@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Green circle background -->
+    <path
+        android:fillColor="#00C805"
+        android:pathData="M54,54m-30,0a30,30 0,1 1,60 0a30,30 0,1 1,-60 0" />
+    <!-- SC text approximation using paths -->
+    <path
+        android:fillColor="#0D0D0D"
+        android:pathData="M44,48 L44,58 C44,61 46,63 49,63 L51,63 C54,63 56,61 56,58 L56,56 L52,56 L52,58 C52,59 51.5,59 51,59 L49,59 C48.5,59 48,59 48,58 L48,48 C48,47 48.5,47 49,47 L51,47 C51.5,47 52,47 52,48 L52,50 L56,50 L56,48 C56,45 54,43 51,43 L49,43 C46,43 44,45 44,48Z" />
+</vector>

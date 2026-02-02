@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">SeekerClaw</string>
+    <string name="notification_channel_name">SeekerClaw Service</string>
+    <string name="notification_content">AI agent is running</string>
+</resources>

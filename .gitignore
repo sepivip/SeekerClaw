@@ -1,0 +1,51 @@
+# Built application files
+*.apk
+*.aar
+*.ap_
+*.aab
+
+# Files for the ART/Dalvik VM
+*.dex
+
+# Java class files
+*.class
+
+# Generated files
+bin/
+gen/
+out/
+release/
+
+# Gradle files
+.gradle/
+build/
+app/build/
+app/.cxx/
+
+# Local configuration file (sdk path, etc)
+local.properties
+
+# Android Studio
+*.iml
+.idea/
+.DS_Store
+.kotlin/
+
+# NDK
+obj/
+
+# Node.js mobile binaries (auto-downloaded by Gradle task)
+app/libnode/
+
+# Agent/tooling configs
+.agent/
+.agents/
+.claude/
+.cline/
+.codex/
+.continue/
+.cursor/
+.gemini/
+.opencode/
+.windsurf/
+skills/

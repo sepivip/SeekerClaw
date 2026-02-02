@@ -1,0 +1,151 @@
+import java.net.HttpURLConnection
+import java.net.URI
+import java.util.zip.ZipInputStream
+
+plugins {
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.kotlin.serialization)
+}
+
+android {
+    namespace = "com.seekerclaw.app"
+    compileSdk = 35
+
+    defaultConfig {
+        applicationId = "com.seekerclaw.app"
+        minSdk = 34
+        targetSdk = 35
+        versionCode = 1
+        versionName = "1.0.0"
+
+        externalNativeBuild {
+            cmake {
+                cppFlags("")
+                arguments("-DANDROID_STL=c++_shared")
+            }
+        }
+        ndk {
+            abiFilters.addAll(listOf("arm64-v8a"))
+        }
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+
+    buildFeatures {
+        compose = true
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
+
+    sourceSets {
+        getByName("main") {
+            jniLibs.srcDirs("libnode/bin/")
+        }
+    }
+}
+
+// --- Download nodejs-mobile binaries ---
+
+abstract class DownloadNodejsTask : DefaultTask() {
+    @TaskAction
+    fun run() {
+        val url = "https://github.com/nodejs-mobile/nodejs-mobile/releases/download/v18.20.4/nodejs-mobile-v18.20.4-android.zip"
+        val zipFile = project.file("./libnode/nodejs-mobile-v18.20.4-android.zip")
+        val extractDir = project.file("./libnode")
+
+        if (!zipFile.exists()) {
+            zipFile.parentFile.mkdirs()
+            println("Downloading Node.js from: $url")
+            // Use HttpURLConnection to follow GitHub redirects
+            var connection = URI.create(url).toURL().openConnection() as HttpURLConnection
+            connection.instanceFollowRedirects = true
+            // Java doesn't follow redirects across protocols; handle manually
+            var redirects = 0
+            while (connection.responseCode in 301..302 && redirects < 5) {
+                val location = connection.getHeaderField("Location")
+                connection.disconnect()
+                connection = URI.create(location).toURL().openConnection() as HttpURLConnection
+                connection.instanceFollowRedirects = true
+                redirects++
+            }
+            zipFile.outputStream().use { os ->
+                connection.inputStream.use { input ->
+                    input.copyTo(os)
+                }
+            }
+            connection.disconnect()
+
+            println("Extracting Node.js to: $extractDir")
+            extractDir.mkdirs()
+            ZipInputStream(zipFile.inputStream()).use { zis ->
+                var entry = zis.nextEntry
+                while (entry != null) {
+                    val targetFile = File(extractDir, entry.name)
+                    if (entry.isDirectory) {
+                        targetFile.mkdirs()
+                    } else {
+                        targetFile.parentFile.mkdirs()
+                        targetFile.outputStream().use { fos -> zis.copyTo(fos) }
+                    }
+                    entry = zis.nextEntry
+                }
+            }
+        }
+    }
+}
+
+tasks.register<DownloadNodejsTask>("downloadNodejs")
+tasks.named("preBuild") { dependsOn("downloadNodejs") }
+
+// --- Dependencies ---
+
+dependencies {
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(libs.androidx.activity.compose)
+
+    implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.androidx.ui)
+    implementation(libs.androidx.ui.graphics)
+    implementation(libs.androidx.ui.tooling.preview)
+    implementation(libs.androidx.material3)
+    implementation(libs.androidx.material.icons.extended)
+
+    implementation(libs.androidx.navigation.compose)
+    implementation(libs.kotlinx.serialization.json)
+
+    implementation(libs.androidx.camera.core)
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.view)
+    implementation(libs.zxing.core)
+
+    debugImplementation(libs.androidx.ui.tooling)
+}
