@@ -278,3 +278,132 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 - `PROMPT.md` — Full coding agent prompt with code snippets, implementation specs, and build priority
 - `MVP.md` — Complete MVP specification with features, testing plan, and success metrics
 - `RESEARCH.md` — Deep feasibility research on Node.js on Android, background services, Solana Mobile, competitive landscape
+- `OPENCLAW_MAPPING.md` — **Critical:** Feature mapping between OpenClaw and SeekerClaw
+- `PHASE3.md` — **Current:** Phase 3 implementation plan for OpenClaw parity
+
+---
+
+## OpenClaw Compatibility
+
+> **Goal:** SeekerClaw should behave as close to OpenClaw as possible.
+
+### Reference Repository
+
+OpenClaw source is cloned at `openclaw-reference/` for direct comparison.
+
+```bash
+# Update OpenClaw reference
+cd openclaw-reference && git pull
+```
+
+### Key OpenClaw Files to Monitor
+
+| OpenClaw File | Purpose | SeekerClaw Equivalent |
+|---------------|---------|----------------------|
+| `src/agents/system-prompt.ts` | System prompt builder | `main.js:buildSystemPrompt()` |
+| `src/agents/skills/workspace.ts` | Skills loading | `main.js:loadSkills()` |
+| `src/memory/manager.ts` | Memory management | `main.js` (simplified) |
+| `src/cron/types.ts` | Cron/reminders | Not implemented yet |
+| `skills/` | 76 bundled skills | `workspace/skills/` (3 examples) |
+
+### OpenClaw Compatibility Checklist
+
+**System Prompt Sections:**
+- [x] Identity line
+- [x] Tooling section
+- [x] Tool Call Style
+- [x] Safety section (exact copy)
+- [x] Skills section
+- [x] Memory Recall
+- [x] Workspace
+- [x] Project Context (SOUL.md, MEMORY.md)
+- [x] Heartbeats
+- [x] Runtime info
+- [x] Silent Replies (SILENT_REPLY token)
+- [x] Reply Tags ([[reply_to_current]])
+- [x] User Identity
+
+**Memory System:**
+- [x] MEMORY.md
+- [x] Daily memory files (memory/*.md)
+- [x] HEARTBEAT.md
+- [ ] Vector search (requires Node 22+)
+- [ ] FTS search
+- [ ] Line citations
+
+**Skills System:**
+- [x] SKILL.md loading
+- [x] Trigger keywords
+- [x] YAML frontmatter format
+- [x] Semantic triggering (AI picks skills)
+- [ ] Requirements gating (bins, env, config)
+
+**Cron/Scheduling:**
+- [x] Reminder tools (set/list/cancel)
+- [x] Natural language time parsing
+- [x] Periodic reminder delivery (30s)
+- [x] HEARTBEAT_OK protocol
+
+### SKILL.md Format
+
+**OpenClaw Format (target):**
+```yaml
+---
+name: skill-name
+description: "What the skill does - AI reads this to decide when to use"
+metadata:
+  openclaw:
+    emoji: "🔧"
+    requires:
+      bins: ["curl"]
+---
+
+# Skill Name
+
+Instructions...
+```
+
+**Current SeekerClaw Format:**
+```markdown
+# Skill Name
+
+Trigger: keyword1, keyword2
+
+## Description
+...
+
+## Instructions
+...
+```
+
+### SOUL.md Template
+
+SeekerClaw uses the **exact same SOUL.md template** as OpenClaw:
+
+```markdown
+# SOUL.md - Who You Are
+
+_You're not a chatbot. You're becoming someone._
+
+## Core Truths
+- Be genuinely helpful, not performatively helpful
+- Have opinions
+- Be resourceful before asking
+- Earn trust through competence
+- Remember you're a guest
+...
+```
+
+### Node.js Limitations
+
+OpenClaw requires **Node 22+** for `node:sqlite`. SeekerClaw runs on **Node 18** (nodejs-mobile limitation).
+
+**Cannot implement:**
+- SQLite-based memory (uses `node:sqlite`)
+- Vector embeddings for semantic search
+- FTS5 full-text search
+
+**Workarounds:**
+- File-based memory (MEMORY.md, daily files)
+- Keyword matching for skills
+- Full file reads for memory recall

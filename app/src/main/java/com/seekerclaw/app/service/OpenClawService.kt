@@ -11,6 +11,7 @@ import androidx.core.app.NotificationCompat
 import com.seekerclaw.app.MainActivity
 import com.seekerclaw.app.R
 import com.seekerclaw.app.SeekerClawApplication
+import com.seekerclaw.app.bridge.AndroidBridge
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.util.LogCollector
 import com.seekerclaw.app.util.LogLevel
@@ -31,6 +32,7 @@ class OpenClawService : Service() {
     private var nodeDebugJob: Job? = null
     private val scope = CoroutineScope(Dispatchers.IO)
     private var startTimeMs = 0L
+    private var androidBridge: AndroidBridge? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -78,6 +80,15 @@ class OpenClawService : Service() {
 
         // Start Node.js runtime
         NodeBridge.start(workDir = workDir.absolutePath, openclawDir = nodeProjectDir)
+
+        // Start Android Bridge (HTTP server for Node.js <-> Kotlin IPC)
+        try {
+            androidBridge = AndroidBridge(applicationContext)
+            androidBridge?.start()
+            LogCollector.append("[Service] AndroidBridge started on port 8765")
+        } catch (e: Exception) {
+            LogCollector.append("[Service] Failed to start AndroidBridge: ${e.message}", LogLevel.ERROR)
+        }
 
         // Start watchdog
         // Note: Node.js can only start once per process. If it dies,
@@ -137,6 +148,7 @@ class OpenClawService : Service() {
         nodeDebugJob?.cancel()
         uptimeJob?.cancel()
         Watchdog.stop()
+        androidBridge?.shutdown()
         NodeBridge.stop()
         wakeLock?.let {
             if (it.isHeld) it.release()

@@ -2,25 +2,24 @@ package com.seekerclaw.app.ui.setup
 
 import android.Manifest
 import android.content.pm.PackageManager
-import android.util.Size
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.camera.core.CameraSelector
-import androidx.camera.core.ImageAnalysis
-import androidx.camera.core.Preview
-import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -33,17 +32,16 @@ import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -51,19 +49,11 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.compose.LocalLifecycleOwner
-import com.google.zxing.BinaryBitmap
-import com.google.zxing.MultiFormatReader
-import com.google.zxing.PlanarYUVLuminanceSource
-import com.google.zxing.common.HybridBinarizer
 import com.seekerclaw.app.config.AppConfig
 import com.seekerclaw.app.config.ConfigManager
-import com.seekerclaw.app.config.QrParser
 import com.seekerclaw.app.service.OpenClawService
 import com.seekerclaw.app.ui.theme.SeekerClawColors
-import java.util.concurrent.Executors
 
 private val modelOptions = listOf(
     "claude-sonnet-4-20250514" to "Sonnet 4 (default)",
@@ -71,38 +61,29 @@ private val modelOptions = listOf(
     "claude-haiku-3-5" to "Haiku 3.5 (fast)",
 )
 
-private enum class SetupMode { LANDING, QR_SCAN, MANUAL_ENTRY }
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SetupScreen(onSetupComplete: () -> Unit) {
     val context = LocalContext.current
-    var mode by remember { mutableStateOf(SetupMode.LANDING) }
+
+    // Form state
     var apiKey by remember { mutableStateOf("") }
     var botToken by remember { mutableStateOf("") }
     var ownerId by remember { mutableStateOf("") }
     var selectedModel by remember { mutableStateOf(modelOptions[0].first) }
-    var agentName by remember { mutableStateOf("MyAgent") }
+    var agentName by remember { mutableStateOf("SeekerClaw") }
     var modelDropdownExpanded by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
-    var hasCameraPermission by remember {
-        mutableStateOf(
-            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
-                    PackageManager.PERMISSION_GRANTED
-        )
-    }
+
+    // Current step (0 = welcome, 1 = claude api, 2 = telegram, 3 = options)
+    var currentStep by remember { mutableIntStateOf(0) }
+
+    // Notification permission
     var hasNotificationPermission by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
                     PackageManager.PERMISSION_GRANTED
         )
-    }
-
-    val cameraPermissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        hasCameraPermission = granted
-        if (granted) mode = SetupMode.QR_SCAN
     }
 
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
@@ -119,16 +100,23 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
     }
 
     fun saveAndStart() {
-        if (apiKey.isBlank() || botToken.isBlank() || ownerId.isBlank()) {
-            errorMessage = "All fields are required"
+        if (apiKey.isBlank()) {
+            errorMessage = "Claude API key is required"
+            currentStep = 1
             return
         }
+        if (botToken.isBlank() || ownerId.isBlank()) {
+            errorMessage = "Telegram bot token and your user ID are required"
+            currentStep = 2
+            return
+        }
+
         val config = AppConfig(
             anthropicApiKey = apiKey.trim(),
             telegramBotToken = botToken.trim(),
             telegramOwnerId = ownerId.trim(),
             model = selectedModel,
-            agentName = agentName.trim().ifBlank { "MyAgent" },
+            agentName = agentName.trim().ifBlank { "SeekerClaw" },
         )
         ConfigManager.saveConfig(context, config)
         ConfigManager.seedWorkspace(context)
@@ -136,303 +124,6 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
         onSetupComplete()
     }
 
-    when (mode) {
-        SetupMode.LANDING -> {
-            LandingContent(
-                onScanQr = {
-                    if (hasCameraPermission) {
-                        mode = SetupMode.QR_SCAN
-                    } else {
-                        cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
-                    }
-                },
-                onManualEntry = { mode = SetupMode.MANUAL_ENTRY },
-            )
-        }
-
-        SetupMode.QR_SCAN -> {
-            QrScanContent(
-                onQrScanned = { raw ->
-                    QrParser.parse(raw).fold(
-                        onSuccess = { payload ->
-                            apiKey = payload.anthropicApiKey
-                            botToken = payload.telegramBotToken
-                            ownerId = payload.telegramOwnerId
-                            selectedModel = payload.model
-                            agentName = payload.agentName
-                            // Auto-save and start
-                            val config = AppConfig(
-                                anthropicApiKey = payload.anthropicApiKey,
-                                telegramBotToken = payload.telegramBotToken,
-                                telegramOwnerId = payload.telegramOwnerId,
-                                model = payload.model,
-                                agentName = payload.agentName,
-                            )
-                            ConfigManager.saveConfig(context, config)
-                            ConfigManager.seedWorkspace(context)
-                            OpenClawService.start(context)
-                            onSetupComplete()
-                        },
-                        onFailure = { e ->
-                            errorMessage = "Invalid QR code: ${e.message}"
-                            mode = SetupMode.MANUAL_ENTRY
-                        },
-                    )
-                },
-                onBack = { mode = SetupMode.LANDING },
-                errorMessage = errorMessage,
-            )
-        }
-
-        SetupMode.MANUAL_ENTRY -> {
-            ManualEntryContent(
-                apiKey = apiKey,
-                onApiKeyChange = { apiKey = it },
-                botToken = botToken,
-                onBotTokenChange = { botToken = it },
-                ownerId = ownerId,
-                onOwnerIdChange = { ownerId = it },
-                selectedModel = selectedModel,
-                onModelChange = { selectedModel = it },
-                modelDropdownExpanded = modelDropdownExpanded,
-                onModelDropdownExpandedChange = { modelDropdownExpanded = it },
-                agentName = agentName,
-                onAgentNameChange = { agentName = it },
-                errorMessage = errorMessage,
-                onStartAgent = ::saveAndStart,
-                onBack = { mode = SetupMode.LANDING },
-            )
-        }
-    }
-}
-
-@Composable
-private fun LandingContent(
-    onScanQr: () -> Unit,
-    onManualEntry: () -> Unit,
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(SeekerClawColors.Background)
-            .padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-    ) {
-        // ASCII-art style logo
-        Text(
-            text = "> SEEKER_CLAW",
-            fontFamily = FontFamily.Monospace,
-            fontSize = 28.sp,
-            fontWeight = FontWeight.Bold,
-            color = SeekerClawColors.Primary,
-            letterSpacing = 3.sp,
-        )
-        Spacer(modifier = Modifier.height(4.dp))
-        Text(
-            text = "////////////////////////////",
-            fontFamily = FontFamily.Monospace,
-            fontSize = 14.sp,
-            color = SeekerClawColors.PrimaryDim,
-        )
-        Spacer(modifier = Modifier.height(16.dp))
-        Text(
-            text = "[ AI AGENT RUNTIME v1.0 ]",
-            fontFamily = FontFamily.Monospace,
-            fontSize = 14.sp,
-            color = SeekerClawColors.TextSecondary,
-            textAlign = TextAlign.Center,
-        )
-        Spacer(modifier = Modifier.height(4.dp))
-        Text(
-            text = "SYSTEM READY. AWAITING CONFIG.",
-            fontFamily = FontFamily.Monospace,
-            fontSize = 12.sp,
-            color = SeekerClawColors.TextDim,
-            textAlign = TextAlign.Center,
-        )
-        Spacer(modifier = Modifier.height(48.dp))
-
-        // Scan QR button — terminal-style with hard corners
-        Button(
-            onClick = onScanQr,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(52.dp)
-                .border(1.dp, SeekerClawColors.Primary, RoundedCornerShape(2.dp)),
-            shape = RoundedCornerShape(2.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = SeekerClawColors.PrimaryGlow,
-                contentColor = SeekerClawColors.Primary,
-            ),
-        ) {
-            Text(
-                "[ SCAN QR CODE ]",
-                fontFamily = FontFamily.Monospace,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 2.sp,
-            )
-        }
-        Spacer(modifier = Modifier.height(16.dp))
-        TextButton(onClick = onManualEntry) {
-            Text(
-                "> enter manually_",
-                fontFamily = FontFamily.Monospace,
-                color = SeekerClawColors.Accent,
-                letterSpacing = 1.sp,
-            )
-        }
-    }
-}
-
-@Composable
-private fun QrScanContent(
-    onQrScanned: (String) -> Unit,
-    onBack: () -> Unit,
-    errorMessage: String?,
-) {
-    val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
-    var scanned by remember { mutableStateOf(false) }
-    val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
-
-    DisposableEffect(Unit) {
-        onDispose { cameraExecutor.shutdown() }
-    }
-
-    Box(modifier = Modifier.fillMaxSize()) {
-        AndroidView(
-            factory = { ctx ->
-                val previewView = PreviewView(ctx)
-                val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
-
-                cameraProviderFuture.addListener({
-                    val cameraProvider = cameraProviderFuture.get()
-                    val preview = Preview.Builder().build().also {
-                        it.surfaceProvider = previewView.surfaceProvider
-                    }
-
-                    val imageAnalysis = ImageAnalysis.Builder()
-                        .setTargetResolution(Size(1280, 720))
-                        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                        .build()
-
-                    imageAnalysis.setAnalyzer(cameraExecutor) { imageProxy ->
-                        if (scanned) {
-                            imageProxy.close()
-                            return@setAnalyzer
-                        }
-                        val buffer = imageProxy.planes[0].buffer
-                        val bytes = ByteArray(buffer.remaining())
-                        buffer.get(bytes)
-
-                        val source = PlanarYUVLuminanceSource(
-                            bytes,
-                            imageProxy.width,
-                            imageProxy.height,
-                            0, 0,
-                            imageProxy.width,
-                            imageProxy.height,
-                            false,
-                        )
-                        val binaryBitmap = BinaryBitmap(HybridBinarizer(source))
-
-                        try {
-                            val result = MultiFormatReader().decode(binaryBitmap)
-                            scanned = true
-                            onQrScanned(result.text)
-                        } catch (_: Exception) {
-                            // No QR code found in this frame
-                        } finally {
-                            imageProxy.close()
-                        }
-                    }
-
-                    cameraProvider.unbindAll()
-                    cameraProvider.bindToLifecycle(
-                        lifecycleOwner,
-                        CameraSelector.DEFAULT_BACK_CAMERA,
-                        preview,
-                        imageAnalysis,
-                    )
-                }, ContextCompat.getMainExecutor(ctx))
-
-                previewView
-            },
-            modifier = Modifier.fillMaxSize(),
-        )
-
-        // Overlay UI — terminal HUD style
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(24.dp),
-            verticalArrangement = Arrangement.SpaceBetween,
-        ) {
-            TextButton(onClick = onBack) {
-                Text(
-                    "< BACK",
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Bold,
-                    color = SeekerClawColors.Primary,
-                    letterSpacing = 1.sp,
-                )
-            }
-
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Text(
-                    text = "[ SCANNING FOR QR SIGNAL... ]",
-                    fontFamily = FontFamily.Monospace,
-                    color = SeekerClawColors.Primary,
-                    fontSize = 14.sp,
-                    letterSpacing = 1.sp,
-                    modifier = Modifier
-                        .background(SeekerClawColors.Background.copy(alpha = 0.85f))
-                        .border(1.dp, SeekerClawColors.PrimaryDim)
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                )
-                if (errorMessage != null) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = "ERR: $errorMessage",
-                        fontFamily = FontFamily.Monospace,
-                        color = SeekerClawColors.Error,
-                        fontSize = 12.sp,
-                        modifier = Modifier
-                            .background(SeekerClawColors.Background.copy(alpha = 0.85f))
-                            .border(1.dp, SeekerClawColors.ErrorDim)
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
-                    )
-                }
-                Spacer(modifier = Modifier.height(32.dp))
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun ManualEntryContent(
-    apiKey: String,
-    onApiKeyChange: (String) -> Unit,
-    botToken: String,
-    onBotTokenChange: (String) -> Unit,
-    ownerId: String,
-    onOwnerIdChange: (String) -> Unit,
-    selectedModel: String,
-    onModelChange: (String) -> Unit,
-    modelDropdownExpanded: Boolean,
-    onModelDropdownExpandedChange: (Boolean) -> Unit,
-    agentName: String,
-    onAgentNameChange: (String) -> Unit,
-    errorMessage: String?,
-    onStartAgent: () -> Unit,
-    onBack: () -> Unit,
-) {
     val fieldColors = OutlinedTextFieldDefaults.colors(
         focusedBorderColor = SeekerClawColors.Primary,
         unfocusedBorderColor = SeekerClawColors.PrimaryDim.copy(alpha = 0.4f),
@@ -455,27 +146,33 @@ private fun ManualEntryContent(
             .verticalScroll(scrollState),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(32.dp))
 
+        // Header
         Text(
-            text = "> CONFIG_INPUT",
+            text = "> SEEKER_CLAW",
             fontFamily = FontFamily.Monospace,
-            fontSize = 22.sp,
+            fontSize = 28.sp,
             fontWeight = FontWeight.Bold,
             color = SeekerClawColors.Primary,
-            letterSpacing = 2.sp,
+            letterSpacing = 3.sp,
         )
         Spacer(modifier = Modifier.height(4.dp))
         Text(
-            text = "ENTER CREDENTIALS TO INITIALIZE",
+            text = "////////////////////////////",
             fontFamily = FontFamily.Monospace,
-            fontSize = 12.sp,
-            color = SeekerClawColors.TextDim,
-            letterSpacing = 1.sp,
+            fontSize = 14.sp,
+            color = SeekerClawColors.PrimaryDim,
         )
 
         Spacer(modifier = Modifier.height(24.dp))
 
+        // Step indicators
+        StepIndicator(currentStep = currentStep, totalSteps = 4)
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // Error message
         if (errorMessage != null) {
             Text(
                 text = "ERR: $errorMessage",
@@ -491,40 +188,338 @@ private fun ManualEntryContent(
             Spacer(modifier = Modifier.height(16.dp))
         }
 
+        when (currentStep) {
+            0 -> WelcomeStep(onNext = { currentStep = 1 })
+            1 -> ClaudeApiStep(
+                apiKey = apiKey,
+                onApiKeyChange = { apiKey = it; errorMessage = null },
+                fieldColors = fieldColors,
+                onNext = { currentStep = 2 },
+                onBack = { currentStep = 0 },
+            )
+            2 -> TelegramStep(
+                botToken = botToken,
+                onBotTokenChange = { botToken = it; errorMessage = null },
+                ownerId = ownerId,
+                onOwnerIdChange = { ownerId = it; errorMessage = null },
+                fieldColors = fieldColors,
+                onNext = { currentStep = 3 },
+                onBack = { currentStep = 1 },
+            )
+            3 -> OptionsStep(
+                selectedModel = selectedModel,
+                onModelChange = { selectedModel = it },
+                modelDropdownExpanded = modelDropdownExpanded,
+                onModelDropdownExpandedChange = { modelDropdownExpanded = it },
+                agentName = agentName,
+                onAgentNameChange = { agentName = it },
+                fieldColors = fieldColors,
+                onStartAgent = ::saveAndStart,
+                onBack = { currentStep = 2 },
+            )
+        }
+
+        Spacer(modifier = Modifier.height(32.dp))
+    }
+}
+
+@Composable
+private fun StepIndicator(currentStep: Int, totalSteps: Int) {
+    Row(
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        for (i in 0 until totalSteps) {
+            Box(
+                modifier = Modifier
+                    .size(if (i == currentStep) 12.dp else 8.dp)
+                    .clip(CircleShape)
+                    .background(
+                        if (i <= currentStep) SeekerClawColors.Primary
+                        else SeekerClawColors.PrimaryDim.copy(alpha = 0.3f)
+                    )
+            )
+            if (i < totalSteps - 1) {
+                Spacer(modifier = Modifier.width(8.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun WelcomeStep(onNext: () -> Unit) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            text = "[ WELCOME ]",
+            fontFamily = FontFamily.Monospace,
+            fontSize = 18.sp,
+            fontWeight = FontWeight.Bold,
+            color = SeekerClawColors.Primary,
+            letterSpacing = 2.sp,
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        Text(
+            text = """
+                SeekerClaw turns your phone into a 24/7 personal AI agent.
+
+                You'll need:
+
+                1. Claude API key
+                   Get one at console.anthropic.com
+
+                2. Telegram Bot
+                   Create one via @BotFather
+
+                3. Your Telegram User ID
+                   We'll show you how
+            """.trimIndent(),
+            fontFamily = FontFamily.Monospace,
+            fontSize = 14.sp,
+            color = SeekerClawColors.TextPrimary,
+            lineHeight = 22.sp,
+        )
+
+        Spacer(modifier = Modifier.height(32.dp))
+
+        Button(
+            onClick = onNext,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(52.dp)
+                .border(1.dp, SeekerClawColors.Primary, RoundedCornerShape(2.dp)),
+            shape = RoundedCornerShape(2.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = SeekerClawColors.PrimaryGlow,
+                contentColor = SeekerClawColors.Primary,
+            ),
+        ) {
+            Text(
+                "[ LET'S GO ]",
+                fontFamily = FontFamily.Monospace,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 2.sp,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ClaudeApiStep(
+    apiKey: String,
+    onApiKeyChange: (String) -> Unit,
+    fieldColors: androidx.compose.material3.TextFieldColors,
+    onNext: () -> Unit,
+    onBack: () -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            text = "[ STEP 1: CLAUDE API ]",
+            fontFamily = FontFamily.Monospace,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold,
+            color = SeekerClawColors.Primary,
+            letterSpacing = 2.sp,
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Text(
+            text = """
+                Get your API key from:
+                console.anthropic.com/settings/keys
+
+                Click "Create Key" and copy it here.
+                Your key starts with "sk-ant-..."
+            """.trimIndent(),
+            fontFamily = FontFamily.Monospace,
+            fontSize = 13.sp,
+            color = SeekerClawColors.TextSecondary,
+            lineHeight = 20.sp,
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
+
         OutlinedTextField(
             value = apiKey,
             onValueChange = onApiKeyChange,
-            label = { Text("ANTHROPIC_API_KEY", fontFamily = FontFamily.Monospace, fontSize = 11.sp) },
+            label = { Text("CLAUDE_API_KEY", fontFamily = FontFamily.Monospace, fontSize = 11.sp) },
+            placeholder = { Text("sk-ant-api03-...", fontFamily = FontFamily.Monospace, fontSize = 14.sp, color = SeekerClawColors.TextDim) },
             modifier = Modifier.fillMaxWidth(),
             visualTransformation = PasswordVisualTransformation(),
             singleLine = true,
             colors = fieldColors,
             shape = RoundedCornerShape(2.dp),
         )
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        NavigationButtons(
+            onBack = onBack,
+            onNext = onNext,
+            nextEnabled = apiKey.isNotBlank(),
+            nextText = "NEXT",
+        )
+    }
+}
+
+@Composable
+private fun TelegramStep(
+    botToken: String,
+    onBotTokenChange: (String) -> Unit,
+    ownerId: String,
+    onOwnerIdChange: (String) -> Unit,
+    fieldColors: androidx.compose.material3.TextFieldColors,
+    onNext: () -> Unit,
+    onBack: () -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            text = "[ STEP 2: TELEGRAM ]",
+            fontFamily = FontFamily.Monospace,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold,
+            color = SeekerClawColors.Primary,
+            letterSpacing = 2.sp,
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Bot Token section
+        Text(
+            text = "BOT TOKEN",
+            fontFamily = FontFamily.Monospace,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
+            color = SeekerClawColors.Accent,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Text(
+            text = """
+                1. Open Telegram, search @BotFather
+                2. Send /newbot and follow prompts
+                3. Copy the token it gives you
+            """.trimIndent(),
+            fontFamily = FontFamily.Monospace,
+            fontSize = 12.sp,
+            color = SeekerClawColors.TextSecondary,
+            lineHeight = 18.sp,
+            modifier = Modifier.fillMaxWidth(),
+        )
+
         Spacer(modifier = Modifier.height(12.dp))
 
         OutlinedTextField(
             value = botToken,
             onValueChange = onBotTokenChange,
-            label = { Text("TELEGRAM_BOT_TOKEN", fontFamily = FontFamily.Monospace, fontSize = 11.sp) },
+            label = { Text("BOT_TOKEN", fontFamily = FontFamily.Monospace, fontSize = 11.sp) },
+            placeholder = { Text("123456789:ABC...", fontFamily = FontFamily.Monospace, fontSize = 14.sp, color = SeekerClawColors.TextDim) },
             modifier = Modifier.fillMaxWidth(),
             visualTransformation = PasswordVisualTransformation(),
             singleLine = true,
             colors = fieldColors,
             shape = RoundedCornerShape(2.dp),
         )
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        // User ID section
+        Text(
+            text = "YOUR USER ID",
+            fontFamily = FontFamily.Monospace,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
+            color = SeekerClawColors.Accent,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Text(
+            text = """
+                To find your Telegram user ID:
+
+                1. Open Telegram, search @userinfobot
+                2. Start a chat and send any message
+                3. It replies with your ID (a number)
+
+                Example: 123456789
+            """.trimIndent(),
+            fontFamily = FontFamily.Monospace,
+            fontSize = 12.sp,
+            color = SeekerClawColors.TextSecondary,
+            lineHeight = 18.sp,
+            modifier = Modifier.fillMaxWidth(),
+        )
+
         Spacer(modifier = Modifier.height(12.dp))
 
         OutlinedTextField(
             value = ownerId,
             onValueChange = onOwnerIdChange,
-            label = { Text("TELEGRAM_OWNER_ID", fontFamily = FontFamily.Monospace, fontSize = 11.sp) },
+            label = { Text("YOUR_USER_ID", fontFamily = FontFamily.Monospace, fontSize = 11.sp) },
+            placeholder = { Text("123456789", fontFamily = FontFamily.Monospace, fontSize = 14.sp, color = SeekerClawColors.TextDim) },
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
             colors = fieldColors,
             shape = RoundedCornerShape(2.dp),
         )
-        Spacer(modifier = Modifier.height(12.dp))
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        NavigationButtons(
+            onBack = onBack,
+            onNext = onNext,
+            nextEnabled = botToken.isNotBlank() && ownerId.isNotBlank(),
+            nextText = "NEXT",
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun OptionsStep(
+    selectedModel: String,
+    onModelChange: (String) -> Unit,
+    modelDropdownExpanded: Boolean,
+    onModelDropdownExpandedChange: (Boolean) -> Unit,
+    agentName: String,
+    onAgentNameChange: (String) -> Unit,
+    fieldColors: androidx.compose.material3.TextFieldColors,
+    onStartAgent: () -> Unit,
+    onBack: () -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            text = "[ STEP 3: OPTIONS ]",
+            fontFamily = FontFamily.Monospace,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold,
+            color = SeekerClawColors.Primary,
+            letterSpacing = 2.sp,
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Text(
+            text = "Choose your AI model and name your agent.",
+            fontFamily = FontFamily.Monospace,
+            fontSize = 13.sp,
+            color = SeekerClawColors.TextSecondary,
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
 
         ExposedDropdownMenuBox(
             expanded = modelDropdownExpanded,
@@ -563,6 +558,7 @@ private fun ManualEntryContent(
                 }
             }
         }
+
         Spacer(modifier = Modifier.height(12.dp))
 
         OutlinedTextField(
@@ -574,22 +570,77 @@ private fun ManualEntryContent(
             colors = fieldColors,
             shape = RoundedCornerShape(2.dp),
         )
-        Spacer(modifier = Modifier.height(24.dp))
 
+        Spacer(modifier = Modifier.height(32.dp))
+
+        // Back button
+        Text(
+            text = "< BACK",
+            fontFamily = FontFamily.Monospace,
+            fontSize = 14.sp,
+            color = SeekerClawColors.Accent,
+            modifier = Modifier
+                .clickable { onBack() }
+                .padding(8.dp),
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Start button
         Button(
             onClick = onStartAgent,
             modifier = Modifier
                 .fillMaxWidth()
-                .height(52.dp)
+                .height(56.dp)
+                .border(1.dp, SeekerClawColors.Primary, RoundedCornerShape(2.dp)),
+            shape = RoundedCornerShape(2.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = SeekerClawColors.PrimaryGlow,
+                contentColor = SeekerClawColors.Primary,
+            ),
+        ) {
+            Text(
+                "[ INITIALIZE AGENT ]",
+                fontFamily = FontFamily.Monospace,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 2.sp,
+            )
+        }
+    }
+}
+
+@Composable
+private fun NavigationButtons(
+    onBack: () -> Unit,
+    onNext: () -> Unit,
+    nextEnabled: Boolean,
+    nextText: String,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = "< BACK",
+            fontFamily = FontFamily.Monospace,
+            fontSize = 14.sp,
+            color = SeekerClawColors.Accent,
+            modifier = Modifier
+                .clickable { onBack() }
+                .padding(8.dp),
+        )
+
+        Button(
+            onClick = onNext,
+            enabled = nextEnabled,
+            modifier = Modifier
                 .border(
                     1.dp,
-                    if (apiKey.isNotBlank() && botToken.isNotBlank() && ownerId.isNotBlank())
-                        SeekerClawColors.Primary
-                    else
-                        SeekerClawColors.TextDim,
-                    RoundedCornerShape(2.dp),
+                    if (nextEnabled) SeekerClawColors.Primary else SeekerClawColors.TextDim,
+                    RoundedCornerShape(2.dp)
                 ),
-            enabled = apiKey.isNotBlank() && botToken.isNotBlank() && ownerId.isNotBlank(),
             shape = RoundedCornerShape(2.dp),
             colors = ButtonDefaults.buttonColors(
                 containerColor = SeekerClawColors.PrimaryGlow,
@@ -599,24 +650,12 @@ private fun ManualEntryContent(
             ),
         ) {
             Text(
-                "[ INITIALIZE AGENT ]",
+                "[ $nextText ]",
                 fontFamily = FontFamily.Monospace,
-                fontSize = 15.sp,
+                fontSize = 14.sp,
                 fontWeight = FontWeight.Bold,
-                letterSpacing = 2.sp,
-            )
-        }
-        Spacer(modifier = Modifier.height(12.dp))
-
-        TextButton(onClick = onBack) {
-            Text(
-                "< back to scanner_",
-                fontFamily = FontFamily.Monospace,
-                color = SeekerClawColors.Accent,
                 letterSpacing = 1.sp,
             )
         }
-
-        Spacer(modifier = Modifier.height(24.dp))
     }
 }
