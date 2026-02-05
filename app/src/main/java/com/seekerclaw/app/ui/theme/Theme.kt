@@ -85,9 +85,9 @@ val DarkOpsThemeColors = ThemeColors(
     primaryDim = Color(0xFFCC1236),
     primaryGlow = Color(0x33FF1744),
 
-    error = Color(0xFFFF6B35),         // Amber-orange (distinct from crimson)
-    errorDim = Color(0xFFCC5528),
-    errorGlow = Color(0x33FF6B35),
+    error = Color(0xFFEF4444),         // Red (distinct from crimson primary)
+    errorDim = Color(0xFFCC3636),
+    errorGlow = Color(0x33EF4444),
 
     warning = Color(0xFFFFB300),
     accent = Color(0xFF00E676),        // Electric green (status/online)

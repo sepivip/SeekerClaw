@@ -77,6 +77,20 @@ object ConfigManager {
         prefs(context).edit().putBoolean(KEY_AUTO_START, enabled).apply()
     }
 
+    fun updateConfigField(context: Context, field: String, value: String) {
+        val config = loadConfig(context) ?: return
+        val updated = when (field) {
+            "anthropicApiKey" -> config.copy(anthropicApiKey = value)
+            "telegramBotToken" -> config.copy(telegramBotToken = value)
+            "telegramOwnerId" -> config.copy(telegramOwnerId = value)
+            "model" -> config.copy(model = value)
+            "agentName" -> config.copy(agentName = value)
+            else -> return
+        }
+        saveConfig(context, updated)
+        writeConfigYaml(context)
+    }
+
     fun clearConfig(context: Context) {
         prefs(context).edit().clear().apply()
         KeystoreHelper.deleteKey()
@@ -1123,7 +1137,7 @@ object ConfigManager {
     /**
      * Export workspace memory to a ZIP file at the given URI.
      * Includes: SOUL.md, MEMORY.md, IDENTITY.md, USER.md, HEARTBEAT.md,
-     *           memory/*.md, skills/*.md, BOOTSTRAP.md
+     *           memory dir, skills dir, BOOTSTRAP.md
      * Excludes: config.yaml, config.json, node_debug.log
      */
     fun exportMemory(context: Context, uri: Uri): Boolean {

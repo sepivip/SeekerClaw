@@ -1,12 +1,6 @@
 package com.seekerclaw.app.ui.navigation
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Description
@@ -20,7 +14,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
@@ -85,63 +78,52 @@ fun SeekerClawNavHost() {
         containerColor = SeekerClawColors.Background,
         bottomBar = {
             if (showBottomBar) {
-                // Terminal-style bottom bar with top border
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .border(
-                            width = 1.dp,
-                            color = SeekerClawColors.PrimaryDim,
-                            shape = RoundedCornerShape(0.dp),
-                        ),
+                NavigationBar(
+                    containerColor = SeekerClawColors.Surface,
+                    tonalElevation = 0.dp,
                 ) {
-                    NavigationBar(
-                        containerColor = SeekerClawColors.Surface,
-                        tonalElevation = 0.dp,
-                    ) {
-                        bottomNavItems.forEach { item ->
-                            val selected = currentDestination?.hierarchy?.any {
-                                it.hasRoute(item.route::class)
-                            } == true
-                            NavigationBarItem(
-                                selected = selected,
-                                onClick = {
-                                    navController.navigate(item.route) {
-                                        popUpTo(navController.graph.findStartDestination().id) {
-                                            saveState = true
-                                        }
-                                        launchSingleTop = true
-                                        restoreState = true
+                    bottomNavItems.forEach { item ->
+                        val selected = currentDestination?.hierarchy?.any {
+                            it.hasRoute(item.route::class)
+                        } == true
+                        NavigationBarItem(
+                            selected = selected,
+                            onClick = {
+                                navController.navigate(item.route) {
+                                    popUpTo(navController.graph.findStartDestination().id) {
+                                        saveState = true
                                     }
-                                },
-                                icon = {
-                                    Icon(
-                                        item.icon,
-                                        contentDescription = item.label,
-                                    )
-                                },
-                                label = {
-                                    Text(
-                                        text = item.label,
-                                        fontFamily = FontFamily.Monospace,
-                                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                                        fontSize = 10.sp,
-                                        letterSpacing = 1.sp,
-                                    )
-                                },
-                                colors = NavigationBarItemDefaults.colors(
-                                    selectedIconColor = SeekerClawColors.Primary,
-                                    selectedTextColor = SeekerClawColors.Primary,
-                                    unselectedIconColor = SeekerClawColors.TextDim,
-                                    unselectedTextColor = SeekerClawColors.TextDim,
-                                    indicatorColor = SeekerClawColors.PrimaryGlow,
-                                ),
-                            )
-                        }
+                                    launchSingleTop = true
+                                    restoreState = true
+                                }
+                            },
+                            icon = {
+                                Icon(
+                                    item.icon,
+                                    contentDescription = item.label,
+                                )
+                            },
+                            label = {
+                                Text(
+                                    text = item.label,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                                    fontSize = 10.sp,
+                                    letterSpacing = 1.sp,
+                                )
+                            },
+                            colors = NavigationBarItemDefaults.colors(
+                                selectedIconColor = SeekerClawColors.Primary,
+                                selectedTextColor = SeekerClawColors.Primary,
+                                unselectedIconColor = SeekerClawColors.TextDim,
+                                unselectedTextColor = SeekerClawColors.TextDim,
+                                indicatorColor = SeekerClawColors.PrimaryGlow,
+                            ),
+                        )
                     }
                 }
             }
-        }
+        },
     ) { innerPadding ->
         NavHost(
             navController = navController,

@@ -34,17 +34,21 @@ if (!fs.existsSync(configPath)) {
 
 const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
 const BOT_TOKEN = config.botToken;
-const OWNER_ID = String(config.ownerId);
+let OWNER_ID = config.ownerId ? String(config.ownerId) : '';
 const ANTHROPIC_KEY = config.anthropicApiKey;
 const MODEL = config.model || 'claude-sonnet-4-20250514';
 const AGENT_NAME = config.agentName || 'SeekerClaw';
 
-if (!BOT_TOKEN || !OWNER_ID || !ANTHROPIC_KEY) {
-    log('ERROR: Missing required config (botToken, ownerId, anthropicApiKey)');
+if (!BOT_TOKEN || !ANTHROPIC_KEY) {
+    log('ERROR: Missing required config (botToken, anthropicApiKey)');
     process.exit(1);
 }
 
-log(`Agent: ${AGENT_NAME} | Model: ${MODEL} | Owner: ${OWNER_ID}`);
+if (!OWNER_ID) {
+    log('Owner ID not set — will auto-detect from first message');
+} else {
+    log(`Agent: ${AGENT_NAME} | Model: ${MODEL} | Owner: ${OWNER_ID}`);
+}
 
 // ============================================================================
 // FILE PATHS
@@ -2150,7 +2154,7 @@ function buildSystemPrompt(matchedSkills = []) {
 
     // User Identity section - OpenClaw style
     lines.push('## User Identity');
-    lines.push(`Telegram Owner ID: ${OWNER_ID}`);
+    lines.push(`Telegram Owner ID: ${OWNER_ID || '(pending auto-detect)'}`);
     lines.push('You are talking to your owner. Treat messages from this ID as trusted.');
     lines.push('');
 
@@ -2375,6 +2379,26 @@ async function handleMessage(msg) {
     const text = (msg.text || '').trim();
 
     if (!text) return;
+
+    // Owner auto-detect: first person to message claims ownership
+    if (!OWNER_ID) {
+        OWNER_ID = senderId;
+        log(`Owner claimed by ${senderId} (auto-detect)`);
+
+        // Persist to config.json
+        try {
+            const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+            cfg.ownerId = senderId;
+            fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2), 'utf8');
+        } catch (e) {
+            log(`Warning: Could not save owner to config.json: ${e.message}`);
+        }
+
+        // Persist to Android encrypted storage
+        androidBridgeCall('/config/set-owner', { ownerId: senderId }).catch(() => {});
+
+        await sendMessage(chatId, `Owner set to your account (${senderId}). Only you can use this bot.`);
+    }
 
     // Only respond to owner
     if (senderId !== OWNER_ID) {

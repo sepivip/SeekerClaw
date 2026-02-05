@@ -24,6 +24,10 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -49,10 +53,16 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+private val modelOptions = listOf(
+    "claude-sonnet-4-20250514" to "Sonnet 4 (default)",
+    "claude-opus-4-5" to "Opus 4.5 (smartest)",
+    "claude-haiku-3-5" to "Haiku 3.5 (fast)",
+)
+
 @Composable
 fun SettingsScreen() {
     val context = LocalContext.current
-    val config = ConfigManager.loadConfig(context)
+    var config by remember { mutableStateOf(ConfigManager.loadConfig(context)) }
 
     var autoStartOnBoot by remember {
         mutableStateOf(ConfigManager.getAutoStartOnBoot(context))
@@ -60,6 +70,13 @@ fun SettingsScreen() {
     var showResetDialog by remember { mutableStateOf(false) }
     var showClearMemoryDialog by remember { mutableStateOf(false) }
     var showImportDialog by remember { mutableStateOf(false) }
+    var showRestartDialog by remember { mutableStateOf(false) }
+
+    // Edit dialog state
+    var editField by remember { mutableStateOf<String?>(null) }
+    var editLabel by remember { mutableStateOf("") }
+    var editValue by remember { mutableStateOf("") }
+    var showModelPicker by remember { mutableStateOf(false) }
 
     // File picker for export (save ZIP)
     val exportLauncher = rememberLauncherForActivityResult(
@@ -89,6 +106,13 @@ fun SettingsScreen() {
         }
     }
 
+    // Helper to save a field and refresh config
+    fun saveField(field: String, value: String) {
+        ConfigManager.updateConfigField(context, field, value)
+        config = ConfigManager.loadConfig(context)
+        showRestartDialog = true
+    }
+
     // Masked display values
     val maskedApiKey = config?.anthropicApiKey?.let { key ->
         if (key.length > 12) "${key.take(8)}${"*".repeat(8)}${key.takeLast(4)}" else "*".repeat(key.length)
@@ -96,10 +120,6 @@ fun SettingsScreen() {
     val maskedBotToken = config?.telegramBotToken?.let { token ->
         if (token.length > 10) "${token.take(6)}${"*".repeat(8)}${token.takeLast(4)}" else "*".repeat(token.length)
     } ?: "---"
-
-    // Tap-to-reveal state
-    var revealApiKey by remember { mutableStateOf(false) }
-    var revealBotToken by remember { mutableStateOf(false) }
 
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
 
@@ -126,25 +146,45 @@ fun SettingsScreen() {
 
         ConfigField(
             label = "API_KEY",
-            value = if (revealApiKey) (config?.anthropicApiKey ?: "---") else maskedApiKey,
-            onClick = { revealApiKey = !revealApiKey },
+            value = maskedApiKey,
+            onClick = {
+                editField = "anthropicApiKey"
+                editLabel = "API KEY"
+                editValue = config?.anthropicApiKey ?: ""
+            },
         )
         ConfigField(
             label = "BOT_TOKEN",
-            value = if (revealBotToken) (config?.telegramBotToken ?: "---") else maskedBotToken,
-            onClick = { revealBotToken = !revealBotToken },
+            value = maskedBotToken,
+            onClick = {
+                editField = "telegramBotToken"
+                editLabel = "BOT TOKEN"
+                editValue = config?.telegramBotToken ?: ""
+            },
         )
         ConfigField(
             label = "OWNER_ID",
             value = config?.telegramOwnerId ?: "---",
+            onClick = {
+                editField = "telegramOwnerId"
+                editLabel = "OWNER ID"
+                editValue = config?.telegramOwnerId ?: ""
+            },
         )
         ConfigField(
             label = "MODEL",
-            value = config?.model ?: "claude-sonnet-4-20250514",
+            value = modelOptions.firstOrNull { it.first == config?.model }?.second
+                ?: (config?.model ?: "---"),
+            onClick = { showModelPicker = true },
         )
         ConfigField(
             label = "AGENT_NAME",
-            value = config?.agentName ?: "MyAgent",
+            value = config?.agentName ?: "---",
+            onClick = {
+                editField = "agentName"
+                editLabel = "AGENT NAME"
+                editValue = config?.agentName ?: ""
+            },
         )
 
         Spacer(modifier = Modifier.height(24.dp))
@@ -298,7 +338,209 @@ fun SettingsScreen() {
         Spacer(modifier = Modifier.height(24.dp))
     }
 
-    // Reset confirmation dialog
+    // ==================== Edit Field Dialog ====================
+    if (editField != null) {
+        AlertDialog(
+            onDismissRequest = { editField = null },
+            title = {
+                Text(
+                    "EDIT $editLabel",
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    color = SeekerClawColors.Primary,
+                )
+            },
+            text = {
+                Column {
+                    if (editField == "anthropicApiKey" || editField == "telegramBotToken") {
+                        Text(
+                            "CHANGING THIS REQUIRES AN AGENT RESTART.",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp,
+                            color = SeekerClawColors.Warning,
+                            modifier = Modifier.padding(bottom = 12.dp),
+                        )
+                    }
+                    OutlinedTextField(
+                        value = editValue,
+                        onValueChange = { editValue = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = editField != "anthropicApiKey",
+                        textStyle = androidx.compose.ui.text.TextStyle(
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 13.sp,
+                            color = SeekerClawColors.TextPrimary,
+                        ),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = SeekerClawColors.Primary,
+                            unfocusedBorderColor = SeekerClawColors.PrimaryDim.copy(alpha = 0.4f),
+                            cursorColor = SeekerClawColors.Primary,
+                        ),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val field = editField ?: return@TextButton
+                        val trimmed = editValue.trim()
+                        if (trimmed.isNotEmpty()) {
+                            saveField(field, trimmed)
+                        }
+                        editField = null
+                    },
+                ) {
+                    Text(
+                        "[ SAVE ]",
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        color = SeekerClawColors.Primary,
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { editField = null }) {
+                    Text(
+                        "[ CANCEL ]",
+                        fontFamily = FontFamily.Monospace,
+                        color = SeekerClawColors.TextDim,
+                    )
+                }
+            },
+            containerColor = SeekerClawColors.Surface,
+            shape = RoundedCornerShape(SeekerClawColors.CornerRadius),
+        )
+    }
+
+    // ==================== Model Picker Dialog ====================
+    if (showModelPicker) {
+        var selectedModel by remember { mutableStateOf(config?.model ?: modelOptions[0].first) }
+
+        AlertDialog(
+            onDismissRequest = { showModelPicker = false },
+            title = {
+                Text(
+                    "SELECT MODEL",
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    color = SeekerClawColors.Primary,
+                )
+            },
+            text = {
+                Column {
+                    modelOptions.forEach { (modelId, label) ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { selectedModel = modelId }
+                                .padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(
+                                selected = selectedModel == modelId,
+                                onClick = { selectedModel = modelId },
+                                colors = RadioButtonDefaults.colors(
+                                    selectedColor = SeekerClawColors.Primary,
+                                    unselectedColor = SeekerClawColors.TextDim,
+                                ),
+                            )
+                            Column(modifier = Modifier.padding(start = 8.dp)) {
+                                Text(
+                                    text = label,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 13.sp,
+                                    color = SeekerClawColors.TextPrimary,
+                                )
+                                Text(
+                                    text = modelId,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 10.sp,
+                                    color = SeekerClawColors.TextDim,
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        saveField("model", selectedModel)
+                        showModelPicker = false
+                    },
+                ) {
+                    Text(
+                        "[ SAVE ]",
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        color = SeekerClawColors.Primary,
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showModelPicker = false }) {
+                    Text(
+                        "[ CANCEL ]",
+                        fontFamily = FontFamily.Monospace,
+                        color = SeekerClawColors.TextDim,
+                    )
+                }
+            },
+            containerColor = SeekerClawColors.Surface,
+            shape = RoundedCornerShape(SeekerClawColors.CornerRadius),
+        )
+    }
+
+    // ==================== Restart Prompt ====================
+    if (showRestartDialog) {
+        AlertDialog(
+            onDismissRequest = { showRestartDialog = false },
+            title = {
+                Text(
+                    "CONFIG UPDATED",
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    color = SeekerClawColors.Primary,
+                )
+            },
+            text = {
+                Text(
+                    "RESTART THE AGENT TO APPLY CHANGES?",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp,
+                    color = SeekerClawColors.TextSecondary,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    OpenClawService.stop(context)
+                    OpenClawService.start(context)
+                    showRestartDialog = false
+                    Toast.makeText(context, "Agent restarting...", Toast.LENGTH_SHORT).show()
+                }) {
+                    Text(
+                        "[ RESTART NOW ]",
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        color = SeekerClawColors.Primary,
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRestartDialog = false }) {
+                    Text(
+                        "[ LATER ]",
+                        fontFamily = FontFamily.Monospace,
+                        color = SeekerClawColors.TextDim,
+                    )
+                }
+            },
+            containerColor = SeekerClawColors.Surface,
+            shape = RoundedCornerShape(SeekerClawColors.CornerRadius),
+        )
+    }
+
+    // ==================== Reset Config Dialog ====================
     if (showResetDialog) {
         AlertDialog(
             onDismissRequest = { showResetDialog = false },
@@ -347,7 +589,7 @@ fun SettingsScreen() {
         )
     }
 
-    // Import confirmation dialog
+    // ==================== Import Dialog ====================
     if (showImportDialog) {
         AlertDialog(
             onDismissRequest = { showImportDialog = false },
@@ -395,7 +637,7 @@ fun SettingsScreen() {
         )
     }
 
-    // Clear memory confirmation dialog
+    // ==================== Clear Memory Dialog ====================
     if (showClearMemoryDialog) {
         AlertDialog(
             onDismissRequest = { showClearMemoryDialog = false },
@@ -468,13 +710,28 @@ private fun ConfigField(label: String, value: String, onClick: (() -> Unit)? = n
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
             .padding(12.dp),
     ) {
-        Text(
-            text = label,
-            fontFamily = FontFamily.Monospace,
-            fontSize = 10.sp,
-            color = SeekerClawColors.TextDim,
-            letterSpacing = 1.sp,
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = label,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 10.sp,
+                color = SeekerClawColors.TextDim,
+                letterSpacing = 1.sp,
+            )
+            if (onClick != null) {
+                Text(
+                    text = "EDIT",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 9.sp,
+                    color = SeekerClawColors.Primary.copy(alpha = 0.6f),
+                    letterSpacing = 1.sp,
+                )
+            }
+        }
         Text(
             text = value,
             fontFamily = FontFamily.Monospace,

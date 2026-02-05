@@ -19,6 +19,7 @@ import android.speech.tts.TextToSpeech
 import android.telephony.SmsManager
 import android.util.Log
 import androidx.core.content.ContextCompat
+import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.util.ServiceState
 import fi.iki.elonen.NanoHTTPD
 import org.json.JSONArray
@@ -95,6 +96,7 @@ class AndroidBridge(
                 "/apps/list" -> handleAppsList()
                 "/apps/launch" -> handleAppsLaunch(params)
                 "/stats/message" -> handleStatsMessage()
+                "/config/set-owner" -> handleSetOwner(params)
                 "/ping" -> jsonResponse(200, mapOf("status" to "ok", "bridge" to "AndroidBridge"))
                 else -> jsonResponse(404, mapOf("error" to "Unknown endpoint: $uri"))
             }
@@ -399,6 +401,18 @@ class AndroidBridge(
     private fun handleStatsMessage(): Response {
         ServiceState.incrementMessages()
         return jsonResponse(200, mapOf("success" to true))
+    }
+
+    // ==================== Config ====================
+
+    private fun handleSetOwner(params: JSONObject): Response {
+        val ownerId = params.optString("ownerId", "")
+        if (ownerId.isBlank()) {
+            return jsonResponse(400, mapOf("error" to "ownerId is required"))
+        }
+        ConfigManager.updateConfigField(context, "telegramOwnerId", ownerId)
+        Log.i(TAG, "Owner ID set to $ownerId via auto-detect")
+        return jsonResponse(200, mapOf("success" to true, "ownerId" to ownerId))
     }
 
     // ==================== Helpers ====================

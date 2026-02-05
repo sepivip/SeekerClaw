@@ -104,8 +104,8 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             currentStep = 1
             return
         }
-        if (botToken.isBlank() || ownerId.isBlank()) {
-            errorMessage = "Telegram bot token and your user ID are required"
+        if (botToken.isBlank()) {
+            errorMessage = "Telegram bot token is required"
             currentStep = 2
             return
         }
@@ -433,7 +433,7 @@ private fun TelegramStep(
 
         // User ID section
         Text(
-            text = "YOUR USER ID",
+            text = "YOUR USER ID (OPTIONAL)",
             fontFamily = FontFamily.Monospace,
             fontSize = 12.sp,
             fontWeight = FontWeight.Bold,
@@ -442,13 +442,9 @@ private fun TelegramStep(
         )
         Text(
             text = """
-                To find your Telegram user ID:
+                Leave empty to auto-detect: the first person to message your bot becomes the owner.
 
-                1. Open Telegram, search @userinfobot
-                2. Start a chat and send any message
-                3. It replies with your ID (a number)
-
-                Example: 123456789
+                Or enter manually (search @userinfobot on Telegram to find your ID).
             """.trimIndent(),
             fontFamily = FontFamily.Monospace,
             fontSize = 12.sp,
@@ -463,7 +459,7 @@ private fun TelegramStep(
             value = ownerId,
             onValueChange = onOwnerIdChange,
             label = { Text("YOUR_USER_ID", fontFamily = FontFamily.Monospace, fontSize = 11.sp) },
-            placeholder = { Text("123456789", fontFamily = FontFamily.Monospace, fontSize = 14.sp, color = SeekerClawColors.TextDim) },
+            placeholder = { Text("auto-detect", fontFamily = FontFamily.Monospace, fontSize = 14.sp, color = SeekerClawColors.TextDim) },
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
             colors = fieldColors,
@@ -475,7 +471,7 @@ private fun TelegramStep(
         PixelNavButtons(
             onBack = onBack,
             onNext = onNext,
-            nextEnabled = botToken.isNotBlank() && ownerId.isNotBlank(),
+            nextEnabled = botToken.isNotBlank(),
         )
     }
 }
