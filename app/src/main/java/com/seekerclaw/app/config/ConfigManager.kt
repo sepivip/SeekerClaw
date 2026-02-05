@@ -35,6 +35,12 @@ object ConfigManager {
     fun isSetupComplete(context: Context): Boolean =
         prefs(context).getBoolean(KEY_SETUP_COMPLETE, false)
 
+    fun markSetupSkipped(context: Context) {
+        prefs(context).edit()
+            .putBoolean(KEY_SETUP_COMPLETE, true)
+            .apply()
+    }
+
     fun saveConfig(context: Context, config: AppConfig) {
         val encApiKey = KeystoreHelper.encrypt(config.anthropicApiKey)
         val encBotToken = KeystoreHelper.encrypt(config.telegramBotToken)
@@ -54,17 +60,27 @@ object ConfigManager {
         val p = prefs(context)
         if (!p.getBoolean(KEY_SETUP_COMPLETE, false)) return null
 
-        val encApiKeyB64 = p.getString(KEY_API_KEY_ENC, null) ?: return null
-        val encBotTokenB64 = p.getString(KEY_BOT_TOKEN_ENC, null) ?: return null
+        val apiKey = try {
+            val enc = p.getString(KEY_API_KEY_ENC, null)
+            if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to decrypt API key", e)
+            ""
+        }
 
-        val apiKey = KeystoreHelper.decrypt(Base64.decode(encApiKeyB64, Base64.NO_WRAP))
-        val botToken = KeystoreHelper.decrypt(Base64.decode(encBotTokenB64, Base64.NO_WRAP))
+        val botToken = try {
+            val enc = p.getString(KEY_BOT_TOKEN_ENC, null)
+            if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to decrypt bot token", e)
+            ""
+        }
 
         return AppConfig(
             anthropicApiKey = apiKey,
             telegramBotToken = botToken,
             telegramOwnerId = p.getString(KEY_OWNER_ID, "") ?: "",
-            model = p.getString(KEY_MODEL, "claude-sonnet-4-20250514") ?: "claude-sonnet-4-20250514",
+            model = p.getString(KEY_MODEL, "claude-opus-4-6") ?: "claude-opus-4-6",
             agentName = p.getString(KEY_AGENT_NAME, "MyAgent") ?: "MyAgent",
             autoStartOnBoot = p.getBoolean(KEY_AUTO_START, true),
         )

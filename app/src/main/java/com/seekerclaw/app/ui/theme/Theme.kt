@@ -289,14 +289,14 @@ private fun createTypography(colors: ThemeColors) = Typography(
         fontWeight = FontWeight.Bold,
         fontSize = 22.sp,
         lineHeight = 28.sp,
-        letterSpacing = 2.sp,
+        letterSpacing = 0.5.sp,
     ),
     labelLarge = TextStyle(
         fontFamily = FontFamily.Monospace,
         fontWeight = FontWeight.Medium,
         fontSize = 13.sp,
         lineHeight = 18.sp,
-        letterSpacing = 1.sp,
+        letterSpacing = 0.5.sp,
     ),
 )
 

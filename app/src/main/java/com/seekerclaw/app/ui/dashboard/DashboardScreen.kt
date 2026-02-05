@@ -1,7 +1,6 @@
 package com.seekerclaw.app.ui.dashboard
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -36,8 +35,6 @@ import androidx.compose.ui.unit.sp
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.service.OpenClawService
 import com.seekerclaw.app.ui.theme.SeekerClawColors
-import com.seekerclaw.app.util.LogCollector
-import com.seekerclaw.app.util.LogLevel
 import com.seekerclaw.app.util.ServiceState
 import com.seekerclaw.app.util.ServiceStatus
 import java.text.SimpleDateFormat
@@ -52,10 +49,9 @@ fun DashboardScreen() {
     val messageCount by ServiceState.messageCount.collectAsState()
     val messagesToday by ServiceState.messagesToday.collectAsState()
     val lastActivityTime by ServiceState.lastActivityTime.collectAsState()
-    val logs by LogCollector.logs.collectAsState()
 
     val config = ConfigManager.loadConfig(context)
-    val agentName = config?.agentName ?: "MyAgent"
+    val agentName = config?.agentName ?: "SeekerClaw"
 
     val isRunning = status == ServiceStatus.RUNNING || status == ServiceStatus.STARTING
 
@@ -67,17 +63,10 @@ fun DashboardScreen() {
     }
 
     val statusText = when (status) {
-        ServiceStatus.RUNNING -> "SYSTEM NOMINAL"
-        ServiceStatus.STARTING -> "INITIALIZING..."
-        ServiceStatus.STOPPED -> "SYSTEM OFFLINE"
-        ServiceStatus.ERROR -> "SYSTEM FAULT"
-    }
-
-    val statusBadge = when (status) {
-        ServiceStatus.RUNNING -> "ONLINE"
-        ServiceStatus.STARTING -> "BOOT"
-        ServiceStatus.STOPPED -> "OFFLINE"
-        ServiceStatus.ERROR -> "FAULT"
+        ServiceStatus.RUNNING -> "Running"
+        ServiceStatus.STARTING -> "Starting..."
+        ServiceStatus.STOPPED -> "Offline"
+        ServiceStatus.ERROR -> "Error"
     }
 
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
@@ -87,220 +76,142 @@ fun DashboardScreen() {
             .fillMaxSize()
             .background(SeekerClawColors.Background)
             .verticalScroll(rememberScrollState())
-            .padding(16.dp),
+            .padding(20.dp),
     ) {
-        // ═══ BRANDING HEADER ═══
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = "SEEKER//CLAW",
-                fontFamily = FontFamily.Monospace,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold,
-                color = SeekerClawColors.Primary,
-                letterSpacing = 2.sp,
-            )
-            Box(
-                modifier = Modifier
-                    .background(statusColor.copy(alpha = 0.15f), RoundedCornerShape(4.dp))
-                    .border(1.dp, statusColor.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
-                    .padding(horizontal = 10.dp, vertical = 4.dp),
-            ) {
-                Text(
-                    text = statusBadge,
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = statusColor,
-                    letterSpacing = 1.sp,
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(4.dp))
-
+        // Header
         Text(
-            text = agentName.uppercase(),
+            text = "SEEKER//CLAW",
             fontFamily = FontFamily.Monospace,
-            fontSize = 12.sp,
-            color = SeekerClawColors.TextDim,
-            letterSpacing = 1.sp,
-        )
-
-        Spacer(modifier = Modifier.height(20.dp))
-
-        // ═══ STATUS CARD ═══
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(SeekerClawColors.Surface, shape)
-                .border(1.dp, SeekerClawColors.Primary.copy(alpha = 0.2f), shape)
-                .padding(20.dp),
-        ) {
-            Column {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier
-                            .size(10.dp)
-                            .clip(CircleShape)
-                            .background(statusColor),
-                    )
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Text(
-                        text = statusText,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = SeekerClawColors.TextPrimary,
-                        letterSpacing = 1.sp,
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                HorizontalDivider(
-                    color = SeekerClawColors.Primary.copy(alpha = 0.1f),
-                    thickness = 1.dp,
-                )
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                Text(
-                    text = "UPTIME",
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 10.sp,
-                    color = SeekerClawColors.TextDim,
-                    letterSpacing = 1.sp,
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = formatUptime(uptime),
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = SeekerClawColors.TextPrimary,
-                    letterSpacing = 2.sp,
-                )
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    StatMini(label = "TODAY", value = "$messagesToday")
-                    StatMini(label = "TOTAL", value = "$messageCount")
-                    StatMini(label = "LAST", value = formatLastActivity(lastActivityTime))
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        // ═══ ACTIVE UPLINKS ═══
-        Text(
-            text = "ACTIVE UPLINKS",
-            fontFamily = FontFamily.Monospace,
-            fontSize = 12.sp,
+            fontSize = 20.sp,
             fontWeight = FontWeight.Bold,
             color = SeekerClawColors.Primary,
             letterSpacing = 1.sp,
         )
 
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(2.dp))
 
+        Text(
+            text = agentName,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 13.sp,
+            color = SeekerClawColors.TextDim,
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // Status card
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(SeekerClawColors.Surface, shape)
-                .border(1.dp, SeekerClawColors.Primary.copy(alpha = 0.12f), shape),
+                .padding(20.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(10.dp)
+                        .clip(CircleShape)
+                        .background(statusColor),
+                )
+                Spacer(modifier = Modifier.width(12.dp))
+                Text(
+                    text = statusText,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = SeekerClawColors.TextPrimary,
+                )
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            HorizontalDivider(
+                color = SeekerClawColors.TextDim.copy(alpha = 0.2f),
+                thickness = 1.dp,
+            )
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            Text(
+                text = "UPTIME",
+                fontFamily = FontFamily.Monospace,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Medium,
+                color = SeekerClawColors.TextDim,
+                letterSpacing = 0.5.sp,
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = formatUptime(uptime),
+                fontFamily = FontFamily.Monospace,
+                fontSize = 24.sp,
+                fontWeight = FontWeight.Bold,
+                color = SeekerClawColors.TextPrimary,
+            )
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                StatMini(label = "TODAY", value = "$messagesToday")
+                StatMini(label = "TOTAL", value = "$messageCount")
+                StatMini(label = "LAST", value = formatLastActivity(lastActivityTime))
+            }
+        }
+
+        Spacer(modifier = Modifier.height(28.dp))
+
+        // Uplinks
+        Text(
+            text = "UPLINKS",
+            fontFamily = FontFamily.Monospace,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Medium,
+            color = SeekerClawColors.TextSecondary,
+            letterSpacing = 0.5.sp,
+        )
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(SeekerClawColors.Surface, shape),
         ) {
             UplinkRow(
                 icon = "//TG",
-                name = "Telegram Uplink",
-                subtitle = "MSG RELAY",
+                name = "Telegram",
+                subtitle = "Message relay",
                 serviceStatus = status,
             )
             HorizontalDivider(
-                color = SeekerClawColors.Primary.copy(alpha = 0.08f),
+                color = SeekerClawColors.TextDim.copy(alpha = 0.1f),
                 modifier = Modifier.padding(horizontal = 16.dp),
             )
             UplinkRow(
                 icon = "//GW",
                 name = "Gateway",
-                subtitle = "OPENCLAW ENGINE",
+                subtitle = "OpenClaw engine",
                 serviceStatus = status,
             )
             HorizontalDivider(
-                color = SeekerClawColors.Primary.copy(alpha = 0.08f),
+                color = SeekerClawColors.TextDim.copy(alpha = 0.1f),
                 modifier = Modifier.padding(horizontal = 16.dp),
             )
             UplinkRow(
                 icon = "//AI",
                 name = "AI Model",
-                subtitle = config?.model?.substringAfterLast("-")?.uppercase() ?: "---",
+                subtitle = config?.model?.substringAfterLast("-")?.replaceFirstChar { it.uppercase() }
+                    ?: "Not configured",
                 serviceStatus = status,
             )
         }
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(28.dp))
 
-        // ═══ MINI TERMINAL ═══
-        Text(
-            text = "TERMINAL",
-            fontFamily = FontFamily.Monospace,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Bold,
-            color = SeekerClawColors.Primary,
-            letterSpacing = 1.sp,
-        )
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(100.dp)
-                .background(SeekerClawColors.Background, shape)
-                .border(1.dp, SeekerClawColors.Primary.copy(alpha = 0.08f), shape)
-                .padding(12.dp),
-        ) {
-            if (logs.isEmpty()) {
-                Text(
-                    text = "$ awaiting output...",
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 11.sp,
-                    color = SeekerClawColors.TextDim,
-                )
-            } else {
-                Column {
-                    logs.takeLast(4).forEach { entry ->
-                        val color = when (entry.level) {
-                            LogLevel.INFO -> SeekerClawColors.Accent.copy(alpha = 0.7f)
-                            LogLevel.WARN -> SeekerClawColors.Warning
-                            LogLevel.ERROR -> SeekerClawColors.Error
-                        }
-                        Text(
-                            text = "$ ${entry.message}",
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 10.sp,
-                            color = color,
-                            maxLines = 1,
-                            lineHeight = 14.sp,
-                        )
-                    }
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        // ═══ ACTION BUTTON ═══
-        val btnColor = if (isRunning) SeekerClawColors.Error else SeekerClawColors.Primary
-
+        // Action button
         Button(
             onClick = {
                 if (isRunning) {
@@ -314,16 +225,15 @@ fun DashboardScreen() {
                 .height(52.dp),
             shape = shape,
             colors = ButtonDefaults.buttonColors(
-                containerColor = btnColor,
+                containerColor = if (isRunning) SeekerClawColors.Error else SeekerClawColors.Primary,
                 contentColor = Color.White,
             ),
         ) {
             Text(
-                text = if (isRunning) "[ TERMINATE ]" else "[ DEPLOY AGENT ]",
+                text = if (isRunning) "Stop Agent" else "Deploy Agent",
                 fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Bold,
                 fontSize = 15.sp,
-                letterSpacing = 2.sp,
             )
         }
 
@@ -346,8 +256,9 @@ private fun StatMini(label: String, value: String) {
             text = label,
             fontFamily = FontFamily.Monospace,
             fontSize = 9.sp,
+            fontWeight = FontWeight.Medium,
             color = SeekerClawColors.TextDim,
-            letterSpacing = 1.sp,
+            letterSpacing = 0.5.sp,
         )
     }
 }
@@ -385,16 +296,15 @@ private fun UplinkRow(
             Text(
                 text = name,
                 fontFamily = FontFamily.Monospace,
-                fontSize = 13.sp,
+                fontSize = 14.sp,
                 fontWeight = FontWeight.Medium,
                 color = SeekerClawColors.TextPrimary,
             )
             Text(
                 text = subtitle,
                 fontFamily = FontFamily.Monospace,
-                fontSize = 10.sp,
+                fontSize = 11.sp,
                 color = SeekerClawColors.TextDim,
-                letterSpacing = 1.sp,
             )
         }
 
@@ -408,14 +318,14 @@ private fun UplinkRow(
 }
 
 private fun formatUptime(millis: Long): String {
-    if (millis <= 0) return "00H 00M 00S"
+    if (millis <= 0) return "00h 00m 00s"
     val seconds = millis / 1000
     val minutes = seconds / 60
     val hours = minutes / 60
     val days = hours / 24
     return buildString {
-        if (days > 0) append("${days}D ")
-        append("%02dH %02dM %02dS".format(hours % 24, minutes % 60, seconds % 60))
+        if (days > 0) append("${days}d ")
+        append("%02dh %02dm %02ds".format(hours % 24, minutes % 60, seconds % 60))
     }.trimEnd()
 }
 

@@ -36,7 +36,7 @@ const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
 const BOT_TOKEN = config.botToken;
 let OWNER_ID = config.ownerId ? String(config.ownerId) : '';
 const ANTHROPIC_KEY = config.anthropicApiKey;
-const MODEL = config.model || 'claude-sonnet-4-20250514';
+const MODEL = config.model || 'claude-opus-4-6';
 const AGENT_NAME = config.agentName || 'SeekerClaw';
 
 if (!BOT_TOKEN || !ANTHROPIC_KEY) {
@@ -2505,9 +2505,19 @@ cronService.start();
 
 log('Connecting to Telegram...');
 telegram('getMe')
-    .then(result => {
+    .then(async result => {
         if (result.ok) {
             log(`Bot connected: @${result.result.username}`);
+            // Flush old updates to avoid re-processing messages after restart
+            try {
+                const flush = await telegram('getUpdates', { offset: -1, timeout: 0 });
+                if (flush.ok && flush.result.length > 0) {
+                    offset = flush.result[flush.result.length - 1].update_id + 1;
+                    log(`Flushed ${flush.result.length} old update(s), offset now ${offset}`);
+                }
+            } catch (e) {
+                log(`Warning: Could not flush old updates: ${e.message}`);
+            }
             poll();
         } else {
             log(`ERROR: ${JSON.stringify(result)}`);

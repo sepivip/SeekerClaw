@@ -14,6 +14,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
@@ -48,9 +49,9 @@ data class BottomNavItem(
 )
 
 val bottomNavItems = listOf(
-    BottomNavItem("HOME", Icons.Default.Dashboard, DashboardRoute),
-    BottomNavItem("CONSOLE", Icons.Default.Description, LogsRoute),
-    BottomNavItem("CONFIG", Icons.Default.Settings, SettingsRoute),
+    BottomNavItem("Home", Icons.Default.Dashboard, DashboardRoute),
+    BottomNavItem("Console", Icons.Default.Description, LogsRoute),
+    BottomNavItem("Settings", Icons.Default.Settings, SettingsRoute),
 )
 
 @Composable
@@ -60,14 +61,12 @@ fun SeekerClawNavHost() {
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = navBackStackEntry?.destination
 
-    // Skip setup if already configured
     val startDestination: Any = if (ConfigManager.isSetupComplete(context)) {
         DashboardRoute
     } else {
         SetupRoute
     }
 
-    // Show bottom bar only on main screens (not Setup)
     val showBottomBar = currentDestination?.let { dest ->
         bottomNavItems.any { item ->
             dest.hierarchy.any { it.hasRoute(item.route::class) }
@@ -107,9 +106,8 @@ fun SeekerClawNavHost() {
                                 Text(
                                     text = item.label,
                                     fontFamily = FontFamily.Monospace,
-                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                                    fontSize = 10.sp,
-                                    letterSpacing = 1.sp,
+                                    fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
+                                    fontSize = 11.sp,
                                 )
                             },
                             colors = NavigationBarItemDefaults.colors(
@@ -117,7 +115,7 @@ fun SeekerClawNavHost() {
                                 selectedTextColor = SeekerClawColors.Primary,
                                 unselectedIconColor = SeekerClawColors.TextDim,
                                 unselectedTextColor = SeekerClawColors.TextDim,
-                                indicatorColor = SeekerClawColors.PrimaryGlow,
+                                indicatorColor = SeekerClawColors.Primary.copy(alpha = 0.12f),
                             ),
                         )
                     }

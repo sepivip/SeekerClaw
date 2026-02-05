@@ -1,7 +1,6 @@
 package com.seekerclaw.app.ui.logs
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -50,7 +49,6 @@ fun LogsScreen() {
 
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
 
-    // Auto-scroll to bottom when new logs arrive
     LaunchedEffect(logs.size, autoScroll) {
         if (autoScroll && logs.isNotEmpty()) {
             listState.animateScrollToItem(logs.size - 1)
@@ -61,7 +59,7 @@ fun LogsScreen() {
         modifier = Modifier
             .fillMaxSize()
             .background(SeekerClawColors.Background)
-            .padding(16.dp),
+            .padding(20.dp),
     ) {
         // Header
         Row(
@@ -70,19 +68,17 @@ fun LogsScreen() {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = "CONSOLE",
+                text = "Console",
                 fontFamily = FontFamily.Monospace,
-                fontSize = 18.sp,
+                fontSize = 20.sp,
                 fontWeight = FontWeight.Bold,
-                color = SeekerClawColors.Primary,
-                letterSpacing = 2.sp,
+                color = SeekerClawColors.TextPrimary,
             )
             Text(
-                text = "${logs.size} LINES",
+                text = "${logs.size} lines",
                 fontFamily = FontFamily.Monospace,
-                fontSize = 11.sp,
+                fontSize = 12.sp,
                 color = SeekerClawColors.TextDim,
-                letterSpacing = 1.sp,
             )
         }
 
@@ -93,8 +89,7 @@ fun LogsScreen() {
             modifier = Modifier
                 .fillMaxWidth()
                 .background(SeekerClawColors.Surface, shape)
-                .border(1.dp, SeekerClawColors.Primary.copy(alpha = 0.12f), shape)
-                .padding(horizontal = 12.dp, vertical = 4.dp),
+                .padding(horizontal = 8.dp, vertical = 2.dp),
             horizontalArrangement = Arrangement.End,
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -116,7 +111,7 @@ fun LogsScreen() {
                 Icon(
                     Icons.Default.Delete,
                     contentDescription = "Clear",
-                    tint = SeekerClawColors.Error.copy(alpha = 0.7f),
+                    tint = SeekerClawColors.Error.copy(alpha = 0.6f),
                 )
             }
         }
@@ -128,8 +123,7 @@ fun LogsScreen() {
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
-                .background(SeekerClawColors.Surface, shape)
-                .border(1.dp, SeekerClawColors.Primary.copy(alpha = 0.08f), shape),
+                .background(SeekerClawColors.Surface, shape),
         ) {
             if (logs.isEmpty()) {
                 Box(
@@ -141,15 +135,14 @@ fun LogsScreen() {
                             text = "$ _",
                             fontFamily = FontFamily.Monospace,
                             fontSize = 24.sp,
-                            color = SeekerClawColors.Primary.copy(alpha = 0.4f),
+                            color = SeekerClawColors.TextDim.copy(alpha = 0.4f),
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            text = "AWAITING OUTPUT...",
+                            text = "Awaiting output...",
                             fontFamily = FontFamily.Monospace,
-                            fontSize = 12.sp,
+                            fontSize = 13.sp,
                             color = SeekerClawColors.TextDim,
-                            letterSpacing = 1.sp,
                         )
                     }
                 }
@@ -158,7 +151,7 @@ fun LogsScreen() {
                     state = listState,
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
                 ) {
                     items(logs) { entry ->
                         val color = when (entry.level) {
