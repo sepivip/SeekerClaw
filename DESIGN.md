@@ -1,130 +1,269 @@
 # Design System: SeekerClaw
 
-## 1. Visual Theme & Atmosphere
+## Theme System
 
-SeekerClaw's visual identity channels **8-bit retrofuturism** — a CRT terminal that hums with phosphor green on near-black void. The aesthetic evokes early command-line interfaces, military HUD displays, and the raw energy of hacker culture. Every screen feels like staring into a glowing terminal in a dark room.
+SeekerClaw supports **4 swappable themes** that can be changed at runtime from Settings:
 
-The mood is **utilitarian, dense, and electric**. There is no softness — corners are sharp, text is monospaced, and every element is clad in hard borders. The UI feels like a control panel for something powerful and slightly dangerous.
+| Theme | Style | Best For |
+|-------|-------|----------|
+| **DarkOps** (default) | Cyberpunk dark navy + crimson red | Modern tactical aesthetic |
+| **Pixel** | 8-bit arcade, dot matrix background | Full retro experience |
+| **Terminal** | CRT phosphor green | Classic hacker aesthetic |
+| **Clean** | Minimal dark with white text | Readability, OpenClaw parity |
+
+### Switching Themes
+
+```kotlin
+// In code
+ThemeManager.setTheme(SeekerClawThemeStyle.DARKOPS)
+
+// In Settings screen
+// Tap DARKOPS, TERMINAL, PIXEL, or CLEAN buttons
+```
+
+---
+
+## 1. Visual Themes & Atmosphere
+
+### DarkOps Theme (Default)
+Cyberpunk tactical interface with dark navy backgrounds, crimson red accents, and electric green status indicators. Evokes military command centers, cyberpunk HUDs, and covert ops dashboards.
 
 **Key Characteristics:**
-- Deep black backgrounds with faint green phosphor tint
-- Monospace typography everywhere — no exceptions
-- Sharp, near-zero border radius (2-4dp) for that pixel-perfect 8-bit feel
-- Bracket-wrapped labels: `[ DEPLOY AGENT ]`, `> SETTINGS`, `--- DANGER ZONE ---`
-- Terminal prompt prefixes: `>`, `<`, `//`, `---`
-- Double-border and inner-glow effects for retro depth
-- Color-coded status: green = good, red = bad, amber = caution
+- Deep navy backgrounds (`#0D0F14`)
+- Crimson red as primary accent (`#FF1744`)
+- Electric green for online/active status (`#00E676`)
+- 12dp corner radius (modern, smooth)
+- Card-based layout with subtle red-tinted borders
+- White text hierarchy (87%/50%/25% opacity)
+- Status dots (green=online, amber=starting, gray=offline, orange=error)
+- "SEEKER//CLAW" branding
+- Active Uplinks section with module status rows
+- Mini terminal preview on dashboard
 
-## 2. Color Palette & Roles
+### Pixel Theme
+Full 8-bit arcade aesthetic with dot matrix halftone background pattern. Evokes Game Boy, early arcade machines, and DOS-era interfaces.
 
-### Void Black Foundation
-- **Deep Terminal Black** (`#050808`) — Primary background. Near-pure black with the barest green cast, like a powered-off CRT still holding charge.
-- **Phosphor Surface** (`#0A1210`) — Card/surface background. Slightly lifted from the void with a green-tinted darkness.
-- **Highlight Surface** (`#0F1A16`) — Elevated surfaces, dropdown menus, modal backgrounds.
+**Key Characteristics:**
+- Dot matrix background pattern (green dots on black)
+- Perfect 0dp corner radius (pixel-sharp squares)
+- ASCII art logo: `╔═══════════════════════╗ ║ S E E K E R C L A W ║ ╚═══════════════════════╝`
+- Square step indicators with connecting lines
+- Chunky pixel arrow navigation
+- Orange accent color for arcade feel
 
-### Phosphor Green (Primary)
-- **Phosphor Bright** (`#00FF41`) — Primary color. Text, active states, running indicators. The signature "Matrix green."
-- **Phosphor Dim** (`#00AA2A`) — Secondary text, borders, inactive but visible elements.
-- **Phosphor Glow** (`#00FF41` at 20% opacity) — Button fills, status box backgrounds, ambient glow effect.
-- **Phosphor Dark** (`#006618`) — Tertiary text, very dim labels, structural hints.
+### Terminal Theme
+CRT phosphor green terminal aesthetic. Evokes early Unix terminals, Matrix-style displays, and military HUD interfaces.
 
-### CRT Red (Error / Danger)
-- **Hot Red** (`#FF003C`) — Error states, danger zone buttons, fault indicators.
-- **Dim Red** (`#AA0028`) — Error borders, muted danger accents.
-- **Red Glow** (`#FF003C` at 20% opacity) — Danger button backgrounds, error message containers.
+**Key Characteristics:**
+- Deep black with green phosphor tint
+- 2dp corner radius (slightly rounded)
+- Double-border effects for CRT depth
+- No dot matrix (solid backgrounds)
+- Red accent color (`#FF2D2D`)
 
-### Signal Colors
-- **CRT Amber** (`#FFB000`) — Warning states (STARTING/BOOT status).
-- **Neon Red** (`#FF2D2D`) — Secondary accent for navigation links, "enter manually" prompts. Adds warmth against the green.
+### Clean Theme
+Minimal dark theme matching OpenClaw's style. High contrast white-on-black for readability.
 
-### Scanline Hint
-- **Scanline** (`#00FF41` at 3% opacity) — Subtle overlay effect for depth.
+**Key Characteristics:**
+- Pure dark backgrounds (`#0D0D0D`)
+- 8dp corner radius (modern, soft)
+- White text at 87%/50% opacity
+- Purple accent (`#A78BFA`) — OpenClaw brand
+- No special effects
 
-## 3. Typography Rules
+---
 
-**Font Family:** `FontFamily.Monospace` (system monospace) — used universally across all text in the app. No sans-serif, no serif, no variable fonts.
+## 2. Color Palettes
 
-### Hierarchy & Weights
-- **Screen Titles:** Bold, 18-22sp, 2-3sp letter-spacing, uppercase. Prefixed with `>` prompt character.
-- **Dividers:** `================================` or `////////////////////////////` in PrimaryDim.
-- **Section Headers:** Bold 12sp, 1sp letter-spacing, wrapped in `--- TITLE ---`, colored Accent red.
-- **Body/Labels:** Normal 13-15sp for readable content. Green primary or dim green for secondary.
-- **Field Labels:** 10-11sp, uppercase with underscores (`ANTHROPIC_API_KEY`), dim green.
-- **Button Text:** Bold 13-16sp, 1-2sp letter-spacing, wrapped in brackets `[ ACTION ]`.
-- **Log Entries:** 11sp, tight 16sp line-height for dense terminal output.
+### DarkOps Theme Colors
+```
+Background:     #0D0F14 (deep navy)
+Surface:        #161A25 (dark card)
+Primary:        #FF1744 (crimson red)
+Primary Dim:    #CC1236
+Primary Glow:   #FF1744 @ 20%
+Error:          #FF6B35 (amber-orange)
+Accent:         #00E676 (electric green)
+Warning:        #FFB300 (gold)
+Text Primary:   #FFFFFF @ 87%
+Text Secondary: #FFFFFF @ 50%
+Text Dim:       #FFFFFF @ 25%
+Corner Radius:  12dp
+```
 
-### Text Color Hierarchy
-1. **Phosphor Bright** (`#00FF41`) — Primary text, values, active content
-2. **Phosphor Dim** (`#00AA2A`) — Secondary text, timestamps, supporting info
-3. **Phosphor Dark** (`#006618`) — Tertiary labels, hints, structural text
+### Pixel Theme Colors
+```
+Background:     #0A0A0A
+Surface:        #141414
+Primary:        #00FF41 (phosphor green)
+Primary Dim:    #00CC33
+Primary Glow:   #00FF41 @ 25%
+Error:          #FF2020
+Accent:         #FF6B00 (arcade orange)
+Text Primary:   #00FF41
+Text Secondary: #00CC33
+Dot Matrix:     #00FF41 @ 7%
+Corner Radius:  0dp
+```
+
+### Terminal Theme Colors
+```
+Background:     #050808 (green-tinted black)
+Surface:        #0A1210
+Primary:        #00FF41
+Primary Dim:    #00AA2A
+Primary Glow:   #00FF41 @ 20%
+Error:          #FF003C
+Accent:         #FF2D2D (neon red)
+Text Primary:   #00FF41
+Text Secondary: #00AA2A
+Corner Radius:  2dp
+```
+
+### Clean Theme Colors
+```
+Background:     #0D0D0D
+Surface:        #1A1A1A
+Primary:        #00C805 (softer green)
+Primary Dim:    #00A004
+Error:          #FF4444
+Accent:         #A78BFA (purple)
+Text Primary:   #FFFFFF @ 87%
+Text Secondary: #FFFFFF @ 50%
+Corner Radius:  8dp
+```
+
+---
+
+## 3. Typography
+
+**Font Family:** `FontFamily.Monospace` — universal across all themes and all text.
+
+### Hierarchy
+- **Screen Titles:** Bold, 18sp, 2sp letter-spacing
+- **Section Labels:** Bold 12sp, 1sp letter-spacing (e.g., "ACTIVE UPLINKS", "TERMINAL")
+- **Body Text:** Normal 13-15sp
+- **Field Labels:** 10-11sp, uppercase with underscores
+- **Button Text:** Bold 13-16sp, bracket-wrapped `[ ACTION ]`
+- **Status Badges:** 11sp, bold, in colored pill background
+
+---
 
 ## 4. Component Stylings
 
 ### Buttons
-- **Shape:** `RoundedCornerShape(2.dp)` — nearly squared, pixel-sharp
-- **Primary CTA:** Phosphor Glow background + 1dp Phosphor Bright border. Green text.
-- **Danger CTA:** Red Glow background + 1dp Dim Red border. Hot Red text.
-- **Disabled:** Surface background, Phosphor Dark text, Dark border.
-- **All text:** Monospace, bold, letter-spaced, bracket-wrapped: `[ INITIALIZE AGENT ]`
+- **Shape:** `RoundedCornerShape(CornerRadius)` — 12dp DarkOps, 0dp Pixel, 2dp Terminal, 8dp Clean
+- **Primary Action (DarkOps):** Solid fill with `containerColor = Primary`, white text
+- **Primary Action (others):** Border with PrimaryGlow background, colored text
+- **Danger:** Solid fill with Error color, white text
+- **Text:** Bracket-wrapped: `[ DEPLOY AGENT ]`, `[ TERMINATE ]`
 
-### Cards / Containers
-- **Corner Radius:** 2dp (config fields, stat cards) to 4dp (status display, dialogs)
-- **Background:** Phosphor Surface (`#0A1210`)
-- **Border:** 1dp Phosphor Dim at 20-40% opacity
-- **Shadow Strategy:** None. Depth conveyed through border hierarchy and color glow, not shadows.
-- **Double-border effect:** Status display uses outer 2dp border + inner 1dp drawn border for retro CRT depth.
+### Status Card (DarkOps Dashboard)
+- Surface background with subtle primary-tinted border (alpha 0.2)
+- Status dot (CircleShape, 10dp) + status text
+- HorizontalDivider separator
+- Uptime display (22sp bold)
+- Mini stats row (TODAY, TOTAL, LAST)
 
-### Inputs / Forms
-- **Shape:** `RoundedCornerShape(2.dp)`
-- **Border:** Phosphor Dim at 40% unfocused, Phosphor Bright on focus
-- **Background:** Phosphor Surface
-- **Label:** Monospace 11sp, uppercase with underscores
-- **Cursor:** Phosphor Bright green
-- **Text:** Phosphor Bright green (the terminal never shows white text)
+### Active Uplinks (DarkOps Dashboard)
+- Card with rows separated by dividers
+- Each row: icon label (//TG, //GW, //AI) + name/subtitle + status dot
+- Status dots: green=running, yellow=starting, gray=stopped, orange=error
 
-### Navigation Bar
-- **Container:** Phosphor Surface with 1dp PrimaryDim top border
-- **Labels:** Bracket-wrapped abbreviations: `[SYS]`, `[LOG]`, `[CFG]`
-- **Selected:** Phosphor Bright icon + text, Phosphor Glow indicator
-- **Unselected:** Phosphor Dark icon + text
-- **Zero tonal elevation** — flat terminal look
+### Mini Terminal (DarkOps Dashboard)
+- Background-colored box with subtle border
+- Shows last 4 log entries with `$` prefix
+- Color-coded: green=info, yellow=warn, red=error
 
-### Dialogs
-- **Shape:** `RoundedCornerShape(4.dp)`
-- **Background:** Phosphor Surface
-- **Title:** Monospace bold, Hot Red, exclamation-wrapped: `!! RESET CONFIG !!`
-- **Body:** Monospace 12sp, uppercase, Phosphor Dim, tight line-height
-- **Confirm:** `[ CONFIRM ]` in Hot Red
-- **Dismiss:** `[ ABORT ]` in Phosphor Dark
+### Step Indicator
+- Shape adapts to theme corner radius (circles for DarkOps/Clean, squares for Pixel)
+- Connecting lines between steps
 
-### Status Indicator (Dashboard)
-- **Shape:** 140dp square box with 4dp corners (not a circle — squares are more 8-bit)
-- **Double border:** 2dp outer in status color, 1dp inner at 30% opacity
-- **Background:** Status color at 8% opacity
-- **Text:** Status word in 22sp bold + animated chevrons `>>>>>>>` or dashes `- - - -`
+### Navigation Arrows (Pixel Theme)
+- Chunky pixel arrows drawn with Canvas Path
+- `PixelArrowLeft` / `PixelArrowRight` composables
+
+### Dot Matrix Background (Pixel Theme Only)
+```kotlin
+Modifier.dotMatrix(
+    dotColor = SeekerClawColors.DotMatrix,
+    dotSpacing = 6.dp,
+    dotRadius = 1.dp,
+)
+```
+
+---
 
 ## 5. Layout Principles
 
 ### Spacing
-- **Screen padding:** 24dp on all sides
-- **Between sections:** 24-32dp
-- **Between related elements:** 8-12dp
-- **Internal card padding:** 12dp
+- **Screen padding:** 16dp
+- **Between sections:** 24dp
+- **Between elements:** 8-12dp
+- **Card padding:** 12-20dp
 
-### Text Patterns (Terminal Language)
-- Screen headers: `> TITLE` with `===` divider below
-- Section headers: `--- TITLE ---`
+### Text Patterns
+- Branding: `SEEKER//CLAW`
+- Section labels: `ACTIVE UPLINKS`, `TERMINAL`, `CONSOLE`, `CONFIG`
 - Buttons: `[ ACTION ]`
-- Navigation: `[SYS]` `[LOG]` `[CFG]`
-- Back links: `< BACK` or `< back to scanner_`
-- Status messages: `SYSTEM NOMINAL`, `AWAITING OUTPUT...`
-- Error prefixes: `ERR: message`
-- Log prefixes: ` ` (info), `!` (warn), `X` (error)
-- Uptime format: `00:00:00` (digital clock)
-- Empty values: `---` (not em-dash)
+- Navigation: `HOME`, `CONSOLE`, `CONFIG`
+- Status badges: `ONLINE`, `OFFLINE`, `BOOT`, `FAULT` (in colored pills)
+- Uplink icons: `//TG`, `//GW`, `//AI`
+- Errors: `ERR: message`
 
-### Visual Weight
-- Green dominates: headers, values, active UI, running status
-- Red appears sparingly: only for errors, danger zone, stop/terminate actions
-- Amber is rare: only the STARTING/BOOT transitional state
-- The Accent red (`#FF2D2D`) appears as a navigation hint color, adding variety to the green monotone
+---
+
+## 6. File Structure
+
+```
+ui/
+├── theme/
+│   └── Theme.kt              # ThemeManager, ThemeColors, all 4 palettes
+├── components/
+│   └── PixelComponents.kt    # dotMatrix, PixelArrow*, StepIndicator, etc.
+├── setup/
+│   └── SetupScreen.kt        # Multi-step wizard
+├── dashboard/
+│   └── DashboardScreen.kt    # Status card, uplinks, mini terminal
+├── logs/
+│   └── LogsScreen.kt         # Terminal-style console viewer
+├── settings/
+│   └── SettingsScreen.kt     # Config, theme selector, danger zone
+└── navigation/
+    └── NavGraph.kt            # Scaffold + bottom nav
+```
+
+---
+
+## 7. Usage Examples
+
+### Check if dot matrix should be used
+```kotlin
+if (SeekerClawColors.UseDotMatrix) {
+    Modifier.dotMatrix(...)
+}
+```
+
+### Get current corner radius
+```kotlin
+shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
+```
+
+### Theme-aware conditional content
+```kotlin
+if (SeekerClawColors.UseDotMatrix) {
+    AsciiLogoCompact(color = SeekerClawColors.Primary)
+} else {
+    Text("SEEKER//CLAW", ...)
+}
+```
+
+### Status color mapping (Dashboard)
+```kotlin
+val statusColor = when (status) {
+    ServiceStatus.RUNNING -> SeekerClawColors.Accent   // Green
+    ServiceStatus.STARTING -> SeekerClawColors.Warning  // Yellow
+    ServiceStatus.STOPPED -> SeekerClawColors.TextDim   // Gray
+    ServiceStatus.ERROR -> SeekerClawColors.Error        // Orange/Red
+}
+```

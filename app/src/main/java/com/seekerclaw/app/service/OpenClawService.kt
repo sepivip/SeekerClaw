@@ -64,6 +64,7 @@ class OpenClawService : Service() {
         prefs.edit().putLong("last_start", now).putInt("crash_count", newCrashCount).apply()
 
         LogCollector.append("[Service] Starting OpenClaw service... (attempt ${newCrashCount + 1})")
+        ServiceState.updateStatus(ServiceStatus.STARTING)
 
         // Write config.yaml from encrypted storage
         ConfigManager.writeConfigYaml(this)
@@ -89,6 +90,10 @@ class OpenClawService : Service() {
         } catch (e: Exception) {
             LogCollector.append("[Service] Failed to start AndroidBridge: ${e.message}", LogLevel.ERROR)
         }
+
+        // Mark as running
+        ServiceState.updateStatus(ServiceStatus.RUNNING)
+        LogCollector.append("[Service] OpenClaw service is now RUNNING")
 
         // Start watchdog
         // Note: Node.js can only start once per process. If it dies,

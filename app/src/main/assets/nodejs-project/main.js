@@ -167,49 +167,146 @@ setInterval(updateHeartbeat, 5 * 60 * 1000);
 updateHeartbeat();
 
 // ============================================================================
-// REMINDERS SYSTEM
+// CRON/SCHEDULING SYSTEM (ported from OpenClaw)
+// ============================================================================
+// Supports three schedule types:
+//   - "at"    : one-shot job at specific timestamp
+//   - "every" : repeating interval (e.g., every 30s)
+//   - "cron"  : cron expressions (e.g., "0 9 * * MON") — future, needs croner lib
+//
+// Persists to JSON file with atomic writes and .bak backup.
 // ============================================================================
 
-const REMINDERS_PATH = path.join(workDir, 'reminders.json');
+const CRON_STORE_PATH = path.join(workDir, 'cron', 'jobs.json');
+const CRON_RUN_LOG_DIR = path.join(workDir, 'cron', 'runs');
+const MAX_TIMEOUT_MS = 2147483647; // 2^31 - 1 (setTimeout max)
 
-function loadReminders() {
+// --- Cron Store (JSON file persistence with atomic writes) ---
+
+function loadCronStore() {
     try {
-        if (fs.existsSync(REMINDERS_PATH)) {
-            return JSON.parse(fs.readFileSync(REMINDERS_PATH, 'utf8'));
+        if (fs.existsSync(CRON_STORE_PATH)) {
+            return JSON.parse(fs.readFileSync(CRON_STORE_PATH, 'utf8'));
         }
     } catch (e) {
-        log(`Error loading reminders: ${e.message}`);
+        log(`Error loading cron store: ${e.message}`);
     }
-    return [];
+    return { version: 1, jobs: [] };
 }
 
-function saveReminders(reminders) {
-    fs.writeFileSync(REMINDERS_PATH, JSON.stringify(reminders, null, 2), 'utf8');
+function saveCronStore(store) {
+    try {
+        const dir = path.dirname(CRON_STORE_PATH);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+        // Atomic write: write to temp, rename over original
+        const tmpPath = CRON_STORE_PATH + '.tmp';
+        fs.writeFileSync(tmpPath, JSON.stringify(store, null, 2), 'utf8');
+
+        // Backup existing file
+        try {
+            if (fs.existsSync(CRON_STORE_PATH)) {
+                fs.copyFileSync(CRON_STORE_PATH, CRON_STORE_PATH + '.bak');
+            }
+        } catch (_) {}
+
+        fs.renameSync(tmpPath, CRON_STORE_PATH);
+    } catch (e) {
+        log(`Error saving cron store: ${e.message}`);
+    }
 }
 
-function generateReminderId() {
-    return 'rem_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+// --- Cron Run Log (JSONL execution history) ---
+
+function appendCronRunLog(jobId, entry) {
+    try {
+        if (!fs.existsSync(CRON_RUN_LOG_DIR)) {
+            fs.mkdirSync(CRON_RUN_LOG_DIR, { recursive: true });
+        }
+        const logPath = path.join(CRON_RUN_LOG_DIR, `${jobId}.jsonl`);
+        const line = JSON.stringify({ ts: Date.now(), jobId, ...entry }) + '\n';
+        fs.appendFileSync(logPath, line, 'utf8');
+
+        // Prune if too large (>500KB)
+        try {
+            const stat = fs.statSync(logPath);
+            if (stat.size > 500 * 1024) {
+                const lines = fs.readFileSync(logPath, 'utf8').trim().split('\n');
+                const kept = lines.slice(-200); // Keep last 200 entries
+                fs.writeFileSync(logPath, kept.join('\n') + '\n', 'utf8');
+            }
+        } catch (_) {}
+    } catch (e) {
+        log(`Error writing run log: ${e.message}`);
+    }
 }
 
-// Parse natural language time expressions
+// --- Job ID Generation ---
+
+function generateJobId() {
+    return 'cron_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+}
+
+// --- Schedule Computation ---
+
+function computeNextRunAtMs(schedule, nowMs) {
+    switch (schedule.kind) {
+        case 'at':
+            // One-shot: fire once at atMs, undefined if past
+            return schedule.atMs > nowMs ? schedule.atMs : undefined;
+
+        case 'every': {
+            // Repeating interval with optional anchor
+            const anchor = schedule.anchorMs || 0;
+            const interval = schedule.everyMs;
+            if (interval <= 0) return undefined;
+            const elapsed = nowMs - anchor;
+            const periods = Math.ceil(elapsed / interval);
+            return anchor + periods * interval;
+        }
+
+        default:
+            return undefined;
+    }
+}
+
+// --- Parse Natural Language Time ---
+
 function parseTimeExpression(timeStr) {
     const now = new Date();
     const lower = timeStr.toLowerCase().trim();
 
-    // "in X minutes/hours/days"
-    const inMatch = lower.match(/^in\s+(\d+)\s*(minute|min|hour|hr|day|week)s?$/i);
+    // "in X minutes/hours/days/seconds"
+    const inMatch = lower.match(/^in\s+(\d+)\s*(second|sec|minute|min|hour|hr|day|week)s?$/i);
     if (inMatch) {
         const amount = parseInt(inMatch[1], 10);
         const unit = inMatch[2].toLowerCase();
         const ms = {
-            'minute': 60 * 1000,
-            'min': 60 * 1000,
-            'hour': 60 * 60 * 1000,
-            'hr': 60 * 60 * 1000,
-            'day': 24 * 60 * 60 * 1000,
-            'week': 7 * 24 * 60 * 60 * 1000
+            'second': 1000, 'sec': 1000,
+            'minute': 60000, 'min': 60000,
+            'hour': 3600000, 'hr': 3600000,
+            'day': 86400000,
+            'week': 604800000
         };
-        return new Date(now.getTime() + amount * (ms[unit] || ms['minute']));
+        return new Date(now.getTime() + amount * (ms[unit] || 60000));
+    }
+
+    // "every X minutes/hours" → returns { recurring: true, everyMs: ... }
+    const everyMatch = lower.match(/^every\s+(\d+)\s*(second|sec|minute|min|hour|hr|day|week)s?$/i);
+    if (everyMatch) {
+        const amount = parseInt(everyMatch[1], 10);
+        const unit = everyMatch[2].toLowerCase();
+        const ms = {
+            'second': 1000, 'sec': 1000,
+            'minute': 60000, 'min': 60000,
+            'hour': 3600000, 'hr': 3600000,
+            'day': 86400000,
+            'week': 604800000
+        };
+        const result = new Date(now.getTime() + amount * (ms[unit] || 60000));
+        result._recurring = true;
+        result._everyMs = amount * (ms[unit] || 60000);
+        return result;
     }
 
     // "tomorrow at Xam/pm" or "tomorrow at HH:MM"
@@ -261,37 +358,278 @@ function parseTimeExpression(timeStr) {
 
     // Fallback: try native Date parsing
     const parsed = new Date(timeStr);
-    if (!isNaN(parsed.getTime())) {
-        return parsed;
-    }
+    if (!isNaN(parsed.getTime())) return parsed;
 
     return null;
 }
 
-// Check for due reminders (called during heartbeat)
-function checkDueReminders() {
-    const reminders = loadReminders();
-    const now = Date.now();
-    const due = [];
-    const remaining = [];
+// --- Cron Service ---
 
-    for (const rem of reminders) {
-        if (rem.status === 'pending' && rem.triggerAt <= now) {
-            due.push(rem);
-            rem.status = 'delivered';
-            rem.deliveredAt = now;
-            remaining.push(rem); // Keep for history
-        } else {
-            remaining.push(rem);
+const cronService = {
+    store: null,
+    timer: null,
+    running: false,
+
+    // Initialize and start the cron service
+    start() {
+        this.store = loadCronStore();
+        // Recompute next runs and clear zombies
+        this._recomputeNextRuns();
+        this._armTimer();
+        log(`[Cron] Service started with ${this.store.jobs.length} jobs`);
+    },
+
+    // Stop the cron service
+    stop() {
+        if (this.timer) {
+            clearTimeout(this.timer);
+            this.timer = null;
         }
-    }
+        this.running = false;
+    },
 
-    if (due.length > 0) {
-        saveReminders(remaining);
-    }
+    // Create a new job
+    create(input) {
+        if (!this.store) this.store = loadCronStore();
 
-    return due;
-}
+        const now = Date.now();
+        const job = {
+            id: generateJobId(),
+            name: input.name || 'Unnamed job',
+            description: input.description || '',
+            enabled: true,
+            deleteAfterRun: input.deleteAfterRun || false,
+            createdAtMs: now,
+            updatedAtMs: now,
+            schedule: input.schedule, // { kind: 'at'|'every', atMs?, everyMs?, anchorMs? }
+            payload: input.payload,   // { kind: 'reminder', message: '...' }
+            state: {
+                nextRunAtMs: undefined,
+                lastRunAtMs: undefined,
+                lastStatus: undefined,
+                lastError: undefined,
+            }
+        };
+
+        // Compute initial next run
+        job.state.nextRunAtMs = computeNextRunAtMs(job.schedule, now);
+
+        this.store.jobs.push(job);
+        saveCronStore(this.store);
+        this._armTimer();
+
+        log(`[Cron] Created job ${job.id}: "${job.name}" → next: ${job.state.nextRunAtMs ? new Date(job.state.nextRunAtMs).toISOString() : 'never'}`);
+        return job;
+    },
+
+    // Update an existing job
+    update(id, patch) {
+        if (!this.store) this.store = loadCronStore();
+        const job = this.store.jobs.find(j => j.id === id);
+        if (!job) return null;
+
+        if (patch.name !== undefined) job.name = patch.name;
+        if (patch.description !== undefined) job.description = patch.description;
+        if (patch.enabled !== undefined) job.enabled = patch.enabled;
+        if (patch.schedule !== undefined) job.schedule = patch.schedule;
+        if (patch.payload !== undefined) job.payload = patch.payload;
+        job.updatedAtMs = Date.now();
+
+        // Recompute next run
+        job.state.nextRunAtMs = job.enabled
+            ? computeNextRunAtMs(job.schedule, Date.now())
+            : undefined;
+
+        saveCronStore(this.store);
+        this._armTimer();
+        return job;
+    },
+
+    // Remove a job
+    remove(id) {
+        if (!this.store) this.store = loadCronStore();
+        const idx = this.store.jobs.findIndex(j => j.id === id);
+        if (idx === -1) return false;
+
+        const removed = this.store.jobs.splice(idx, 1)[0];
+        saveCronStore(this.store);
+        this._armTimer();
+        log(`[Cron] Removed job ${id}: "${removed.name}"`);
+        return true;
+    },
+
+    // List jobs
+    list(opts = {}) {
+        if (!this.store) this.store = loadCronStore();
+        let jobs = this.store.jobs;
+        if (!opts.includeDisabled) {
+            jobs = jobs.filter(j => j.enabled);
+        }
+        return jobs.sort((a, b) => (a.state.nextRunAtMs || Infinity) - (b.state.nextRunAtMs || Infinity));
+    },
+
+    // Get service status
+    status() {
+        if (!this.store) this.store = loadCronStore();
+        const enabledJobs = this.store.jobs.filter(j => j.enabled);
+        const nextJob = enabledJobs
+            .filter(j => j.state.nextRunAtMs)
+            .sort((a, b) => a.state.nextRunAtMs - b.state.nextRunAtMs)[0];
+
+        return {
+            running: true,
+            totalJobs: this.store.jobs.length,
+            enabledJobs: enabledJobs.length,
+            nextWakeAtMs: nextJob?.state.nextRunAtMs || null,
+            nextWakeIn: nextJob?.state.nextRunAtMs
+                ? formatDuration(nextJob.state.nextRunAtMs - Date.now())
+                : null,
+        };
+    },
+
+    // --- Internal Methods ---
+
+    _recomputeNextRuns() {
+        const now = Date.now();
+        const ZOMBIE_THRESHOLD = 2 * 3600000; // 2 hours
+
+        for (const job of this.store.jobs) {
+            // Clear stuck "running" markers
+            if (job.state.runningAtMs && (now - job.state.runningAtMs) > ZOMBIE_THRESHOLD) {
+                log(`[Cron] Clearing zombie job: ${job.id}`);
+                job.state.runningAtMs = undefined;
+                job.state.lastStatus = 'error';
+                job.state.lastError = 'Job timed out (zombie cleared)';
+            }
+
+            if (!job.enabled) {
+                job.state.nextRunAtMs = undefined;
+                continue;
+            }
+
+            // One-shot "at" jobs that already ran → disable
+            if (job.schedule.kind === 'at' && job.state.lastStatus === 'ok') {
+                job.enabled = false;
+                job.state.nextRunAtMs = undefined;
+                continue;
+            }
+
+            job.state.nextRunAtMs = computeNextRunAtMs(job.schedule, now);
+        }
+
+        saveCronStore(this.store);
+    },
+
+    _armTimer() {
+        if (this.timer) {
+            clearTimeout(this.timer);
+            this.timer = null;
+        }
+
+        if (!this.store) return;
+
+        // Find earliest next run
+        let earliest = Infinity;
+        for (const job of this.store.jobs) {
+            if (job.enabled && job.state.nextRunAtMs && job.state.nextRunAtMs < earliest) {
+                earliest = job.state.nextRunAtMs;
+            }
+        }
+
+        if (earliest === Infinity) return;
+
+        const delay = Math.max(0, Math.min(earliest - Date.now(), MAX_TIMEOUT_MS));
+        this.timer = setTimeout(() => this._onTimer(), delay);
+        if (this.timer.unref) this.timer.unref(); // Don't keep process alive
+    },
+
+    async _onTimer() {
+        if (this.running) return; // Prevent concurrent execution
+        this.running = true;
+
+        try {
+            if (!this.store) this.store = loadCronStore();
+            await this._runDueJobs();
+            saveCronStore(this.store);
+        } catch (e) {
+            log(`[Cron] Timer error: ${e.message}`);
+        } finally {
+            this.running = false;
+            this._armTimer();
+        }
+    },
+
+    async _runDueJobs() {
+        const now = Date.now();
+        const dueJobs = this.store.jobs.filter(j =>
+            j.enabled &&
+            !j.state.runningAtMs &&
+            j.state.nextRunAtMs &&
+            j.state.nextRunAtMs <= now
+        );
+
+        for (const job of dueJobs) {
+            await this._executeJob(job, now);
+        }
+    },
+
+    async _executeJob(job, nowMs) {
+        log(`[Cron] Executing job ${job.id}: "${job.name}"`);
+        job.state.runningAtMs = nowMs;
+
+        const startTime = Date.now();
+        let status = 'ok';
+        let error = null;
+
+        try {
+            // Execute based on payload type
+            if (job.payload.kind === 'reminder') {
+                const message = `⏰ **Reminder**\n\n${job.payload.message}\n\n_Set ${formatDuration(Date.now() - job.createdAtMs)} ago_`;
+                await sendMessage(OWNER_ID, message);
+                log(`[Cron] Delivered reminder: ${job.id}`);
+            }
+        } catch (e) {
+            status = 'error';
+            error = e.message;
+            log(`[Cron] Job error ${job.id}: ${e.message}`);
+        }
+
+        const durationMs = Date.now() - startTime;
+
+        // Update job state
+        job.state.runningAtMs = undefined;
+        job.state.lastRunAtMs = nowMs;
+        job.state.lastStatus = status;
+        job.state.lastError = error;
+        job.state.lastDurationMs = durationMs;
+
+        // Log execution
+        appendCronRunLog(job.id, {
+            action: 'finished',
+            status,
+            error,
+            durationMs,
+            nextRunAtMs: undefined,
+        });
+
+        // Handle post-execution
+        if (job.schedule.kind === 'at') {
+            // One-shot: disable after successful run
+            if (status === 'ok') {
+                job.enabled = false;
+                job.state.nextRunAtMs = undefined;
+                if (job.deleteAfterRun) {
+                    const idx = this.store.jobs.indexOf(job);
+                    if (idx !== -1) this.store.jobs.splice(idx, 1);
+                }
+            }
+        } else {
+            // Recurring: compute next run
+            job.state.nextRunAtMs = computeNextRunAtMs(job.schedule, Date.now());
+        }
+    },
+};
+
 
 // ============================================================================
 // SKILLS SYSTEM
@@ -580,19 +918,36 @@ async function sendMessage(chatId, text, replyTo = null) {
     }
 
     for (const chunk of chunks) {
-        await telegram('sendMessage', {
-            chat_id: chatId,
-            text: chunk,
-            reply_to_message_id: replyTo,
-            parse_mode: 'Markdown',
-        }).catch(async () => {
-            // Retry without markdown if it fails
-            await telegram('sendMessage', {
+        let sent = false;
+
+        // Try with Markdown first
+        try {
+            const result = await telegram('sendMessage', {
                 chat_id: chatId,
                 text: chunk,
                 reply_to_message_id: replyTo,
+                parse_mode: 'Markdown',
             });
-        });
+            // Check if Telegram actually accepted the message
+            if (result && result.ok) {
+                sent = true;
+            }
+        } catch (e) {
+            // Network error - will retry without markdown
+        }
+
+        // Only retry without markdown if the first attempt failed
+        if (!sent) {
+            try {
+                await telegram('sendMessage', {
+                    chat_id: chatId,
+                    text: chunk,
+                    reply_to_message_id: replyTo,
+                });
+            } catch (e) {
+                log(`Failed to send message: ${e.message}`);
+            }
+        }
     }
 }
 
@@ -742,34 +1097,46 @@ const TOOLS = [
         }
     },
     {
-        name: 'reminder_set',
-        description: 'Set a reminder to be delivered at a specific time. Supports natural language like "in 30 minutes", "tomorrow at 9am", "in 2 hours".',
+        name: 'cron_create',
+        description: 'Create a scheduled job. Supports one-shot reminders ("in 30 minutes", "tomorrow at 9am") and recurring intervals ("every 2 hours", "every 30 minutes").',
         input_schema: {
             type: 'object',
             properties: {
-                message: { type: 'string', description: 'The reminder message' },
-                time: { type: 'string', description: 'When to remind (e.g., "in 30 minutes", "tomorrow at 9am", "2024-01-15 14:30")' }
+                name: { type: 'string', description: 'Short name for the job (e.g., "Water plants reminder")' },
+                message: { type: 'string', description: 'The message to deliver when the job fires' },
+                time: { type: 'string', description: 'When to fire: "in 30 minutes", "tomorrow at 9am", "every 2 hours", "at 3pm"' },
+                deleteAfterRun: { type: 'boolean', description: 'If true, delete the job after it runs (default: false for one-shot, N/A for recurring)' }
             },
             required: ['message', 'time']
         }
     },
     {
-        name: 'reminder_list',
-        description: 'List all pending reminders.',
-        input_schema: {
-            type: 'object',
-            properties: {}
-        }
-    },
-    {
-        name: 'reminder_cancel',
-        description: 'Cancel a pending reminder by its ID.',
+        name: 'cron_list',
+        description: 'List all scheduled jobs with their status and next run time.',
         input_schema: {
             type: 'object',
             properties: {
-                id: { type: 'string', description: 'The reminder ID to cancel' }
+                includeDisabled: { type: 'boolean', description: 'Include disabled/completed jobs (default: false)' }
+            }
+        }
+    },
+    {
+        name: 'cron_cancel',
+        description: 'Cancel a scheduled job by its ID.',
+        input_schema: {
+            type: 'object',
+            properties: {
+                id: { type: 'string', description: 'The job ID to cancel' }
             },
             required: ['id']
+        }
+    },
+    {
+        name: 'cron_status',
+        description: 'Get scheduling service status: total jobs, next wake time, etc.',
+        input_schema: {
+            type: 'object',
+            properties: {}
         }
     },
     {
@@ -1194,69 +1561,89 @@ async function executeTool(name, input) {
             };
         }
 
-        case 'reminder_set': {
+        case 'cron_create': {
             const triggerTime = parseTimeExpression(input.time);
             if (!triggerTime) {
-                return { error: `Could not parse time: "${input.time}". Try formats like "in 30 minutes", "tomorrow at 9am", "at 3pm", or "2024-01-15 14:30".` };
+                return { error: `Could not parse time: "${input.time}". Try formats like "in 30 minutes", "tomorrow at 9am", "every 2 hours", "at 3pm", or "2024-01-15 14:30".` };
             }
 
-            if (triggerTime.getTime() <= Date.now()) {
-                return { error: 'Reminder time must be in the future.' };
+            const isRecurring = triggerTime._recurring === true;
+
+            if (!isRecurring && triggerTime.getTime() <= Date.now()) {
+                return { error: 'Scheduled time must be in the future.' };
             }
 
-            const reminder = {
-                id: generateReminderId(),
-                message: input.message,
-                triggerAt: triggerTime.getTime(),
-                createdAt: Date.now(),
-                status: 'pending'
-            };
+            let schedule;
+            if (isRecurring) {
+                schedule = {
+                    kind: 'every',
+                    everyMs: triggerTime._everyMs,
+                    anchorMs: Date.now(),
+                };
+            } else {
+                schedule = {
+                    kind: 'at',
+                    atMs: triggerTime.getTime(),
+                };
+            }
 
-            const reminders = loadReminders();
-            reminders.push(reminder);
-            saveReminders(reminders);
+            const job = cronService.create({
+                name: input.name || input.message.slice(0, 50),
+                description: input.message,
+                schedule,
+                payload: { kind: 'reminder', message: input.message },
+                deleteAfterRun: input.deleteAfterRun || false,
+            });
 
             return {
                 success: true,
-                id: reminder.id,
-                message: reminder.message,
-                triggerAt: triggerTime.toISOString(),
-                triggerIn: formatDuration(triggerTime.getTime() - Date.now())
+                id: job.id,
+                name: job.name,
+                message: input.message,
+                type: isRecurring ? 'recurring' : 'one-shot',
+                nextRunAt: job.state.nextRunAtMs ? new Date(job.state.nextRunAtMs).toISOString() : null,
+                nextRunIn: job.state.nextRunAtMs ? formatDuration(job.state.nextRunAtMs - Date.now()) : null,
+                interval: isRecurring ? formatDuration(triggerTime._everyMs) : null,
             };
         }
 
-        case 'reminder_list': {
-            const reminders = loadReminders();
-            const pending = reminders.filter(r => r.status === 'pending');
+        case 'cron_list': {
+            const jobs = cronService.list({ includeDisabled: input.includeDisabled || false });
 
             return {
-                count: pending.length,
-                reminders: pending.map(r => ({
-                    id: r.id,
-                    message: r.message,
-                    triggerAt: new Date(r.triggerAt).toISOString(),
-                    triggerIn: formatDuration(r.triggerAt - Date.now())
+                count: jobs.length,
+                jobs: jobs.map(j => ({
+                    id: j.id,
+                    name: j.name,
+                    type: j.schedule.kind,
+                    enabled: j.enabled,
+                    message: j.payload?.message || j.description,
+                    nextRunAt: j.state.nextRunAtMs ? new Date(j.state.nextRunAtMs).toISOString() : null,
+                    nextRunIn: j.state.nextRunAtMs ? formatDuration(j.state.nextRunAtMs - Date.now()) : null,
+                    lastRun: j.state.lastRunAtMs ? new Date(j.state.lastRunAtMs).toISOString() : null,
+                    lastStatus: j.state.lastStatus || 'never',
                 }))
             };
         }
 
-        case 'reminder_cancel': {
-            const reminders = loadReminders();
-            const idx = reminders.findIndex(r => r.id === input.id && r.status === 'pending');
+        case 'cron_cancel': {
+            const jobs = cronService.list({ includeDisabled: true });
+            const job = jobs.find(j => j.id === input.id);
 
-            if (idx === -1) {
-                return { error: `Reminder not found or already delivered: ${input.id}` };
+            if (!job) {
+                return { error: `Job not found: ${input.id}` };
             }
 
-            reminders[idx].status = 'cancelled';
-            reminders[idx].cancelledAt = Date.now();
-            saveReminders(reminders);
-
+            const removed = cronService.remove(input.id);
             return {
-                success: true,
+                success: removed,
                 id: input.id,
-                message: `Reminder "${reminders[idx].message}" cancelled.`
+                message: `Job "${job.name}" cancelled and removed.`
             };
+        }
+
+        case 'cron_status': {
+            return cronService.status();
         }
 
         case 'datetime': {
@@ -1616,10 +2003,11 @@ function buildSystemPrompt(matchedSkills = []) {
     lines.push('**Skills:**');
     lines.push('- skill_read: Load a skill\'s instructions (use when a skill applies)');
     lines.push('');
-    lines.push('**Reminders:**');
-    lines.push('- reminder_set: Set a reminder ("in 30 min", "tomorrow at 9am", etc.)');
-    lines.push('- reminder_list: List pending reminders');
-    lines.push('- reminder_cancel: Cancel a reminder by ID');
+    lines.push('**Scheduling:**');
+    lines.push('- cron_create: Create a scheduled job — one-shot ("in 30 min", "tomorrow at 9am") or recurring ("every 2 hours")');
+    lines.push('- cron_list: List all scheduled jobs with status and next run time');
+    lines.push('- cron_cancel: Cancel and remove a scheduled job by ID');
+    lines.push('- cron_status: Get scheduling service status (total jobs, next wake time)');
     lines.push('');
     lines.push('**Utility:**');
     lines.push('- datetime: Get current date/time in various formats and timezones');
@@ -2035,6 +2423,9 @@ async function handleMessage(msg) {
 
         await sendMessage(chatId, response, replyToId || msg.message_id);
 
+        // Report message to Android for stats tracking
+        androidBridgeCall('/stats/message').catch(() => {});
+
     } catch (error) {
         log(`Error: ${error.message}`);
         await sendMessage(chatId, `Error: ${error.message}`, msg.message_id);
@@ -2078,26 +2469,11 @@ async function poll() {
 }
 
 // ============================================================================
-// REMINDER CHECK LOOP
+// CRON SERVICE STARTUP
 // ============================================================================
 
-async function checkAndSendReminders() {
-    try {
-        const dueReminders = checkDueReminders();
-        for (const reminder of dueReminders) {
-            const message = `⏰ **Reminder**\n\n${reminder.message}\n\n_Set ${formatDuration(Date.now() - reminder.createdAt)} ago_`;
-            await sendMessage(OWNER_ID, message);
-            log(`Sent reminder: ${reminder.id}`);
-        }
-    } catch (e) {
-        log(`Reminder check error: ${e.message}`);
-    }
-}
-
-// Check reminders every 30 seconds
-setInterval(checkAndSendReminders, 30 * 1000);
-// Also check on startup
-setTimeout(checkAndSendReminders, 5000);
+// Start the cron service (loads persisted jobs, arms timers)
+cronService.start();
 
 // ============================================================================
 // STARTUP

@@ -55,9 +55,9 @@ data class BottomNavItem(
 )
 
 val bottomNavItems = listOf(
-    BottomNavItem("SYS", Icons.Default.Dashboard, DashboardRoute),
-    BottomNavItem("LOG", Icons.Default.Description, LogsRoute),
-    BottomNavItem("CFG", Icons.Default.Settings, SettingsRoute),
+    BottomNavItem("HOME", Icons.Default.Dashboard, DashboardRoute),
+    BottomNavItem("CONSOLE", Icons.Default.Description, LogsRoute),
+    BottomNavItem("CONFIG", Icons.Default.Settings, SettingsRoute),
 )
 
 @Composable
@@ -122,10 +122,10 @@ fun SeekerClawNavHost() {
                                 },
                                 label = {
                                     Text(
-                                        text = "[${item.label}]",
+                                        text = item.label,
                                         fontFamily = FontFamily.Monospace,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 11.sp,
+                                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                                        fontSize = 10.sp,
                                         letterSpacing = 1.sp,
                                     )
                                 },

@@ -19,6 +19,7 @@ import android.speech.tts.TextToSpeech
 import android.telephony.SmsManager
 import android.util.Log
 import androidx.core.content.ContextCompat
+import com.seekerclaw.app.util.ServiceState
 import fi.iki.elonen.NanoHTTPD
 import org.json.JSONArray
 import org.json.JSONObject
@@ -93,6 +94,7 @@ class AndroidBridge(
                 "/tts" -> handleTts(params)
                 "/apps/list" -> handleAppsList()
                 "/apps/launch" -> handleAppsLaunch(params)
+                "/stats/message" -> handleStatsMessage()
                 "/ping" -> jsonResponse(200, mapOf("status" to "ok", "bridge" to "AndroidBridge"))
                 else -> jsonResponse(404, mapOf("error" to "Unknown endpoint: $uri"))
             }
@@ -390,6 +392,13 @@ class AndroidBridge(
         context.startActivity(intent)
 
         return jsonResponse(200, mapOf("success" to true, "package" to packageName))
+    }
+
+    // ==================== Stats ====================
+
+    private fun handleStatsMessage(): Response {
+        ServiceState.incrementMessages()
+        return jsonResponse(200, mapOf("success" to true))
     }
 
     // ==================== Helpers ====================

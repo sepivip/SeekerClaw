@@ -246,6 +246,46 @@ OpenClaw config overrides for mobile environment:
 - Web fetch timeout: 15s (shorter for mobile networks)
 - Disabled skills: browser, canvas, nodes, screen
 
+## Memory Preservation (CRITICAL)
+
+> **RULE: App updates and code changes MUST NEVER affect user memory.**
+
+The agent's memory is sacred. These files live in the workspace directory and must survive all updates:
+
+| File | Purpose | MUST Preserve |
+|------|---------|---------------|
+| `SOUL.md` | Agent personality | YES |
+| `IDENTITY.md` | Agent name/nature | YES |
+| `USER.md` | Owner info | YES |
+| `MEMORY.md` | Long-term memory | YES |
+| `memory/*.md` | Daily memory files | YES |
+| `HEARTBEAT.md` | Last heartbeat | YES |
+| `config.yaml` | Config (regenerated) | Regenerated from encrypted store |
+| `skills/*.md` | Custom user skills | YES |
+
+### Rules for Developers
+
+1. **Never delete workspace/** during app updates
+2. **Never overwrite** existing SOUL.md, MEMORY.md, IDENTITY.md, USER.md
+3. **Seed files only if they don't exist** (`if (!file.exists())`)
+4. **BOOTSTRAP.md** is the only file the agent itself deletes (after first-run ritual)
+5. **Config.yaml** is regenerated from encrypted storage on each service start — this is fine
+6. **Use `adb install -r`** (replace) to preserve app data during development
+7. **Export/Import** feature exists in Settings for backup/restore
+
+### What Gets Lost and When
+
+| Action | Memory Lost? |
+|--------|-------------|
+| App update (store) | NO |
+| `adb install -r` | NO |
+| Uninstall + reinstall | YES (use export first!) |
+| "WIPE MEMORY" in Settings | YES (intentional) |
+| "RESET CONFIG" in Settings | Config only, memory preserved |
+| Factory reset | YES (use export first!) |
+
+---
+
 ## Key Implementation Details
 
 - **nodejs-mobile:** Community fork at https://github.com/niccolobocook/nodejs-mobile — pin to latest stable release at dev start. Adapt their React Native integration guide for pure Kotlin (no React Native).
@@ -278,8 +318,43 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 - `PROMPT.md` — Full coding agent prompt with code snippets, implementation specs, and build priority
 - `MVP.md` — Complete MVP specification with features, testing plan, and success metrics
 - `RESEARCH.md` — Deep feasibility research on Node.js on Android, background services, Solana Mobile, competitive landscape
-- `OPENCLAW_MAPPING.md` — **Critical:** Feature mapping between OpenClaw and SeekerClaw
-- `PHASE3.md` — **Current:** Phase 3 implementation plan for OpenClaw parity
+- `OPENCLAW_TRACKING.md` — **Critical:** Version tracking, change detection, and update process
+- `PHASE3.md` — Phase 3 implementation plan for OpenClaw parity
+
+---
+
+## OpenClaw Version Tracking
+
+> **IMPORTANT:** SeekerClaw must stay in sync with OpenClaw updates. See `OPENCLAW_TRACKING.md` for full details.
+
+### Current Versions
+- **OpenClaw Reference:** 2026.2.2 (commit 1c4db91)
+- **Last Sync Review:** 2026-02-05
+
+### Quick Update Check
+```bash
+# Check for new OpenClaw versions
+cd openclaw-reference && git fetch origin
+git log --oneline HEAD..origin/main
+
+# If updates exist, pull and review
+git pull origin main
+# Then review OPENCLAW_TRACKING.md for what to check
+```
+
+### When OpenClaw Updates
+
+1. **Pull the update:** `cd openclaw-reference && git pull`
+2. **Check critical files:** See priority list in `OPENCLAW_TRACKING.md`
+3. **Compare changes:** `git diff <old>..<new> -- <file>`
+4. **Port relevant changes** to `main.js` and skills
+5. **Update tracking docs** with new version info
+
+### Files That Require Immediate Review
+- `src/agents/system-prompt.ts` — System prompt changes
+- `src/memory/` — Memory system changes
+- `src/cron/` — Scheduling changes
+- `skills/` — New or updated skills
 
 ---
 
@@ -303,7 +378,7 @@ cd openclaw-reference && git pull
 | `src/agents/system-prompt.ts` | System prompt builder | `main.js:buildSystemPrompt()` |
 | `src/agents/skills/workspace.ts` | Skills loading | `main.js:loadSkills()` |
 | `src/memory/manager.ts` | Memory management | `main.js` (simplified) |
-| `src/cron/types.ts` | Cron/reminders | Not implemented yet |
+| `src/cron/types.ts` | Cron/scheduling | `main.js:cronService` (ported) |
 | `skills/` | 76 bundled skills | `workspace/skills/` (3 examples) |
 
 ### OpenClaw Compatibility Checklist
@@ -338,10 +413,15 @@ cd openclaw-reference && git pull
 - [x] Semantic triggering (AI picks skills)
 - [ ] Requirements gating (bins, env, config)
 
-**Cron/Scheduling:**
-- [x] Reminder tools (set/list/cancel)
-- [x] Natural language time parsing
-- [x] Periodic reminder delivery (30s)
+**Cron/Scheduling (ported from OpenClaw):**
+- [x] cron_create tool (one-shot + recurring)
+- [x] cron_list, cron_cancel, cron_status tools
+- [x] Natural language time parsing ("in X min", "every X hours", "tomorrow at 9am")
+- [x] JSON file persistence with atomic writes + .bak backup
+- [x] JSONL execution history per job
+- [x] Timer-based delivery (no polling)
+- [x] Zombie detection (2hr threshold)
+- [x] Recurring intervals ("every" schedule)
 - [x] HEARTBEAT_OK protocol
 
 ### SKILL.md Format
@@ -407,3 +487,75 @@ OpenClaw requires **Node 22+** for `node:sqlite`. SeekerClaw runs on **Node 18**
 - File-based memory (MEMORY.md, daily files)
 - Keyword matching for skills
 - Full file reads for memory recall
+
+---
+
+## Android Bridge (Phase 4)
+
+SeekerClaw extends OpenClaw with Android-native capabilities via a local HTTP bridge.
+
+### Architecture
+```
+Node.js (main.js)  ──HTTP POST──►  AndroidBridge.kt (port 8765)  ──►  Android APIs
+```
+
+### Available Endpoints
+
+| Endpoint | Purpose | Permission Required |
+|----------|---------|---------------------|
+| `/battery` | Battery level, charging status | None |
+| `/storage` | Storage stats | None |
+| `/network` | Network connectivity | None |
+| `/clipboard/get` | Read clipboard | None |
+| `/clipboard/set` | Write clipboard | None |
+| `/contacts/search` | Search contacts | READ_CONTACTS |
+| `/contacts/add` | Add contact | WRITE_CONTACTS |
+| `/sms` | Send SMS | SEND_SMS |
+| `/call` | Make phone call | CALL_PHONE |
+| `/location` | Get GPS location | ACCESS_FINE_LOCATION |
+| `/tts` | Text-to-speech | None |
+| `/apps/list` | List installed apps | None |
+| `/apps/launch` | Launch app | None |
+| `/stats/message` | Report message for stats | None |
+| `/ping` | Health check | None |
+
+### Using from Node.js
+```javascript
+async function androidBridgeCall(endpoint, data = {}) {
+    const http = require('http');
+    return new Promise((resolve) => {
+        const req = http.request({
+            hostname: 'localhost',
+            port: 8765,
+            path: endpoint,
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+        }, (res) => {
+            let body = '';
+            res.on('data', chunk => body += chunk);
+            res.on('end', () => resolve(JSON.parse(body)));
+        });
+        req.write(JSON.stringify(data));
+        req.end();
+    });
+}
+
+// Example: Get battery level
+const battery = await androidBridgeCall('/battery');
+// Returns: { level: 85, isCharging: true, chargeType: "usb" }
+```
+
+---
+
+## Theme System
+
+SeekerClaw supports multiple swappable themes:
+
+| Theme | Style | Features |
+|-------|-------|----------|
+| **Terminal** | CRT phosphor green | Sharp corners, classic terminal |
+| **Pixel** | 8-bit arcade | Dot matrix background, pixel-perfect |
+| **Clean** | OpenClaw style | Rounded corners, white text |
+
+Themes are defined in `Theme.kt` with `ThemeManager` for runtime switching.
+Theme selection persists via SharedPreferences (TODO).

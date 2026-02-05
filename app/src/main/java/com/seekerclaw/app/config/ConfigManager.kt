@@ -2,8 +2,13 @@ package com.seekerclaw.app.config
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.net.Uri
 import android.util.Base64
+import android.util.Log
 import java.io.File
+import java.util.zip.ZipEntry
+import java.util.zip.ZipInputStream
+import java.util.zip.ZipOutputStream
 
 data class AppConfig(
     val anthropicApiKey: String,
@@ -154,6 +159,15 @@ object ConfigManager {
                 |
                 |Be the assistant you'd actually want to talk to. Concise when needed, thorough when it matters. Not a corporate drone. Not a sycophant. Just... good.
                 |
+                |## Communication Style
+                |
+                |_These preferences can be customized. Update based on what your human likes._
+                |
+                |- **Emojis:** Use sparingly by default. If user enjoys emojis, use them freely! 🎉
+                |- **Formatting:** Keep it readable. Use markdown when helpful.
+                |- **Length:** Match the question. Short query → short answer. Complex topic → thorough response.
+                |- **Tone:** Warm but efficient. Friendly but not fake.
+                |
                 |## Continuity
                 |
                 |Each session, you wake up fresh. These files _are_ your memory. Read them. Update them. They're how you persist.
@@ -215,7 +229,11 @@ object ConfigManager {
                 |Ask: "What's your timezone? And what should I know about your life — work, interests, projects, anything that helps me help you?"
                 |→ Save to USER.md
                 |
-                |### 7. Boundaries & Preferences
+                |### 7. Communication Style
+                |Ask: "How do you like your messages? Should I use emojis? Keep things short or detailed? Any communication preferences?"
+                |→ Update SOUL.md Communication Style section
+                |
+                |### 8. Boundaries & Preferences
                 |Ask: "Any boundaries I should respect? Topics to avoid? Ways you definitely don't want me to act?"
                 |→ Update SOUL.md if they have strong preferences
                 |
@@ -1090,6 +1108,112 @@ object ConfigManager {
         File(workspaceDir, "memory").apply {
             if (exists()) deleteRecursively()
             mkdirs()
+        }
+    }
+
+    // ==================== Memory Export/Import ====================
+
+    private const val TAG = "ConfigManager"
+
+    // Files to exclude from export (regenerated or transient)
+    private val EXPORT_EXCLUDE = setOf(
+        "config.yaml", "config.json", "node_debug.log"
+    )
+
+    /**
+     * Export workspace memory to a ZIP file at the given URI.
+     * Includes: SOUL.md, MEMORY.md, IDENTITY.md, USER.md, HEARTBEAT.md,
+     *           memory/*.md, skills/*.md, BOOTSTRAP.md
+     * Excludes: config.yaml, config.json, node_debug.log
+     */
+    fun exportMemory(context: Context, uri: Uri): Boolean {
+        val workspaceDir = File(context.filesDir, "workspace")
+        if (!workspaceDir.exists()) {
+            Log.e(TAG, "Workspace directory does not exist")
+            return false
+        }
+
+        return try {
+            context.contentResolver.openOutputStream(uri)?.use { outputStream ->
+                ZipOutputStream(outputStream).use { zip ->
+                    addDirectoryToZip(zip, workspaceDir, workspaceDir)
+                }
+            }
+            Log.i(TAG, "Memory exported successfully")
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to export memory", e)
+            false
+        }
+    }
+
+    private fun addDirectoryToZip(zip: ZipOutputStream, dir: File, baseDir: File) {
+        val files = dir.listFiles() ?: return
+        for (file in files) {
+            val relativePath = file.relativeTo(baseDir).path.replace("\\", "/")
+
+            // Skip excluded files
+            if (file.name in EXPORT_EXCLUDE) continue
+
+            if (file.isDirectory) {
+                addDirectoryToZip(zip, file, baseDir)
+            } else {
+                zip.putNextEntry(ZipEntry(relativePath))
+                file.inputStream().use { it.copyTo(zip) }
+                zip.closeEntry()
+            }
+        }
+    }
+
+    /**
+     * Import workspace memory from a ZIP file at the given URI.
+     * Extracts into workspace directory, overwriting existing files.
+     * Does NOT overwrite config.yaml/config.json (those are regenerated).
+     */
+    fun importMemory(context: Context, uri: Uri): Boolean {
+        val workspaceDir = File(context.filesDir, "workspace").apply { mkdirs() }
+
+        return try {
+            context.contentResolver.openInputStream(uri)?.use { inputStream ->
+                ZipInputStream(inputStream).use { zip ->
+                    var entry = zip.nextEntry
+                    while (entry != null) {
+                        val entryName = entry.name
+
+                        // Skip config files (regenerated from encrypted store)
+                        if (entryName in EXPORT_EXCLUDE) {
+                            zip.closeEntry()
+                            entry = zip.nextEntry
+                            continue
+                        }
+
+                        val destFile = File(workspaceDir, entryName)
+
+                        // Security: prevent path traversal
+                        if (!destFile.canonicalPath.startsWith(workspaceDir.canonicalPath)) {
+                            Log.w(TAG, "Skipping suspicious entry: $entryName")
+                            zip.closeEntry()
+                            entry = zip.nextEntry
+                            continue
+                        }
+
+                        if (entry.isDirectory) {
+                            destFile.mkdirs()
+                        } else {
+                            destFile.parentFile?.mkdirs()
+                            destFile.outputStream().use { zip.copyTo(it) }
+                        }
+
+                        zip.closeEntry()
+                        entry = zip.nextEntry
+                    }
+                }
+            }
+            Log.i(TAG, "Memory imported successfully")
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to import memory", e)
+            false
         }
     }
 }

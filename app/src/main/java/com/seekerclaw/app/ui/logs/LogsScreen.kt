@@ -6,12 +6,15 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Share
@@ -45,6 +48,8 @@ fun LogsScreen() {
     val listState = rememberLazyListState()
     var autoScroll by remember { mutableStateOf(true) }
 
+    val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
+
     // Auto-scroll to bottom when new logs arrive
     LaunchedEffect(logs.size, autoScroll) {
         if (autoScroll && logs.isNotEmpty()) {
@@ -55,103 +60,127 @@ fun LogsScreen() {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(SeekerClawColors.Background),
+            .background(SeekerClawColors.Background)
+            .padding(16.dp),
     ) {
-        // Toolbar — terminal header bar
+        // Header
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(SeekerClawColors.Surface)
-                .border(
-                    width = 1.dp,
-                    color = SeekerClawColors.PrimaryDim.copy(alpha = 0.3f),
-                )
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+            modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = "> LOG [${logs.size}]",
+                text = "CONSOLE",
                 fontFamily = FontFamily.Monospace,
+                fontSize = 18.sp,
                 fontWeight = FontWeight.Bold,
                 color = SeekerClawColors.Primary,
-                fontSize = 14.sp,
+                letterSpacing = 2.sp,
+            )
+            Text(
+                text = "${logs.size} LINES",
+                fontFamily = FontFamily.Monospace,
+                fontSize = 11.sp,
+                color = SeekerClawColors.TextDim,
                 letterSpacing = 1.sp,
             )
-            Row {
-                IconButton(onClick = { autoScroll = !autoScroll }) {
-                    Icon(
-                        Icons.Default.VerticalAlignBottom,
-                        contentDescription = "Auto-scroll",
-                        tint = if (autoScroll) SeekerClawColors.Primary else SeekerClawColors.TextDim,
-                    )
-                }
-                IconButton(onClick = { /* TODO: Share/export logs */ }) {
-                    Icon(
-                        Icons.Default.Share,
-                        contentDescription = "Share",
-                        tint = SeekerClawColors.TextDim,
-                    )
-                }
-                IconButton(onClick = { LogCollector.clear() }) {
-                    Icon(
-                        Icons.Default.Delete,
-                        contentDescription = "Clear",
-                        tint = SeekerClawColors.Error.copy(alpha = 0.7f),
-                    )
-                }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Toolbar
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(SeekerClawColors.Surface, shape)
+                .border(1.dp, SeekerClawColors.Primary.copy(alpha = 0.12f), shape)
+                .padding(horizontal = 12.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(onClick = { autoScroll = !autoScroll }) {
+                Icon(
+                    Icons.Default.VerticalAlignBottom,
+                    contentDescription = "Auto-scroll",
+                    tint = if (autoScroll) SeekerClawColors.Accent else SeekerClawColors.TextDim,
+                )
+            }
+            IconButton(onClick = { /* TODO: Share/export logs */ }) {
+                Icon(
+                    Icons.Default.Share,
+                    contentDescription = "Share",
+                    tint = SeekerClawColors.TextDim,
+                )
+            }
+            IconButton(onClick = { LogCollector.clear() }) {
+                Icon(
+                    Icons.Default.Delete,
+                    contentDescription = "Clear",
+                    tint = SeekerClawColors.Error.copy(alpha = 0.7f),
+                )
             }
         }
 
-        // Log entries
-        if (logs.isEmpty()) {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center,
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        text = "> _",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 24.sp,
-                        color = SeekerClawColors.PrimaryDim,
-                    )
-                    Text(
-                        text = "AWAITING OUTPUT...",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 12.sp,
-                        color = SeekerClawColors.TextDim,
-                        letterSpacing = 1.sp,
-                    )
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Terminal window
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .background(SeekerClawColors.Surface, shape)
+                .border(1.dp, SeekerClawColors.Primary.copy(alpha = 0.08f), shape),
+        ) {
+            if (logs.isEmpty()) {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = "$ _",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 24.sp,
+                            color = SeekerClawColors.Primary.copy(alpha = 0.4f),
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "AWAITING OUTPUT...",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 12.sp,
+                            color = SeekerClawColors.TextDim,
+                            letterSpacing = 1.sp,
+                        )
+                    }
                 }
-            }
-        } else {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 8.dp, vertical = 4.dp),
-            ) {
-                items(logs) { entry ->
-                    val color = when (entry.level) {
-                        LogLevel.INFO -> SeekerClawColors.TextPrimary
-                        LogLevel.WARN -> SeekerClawColors.Warning
-                        LogLevel.ERROR -> SeekerClawColors.Error
+            } else {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                ) {
+                    items(logs) { entry ->
+                        val color = when (entry.level) {
+                            LogLevel.INFO -> SeekerClawColors.Accent.copy(alpha = 0.8f)
+                            LogLevel.WARN -> SeekerClawColors.Warning
+                            LogLevel.ERROR -> SeekerClawColors.Error
+                        }
+                        val prefix = when (entry.level) {
+                            LogLevel.INFO -> "$"
+                            LogLevel.WARN -> "!"
+                            LogLevel.ERROR -> "X"
+                        }
+                        val timeFormat = remember { SimpleDateFormat("HH:mm:ss", Locale.US) }
+                        Text(
+                            text = "$prefix ${timeFormat.format(Date(entry.timestamp))} ${entry.message}",
+                            color = color,
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            lineHeight = 16.sp,
+                            modifier = Modifier.padding(vertical = 1.dp),
+                        )
                     }
-                    val prefix = when (entry.level) {
-                        LogLevel.INFO -> " "
-                        LogLevel.WARN -> "!"
-                        LogLevel.ERROR -> "X"
-                    }
-                    val timeFormat = remember { SimpleDateFormat("HH:mm:ss", Locale.US) }
-                    Text(
-                        text = "$prefix ${timeFormat.format(Date(entry.timestamp))} ${entry.message}",
-                        color = color,
-                        fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace,
-                        lineHeight = 16.sp,
-                        modifier = Modifier.padding(vertical = 1.dp),
-                    )
                 }
             }
         }
