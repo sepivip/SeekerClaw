@@ -64,6 +64,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
     val context = LocalContext.current
 
     var apiKey by remember { mutableStateOf("") }
+    var authType by remember { mutableStateOf("api_key") }
     var botToken by remember { mutableStateOf("") }
     var ownerId by remember { mutableStateOf("") }
     var selectedModel by remember { mutableStateOf(modelOptions[0].first) }
@@ -103,6 +104,12 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             currentStep = 1
             return
         }
+        val credentialError = ConfigManager.validateCredential(apiKey.trim(), authType)
+        if (credentialError != null) {
+            errorMessage = credentialError
+            currentStep = 1
+            return
+        }
         if (botToken.isBlank()) {
             errorMessage = "Telegram bot token is required"
             currentStep = 2
@@ -111,6 +118,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
 
         val config = AppConfig(
             anthropicApiKey = apiKey.trim(),
+            authType = authType,
             telegramBotToken = botToken.trim(),
             telegramOwnerId = ownerId.trim(),
             model = selectedModel,
@@ -225,7 +233,15 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             0 -> WelcomeStep(onNext = { currentStep = 1 })
             1 -> ClaudeApiStep(
                 apiKey = apiKey,
-                onApiKeyChange = { apiKey = it; errorMessage = null },
+                onApiKeyChange = { newValue ->
+                    apiKey = newValue
+                    errorMessage = null
+                    if (newValue.length > 20) {
+                        authType = ConfigManager.detectAuthType(newValue)
+                    }
+                },
+                authType = authType,
+                onAuthTypeChange = { authType = it },
                 fieldColors = fieldColors,
                 onNext = { currentStep = 2 },
                 onBack = { currentStep = 0 },
@@ -280,8 +296,8 @@ private fun WelcomeStep(onNext: () -> Unit) {
 
                 You'll need:
 
-                1. Claude API key
-                   Get one at console.anthropic.com
+                1. Claude API key or Pro/Max token
+                   API key or run: claude setup-token
 
                 2. Telegram Bot
                    Create one via @BotFather
@@ -322,18 +338,21 @@ private fun WelcomeStep(onNext: () -> Unit) {
 private fun ClaudeApiStep(
     apiKey: String,
     onApiKeyChange: (String) -> Unit,
+    authType: String,
+    onAuthTypeChange: (String) -> Unit,
     fieldColors: androidx.compose.material3.TextFieldColors,
     onNext: () -> Unit,
     onBack: () -> Unit,
 ) {
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
+    val isToken = authType == "setup_token"
 
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(
-            text = "Step 1: Claude API",
+            text = "Step 1: Claude Auth",
             fontFamily = FontFamily.Monospace,
             fontSize = 18.sp,
             fontWeight = FontWeight.Bold,
@@ -342,13 +361,53 @@ private fun ClaudeApiStep(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        Text(
-            text = """
-                Get your API key from:
-                console.anthropic.com/settings/keys
+        // Auth type selector
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            listOf("api_key" to "API Key", "setup_token" to "Pro/Max Token").forEach { (type, label) ->
+                val isSelected = authType == type
+                Button(
+                    onClick = { onAuthTypeChange(type) },
+                    modifier = Modifier.weight(1f).height(42.dp),
+                    shape = shape,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (isSelected) SeekerClawColors.Primary.copy(alpha = 0.15f)
+                            else SeekerClawColors.Surface,
+                        contentColor = if (isSelected) SeekerClawColors.Primary
+                            else SeekerClawColors.TextDim,
+                    ),
+                ) {
+                    Text(
+                        text = label,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp,
+                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                    )
+                }
+            }
+        }
 
-                Click "Create Key" and paste it below.
-            """.trimIndent(),
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Text(
+            text = if (isToken) {
+                """
+                    Run in your terminal:
+                    claude setup-token
+
+                    Paste the generated token below.
+                    Requires Claude Pro or Max subscription.
+                """.trimIndent()
+            } else {
+                """
+                    Get your API key from:
+                    console.anthropic.com/settings/keys
+
+                    Click "Create Key" and paste it below.
+                """.trimIndent()
+            },
             fontFamily = FontFamily.Monospace,
             fontSize = 13.sp,
             color = SeekerClawColors.TextSecondary,
@@ -360,8 +419,21 @@ private fun ClaudeApiStep(
         OutlinedTextField(
             value = apiKey,
             onValueChange = onApiKeyChange,
-            label = { Text("API Key", fontFamily = FontFamily.Monospace, fontSize = 12.sp) },
-            placeholder = { Text("sk-ant-api03-...", fontFamily = FontFamily.Monospace, fontSize = 14.sp, color = SeekerClawColors.TextDim) },
+            label = {
+                Text(
+                    if (isToken) "Setup Token" else "API Key",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp,
+                )
+            },
+            placeholder = {
+                Text(
+                    if (isToken) "sk-ant-oat01-..." else "sk-ant-api03-...",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 14.sp,
+                    color = SeekerClawColors.TextDim,
+                )
+            },
             modifier = Modifier.fillMaxWidth(),
             visualTransformation = PasswordVisualTransformation(),
             singleLine = true,

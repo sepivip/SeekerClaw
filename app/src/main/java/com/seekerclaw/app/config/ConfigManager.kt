@@ -12,6 +12,7 @@ import java.util.zip.ZipOutputStream
 
 data class AppConfig(
     val anthropicApiKey: String,
+    val authType: String = "api_key", // "api_key" or "setup_token"
     val telegramBotToken: String,
     val telegramOwnerId: String,
     val model: String,
@@ -28,6 +29,9 @@ object ConfigManager {
     private const val KEY_AGENT_NAME = "agent_name"
     private const val KEY_AUTO_START = "auto_start_on_boot"
     private const val KEY_SETUP_COMPLETE = "setup_complete"
+    private const val KEY_AUTH_TYPE = "auth_type"
+    private const val KEY_WALLET_ADDRESS = "wallet_address"
+    private const val KEY_WALLET_LABEL = "wallet_label"
 
     private fun prefs(context: Context): SharedPreferences =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -51,6 +55,7 @@ object ConfigManager {
             .putString(KEY_OWNER_ID, config.telegramOwnerId)
             .putString(KEY_MODEL, config.model)
             .putString(KEY_AGENT_NAME, config.agentName)
+            .putString(KEY_AUTH_TYPE, config.authType)
             .putBoolean(KEY_AUTO_START, config.autoStartOnBoot)
             .putBoolean(KEY_SETUP_COMPLETE, true)
             .apply()
@@ -78,6 +83,7 @@ object ConfigManager {
 
         return AppConfig(
             anthropicApiKey = apiKey,
+            authType = p.getString(KEY_AUTH_TYPE, "api_key") ?: "api_key",
             telegramBotToken = botToken,
             telegramOwnerId = p.getString(KEY_OWNER_ID, "") ?: "",
             model = p.getString(KEY_MODEL, "claude-opus-4-6") ?: "claude-opus-4-6",
@@ -101,6 +107,7 @@ object ConfigManager {
             "telegramOwnerId" -> config.copy(telegramOwnerId = value)
             "model" -> config.copy(model = value)
             "agentName" -> config.copy(agentName = value)
+            "authType" -> config.copy(authType = value)
             else -> return
         }
         saveConfig(context, updated)
@@ -144,11 +151,71 @@ object ConfigManager {
             |  "botToken": "${config.telegramBotToken}",
             |  "ownerId": "${config.telegramOwnerId}",
             |  "anthropicApiKey": "${config.anthropicApiKey}",
+            |  "authType": "${config.authType}",
             |  "model": "${config.model}",
             |  "agentName": "${config.agentName}"
             |}
         """.trimMargin()
         File(workspaceDir, "config.json").writeText(json)
+    }
+
+    // ==================== Auth Type Detection ====================
+
+    fun detectAuthType(credential: String): String {
+        val trimmed = credential.trim()
+        return if (trimmed.startsWith("sk-ant-oat01-") && trimmed.length >= 80) {
+            "setup_token"
+        } else {
+            "api_key"
+        }
+    }
+
+    fun validateCredential(credential: String, authType: String): String? {
+        val trimmed = credential.trim()
+        if (trimmed.isBlank()) return "Credential is required"
+        return when (authType) {
+            "setup_token" -> {
+                if (!trimmed.startsWith("sk-ant-oat01-")) {
+                    "Setup token must start with sk-ant-oat01-"
+                } else if (trimmed.length < 80) {
+                    "Token looks too short. Paste the full setup-token."
+                } else null
+            }
+            else -> null
+        }
+    }
+
+    // ==================== Solana Wallet ====================
+
+    fun getWalletAddress(context: Context): String? =
+        prefs(context).getString(KEY_WALLET_ADDRESS, null)?.ifBlank { null }
+
+    fun getWalletLabel(context: Context): String =
+        prefs(context).getString(KEY_WALLET_LABEL, "") ?: ""
+
+    fun setWalletAddress(context: Context, address: String, label: String = "") {
+        prefs(context).edit()
+            .putString(KEY_WALLET_ADDRESS, address)
+            .putString(KEY_WALLET_LABEL, label)
+            .apply()
+        writeWalletConfig(context)
+    }
+
+    fun clearWalletAddress(context: Context) {
+        prefs(context).edit()
+            .remove(KEY_WALLET_ADDRESS)
+            .remove(KEY_WALLET_LABEL)
+            .apply()
+        val walletFile = File(File(context.filesDir, "workspace"), "solana_wallet.json")
+        if (walletFile.exists()) walletFile.delete()
+    }
+
+    private fun writeWalletConfig(context: Context) {
+        val address = prefs(context).getString(KEY_WALLET_ADDRESS, null) ?: return
+        val label = prefs(context).getString(KEY_WALLET_LABEL, "") ?: ""
+        val workspaceDir = File(context.filesDir, "workspace").apply { mkdirs() }
+        val json = """{"publicKey": "$address", "label": "$label"}"""
+        File(workspaceDir, "solana_wallet.json").writeText(json)
     }
 
     /**

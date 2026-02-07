@@ -97,6 +97,10 @@ class AndroidBridge(
                 "/apps/launch" -> handleAppsLaunch(params)
                 "/stats/message" -> handleStatsMessage()
                 "/config/set-owner" -> handleSetOwner(params)
+                "/solana/authorize" -> handleSolanaAuthorize()
+                "/solana/address" -> handleSolanaAddress()
+                "/solana/sign" -> handleSolanaSign(params)
+                "/solana/send" -> handleSolanaSend(params)
                 "/ping" -> jsonResponse(200, mapOf("status" to "ok", "bridge" to "AndroidBridge"))
                 else -> jsonResponse(404, mapOf("error" to "Unknown endpoint: $uri"))
             }
@@ -413,6 +417,89 @@ class AndroidBridge(
         ConfigManager.updateConfigField(context, "telegramOwnerId", ownerId)
         Log.i(TAG, "Owner ID set to $ownerId via auto-detect")
         return jsonResponse(200, mapOf("success" to true, "ownerId" to ownerId))
+    }
+
+    // ==================== Solana ====================
+
+    private fun handleSolanaAuthorize(): Response {
+        val requestId = java.util.UUID.randomUUID().toString()
+        val intent = Intent(context, com.seekerclaw.app.solana.SolanaAuthActivity::class.java).apply {
+            putExtra("action", "authorize")
+            putExtra("requestId", requestId)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(intent)
+
+        val resultFile = java.io.File(java.io.File(context.filesDir, "solana_results"), "$requestId.json")
+        val deadline = System.currentTimeMillis() + 60_000
+        while (System.currentTimeMillis() < deadline) {
+            if (resultFile.exists()) {
+                val result = JSONObject(resultFile.readText())
+                resultFile.delete()
+                val address = result.optString("address", "")
+                val error = result.optString("error", "")
+
+                return if (address.isNotBlank()) {
+                    jsonResponse(200, mapOf("address" to address, "success" to true))
+                } else {
+                    jsonResponse(400, mapOf("error" to error.ifBlank { "Authorization failed" }))
+                }
+            }
+            Thread.sleep(300)
+        }
+        return jsonResponse(408, mapOf("error" to "Authorization timed out"))
+    }
+
+    private fun handleSolanaAddress(): Response {
+        val address = ConfigManager.getWalletAddress(context)
+        return if (address != null) {
+            val label = ConfigManager.getWalletLabel(context)
+            jsonResponse(200, mapOf("address" to address, "label" to label))
+        } else {
+            jsonResponse(404, mapOf("error" to "No wallet connected"))
+        }
+    }
+
+    private fun handleSolanaSign(params: JSONObject): Response {
+        val txBase64 = params.optString("transaction", "")
+        if (txBase64.isBlank()) {
+            return jsonResponse(400, mapOf("error" to "transaction (base64) is required"))
+        }
+
+        val txBytes = android.util.Base64.decode(txBase64, android.util.Base64.NO_WRAP)
+        val requestId = java.util.UUID.randomUUID().toString()
+
+        val intent = Intent(context, com.seekerclaw.app.solana.SolanaAuthActivity::class.java).apply {
+            putExtra("action", "sign")
+            putExtra("requestId", requestId)
+            putExtra("transaction", txBytes)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(intent)
+
+        val resultFile = java.io.File(java.io.File(context.filesDir, "solana_results"), "$requestId.json")
+        val deadline = System.currentTimeMillis() + 120_000
+        while (System.currentTimeMillis() < deadline) {
+            if (resultFile.exists()) {
+                val result = JSONObject(resultFile.readText())
+                resultFile.delete()
+                val sigB64 = result.optString("signature", "")
+                val error = result.optString("error", "")
+
+                return if (sigB64.isNotBlank()) {
+                    jsonResponse(200, mapOf("signature" to sigB64, "success" to true))
+                } else {
+                    jsonResponse(400, mapOf("error" to error.ifBlank { "Transaction rejected by user" }))
+                }
+            }
+            Thread.sleep(300)
+        }
+        return jsonResponse(408, mapOf("error" to "Signing timed out"))
+    }
+
+    private fun handleSolanaSend(params: JSONObject): Response {
+        // Legacy endpoint — solana_send now builds tx in JS and uses /solana/sign
+        return jsonResponse(400, mapOf("error" to "Use /solana/sign instead. Transaction building is handled by the Node.js agent."))
     }
 
     // ==================== Helpers ====================

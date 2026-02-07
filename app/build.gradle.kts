@@ -144,5 +144,11 @@ dependencies {
     // NanoHTTPD for Android Bridge (Node.js <-> Kotlin IPC)
     implementation("org.nanohttpd:nanohttpd:2.3.1")
 
+    // Solana Mobile Wallet Adapter
+    implementation("com.solanamobile:mobile-wallet-adapter-clientlib-ktx:2.0.3")
+
+    // Solana transaction building (pure Kotlin)
+    implementation("org.sol4k:sol4k:0.4.2")
+
     debugImplementation(libs.androidx.ui.tooling)
 }

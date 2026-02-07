@@ -42,6 +42,11 @@
             android:foregroundServiceType="specialUse"
             android:exported="false" />
 
+        <activity
+            android:name=".solana.SolanaAuthActivity"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:exported="false" />
+
         <receiver
             android:name=".receiver.BootReceiver"
             android:enabled="true"

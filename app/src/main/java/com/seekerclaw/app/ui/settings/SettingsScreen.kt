@@ -1,13 +1,19 @@
 package com.seekerclaw.app.ui.settings
 
+import android.Manifest
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.PowerManager
 import android.provider.Settings
 import android.widget.Toast
+import androidx.activity.compose.ManagedActivityResultLauncher
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -79,11 +85,35 @@ fun SettingsScreen() {
     var batteryOptimizationDisabled by remember {
         mutableStateOf(powerManager.isIgnoringBatteryOptimizations(context.packageName))
     }
+
+    // Permission states
+    var hasLocationPermission by remember {
+        mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED)
+    }
+    var hasContactsPermission by remember {
+        mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED)
+    }
+    var hasSmsPermission by remember {
+        mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED)
+    }
+    var hasCallPermission by remember {
+        mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED)
+    }
+
+    val locationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { hasLocationPermission = it }
+    val contactsLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { hasContactsPermission = it }
+    val smsLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { hasSmsPermission = it }
+    val callLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { hasCallPermission = it }
+
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 batteryOptimizationDisabled = powerManager.isIgnoringBatteryOptimizations(context.packageName)
+                hasLocationPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                hasContactsPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED
+                hasSmsPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED
+                hasCallPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -131,6 +161,7 @@ fun SettingsScreen() {
         showRestartDialog = true
     }
 
+    val authTypeLabel = if (config?.authType == "setup_token") "Setup Token" else "API Key"
     val maskedApiKey = config?.anthropicApiKey?.let { key ->
         if (key.length > 12) "${key.take(8)}${"*".repeat(8)}${key.takeLast(4)}" else "*".repeat(key.length)
     } ?: "Not set"
@@ -168,11 +199,11 @@ fun SettingsScreen() {
                 .background(SeekerClawColors.Surface, shape),
         ) {
             ConfigField(
-                label = "API Key",
+                label = authTypeLabel,
                 value = maskedApiKey,
                 onClick = {
                     editField = "anthropicApiKey"
-                    editLabel = "API Key"
+                    editLabel = authTypeLabel
                     editValue = config?.anthropicApiKey ?: ""
                 },
             )
@@ -252,6 +283,118 @@ fun SettingsScreen() {
                     context.startActivity(intent)
                 },
             )
+        }
+
+        Spacer(modifier = Modifier.height(28.dp))
+
+        // Permissions
+        SectionLabel("PERMISSIONS")
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(SeekerClawColors.Surface, shape)
+                .padding(horizontal = 16.dp),
+        ) {
+            PermissionRow("GPS Location", hasLocationPermission) {
+                requestPermissionOrOpenSettings(context, Manifest.permission.ACCESS_FINE_LOCATION, locationLauncher)
+            }
+            PermissionRow("Contacts", hasContactsPermission) {
+                requestPermissionOrOpenSettings(context, Manifest.permission.READ_CONTACTS, contactsLauncher)
+            }
+            PermissionRow("SMS", hasSmsPermission) {
+                requestPermissionOrOpenSettings(context, Manifest.permission.SEND_SMS, smsLauncher)
+            }
+            PermissionRow("Phone Calls", hasCallPermission) {
+                requestPermissionOrOpenSettings(context, Manifest.permission.CALL_PHONE, callLauncher)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(28.dp))
+
+        // Solana Wallet
+        SectionLabel("SOLANA WALLET")
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        var walletAddress by remember { mutableStateOf(ConfigManager.getWalletAddress(context)) }
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(SeekerClawColors.Surface, shape)
+                .padding(16.dp),
+        ) {
+            if (walletAddress != null) {
+                InfoRow("Address", "${walletAddress!!.take(6)}...${walletAddress!!.takeLast(4)}")
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedButton(
+                    onClick = {
+                        ConfigManager.clearWalletAddress(context)
+                        walletAddress = null
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = shape,
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = SeekerClawColors.Error,
+                    ),
+                ) {
+                    Text("Disconnect Wallet", fontFamily = FontFamily.Monospace, fontSize = 14.sp)
+                }
+            } else {
+                var manualAddress by remember { mutableStateOf("") }
+                OutlinedTextField(
+                    value = manualAddress,
+                    onValueChange = { manualAddress = it },
+                    label = {
+                        Text(
+                            "Wallet Address",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 12.sp,
+                        )
+                    },
+                    placeholder = {
+                        Text(
+                            "Paste public key...",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 14.sp,
+                            color = SeekerClawColors.TextDim,
+                        )
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    textStyle = androidx.compose.ui.text.TextStyle(
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 14.sp,
+                        color = SeekerClawColors.TextPrimary,
+                    ),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = SeekerClawColors.Primary,
+                        unfocusedBorderColor = SeekerClawColors.TextDim.copy(alpha = 0.3f),
+                        cursorColor = SeekerClawColors.Primary,
+                    ),
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Button(
+                    onClick = {
+                        if (manualAddress.isNotBlank()) {
+                            ConfigManager.setWalletAddress(context, manualAddress.trim())
+                            walletAddress = manualAddress.trim()
+                            manualAddress = ""
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = shape,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = SeekerClawColors.Accent.copy(alpha = 0.15f),
+                        contentColor = SeekerClawColors.Accent,
+                    ),
+                ) {
+                    Text("Save Address", fontFamily = FontFamily.Monospace, fontSize = 14.sp)
+                }
+            }
         }
 
         Spacer(modifier = Modifier.height(28.dp))
@@ -408,6 +551,10 @@ fun SettingsScreen() {
                         val field = editField ?: return@TextButton
                         val trimmed = editValue.trim()
                         if (trimmed.isNotEmpty()) {
+                            if (field == "anthropicApiKey") {
+                                val detected = ConfigManager.detectAuthType(trimmed)
+                                saveField("authType", detected)
+                            }
                             saveField(field, trimmed)
                         }
                         editField = null
@@ -817,6 +964,58 @@ private fun InfoRow(label: String, value: String) {
             fontSize = 13.sp,
             color = SeekerClawColors.TextPrimary,
         )
+    }
+}
+
+@Composable
+private fun PermissionRow(label: String, granted: Boolean, onRequest: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = label,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 14.sp,
+            color = SeekerClawColors.TextPrimary,
+        )
+        Switch(
+            checked = granted,
+            onCheckedChange = { if (!granted) onRequest() },
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = SeekerClawColors.Accent,
+                checkedTrackColor = SeekerClawColors.Accent.copy(alpha = 0.3f),
+                uncheckedThumbColor = SeekerClawColors.TextDim,
+                uncheckedTrackColor = SeekerClawColors.Background,
+                uncheckedBorderColor = SeekerClawColors.TextDim.copy(alpha = 0.3f),
+            ),
+        )
+    }
+}
+
+private fun requestPermissionOrOpenSettings(
+    context: Context,
+    permission: String,
+    launcher: ManagedActivityResultLauncher<String, Boolean>,
+) {
+    val activity = context as? Activity ?: return
+    if (ActivityCompat.shouldShowRequestPermissionRationale(activity, permission)) {
+        launcher.launch(permission)
+    } else {
+        val prefs = context.getSharedPreferences("seekerclaw_prefs", Context.MODE_PRIVATE)
+        val askedKey = "permission_asked_$permission"
+        if (prefs.getBoolean(askedKey, false)) {
+            val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                data = Uri.parse("package:${context.packageName}")
+            }
+            context.startActivity(intent)
+        } else {
+            prefs.edit().putBoolean(askedKey, true).apply()
+            launcher.launch(permission)
+        }
     }
 }
 

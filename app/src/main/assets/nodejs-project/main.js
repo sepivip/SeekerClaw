@@ -36,6 +36,7 @@ const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
 const BOT_TOKEN = config.botToken;
 let OWNER_ID = config.ownerId ? String(config.ownerId) : '';
 const ANTHROPIC_KEY = config.anthropicApiKey;
+const AUTH_TYPE = config.authType || 'api_key';
 const MODEL = config.model || 'claude-opus-4-6';
 const AGENT_NAME = config.agentName || 'SeekerClaw';
 
@@ -47,7 +48,8 @@ if (!BOT_TOKEN || !ANTHROPIC_KEY) {
 if (!OWNER_ID) {
     log('Owner ID not set — will auto-detect from first message');
 } else {
-    log(`Agent: ${AGENT_NAME} | Model: ${MODEL} | Owner: ${OWNER_ID}`);
+    const authLabel = AUTH_TYPE === 'setup_token' ? 'setup-token' : 'api-key';
+    log(`Agent: ${AGENT_NAME} | Model: ${MODEL} | Auth: ${authLabel} | Owner: ${OWNER_ID}`);
 }
 
 // ============================================================================
@@ -1280,6 +1282,48 @@ const TOOLS = [
             },
             required: ['package']
         }
+    },
+    // Solana Wallet Tools
+    {
+        name: 'solana_balance',
+        description: 'Get SOL balance and SPL token balances for a Solana wallet address.',
+        input_schema: {
+            type: 'object',
+            properties: {
+                address: { type: 'string', description: 'Solana wallet public key (base58). If omitted, uses the connected wallet address.' }
+            }
+        }
+    },
+    {
+        name: 'solana_history',
+        description: 'Get recent transaction history for a Solana wallet address.',
+        input_schema: {
+            type: 'object',
+            properties: {
+                address: { type: 'string', description: 'Solana wallet public key (base58). If omitted, uses the connected wallet address.' },
+                limit: { type: 'number', description: 'Number of transactions (default 10, max 50)' }
+            }
+        }
+    },
+    {
+        name: 'solana_address',
+        description: 'Get the connected Solana wallet address from the SeekerClaw app.',
+        input_schema: {
+            type: 'object',
+            properties: {}
+        }
+    },
+    {
+        name: 'solana_send',
+        description: 'Send SOL to a Solana address. IMPORTANT: This prompts the user to approve the transaction in their wallet app on the phone. ALWAYS confirm with the user in chat before calling this tool.',
+        input_schema: {
+            type: 'object',
+            properties: {
+                to: { type: 'string', description: 'Recipient Solana address (base58)' },
+                amount: { type: 'number', description: 'Amount of SOL to send' }
+            },
+            required: ['to', 'amount']
+        }
     }
 ];
 
@@ -1852,6 +1896,135 @@ async function executeTool(name, input) {
             return await androidBridgeCall('/apps/launch', { package: input.package });
         }
 
+        // ==================== Solana Tools ====================
+
+        case 'solana_address': {
+            const walletConfigPath = path.join(workDir, 'solana_wallet.json');
+            if (fs.existsSync(walletConfigPath)) {
+                try {
+                    const walletConfig = JSON.parse(fs.readFileSync(walletConfigPath, 'utf8'));
+                    return { address: walletConfig.publicKey, label: walletConfig.label || '' };
+                } catch (e) {
+                    return { error: 'Failed to read wallet config' };
+                }
+            }
+            return { error: 'No wallet connected. Connect a wallet in the SeekerClaw app Settings.' };
+        }
+
+        case 'solana_balance': {
+            let address = input.address;
+            if (!address) {
+                const walletConfigPath = path.join(workDir, 'solana_wallet.json');
+                if (fs.existsSync(walletConfigPath)) {
+                    try {
+                        address = JSON.parse(fs.readFileSync(walletConfigPath, 'utf8')).publicKey;
+                    } catch (_) {}
+                }
+            }
+            if (!address) return { error: 'No wallet address provided and no wallet connected.' };
+
+            const balanceResult = await solanaRpc('getBalance', [address]);
+            if (balanceResult.error) return { error: balanceResult.error };
+
+            const solBalance = (balanceResult.value || 0) / 1e9;
+
+            const tokenResult = await solanaRpc('getTokenAccountsByOwner', [
+                address,
+                { programId: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA' },
+                { encoding: 'jsonParsed' }
+            ]);
+
+            const tokens = [];
+            if (tokenResult.value) {
+                for (const account of tokenResult.value) {
+                    try {
+                        const info = account.account.data.parsed.info;
+                        if (parseFloat(info.tokenAmount.uiAmountString) > 0) {
+                            tokens.push({
+                                mint: info.mint,
+                                amount: info.tokenAmount.uiAmountString,
+                                decimals: info.tokenAmount.decimals,
+                            });
+                        }
+                    } catch (_) {}
+                }
+            }
+
+            return { address, sol: solBalance, tokens, tokenCount: tokens.length };
+        }
+
+        case 'solana_history': {
+            let address = input.address;
+            if (!address) {
+                const walletConfigPath = path.join(workDir, 'solana_wallet.json');
+                if (fs.existsSync(walletConfigPath)) {
+                    try {
+                        address = JSON.parse(fs.readFileSync(walletConfigPath, 'utf8')).publicKey;
+                    } catch (_) {}
+                }
+            }
+            if (!address) return { error: 'No wallet address provided and no wallet connected.' };
+
+            const limit = Math.min(input.limit || 10, 50);
+            const signatures = await solanaRpc('getSignaturesForAddress', [address, { limit }]);
+            if (signatures.error) return { error: signatures.error };
+
+            return {
+                address,
+                transactions: (signatures || []).map(sig => ({
+                    signature: sig.signature,
+                    slot: sig.slot,
+                    blockTime: sig.blockTime ? new Date(sig.blockTime * 1000).toISOString() : null,
+                    status: sig.err ? 'Failed' : 'Success',
+                    memo: sig.memo || null,
+                })),
+                count: (signatures || []).length,
+            };
+        }
+
+        case 'solana_send': {
+            // Build tx in JS, wallet signs AND broadcasts via signAndSendTransactions
+            const walletConfigPath = path.join(workDir, 'solana_wallet.json');
+            if (!fs.existsSync(walletConfigPath)) {
+                return { error: 'No wallet connected. Connect a wallet in the SeekerClaw app Settings.' };
+            }
+            const walletConfig = JSON.parse(fs.readFileSync(walletConfigPath, 'utf8'));
+            const from = walletConfig.publicKey;
+            const to = input.to;
+            const amount = input.amount;
+
+            if (!to || !amount || amount <= 0) {
+                return { error: 'Both "to" address and a positive "amount" are required.' };
+            }
+
+            // Step 1: Get latest blockhash
+            const blockhashResult = await solanaRpc('getLatestBlockhash', [{ commitment: 'finalized' }]);
+            if (blockhashResult.error) return { error: 'Failed to get blockhash: ' + blockhashResult.error };
+            const recentBlockhash = blockhashResult.blockhash || (blockhashResult.value && blockhashResult.value.blockhash);
+            if (!recentBlockhash) return { error: 'No blockhash returned from RPC' };
+
+            // Step 2: Build unsigned transaction
+            const lamports = Math.round(amount * 1e9);
+            let unsignedTx;
+            try {
+                unsignedTx = buildSolTransferTx(from, to, lamports, recentBlockhash);
+            } catch (e) {
+                return { error: 'Failed to build transaction: ' + e.message };
+            }
+            const txBase64 = unsignedTx.toString('base64');
+
+            // Step 3: Send to wallet — wallet signs AND broadcasts (signAndSendTransactions)
+            const result = await androidBridgeCall('/solana/sign', { transaction: txBase64 });
+            if (result.error) return { error: result.error };
+            if (!result.signature) return { error: 'No signature returned from wallet' };
+
+            // Convert base64 signature to base58 for display
+            const sigBytes = Buffer.from(result.signature, 'base64');
+            const sigBase58 = base58Encode(sigBytes);
+
+            return { signature: sigBase58, success: true };
+        }
+
         default:
             return { error: `Unknown tool: ${name}` };
     }
@@ -1899,6 +2072,129 @@ async function androidBridgeCall(endpoint, data = {}) {
         req.write(postData);
         req.end();
     });
+}
+
+// ============================================================================
+// SOLANA RPC
+// ============================================================================
+
+const SOLANA_RPC_URL = 'https://api.mainnet-beta.solana.com';
+
+async function solanaRpc(method, params = []) {
+    return new Promise((resolve) => {
+        const postData = JSON.stringify({
+            jsonrpc: '2.0',
+            id: 1,
+            method: method,
+            params: params,
+        });
+
+        const url = new URL(SOLANA_RPC_URL);
+        const options = {
+            hostname: url.hostname,
+            port: 443,
+            path: url.pathname,
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(postData),
+            },
+            timeout: 15000,
+        };
+
+        const req = https.request(options, (res) => {
+            let body = '';
+            res.on('data', chunk => body += chunk);
+            res.on('end', () => {
+                try {
+                    const json = JSON.parse(body);
+                    if (json.error) {
+                        resolve({ error: json.error.message });
+                    } else {
+                        resolve(json.result);
+                    }
+                } catch (e) {
+                    resolve({ error: 'Invalid RPC response' });
+                }
+            });
+        });
+
+        req.on('error', (e) => resolve({ error: e.message }));
+        req.on('timeout', () => { req.destroy(); resolve({ error: 'Solana RPC timeout' }); });
+        req.write(postData);
+        req.end();
+    });
+}
+
+// Base58 decode for Solana public keys and blockhashes
+function base58Decode(str) {
+    const ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+    let zeros = 0;
+    for (let i = 0; i < str.length && str[i] === '1'; i++) zeros++;
+    let value = 0n;
+    for (let i = 0; i < str.length; i++) {
+        const idx = ALPHABET.indexOf(str[i]);
+        if (idx < 0) throw new Error('Invalid base58 character: ' + str[i]);
+        value = value * 58n + BigInt(idx);
+    }
+    const hex = value.toString(16);
+    const hexPadded = hex.length % 2 ? '0' + hex : hex;
+    const decoded = Buffer.from(hexPadded, 'hex');
+    const result = Buffer.alloc(zeros + decoded.length);
+    decoded.copy(result, zeros);
+    return result;
+}
+
+// Base58 encode for Solana transaction signatures
+function base58Encode(buf) {
+    const ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+    let zeros = 0;
+    for (let i = 0; i < buf.length && buf[i] === 0; i++) zeros++;
+    let value = 0n;
+    for (let i = 0; i < buf.length; i++) {
+        value = value * 256n + BigInt(buf[i]);
+    }
+    let result = '';
+    while (value > 0n) {
+        result = ALPHABET[Number(value % 58n)] + result;
+        value = value / 58n;
+    }
+    return '1'.repeat(zeros) + result;
+}
+
+// Build an unsigned SOL transfer transaction (legacy format)
+function buildSolTransferTx(fromBase58, toBase58, lamports, recentBlockhashBase58) {
+    const from = base58Decode(fromBase58);
+    const to = base58Decode(toBase58);
+    const blockhash = base58Decode(recentBlockhashBase58);
+    const systemProgram = Buffer.alloc(32); // 11111111111111111111111111111111
+
+    // SystemProgram.Transfer instruction data: u32 LE index(2) + u64 LE lamports
+    const instructionData = Buffer.alloc(12);
+    instructionData.writeUInt32LE(2, 0);
+    instructionData.writeBigUInt64LE(BigInt(lamports), 4);
+
+    // Message: header + account keys + blockhash + instructions
+    const message = Buffer.concat([
+        Buffer.from([1, 0, 1]),          // num_required_sigs=1, readonly_signed=0, readonly_unsigned=1
+        Buffer.from([3]),                // compact-u16: 3 account keys
+        from,                            // index 0: from (signer, writable)
+        to,                              // index 1: to (writable)
+        systemProgram,                   // index 2: System Program (readonly)
+        blockhash,                       // recent blockhash
+        Buffer.from([1]),                // compact-u16: 1 instruction
+        Buffer.from([2]),                // program_id_index = 2 (System Program)
+        Buffer.from([2, 0, 1]),          // compact-u16 num_accounts=2, indices [0, 1]
+        Buffer.from([12]),               // compact-u16 data_length=12
+        instructionData,
+    ]);
+
+    // Full transaction: signature count + empty signature + message
+    return Buffer.concat([
+        Buffer.from([1]),                // compact-u16: 1 signature
+        Buffer.alloc(64),               // empty signature placeholder
+        message,
+    ]);
 }
 
 // Helper to format bytes
@@ -2029,6 +2325,12 @@ function buildSystemPrompt(matchedSkills = []) {
     lines.push('- android_tts: Speak text out loud');
     lines.push('- android_apps_list: List installed apps');
     lines.push('- android_apps_launch: Launch an app by package name');
+    lines.push('');
+    lines.push('### Solana Wallet');
+    lines.push('- solana_balance: Get SOL and token balances');
+    lines.push('- solana_history: Get recent transactions');
+    lines.push('- solana_address: Get connected wallet address');
+    lines.push('- solana_send: Send SOL (requires user confirmation + wallet approval on device)');
     lines.push('');
 
     // Tool Call Style - OpenClaw style
@@ -2210,14 +2512,18 @@ async function chat(chatId, userMessage) {
             messages: messages
         });
 
+        const authHeaders = AUTH_TYPE === 'setup_token'
+            ? { 'Authorization': `Bearer ${ANTHROPIC_KEY}` }
+            : { 'x-api-key': ANTHROPIC_KEY };
+
         const res = await httpRequest({
             hostname: 'api.anthropic.com',
             path: '/v1/messages',
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'x-api-key': ANTHROPIC_KEY,
-                'anthropic-version': '2023-06-01'
+                'anthropic-version': '2023-06-01',
+                ...authHeaders,
             }
         }, body);
 
