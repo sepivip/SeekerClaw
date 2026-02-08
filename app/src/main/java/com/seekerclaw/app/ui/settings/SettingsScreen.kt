@@ -61,6 +61,7 @@ import com.seekerclaw.app.service.OpenClawService
 import com.seekerclaw.app.ui.theme.SeekerClawColors
 import com.seekerclaw.app.ui.theme.SeekerClawThemeStyle
 import com.seekerclaw.app.ui.theme.ThemeManager
+import com.seekerclaw.app.BuildConfig
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -238,6 +239,19 @@ fun SettingsScreen() {
                     editField = "agentName"
                     editLabel = "Agent Name"
                     editValue = config?.agentName ?: ""
+                },
+            )
+            ConfigField(
+                label = "Brave API Key",
+                value = config?.braveApiKey?.let { key ->
+                    if (key.isBlank()) "Not set (web search disabled)"
+                    else if (key.length > 12) "${key.take(8)}${"*".repeat(8)}${key.takeLast(4)}"
+                    else "*".repeat(key.length)
+                } ?: "Not set (web search disabled)",
+                onClick = {
+                    editField = "braveApiKey"
+                    editLabel = "Brave API Key"
+                    editValue = config?.braveApiKey ?: ""
                 },
                 showDivider = false,
             )
@@ -496,8 +510,8 @@ fun SettingsScreen() {
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            InfoRow("Version", "1.0.0")
-            InfoRow("OpenClaw", "---")
+            InfoRow("Version", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+            InfoRow("OpenClaw", "2026.2.6")
             InfoRow("Node.js", "18 LTS")
         }
 
@@ -518,7 +532,7 @@ fun SettingsScreen() {
             },
             text = {
                 Column {
-                    if (editField == "anthropicApiKey" || editField == "telegramBotToken") {
+                    if (editField == "anthropicApiKey" || editField == "telegramBotToken" || editField == "braveApiKey") {
                         Text(
                             "Changing this requires an agent restart.",
                             fontFamily = FontFamily.Monospace,
@@ -550,7 +564,10 @@ fun SettingsScreen() {
                     onClick = {
                         val field = editField ?: return@TextButton
                         val trimmed = editValue.trim()
-                        if (trimmed.isNotEmpty()) {
+                        if (field == "braveApiKey") {
+                            // Allow empty to disable web search
+                            saveField(field, trimmed)
+                        } else if (trimmed.isNotEmpty()) {
                             if (field == "anthropicApiKey") {
                                 val detected = ConfigManager.detectAuthType(trimmed)
                                 saveField("authType", detected)

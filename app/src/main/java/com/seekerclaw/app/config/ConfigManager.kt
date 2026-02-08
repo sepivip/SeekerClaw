@@ -17,6 +17,7 @@ data class AppConfig(
     val telegramOwnerId: String,
     val model: String,
     val agentName: String,
+    val braveApiKey: String = "",
     val autoStartOnBoot: Boolean = true,
 )
 
@@ -30,6 +31,7 @@ object ConfigManager {
     private const val KEY_AUTO_START = "auto_start_on_boot"
     private const val KEY_SETUP_COMPLETE = "setup_complete"
     private const val KEY_AUTH_TYPE = "auth_type"
+    private const val KEY_BRAVE_API_KEY_ENC = "brave_api_key_enc"
     private const val KEY_WALLET_ADDRESS = "wallet_address"
     private const val KEY_WALLET_LABEL = "wallet_label"
 
@@ -49,7 +51,7 @@ object ConfigManager {
         val encApiKey = KeystoreHelper.encrypt(config.anthropicApiKey)
         val encBotToken = KeystoreHelper.encrypt(config.telegramBotToken)
 
-        prefs(context).edit()
+        val editor = prefs(context).edit()
             .putString(KEY_API_KEY_ENC, Base64.encodeToString(encApiKey, Base64.NO_WRAP))
             .putString(KEY_BOT_TOKEN_ENC, Base64.encodeToString(encBotToken, Base64.NO_WRAP))
             .putString(KEY_OWNER_ID, config.telegramOwnerId)
@@ -58,7 +60,15 @@ object ConfigManager {
             .putString(KEY_AUTH_TYPE, config.authType)
             .putBoolean(KEY_AUTO_START, config.autoStartOnBoot)
             .putBoolean(KEY_SETUP_COMPLETE, true)
-            .apply()
+
+        if (config.braveApiKey.isNotBlank()) {
+            val encBrave = KeystoreHelper.encrypt(config.braveApiKey)
+            editor.putString(KEY_BRAVE_API_KEY_ENC, Base64.encodeToString(encBrave, Base64.NO_WRAP))
+        } else {
+            editor.remove(KEY_BRAVE_API_KEY_ENC)
+        }
+
+        editor.apply()
     }
 
     fun loadConfig(context: Context): AppConfig? {
@@ -81,6 +91,14 @@ object ConfigManager {
             ""
         }
 
+        val braveApiKey = try {
+            val enc = p.getString(KEY_BRAVE_API_KEY_ENC, null)
+            if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to decrypt Brave API key", e)
+            ""
+        }
+
         return AppConfig(
             anthropicApiKey = apiKey,
             authType = p.getString(KEY_AUTH_TYPE, "api_key") ?: "api_key",
@@ -88,6 +106,7 @@ object ConfigManager {
             telegramOwnerId = p.getString(KEY_OWNER_ID, "") ?: "",
             model = p.getString(KEY_MODEL, "claude-opus-4-6") ?: "claude-opus-4-6",
             agentName = p.getString(KEY_AGENT_NAME, "MyAgent") ?: "MyAgent",
+            braveApiKey = braveApiKey,
             autoStartOnBoot = p.getBoolean(KEY_AUTO_START, true),
         )
     }
@@ -108,6 +127,7 @@ object ConfigManager {
             "model" -> config.copy(model = value)
             "agentName" -> config.copy(agentName = value)
             "authType" -> config.copy(authType = value)
+            "braveApiKey" -> config.copy(braveApiKey = value)
             else -> return
         }
         saveConfig(context, updated)
@@ -146,6 +166,10 @@ object ConfigManager {
         File(workspaceDir, "config.yaml").writeText(yaml)
 
         // Also write config.json for easy reading from Node.js
+        val braveField = if (config.braveApiKey.isNotBlank()) {
+            """,
+            |  "braveApiKey": "${config.braveApiKey}""""
+        } else ""
         val json = """
             |{
             |  "botToken": "${config.telegramBotToken}",
@@ -153,7 +177,7 @@ object ConfigManager {
             |  "anthropicApiKey": "${config.anthropicApiKey}",
             |  "authType": "${config.authType}",
             |  "model": "${config.model}",
-            |  "agentName": "${config.agentName}"
+            |  "agentName": "${config.agentName}"$braveField
             |}
         """.trimMargin()
         File(workspaceDir, "config.json").writeText(json)

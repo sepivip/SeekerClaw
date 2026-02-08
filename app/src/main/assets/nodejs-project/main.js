@@ -192,7 +192,22 @@ const MAX_TIMEOUT_MS = 2147483647; // 2^31 - 1 (setTimeout max)
 function loadCronStore() {
     try {
         if (fs.existsSync(CRON_STORE_PATH)) {
-            return JSON.parse(fs.readFileSync(CRON_STORE_PATH, 'utf8'));
+            const store = JSON.parse(fs.readFileSync(CRON_STORE_PATH, 'utf8'));
+            // Migrate old jobs: add delivery object if missing
+            let mutated = false;
+            for (const job of store.jobs) {
+                if (!job.delivery) {
+                    job.delivery = { mode: 'announce' };
+                    mutated = true;
+                }
+                // Migrate old "deliver" mode name to "announce"
+                if (job.delivery.mode === 'deliver') {
+                    job.delivery.mode = 'announce';
+                    mutated = true;
+                }
+            }
+            if (mutated) saveCronStore(store);
+            return store;
         }
     } catch (e) {
         log(`Error loading cron store: ${e.message}`);
@@ -409,6 +424,7 @@ const cronService = {
             updatedAtMs: now,
             schedule: input.schedule, // { kind: 'at'|'every', atMs?, everyMs?, anchorMs? }
             payload: input.payload,   // { kind: 'reminder', message: '...' }
+            delivery: { mode: 'announce' },
             state: {
                 nextRunAtMs: undefined,
                 lastRunAtMs: undefined,
@@ -1617,8 +1633,14 @@ async function executeTool(name, input) {
 
             const isRecurring = triggerTime._recurring === true;
 
-            if (!isRecurring && triggerTime.getTime() <= Date.now()) {
-                return { error: 'Scheduled time must be in the future.' };
+            if (!isRecurring) {
+                const diffMs = triggerTime.getTime() - Date.now();
+                if (diffMs < -60000) {
+                    return { error: 'Scheduled time is in the past.' };
+                }
+                if (diffMs > 10 * 365.25 * 24 * 3600000) {
+                    return { error: 'Scheduled time is too far in the future (max 10 years).' };
+                }
             }
 
             let schedule;
