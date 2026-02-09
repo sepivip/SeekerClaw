@@ -96,6 +96,7 @@ class AndroidBridge(
                 "/apps/list" -> handleAppsList()
                 "/apps/launch" -> handleAppsLaunch(params)
                 "/stats/message" -> handleStatsMessage()
+                "/stats/tokens" -> handleStatsTokens(params)
                 "/config/set-owner" -> handleSetOwner(params)
                 "/solana/authorize" -> handleSolanaAuthorize()
                 "/solana/address" -> handleSolanaAddress()
@@ -405,6 +406,16 @@ class AndroidBridge(
     private fun handleStatsMessage(): Response {
         ServiceState.incrementMessages()
         return jsonResponse(200, mapOf("success" to true))
+    }
+
+    private fun handleStatsTokens(params: JSONObject): Response {
+        val inputTokens = params.optLong("input_tokens", 0)
+        val outputTokens = params.optLong("output_tokens", 0)
+        val total = inputTokens + outputTokens
+        if (total > 0) {
+            ServiceState.addTokens(total)
+        }
+        return jsonResponse(200, mapOf("success" to true, "tokens_added" to total))
     }
 
     // ==================== Config ====================

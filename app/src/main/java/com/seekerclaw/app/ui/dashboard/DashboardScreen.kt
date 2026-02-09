@@ -1,6 +1,7 @@
 package com.seekerclaw.app.ui.dashboard
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -42,7 +43,7 @@ import java.util.Date
 import java.util.Locale
 
 @Composable
-fun DashboardScreen() {
+fun DashboardScreen(onNavigateToSystem: () -> Unit = {}) {
     val context = LocalContext.current
     val status by ServiceState.status.collectAsState()
     val uptime by ServiceState.uptime.collectAsState()
@@ -99,27 +100,40 @@ fun DashboardScreen() {
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        // Status card
+        // Status card (tappable → System screen)
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(SeekerClawColors.Surface, shape)
+                .clickable { onNavigateToSystem() }
                 .padding(20.dp),
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(10.dp)
-                        .clip(CircleShape)
-                        .background(statusColor),
-                )
-                Spacer(modifier = Modifier.width(12.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(10.dp)
+                            .clip(CircleShape)
+                            .background(statusColor),
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(
+                        text = statusText,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = SeekerClawColors.TextPrimary,
+                    )
+                }
                 Text(
-                    text = statusText,
+                    text = "System >",
                     fontFamily = FontFamily.Monospace,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = SeekerClawColors.TextPrimary,
+                    fontSize = 11.sp,
+                    color = SeekerClawColors.TextDim,
                 )
             }
 

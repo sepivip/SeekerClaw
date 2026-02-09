@@ -129,6 +129,7 @@ fun SettingsScreen() {
     var editLabel by remember { mutableStateOf("") }
     var editValue by remember { mutableStateOf("") }
     var showModelPicker by remember { mutableStateOf(false) }
+    var showAuthTypePicker by remember { mutableStateOf(false) }
 
     val exportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/zip")
@@ -162,9 +163,14 @@ fun SettingsScreen() {
         showRestartDialog = true
     }
 
-    val authTypeLabel = if (config?.authType == "setup_token") "Setup Token" else "API Key"
+    val authTypeLabel = if (config?.authType == "setup_token") "Pro/Max Token" else "API Key"
     val maskedApiKey = config?.anthropicApiKey?.let { key ->
-        if (key.length > 12) "${key.take(8)}${"*".repeat(8)}${key.takeLast(4)}" else "*".repeat(key.length)
+        if (key.isBlank()) "Not set"
+        else if (key.length > 12) "${key.take(8)}${"*".repeat(8)}${key.takeLast(4)}" else "*".repeat(key.length)
+    } ?: "Not set"
+    val maskedSetupToken = config?.setupToken?.let { token ->
+        if (token.isBlank()) "Not set"
+        else if (token.length > 12) "${token.take(8)}${"*".repeat(8)}${token.takeLast(4)}" else "*".repeat(token.length)
     } ?: "Not set"
     val maskedBotToken = config?.telegramBotToken?.let { token ->
         if (token.length > 10) "${token.take(6)}${"*".repeat(8)}${token.takeLast(4)}" else "*".repeat(token.length)
@@ -200,12 +206,26 @@ fun SettingsScreen() {
                 .background(SeekerClawColors.Surface, shape),
         ) {
             ConfigField(
-                label = authTypeLabel,
+                label = "Auth Type",
+                value = authTypeLabel,
+                onClick = { showAuthTypePicker = true },
+            )
+            ConfigField(
+                label = if (config?.authType == "api_key") "API Key (active)" else "API Key",
                 value = maskedApiKey,
                 onClick = {
                     editField = "anthropicApiKey"
-                    editLabel = authTypeLabel
+                    editLabel = "API Key"
                     editValue = config?.anthropicApiKey ?: ""
+                },
+            )
+            ConfigField(
+                label = if (config?.authType == "setup_token") "Setup Token (active)" else "Setup Token",
+                value = maskedSetupToken,
+                onClick = {
+                    editField = "setupToken"
+                    editLabel = "Setup Token"
+                    editValue = config?.setupToken ?: ""
                 },
             )
             ConfigField(
@@ -532,7 +552,7 @@ fun SettingsScreen() {
             },
             text = {
                 Column {
-                    if (editField == "anthropicApiKey" || editField == "telegramBotToken" || editField == "braveApiKey") {
+                    if (editField == "anthropicApiKey" || editField == "setupToken" || editField == "telegramBotToken" || editField == "braveApiKey") {
                         Text(
                             "Changing this requires an agent restart.",
                             fontFamily = FontFamily.Monospace,
@@ -545,7 +565,7 @@ fun SettingsScreen() {
                         value = editValue,
                         onValueChange = { editValue = it },
                         modifier = Modifier.fillMaxWidth(),
-                        singleLine = editField != "anthropicApiKey",
+                        singleLine = editField != "anthropicApiKey" && editField != "setupToken",
                         textStyle = androidx.compose.ui.text.TextStyle(
                             fontFamily = FontFamily.Monospace,
                             fontSize = 14.sp,
@@ -567,10 +587,22 @@ fun SettingsScreen() {
                         if (field == "braveApiKey") {
                             // Allow empty to disable web search
                             saveField(field, trimmed)
+                        } else if (field == "setupToken") {
+                            // Allow empty to clear, auto-switch auth type if setting a token
+                            saveField(field, trimmed)
+                            if (trimmed.isNotEmpty()) {
+                                saveField("authType", "setup_token")
+                            }
                         } else if (trimmed.isNotEmpty()) {
                             if (field == "anthropicApiKey") {
+                                // Auto-detect: if user pastes a setup token into API key field, store it correctly
                                 val detected = ConfigManager.detectAuthType(trimmed)
-                                saveField("authType", detected)
+                                if (detected == "setup_token") {
+                                    saveField("setupToken", trimmed)
+                                    saveField("authType", "setup_token")
+                                    editField = null
+                                    return@TextButton
+                                }
                             }
                             saveField(field, trimmed)
                         }
@@ -666,6 +698,89 @@ fun SettingsScreen() {
             },
             dismissButton = {
                 TextButton(onClick = { showModelPicker = false }) {
+                    Text(
+                        "Cancel",
+                        fontFamily = FontFamily.Monospace,
+                        color = SeekerClawColors.TextDim,
+                    )
+                }
+            },
+            containerColor = SeekerClawColors.Surface,
+            shape = shape,
+        )
+    }
+
+    // ==================== Auth Type Picker ====================
+    if (showAuthTypePicker) {
+        val authOptions = listOf(
+            "api_key" to "API Key",
+            "setup_token" to "Pro/Max Token",
+        )
+        var selectedAuth by remember { mutableStateOf(config?.authType ?: "api_key") }
+
+        AlertDialog(
+            onDismissRequest = { showAuthTypePicker = false },
+            title = {
+                Text(
+                    "Auth Type",
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    color = SeekerClawColors.TextPrimary,
+                )
+            },
+            text = {
+                Column {
+                    authOptions.forEach { (typeId, label) ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { selectedAuth = typeId }
+                                .padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(
+                                selected = selectedAuth == typeId,
+                                onClick = { selectedAuth = typeId },
+                                colors = RadioButtonDefaults.colors(
+                                    selectedColor = SeekerClawColors.Primary,
+                                    unselectedColor = SeekerClawColors.TextDim,
+                                ),
+                            )
+                            Text(
+                                text = label,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 14.sp,
+                                color = SeekerClawColors.TextPrimary,
+                                modifier = Modifier.padding(start = 8.dp),
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Both credentials are stored. Switching just changes which one is used.",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp,
+                        color = SeekerClawColors.TextDim,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        saveField("authType", selectedAuth)
+                        showAuthTypePicker = false
+                    },
+                ) {
+                    Text(
+                        "Save",
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        color = SeekerClawColors.Primary,
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAuthTypePicker = false }) {
                     Text(
                         "Cancel",
                         fontFamily = FontFamily.Monospace,

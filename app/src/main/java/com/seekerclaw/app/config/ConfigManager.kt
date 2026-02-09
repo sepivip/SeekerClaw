@@ -12,6 +12,7 @@ import java.util.zip.ZipOutputStream
 
 data class AppConfig(
     val anthropicApiKey: String,
+    val setupToken: String = "",
     val authType: String = "api_key", // "api_key" or "setup_token"
     val telegramBotToken: String,
     val telegramOwnerId: String,
@@ -19,7 +20,11 @@ data class AppConfig(
     val agentName: String,
     val braveApiKey: String = "",
     val autoStartOnBoot: Boolean = true,
-)
+) {
+    /** Returns the credential that should be used based on the current authType. */
+    val activeCredential: String
+        get() = if (authType == "setup_token") setupToken else anthropicApiKey
+}
 
 object ConfigManager {
     private const val PREFS_NAME = "seekerclaw_prefs"
@@ -31,6 +36,7 @@ object ConfigManager {
     private const val KEY_AUTO_START = "auto_start_on_boot"
     private const val KEY_SETUP_COMPLETE = "setup_complete"
     private const val KEY_AUTH_TYPE = "auth_type"
+    private const val KEY_SETUP_TOKEN_ENC = "setup_token_enc"
     private const val KEY_BRAVE_API_KEY_ENC = "brave_api_key_enc"
     private const val KEY_WALLET_ADDRESS = "wallet_address"
     private const val KEY_WALLET_LABEL = "wallet_label"
@@ -60,6 +66,14 @@ object ConfigManager {
             .putString(KEY_AUTH_TYPE, config.authType)
             .putBoolean(KEY_AUTO_START, config.autoStartOnBoot)
             .putBoolean(KEY_SETUP_COMPLETE, true)
+
+        // Store setup token separately so switching auth type preserves both
+        if (config.setupToken.isNotBlank()) {
+            val encSetupToken = KeystoreHelper.encrypt(config.setupToken)
+            editor.putString(KEY_SETUP_TOKEN_ENC, Base64.encodeToString(encSetupToken, Base64.NO_WRAP))
+        } else {
+            editor.remove(KEY_SETUP_TOKEN_ENC)
+        }
 
         if (config.braveApiKey.isNotBlank()) {
             val encBrave = KeystoreHelper.encrypt(config.braveApiKey)
@@ -91,6 +105,14 @@ object ConfigManager {
             ""
         }
 
+        val setupToken = try {
+            val enc = p.getString(KEY_SETUP_TOKEN_ENC, null)
+            if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to decrypt setup token", e)
+            ""
+        }
+
         val braveApiKey = try {
             val enc = p.getString(KEY_BRAVE_API_KEY_ENC, null)
             if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
@@ -101,6 +123,7 @@ object ConfigManager {
 
         return AppConfig(
             anthropicApiKey = apiKey,
+            setupToken = setupToken,
             authType = p.getString(KEY_AUTH_TYPE, "api_key") ?: "api_key",
             telegramBotToken = botToken,
             telegramOwnerId = p.getString(KEY_OWNER_ID, "") ?: "",
@@ -122,6 +145,7 @@ object ConfigManager {
         val config = loadConfig(context) ?: return
         val updated = when (field) {
             "anthropicApiKey" -> config.copy(anthropicApiKey = value)
+            "setupToken" -> config.copy(setupToken = value)
             "telegramBotToken" -> config.copy(telegramBotToken = value)
             "telegramOwnerId" -> config.copy(telegramOwnerId = value)
             "model" -> config.copy(model = value)
@@ -145,11 +169,13 @@ object ConfigManager {
     fun writeConfigYaml(context: Context) {
         val config = loadConfig(context) ?: return
         val workspaceDir = File(context.filesDir, "workspace").apply { mkdirs() }
+        // Use the active credential (API key or setup token based on authType)
+        val credential = config.activeCredential
         val yaml = """
             |version: 1
             |providers:
             |  anthropic:
-            |    apiKey: "${config.anthropicApiKey}"
+            |    apiKey: "$credential"
             |
             |agents:
             |  main:
@@ -174,7 +200,7 @@ object ConfigManager {
             |{
             |  "botToken": "${config.telegramBotToken}",
             |  "ownerId": "${config.telegramOwnerId}",
-            |  "anthropicApiKey": "${config.anthropicApiKey}",
+            |  "anthropicApiKey": "$credential",
             |  "authType": "${config.authType}",
             |  "model": "${config.model}",
             |  "agentName": "${config.agentName}"$braveField

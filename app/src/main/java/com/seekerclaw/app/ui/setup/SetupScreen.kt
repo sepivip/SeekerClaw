@@ -116,8 +116,10 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             return
         }
 
+        val trimmedKey = apiKey.trim()
         val config = AppConfig(
-            anthropicApiKey = apiKey.trim(),
+            anthropicApiKey = if (authType == "api_key") trimmedKey else "",
+            setupToken = if (authType == "setup_token") trimmedKey else "",
             authType = authType,
             telegramBotToken = botToken.trim(),
             telegramOwnerId = ownerId.trim(),

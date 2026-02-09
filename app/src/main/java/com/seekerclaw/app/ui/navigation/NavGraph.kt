@@ -33,6 +33,7 @@ import com.seekerclaw.app.ui.dashboard.DashboardScreen
 import com.seekerclaw.app.ui.logs.LogsScreen
 import com.seekerclaw.app.ui.settings.SettingsScreen
 import com.seekerclaw.app.ui.setup.SetupScreen
+import com.seekerclaw.app.ui.system.SystemScreen
 import com.seekerclaw.app.ui.theme.SeekerClawColors
 import kotlinx.serialization.Serializable
 
@@ -41,6 +42,7 @@ import kotlinx.serialization.Serializable
 @Serializable object DashboardRoute
 @Serializable object LogsRoute
 @Serializable object SettingsRoute
+@Serializable object SystemRoute
 
 data class BottomNavItem(
     val label: String,
@@ -138,7 +140,16 @@ fun SeekerClawNavHost() {
                 )
             }
             composable<DashboardRoute> {
-                DashboardScreen()
+                DashboardScreen(
+                    onNavigateToSystem = {
+                        navController.navigate(SystemRoute)
+                    }
+                )
+            }
+            composable<SystemRoute> {
+                SystemScreen(
+                    onBack = { navController.popBackStack() }
+                )
             }
             composable<LogsRoute> {
                 LogsScreen()

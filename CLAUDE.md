@@ -2,6 +2,10 @@
 
 > **Product spec:** See `MVP.md` | **Build instructions:** See `PROMPT.md` | **Background research:** See `RESEARCH.md`
 
+## Design Principle: UX First
+
+**Always think about user experience.** This is the top priority when building SeekerClaw. Every UI decision, feature implementation, and config flow should be designed from the user's perspective. Ask: "Is this intuitive? Will the user lose data? Is switching between options seamless?" When in doubt, prioritize ease of use over technical elegance.
+
 ## What Is This Project
 
 **SeekerClaw** (package: `com.seekerclaw.app`) is an Android app that turns a Solana Seeker phone into a 24/7 personal AI agent. It embeds a Node.js runtime via `nodejs-mobile` and runs the OpenClaw gateway as a foreground service. Users interact with their agent through Telegram — the app itself is minimal (setup, status, logs, settings).

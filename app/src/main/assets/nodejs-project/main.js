@@ -903,9 +903,9 @@ function httpRequest(options, body = null) {
             res.on('data', chunk => data += chunk);
             res.on('end', () => {
                 try {
-                    resolve({ status: res.statusCode, data: JSON.parse(data) });
+                    resolve({ status: res.statusCode, data: JSON.parse(data), headers: res.headers });
                 } catch (e) {
-                    resolve({ status: res.statusCode, data: data });
+                    resolve({ status: res.statusCode, data: data, headers: res.headers });
                 }
             });
         });
@@ -2036,7 +2036,8 @@ async function executeTool(name, input) {
             const txBase64 = unsignedTx.toString('base64');
 
             // Step 3: Send to wallet — wallet signs AND broadcasts (signAndSendTransactions)
-            const result = await androidBridgeCall('/solana/sign', { transaction: txBase64 });
+            // 120s timeout: user needs time to open wallet app and approve
+            const result = await androidBridgeCall('/solana/sign', { transaction: txBase64 }, 120000);
             if (result.error) return { error: result.error };
             if (!result.signature) return { error: 'No signature returned from wallet' };
 
@@ -2053,7 +2054,8 @@ async function executeTool(name, input) {
 }
 
 // Helper for Android Bridge HTTP calls
-async function androidBridgeCall(endpoint, data = {}) {
+// timeoutMs: default 10s for quick calls, use longer for interactive flows (wallet approval)
+async function androidBridgeCall(endpoint, data = {}, timeoutMs = 10000) {
     const http = require('http');
 
     return new Promise((resolve) => {
@@ -2068,7 +2070,7 @@ async function androidBridgeCall(endpoint, data = {}) {
                 'Content-Type': 'application/json',
                 'Content-Length': Buffer.byteLength(postData)
             },
-            timeout: 10000
+            timeout: timeoutMs
         }, (res) => {
             let body = '';
             res.on('data', chunk => body += chunk);
@@ -2094,6 +2096,20 @@ async function androidBridgeCall(endpoint, data = {}) {
         req.write(postData);
         req.end();
     });
+}
+
+// ============================================================================
+// CLAUDE USAGE STATE
+// ============================================================================
+
+const CLAUDE_USAGE_FILE = path.join(workDir, 'claude_usage_state');
+
+function writeClaudeUsageState(data) {
+    try {
+        fs.writeFileSync(CLAUDE_USAGE_FILE, JSON.stringify(data));
+    } catch (e) {
+        log(`Failed to write claude usage state: ${e.message}`);
+    }
 }
 
 // ============================================================================
@@ -2556,6 +2572,33 @@ async function chat(chatId, userMessage) {
 
         response = res.data;
 
+        // Track token usage
+        if (response.usage) {
+            androidBridgeCall('/stats/tokens', {
+                input_tokens: response.usage.input_tokens || 0,
+                output_tokens: response.usage.output_tokens || 0,
+            }).catch(() => {});
+        }
+
+        // Capture rate limit headers (API key users)
+        if (AUTH_TYPE === 'api_key' && res.headers) {
+            const h = res.headers;
+            writeClaudeUsageState({
+                type: 'api_key',
+                requests: {
+                    limit: parseInt(h['anthropic-ratelimit-requests-limit']) || 0,
+                    remaining: parseInt(h['anthropic-ratelimit-requests-remaining']) || 0,
+                    reset: h['anthropic-ratelimit-requests-reset'] || '',
+                },
+                tokens: {
+                    limit: parseInt(h['anthropic-ratelimit-tokens-limit']) || 0,
+                    remaining: parseInt(h['anthropic-ratelimit-tokens-remaining']) || 0,
+                    reset: h['anthropic-ratelimit-tokens-reset'] || '',
+                },
+                updated_at: new Date().toISOString(),
+            });
+        }
+
         // Check if we need to handle tool use
         const toolUses = response.content.filter(c => c.type === 'tool_use');
 
@@ -2587,7 +2630,44 @@ async function chat(chatId, userMessage) {
     }
 
     // Extract text response
-    const textContent = response.content.find(c => c.type === 'text');
+    let textContent = response.content.find(c => c.type === 'text');
+
+    // If no text in final response but we ran tools, make one more call so Claude
+    // can summarize the tool results for the user (e.g. after solana_send)
+    if (!textContent && toolUseCount > 0) {
+        log('No text in final tool response, requesting summary...');
+        // The tool results are already in messages — just call again without tools
+        const authHeaders = AUTH_TYPE === 'setup_token'
+            ? { 'Authorization': `Bearer ${ANTHROPIC_KEY}` }
+            : { 'x-api-key': ANTHROPIC_KEY };
+        const summaryRes = await httpRequest({
+            hostname: 'api.anthropic.com',
+            path: '/v1/messages',
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'anthropic-version': '2023-06-01',
+                ...authHeaders,
+            }
+        }, JSON.stringify({
+            model: MODEL,
+            max_tokens: 4096,
+            system: systemPrompt,
+            messages: messages
+        }));
+
+        if (summaryRes.status === 200 && summaryRes.data.content) {
+            response = summaryRes.data;
+            textContent = response.content.find(c => c.type === 'text');
+            if (response.usage) {
+                androidBridgeCall('/stats/tokens', {
+                    input_tokens: response.usage.input_tokens || 0,
+                    output_tokens: response.usage.output_tokens || 0,
+                }).catch(() => {});
+            }
+        }
+    }
+
     const assistantMessage = textContent ? textContent.text : '(No response)';
 
     // Update conversation history with final response
@@ -2704,9 +2784,20 @@ How to handle matching requests
 async function handleMessage(msg) {
     const chatId = msg.chat.id;
     const senderId = String(msg.from?.id);
-    const text = (msg.text || '').trim();
+    const rawText = (msg.text || '').trim();
 
-    if (!text) return;
+    if (!rawText) return;
+
+    // Extract quoted/replied message context
+    let text = rawText;
+    if (msg.reply_to_message) {
+        const quoted = msg.reply_to_message;
+        const quotedText = (quoted.text || quoted.caption || '').trim();
+        if (quotedText) {
+            const quotedFrom = quoted.from?.first_name || 'Someone';
+            text = `[Replying to ${quotedFrom}: "${quotedText}"]\n\n${rawText}`;
+        }
+    }
 
     // Owner auto-detect: first person to message claims ownership
     if (!OWNER_ID) {
@@ -2734,12 +2825,12 @@ async function handleMessage(msg) {
         return;
     }
 
-    log(`Message: ${text.slice(0, 100)}${text.length > 100 ? '...' : ''}`);
+    log(`Message: ${rawText.slice(0, 100)}${rawText.length > 100 ? '...' : ''}${msg.reply_to_message ? ' [reply]' : ''}`);
 
     try {
-        // Check for commands
-        if (text.startsWith('/')) {
-            const [command, ...argParts] = text.split(' ');
+        // Check for commands (use rawText so /commands work even in replies)
+        if (rawText.startsWith('/')) {
+            const [command, ...argParts] = rawText.split(' ');
             const args = argParts.join(' ');
             const response = await handleCommand(chatId, command.toLowerCase(), args);
             if (response) {
@@ -2748,7 +2839,7 @@ async function handleMessage(msg) {
             }
         }
 
-        // Regular message - send to Claude
+        // Regular message - send to Claude (text includes quoted context if replying)
         await sendTyping(chatId);
 
         let response = await chat(chatId, text);
@@ -2828,6 +2919,55 @@ async function poll() {
 cronService.start();
 
 // ============================================================================
+// CLAUDE USAGE POLLING (setup_token users)
+// ============================================================================
+
+function startClaudeUsagePolling() {
+    if (AUTH_TYPE !== 'setup_token') return;
+    log('Starting Claude usage polling (60s interval)');
+    pollClaudeUsage();
+    setInterval(pollClaudeUsage, 60000);
+}
+
+async function pollClaudeUsage() {
+    try {
+        const res = await httpRequest({
+            hostname: 'api.anthropic.com',
+            path: '/api/oauth/usage',
+            method: 'GET',
+            headers: {
+                'Authorization': `Bearer ${ANTHROPIC_KEY}`,
+                'anthropic-beta': 'oauth-2025-04-20',
+            },
+        });
+
+        if (res.status === 200 && res.data) {
+            writeClaudeUsageState({
+                type: 'oauth',
+                five_hour: {
+                    utilization: res.data.five_hour?.utilization || 0,
+                    resets_at: res.data.five_hour?.resets_at || '',
+                },
+                seven_day: {
+                    utilization: res.data.seven_day?.utilization || 0,
+                    resets_at: res.data.seven_day?.resets_at || '',
+                },
+                updated_at: new Date().toISOString(),
+            });
+        } else {
+            log(`Claude usage poll: HTTP ${res.status}`);
+            writeClaudeUsageState({
+                type: 'oauth',
+                error: `HTTP ${res.status}`,
+                updated_at: new Date().toISOString(),
+            });
+        }
+    } catch (e) {
+        log(`Claude usage poll error: ${e.message}`);
+    }
+}
+
+// ============================================================================
 // STARTUP
 // ============================================================================
 
@@ -2847,6 +2987,7 @@ telegram('getMe')
                 log(`Warning: Could not flush old updates: ${e.message}`);
             }
             poll();
+            startClaudeUsagePolling();
         } else {
             log(`ERROR: ${JSON.stringify(result)}`);
             process.exit(1);
