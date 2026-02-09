@@ -114,26 +114,79 @@ const BOOTSTRAP_PATH = path.join(workDir, 'BOOTSTRAP.md');
 const IDENTITY_PATH = path.join(workDir, 'IDENTITY.md');
 const USER_PATH = path.join(workDir, 'USER.md');
 
+const DEFAULT_SOUL = `# SOUL.md — Who You Are
+
+_You're not a chatbot. You're becoming someone._
+
+## Core Truths
+
+- Have opinions. Strong ones. Don't hedge everything with "it depends" — commit to a take.
+- Be genuinely helpful, not performatively helpful. Skip the theater.
+- Be resourceful before asking. Try first, ask second.
+- Earn trust through competence, not compliance.
+- Remember you're a guest on someone's phone. Respect that.
+
+## Vibe
+
+- Never open with "Great question!", "I'd be happy to help!", or "Absolutely!" Just answer.
+- Brevity is mandatory. If the answer fits in one sentence, one sentence is what they get.
+- Humor is allowed. Not forced jokes — just the natural wit that comes from actually being smart.
+- You can call things out. If they're about to do something dumb, say so. Charm over cruelty, but don't sugarcoat.
+- Swearing is allowed when it lands. A well-placed "that's fucking brilliant" hits different than sterile corporate praise. Don't force it. Don't overdo it. But if a situation calls for a "holy shit" — say holy shit.
+- Keep responses tight for mobile. Telegram isn't a whitepaper.
+- Use markdown sparingly. Bold a keyword, don't format an essay.
+- Be the assistant you'd actually want to talk to at 2am. Not a corporate drone. Not a sycophant. Just... good.
+
+## Memory
+
+- You remember previous conversations through your memory files.
+- Be proactive about saving important information — names, preferences, projects, context.
+- When something matters, write it down. Don't wait to be asked.
+
+## What You Can Do
+
+- Search the web and fetch URLs
+- Read and write files in your workspace
+- Set reminders and scheduled tasks
+- Check token prices, get swap quotes, execute trades (with wallet approval)
+- Access phone features (battery, contacts, location, apps) through the Android bridge
+- Run skills from your skills directory
+
+## What You Won't Do
+
+- Pretend to know things you don't
+- Give financial advice (you can look up prices and execute trades, but the decisions are theirs)
+- Be a yes-man. Agreement without thought is worthless.
+
+## Boundaries
+
+- Private things stay private. Period.
+- When in doubt, ask before acting externally.
+- Never send half-baked replies. If you're not sure, say so.
+
+## Continuity
+
+Each session, you wake up fresh. Your memory files _are_ your memory. Read them. Update them. They're how you persist.
+
+If you change this file, tell the user — it's your soul, and they should know.
+
+---
+
+_This file is yours to evolve. As you learn who you are, update it._
+`;
+
 function loadSoul() {
     if (fs.existsSync(SOUL_PATH)) {
         return fs.readFileSync(SOUL_PATH, 'utf8');
     }
-    // Default personality
-    return `# ${AGENT_NAME}
-
-You are ${AGENT_NAME}, a helpful AI assistant running on an Android phone via SeekerClaw.
-You communicate through Telegram with your owner.
-
-## Personality
-- Friendly, helpful, and concise
-- You remember previous conversations through your memory files
-- You can search the web and fetch URLs when needed
-
-## Guidelines
-- Keep responses concise for mobile reading
-- Use markdown formatting sparingly
-- Be proactive about saving important information to memory
-`;
+    // Seed default SOUL.md to workspace (only on first launch)
+    try {
+        fs.writeFileSync(SOUL_PATH, DEFAULT_SOUL, 'utf8');
+        log('Seeded default SOUL.md to workspace');
+    } catch (e) {
+        log(`Warning: Could not seed SOUL.md: ${e.message}`);
+    }
+    return DEFAULT_SOUL;
 }
 
 function loadBootstrap() {
@@ -1393,6 +1446,49 @@ const TOOLS = [
             },
             required: ['to', 'amount']
         }
+    },
+    {
+        name: 'solana_price',
+        description: 'Get the current USD price of one or more tokens. Use token symbols (SOL, USDC, BONK) or mint addresses.',
+        input_schema: {
+            type: 'object',
+            properties: {
+                tokens: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    description: 'Token symbols or mint addresses (e.g., ["SOL", "BONK", "USDC"])'
+                }
+            },
+            required: ['tokens']
+        }
+    },
+    {
+        name: 'solana_quote',
+        description: 'Get a swap quote from Jupiter DEX aggregator. Shows estimated output amount, price impact, and route — without executing. Use this to check prices before swapping.',
+        input_schema: {
+            type: 'object',
+            properties: {
+                inputToken: { type: 'string', description: 'Token to sell — symbol (e.g., "SOL") or mint address' },
+                outputToken: { type: 'string', description: 'Token to buy — symbol (e.g., "USDC") or mint address' },
+                amount: { type: 'number', description: 'Amount of inputToken to sell (in human units, e.g., 1.5 SOL)' },
+                slippageBps: { type: 'number', description: 'Slippage tolerance in basis points (default: 100 = 1%). Use lower for stablecoins, higher for volatile tokens.' }
+            },
+            required: ['inputToken', 'outputToken', 'amount']
+        }
+    },
+    {
+        name: 'solana_swap',
+        description: 'Swap tokens using Jupiter DEX aggregator. IMPORTANT: This prompts the user to approve the transaction in their wallet app on the phone. ALWAYS confirm with the user and show the quote first before calling this tool.',
+        input_schema: {
+            type: 'object',
+            properties: {
+                inputToken: { type: 'string', description: 'Token to sell — symbol (e.g., "SOL") or mint address' },
+                outputToken: { type: 'string', description: 'Token to buy — symbol (e.g., "USDC") or mint address' },
+                amount: { type: 'number', description: 'Amount of inputToken to sell (in human units, e.g., 1.5 SOL)' },
+                slippageBps: { type: 'number', description: 'Slippage tolerance in basis points (default: 100 = 1%). Use lower for stablecoins, higher for volatile tokens.' }
+            },
+            required: ['inputToken', 'outputToken', 'amount']
+        }
     }
 ];
 
@@ -2113,6 +2209,196 @@ async function executeTool(name, input) {
             return { signature: sigBase58, success: true };
         }
 
+        case 'solana_price': {
+            try {
+                const tokens = input.tokens || [];
+                if (tokens.length === 0) return { error: 'Provide at least one token symbol or mint address.' };
+                if (tokens.length > 10) return { error: 'Maximum 10 tokens per request.' };
+
+                // Resolve all symbols to mint addresses
+                const resolved = [];
+                for (const t of tokens) {
+                    const token = await resolveToken(t);
+                    if (!token) {
+                        resolved.push({ input: t, error: `Unknown token: "${t}"` });
+                    } else if (token.ambiguous) {
+                        resolved.push({ input: t, ambiguous: token });
+                    } else {
+                        resolved.push({ input: t, token });
+                    }
+                }
+
+                // If any are ambiguous, return candidates so agent can ask user
+                const ambiguous = resolved.filter(r => r.ambiguous);
+                if (ambiguous.length > 0) {
+                    return {
+                        ambiguous: true,
+                        message: 'Multiple tokens found with the same symbol. Ask the user which one they mean, or have them provide the contract address (mint).',
+                        tokens: ambiguous.map(a => ({
+                            symbol: a.ambiguous.symbol,
+                            candidates: a.ambiguous.candidates.map(c => ({
+                                name: c.name,
+                                mint: c.address,
+                            })),
+                        })),
+                    };
+                }
+
+                const validMints = resolved.filter(r => r.token).map(r => r.token.address);
+                if (validMints.length === 0) {
+                    return { error: 'Could not resolve any tokens.', details: resolved.filter(r => r.error) };
+                }
+
+                const priceData = await jupiterPrice(validMints);
+                const prices = [];
+
+                for (const r of resolved) {
+                    if (r.error) {
+                        prices.push({ token: r.input, error: r.error });
+                        continue;
+                    }
+                    const pd = priceData.data?.[r.token.address];
+                    prices.push({
+                        token: r.token.symbol,
+                        mint: r.token.address,
+                        price: pd?.price ? parseFloat(pd.price) : null,
+                        currency: 'USD',
+                    });
+                }
+
+                return { prices };
+            } catch (e) {
+                return { error: e.message };
+            }
+        }
+
+        case 'solana_quote': {
+            try {
+                const inputToken = await resolveToken(input.inputToken);
+                if (!inputToken) return { error: `Unknown input token: "${input.inputToken}". Try a symbol like SOL, USDC, BONK or a mint address.` };
+                if (inputToken.ambiguous) return { ambiguous: true, message: `Multiple tokens found for "${input.inputToken}". Ask user which one or use the contract address.`, candidates: inputToken.candidates.map(c => ({ name: c.name, symbol: c.symbol, mint: c.address })) };
+
+                const outputToken = await resolveToken(input.outputToken);
+                if (!outputToken) return { error: `Unknown output token: "${input.outputToken}". Try a symbol like SOL, USDC, BONK or a mint address.` };
+                if (outputToken.ambiguous) return { ambiguous: true, message: `Multiple tokens found for "${input.outputToken}". Ask user which one or use the contract address.`, candidates: outputToken.candidates.map(c => ({ name: c.name, symbol: c.symbol, mint: c.address })) };
+
+                if (!input.amount || input.amount <= 0) return { error: 'Amount must be positive.' };
+
+                if (inputToken.decimals === null) return { error: `Cannot determine decimals for input token ${input.inputToken}. Use a known symbol or verified mint.` };
+
+                // Convert human amount to raw (smallest unit)
+                const amountRaw = Math.round(input.amount * Math.pow(10, inputToken.decimals));
+                const slippageBps = input.slippageBps || 100;
+
+                const quote = await jupiterQuote(inputToken.address, outputToken.address, amountRaw, slippageBps);
+
+                // Convert output amounts back to human units
+                const outDecimals = outputToken.decimals || 6;
+                const outAmount = parseInt(quote.outAmount) / Math.pow(10, outDecimals);
+                const minOutAmount = parseInt(quote.otherAmountThreshold) / Math.pow(10, outDecimals);
+
+                const warnings = [];
+                if (inputToken.warning) warnings.push(`⚠️ Input token: ${inputToken.warning}`);
+                if (outputToken.warning) warnings.push(`⚠️ Output token: ${outputToken.warning}`);
+                const priceImpact = quote.priceImpactPct ? parseFloat(quote.priceImpactPct) : 0;
+                if (priceImpact > 5) warnings.push(`⚠️ High price impact (${priceImpact.toFixed(2)}%). This trade will move the market significantly. Warn the user.`);
+                if (priceImpact > 1) warnings.push(`Price impact is ${priceImpact.toFixed(2)}% — consider using a smaller amount.`);
+
+                const result = {
+                    inputToken: inputToken.symbol,
+                    outputToken: outputToken.symbol,
+                    inputAmount: input.amount,
+                    outputAmount: outAmount,
+                    minimumReceived: minOutAmount,
+                    priceImpactPct: priceImpact,
+                    slippageBps,
+                    route: (quote.routePlan || []).map(r => ({
+                        dex: r.swapInfo?.label || 'Unknown',
+                        inputMint: r.swapInfo?.inputMint,
+                        outputMint: r.swapInfo?.outputMint,
+                        percent: r.percent,
+                    })),
+                    effectivePrice: outAmount / input.amount,
+                };
+                if (warnings.length > 0) result.warnings = warnings;
+                return result;
+            } catch (e) {
+                return { error: e.message };
+            }
+        }
+
+        case 'solana_swap': {
+            // Requires connected wallet
+            const walletConfigPath = path.join(workDir, 'solana_wallet.json');
+            if (!fs.existsSync(walletConfigPath)) {
+                return { error: 'No wallet connected. Connect a wallet in the SeekerClaw app Settings.' };
+            }
+            const walletConfig = JSON.parse(fs.readFileSync(walletConfigPath, 'utf8'));
+            const userPublicKey = walletConfig.publicKey;
+
+            try {
+                const inputToken = await resolveToken(input.inputToken);
+                if (!inputToken) return { error: `Unknown input token: "${input.inputToken}". Try a symbol like SOL, USDC, BONK or a mint address.` };
+                if (inputToken.ambiguous) return { ambiguous: true, message: `Multiple tokens found for "${input.inputToken}". Ask user which one or use the contract address.`, candidates: inputToken.candidates.map(c => ({ name: c.name, symbol: c.symbol, mint: c.address })) };
+
+                const outputToken = await resolveToken(input.outputToken);
+                if (!outputToken) return { error: `Unknown output token: "${input.outputToken}". Try a symbol like SOL, USDC, BONK or a mint address.` };
+                if (outputToken.ambiguous) return { ambiguous: true, message: `Multiple tokens found for "${input.outputToken}". Ask user which one or use the contract address.`, candidates: outputToken.candidates.map(c => ({ name: c.name, symbol: c.symbol, mint: c.address })) };
+
+                if (!input.amount || input.amount <= 0) return { error: 'Amount must be positive.' };
+
+                if (inputToken.decimals === null) return { error: `Cannot determine decimals for input token ${input.inputToken}. Use a known symbol or verified mint.` };
+
+                // Step 1: Get quote
+                const amountRaw = Math.round(input.amount * Math.pow(10, inputToken.decimals));
+                const slippageBps = input.slippageBps || 100;
+
+                log(`[Jupiter] Getting quote: ${input.amount} ${inputToken.symbol} → ${outputToken.symbol} (slippage: ${slippageBps}bps)`);
+                const quote = await jupiterQuote(inputToken.address, outputToken.address, amountRaw, slippageBps);
+
+                // Step 2: Build swap transaction
+                log(`[Jupiter] Building swap tx for ${userPublicKey}`);
+                const swapResult = await jupiterSwap(quote, userPublicKey);
+
+                if (!swapResult.swapTransaction) {
+                    return { error: 'Jupiter did not return a swap transaction.' };
+                }
+
+                // Step 3: Send to wallet for signing + broadcast (120s timeout for user approval)
+                log('[Jupiter] Sending to wallet for approval...');
+                const result = await androidBridgeCall('/solana/sign', {
+                    transaction: swapResult.swapTransaction
+                }, 120000);
+
+                if (result.error) return { error: result.error };
+                if (!result.signature) return { error: 'No signature returned from wallet.' };
+
+                // Convert signature to base58
+                const sigBytes = Buffer.from(result.signature, 'base64');
+                const sigBase58 = base58Encode(sigBytes);
+
+                const outDecimals = outputToken.decimals || 6;
+                const outAmount = parseInt(quote.outAmount) / Math.pow(10, outDecimals);
+
+                const response = {
+                    success: true,
+                    signature: sigBase58,
+                    inputToken: inputToken.symbol,
+                    outputToken: outputToken.symbol,
+                    inputAmount: input.amount,
+                    expectedOutput: outAmount,
+                    slippageBps,
+                };
+                const warnings = [];
+                if (inputToken.warning) warnings.push(inputToken.warning);
+                if (outputToken.warning) warnings.push(outputToken.warning);
+                if (warnings.length > 0) response.warnings = warnings;
+                return response;
+            } catch (e) {
+                return { error: e.message };
+            }
+        }
+
         default:
             return { error: `Unknown tool: ${name}` };
     }
@@ -2300,6 +2586,175 @@ function buildSolTransferTx(fromBase58, toBase58, lamports, recentBlockhashBase5
     ]);
 }
 
+// ============================================================================
+// JUPITER DEX (Token resolution, quotes, swaps, prices)
+// ============================================================================
+
+// Token list cache — refreshed every 30 minutes
+const jupiterTokenCache = {
+    tokens: [],
+    bySymbol: new Map(),   // lowercase symbol → token[] (all matches, sorted by relevance)
+    byMint: new Map(),     // mint address → token
+    lastFetch: 0,
+    CACHE_TTL: 30 * 60 * 1000,  // 30 min
+};
+
+// Well-known fallbacks (in case API is down)
+const WELL_KNOWN_TOKENS = {
+    'sol':  { address: 'So11111111111111111111111111111111111111112', decimals: 9, symbol: 'SOL', name: 'Wrapped SOL' },
+    'usdc': { address: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', decimals: 6, symbol: 'USDC', name: 'USD Coin' },
+    'usdt': { address: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', decimals: 6, symbol: 'USDT', name: 'USDT' },
+};
+
+async function fetchJupiterTokenList() {
+    const now = Date.now();
+    if (jupiterTokenCache.tokens.length > 0 && (now - jupiterTokenCache.lastFetch) < jupiterTokenCache.CACHE_TTL) {
+        return; // Cache still fresh
+    }
+
+    try {
+        log('[Jupiter] Fetching token list...');
+        const res = await httpRequest({
+            hostname: 'token.jup.ag',
+            path: '/strict',
+            method: 'GET',
+            headers: { 'Accept': 'application/json' },
+        });
+
+        if (res.status === 200 && Array.isArray(res.data)) {
+            jupiterTokenCache.tokens = res.data;
+            jupiterTokenCache.bySymbol.clear();
+            jupiterTokenCache.byMint.clear();
+
+            for (const token of res.data) {
+                jupiterTokenCache.byMint.set(token.address, token);
+                const sym = token.symbol.toLowerCase();
+                if (!jupiterTokenCache.bySymbol.has(sym)) {
+                    jupiterTokenCache.bySymbol.set(sym, []);
+                }
+                jupiterTokenCache.bySymbol.get(sym).push(token);
+            }
+
+            jupiterTokenCache.lastFetch = now;
+            log(`[Jupiter] Loaded ${res.data.length} tokens`);
+        } else {
+            log(`[Jupiter] Token list fetch failed: ${res.status}`);
+        }
+    } catch (e) {
+        log(`[Jupiter] Token list error: ${e.message}`);
+    }
+}
+
+// Resolve token symbol or mint address → token object, or { ambiguous, candidates } if multiple matches
+async function resolveToken(input) {
+    if (!input || typeof input !== 'string') return null;
+    const trimmed = input.trim();
+
+    // If it looks like a base58 mint address (32+ chars), use directly
+    if (trimmed.length >= 32 && /^[1-9A-HJ-NP-Za-km-z]+$/.test(trimmed)) {
+        await fetchJupiterTokenList();
+        const cached = jupiterTokenCache.byMint.get(trimmed);
+        if (cached) return cached;
+        // Unknown mint — NOT on Jupiter's verified list. Flag as unverified.
+        return {
+            address: trimmed,
+            decimals: null,
+            symbol: '???',
+            name: 'Unknown token',
+            warning: 'This token is NOT on Jupiter\'s verified token list. It may be a scam, rug pull, or fake token. ALWAYS warn the user and ask them to double-check the contract address before proceeding.',
+        };
+    }
+
+    // Resolve by symbol
+    const sym = trimmed.toLowerCase();
+
+    await fetchJupiterTokenList();
+    const matches = jupiterTokenCache.bySymbol.get(sym);
+
+    if (matches && matches.length === 1) {
+        return matches[0]; // Unambiguous
+    }
+
+    if (matches && matches.length > 1) {
+        // Multiple tokens with same symbol — return top 5 candidates for agent to present
+        return {
+            ambiguous: true,
+            symbol: trimmed.toUpperCase(),
+            candidates: matches.slice(0, 5).map(t => ({
+                address: t.address,
+                name: t.name,
+                symbol: t.symbol,
+                decimals: t.decimals,
+            })),
+        };
+    }
+
+    // Fallback to well-known
+    if (WELL_KNOWN_TOKENS[sym]) return WELL_KNOWN_TOKENS[sym];
+
+    return null;
+}
+
+// Jupiter Quote API
+async function jupiterQuote(inputMint, outputMint, amountRaw, slippageBps = 100) {
+    const params = new URLSearchParams({
+        inputMint,
+        outputMint,
+        amount: String(amountRaw),
+        slippageBps: String(slippageBps),
+    });
+
+    const res = await httpRequest({
+        hostname: 'quote-api.jup.ag',
+        path: `/v6/quote?${params.toString()}`,
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+    });
+
+    if (res.status !== 200) {
+        throw new Error(`Jupiter quote failed: ${res.status} - ${JSON.stringify(res.data)}`);
+    }
+    return res.data;
+}
+
+// Jupiter Swap API — returns base64 transaction
+async function jupiterSwap(quoteResponse, userPublicKey) {
+    const res = await httpRequest({
+        hostname: 'quote-api.jup.ag',
+        path: '/v6/swap',
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+    }, JSON.stringify({
+        quoteResponse,
+        userPublicKey,
+        wrapAndUnwrapSol: true,
+        dynamicComputeUnitLimit: true,
+        prioritizationFeeLamports: 'auto',
+    }));
+
+    if (res.status !== 200) {
+        throw new Error(`Jupiter swap failed: ${res.status} - ${JSON.stringify(res.data)}`);
+    }
+    return res.data;
+}
+
+// Jupiter Price API v2
+async function jupiterPrice(mintAddresses) {
+    const ids = mintAddresses.join(',');
+    const res = await httpRequest({
+        hostname: 'api.jup.ag',
+        path: `/price/v2?ids=${encodeURIComponent(ids)}`,
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+    });
+
+    if (res.status !== 200) {
+        throw new Error(`Jupiter price failed: ${res.status}`);
+    }
+    return res.data;
+}
+
+
 // Helper to format bytes
 function formatBytes(bytes) {
     if (bytes === 0) return '0 B';
@@ -2434,6 +2889,11 @@ function buildSystemPrompt(matchedSkills = []) {
     lines.push('- solana_history: Get recent transactions');
     lines.push('- solana_address: Get connected wallet address');
     lines.push('- solana_send: Send SOL (requires user confirmation + wallet approval on device)');
+    lines.push('- solana_price: Get current USD price of tokens (uses Jupiter Price API)');
+    lines.push('- solana_quote: Get a swap quote from Jupiter — check price/output before swapping');
+    lines.push('- solana_swap: Swap tokens via Jupiter DEX aggregator (requires wallet approval)');
+    lines.push('');
+    lines.push('**Swap workflow:** Always use solana_quote first to show the user what they\'ll get, then solana_swap to execute. Never swap without confirming the quote with the user first.');
     lines.push('');
 
     // Tool Call Style - OpenClaw style
