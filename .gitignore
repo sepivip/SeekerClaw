@@ -37,6 +37,24 @@ obj/
 # Node.js mobile binaries (auto-downloaded by Gradle task)
 app/libnode/
 
+# Signing keys — NEVER commit these
+*.jks
+*.keystore
+*.pem
+*.p12
+signing.properties
+
+# dApp Store publishing — keypairs and local config
+publishing/node_modules/
+publishing/.cache/
+publishing/*.json
+!publishing/package.json
+publisher-keypair.json
+*-keypair.json
+
+# OpenClaw reference (tracked separately)
+openclaw-reference/
+
 # Agent/tooling configs
 .agent/
 .agents/

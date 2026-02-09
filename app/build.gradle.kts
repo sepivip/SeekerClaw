@@ -1,5 +1,6 @@
 import java.net.HttpURLConnection
 import java.net.URI
+import java.util.Properties
 import java.util.zip.ZipInputStream
 
 plugins {
@@ -7,6 +8,12 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
+}
+
+// Load signing config from local.properties (not in version control)
+val localProps = Properties().apply {
+    val f = rootProject.file("local.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
 }
 
 android {
@@ -17,8 +24,8 @@ android {
         applicationId = "com.seekerclaw.app"
         minSdk = 34
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.1.0"
+        versionCode = 3
+        versionName = "1.2.0"
 
         externalNativeBuild {
             cmake {
@@ -31,6 +38,18 @@ android {
         }
     }
 
+    signingConfigs {
+        create("release") {
+            val ksPath = localProps.getProperty("SEEKERCLAW_KEYSTORE_PATH")
+            if (ksPath != null) {
+                storeFile = file(ksPath)
+                storePassword = localProps.getProperty("SEEKERCLAW_STORE_PASSWORD")
+                keyAlias = localProps.getProperty("SEEKERCLAW_KEY_ALIAS")
+                keyPassword = localProps.getProperty("SEEKERCLAW_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
@@ -39,6 +58,10 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            val ksPath = localProps.getProperty("SEEKERCLAW_KEYSTORE_PATH")
+            if (ksPath != null) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 
