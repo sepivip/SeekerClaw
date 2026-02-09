@@ -33,9 +33,15 @@ if (!fs.existsSync(configPath)) {
 }
 
 const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-const BOT_TOKEN = config.botToken;
-let OWNER_ID = config.ownerId ? String(config.ownerId) : '';
-const ANTHROPIC_KEY = config.anthropicApiKey;
+
+// Strip hidden line breaks from secrets (clipboard paste can include \r\n, Unicode separators)
+function normalizeSecret(val) {
+    return typeof val === 'string' ? val.replace(/[\r\n\u2028\u2029]+/g, '').trim() : '';
+}
+
+const BOT_TOKEN = normalizeSecret(config.botToken);
+let OWNER_ID = config.ownerId ? String(config.ownerId).trim() : '';
+const ANTHROPIC_KEY = normalizeSecret(config.anthropicApiKey);
 const AUTH_TYPE = config.authType || 'api_key';
 const MODEL = config.model || 'claude-opus-4-6';
 const AGENT_NAME = config.agentName || 'SeekerClaw';
@@ -69,6 +75,35 @@ if (!fs.existsSync(MEMORY_DIR)) {
 if (!fs.existsSync(SKILLS_DIR)) {
     fs.mkdirSync(SKILLS_DIR, { recursive: true });
 }
+
+// ============================================================================
+// TOOL RESULT TRUNCATION (ported from OpenClaw)
+// ============================================================================
+
+const HARD_MAX_TOOL_RESULT_CHARS = 400000;  // ~100K tokens, absolute safety net
+const MAX_TOOL_RESULT_CONTEXT_SHARE = 0.3;  // Max 30% of context per tool result
+const MIN_KEEP_CHARS = 2000;                // Always keep at least this much
+const MODEL_CONTEXT_CHARS = 400000;         // ~100K tokens for typical model context
+
+function truncateToolResult(text) {
+    if (typeof text !== 'string') return text;
+
+    const maxChars = Math.min(
+        HARD_MAX_TOOL_RESULT_CHARS,
+        Math.max(MIN_KEEP_CHARS, Math.floor(MODEL_CONTEXT_CHARS * MAX_TOOL_RESULT_CONTEXT_SHARE))
+    );
+
+    if (text.length <= maxChars) return text;
+
+    // Truncate at a line boundary
+    let cutoff = text.lastIndexOf('\n', maxChars);
+    if (cutoff < MIN_KEEP_CHARS) cutoff = maxChars;
+
+    const truncated = text.slice(0, cutoff);
+    const droppedChars = text.length - cutoff;
+    return truncated + `\n\n⚠️ [Content truncated — ${droppedChars} characters removed. Use offset/limit parameters for more.]`;
+}
+
 
 // ============================================================================
 // SOUL & MEMORY
@@ -409,6 +444,9 @@ const cronService = {
         this.running = false;
     },
 
+    // Error backoff schedule (exponential): 30s, 1min, 5min, 15min, 60min
+    ERROR_BACKOFF_MS: [30000, 60000, 300000, 900000, 3600000],
+
     // Create a new job
     create(input) {
         if (!this.store) this.store = loadCronStore();
@@ -430,6 +468,7 @@ const cronService = {
                 lastRunAtMs: undefined,
                 lastStatus: undefined,
                 lastError: undefined,
+                consecutiveErrors: 0,
             }
         };
 
@@ -529,8 +568,8 @@ const cronService = {
                 continue;
             }
 
-            // One-shot "at" jobs that already ran → disable
-            if (job.schedule.kind === 'at' && job.state.lastStatus === 'ok') {
+            // One-shot "at" jobs that already ran (any terminal status) → disable
+            if (job.schedule.kind === 'at' && (job.state.lastStatus === 'ok' || job.state.lastStatus === 'error')) {
                 job.enabled = false;
                 job.state.nextRunAtMs = undefined;
                 continue;
@@ -634,20 +673,34 @@ const cronService = {
             nextRunAtMs: undefined,
         });
 
+        // Track consecutive errors for backoff
+        if (status === 'error') {
+            job.state.consecutiveErrors = (job.state.consecutiveErrors || 0) + 1;
+        } else {
+            job.state.consecutiveErrors = 0;
+        }
+
         // Handle post-execution
         if (job.schedule.kind === 'at') {
-            // One-shot: disable after successful run
-            if (status === 'ok') {
-                job.enabled = false;
-                job.state.nextRunAtMs = undefined;
-                if (job.deleteAfterRun) {
-                    const idx = this.store.jobs.indexOf(job);
-                    if (idx !== -1) this.store.jobs.splice(idx, 1);
-                }
+            // One-shot: disable after any terminal status (ok or error)
+            job.enabled = false;
+            job.state.nextRunAtMs = undefined;
+            if (job.deleteAfterRun) {
+                const idx = this.store.jobs.indexOf(job);
+                if (idx !== -1) this.store.jobs.splice(idx, 1);
             }
         } else {
-            // Recurring: compute next run
-            job.state.nextRunAtMs = computeNextRunAtMs(job.schedule, Date.now());
+            // Recurring: compute next run with error backoff
+            const normalNext = computeNextRunAtMs(job.schedule, Date.now());
+
+            if (status === 'error' && job.state.consecutiveErrors > 0) {
+                const backoffIdx = Math.min(job.state.consecutiveErrors - 1, this.ERROR_BACKOFF_MS.length - 1);
+                const backoffNext = nowMs + this.ERROR_BACKOFF_MS[backoffIdx];
+                job.state.nextRunAtMs = Math.max(normalNext, backoffNext);
+                log(`[Cron] Job ${job.id} error #${job.state.consecutiveErrors}, backing off until ${new Date(job.state.nextRunAtMs).toISOString()}`);
+            } else {
+                job.state.nextRunAtMs = normalNext;
+            }
         }
     },
 };
@@ -1626,6 +1679,18 @@ async function executeTool(name, input) {
         }
 
         case 'cron_create': {
+            // Flat-params recovery: non-frontier models sometimes put job fields
+            // at top level instead of using the schema correctly
+            if (!input.time && !input.message) {
+                // Check if params were wrapped in a 'job' object
+                if (input.job && typeof input.job === 'object') {
+                    if (input.job.time) input.time = input.job.time;
+                    if (input.job.message) input.message = input.job.message;
+                    if (input.job.name) input.name = input.job.name;
+                    if (input.job.deleteAfterRun !== undefined) input.deleteAfterRun = input.job.deleteAfterRun;
+                }
+            }
+
             const triggerTime = parseTimeExpression(input.time);
             if (!triggerTime) {
                 return { error: `Could not parse time: "${input.time}". Try formats like "in 30 minutes", "tomorrow at 9am", "every 2 hours", "at 3pm", or "2024-01-15 14:30".` };
@@ -2517,7 +2582,9 @@ function buildSystemPrompt(matchedSkills = []) {
     lines.push('## Runtime');
     lines.push(`Platform: Android ${process.arch} | Node: ${process.version} | Model: ${MODEL}`);
     lines.push(`Channel: telegram | Agent: ${AGENT_NAME}`);
-    lines.push(`Current time: ${new Date().toLocaleString()}`);
+    const now = new Date();
+    const weekday = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][now.getDay()];
+    lines.push(`Current time: ${weekday} ${now.toISOString()} (${now.toLocaleString()})`);
 
     return lines.join('\n');
 }
@@ -2621,7 +2688,7 @@ async function chat(chatId, userMessage) {
             toolResults.push({
                 type: 'tool_result',
                 tool_use_id: toolUse.id,
-                content: JSON.stringify(result)
+                content: truncateToolResult(JSON.stringify(result))
             });
         }
 
@@ -2788,14 +2855,24 @@ async function handleMessage(msg) {
 
     if (!rawText) return;
 
-    // Extract quoted/replied message context
+    // Extract quoted/replied message context (ported from OpenClaw)
+    // Handles: direct replies, inline quotes, external replies (forwards/cross-group)
     let text = rawText;
-    if (msg.reply_to_message) {
-        const quoted = msg.reply_to_message;
-        const quotedText = (quoted.text || quoted.caption || '').trim();
-        if (quotedText) {
-            const quotedFrom = quoted.from?.first_name || 'Someone';
-            text = `[Replying to ${quotedFrom}: "${quotedText}"]\n\n${rawText}`;
+    const reply = msg.reply_to_message;
+    const externalReply = msg.external_reply;
+    const quoteText = (msg.quote?.text ?? externalReply?.quote?.text ?? '').trim();
+    const replyLike = reply ?? externalReply;
+
+    if (quoteText) {
+        // Inline quote or external reply quote
+        const quotedFrom = reply?.from?.first_name || 'Someone';
+        text = `[Replying to ${quotedFrom}: "${quoteText}"]\n\n${rawText}`;
+    } else if (replyLike) {
+        // Standard reply — extract body from reply/external_reply
+        const replyBody = (replyLike.text ?? replyLike.caption ?? '').trim();
+        if (replyBody) {
+            const quotedFrom = reply?.from?.first_name || 'Someone';
+            text = `[Replying to ${quotedFrom}: "${replyBody}"]\n\n${rawText}`;
         }
     }
 
