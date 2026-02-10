@@ -13,9 +13,10 @@ const workDir = process.argv[2] || __dirname;
 const debugLog = path.join(workDir, 'node_debug.log');
 
 function log(msg) {
-    const line = `[${new Date().toISOString()}] ${msg}\n`;
+    const safe = typeof redactSecrets === 'function' ? redactSecrets(msg) : msg;
+    const line = `[${new Date().toISOString()}] ${safe}\n`;
     try { fs.appendFileSync(debugLog, line); } catch (_) {}
-    console.log('[SeekerClaw] ' + msg);
+    console.log('[SeekerClaw] ' + safe);
 }
 
 process.on('uncaughtException', (err) => log('UNCAUGHT: ' + (err.stack || err)));
@@ -45,6 +46,7 @@ const ANTHROPIC_KEY = normalizeSecret(config.anthropicApiKey);
 const AUTH_TYPE = config.authType || 'api_key';
 const MODEL = config.model || 'claude-opus-4-6';
 const AGENT_NAME = config.agentName || 'SeekerClaw';
+const BRIDGE_TOKEN = config.bridgeToken || '';
 
 if (!BOT_TOKEN || !ANTHROPIC_KEY) {
     log('ERROR: Missing required config (botToken, anthropicApiKey)');
@@ -56,6 +58,35 @@ if (!OWNER_ID) {
 } else {
     const authLabel = AUTH_TYPE === 'setup_token' ? 'setup-token' : 'api-key';
     log(`Agent: ${AGENT_NAME} | Model: ${MODEL} | Auth: ${authLabel} | Owner: ${OWNER_ID}`);
+}
+
+// ============================================================================
+// SECURITY HELPERS
+// ============================================================================
+
+// Redact sensitive data from log strings (API keys, bot tokens, bridge tokens)
+function redactSecrets(msg) {
+    if (typeof msg !== 'string') return msg;
+    // Redact Anthropic API keys (sk-ant-...)
+    msg = msg.replace(/sk-ant-[a-zA-Z0-9_-]{10,}/g, 'sk-ant-***');
+    // Redact bot tokens (digits:alphanumeric)
+    msg = msg.replace(/\d{8,}:[A-Za-z0-9_-]{20,}/g, '***:***');
+    // Redact bridge tokens (UUID format)
+    if (BRIDGE_TOKEN) msg = msg.replace(new RegExp(BRIDGE_TOKEN.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&'), 'g'), '***bridge-token***');
+    return msg;
+}
+
+// Validate that a resolved file path is within workspace (prevents path traversal)
+function safePath(userPath) {
+    // Resolve to absolute, then check it starts with workDir
+    const resolved = path.resolve(workDir, userPath);
+    // Normalize both to handle trailing separators
+    const normalizedWork = path.resolve(workDir) + path.sep;
+    const normalizedResolved = path.resolve(resolved);
+    if (normalizedResolved !== path.resolve(workDir) && !normalizedResolved.startsWith(normalizedWork)) {
+        return null; // Path escapes workspace
+    }
+    return normalizedResolved;
 }
 
 // ============================================================================
@@ -1609,11 +1640,8 @@ async function executeTool(name, input) {
         }
 
         case 'memory_get': {
-            const filePath = path.join(workDir, input.file);
-            // Security: ensure path is within workspace
-            if (!filePath.startsWith(workDir)) {
-                return { error: 'Access denied: path outside workspace' };
-            }
+            const filePath = safePath(input.file);
+            if (!filePath) return { error: 'Access denied: path outside workspace' };
             if (!fs.existsSync(filePath)) {
                 return { error: `File not found: ${input.file}` };
             }
@@ -1631,11 +1659,8 @@ async function executeTool(name, input) {
         }
 
         case 'read': {
-            const filePath = path.join(workDir, input.path);
-            // Security: ensure path is within workspace
-            if (!filePath.startsWith(workDir)) {
-                return { error: 'Access denied: path outside workspace' };
-            }
+            const filePath = safePath(input.path);
+            if (!filePath) return { error: 'Access denied: path outside workspace' };
             if (!fs.existsSync(filePath)) {
                 return { error: `File not found: ${input.path}` };
             }
@@ -1652,11 +1677,8 @@ async function executeTool(name, input) {
         }
 
         case 'write': {
-            const filePath = path.join(workDir, input.path);
-            // Security: ensure path is within workspace
-            if (!filePath.startsWith(workDir)) {
-                return { error: 'Access denied: path outside workspace' };
-            }
+            const filePath = safePath(input.path);
+            if (!filePath) return { error: 'Access denied: path outside workspace' };
             // Create parent directories if needed
             const dir = path.dirname(filePath);
             if (!fs.existsSync(dir)) {
@@ -1671,11 +1693,8 @@ async function executeTool(name, input) {
         }
 
         case 'edit': {
-            const filePath = path.join(workDir, input.path);
-            // Security: ensure path is within workspace
-            if (!filePath.startsWith(workDir)) {
-                return { error: 'Access denied: path outside workspace' };
-            }
+            const filePath = safePath(input.path);
+            if (!filePath) return { error: 'Access denied: path outside workspace' };
             if (!fs.existsSync(filePath)) {
                 return { error: `File not found: ${input.path}` };
             }
@@ -1710,11 +1729,8 @@ async function executeTool(name, input) {
         }
 
         case 'ls': {
-            const targetPath = path.join(workDir, input.path || '');
-            // Security: ensure path is within workspace
-            if (!targetPath.startsWith(workDir)) {
-                return { error: 'Access denied: path outside workspace' };
-            }
+            const targetPath = safePath(input.path || '');
+            if (!targetPath) return { error: 'Access denied: path outside workspace' };
             if (!fs.existsSync(targetPath)) {
                 return { error: `Directory not found: ${input.path || '/'}` };
             }
@@ -2364,7 +2380,20 @@ async function executeTool(name, input) {
                     return { error: 'Jupiter did not return a swap transaction.' };
                 }
 
-                // Step 3: Send to wallet for signing + broadcast (120s timeout for user approval)
+                // Step 3: Verify transaction before sending to wallet
+                try {
+                    const verification = verifySwapTransaction(swapResult.swapTransaction, userPublicKey);
+                    if (!verification.valid) {
+                        log(`[Jupiter] Swap tx verification FAILED: ${verification.error}`);
+                        return { error: `Swap transaction rejected: ${verification.error}` };
+                    }
+                    log('[Jupiter] Swap tx verified — payer and programs OK');
+                } catch (verifyErr) {
+                    log(`[Jupiter] Swap tx verification error: ${verifyErr.message}`);
+                    return { error: `Could not verify swap transaction: ${verifyErr.message}` };
+                }
+
+                // Step 4: Send to wallet for signing + broadcast (120s timeout for user approval)
                 log('[Jupiter] Sending to wallet for approval...');
                 const result = await androidBridgeCall('/solana/sign', {
                     transaction: swapResult.swapTransaction
@@ -2413,13 +2442,14 @@ async function androidBridgeCall(endpoint, data = {}, timeoutMs = 10000) {
         const postData = JSON.stringify(data);
 
         const req = http.request({
-            hostname: 'localhost',
+            hostname: '127.0.0.1',
             port: 8765,
             path: endpoint,
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'Content-Length': Buffer.byteLength(postData)
+                'Content-Length': Buffer.byteLength(postData),
+                'X-Bridge-Token': BRIDGE_TOKEN
             },
             timeout: timeoutMs
         }, (res) => {
@@ -2715,6 +2745,140 @@ async function jupiterQuote(inputMint, outputMint, amountRaw, slippageBps = 100)
         throw new Error(`Jupiter quote failed: ${res.status} - ${JSON.stringify(res.data)}`);
     }
     return res.data;
+}
+
+// Verify a Jupiter swap transaction before sending to wallet
+// Decodes the versioned transaction and checks:
+// 1. Fee payer matches user's public key
+// 2. Only known/trusted programs are referenced
+function verifySwapTransaction(txBase64, expectedPayerBase58) {
+    const txBuf = Buffer.from(txBase64, 'base64');
+
+    // Known safe programs (Jupiter, System, Token, Compute Budget, etc.)
+    const TRUSTED_PROGRAMS = new Set([
+        '11111111111111111111111111111111',           // System Program
+        'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',  // Token Program
+        'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb',  // Token-2022
+        'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL',  // Associated Token
+        'ComputeBudget111111111111111111111111111111', // Compute Budget
+        'JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4',  // Jupiter v6
+        'JUP4Fb2cqiRUcaTHdrPC8h2gNsA2ETXiPDD33WcGuJB',  // Jupiter v4
+        'JUP3jqKShLQUCEDeLBpihUwbcTiY7Gg3V1GAbRhhr82',  // Jupiter v3
+        'jup6SoC2JQ3FWcz6aKdR6FMWbN4mk2VmC3S7sREqLhw',  // Jupiter limit order
+        'jupoNjAxXgZ4rjzxzPMP4oxduvQsQtZzyknqvzYNrNu',  // Jupiter DCA
+        'whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc',  // Orca Whirlpool
+        '675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8', // Raydium AMM
+        'CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK', // Raydium CLMM
+        'SSwpkEEcbUqx4vtoEByFjSkhKdCT862DNVb52nZg1UZ',  // Saber Swap
+        'MERLuDFBMmsHnsBPZw2sDQZHvXFMwp8EdjudcU2HKky',  // Mercurial
+        'srmqPvymJeFKQ4zGQed1GFppgkRHL9kaELCbyksJtPX',  // Serum
+        'PhoeNiXZ8ByJGLkxNfZRnkUfjvmuYqLR89jjFHGqdXY',  // Phoenix
+        'LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo',  // Meteora LB
+        'Eo7WjKq67rjJQSZxS6z3YkapzY3eMj6Xy8X5EQVn5UaB', // Meteora pools
+    ]);
+
+    // Versioned transactions start with a prefix byte (0x80 = v0)
+    let offset = 0;
+    const prefix = txBuf[offset];
+    offset++;
+
+    if (prefix !== 0x80) {
+        // Legacy transaction — different format, but still check payer
+        // Legacy: signatures count + signatures + message
+        // For legacy, payer is the first account in the account keys
+        // Skip signatures section
+        offset = 0; // reset for legacy
+        const numSigs = readCompactU16(txBuf, offset);
+        offset = numSigs.offset;
+        offset += numSigs.value * 64; // skip signature slots
+
+        // Message starts here
+        const numRequired = txBuf[offset]; offset++;
+        const numReadonlySigned = txBuf[offset]; offset++;
+        const numReadonlyUnsigned = txBuf[offset]; offset++;
+        const numAccounts = readCompactU16(txBuf, offset);
+        offset = numAccounts.offset;
+
+        // First account is fee payer
+        if (numAccounts.value > 0) {
+            const payer = base58Encode(txBuf.slice(offset, offset + 32));
+            if (payer !== expectedPayerBase58) {
+                return { valid: false, error: `Fee payer mismatch: expected ${expectedPayerBase58}, got ${payer}` };
+            }
+        }
+        return { valid: true }; // Legacy tx basic check passed
+    }
+
+    // V0 transaction format
+    // After prefix: num_required_signatures (1), num_readonly_signed (1), num_readonly_unsigned (1)
+    const numRequired = txBuf[offset]; offset++;
+    const numReadonlySigned = txBuf[offset]; offset++;
+    const numReadonlyUnsigned = txBuf[offset]; offset++;
+
+    // Static account keys
+    const numStaticAccounts = readCompactU16(txBuf, offset);
+    offset = numStaticAccounts.offset;
+
+    const accountKeys = [];
+    for (let i = 0; i < numStaticAccounts.value; i++) {
+        accountKeys.push(base58Encode(txBuf.slice(offset, offset + 32)));
+        offset += 32;
+    }
+
+    // First account is fee payer
+    if (accountKeys.length > 0) {
+        if (accountKeys[0] !== expectedPayerBase58) {
+            return { valid: false, error: `Fee payer mismatch: expected ${expectedPayerBase58}, got ${accountKeys[0]}` };
+        }
+    }
+
+    // Check that program IDs in instructions are trusted
+    // Recent blockhash (32 bytes)
+    offset += 32;
+
+    // Instructions
+    const numInstructions = readCompactU16(txBuf, offset);
+    offset = numInstructions.offset;
+
+    const untrustedPrograms = [];
+    for (let i = 0; i < numInstructions.value; i++) {
+        const programIdIdx = txBuf[offset]; offset++;
+        if (programIdIdx < accountKeys.length) {
+            const programId = accountKeys[programIdIdx];
+            if (!TRUSTED_PROGRAMS.has(programId)) {
+                untrustedPrograms.push(programId);
+            }
+        }
+        // Skip accounts
+        const numAcctIdx = readCompactU16(txBuf, offset);
+        offset = numAcctIdx.offset;
+        offset += numAcctIdx.value;
+        // Skip data
+        const dataLen = readCompactU16(txBuf, offset);
+        offset = dataLen.offset;
+        offset += dataLen.value;
+    }
+
+    if (untrustedPrograms.length > 0) {
+        const unique = [...new Set(untrustedPrograms)];
+        return { valid: false, error: `Transaction contains unknown program(s): ${unique.join(', ')}. Refusing to sign.` };
+    }
+
+    return { valid: true };
+}
+
+// Read Solana compact-u16 encoding
+function readCompactU16(buf, offset) {
+    let value = 0;
+    let shift = 0;
+    let pos = offset;
+    while (pos < buf.length) {
+        const byte = buf[pos]; pos++;
+        value |= (byte & 0x7F) << shift;
+        if ((byte & 0x80) === 0) break;
+        shift += 7;
+    }
+    return { value, offset: pos };
 }
 
 // Jupiter Swap API — returns base64 transaction
@@ -3341,17 +3505,8 @@ async function handleMessage(msg) {
         OWNER_ID = senderId;
         log(`Owner claimed by ${senderId} (auto-detect)`);
 
-        // Persist to config.json
-        try {
-            const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-            cfg.ownerId = senderId;
-            fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2), 'utf8');
-        } catch (e) {
-            log(`Warning: Could not save owner to config.json: ${e.message}`);
-        }
-
-        // Persist to Android encrypted storage
-        androidBridgeCall('/config/set-owner', { ownerId: senderId }).catch(() => {});
+        // Persist to Android encrypted storage via bridge
+        androidBridgeCall('/config/save-owner', { ownerId: senderId }).catch(() => {});
 
         await sendMessage(chatId, `Owner set to your account (${senderId}). Only you can use this bot.`);
     }
@@ -3419,6 +3574,22 @@ async function handleMessage(msg) {
 let offset = 0;
 let pollErrors = 0;
 
+// Per-chat message queue: prevents concurrent handleMessage() for the same chat
+const chatQueues = new Map(); // chatId -> Promise chain
+
+function enqueueMessage(msg) {
+    const chatId = msg.chat.id;
+    const prev = chatQueues.get(chatId) || Promise.resolve();
+    const next = prev.then(() => handleMessage(msg)).catch(e =>
+        log(`Message handler error: ${e.message}`)
+    );
+    chatQueues.set(chatId, next);
+    // Cleanup finished queues to prevent memory leak
+    next.then(() => {
+        if (chatQueues.get(chatId) === next) chatQueues.delete(chatId);
+    });
+}
+
 async function poll() {
     while (true) {
         try {
@@ -3428,13 +3599,19 @@ async function poll() {
                 allowed_updates: ['message']
             });
 
+            // Handle Telegram rate limiting (429)
+            if (result && result.ok === false && result.parameters?.retry_after) {
+                const retryAfter = result.parameters.retry_after;
+                log(`Telegram rate limited — waiting ${retryAfter}s`);
+                await new Promise(r => setTimeout(r, retryAfter * 1000));
+                continue;
+            }
+
             if (result.ok && result.result.length > 0) {
                 for (const update of result.result) {
                     offset = update.update_id + 1;
                     if (update.message) {
-                        handleMessage(update.message).catch(e =>
-                            log(`Message handler error: ${e.message}`)
-                        );
+                        enqueueMessage(update.message);
                     }
                 }
             }

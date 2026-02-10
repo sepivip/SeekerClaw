@@ -25,6 +25,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.File
 import java.io.RandomAccessFile
+import java.util.UUID
 
 class OpenClawService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
@@ -66,8 +67,11 @@ class OpenClawService : Service() {
         LogCollector.append("[Service] Starting OpenClaw service... (attempt ${newCrashCount + 1})")
         ServiceState.updateStatus(ServiceStatus.STARTING)
 
-        // Write config.yaml from encrypted storage
-        ConfigManager.writeConfigYaml(this)
+        // Generate per-boot auth token for bridge security
+        val bridgeToken = UUID.randomUUID().toString()
+
+        // Write config from encrypted storage (includes bridge token for Node.js)
+        ConfigManager.writeConfigJson(this, bridgeToken)
 
         // Seed workspace if first run
         ConfigManager.seedWorkspace(this)
@@ -82,11 +86,22 @@ class OpenClawService : Service() {
         // Start Node.js runtime
         NodeBridge.start(workDir = workDir.absolutePath, openclawDir = nodeProjectDir)
 
+        // Delete config.json after Node.js has had time to read it (ephemeral credentials)
+        scope.launch {
+            delay(5000) // Give Node.js 5s to read config
+            val configFile = File(workDir, "config.json")
+            if (configFile.exists()) {
+                configFile.delete()
+                LogCollector.append("[Service] Deleted ephemeral config.json")
+            }
+        }
+
         // Start Android Bridge (HTTP server for Node.js <-> Kotlin IPC)
+        // Bound to 127.0.0.1 only, requires per-boot auth token
         try {
-            androidBridge = AndroidBridge(applicationContext)
+            androidBridge = AndroidBridge(applicationContext, bridgeToken)
             androidBridge?.start()
-            LogCollector.append("[Service] AndroidBridge started on port 8765")
+            LogCollector.append("[Service] AndroidBridge started on 127.0.0.1:8765 (auth required)")
         } catch (e: Exception) {
             LogCollector.append("[Service] Failed to start AndroidBridge: ${e.message}", LogLevel.ERROR)
         }

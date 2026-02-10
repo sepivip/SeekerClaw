@@ -34,11 +34,13 @@ import java.util.Locale
  */
 class AndroidBridge(
     private val context: Context,
+    private val authToken: String,
     port: Int = 8765
-) : NanoHTTPD(port) {
+) : NanoHTTPD("127.0.0.1", port) {
 
     companion object {
         private const val TAG = "AndroidBridge"
+        private const val AUTH_HEADER = "X-Bridge-Token"
     }
 
     private var tts: TextToSpeech? = null
@@ -63,6 +65,13 @@ class AndroidBridge(
         // Only allow POST requests
         if (method != Method.POST) {
             return jsonResponse(400, mapOf("error" to "Only POST requests allowed"))
+        }
+
+        // Verify auth token on every request (per-boot random secret)
+        val token = session.headers?.get(AUTH_HEADER.lowercase())
+        if (token != authToken) {
+            Log.w(TAG, "Unauthorized request to $uri (bad/missing token)")
+            return jsonResponse(403, mapOf("error" to "Unauthorized"))
         }
 
         // Parse body
@@ -97,11 +106,11 @@ class AndroidBridge(
                 "/apps/launch" -> handleAppsLaunch(params)
                 "/stats/message" -> handleStatsMessage()
                 "/stats/tokens" -> handleStatsTokens(params)
-                "/config/set-owner" -> handleSetOwner(params)
                 "/solana/authorize" -> handleSolanaAuthorize()
                 "/solana/address" -> handleSolanaAddress()
                 "/solana/sign" -> handleSolanaSign(params)
                 "/solana/send" -> handleSolanaSend(params)
+                "/config/save-owner" -> handleConfigSaveOwner(params)
                 "/ping" -> jsonResponse(200, mapOf("status" to "ok", "bridge" to "AndroidBridge"))
                 else -> jsonResponse(404, mapOf("error" to "Unknown endpoint: $uri"))
             }
@@ -418,18 +427,6 @@ class AndroidBridge(
         return jsonResponse(200, mapOf("success" to true, "tokens_added" to total))
     }
 
-    // ==================== Config ====================
-
-    private fun handleSetOwner(params: JSONObject): Response {
-        val ownerId = params.optString("ownerId", "")
-        if (ownerId.isBlank()) {
-            return jsonResponse(400, mapOf("error" to "ownerId is required"))
-        }
-        ConfigManager.updateConfigField(context, "telegramOwnerId", ownerId)
-        Log.i(TAG, "Owner ID set to $ownerId via auto-detect")
-        return jsonResponse(200, mapOf("success" to true, "ownerId" to ownerId))
-    }
-
     // ==================== Solana ====================
 
     private fun handleSolanaAuthorize(): Response {
@@ -511,6 +508,17 @@ class AndroidBridge(
     private fun handleSolanaSend(params: JSONObject): Response {
         // Legacy endpoint — solana_send now builds tx in JS and uses /solana/sign
         return jsonResponse(400, mapOf("error" to "Use /solana/sign instead. Transaction building is handled by the Node.js agent."))
+    }
+
+    // ==================== Config ====================
+
+    private fun handleConfigSaveOwner(params: JSONObject): Response {
+        val ownerId = params.optString("ownerId", "")
+        if (ownerId.isBlank()) {
+            return jsonResponse(400, mapOf("error" to "ownerId is required"))
+        }
+        ConfigManager.saveOwnerId(context, ownerId)
+        return jsonResponse(200, mapOf("success" to true))
     }
 
     // ==================== Helpers ====================

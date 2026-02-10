@@ -155,7 +155,10 @@ object ConfigManager {
             else -> return
         }
         saveConfig(context, updated)
-        writeConfigYaml(context)
+    }
+
+    fun saveOwnerId(context: Context, ownerId: String) {
+        prefs(context).edit().putString(KEY_OWNER_ID, ownerId).apply()
     }
 
     fun clearConfig(context: Context) {
@@ -164,34 +167,13 @@ object ConfigManager {
     }
 
     /**
-     * Write config.yaml to the workspace directory for OpenClaw to read.
+     * Write ephemeral config.json to workspace for Node.js to read on startup.
+     * Includes per-boot bridge auth token. File is deleted after Node.js reads it.
      */
-    fun writeConfigYaml(context: Context) {
+    fun writeConfigJson(context: Context, bridgeToken: String) {
         val config = loadConfig(context) ?: return
         val workspaceDir = File(context.filesDir, "workspace").apply { mkdirs() }
-        // Use the active credential (API key or setup token based on authType)
         val credential = config.activeCredential
-        val yaml = """
-            |version: 1
-            |providers:
-            |  anthropic:
-            |    apiKey: "$credential"
-            |
-            |agents:
-            |  main:
-            |    model: "${config.model}"
-            |    channel: telegram
-            |
-            |channels:
-            |  telegram:
-            |    botToken: "${config.telegramBotToken}"
-            |    ownerIds:
-            |      - "${config.telegramOwnerId}"
-            |    polling: true
-        """.trimMargin()
-        File(workspaceDir, "config.yaml").writeText(yaml)
-
-        // Also write config.json for easy reading from Node.js
         val braveField = if (config.braveApiKey.isNotBlank()) {
             """,
             |  "braveApiKey": "${config.braveApiKey}""""
@@ -203,7 +185,8 @@ object ConfigManager {
             |  "anthropicApiKey": "$credential",
             |  "authType": "${config.authType}",
             |  "model": "${config.model}",
-            |  "agentName": "${config.agentName}"$braveField
+            |  "agentName": "${config.agentName}",
+            |  "bridgeToken": "$bridgeToken"$braveField
             |}
         """.trimMargin()
         File(workspaceDir, "config.json").writeText(json)
