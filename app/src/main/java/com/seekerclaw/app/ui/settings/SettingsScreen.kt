@@ -56,21 +56,20 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.material3.CircularProgressIndicator
 import com.seekerclaw.app.config.ConfigManager
+import com.seekerclaw.app.config.availableModels
 import com.seekerclaw.app.service.OpenClawService
+import com.seekerclaw.app.solana.SolanaAuthActivity
 import com.seekerclaw.app.ui.theme.SeekerClawColors
-import com.seekerclaw.app.ui.theme.SeekerClawThemeStyle
-import com.seekerclaw.app.ui.theme.ThemeManager
 import com.seekerclaw.app.BuildConfig
+import org.json.JSONObject
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-
-private val modelOptions = listOf(
-    "claude-opus-4-6" to "Opus 4.6 (default)",
-    "claude-sonnet-4-5-20250929" to "Sonnet 4.5 (balanced)",
-    "claude-haiku-4-5-20251001" to "Haiku 4.5 (fast)",
-)
 
 @Composable
 fun SettingsScreen() {
@@ -131,6 +130,45 @@ fun SettingsScreen() {
     var showModelPicker by remember { mutableStateOf(false) }
     var showAuthTypePicker by remember { mutableStateOf(false) }
 
+    // Wallet connect state
+    var walletAddress by remember { mutableStateOf(ConfigManager.getWalletAddress(context)) }
+    var isConnecting by remember { mutableStateOf(false) }
+    var walletError by remember { mutableStateOf<String?>(null) }
+    var walletRequestId by remember { mutableStateOf<String?>(null) }
+
+    val walletLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { _ ->
+        isConnecting = false
+        // SolanaAuthActivity saves address to ConfigManager on success — just re-read
+        val newAddress = ConfigManager.getWalletAddress(context)
+        if (newAddress != null) {
+            walletAddress = newAddress
+            walletError = null
+        } else {
+            // Read result file for specific error
+            val reqId = walletRequestId
+            if (reqId != null) {
+                try {
+                    val resultFile = File(context.filesDir, "${SolanaAuthActivity.RESULTS_DIR}/$reqId.json")
+                    if (resultFile.exists()) {
+                        val result = JSONObject(resultFile.readText())
+                        val error = result.optString("error", "")
+                        walletError = if (error.isNotBlank()) error else "Connection cancelled"
+                        resultFile.delete()
+                    } else {
+                        walletError = "Connection cancelled"
+                    }
+                } catch (_: Exception) {
+                    walletError = "Connection failed"
+                }
+            } else {
+                walletError = "Connection cancelled"
+            }
+        }
+        walletRequestId = null
+    }
+
     val exportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/zip")
     ) { uri ->
@@ -187,8 +225,8 @@ fun SettingsScreen() {
     ) {
         Text(
             text = "Settings",
-            fontFamily = FontFamily.Monospace,
-            fontSize = 20.sp,
+            fontFamily = FontFamily.Default,
+            fontSize = 24.sp,
             fontWeight = FontWeight.Bold,
             color = SeekerClawColors.TextPrimary,
         )
@@ -209,6 +247,10 @@ fun SettingsScreen() {
                 label = "Auth Type",
                 value = authTypeLabel,
                 onClick = { showAuthTypePicker = true },
+                info = "How your agent authenticates with the AI provider. " +
+                    "\"API Key\" uses your personal Anthropic key. " +
+                    "\"Setup Token\" uses a shared team token from your admin. " +
+                    "Pick whichever one you were given.",
             )
             ConfigField(
                 label = if (config?.authType == "api_key") "API Key (active)" else "API Key",
@@ -218,6 +260,11 @@ fun SettingsScreen() {
                     editLabel = "API Key"
                     editValue = config?.anthropicApiKey ?: ""
                 },
+                info = "Your personal Anthropic API key. " +
+                    "Get one at console.anthropic.com under API Keys. " +
+                    "It starts with \"sk-ant-\". " +
+                    "This is used to send messages to the AI model. " +
+                    "Keep it secret — anyone with this key can use your account.",
             )
             ConfigField(
                 label = if (config?.authType == "setup_token") "Setup Token (active)" else "Setup Token",
@@ -227,6 +274,9 @@ fun SettingsScreen() {
                     editLabel = "Setup Token"
                     editValue = config?.setupToken ?: ""
                 },
+                info = "A team token provided by your administrator or OpenClaw gateway. " +
+                    "Use this instead of an API Key if someone set up a shared gateway for you. " +
+                    "If you have your own API key, you probably don't need this.",
             )
             ConfigField(
                 label = "Bot Token",
@@ -236,6 +286,10 @@ fun SettingsScreen() {
                     editLabel = "Bot Token"
                     editValue = config?.telegramBotToken ?: ""
                 },
+                info = "Your Telegram bot token. " +
+                    "To get one: open Telegram, message @BotFather, send /newbot, and follow the steps. " +
+                    "BotFather will give you a token like \"123456:ABC-DEF\". " +
+                    "This lets your agent send and receive messages through Telegram.",
             )
             ConfigField(
                 label = "Owner ID",
@@ -245,12 +299,21 @@ fun SettingsScreen() {
                     editLabel = "Owner ID"
                     editValue = config?.telegramOwnerId ?: ""
                 },
+                info = "Your Telegram user ID (a number, not your username). " +
+                    "This tells the agent who is allowed to control it. " +
+                    "Leave blank to auto-detect — the first person to message the bot becomes the owner. " +
+                    "To find your ID: message @userinfobot on Telegram.",
             )
             ConfigField(
                 label = "Model",
-                value = modelOptions.firstOrNull { it.first == config?.model }?.second
+                value = availableModels.find { it.id == config?.model }
+                    ?.let { "${it.displayName} (${it.description})" }
                     ?: (config?.model ?: "Not set"),
                 onClick = { showModelPicker = true },
+                info = "Which AI model powers your agent.\n\n" +
+                    "• Opus 4.6 — Most capable, best for complex tasks. Uses more credits.\n" +
+                    "• Sonnet 4.5 — Good balance of speed and smarts. Recommended for most users.\n" +
+                    "• Haiku 4.5 — Fastest and cheapest. Great for simple tasks and quick replies.",
             )
             ConfigField(
                 label = "Agent Name",
@@ -260,6 +323,9 @@ fun SettingsScreen() {
                     editLabel = "Agent Name"
                     editValue = config?.agentName ?: ""
                 },
+                info = "A display name for your agent. " +
+                    "This appears on the dashboard and in the agent's system prompt. " +
+                    "Purely cosmetic — change it to whatever you like.",
             )
             ConfigField(
                 label = "Brave API Key",
@@ -274,17 +340,11 @@ fun SettingsScreen() {
                     editValue = config?.braveApiKey ?: ""
                 },
                 showDivider = false,
+                info = "Optional. Lets your agent search the web using Brave Search. " +
+                    "Get a free key at brave.com/search/api. " +
+                    "Without this, the agent cannot look things up online.",
             )
         }
-
-        Spacer(modifier = Modifier.height(28.dp))
-
-        // Appearance
-        SectionLabel("APPEARANCE")
-
-        Spacer(modifier = Modifier.height(10.dp))
-
-        ThemeSelector()
 
         Spacer(modifier = Modifier.height(28.dp))
 
@@ -306,6 +366,9 @@ fun SettingsScreen() {
                     autoStartOnBoot = it
                     ConfigManager.setAutoStartOnBoot(context, it)
                 },
+                info = "When enabled, the agent starts automatically every time your phone boots up. " +
+                    "You won't need to open the app and press Deploy manually. " +
+                    "Turn this on if you want your agent always available.",
             )
             SettingRow(
                 label = "Battery unrestricted",
@@ -316,6 +379,9 @@ fun SettingsScreen() {
                     }
                     context.startActivity(intent)
                 },
+                info = "Android may kill background apps to save battery. " +
+                    "Enabling this prevents the system from stopping your agent while it's running. " +
+                    "Highly recommended — without this, your agent may randomly go offline.",
             )
         }
 
@@ -332,18 +398,46 @@ fun SettingsScreen() {
                 .background(SeekerClawColors.Surface, shape)
                 .padding(horizontal = 16.dp),
         ) {
-            PermissionRow("GPS Location", hasLocationPermission) {
-                requestPermissionOrOpenSettings(context, Manifest.permission.ACCESS_FINE_LOCATION, locationLauncher)
-            }
-            PermissionRow("Contacts", hasContactsPermission) {
-                requestPermissionOrOpenSettings(context, Manifest.permission.READ_CONTACTS, contactsLauncher)
-            }
-            PermissionRow("SMS", hasSmsPermission) {
-                requestPermissionOrOpenSettings(context, Manifest.permission.SEND_SMS, smsLauncher)
-            }
-            PermissionRow("Phone Calls", hasCallPermission) {
-                requestPermissionOrOpenSettings(context, Manifest.permission.CALL_PHONE, callLauncher)
-            }
+            PermissionRow(
+                label = "GPS Location",
+                granted = hasLocationPermission,
+                onRequest = {
+                    requestPermissionOrOpenSettings(context, Manifest.permission.ACCESS_FINE_LOCATION, locationLauncher)
+                },
+                info = "Lets the agent know your phone's location. " +
+                    "Useful for location-based tasks like weather, nearby places, or navigation. " +
+                    "The agent only checks location when you ask — it doesn't track you in the background.",
+            )
+            PermissionRow(
+                label = "Contacts",
+                granted = hasContactsPermission,
+                onRequest = {
+                    requestPermissionOrOpenSettings(context, Manifest.permission.READ_CONTACTS, contactsLauncher)
+                },
+                info = "Lets the agent read your contacts list. " +
+                    "This allows it to look up names and phone numbers when you ask, for example \"text Mom\" or \"call John\". " +
+                    "Your contacts are never sent to the cloud — only used on-device to resolve names.",
+            )
+            PermissionRow(
+                label = "SMS",
+                granted = hasSmsPermission,
+                onRequest = {
+                    requestPermissionOrOpenSettings(context, Manifest.permission.SEND_SMS, smsLauncher)
+                },
+                info = "Lets the agent send text messages on your behalf. " +
+                    "The agent will always tell you who it's texting and what it's sending before it acts. " +
+                    "Standard carrier SMS rates may apply.",
+            )
+            PermissionRow(
+                label = "Phone Calls",
+                granted = hasCallPermission,
+                onRequest = {
+                    requestPermissionOrOpenSettings(context, Manifest.permission.CALL_PHONE, callLauncher)
+                },
+                info = "Lets the agent make phone calls for you. " +
+                    "It will always confirm the number with you before dialing. " +
+                    "Useful for quick calls like \"call the pizza place\".",
+            )
         }
 
         Spacer(modifier = Modifier.height(28.dp))
@@ -353,8 +447,6 @@ fun SettingsScreen() {
 
         Spacer(modifier = Modifier.height(10.dp))
 
-        var walletAddress by remember { mutableStateOf(ConfigManager.getWalletAddress(context)) }
-
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -362,12 +454,21 @@ fun SettingsScreen() {
                 .padding(16.dp),
         ) {
             if (walletAddress != null) {
+                // Connected state
                 InfoRow("Address", "${walletAddress!!.take(6)}...${walletAddress!!.takeLast(4)}")
+
+                val label = ConfigManager.getWalletLabel(context)
+                if (label.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    InfoRow("Wallet", label)
+                }
+
                 Spacer(modifier = Modifier.height(12.dp))
                 OutlinedButton(
                     onClick = {
                         ConfigManager.clearWalletAddress(context)
                         walletAddress = null
+                        walletError = null
                     },
                     modifier = Modifier.fillMaxWidth(),
                     shape = shape,
@@ -375,59 +476,69 @@ fun SettingsScreen() {
                         contentColor = SeekerClawColors.Error,
                     ),
                 ) {
-                    Text("Disconnect Wallet", fontFamily = FontFamily.Monospace, fontSize = 14.sp)
+                    Text("Disconnect Wallet", fontFamily = FontFamily.Default, fontSize = 14.sp)
                 }
             } else {
-                var manualAddress by remember { mutableStateOf("") }
-                OutlinedTextField(
-                    value = manualAddress,
-                    onValueChange = { manualAddress = it },
-                    label = {
-                        Text(
-                            "Wallet Address",
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 12.sp,
-                        )
-                    },
-                    placeholder = {
-                        Text(
-                            "Paste public key...",
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 14.sp,
-                            color = SeekerClawColors.TextDim,
-                        )
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    textStyle = androidx.compose.ui.text.TextStyle(
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 14.sp,
-                        color = SeekerClawColors.TextPrimary,
-                    ),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = SeekerClawColors.Primary,
-                        unfocusedBorderColor = SeekerClawColors.TextDim.copy(alpha = 0.3f),
-                        cursorColor = SeekerClawColors.Primary,
-                    ),
-                )
-                Spacer(modifier = Modifier.height(12.dp))
+                // Not connected — show Connect button
+                if (walletError != null) {
+                    Text(
+                        text = walletError!!,
+                        fontFamily = FontFamily.Default,
+                        fontSize = 12.sp,
+                        color = SeekerClawColors.Error,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(SeekerClawColors.Error.copy(alpha = 0.1f), shape)
+                            .padding(12.dp),
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                }
+
                 Button(
                     onClick = {
-                        if (manualAddress.isNotBlank()) {
-                            ConfigManager.setWalletAddress(context, manualAddress.trim())
-                            walletAddress = manualAddress.trim()
-                            manualAddress = ""
+                        isConnecting = true
+                        walletError = null
+                        val requestId = "settings_${System.currentTimeMillis()}"
+                        walletRequestId = requestId
+                        val intent = Intent(context, SolanaAuthActivity::class.java).apply {
+                            putExtra("action", "authorize")
+                            putExtra("requestId", requestId)
                         }
+                        walletLauncher.launch(intent)
                     },
-                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !isConnecting,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp),
                     shape = shape,
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = SeekerClawColors.Accent.copy(alpha = 0.15f),
-                        contentColor = SeekerClawColors.Accent,
+                        containerColor = SeekerClawColors.Primary,
+                        contentColor = androidx.compose.ui.graphics.Color.White,
+                        disabledContainerColor = SeekerClawColors.Primary.copy(alpha = 0.4f),
+                        disabledContentColor = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.6f),
                     ),
                 ) {
-                    Text("Save Address", fontFamily = FontFamily.Monospace, fontSize = 14.sp)
+                    if (isConnecting) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            color = androidx.compose.ui.graphics.Color.White,
+                            strokeWidth = 2.dp,
+                        )
+                        Spacer(modifier = Modifier.padding(start = 8.dp))
+                        Text("Connecting...", fontFamily = FontFamily.Default, fontSize = 14.sp)
+                    } else {
+                        Text("Connect Wallet", fontFamily = FontFamily.Default, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    }
                 }
+
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Opens Phantom, Solflare, or Seeker Vault",
+                    fontFamily = FontFamily.Default,
+                    fontSize = 11.sp,
+                    color = SeekerClawColors.TextDim,
+                    modifier = Modifier.fillMaxWidth(),
+                )
             }
         }
 
@@ -445,13 +556,14 @@ fun SettingsScreen() {
             },
             modifier = Modifier.fillMaxWidth(),
             shape = shape,
+            border = androidx.compose.foundation.BorderStroke(1.dp, androidx.compose.ui.graphics.Color(0xFF374151)),
             colors = ButtonDefaults.outlinedButtonColors(
                 contentColor = SeekerClawColors.TextPrimary,
             ),
         ) {
             Text(
                 "Export Memory",
-                fontFamily = FontFamily.Monospace,
+                fontFamily = FontFamily.Default,
                 fontSize = 14.sp,
             )
         }
@@ -462,13 +574,14 @@ fun SettingsScreen() {
             onClick = { showImportDialog = true },
             modifier = Modifier.fillMaxWidth(),
             shape = shape,
+            border = androidx.compose.foundation.BorderStroke(1.dp, androidx.compose.ui.graphics.Color(0xFF374151)),
             colors = ButtonDefaults.outlinedButtonColors(
                 contentColor = SeekerClawColors.TextPrimary,
             ),
         ) {
             Text(
                 "Import Memory",
-                fontFamily = FontFamily.Monospace,
+                fontFamily = FontFamily.Default,
                 fontSize = 14.sp,
             )
         }
@@ -485,13 +598,13 @@ fun SettingsScreen() {
             modifier = Modifier.fillMaxWidth(),
             shape = shape,
             colors = ButtonDefaults.buttonColors(
-                containerColor = SeekerClawColors.Error.copy(alpha = 0.12f),
-                contentColor = SeekerClawColors.Error,
+                containerColor = androidx.compose.ui.graphics.Color(0xFF4A1515),
+                contentColor = androidx.compose.ui.graphics.Color.White,
             ),
         ) {
             Text(
                 "Reset Config",
-                fontFamily = FontFamily.Monospace,
+                fontFamily = FontFamily.Default,
                 fontWeight = FontWeight.Medium,
                 fontSize = 14.sp,
             )
@@ -504,13 +617,13 @@ fun SettingsScreen() {
             modifier = Modifier.fillMaxWidth(),
             shape = shape,
             colors = ButtonDefaults.buttonColors(
-                containerColor = SeekerClawColors.Error.copy(alpha = 0.12f),
-                contentColor = SeekerClawColors.Error,
+                containerColor = androidx.compose.ui.graphics.Color(0xFF4A1515),
+                contentColor = androidx.compose.ui.graphics.Color.White,
             ),
         ) {
             Text(
                 "Wipe Memory",
-                fontFamily = FontFamily.Monospace,
+                fontFamily = FontFamily.Default,
                 fontWeight = FontWeight.Medium,
                 fontSize = 14.sp,
             )
@@ -545,7 +658,7 @@ fun SettingsScreen() {
             title = {
                 Text(
                     "Edit $editLabel",
-                    fontFamily = FontFamily.Monospace,
+                    fontFamily = FontFamily.Default,
                     fontWeight = FontWeight.Bold,
                     color = SeekerClawColors.TextPrimary,
                 )
@@ -555,7 +668,7 @@ fun SettingsScreen() {
                     if (editField == "anthropicApiKey" || editField == "setupToken" || editField == "telegramBotToken" || editField == "braveApiKey") {
                         Text(
                             "Changing this requires an agent restart.",
-                            fontFamily = FontFamily.Monospace,
+                            fontFamily = FontFamily.Default,
                             fontSize = 12.sp,
                             color = SeekerClawColors.Warning,
                             modifier = Modifier.padding(bottom = 12.dp),
@@ -611,7 +724,7 @@ fun SettingsScreen() {
                 ) {
                     Text(
                         "Save",
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = FontFamily.Default,
                         fontWeight = FontWeight.Bold,
                         color = SeekerClawColors.Primary,
                     )
@@ -621,7 +734,7 @@ fun SettingsScreen() {
                 TextButton(onClick = { editField = null }) {
                     Text(
                         "Cancel",
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = FontFamily.Default,
                         color = SeekerClawColors.TextDim,
                     )
                 }
@@ -633,31 +746,31 @@ fun SettingsScreen() {
 
     // ==================== Model Picker Dialog ====================
     if (showModelPicker) {
-        var selectedModel by remember { mutableStateOf(config?.model ?: modelOptions[0].first) }
+        var selectedModel by remember { mutableStateOf(config?.model ?: availableModels[0].id) }
 
         AlertDialog(
             onDismissRequest = { showModelPicker = false },
             title = {
                 Text(
                     "Select Model",
-                    fontFamily = FontFamily.Monospace,
+                    fontFamily = FontFamily.Default,
                     fontWeight = FontWeight.Bold,
                     color = SeekerClawColors.TextPrimary,
                 )
             },
             text = {
                 Column {
-                    modelOptions.forEach { (modelId, label) ->
+                    availableModels.forEach { model ->
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable { selectedModel = modelId }
+                                .clickable { selectedModel = model.id }
                                 .padding(vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             RadioButton(
-                                selected = selectedModel == modelId,
-                                onClick = { selectedModel = modelId },
+                                selected = selectedModel == model.id,
+                                onClick = { selectedModel = model.id },
                                 colors = RadioButtonDefaults.colors(
                                     selectedColor = SeekerClawColors.Primary,
                                     unselectedColor = SeekerClawColors.TextDim,
@@ -665,13 +778,13 @@ fun SettingsScreen() {
                             )
                             Column(modifier = Modifier.padding(start = 8.dp)) {
                                 Text(
-                                    text = label,
-                                    fontFamily = FontFamily.Monospace,
+                                    text = "${model.displayName} (${model.description})",
+                                    fontFamily = FontFamily.Default,
                                     fontSize = 14.sp,
                                     color = SeekerClawColors.TextPrimary,
                                 )
                                 Text(
-                                    text = modelId,
+                                    text = model.id,
                                     fontFamily = FontFamily.Monospace,
                                     fontSize = 11.sp,
                                     color = SeekerClawColors.TextDim,
@@ -690,7 +803,7 @@ fun SettingsScreen() {
                 ) {
                     Text(
                         "Save",
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = FontFamily.Default,
                         fontWeight = FontWeight.Bold,
                         color = SeekerClawColors.Primary,
                     )
@@ -700,7 +813,7 @@ fun SettingsScreen() {
                 TextButton(onClick = { showModelPicker = false }) {
                     Text(
                         "Cancel",
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = FontFamily.Default,
                         color = SeekerClawColors.TextDim,
                     )
                 }
@@ -723,7 +836,7 @@ fun SettingsScreen() {
             title = {
                 Text(
                     "Auth Type",
-                    fontFamily = FontFamily.Monospace,
+                    fontFamily = FontFamily.Default,
                     fontWeight = FontWeight.Bold,
                     color = SeekerClawColors.TextPrimary,
                 )
@@ -748,7 +861,7 @@ fun SettingsScreen() {
                             )
                             Text(
                                 text = label,
-                                fontFamily = FontFamily.Monospace,
+                                fontFamily = FontFamily.Default,
                                 fontSize = 14.sp,
                                 color = SeekerClawColors.TextPrimary,
                                 modifier = Modifier.padding(start = 8.dp),
@@ -758,7 +871,7 @@ fun SettingsScreen() {
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
                         text = "Both credentials are stored. Switching just changes which one is used.",
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = FontFamily.Default,
                         fontSize = 12.sp,
                         color = SeekerClawColors.TextDim,
                     )
@@ -773,7 +886,7 @@ fun SettingsScreen() {
                 ) {
                     Text(
                         "Save",
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = FontFamily.Default,
                         fontWeight = FontWeight.Bold,
                         color = SeekerClawColors.Primary,
                     )
@@ -783,7 +896,7 @@ fun SettingsScreen() {
                 TextButton(onClick = { showAuthTypePicker = false }) {
                     Text(
                         "Cancel",
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = FontFamily.Default,
                         color = SeekerClawColors.TextDim,
                     )
                 }
@@ -800,7 +913,7 @@ fun SettingsScreen() {
             title = {
                 Text(
                     "Config Updated",
-                    fontFamily = FontFamily.Monospace,
+                    fontFamily = FontFamily.Default,
                     fontWeight = FontWeight.Bold,
                     color = SeekerClawColors.TextPrimary,
                 )
@@ -808,7 +921,7 @@ fun SettingsScreen() {
             text = {
                 Text(
                     "Restart the agent to apply changes?",
-                    fontFamily = FontFamily.Monospace,
+                    fontFamily = FontFamily.Default,
                     fontSize = 14.sp,
                     color = SeekerClawColors.TextSecondary,
                 )
@@ -822,7 +935,7 @@ fun SettingsScreen() {
                 }) {
                     Text(
                         "Restart Now",
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = FontFamily.Default,
                         fontWeight = FontWeight.Bold,
                         color = SeekerClawColors.Primary,
                     )
@@ -832,7 +945,7 @@ fun SettingsScreen() {
                 TextButton(onClick = { showRestartDialog = false }) {
                     Text(
                         "Later",
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = FontFamily.Default,
                         color = SeekerClawColors.TextDim,
                     )
                 }
@@ -849,7 +962,7 @@ fun SettingsScreen() {
             title = {
                 Text(
                     "Reset Config",
-                    fontFamily = FontFamily.Monospace,
+                    fontFamily = FontFamily.Default,
                     fontWeight = FontWeight.Bold,
                     color = SeekerClawColors.Error,
                 )
@@ -857,7 +970,7 @@ fun SettingsScreen() {
             text = {
                 Text(
                     "This will stop the agent, clear all config, and return to setup. This cannot be undone.",
-                    fontFamily = FontFamily.Monospace,
+                    fontFamily = FontFamily.Default,
                     fontSize = 13.sp,
                     color = SeekerClawColors.TextSecondary,
                     lineHeight = 20.sp,
@@ -871,7 +984,7 @@ fun SettingsScreen() {
                 }) {
                     Text(
                         "Confirm",
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = FontFamily.Default,
                         fontWeight = FontWeight.Bold,
                         color = SeekerClawColors.Error,
                     )
@@ -881,7 +994,7 @@ fun SettingsScreen() {
                 TextButton(onClick = { showResetDialog = false }) {
                     Text(
                         "Cancel",
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = FontFamily.Default,
                         color = SeekerClawColors.TextDim,
                     )
                 }
@@ -898,7 +1011,7 @@ fun SettingsScreen() {
             title = {
                 Text(
                     "Import Memory",
-                    fontFamily = FontFamily.Monospace,
+                    fontFamily = FontFamily.Default,
                     fontWeight = FontWeight.Bold,
                     color = SeekerClawColors.Warning,
                 )
@@ -906,7 +1019,7 @@ fun SettingsScreen() {
             text = {
                 Text(
                     "This will overwrite current memory files with the backup. Export first if you want to keep current data.",
-                    fontFamily = FontFamily.Monospace,
+                    fontFamily = FontFamily.Default,
                     fontSize = 13.sp,
                     color = SeekerClawColors.TextSecondary,
                     lineHeight = 20.sp,
@@ -919,7 +1032,7 @@ fun SettingsScreen() {
                 }) {
                     Text(
                         "Select File",
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = FontFamily.Default,
                         fontWeight = FontWeight.Bold,
                         color = SeekerClawColors.Warning,
                     )
@@ -929,7 +1042,7 @@ fun SettingsScreen() {
                 TextButton(onClick = { showImportDialog = false }) {
                     Text(
                         "Cancel",
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = FontFamily.Default,
                         color = SeekerClawColors.TextDim,
                     )
                 }
@@ -946,7 +1059,7 @@ fun SettingsScreen() {
             title = {
                 Text(
                     "Wipe Memory",
-                    fontFamily = FontFamily.Monospace,
+                    fontFamily = FontFamily.Default,
                     fontWeight = FontWeight.Bold,
                     color = SeekerClawColors.Error,
                 )
@@ -954,7 +1067,7 @@ fun SettingsScreen() {
             text = {
                 Text(
                     "This will delete all memory files. The agent will lose all accumulated knowledge. This cannot be undone.",
-                    fontFamily = FontFamily.Monospace,
+                    fontFamily = FontFamily.Default,
                     fontSize = 13.sp,
                     color = SeekerClawColors.TextSecondary,
                     lineHeight = 20.sp,
@@ -967,7 +1080,7 @@ fun SettingsScreen() {
                 }) {
                     Text(
                         "Confirm",
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = FontFamily.Default,
                         fontWeight = FontWeight.Bold,
                         color = SeekerClawColors.Error,
                     )
@@ -977,7 +1090,7 @@ fun SettingsScreen() {
                 TextButton(onClick = { showClearMemoryDialog = false }) {
                     Text(
                         "Cancel",
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = FontFamily.Default,
                         color = SeekerClawColors.TextDim,
                     )
                 }
@@ -992,11 +1105,11 @@ fun SettingsScreen() {
 private fun SectionLabel(title: String) {
     Text(
         text = title,
-        fontFamily = FontFamily.Monospace,
+        fontFamily = FontFamily.Default,
         fontSize = 11.sp,
         fontWeight = FontWeight.Medium,
-        color = SeekerClawColors.TextSecondary,
-        letterSpacing = 0.5.sp,
+        color = SeekerClawColors.TextDim,
+        letterSpacing = 1.sp,
     )
 }
 
@@ -1006,7 +1119,10 @@ private fun ConfigField(
     value: String,
     onClick: (() -> Unit)? = null,
     showDivider: Boolean = true,
+    info: String? = null,
 ) {
+    var showInfo by remember { mutableStateOf(false) }
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -1018,25 +1134,37 @@ private fun ConfigField(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(
-                text = label,
-                fontFamily = FontFamily.Monospace,
-                fontSize = 12.sp,
-                color = SeekerClawColors.TextDim,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = label,
+                    fontFamily = FontFamily.Default,
+                    fontSize = 12.sp,
+                    color = SeekerClawColors.TextDim,
+                )
+                if (info != null) {
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "[i]",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                        color = SeekerClawColors.TextDim,
+                        modifier = Modifier.clickable { showInfo = true },
+                    )
+                }
+            }
             if (onClick != null) {
                 Text(
                     text = "Edit",
-                    fontFamily = FontFamily.Monospace,
+                    fontFamily = FontFamily.Default,
                     fontSize = 12.sp,
-                    color = SeekerClawColors.Primary.copy(alpha = 0.7f),
+                    color = SeekerClawColors.Primary,
                 )
             }
         }
         Spacer(modifier = Modifier.height(2.dp))
         Text(
             text = value,
-            fontFamily = FontFamily.Monospace,
+            fontFamily = FontFamily.Default,
             fontSize = 14.sp,
             color = SeekerClawColors.TextPrimary,
         )
@@ -1047,10 +1175,21 @@ private fun ConfigField(
             modifier = Modifier.padding(horizontal = 16.dp),
         )
     }
+
+    if (showInfo && info != null) {
+        InfoDialog(title = label, message = info, onDismiss = { showInfo = false })
+    }
 }
 
 @Composable
-private fun SettingRow(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+private fun SettingRow(
+    label: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    info: String? = null,
+) {
+    var showInfo by remember { mutableStateOf(false) }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1058,23 +1197,39 @@ private fun SettingRow(label: String, checked: Boolean, onCheckedChange: (Boolea
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            text = label,
-            fontFamily = FontFamily.Monospace,
-            fontSize = 14.sp,
-            color = SeekerClawColors.TextPrimary,
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = label,
+                fontFamily = FontFamily.Default,
+                fontSize = 14.sp,
+                color = SeekerClawColors.TextPrimary,
+            )
+            if (info != null) {
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "[i]",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 10.sp,
+                    color = SeekerClawColors.TextDim,
+                    modifier = Modifier.clickable { showInfo = true },
+                )
+            }
+        }
         Switch(
             checked = checked,
             onCheckedChange = onCheckedChange,
             colors = SwitchDefaults.colors(
-                checkedThumbColor = SeekerClawColors.Accent,
-                checkedTrackColor = SeekerClawColors.Accent.copy(alpha = 0.3f),
-                uncheckedThumbColor = SeekerClawColors.TextDim,
-                uncheckedTrackColor = SeekerClawColors.Background,
-                uncheckedBorderColor = SeekerClawColors.TextDim.copy(alpha = 0.3f),
+                checkedThumbColor = androidx.compose.ui.graphics.Color.White,
+                checkedTrackColor = androidx.compose.ui.graphics.Color(0xFF10B981),
+                uncheckedThumbColor = androidx.compose.ui.graphics.Color.White,
+                uncheckedTrackColor = androidx.compose.ui.graphics.Color(0xFF374151),
+                uncheckedBorderColor = androidx.compose.ui.graphics.Color.Transparent,
             ),
         )
+    }
+
+    if (showInfo && info != null) {
+        InfoDialog(title = label, message = info, onDismiss = { showInfo = false })
     }
 }
 
@@ -1086,21 +1241,28 @@ private fun InfoRow(label: String, value: String) {
     ) {
         Text(
             text = label,
-            fontFamily = FontFamily.Monospace,
+            fontFamily = FontFamily.Default,
             fontSize = 13.sp,
             color = SeekerClawColors.TextDim,
         )
         Text(
             text = value,
-            fontFamily = FontFamily.Monospace,
+            fontFamily = FontFamily.Default,
             fontSize = 13.sp,
-            color = SeekerClawColors.TextPrimary,
+            color = SeekerClawColors.TextSecondary,
         )
     }
 }
 
 @Composable
-private fun PermissionRow(label: String, granted: Boolean, onRequest: () -> Unit) {
+private fun PermissionRow(
+    label: String,
+    granted: Boolean,
+    onRequest: () -> Unit,
+    info: String? = null,
+) {
+    var showInfo by remember { mutableStateOf(false) }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1108,23 +1270,39 @@ private fun PermissionRow(label: String, granted: Boolean, onRequest: () -> Unit
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            text = label,
-            fontFamily = FontFamily.Monospace,
-            fontSize = 14.sp,
-            color = SeekerClawColors.TextPrimary,
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = label,
+                fontFamily = FontFamily.Default,
+                fontSize = 14.sp,
+                color = SeekerClawColors.TextPrimary,
+            )
+            if (info != null) {
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "[i]",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 10.sp,
+                    color = SeekerClawColors.TextDim,
+                    modifier = Modifier.clickable { showInfo = true },
+                )
+            }
+        }
         Switch(
             checked = granted,
             onCheckedChange = { if (!granted) onRequest() },
             colors = SwitchDefaults.colors(
-                checkedThumbColor = SeekerClawColors.Accent,
-                checkedTrackColor = SeekerClawColors.Accent.copy(alpha = 0.3f),
-                uncheckedThumbColor = SeekerClawColors.TextDim,
-                uncheckedTrackColor = SeekerClawColors.Background,
-                uncheckedBorderColor = SeekerClawColors.TextDim.copy(alpha = 0.3f),
+                checkedThumbColor = androidx.compose.ui.graphics.Color.White,
+                checkedTrackColor = androidx.compose.ui.graphics.Color(0xFF10B981),
+                uncheckedThumbColor = androidx.compose.ui.graphics.Color.White,
+                uncheckedTrackColor = androidx.compose.ui.graphics.Color(0xFF374151),
+                uncheckedBorderColor = androidx.compose.ui.graphics.Color.Transparent,
             ),
         )
+    }
+
+    if (showInfo && info != null) {
+        InfoDialog(title = label, message = info, onDismiss = { showInfo = false })
     }
 }
 
@@ -1152,31 +1330,39 @@ private fun requestPermissionOrOpenSettings(
 }
 
 @Composable
-private fun ThemeSelector() {
-    val currentTheme = ThemeManager.currentStyle
-
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        SeekerClawThemeStyle.entries.forEach { style ->
-            val isSelected = style == currentTheme
-            Button(
-                onClick = { ThemeManager.setTheme(style) },
-                modifier = Modifier.weight(1f),
-                shape = RoundedCornerShape(SeekerClawColors.CornerRadius),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (isSelected) SeekerClawColors.Primary.copy(alpha = 0.15f) else SeekerClawColors.Surface,
-                    contentColor = if (isSelected) SeekerClawColors.Primary else SeekerClawColors.TextDim,
-                ),
-            ) {
+private fun InfoDialog(title: String, message: String, onDismiss: () -> Unit) {
+    val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = title,
+                fontFamily = FontFamily.Default,
+                fontWeight = FontWeight.Bold,
+                fontSize = 16.sp,
+                color = SeekerClawColors.TextPrimary,
+            )
+        },
+        text = {
+            Text(
+                text = message,
+                fontFamily = FontFamily.Default,
+                fontSize = 13.sp,
+                color = SeekerClawColors.TextSecondary,
+                lineHeight = 20.sp,
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
                 Text(
-                    text = style.displayName,
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 11.sp,
-                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                    "Got it",
+                    fontFamily = FontFamily.Default,
+                    fontWeight = FontWeight.Bold,
+                    color = SeekerClawColors.Primary,
                 )
             }
-        }
-    }
+        },
+        containerColor = SeekerClawColors.Surface,
+        shape = shape,
+    )
 }

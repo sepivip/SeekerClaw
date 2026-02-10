@@ -57,6 +57,9 @@ data class ThemeColors(
     // Accent (secondary highlight)
     val accent: Color,
 
+    // Log info (blue for info-level logs)
+    val logInfo: Color,
+
     // Text
     val textPrimary: Color,
     val textSecondary: Color,
@@ -76,25 +79,27 @@ data class ThemeColors(
 // DARKOPS THEME — Cyberpunk dark navy + crimson red + green status
 // ============================================================================
 val DarkOpsThemeColors = ThemeColors(
-    background = Color(0xFF0D0F14),
-    surface = Color(0xFF161A25),
-    surfaceHighlight = Color(0xFF1E2235),
-    cardBorder = Color(0x20FF1744),
+    background = Color(0xFF0A0A0F),
+    surface = Color(0xFF16161F),
+    surfaceHighlight = Color(0xFF1E1E2E),
+    cardBorder = Color(0x40374151),
 
-    primary = Color(0xFFFF1744),       // Crimson red
-    primaryDim = Color(0xFFCC1236),
-    primaryGlow = Color(0x33FF1744),
+    primary = Color(0xFFE41F28),       // SeekerClaw red
+    primaryDim = Color(0xFFB81820),
+    primaryGlow = Color(0x33E41F28),
 
-    error = Color(0xFFEF4444),         // Red (distinct from crimson primary)
+    error = Color(0xFFF87171),         // Tailwind red-400
     errorDim = Color(0xFFCC3636),
-    errorGlow = Color(0x33EF4444),
+    errorGlow = Color(0x33F87171),
 
-    warning = Color(0xFFFFB300),
-    accent = Color(0xFF00E676),        // Electric green (status/online)
+    warning = Color(0xFFFBBF24),       // Tailwind yellow-400
+    accent = Color(0xFF4ADE80),        // Tailwind green-400 (status/online)
 
-    textPrimary = Color(0xDEFFFFFF),   // White 87%
-    textSecondary = Color(0x80FFFFFF), // White 50%
-    textDim = Color(0x40FFFFFF),       // White 25%
+    logInfo = Color(0xFF60A5FA),       // Tailwind blue-400
+
+    textPrimary = Color(0xF0FFFFFF),   // White ~94%
+    textSecondary = Color(0xFF9CA3AF), // Tailwind gray-400
+    textDim = Color(0xFF6B7280),       // Tailwind gray-500
 
     scanline = Color(0x00000000),
     dotMatrix = Color(0x00000000),
@@ -123,6 +128,8 @@ val TerminalThemeColors = ThemeColors(
 
     warning = Color(0xFFFFB000),
     accent = Color(0xFFFF2D2D),
+
+    logInfo = Color(0xFF00AAFF),       // Blue CRT
 
     textPrimary = Color(0xFF00FF41),
     textSecondary = Color(0xFF00AA2A),
@@ -156,6 +163,8 @@ val PixelThemeColors = ThemeColors(
     warning = Color(0xFFFFCC00),
     accent = Color(0xFFFF6B00), // Orange for arcade feel
 
+    logInfo = Color(0xFF00AAFF),       // Blue pixel
+
     textPrimary = Color(0xFF00FF41),
     textSecondary = Color(0xFF00CC33),
     textDim = Color(0xFF007722),
@@ -187,6 +196,8 @@ val CleanThemeColors = ThemeColors(
 
     warning = Color(0xFFFBBF24),
     accent = Color(0xFFA78BFA), // Purple — OpenClaw brand
+
+    logInfo = Color(0xFF60A5FA),       // Tailwind blue-400
 
     textPrimary = Color(0xDEFFFFFF), // White at 87%
     textSecondary = Color(0x80FFFFFF), // White at 50%
@@ -238,6 +249,7 @@ object SeekerClawColors {
 
     val Warning: Color get() = ThemeManager.getColors().warning
     val Accent: Color get() = ThemeManager.getColors().accent
+    val LogInfo: Color get() = ThemeManager.getColors().logInfo
 
     val TextPrimary: Color get() = ThemeManager.getColors().textPrimary
     val TextSecondary: Color get() = ThemeManager.getColors().textSecondary
@@ -271,28 +283,28 @@ private fun createDarkColorScheme(colors: ThemeColors) = darkColorScheme(
 
 private fun createTypography(colors: ThemeColors) = Typography(
     bodyLarge = TextStyle(
-        fontFamily = FontFamily.Monospace,
+        fontFamily = FontFamily.Default,
         fontWeight = FontWeight.Normal,
         fontSize = 15.sp,
         lineHeight = 22.sp,
         color = colors.textPrimary,
     ),
     bodyMedium = TextStyle(
-        fontFamily = FontFamily.Monospace,
+        fontFamily = FontFamily.Default,
         fontWeight = FontWeight.Normal,
         fontSize = 13.sp,
         lineHeight = 18.sp,
         color = colors.textSecondary,
     ),
     titleLarge = TextStyle(
-        fontFamily = FontFamily.Monospace,
+        fontFamily = FontFamily.Default,
         fontWeight = FontWeight.Bold,
         fontSize = 22.sp,
         lineHeight = 28.sp,
-        letterSpacing = 0.5.sp,
+        letterSpacing = 0.sp,
     ),
     labelLarge = TextStyle(
-        fontFamily = FontFamily.Monospace,
+        fontFamily = FontFamily.Default,
         fontWeight = FontWeight.Medium,
         fontSize = 13.sp,
         lineHeight = 18.sp,

@@ -29,11 +29,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.seekerclaw.app.config.ConfigManager
+import com.seekerclaw.app.config.modelDisplayName
 import com.seekerclaw.app.service.OpenClawService
 import com.seekerclaw.app.ui.theme.SeekerClawColors
 import com.seekerclaw.app.util.ServiceState
@@ -64,7 +68,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}) {
     }
 
     val statusText = when (status) {
-        ServiceStatus.RUNNING -> "Running"
+        ServiceStatus.RUNNING -> "Online"
         ServiceStatus.STARTING -> "Starting..."
         ServiceStatus.STOPPED -> "Offline"
         ServiceStatus.ERROR -> "Error"
@@ -79,22 +83,26 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}) {
             .verticalScroll(rememberScrollState())
             .padding(20.dp),
     ) {
-        // Header
+        // Header — two-tone logo
         Text(
-            text = "SEEKER//CLAW",
-            fontFamily = FontFamily.Monospace,
-            fontSize = 20.sp,
-            fontWeight = FontWeight.Bold,
-            color = SeekerClawColors.Primary,
-            letterSpacing = 1.sp,
+            text = buildAnnotatedString {
+                withStyle(SpanStyle(color = Color.White, fontWeight = FontWeight.ExtraBold)) {
+                    append("Seeker")
+                }
+                withStyle(SpanStyle(color = SeekerClawColors.Primary, fontWeight = FontWeight.ExtraBold)) {
+                    append("C/aw")
+                }
+            },
+            fontFamily = FontFamily.Default,
+            fontSize = 28.sp,
         )
 
         Spacer(modifier = Modifier.height(2.dp))
 
         Text(
             text = agentName,
-            fontFamily = FontFamily.Monospace,
-            fontSize = 13.sp,
+            fontFamily = FontFamily.Default,
+            fontSize = 14.sp,
             color = SeekerClawColors.TextDim,
         )
 
@@ -123,7 +131,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}) {
                     Spacer(modifier = Modifier.width(12.dp))
                     Text(
                         text = statusText,
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = FontFamily.Default,
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Medium,
                         color = SeekerClawColors.TextPrimary,
@@ -131,8 +139,8 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}) {
                 }
                 Text(
                     text = "System >",
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Default,
+                    fontSize = 12.sp,
                     color = SeekerClawColors.TextDim,
                 )
             }
@@ -148,17 +156,17 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}) {
 
             Text(
                 text = "UPTIME",
-                fontFamily = FontFamily.Monospace,
+                fontFamily = FontFamily.Default,
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Medium,
                 color = SeekerClawColors.TextDim,
-                letterSpacing = 0.5.sp,
+                letterSpacing = 1.sp,
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
                 text = formatUptime(uptime),
                 fontFamily = FontFamily.Monospace,
-                fontSize = 24.sp,
+                fontSize = 32.sp,
                 fontWeight = FontWeight.Bold,
                 color = SeekerClawColors.TextPrimary,
             )
@@ -180,46 +188,39 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}) {
         // Uplinks
         Text(
             text = "UPLINKS",
-            fontFamily = FontFamily.Monospace,
+            fontFamily = FontFamily.Default,
             fontSize = 11.sp,
             fontWeight = FontWeight.Medium,
-            color = SeekerClawColors.TextSecondary,
-            letterSpacing = 0.5.sp,
+            color = SeekerClawColors.TextDim,
+            letterSpacing = 1.sp,
         )
 
         Spacer(modifier = Modifier.height(10.dp))
 
         Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(SeekerClawColors.Surface, shape),
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            UplinkRow(
+            UplinkCard(
                 icon = "//TG",
                 name = "Telegram",
                 subtitle = "Message relay",
                 serviceStatus = status,
+                shape = shape,
             )
-            HorizontalDivider(
-                color = SeekerClawColors.TextDim.copy(alpha = 0.1f),
-                modifier = Modifier.padding(horizontal = 16.dp),
-            )
-            UplinkRow(
+            UplinkCard(
                 icon = "//GW",
                 name = "Gateway",
                 subtitle = "OpenClaw engine",
                 serviceStatus = status,
+                shape = shape,
             )
-            HorizontalDivider(
-                color = SeekerClawColors.TextDim.copy(alpha = 0.1f),
-                modifier = Modifier.padding(horizontal = 16.dp),
-            )
-            UplinkRow(
+            UplinkCard(
                 icon = "//AI",
                 name = "AI Model",
-                subtitle = config?.model?.substringAfterLast("-")?.replaceFirstChar { it.uppercase() }
-                    ?: "Not configured",
+                subtitle = modelDisplayName(config?.model),
                 serviceStatus = status,
+                shape = shape,
             )
         }
 
@@ -239,13 +240,13 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}) {
                 .height(52.dp),
             shape = shape,
             colors = ButtonDefaults.buttonColors(
-                containerColor = if (isRunning) SeekerClawColors.Error else SeekerClawColors.Primary,
+                containerColor = if (isRunning) Color(0xFF374151) else SeekerClawColors.Primary,
                 contentColor = Color.White,
             ),
         ) {
             Text(
                 text = if (isRunning) "Stop Agent" else "Deploy Agent",
-                fontFamily = FontFamily.Monospace,
+                fontFamily = FontFamily.Default,
                 fontWeight = FontWeight.Bold,
                 fontSize = 15.sp,
             )
@@ -261,31 +262,32 @@ private fun StatMini(label: String, value: String) {
         Text(
             text = value,
             fontFamily = FontFamily.Monospace,
-            fontSize = 16.sp,
+            fontSize = 20.sp,
             fontWeight = FontWeight.Bold,
             color = SeekerClawColors.TextPrimary,
         )
         Spacer(modifier = Modifier.height(2.dp))
         Text(
             text = label,
-            fontFamily = FontFamily.Monospace,
-            fontSize = 9.sp,
+            fontFamily = FontFamily.Default,
+            fontSize = 10.sp,
             fontWeight = FontWeight.Medium,
             color = SeekerClawColors.TextDim,
-            letterSpacing = 0.5.sp,
+            letterSpacing = 1.sp,
         )
     }
 }
 
 @Composable
-private fun UplinkRow(
+private fun UplinkCard(
     icon: String,
     name: String,
     subtitle: String,
     serviceStatus: ServiceStatus,
+    shape: RoundedCornerShape,
 ) {
     val dotColor = when (serviceStatus) {
-        ServiceStatus.RUNNING -> SeekerClawColors.Accent
+        ServiceStatus.RUNNING -> SeekerClawColors.Primary
         ServiceStatus.STARTING -> SeekerClawColors.Warning
         ServiceStatus.STOPPED -> SeekerClawColors.TextDim
         ServiceStatus.ERROR -> SeekerClawColors.Error
@@ -294,37 +296,38 @@ private fun UplinkRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 14.dp),
+            .background(SeekerClawColors.Surface, shape)
+            .padding(horizontal = 16.dp, vertical = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
             text = icon,
             fontFamily = FontFamily.Monospace,
-            fontSize = 12.sp,
+            fontSize = 13.sp,
             fontWeight = FontWeight.Bold,
             color = SeekerClawColors.Primary,
-            modifier = Modifier.width(40.dp),
+            modifier = Modifier.width(44.dp),
         )
 
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = name,
-                fontFamily = FontFamily.Monospace,
+                fontFamily = FontFamily.Default,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Medium,
                 color = SeekerClawColors.TextPrimary,
             )
             Text(
                 text = subtitle,
-                fontFamily = FontFamily.Monospace,
-                fontSize = 11.sp,
+                fontFamily = FontFamily.Default,
+                fontSize = 12.sp,
                 color = SeekerClawColors.TextDim,
             )
         }
 
         Box(
             modifier = Modifier
-                .size(8.dp)
+                .size(10.dp)
                 .clip(CircleShape)
                 .background(dotColor),
         )
@@ -348,3 +351,4 @@ private fun formatLastActivity(timestamp: Long): String {
     val format = SimpleDateFormat("HH:mm", Locale.US)
     return format.format(Date(timestamp))
 }
+

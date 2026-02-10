@@ -1,10 +1,8 @@
 package com.seekerclaw.app.ui.navigation
 
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Dashboard
-import androidx.compose.material.icons.filled.Description
-import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -15,8 +13,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -34,6 +32,7 @@ import com.seekerclaw.app.ui.logs.LogsScreen
 import com.seekerclaw.app.ui.settings.SettingsScreen
 import com.seekerclaw.app.ui.setup.SetupScreen
 import com.seekerclaw.app.ui.system.SystemScreen
+import com.seekerclaw.app.R
 import com.seekerclaw.app.ui.theme.SeekerClawColors
 import kotlinx.serialization.Serializable
 
@@ -46,14 +45,14 @@ import kotlinx.serialization.Serializable
 
 data class BottomNavItem(
     val label: String,
-    val icon: ImageVector,
+    val iconRes: Int,
     val route: Any,
 )
 
 val bottomNavItems = listOf(
-    BottomNavItem("Home", Icons.Default.Dashboard, DashboardRoute),
-    BottomNavItem("Console", Icons.Default.Description, LogsRoute),
-    BottomNavItem("Settings", Icons.Default.Settings, SettingsRoute),
+    BottomNavItem("Home", R.drawable.ic_lucide_layout_grid, DashboardRoute),
+    BottomNavItem("Console", R.drawable.ic_lucide_terminal, LogsRoute),
+    BottomNavItem("Settings", R.drawable.ic_lucide_settings, SettingsRoute),
 )
 
 @Composable
@@ -79,47 +78,53 @@ fun SeekerClawNavHost() {
         containerColor = SeekerClawColors.Background,
         bottomBar = {
             if (showBottomBar) {
-                NavigationBar(
-                    containerColor = SeekerClawColors.Surface,
-                    tonalElevation = 0.dp,
-                ) {
-                    bottomNavItems.forEach { item ->
-                        val selected = currentDestination?.hierarchy?.any {
-                            it.hasRoute(item.route::class)
-                        } == true
-                        NavigationBarItem(
-                            selected = selected,
-                            onClick = {
-                                navController.navigate(item.route) {
-                                    popUpTo(navController.graph.findStartDestination().id) {
-                                        saveState = true
+                Column {
+                    HorizontalDivider(
+                        thickness = 1.dp,
+                        color = Color(0x80374151),
+                    )
+                    NavigationBar(
+                        containerColor = SeekerClawColors.Background,
+                        tonalElevation = 0.dp,
+                    ) {
+                        bottomNavItems.forEach { item ->
+                            val selected = currentDestination?.hierarchy?.any {
+                                it.hasRoute(item.route::class)
+                            } == true
+                            NavigationBarItem(
+                                selected = selected,
+                                onClick = {
+                                    navController.navigate(item.route) {
+                                        popUpTo(navController.graph.findStartDestination().id) {
+                                            saveState = true
+                                        }
+                                        launchSingleTop = true
+                                        restoreState = true
                                     }
-                                    launchSingleTop = true
-                                    restoreState = true
-                                }
-                            },
-                            icon = {
-                                Icon(
-                                    item.icon,
-                                    contentDescription = item.label,
-                                )
-                            },
-                            label = {
-                                Text(
-                                    text = item.label,
-                                    fontFamily = FontFamily.Monospace,
-                                    fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
-                                    fontSize = 11.sp,
-                                )
-                            },
-                            colors = NavigationBarItemDefaults.colors(
-                                selectedIconColor = SeekerClawColors.Primary,
-                                selectedTextColor = SeekerClawColors.Primary,
-                                unselectedIconColor = SeekerClawColors.TextDim,
-                                unselectedTextColor = SeekerClawColors.TextDim,
-                                indicatorColor = SeekerClawColors.Primary.copy(alpha = 0.12f),
-                            ),
-                        )
+                                },
+                                icon = {
+                                    Icon(
+                                        painter = painterResource(item.iconRes),
+                                        contentDescription = item.label,
+                                    )
+                                },
+                                label = {
+                                    Text(
+                                        text = item.label,
+                                        fontFamily = FontFamily.Default,
+                                        fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
+                                        fontSize = 11.sp,
+                                    )
+                                },
+                                colors = NavigationBarItemDefaults.colors(
+                                    selectedIconColor = SeekerClawColors.Primary,
+                                    selectedTextColor = SeekerClawColors.Primary,
+                                    unselectedIconColor = SeekerClawColors.TextDim,
+                                    unselectedTextColor = SeekerClawColors.TextDim,
+                                    indicatorColor = Color.Transparent,
+                                ),
+                            )
+                        }
                     }
                 }
             }
