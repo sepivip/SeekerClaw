@@ -5,6 +5,8 @@ import android.content.SharedPreferences
 import android.net.Uri
 import android.util.Base64
 import android.util.Log
+import com.seekerclaw.app.util.LogCollector
+import com.seekerclaw.app.util.LogLevel
 import java.io.File
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
@@ -83,7 +85,10 @@ object ConfigManager {
             editor.remove(KEY_BRAVE_API_KEY_ENC)
         }
 
-        editor.apply()
+        val persisted = editor.commit()
+        if (!persisted) {
+            LogCollector.append("[Config] Failed to persist config (commit=false)", LogLevel.ERROR)
+        }
     }
 
     fun loadConfig(context: Context): AppConfig? {
@@ -95,6 +100,7 @@ object ConfigManager {
             if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
         } catch (e: Exception) {
             Log.w(TAG, "Failed to decrypt API key", e)
+            LogCollector.append("[Config] Failed to decrypt API key: ${e.javaClass.simpleName}", LogLevel.ERROR)
             ""
         }
 
@@ -103,6 +109,7 @@ object ConfigManager {
             if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
         } catch (e: Exception) {
             Log.w(TAG, "Failed to decrypt bot token", e)
+            LogCollector.append("[Config] Failed to decrypt bot token: ${e.javaClass.simpleName}", LogLevel.ERROR)
             ""
         }
 
@@ -111,6 +118,7 @@ object ConfigManager {
             if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
         } catch (e: Exception) {
             Log.w(TAG, "Failed to decrypt setup token", e)
+            LogCollector.append("[Config] Failed to decrypt setup token: ${e.javaClass.simpleName}", LogLevel.ERROR)
             ""
         }
 
@@ -119,6 +127,7 @@ object ConfigManager {
             if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
         } catch (e: Exception) {
             Log.w(TAG, "Failed to decrypt Brave API key", e)
+            LogCollector.append("[Config] Failed to decrypt Brave API key: ${e.javaClass.simpleName}", LogLevel.ERROR)
             ""
         }
 
@@ -139,14 +148,14 @@ object ConfigManager {
         prefs(context).getBoolean(KEY_AUTO_START, true)
 
     fun setAutoStartOnBoot(context: Context, enabled: Boolean) {
-        prefs(context).edit().putBoolean(KEY_AUTO_START, enabled).apply()
+        prefs(context).edit().putBoolean(KEY_AUTO_START, enabled).commit()
     }
 
     fun getKeepScreenOn(context: Context): Boolean =
         prefs(context).getBoolean(KEY_KEEP_SCREEN_ON, false)
 
     fun setKeepScreenOn(context: Context, enabled: Boolean) {
-        prefs(context).edit().putBoolean(KEY_KEEP_SCREEN_ON, enabled).apply()
+        prefs(context).edit().putBoolean(KEY_KEEP_SCREEN_ON, enabled).commit()
     }
 
     fun updateConfigField(context: Context, field: String, value: String) {
@@ -198,6 +207,20 @@ object ConfigManager {
             |}
         """.trimMargin()
         File(workspaceDir, "config.json").writeText(json)
+    }
+
+    fun runtimeValidationError(config: AppConfig?): String? {
+        if (config == null) return "setup_not_complete"
+        if (config.telegramBotToken.isBlank()) return "missing_bot_token"
+        if (config.activeCredential.isBlank()) return "missing_credential"
+        return null
+    }
+
+    fun redactedSnapshot(config: AppConfig?): String {
+        if (config == null) return "setup=false"
+        return "setup=true authType=${config.authType} botSet=${config.telegramBotToken.isNotBlank()} " +
+            "apiSet=${config.anthropicApiKey.isNotBlank()} setupTokenSet=${config.setupToken.isNotBlank()} " +
+            "activeSet=${config.activeCredential.isNotBlank()} model=${config.model}"
     }
 
     // ==================== Auth Type Detection ====================

@@ -45,6 +45,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -63,12 +64,18 @@ import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import com.seekerclaw.app.config.ConfigClaimImport
+import com.seekerclaw.app.config.ConfigClaimImporter
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.config.availableModels
+import com.seekerclaw.app.qr.QrScannerActivity
 import com.seekerclaw.app.service.OpenClawService
 import com.seekerclaw.app.solana.SolanaAuthActivity
 import com.seekerclaw.app.ui.theme.SeekerClawColors
+import com.seekerclaw.app.util.LogCollector
+import com.seekerclaw.app.util.LogLevel
 import com.seekerclaw.app.BuildConfig
+import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.io.File
 import java.util.Date
@@ -132,7 +139,11 @@ fun SettingsScreen() {
     var showResetDialog by remember { mutableStateOf(false) }
     var showClearMemoryDialog by remember { mutableStateOf(false) }
     var showImportDialog by remember { mutableStateOf(false) }
+    var showApplyConfigDialog by remember { mutableStateOf(false) }
     var showRestartDialog by remember { mutableStateOf(false) }
+    var isConfigImporting by remember { mutableStateOf(false) }
+    var configImportError by remember { mutableStateOf<String?>(null) }
+    var pendingConfigImport by remember { mutableStateOf<ConfigClaimImport?>(null) }
 
     var editField by remember { mutableStateOf<String?>(null) }
     var editLabel by remember { mutableStateOf("") }
@@ -202,6 +213,40 @@ fun SettingsScreen() {
                 if (success) "Memory imported. Restart agent to apply." else "Import failed",
                 Toast.LENGTH_SHORT
             ).show()
+        }
+    }
+
+    val scope = rememberCoroutineScope()
+    val qrConfigLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val qrError = result.data?.getStringExtra(QrScannerActivity.EXTRA_ERROR)
+        if (!qrError.isNullOrBlank()) {
+            configImportError = qrError
+            Toast.makeText(context, qrError, Toast.LENGTH_SHORT).show()
+            return@rememberLauncherForActivityResult
+        }
+        if (result.resultCode != Activity.RESULT_OK) return@rememberLauncherForActivityResult
+
+        val qrText = result.data?.getStringExtra(QrScannerActivity.EXTRA_QR_TEXT)
+        if (qrText.isNullOrBlank()) {
+            configImportError = "No QR data received"
+            Toast.makeText(context, "No QR data received", Toast.LENGTH_SHORT).show()
+            return@rememberLauncherForActivityResult
+        }
+
+        isConfigImporting = true
+        configImportError = null
+        scope.launch {
+            val importResult = ConfigClaimImporter.fetchFromQr(qrText)
+            isConfigImporting = false
+            importResult.onSuccess { imported ->
+                pendingConfigImport = imported
+                showApplyConfigDialog = true
+            }.onFailure { err ->
+                configImportError = err.message ?: "Config import failed"
+                Toast.makeText(context, configImportError, Toast.LENGTH_LONG).show()
+            }
         }
     }
 
@@ -620,6 +665,50 @@ fun SettingsScreen() {
             )
         }
 
+        Spacer(modifier = Modifier.height(8.dp))
+
+        OutlinedButton(
+            onClick = {
+                if (!isConfigImporting) {
+                    qrConfigLauncher.launch(Intent(context, QrScannerActivity::class.java))
+                }
+            },
+            enabled = !isConfigImporting,
+            modifier = Modifier.fillMaxWidth(),
+            shape = shape,
+            border = androidx.compose.foundation.BorderStroke(1.dp, androidx.compose.ui.graphics.Color(0xFF374151)),
+            colors = ButtonDefaults.outlinedButtonColors(
+                contentColor = SeekerClawColors.TextPrimary,
+                disabledContentColor = SeekerClawColors.TextDim,
+            ),
+        ) {
+            if (isConfigImporting) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    strokeWidth = 2.dp,
+                    color = SeekerClawColors.Primary,
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Importing Config\u2026", fontFamily = FontFamily.Default, fontSize = 14.sp)
+            } else {
+                Text(
+                    "Scan Config QR",
+                    fontFamily = FontFamily.Default,
+                    fontSize = 14.sp,
+                )
+            }
+        }
+
+        if (configImportError != null) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = configImportError ?: "",
+                fontFamily = FontFamily.Default,
+                fontSize = 12.sp,
+                color = SeekerClawColors.Error,
+            )
+        }
+
         Spacer(modifier = Modifier.height(32.dp))
 
         // Danger zone
@@ -963,8 +1052,7 @@ fun SettingsScreen() {
             },
             confirmButton = {
                 TextButton(onClick = {
-                    OpenClawService.stop(context)
-                    OpenClawService.start(context)
+                    OpenClawService.restart(context)
                     showRestartDialog = false
                     Toast.makeText(context, "Agent restarting\u2026", Toast.LENGTH_SHORT).show()
                 }) {
@@ -1075,6 +1163,110 @@ fun SettingsScreen() {
             },
             dismissButton = {
                 TextButton(onClick = { showImportDialog = false }) {
+                    Text(
+                        "Cancel",
+                        fontFamily = FontFamily.Default,
+                        color = SeekerClawColors.TextDim,
+                    )
+                }
+            },
+            containerColor = SeekerClawColors.Surface,
+            shape = shape,
+        )
+    }
+
+    // ==================== Apply Config Import Dialog ====================
+    if (showApplyConfigDialog && pendingConfigImport != null) {
+        val imported = pendingConfigImport!!
+        val importedConfig = imported.config
+        val maskedCredential = maskSensitive(importedConfig.activeCredential)
+        val maskedBot = maskSensitive(importedConfig.telegramBotToken)
+        val source = Uri.parse(imported.sourceUrl).host ?: imported.sourceUrl
+        val autoStartSummary = imported.autoStartOnBoot?.let { if (it) "Enabled" else "Disabled" } ?: "No change"
+        val keepScreenSummary = imported.keepScreenOn?.let { if (it) "Enabled" else "Disabled" } ?: "No change"
+        AlertDialog(
+            onDismissRequest = {
+                showApplyConfigDialog = false
+                pendingConfigImport = null
+            },
+            title = {
+                Text(
+                    "Apply Imported Config",
+                    fontFamily = FontFamily.Default,
+                    fontWeight = FontWeight.Bold,
+                    color = SeekerClawColors.Warning,
+                )
+            },
+            text = {
+                Text(
+                    "Schema: v${imported.schemaVersion}\n" +
+                        "Source: $source\n" +
+                        "Auth: ${if (importedConfig.authType == "setup_token") "Pro/Max Token" else "API Key"}\n" +
+                        "Credential: $maskedCredential\n" +
+                        "Bot Token: $maskedBot\n" +
+                        "Owner ID: ${importedConfig.telegramOwnerId.ifBlank { "Auto-detect" }}\n" +
+                        "Model: ${importedConfig.model}\n" +
+                        "Agent: ${importedConfig.agentName}\n" +
+                        "Auto-start on boot: $autoStartSummary\n" +
+                        "Server mode: $keepScreenSummary\n\n" +
+                        "Apply this configuration to your device?",
+                    fontFamily = FontFamily.Default,
+                    fontSize = 13.sp,
+                    color = SeekerClawColors.TextSecondary,
+                    lineHeight = 20.sp,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    ConfigManager.saveConfig(context, importedConfig)
+                    val savedConfig = ConfigManager.loadConfig(context)
+                    LogCollector.append(
+                        "[ConfigImport] Saved snapshot: ${ConfigManager.redactedSnapshot(savedConfig)}"
+                    )
+                    val saveValidationError = ConfigManager.runtimeValidationError(savedConfig)
+                    if (saveValidationError != null) {
+                        LogCollector.append(
+                            "[ConfigImport] Validation failed after save: $saveValidationError",
+                            LogLevel.ERROR,
+                        )
+                        configImportError = "Config saved but invalid: $saveValidationError"
+                        Toast.makeText(
+                            context,
+                            "Imported config could not be applied: $saveValidationError",
+                            Toast.LENGTH_LONG
+                        ).show()
+                        showApplyConfigDialog = false
+                        pendingConfigImport = null
+                        return@TextButton
+                    }
+                    imported.autoStartOnBoot?.let {
+                        ConfigManager.setAutoStartOnBoot(context, it)
+                        autoStartOnBoot = it
+                    }
+                    imported.keepScreenOn?.let {
+                        ConfigManager.setKeepScreenOn(context, it)
+                        keepScreenOn = it
+                    }
+                    config = ConfigManager.loadConfig(context)
+                    showApplyConfigDialog = false
+                    pendingConfigImport = null
+                    configImportError = null
+                    showRestartDialog = true
+                    Toast.makeText(context, "Config imported", Toast.LENGTH_SHORT).show()
+                }) {
+                    Text(
+                        "Apply",
+                        fontFamily = FontFamily.Default,
+                        fontWeight = FontWeight.Bold,
+                        color = SeekerClawColors.Warning,
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showApplyConfigDialog = false
+                    pendingConfigImport = null
+                }) {
                     Text(
                         "Cancel",
                         fontFamily = FontFamily.Default,
@@ -1371,6 +1563,12 @@ private fun requestPermissionOrOpenSettings(
             launcher.launch(permission)
         }
     }
+}
+
+private fun maskSensitive(value: String): String {
+    if (value.isBlank()) return "Not set"
+    if (value.length <= 8) return "*".repeat(value.length)
+    return "${value.take(6)}${"*".repeat(8)}${value.takeLast(4)}"
 }
 
 @Composable

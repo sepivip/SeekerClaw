@@ -25,6 +25,13 @@ class BootReceiver : BroadcastReceiver() {
             return
         }
 
+        val config = ConfigManager.loadConfig(context)
+        val validationError = ConfigManager.runtimeValidationError(config)
+        if (validationError != null) {
+            LogCollector.append("[Boot] Config invalid ($validationError), skipping auto-start")
+            return
+        }
+
         LogCollector.append("[Boot] Auto-starting OpenClaw service...")
         OpenClawService.start(context)
     }

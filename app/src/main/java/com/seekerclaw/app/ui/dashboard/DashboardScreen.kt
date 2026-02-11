@@ -36,10 +36,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.widget.Toast
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.config.modelDisplayName
 import com.seekerclaw.app.service.OpenClawService
 import com.seekerclaw.app.ui.theme.SeekerClawColors
+import com.seekerclaw.app.util.LogCollector
+import com.seekerclaw.app.util.LogLevel
 import com.seekerclaw.app.util.ServiceState
 import com.seekerclaw.app.util.ServiceStatus
 import android.content.Context
@@ -53,9 +56,14 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}) {
     val messageCount by ServiceState.messageCount.collectAsState()
     val messagesToday by ServiceState.messagesToday.collectAsState()
     val lastActivityTime by ServiceState.lastActivityTime.collectAsState()
+    val logs by LogCollector.logs.collectAsState()
 
     val config = ConfigManager.loadConfig(context)
     val agentName = config?.agentName?.ifBlank { "SeekerClaw" } ?: "SeekerClaw"
+    val hasBotToken = config?.telegramBotToken?.isNotBlank() == true
+    val hasCredential = config?.activeCredential?.isNotBlank() == true
+    val validationError = ConfigManager.runtimeValidationError(config)
+    val latestError = logs.lastOrNull { it.level == LogLevel.ERROR }?.message
 
     val isRunning = status == ServiceStatus.RUNNING || status == ServiceStatus.STARTING
 
@@ -70,7 +78,12 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}) {
         ServiceStatus.RUNNING -> "Online"
         ServiceStatus.STARTING -> "Starting\u2026"
         ServiceStatus.STOPPED -> "Offline"
-        ServiceStatus.ERROR -> "Error"
+        ServiceStatus.ERROR -> {
+            if (validationError == "setup_not_complete" ||
+                validationError == "missing_bot_token" ||
+                validationError == "missing_credential"
+            ) "Config Needed" else "Error"
+        }
     }
 
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
@@ -144,6 +157,16 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}) {
                 )
             }
 
+            if (status == ServiceStatus.ERROR && !latestError.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(10.dp))
+                Text(
+                    text = latestError,
+                    fontFamily = FontFamily.Default,
+                    fontSize = 12.sp,
+                    color = SeekerClawColors.Error,
+                )
+            }
+
             Spacer(modifier = Modifier.height(20.dp))
 
             HorizontalDivider(
@@ -200,25 +223,67 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}) {
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            val gatewaySubtitle = when (status) {
+                ServiceStatus.RUNNING -> "OpenClaw engine"
+                ServiceStatus.STARTING -> "Starting..."
+                ServiceStatus.STOPPED -> "Offline"
+                ServiceStatus.ERROR -> {
+                    if (!hasBotToken || !hasCredential) "Blocked: missing config"
+                    else "Engine error"
+                }
+            }
+            val gatewayDotColor = when (status) {
+                ServiceStatus.RUNNING -> SeekerClawColors.Primary
+                ServiceStatus.STARTING -> SeekerClawColors.Warning
+                ServiceStatus.STOPPED -> SeekerClawColors.TextDim
+                ServiceStatus.ERROR -> SeekerClawColors.Error
+            }
+
+            val telegramSubtitle = when {
+                !hasBotToken -> "Bot token missing"
+                status == ServiceStatus.RUNNING -> "Message relay"
+                status == ServiceStatus.STARTING -> "Connecting..."
+                else -> "Configured"
+            }
+            val telegramDotColor = when {
+                !hasBotToken -> SeekerClawColors.Error
+                status == ServiceStatus.RUNNING -> SeekerClawColors.Primary
+                status == ServiceStatus.STARTING -> SeekerClawColors.Warning
+                else -> SeekerClawColors.TextDim
+            }
+
+            val aiSubtitle = when {
+                !hasCredential -> "Credential missing"
+                status == ServiceStatus.RUNNING -> modelDisplayName(config?.model)
+                status == ServiceStatus.STARTING -> "Loading model..."
+                else -> modelDisplayName(config?.model)
+            }
+            val aiDotColor = when {
+                !hasCredential -> SeekerClawColors.Error
+                status == ServiceStatus.RUNNING -> SeekerClawColors.Primary
+                status == ServiceStatus.STARTING -> SeekerClawColors.Warning
+                else -> SeekerClawColors.TextDim
+            }
+
             UplinkCard(
                 icon = "//TG",
                 name = "Telegram",
-                subtitle = "Message relay",
-                serviceStatus = status,
+                subtitle = telegramSubtitle,
+                dotColor = telegramDotColor,
                 shape = shape,
             )
             UplinkCard(
                 icon = "//GW",
                 name = "Gateway",
-                subtitle = "OpenClaw engine",
-                serviceStatus = status,
+                subtitle = gatewaySubtitle,
+                dotColor = gatewayDotColor,
                 shape = shape,
             )
             UplinkCard(
                 icon = "//AI",
                 name = "AI Model",
-                subtitle = modelDisplayName(config?.model),
-                serviceStatus = status,
+                subtitle = aiSubtitle,
+                dotColor = aiDotColor,
                 shape = shape,
             )
         }
@@ -231,6 +296,19 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}) {
                 if (isRunning) {
                     OpenClawService.stop(context)
                 } else {
+                    val cfg = ConfigManager.loadConfig(context)
+                    val startError = when (ConfigManager.runtimeValidationError(cfg)) {
+                        "setup_not_complete" -> "Setup is not complete yet."
+                        "missing_bot_token" -> "Telegram Bot Token is missing."
+                        "missing_credential" ->
+                            if (cfg?.authType == "setup_token") "Setup Token is missing."
+                            else "API Key is missing."
+                        else -> null
+                    }
+                    if (startError != null) {
+                        Toast.makeText(context, "$startError Open Settings to fix.", Toast.LENGTH_LONG).show()
+                        return@Button
+                    }
                     OpenClawService.start(context)
                 }
             },
@@ -282,16 +360,9 @@ private fun UplinkCard(
     icon: String,
     name: String,
     subtitle: String,
-    serviceStatus: ServiceStatus,
+    dotColor: Color,
     shape: RoundedCornerShape,
 ) {
-    val dotColor = when (serviceStatus) {
-        ServiceStatus.RUNNING -> SeekerClawColors.Primary
-        ServiceStatus.STARTING -> SeekerClawColors.Warning
-        ServiceStatus.STOPPED -> SeekerClawColors.TextDim
-        ServiceStatus.ERROR -> SeekerClawColors.Error
-    }
-
     Row(
         modifier = Modifier
             .fillMaxWidth()

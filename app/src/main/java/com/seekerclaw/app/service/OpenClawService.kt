@@ -5,7 +5,9 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import com.seekerclaw.app.MainActivity
@@ -45,6 +47,16 @@ class OpenClawService : Service() {
 
         val notification = createNotification("SeekerClaw is running")
         startForeground(NOTIFICATION_ID, notification)
+
+        val config = ConfigManager.loadConfig(this)
+        LogCollector.append("[Service] Config snapshot: ${ConfigManager.redactedSnapshot(config)}")
+        val validationError = ConfigManager.runtimeValidationError(config)
+        if (validationError != null) {
+            LogCollector.append("[Service] Config invalid: $validationError", LogLevel.ERROR)
+            ServiceState.updateStatus(ServiceStatus.ERROR)
+            stopSelf()
+            return START_NOT_STICKY
+        }
 
         // Acquire partial wake lock (CPU stays on)
         val pm = getSystemService(POWER_SERVICE) as PowerManager
@@ -97,6 +109,12 @@ class OpenClawService : Service() {
 
         // Start Node.js runtime
         NodeBridge.start(workDir = workDir.absolutePath, openclawDir = nodeProjectDir)
+        if (!NodeBridge.isAlive()) {
+            LogCollector.append("[Service] Node runtime failed to initialize", LogLevel.ERROR)
+            ServiceState.updateStatus(ServiceStatus.ERROR)
+            stopSelf()
+            return START_NOT_STICKY
+        }
 
         // Delete config.json after Node.js has had time to read it (ephemeral credentials)
         scope.launch {
@@ -190,8 +208,19 @@ class OpenClawService : Service() {
         }
         ServiceState.updateStatus(ServiceStatus.STOPPED)
         ServiceState.updateUptime(0)
+
+        // Clean shutdown should clear crash-loop counters. Unexpected deaths won't hit this path.
+        getSharedPreferences("seekerclaw_crash", MODE_PRIVATE)
+            .edit()
+            .putLong("last_start", 0L)
+            .putInt("crash_count", 0)
+            .apply()
+
         LogCollector.append("[Service] OpenClaw service stopped")
         super.onDestroy()
+
+        // Service is isolated in :node process. Kill process so Node runtime cannot linger.
+        android.os.Process.killProcess(android.os.Process.myPid())
     }
 
     private fun createNotification(text: String): Notification {
@@ -213,15 +242,31 @@ class OpenClawService : Service() {
 
     companion object {
         private const val NOTIFICATION_ID = 1
+        private val restartHandler = Handler(Looper.getMainLooper())
 
         fun start(context: Context) {
+            restartHandler.removeCallbacksAndMessages(null)
             val intent = Intent(context, OpenClawService::class.java)
             context.startForegroundService(intent)
         }
 
         fun stop(context: Context) {
+            restartHandler.removeCallbacksAndMessages(null)
+            runCatching {
+                ServiceState.init(context.applicationContext)
+                ServiceState.updateStatus(ServiceStatus.STOPPED)
+                ServiceState.updateUptime(0)
+            }
             val intent = Intent(context, OpenClawService::class.java)
             context.stopService(intent)
+        }
+
+        fun restart(context: Context, delayMs: Long = 1200L) {
+            stop(context)
+            restartHandler.postDelayed(
+                { start(context) },
+                delayMs,
+            )
         }
     }
 }
