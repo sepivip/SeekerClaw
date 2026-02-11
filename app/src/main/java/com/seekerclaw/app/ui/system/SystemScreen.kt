@@ -60,8 +60,11 @@ fun SystemScreen(onBack: () -> Unit) {
     val claudeUsage by ServiceState.claudeUsage.collectAsState()
 
     val config = ConfigManager.loadConfig(context)
-    val agentName = config?.agentName ?: "SeekerClaw"
-    val modelName = config?.model?.let { formatModelName(it) } ?: "Not set"
+    val agentName = config?.agentName?.ifBlank { "SeekerClaw" } ?: "SeekerClaw"
+    val modelName = config?.model
+        ?.ifBlank { "Not set" }
+        ?.let { formatModelName(it) }
+        ?: "Not set"
 
     var deviceInfo by remember { mutableStateOf<DeviceInfo?>(null) }
 

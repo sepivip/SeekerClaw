@@ -213,7 +213,9 @@ fun SettingsScreen() {
         else if (token.length > 12) "${token.take(8)}${"*".repeat(8)}${token.takeLast(4)}" else "*".repeat(token.length)
     } ?: "Not set"
     val maskedBotToken = config?.telegramBotToken?.let { token ->
-        if (token.length > 10) "${token.take(6)}${"*".repeat(8)}${token.takeLast(4)}" else "*".repeat(token.length)
+        if (token.isBlank()) "Not set"
+        else if (token.length > 10) "${token.take(6)}${"*".repeat(8)}${token.takeLast(4)}"
+        else "*".repeat(token.length)
     } ?: "Not set"
 
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
@@ -310,7 +312,8 @@ fun SettingsScreen() {
                 label = "Model",
                 value = availableModels.find { it.id == config?.model }
                     ?.let { "${it.displayName} (${it.description})" }
-                    ?: (config?.model ?: "Not set"),
+                    ?: config?.model?.ifBlank { "Not set" }
+                    ?: "Not set",
                 onClick = { showModelPicker = true },
                 info = "Which AI model powers your agent.\n\n" +
                     "• Opus 4.6 — Most capable, best for complex tasks. Uses more credits.\n" +
@@ -319,7 +322,7 @@ fun SettingsScreen() {
             )
             ConfigField(
                 label = "Agent Name",
-                value = config?.agentName ?: "SeekerClaw",
+                value = config?.agentName?.ifBlank { "SeekerClaw" } ?: "SeekerClaw",
                 onClick = {
                     editField = "agentName"
                     editLabel = "Agent Name"

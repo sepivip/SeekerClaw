@@ -55,7 +55,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}) {
     val lastActivityTime by ServiceState.lastActivityTime.collectAsState()
 
     val config = ConfigManager.loadConfig(context)
-    val agentName = config?.agentName ?: "SeekerClaw"
+    val agentName = config?.agentName?.ifBlank { "SeekerClaw" } ?: "SeekerClaw"
 
     val isRunning = status == ServiceStatus.RUNNING || status == ServiceStatus.STARTING
 
