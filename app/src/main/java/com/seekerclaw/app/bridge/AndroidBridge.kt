@@ -209,6 +209,14 @@ class AndroidBridge(
 
     private fun handleClipboardSet(params: JSONObject): Response {
         val content = params.optString("content", "")
+
+        // Validate clipboard size to prevent OOM
+        if (content.toByteArray().size > Constants.MAX_CLIPBOARD_SIZE_BYTES) {
+            return jsonResponse(413, mapOf(
+                "error" to "Clipboard content too large (max ${Constants.MAX_CLIPBOARD_SIZE_BYTES / 1024 / 1024}MB)"
+            ))
+        }
+
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         val clip = ClipData.newPlainText("SeekerClaw", content)
         clipboard.setPrimaryClip(clip)
@@ -262,11 +270,22 @@ class AndroidBridge(
             return jsonResponse(400, mapOf("error" to "name and phone are required"))
         }
 
+        // Validate name length
+        if (name.length > 100) {
+            return jsonResponse(400, mapOf("error" to "Contact name too long (max 100 characters)"))
+        }
+
+        // Basic phone validation
+        val phoneDigits = phone.replace(Regex("[^0-9+]"), "")
+        if (phoneDigits.length < 10) {
+            return jsonResponse(400, mapOf("error" to "Invalid phone number format"))
+        }
+
         // Use intent to add contact (safer, doesn't require raw insert)
         val intent = Intent(Intent.ACTION_INSERT).apply {
             type = ContactsContract.Contacts.CONTENT_TYPE
             putExtra(ContactsContract.Intents.Insert.NAME, name)
-            putExtra(ContactsContract.Intents.Insert.PHONE, phone)
+            putExtra(ContactsContract.Intents.Insert.PHONE, phoneDigits)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         context.startActivity(intent)
@@ -288,12 +307,25 @@ class AndroidBridge(
             return jsonResponse(400, mapOf("error" to "phone and message are required"))
         }
 
+        // Validate message length
+        if (message.length > Constants.MAX_SMS_LENGTH) {
+            return jsonResponse(413, mapOf(
+                "error" to "Message too long (max ${Constants.MAX_SMS_LENGTH} characters)"
+            ))
+        }
+
+        // Basic phone number validation
+        val phoneDigits = phone.replace(Regex("[^0-9+]"), "")
+        if (phoneDigits.length < 10) {
+            return jsonResponse(400, mapOf("error" to "Invalid phone number format"))
+        }
+
         try {
             val smsManager = context.getSystemService(SmsManager::class.java)
             // Split long messages
             val parts = smsManager.divideMessage(message)
-            smsManager.sendMultipartTextMessage(phone, null, parts, null, null)
-            return jsonResponse(200, mapOf("success" to true, "phone" to phone, "parts" to parts.size))
+            smsManager.sendMultipartTextMessage(phoneDigits, null, parts, null, null)
+            return jsonResponse(200, mapOf("success" to true, "phone" to phoneDigits, "parts" to parts.size))
         } catch (e: Exception) {
             return jsonResponse(500, mapOf("error" to "Failed to send SMS: ${e.message}"))
         }
@@ -370,6 +402,13 @@ class AndroidBridge(
         val text = params.optString("text", "")
         if (text.isBlank()) {
             return jsonResponse(400, mapOf("error" to "text is required"))
+        }
+
+        // Validate TTS text length to prevent abuse
+        if (text.length > Constants.MAX_TTS_TEXT_LENGTH) {
+            return jsonResponse(413, mapOf(
+                "error" to "Text too long for TTS (max ${Constants.MAX_TTS_TEXT_LENGTH} characters)"
+            ))
         }
 
         val pitch = params.optDouble("pitch", 1.0).toFloat()
