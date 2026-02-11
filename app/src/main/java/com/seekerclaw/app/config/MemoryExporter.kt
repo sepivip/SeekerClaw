@@ -99,8 +99,10 @@ object MemoryExporter {
 
                         val destFile = File(workspaceDir, entryName)
 
-                        // Security: prevent path traversal
-                        if (!destFile.canonicalPath.startsWith(workspaceDir.canonicalPath)) {
+                        // Security: prevent path traversal (check with separator to avoid "/workspace2" bypass)
+                        val workspacePath = workspaceDir.canonicalFile.path + File.separator
+                        val destPath = destFile.canonicalFile.path
+                        if (!destPath.startsWith(workspacePath)) {
                             LogCollector.append("[$TAG] Skipping suspicious import entry: $entryName", LogLevel.WARN)
                             zip.closeEntry()
                             entry = zip.nextEntry

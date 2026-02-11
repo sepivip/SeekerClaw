@@ -4,7 +4,6 @@ import android.Manifest
 import android.app.KeyguardManager
 import android.content.pm.PackageManager
 import android.os.Bundle
-import android.util.Log
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.camera.core.CameraSelector
@@ -14,6 +13,8 @@ import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
+import com.seekerclaw.app.util.LogCollector
+import com.seekerclaw.app.util.LogLevel
 import org.json.JSONObject
 import java.io.File
 
