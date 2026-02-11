@@ -1,6 +1,7 @@
 package com.seekerclaw.app.solana
 
-import android.util.Log
+import com.seekerclaw.app.util.LogCollector
+import com.seekerclaw.app.util.LogLevel
 
 /**
  * SolanaTransactionBuilder - Transaction construction for Solana operations
@@ -47,7 +48,7 @@ object SolanaTransactionBuilder {
      * @throws UnsupportedOperationException Always - not yet implemented
      */
     fun buildSolTransfer(from: String, to: String, amountSol: Double): ByteArray {
-        Log.w(TAG, "buildSolTransfer called but not implemented")
+        LogCollector.append("[Solana] buildSolTransfer called but not implemented", LogLevel.WARN)
         throw UnsupportedOperationException(
             "Direct transaction building is not yet implemented. " +
             "Use Mobile Wallet Adapter (MWA) via SolanaAuthActivity for now. " +
@@ -62,7 +63,7 @@ object SolanaTransactionBuilder {
      * @throws UnsupportedOperationException Always - not yet implemented
      */
     fun broadcastTransaction(signedTxBase64: String): String? {
-        Log.w(TAG, "broadcastTransaction called but not implemented")
+        LogCollector.append("[Solana] broadcastTransaction called but not implemented", LogLevel.WARN)
         throw UnsupportedOperationException(
             "Transaction broadcasting not implemented. " +
             "Use MWA wallets which handle RPC communication internally."

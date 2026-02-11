@@ -1,7 +1,6 @@
 package com.seekerclaw.app.util
 
 import android.content.Context
-import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -83,7 +82,7 @@ object ServiceState {
             readFromFile()
             checkDailyReset()
             initialized = true
-            Log.i(TAG, "init: restored msgs=${_messageCount.value} today=${_messagesToday.value} tokens=${_tokensTotal.value}")
+            LogCollector.append("[State] Restored counters: msgs=${_messageCount.value} today=${_messagesToday.value} tokens=${_tokensTotal.value}")
         }
     }
 
@@ -103,7 +102,7 @@ object ServiceState {
         _messagesToday.value++
         _lastActivityTime.value = System.currentTimeMillis()
         writeToFile()
-        Log.d(TAG, "incrementMessages: total=${_messageCount.value} today=${_messagesToday.value}")
+        LogCollector.append("[State] Message increment: total=${_messageCount.value} today=${_messagesToday.value}")
     }
 
     fun addTokens(count: Long) {
@@ -111,7 +110,7 @@ object ServiceState {
         _tokensToday.value += count
         _tokensTotal.value += count
         writeToFile()
-        Log.d(TAG, "addTokens: +$count today=${_tokensToday.value} total=${_tokensTotal.value}")
+        LogCollector.append("[State] Token addition: +$count today=${_tokensToday.value} total=${_tokensTotal.value}")
     }
 
     fun reset() {

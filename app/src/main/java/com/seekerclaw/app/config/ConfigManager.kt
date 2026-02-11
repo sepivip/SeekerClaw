@@ -4,8 +4,9 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.net.Uri
 import android.util.Base64
-import android.util.Log
 import com.seekerclaw.app.Constants
+import com.seekerclaw.app.util.LogCollector
+import com.seekerclaw.app.util.LogLevel
 import java.io.File
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
@@ -95,7 +96,7 @@ object ConfigManager {
             val enc = p.getString(KEY_API_KEY_ENC, null)
             if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to decrypt API key", e)
+            LogCollector.append("[Config] Failed to decrypt API key: ${e.message}", LogLevel.WARN)
             ""
         }
 
@@ -103,7 +104,7 @@ object ConfigManager {
             val enc = p.getString(KEY_BOT_TOKEN_ENC, null)
             if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to decrypt bot token", e)
+            LogCollector.append("[Config] Failed to decrypt bot token: ${e.message}", LogLevel.WARN)
             ""
         }
 
@@ -111,7 +112,7 @@ object ConfigManager {
             val enc = p.getString(KEY_SETUP_TOKEN_ENC, null)
             if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to decrypt setup token", e)
+            LogCollector.append("[Config] Failed to decrypt setup token: ${e.message}", LogLevel.WARN)
             ""
         }
 
@@ -119,7 +120,7 @@ object ConfigManager {
             val enc = p.getString(KEY_BRAVE_API_KEY_ENC, null)
             if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to decrypt Brave API key", e)
+            LogCollector.append("[Config] Failed to decrypt Brave API key: ${e.message}", LogLevel.WARN)
             ""
         }
 
@@ -1269,7 +1270,7 @@ object ConfigManager {
     fun exportMemory(context: Context, uri: Uri): Boolean {
         val workspaceDir = File(context.filesDir, "workspace")
         if (!workspaceDir.exists()) {
-            Log.e(TAG, "Workspace directory does not exist")
+            LogCollector.append("[Config] Cannot export: workspace directory does not exist", LogLevel.ERROR)
             return false
         }
 
@@ -1279,10 +1280,10 @@ object ConfigManager {
                     addDirectoryToZip(zip, workspaceDir, workspaceDir)
                 }
             }
-            Log.i(TAG, "Memory exported successfully")
+            LogCollector.append("[Config] Memory exported successfully")
             true
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to export memory", e)
+            LogCollector.append("[Config] Failed to export memory: ${e.message}", LogLevel.ERROR)
             false
         }
     }
@@ -1331,7 +1332,7 @@ object ConfigManager {
 
                         // Security: prevent path traversal
                         if (!destFile.canonicalPath.startsWith(workspaceDir.canonicalPath)) {
-                            Log.w(TAG, "Skipping suspicious entry: $entryName")
+                            LogCollector.append("[Config] Skipping suspicious import entry: $entryName", LogLevel.WARN)
                             zip.closeEntry()
                             entry = zip.nextEntry
                             continue
@@ -1349,10 +1350,10 @@ object ConfigManager {
                     }
                 }
             }
-            Log.i(TAG, "Memory imported successfully")
+            LogCollector.append("[Config] Memory imported successfully")
             true
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to import memory", e)
+            LogCollector.append("[Config] Failed to import memory: ${e.message}", LogLevel.ERROR)
             false
         }
     }

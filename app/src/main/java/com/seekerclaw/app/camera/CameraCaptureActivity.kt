@@ -39,7 +39,7 @@ class CameraCaptureActivity : ComponentActivity() {
         lens = intent.getStringExtra("lens")?.lowercase() ?: "back"
 
         if (requestId.isBlank()) {
-            Log.e(TAG, "Missing requestId")
+            LogCollector.append("[Camera] Missing requestId", LogLevel.ERROR)
             finish()
             return
         }
@@ -102,7 +102,7 @@ class CameraCaptureActivity : ComponentActivity() {
                 // Give camera pipeline a moment to warm up before capture.
                 previewView.postDelayed({ capturePhoto(imageCapture) }, 600)
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to start camera", e)
+                LogCollector.append("[Camera] Failed to start camera: ${e.message}", LogLevel.ERROR)
                 writeResultFile(
                     JSONObject().apply {
                         put("error", "Failed to start camera: ${e.message}")
@@ -136,7 +136,7 @@ class CameraCaptureActivity : ComponentActivity() {
                 }
 
                 override fun onError(exception: ImageCaptureException) {
-                    Log.e(TAG, "Capture failed", exception)
+                    LogCollector.append("[Camera] Capture failed: ${exception.message}", LogLevel.ERROR)
                     writeResultFile(
                         JSONObject().apply {
                             put("error", "Capture failed: ${exception.message}")
@@ -161,6 +161,6 @@ class CameraCaptureActivity : ComponentActivity() {
         val jsonFile = File(resultDir, "$requestId.json")
         tmpFile.writeText(result.toString())
         tmpFile.renameTo(jsonFile)
-        Log.d(TAG, "Camera result written: ${jsonFile.absolutePath}")
+        LogCollector.append("[Camera] Result written: ${jsonFile.name}")
     }
 }

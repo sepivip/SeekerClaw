@@ -17,11 +17,12 @@ import android.os.StatFs
 import android.provider.ContactsContract
 import android.speech.tts.TextToSpeech
 import android.telephony.SmsManager
-import android.util.Log
 import androidx.core.content.ContextCompat
 import com.seekerclaw.app.Constants
 import com.seekerclaw.app.camera.CameraCaptureActivity
 import com.seekerclaw.app.config.ConfigManager
+import com.seekerclaw.app.util.LogCollector
+import com.seekerclaw.app.util.LogLevel
 import com.seekerclaw.app.util.ServiceState
 import fi.iki.elonen.NanoHTTPD
 import org.json.JSONArray
@@ -63,8 +64,6 @@ class AndroidBridge(
         val uri = session.uri
         val method = session.method
 
-        Log.d(TAG, "Request: $method $uri")
-
         // Only allow POST requests
         if (method != Method.POST) {
             return jsonResponse(400, mapOf("error" to "Only POST requests allowed"))
@@ -73,7 +72,7 @@ class AndroidBridge(
         // Verify auth token on every request (per-boot random secret)
         val token = session.headers?.get(Constants.BRIDGE_AUTH_HEADER.lowercase())
         if (token != authToken) {
-            Log.w(TAG, "Unauthorized request to $uri (bad/missing token)")
+            LogCollector.append("[Bridge] Unauthorized request to $uri", LogLevel.WARN)
             return jsonResponse(403, mapOf("error" to "Unauthorized"))
         }
 
@@ -82,7 +81,7 @@ class AndroidBridge(
         try {
             session.parseBody(body)
         } catch (e: Exception) {
-            Log.e(TAG, "Error parsing body", e)
+            LogCollector.append("[Bridge] Error parsing body: ${e.message}", LogLevel.ERROR)
         }
 
         val postData = body["postData"] ?: "{}"
@@ -119,7 +118,7 @@ class AndroidBridge(
                 else -> jsonResponse(404, mapOf("error" to "Unknown endpoint: $uri"))
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error handling $uri", e)
+            LogCollector.append("[Bridge] Error handling $uri: ${e.message}", LogLevel.ERROR)
             jsonResponse(500, mapOf("error" to e.message))
         }
     }
@@ -374,7 +373,7 @@ class AndroidBridge(
                     }
                 }
             } catch (e: SecurityException) {
-                Log.e(TAG, "Security exception for provider $provider", e)
+                LogCollector.append("[Bridge] Location permission denied for $provider", LogLevel.WARN)
             }
         }
 
