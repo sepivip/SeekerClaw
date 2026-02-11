@@ -18,8 +18,48 @@
 
 ### Development Phases
 
-- **Phase 1 (PoC):** Mock OpenClaw with a simple Node.js Telegram bot (`grammy`/`telegraf`) that responds to a hardcoded message. Proves Node.js runs on device, Telegram round-trip works.
-- **Phase 2 (App Shell):** Replace mock with real OpenClaw gateway bundle. Full setup flow, all screens, watchdog, boot receiver.
+- **Phase 1 (PoC):** ✅ Mock OpenClaw with a simple Node.js Telegram bot (`grammy`/`telegraf`) that responds to a hardcoded message. Proves Node.js runs on device, Telegram round-trip works.
+- **Phase 2 (App Shell):** ✅ Replace mock with real OpenClaw gateway bundle. Full setup flow, all screens, watchdog, boot receiver.
+- **Phase 3 (OpenClaw Parity):** ✅ Port OpenClaw core features (memory, skills, cron) to mobile
+- **Phase 4 (Android Superpowers):** ✅ Android Bridge, Camera Vision, Solana integration
+- **Phase 5 (Polish):** 🔜 Multi-theme support, advanced settings, optimization
+
+## Quick Start (New Developers)
+
+```bash
+# 1. Clone and setup
+git clone <repo-url>
+cd SeekerClaw
+
+# 2. Build (Node.js binaries downloaded automatically)
+./gradlew assembleDebug
+
+# 3. Install to device
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+
+# 4. View logs
+adb logcat | grep SeekerClaw
+```
+
+### First Launch Setup
+1. Open app on device
+2. Allow notification permission
+3. Enter config manually:
+   - Anthropic API key (from console.anthropic.com)
+   - Telegram bot token (from @BotFather)
+   - Telegram owner ID (your user ID)
+   - Model (default: claude-sonnet-4-20250514)
+   - Agent name
+4. Service auto-starts after setup
+5. Chat with your agent via Telegram
+
+### Key Files to Know
+- `MainActivity.kt` — Single activity, Compose navigation
+- `OpenClawService.kt` — Foreground service, Node.js lifecycle
+- `main.js` — OpenClaw gateway (bundled in assets/)
+- `AndroidBridge.kt` — HTTP server for Node.js ↔ Android IPC
+- `Theme.kt` — Theme system and colors
+- `CLAUDE.md` — You are here
 
 ## Tech Stack
 
@@ -46,26 +86,42 @@ seekerclaw/
 │   │   │   ├── MainActivity.kt              # Single activity, Compose navigation
 │   │   │   ├── SeekerClawApplication.kt     # App class
 │   │   │   ├── ui/
-│   │   │   │   ├── theme/Theme.kt            # Dark theme (Theme.SeekerClaw), Material 3
-│   │   │   │   ├── navigation/NavGraph.kt    # Setup → Main (Dashboard/Logs/Settings)
+│   │   │   │   ├── theme/Theme.kt            # Theme system with ThemeManager
+│   │   │   │   ├── navigation/NavGraph.kt    # Setup → Main (Dashboard/Logs/Settings/System)
+│   │   │   │   ├── components/PixelComponents.kt  # Reusable UI components
 │   │   │   │   ├── setup/SetupScreen.kt      # QR scan + manual entry + notification permission
 │   │   │   │   ├── dashboard/DashboardScreen.kt
 │   │   │   │   ├── logs/LogsScreen.kt        # Monospace scrollable log viewer
-│   │   │   │   └── settings/SettingsScreen.kt
+│   │   │   │   ├── settings/SettingsScreen.kt
+│   │   │   │   └── system/SystemScreen.kt    # Debug/system info screen
 │   │   │   ├── service/
 │   │   │   │   ├── OpenClawService.kt        # Foreground Service — starts/manages Node.js
 │   │   │   │   ├── NodeBridge.kt             # IPC wrapper for nodejs-mobile
 │   │   │   │   └── Watchdog.kt               # Monitors Node.js health, auto-restarts
+│   │   │   ├── bridge/
+│   │   │   │   └── AndroidBridge.kt          # HTTP server for Node.js ↔ Android IPC (port 8765)
+│   │   │   ├── camera/
+│   │   │   │   └── CameraCaptureActivity.kt  # Seeker Camera vision capture
+│   │   │   ├── solana/
+│   │   │   │   ├── SolanaAuthActivity.kt     # Mobile Wallet Adapter integration
+│   │   │   │   ├── SolanaTransactionBuilder.kt
+│   │   │   │   └── SolanaWalletManager.kt
 │   │   │   ├── receiver/
 │   │   │   │   └── BootReceiver.kt           # BOOT_COMPLETED → start service
 │   │   │   ├── config/
 │   │   │   │   ├── ConfigManager.kt          # Read/write config (encrypted + prefs)
 │   │   │   │   ├── KeystoreHelper.kt         # Android Keystore encrypt/decrypt
-│   │   │   │   └── QrParser.kt               # Parse QR JSON payload
+│   │   │   │   ├── Models.kt                 # Model definitions and data classes
+│   │   │   │   └── QrParser.kt               # Parse QR JSON payload (TODO)
 │   │   │   └── util/
 │   │   │       ├── LogCollector.kt           # Captures Node.js stdout/stderr
-│   │   │       └── ServiceState.kt           # Shared state (StateFlow) for UI
-│   │   ├── assets/openclaw/                  # Bundled OpenClaw JS (extracted on first launch)
+│   │   │       ├── ServiceState.kt           # Shared state (StateFlow) for UI
+│   │   │       └── DeviceInfoProvider.kt     # Device capabilities detection
+│   │   ├── assets/
+│   │   │   └── nodejs-project/
+│   │   │       └── main.js                   # Single bundled OpenClaw gateway file
+│   │   ├── cpp/                              # CMake build for nodejs-mobile
+│   │   │   └── CMakeLists.txt
 │   │   ├── res/
 │   │   └── AndroidManifest.xml
 │   └── build.gradle.kts
@@ -74,7 +130,10 @@ seekerclaw/
 ├── CLAUDE.md
 ├── PROMPT.md
 ├── MVP.md
-└── RESEARCH.md
+├── RESEARCH.md
+├── OPENCLAW_TRACKING.md
+├── PHASE3.md
+└── PHASE4_SUPERPOWERS.md
 ```
 
 ## Architecture
@@ -108,14 +167,15 @@ seekerclaw/
 - **Boot Receiver** auto-starts the service after device reboot (`directBootAware=false` for v1 — starts after first unlock)
 - **IPC** uses nodejs-mobile JNI bridge for lifecycle + localhost HTTP for rich API
 
-## Screens (4 total)
+## Screens (5 total)
 
 1. **Setup** (first launch only) — notification permission request (API 33+), QR scan or manual entry of API key, Telegram bot token, owner ID, model, agent name
 2. **Dashboard** (main) — status indicator (green/red/yellow), uptime, start/stop toggle, message stats (all local, no telemetry)
 3. **Logs** — monospace auto-scrolling view, color-coded (white=info, yellow=warn, red=error)
 4. **Settings** — edit config (masked fields), model dropdown, auto-start toggle, battery optimization, danger zone (reset/clear memory), about
+5. **System** (debug) — Device info, capabilities, system diagnostics (accessible via Settings)
 
-**Navigation:** Bottom bar with 3 tabs (Dashboard | Logs | Settings). Setup screen has no bottom bar.
+**Navigation:** Bottom bar with 3 tabs (Dashboard | Logs | Settings). Setup screen has no bottom bar. System screen accessible from Settings.
 
 ## Design Theme (Dark Only)
 
@@ -205,22 +265,36 @@ These are standard OpenClaw workspace files — the agent creates and manages th
 - **Dead declaration:** After 60 seconds of no response (2 consecutive missed checks), declare Node.js dead and restart
 - These values are constants in `Watchdog.kt` — easy to tune later
 
-## Build Priority Order
+## Project Status
 
-1. Project setup (Gradle, dependencies, theme)
-2. Navigation (4 screens with bottom bar)
-3. Setup screen (QR scan + manual entry + notification permission request)
-4. Config encryption (KeystoreHelper + ConfigManager)
-5. Dashboard screen (status UI with mock data)
-6. Settings screen (config display/edit)
-7. Foreground Service (basic, without Node.js first)
-8. nodejs-mobile integration (get Node.js running)
-9. **Phase 1 mock:** Simple Node.js Telegram bot responding to hardcoded message
-10. **Phase 2:** Replace mock with real OpenClaw gateway bundle
-11. Boot receiver + auto-start
-12. Watchdog + crash recovery (30s check / 10s timeout / 60s dead)
-13. Logs screen (connect to real Node.js output)
-14. Polish & testing
+### ✅ Completed
+1. ✅ Project setup (Gradle, dependencies, theme)
+2. ✅ Navigation (5 screens with bottom bar)
+3. ✅ Setup screen (manual entry + notification permission)
+4. ✅ Config encryption (KeystoreHelper + ConfigManager)
+5. ✅ Dashboard screen (status UI with real data)
+6. ✅ Settings screen (config display/edit)
+7. ✅ Foreground Service (OpenClawService)
+8. ✅ nodejs-mobile integration (Node.js v18.20.4 running)
+9. ✅ **Phase 1:** Mock Telegram bot
+10. ✅ **Phase 2:** Real OpenClaw gateway (main.js)
+11. ✅ Boot receiver + auto-start
+12. ✅ Watchdog + crash recovery (30s check / 10s timeout / 60s dead)
+13. ✅ Logs screen (real Node.js output)
+14. ✅ Android Bridge (HTTP IPC on port 8765)
+15. ✅ Camera Vision (Seeker camera button integration)
+16. ✅ Solana MWA (Mobile Wallet Adapter basics)
+17. ✅ System screen (debug/diagnostics)
+18. ✅ Theme system (ThemeManager with DARKOPS)
+
+### 🔜 TODO
+- QR scanning for setup (currently manual entry only)
+- Multi-theme UI (Terminal, Pixel, Clean themes)
+- Theme persistence (SharedPreferences)
+- Advanced Solana features (trading, DeFi)
+- Additional Android Bridge endpoints
+- Performance optimization
+- Release build signing automation
 
 ## File System Layout (On Device)
 
@@ -300,22 +374,87 @@ The agent's memory is sacred. These files live in the workspace directory and mu
 - **ServiceState:** Singleton with `StateFlow<ServiceStatus>` (STOPPED, STARTING, RUNNING, ERROR), uptime, and message count. UI observes these flows.
 - **Metrics:** All metrics (message count, uptime, response times) tracked locally on-device only. No analytics servers, no telemetry.
 
-## What NOT to Build (v1)
+## What NOT to Build (v1) — Status Update
 
-- No Solana/wallet/MWA/Seed Vault integration
-- No trading/DeFi features
+- ~~No Solana/wallet/MWA/Seed Vault integration~~ **✅ IMPLEMENTED:** Basic Solana Mobile Wallet Adapter integration now exists for future features
+- No trading/DeFi features (still applies)
 - No in-app chat (users use Telegram)
-- No light theme
+- ~~No light theme~~ **PARTIAL:** Theme system exists but only DARKOPS theme is implemented
 - No multi-agent support
 - No OTA updates (update via app store)
 - No multi-channel (Telegram only)
 
 ## Build & Run
 
+### Development Builds
 ```bash
+# Build debug APK
 ./gradlew assembleDebug
-adb install app/build/outputs/apk/debug/app-debug.apk
+
+# Install to connected device (preserves data)
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+
+# Build and install in one command
+./gradlew installDebug
 ```
+
+### Release Builds
+```bash
+# Requires local.properties with signing config:
+# SEEKERCLAW_KEYSTORE_PATH=/path/to/keystore
+# SEEKERCLAW_STORE_PASSWORD=***
+# SEEKERCLAW_KEY_ALIAS=***
+# SEEKERCLAW_KEY_PASSWORD=***
+
+./gradlew assembleRelease
+```
+
+### Clean Build
+```bash
+./gradlew clean
+./gradlew assembleDebug
+```
+
+### Testing & Debugging
+```bash
+# View logs
+adb logcat | grep SeekerClaw
+
+# Clear app data (WARNING: Deletes all memory!)
+adb shell pm clear com.seekerclaw.app
+
+# List installed packages
+adb shell pm list packages | grep seekerclaw
+```
+
+## Key Dependencies
+
+From `app/build.gradle.kts`:
+
+```kotlin
+// Core Android
+implementation(libs.androidx.core.ktx)
+implementation(libs.androidx.lifecycle.runtime.compose)
+implementation(libs.androidx.activity.compose)
+implementation(libs.androidx.compose.material3)
+implementation(libs.androidx.navigation.compose)
+implementation(libs.kotlinx.serialization.json)
+
+// Node.js IPC Bridge
+implementation("org.nanohttpd:nanohttpd:2.3.1")  // AndroidBridge HTTP server
+
+// Solana Mobile
+implementation("com.solanamobile:mobile-wallet-adapter-clientlib-ktx:2.0.3")
+implementation("org.sol4k:sol4k:0.4.2")          // Pure Kotlin Solana SDK
+
+// CameraX (Seeker Camera vision)
+implementation("androidx.camera:camera-core:1.4.1")
+implementation("androidx.camera:camera-camera2:1.4.1")
+implementation("androidx.camera:camera-lifecycle:1.4.1")
+implementation("androidx.camera:camera-view:1.4.1")
+```
+
+**Node.js Runtime:** v18.20.4 (nodejs-mobile) — Downloaded automatically during build via `downloadNodejs` Gradle task
 
 ## Reference Documents
 
@@ -324,6 +463,7 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 - `RESEARCH.md` — Deep feasibility research on Node.js on Android, background services, Solana Mobile, competitive landscape
 - `OPENCLAW_TRACKING.md` — **Critical:** Version tracking, change detection, and update process
 - `PHASE3.md` — Phase 3 implementation plan for OpenClaw parity
+- `PHASE4_SUPERPOWERS.md` — Android superpowers and API integration via skills
 
 ---
 
@@ -551,15 +691,61 @@ const battery = await androidBridgeCall('/battery');
 
 ---
 
+## Seeker Camera Vision
+
+SeekerClaw leverages the Solana Seeker's dedicated camera button for AI vision capabilities.
+
+### Implementation
+
+**File:** `app/src/main/java/com/seekerclaw/app/camera/CameraCaptureActivity.kt`
+
+- **CameraX** — Camera lifecycle management and capture
+- **Hardware Integration** — Responds to Seeker camera button press
+- **Bridge Integration** — Sends captured images to Node.js via AndroidBridge
+- **Claude Vision** — Images analyzed via Anthropic API in Node.js
+- **Telegram Delivery** — Results sent via Telegram with context
+
+### Usage Flow
+
+1. User presses Seeker camera button
+2. `CameraCaptureActivity` captures image
+3. Image encoded and sent to Node.js via bridge endpoint
+4. Agent analyzes image with Claude vision API
+5. Response delivered via Telegram chat with full context
+
+### Configuration
+
+Camera vision is integrated into the main agent loop:
+- No separate configuration needed
+- Automatically available when service is running
+- Images stored temporarily and cleaned up after processing
+- Privacy-first: images not persisted long-term
+
+See `PHASE4_SUPERPOWERS.md` for full camera integration specification.
+
+---
+
 ## Theme System
 
-SeekerClaw supports multiple swappable themes:
+SeekerClaw implements a theme system via `ThemeManager` singleton with runtime theme switching:
 
-| Theme | Style | Features |
-|-------|-------|----------|
-| **Terminal** | CRT phosphor green | Sharp corners, classic terminal |
-| **Pixel** | 8-bit arcade | Dot matrix background, pixel-perfect |
-| **Clean** | OpenClaw style | Rounded corners, white text |
+```kotlin
+// Current implementation (Theme.kt)
+object ThemeManager {
+    var currentStyle by mutableStateOf(SeekerClawThemeStyle.DARKOPS)
+        private set
 
-Themes are defined in `Theme.kt` with `ThemeManager` for runtime switching.
-Theme selection persists via SharedPreferences (TODO).
+    fun setTheme(style: SeekerClawThemeStyle) {
+        currentStyle = style
+    }
+}
+```
+
+| Theme | Style | Status |
+|-------|-------|--------|
+| **DARKOPS** | Default dark theme | ✅ Implemented (current default) |
+| **Terminal** | CRT phosphor green | 🔜 Planned |
+| **Pixel** | 8-bit arcade | 🔜 Planned |
+| **Clean** | OpenClaw style | 🔜 Planned |
+
+**TODO:** Theme selection persistence via SharedPreferences
