@@ -20,7 +20,7 @@ data class LogEntry(
 enum class LogLevel { INFO, WARN, ERROR }
 
 object LogCollector {
-    private const val MAX_LINES = 1000
+    private const val MAX_LINES = 300
     private const val LOG_FILE_NAME = "service_logs"
 
     private val _logs = MutableStateFlow<List<LogEntry>>(emptyList())
