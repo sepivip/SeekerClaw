@@ -58,7 +58,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.config.availableModels
 import com.seekerclaw.app.service.OpenClawService
@@ -67,9 +71,7 @@ import com.seekerclaw.app.ui.theme.SeekerClawColors
 import com.seekerclaw.app.BuildConfig
 import org.json.JSONObject
 import java.io.File
-import java.text.SimpleDateFormat
 import java.util.Date
-import java.util.Locale
 
 @Composable
 fun SettingsScreen() {
@@ -234,7 +236,7 @@ fun SettingsScreen() {
         Spacer(modifier = Modifier.height(28.dp))
 
         // Configuration
-        SectionLabel("CONFIGURATION")
+        SectionLabel("Configuration")
 
         Spacer(modifier = Modifier.height(10.dp))
 
@@ -349,7 +351,7 @@ fun SettingsScreen() {
         Spacer(modifier = Modifier.height(28.dp))
 
         // Preferences
-        SectionLabel("PREFERENCES")
+        SectionLabel("Preferences")
 
         Spacer(modifier = Modifier.height(10.dp))
 
@@ -388,7 +390,7 @@ fun SettingsScreen() {
         Spacer(modifier = Modifier.height(28.dp))
 
         // Permissions
-        SectionLabel("PERMISSIONS")
+        SectionLabel("Permissions")
 
         Spacer(modifier = Modifier.height(10.dp))
 
@@ -443,7 +445,7 @@ fun SettingsScreen() {
         Spacer(modifier = Modifier.height(28.dp))
 
         // Solana Wallet
-        SectionLabel("SOLANA WALLET")
+        SectionLabel("Solana Wallet")
 
         Spacer(modifier = Modifier.height(10.dp))
 
@@ -455,7 +457,7 @@ fun SettingsScreen() {
         ) {
             if (walletAddress != null) {
                 // Connected state
-                InfoRow("Address", "${walletAddress!!.take(6)}...${walletAddress!!.takeLast(4)}")
+                InfoRow("Address", "${walletAddress!!.take(6)}\u2026${walletAddress!!.takeLast(4)}")
 
                 val label = ConfigManager.getWalletLabel(context)
                 if (label.isNotBlank()) {
@@ -525,7 +527,7 @@ fun SettingsScreen() {
                             strokeWidth = 2.dp,
                         )
                         Spacer(modifier = Modifier.padding(start = 8.dp))
-                        Text("Connecting...", fontFamily = FontFamily.Default, fontSize = 14.sp)
+                        Text("Connecting\u2026", fontFamily = FontFamily.Default, fontSize = 14.sp)
                     } else {
                         Text("Connect Wallet", fontFamily = FontFamily.Default, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                     }
@@ -545,13 +547,13 @@ fun SettingsScreen() {
         Spacer(modifier = Modifier.height(28.dp))
 
         // Data backup
-        SectionLabel("DATA")
+        SectionLabel("Data")
 
         Spacer(modifier = Modifier.height(10.dp))
 
         OutlinedButton(
             onClick = {
-                val timestamp = SimpleDateFormat("yyyyMMdd_HHmm", Locale.US).format(Date())
+                val timestamp = android.text.format.DateFormat.format("yyyyMMdd_HHmm", Date())
                 exportLauncher.launch("seekerclaw_backup_$timestamp.zip")
             },
             modifier = Modifier.fillMaxWidth(),
@@ -589,7 +591,7 @@ fun SettingsScreen() {
         Spacer(modifier = Modifier.height(32.dp))
 
         // Danger zone
-        SectionLabel("DANGER ZONE")
+        SectionLabel("Danger Zone")
 
         Spacer(modifier = Modifier.height(10.dp))
 
@@ -632,7 +634,7 @@ fun SettingsScreen() {
         Spacer(modifier = Modifier.height(32.dp))
 
         // System info
-        SectionLabel("SYSTEM")
+        SectionLabel("System")
 
         Spacer(modifier = Modifier.height(10.dp))
 
@@ -677,6 +679,7 @@ fun SettingsScreen() {
                     OutlinedTextField(
                         value = editValue,
                         onValueChange = { editValue = it },
+                        label = { Text(editLabel, fontFamily = FontFamily.Default, fontSize = 12.sp) },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = editField != "anthropicApiKey" && editField != "setupToken",
                         textStyle = androidx.compose.ui.text.TextStyle(
@@ -931,7 +934,7 @@ fun SettingsScreen() {
                     OpenClawService.stop(context)
                     OpenClawService.start(context)
                     showRestartDialog = false
-                    Toast.makeText(context, "Agent restarting...", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "Agent restarting\u2026", Toast.LENGTH_SHORT).show()
                 }) {
                     Text(
                         "Restart Now",
@@ -1142,14 +1145,17 @@ private fun ConfigField(
                     color = SeekerClawColors.TextDim,
                 )
                 if (info != null) {
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "[i]",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 10.sp,
-                        color = SeekerClawColors.TextDim,
-                        modifier = Modifier.clickable { showInfo = true },
-                    )
+                    IconButton(
+                        onClick = { showInfo = true },
+                        modifier = Modifier.size(20.dp),
+                    ) {
+                        Icon(
+                            Icons.Outlined.Info,
+                            contentDescription = "More info about $label",
+                            tint = SeekerClawColors.TextDim,
+                            modifier = Modifier.size(14.dp),
+                        )
+                    }
                 }
             }
             if (onClick != null) {
@@ -1205,14 +1211,17 @@ private fun SettingRow(
                 color = SeekerClawColors.TextPrimary,
             )
             if (info != null) {
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = "[i]",
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 10.sp,
-                    color = SeekerClawColors.TextDim,
-                    modifier = Modifier.clickable { showInfo = true },
-                )
+                IconButton(
+                    onClick = { showInfo = true },
+                    modifier = Modifier.size(20.dp),
+                ) {
+                    Icon(
+                        Icons.Outlined.Info,
+                        contentDescription = "More info about $label",
+                        tint = SeekerClawColors.TextDim,
+                        modifier = Modifier.size(14.dp),
+                    )
+                }
             }
         }
         Switch(
@@ -1278,14 +1287,17 @@ private fun PermissionRow(
                 color = SeekerClawColors.TextPrimary,
             )
             if (info != null) {
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = "[i]",
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 10.sp,
-                    color = SeekerClawColors.TextDim,
-                    modifier = Modifier.clickable { showInfo = true },
-                )
+                IconButton(
+                    onClick = { showInfo = true },
+                    modifier = Modifier.size(20.dp),
+                ) {
+                    Icon(
+                        Icons.Outlined.Info,
+                        contentDescription = "More info about $label",
+                        tint = SeekerClawColors.TextDim,
+                        modifier = Modifier.size(14.dp),
+                    )
+                }
             }
         }
         Switch(

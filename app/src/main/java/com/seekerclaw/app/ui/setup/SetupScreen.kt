@@ -46,17 +46,12 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.seekerclaw.app.config.AppConfig
 import com.seekerclaw.app.config.ConfigManager
+import com.seekerclaw.app.config.availableModels
 import com.seekerclaw.app.service.OpenClawService
 import com.seekerclaw.app.ui.components.AsciiLogoCompact
 import com.seekerclaw.app.ui.components.PixelStepIndicator
 import com.seekerclaw.app.ui.components.dotMatrix
 import com.seekerclaw.app.ui.theme.SeekerClawColors
-
-private val modelOptions = listOf(
-    "claude-opus-4-6" to "Opus 4.6 (default)",
-    "claude-sonnet-4-5-20250929" to "Sonnet 4.5 (balanced)",
-    "claude-haiku-4-5-20251001" to "Haiku 4.5 (fast)",
-)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -67,10 +62,12 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
     var authType by remember { mutableStateOf("api_key") }
     var botToken by remember { mutableStateOf("") }
     var ownerId by remember { mutableStateOf("") }
-    var selectedModel by remember { mutableStateOf(modelOptions[0].first) }
+    var selectedModel by remember { mutableStateOf(availableModels[0].id) }
     var agentName by remember { mutableStateOf("SeekerClaw") }
     var modelDropdownExpanded by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var apiKeyError by remember { mutableStateOf<String?>(null) }
+    var botTokenError by remember { mutableStateOf<String?>(null) }
 
     var currentStep by remember { mutableIntStateOf(0) }
 
@@ -100,17 +97,20 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
 
     fun saveAndStart() {
         if (apiKey.isBlank()) {
+            apiKeyError = "Required"
             errorMessage = "Claude API key is required"
             currentStep = 1
             return
         }
         val credentialError = ConfigManager.validateCredential(apiKey.trim(), authType)
         if (credentialError != null) {
+            apiKeyError = credentialError
             errorMessage = credentialError
             currentStep = 1
             return
         }
         if (botToken.isBlank()) {
+            botTokenError = "Required"
             errorMessage = "Telegram bot token is required"
             currentStep = 2
             return
@@ -237,6 +237,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                 apiKey = apiKey,
                 onApiKeyChange = { newValue ->
                     apiKey = newValue
+                    apiKeyError = null
                     errorMessage = null
                     if (newValue.length > 20) {
                         authType = ConfigManager.detectAuthType(newValue)
@@ -244,15 +245,17 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                 },
                 authType = authType,
                 onAuthTypeChange = { authType = it },
+                apiKeyError = apiKeyError,
                 fieldColors = fieldColors,
                 onNext = { currentStep = 2 },
                 onBack = { currentStep = 0 },
             )
             2 -> TelegramStep(
                 botToken = botToken,
-                onBotTokenChange = { botToken = it; errorMessage = null },
+                onBotTokenChange = { botToken = it; botTokenError = null; errorMessage = null },
                 ownerId = ownerId,
                 onOwnerIdChange = { ownerId = it; errorMessage = null },
+                botTokenError = botTokenError,
                 fieldColors = fieldColors,
                 onNext = { currentStep = 3 },
                 onBack = { currentStep = 1 },
@@ -305,7 +308,7 @@ private fun WelcomeStep(onNext: () -> Unit) {
                    Create one via @BotFather
 
                 3. Your Telegram User ID
-                   We'll show you how
+                   You'll see how
             """.trimIndent(),
             fontFamily = FontFamily.Monospace,
             fontSize = 14.sp,
@@ -342,6 +345,7 @@ private fun ClaudeApiStep(
     onApiKeyChange: (String) -> Unit,
     authType: String,
     onAuthTypeChange: (String) -> Unit,
+    apiKeyError: String?,
     fieldColors: androidx.compose.material3.TextFieldColors,
     onNext: () -> Unit,
     onBack: () -> Unit,
@@ -430,7 +434,7 @@ private fun ClaudeApiStep(
             },
             placeholder = {
                 Text(
-                    if (isToken) "sk-ant-oat01-..." else "sk-ant-api03-...",
+                    if (isToken) "sk-ant-oat01-\u2026" else "sk-ant-api03-\u2026",
                     fontFamily = FontFamily.Monospace,
                     fontSize = 14.sp,
                     color = SeekerClawColors.TextDim,
@@ -439,6 +443,10 @@ private fun ClaudeApiStep(
             modifier = Modifier.fillMaxWidth(),
             visualTransformation = PasswordVisualTransformation(),
             singleLine = true,
+            isError = apiKeyError != null,
+            supportingText = apiKeyError?.let { err ->
+                { Text(err, fontFamily = FontFamily.Monospace, fontSize = 12.sp) }
+            },
             colors = fieldColors,
             shape = shape,
         )
@@ -459,6 +467,7 @@ private fun TelegramStep(
     onBotTokenChange: (String) -> Unit,
     ownerId: String,
     onOwnerIdChange: (String) -> Unit,
+    botTokenError: String?,
     fieldColors: androidx.compose.material3.TextFieldColors,
     onNext: () -> Unit,
     onBack: () -> Unit,
@@ -507,10 +516,14 @@ private fun TelegramStep(
             value = botToken,
             onValueChange = onBotTokenChange,
             label = { Text("Bot Token", fontFamily = FontFamily.Monospace, fontSize = 12.sp) },
-            placeholder = { Text("123456789:ABC...", fontFamily = FontFamily.Monospace, fontSize = 14.sp, color = SeekerClawColors.TextDim) },
+            placeholder = { Text("123456789:ABC\u2026", fontFamily = FontFamily.Monospace, fontSize = 14.sp, color = SeekerClawColors.TextDim) },
             modifier = Modifier.fillMaxWidth(),
             visualTransformation = PasswordVisualTransformation(),
             singleLine = true,
+            isError = botTokenError != null,
+            supportingText = botTokenError?.let { err ->
+                { Text(err, fontFamily = FontFamily.Monospace, fontSize = 12.sp) }
+            },
             colors = fieldColors,
             shape = shape,
         )
@@ -601,7 +614,7 @@ private fun OptionsStep(
             onExpandedChange = onModelDropdownExpandedChange,
         ) {
             OutlinedTextField(
-                value = modelOptions.first { it.first == selectedModel }.second,
+                value = availableModels.first { it.id == selectedModel }.let { "${it.displayName} (${it.description})" },
                 onValueChange = {},
                 readOnly = true,
                 label = { Text("Model", fontFamily = FontFamily.Monospace, fontSize = 12.sp) },
@@ -616,17 +629,17 @@ private fun OptionsStep(
                 expanded = modelDropdownExpanded,
                 onDismissRequest = { onModelDropdownExpandedChange(false) },
             ) {
-                modelOptions.forEach { (model, label) ->
+                availableModels.forEach { model ->
                     DropdownMenuItem(
                         text = {
                             Text(
-                                label,
+                                "${model.displayName} (${model.description})",
                                 fontFamily = FontFamily.Monospace,
                                 color = SeekerClawColors.TextPrimary,
                             )
                         },
                         onClick = {
-                            onModelChange(model)
+                            onModelChange(model.id)
                             onModelDropdownExpandedChange(false)
                         },
                     )

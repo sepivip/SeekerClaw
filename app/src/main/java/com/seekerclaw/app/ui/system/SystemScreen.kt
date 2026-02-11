@@ -17,6 +17,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -82,18 +86,16 @@ fun SystemScreen(onBack: () -> Unit) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(
-                text = "<",
-                fontFamily = FontFamily.Monospace,
-                fontSize = 18.sp,
-                color = SeekerClawColors.TextDim,
-                modifier = Modifier
-                    .clickable { onBack() }
-                    .padding(end = 12.dp, top = 4.dp, bottom = 4.dp),
-            )
+            IconButton(onClick = onBack) {
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "Back",
+                    tint = SeekerClawColors.TextDim,
+                )
+            }
             Text(
                 text = "System",
-                fontFamily = FontFamily.Monospace,
+                fontFamily = FontFamily.Default,
                 fontSize = 22.sp,
                 fontWeight = FontWeight.Bold,
                 color = SeekerClawColors.TextPrimary,
@@ -103,7 +105,7 @@ fun SystemScreen(onBack: () -> Unit) {
         Spacer(modifier = Modifier.height(28.dp))
 
         // ==================== STATUS ====================
-        SectionLabel("STATUS")
+        SectionLabel("Status")
 
         Column(
             modifier = Modifier
@@ -134,7 +136,7 @@ fun SystemScreen(onBack: () -> Unit) {
         Spacer(modifier = Modifier.height(24.dp))
 
         // ==================== DEVICE ====================
-        SectionLabel("DEVICE")
+        SectionLabel("Device")
 
         Column(
             modifier = Modifier
@@ -182,7 +184,7 @@ fun SystemScreen(onBack: () -> Unit) {
                 )
             } else {
                 Text(
-                    text = "Loading...",
+                    text = "Loading\u2026",
                     fontFamily = FontFamily.Monospace,
                     fontSize = 13.sp,
                     color = SeekerClawColors.TextDim,
@@ -193,7 +195,7 @@ fun SystemScreen(onBack: () -> Unit) {
         Spacer(modifier = Modifier.height(24.dp))
 
         // ==================== CONNECTION ====================
-        SectionLabel("CONNECTION")
+        SectionLabel("Connection")
 
         Column(
             modifier = Modifier
@@ -214,7 +216,7 @@ fun SystemScreen(onBack: () -> Unit) {
         // ==================== CLAUDE LIMITS ====================
         val usage = claudeUsage
         if (usage != null) {
-            SectionLabel("CLAUDE LIMITS")
+            SectionLabel("Claude Limits")
 
             Column(
                 modifier = Modifier
@@ -280,7 +282,7 @@ fun SystemScreen(onBack: () -> Unit) {
         }
 
         // ==================== USAGE ====================
-        SectionLabel("USAGE")
+        SectionLabel("Usage")
 
         Row(
             modifier = Modifier.fillMaxWidth(),

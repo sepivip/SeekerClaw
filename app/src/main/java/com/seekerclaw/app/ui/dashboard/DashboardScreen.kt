@@ -42,9 +42,8 @@ import com.seekerclaw.app.service.OpenClawService
 import com.seekerclaw.app.ui.theme.SeekerClawColors
 import com.seekerclaw.app.util.ServiceState
 import com.seekerclaw.app.util.ServiceStatus
-import java.text.SimpleDateFormat
+import android.content.Context
 import java.util.Date
-import java.util.Locale
 
 @Composable
 fun DashboardScreen(onNavigateToSystem: () -> Unit = {}) {
@@ -69,7 +68,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}) {
 
     val statusText = when (status) {
         ServiceStatus.RUNNING -> "Online"
-        ServiceStatus.STARTING -> "Starting..."
+        ServiceStatus.STARTING -> "Starting\u2026"
         ServiceStatus.STOPPED -> "Offline"
         ServiceStatus.ERROR -> "Error"
     }
@@ -155,7 +154,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}) {
             Spacer(modifier = Modifier.height(20.dp))
 
             Text(
-                text = "UPTIME",
+                text = "Uptime",
                 fontFamily = FontFamily.Default,
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Medium,
@@ -179,7 +178,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}) {
             ) {
                 StatMini(label = "TODAY", value = "$messagesToday")
                 StatMini(label = "TOTAL", value = "$messageCount")
-                StatMini(label = "LAST", value = formatLastActivity(lastActivityTime))
+                StatMini(label = "LAST", value = formatLastActivity(lastActivityTime, context))
             }
         }
 
@@ -187,7 +186,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}) {
 
         // Uplinks
         Text(
-            text = "UPLINKS",
+            text = "Uplinks",
             fontFamily = FontFamily.Default,
             fontSize = 11.sp,
             fontWeight = FontWeight.Medium,
@@ -346,9 +345,9 @@ private fun formatUptime(millis: Long): String {
     }.trimEnd()
 }
 
-private fun formatLastActivity(timestamp: Long): String {
+private fun formatLastActivity(timestamp: Long, context: Context): String {
     if (timestamp <= 0L) return "--:--"
-    val format = SimpleDateFormat("HH:mm", Locale.US)
+    val format = android.text.format.DateFormat.getTimeFormat(context)
     return format.format(Date(timestamp))
 }
 

@@ -19,10 +19,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -40,18 +42,19 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalContext
 import com.seekerclaw.app.ui.theme.SeekerClawColors
 import com.seekerclaw.app.util.LogCollector
 import com.seekerclaw.app.util.LogLevel
-import java.text.SimpleDateFormat
 import java.util.Date
-import java.util.Locale
 
 @Composable
 fun LogsScreen() {
     val logs by LogCollector.logs.collectAsState()
     val listState = rememberLazyListState()
     var autoScroll by remember { mutableStateOf(true) }
+
+    var showClearDialog by remember { mutableStateOf(false) }
 
     // Filter toggles — all enabled by default
     var showInfo by remember { mutableStateOf(true) }
@@ -104,7 +107,7 @@ fun LogsScreen() {
                     color = SeekerClawColors.TextPrimary,
                 )
             }
-            IconButton(onClick = { LogCollector.clear() }) {
+            IconButton(onClick = { showClearDialog = true }) {
                 Icon(
                     Icons.Default.Delete,
                     contentDescription = "Clear logs",
@@ -143,7 +146,7 @@ fun LogsScreen() {
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            text = "Awaiting output...",
+                            text = "Awaiting output\u2026",
                             fontFamily = FontFamily.Monospace,
                             fontSize = 13.sp,
                             color = SeekerClawColors.TextDim,
@@ -163,9 +166,11 @@ fun LogsScreen() {
                             LogLevel.WARN -> SeekerClawColors.Warning
                             LogLevel.ERROR -> SeekerClawColors.Error
                         }
-                        val timeFormat = remember { SimpleDateFormat("HH:mm:ss", Locale.US) }
+                        val context = LocalContext.current
+                        val pattern = if (android.text.format.DateFormat.is24HourFormat(context)) "HH:mm:ss" else "hh:mm:ss a"
+                        val timeStr = android.text.format.DateFormat.format(pattern, Date(entry.timestamp))
                         Text(
-                            text = "[${timeFormat.format(Date(entry.timestamp))}] ${entry.message}",
+                            text = "[$timeStr] ${entry.message}",
                             color = color,
                             fontSize = 11.sp,
                             fontFamily = FontFamily.Monospace,
@@ -236,6 +241,53 @@ fun LogsScreen() {
                 onClick = { showError = !showError },
             )
         }
+    }
+
+    if (showClearDialog) {
+        AlertDialog(
+            onDismissRequest = { showClearDialog = false },
+            title = {
+                Text(
+                    "Clear Logs",
+                    fontFamily = FontFamily.Default,
+                    fontWeight = FontWeight.Bold,
+                    color = SeekerClawColors.TextPrimary,
+                )
+            },
+            text = {
+                Text(
+                    "This will delete all log entries. This cannot be undone.",
+                    fontFamily = FontFamily.Default,
+                    fontSize = 13.sp,
+                    color = SeekerClawColors.TextSecondary,
+                    lineHeight = 20.sp,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    LogCollector.clear()
+                    showClearDialog = false
+                }) {
+                    Text(
+                        "Clear",
+                        fontFamily = FontFamily.Default,
+                        fontWeight = FontWeight.Bold,
+                        color = SeekerClawColors.Error,
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearDialog = false }) {
+                    Text(
+                        "Cancel",
+                        fontFamily = FontFamily.Default,
+                        color = SeekerClawColors.TextDim,
+                    )
+                }
+            },
+            containerColor = SeekerClawColors.Surface,
+            shape = shape,
+        )
     }
 }
 
