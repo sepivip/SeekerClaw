@@ -11,6 +11,7 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- Android Bridge permissions (Phase 4) -->
+    <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.SEND_SMS" />
     <uses-permission android:name="android.permission.CALL_PHONE" />
     <uses-permission android:name="android.permission.READ_CONTACTS" />
@@ -45,6 +46,14 @@
         <activity
             android:name=".solana.SolanaAuthActivity"
             android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:exported="false" />
+
+        <activity
+            android:name=".camera.CameraCaptureActivity"
+            android:theme="@style/Theme.SeekerClaw"
+            android:excludeFromRecents="true"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
             android:exported="false" />
 
         <receiver

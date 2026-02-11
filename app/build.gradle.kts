@@ -174,5 +174,11 @@ dependencies {
     // Solana transaction building (pure Kotlin)
     implementation("org.sol4k:sol4k:0.4.2")
 
+    // CameraX (Seeker Camera / vision capture)
+    implementation("androidx.camera:camera-core:1.4.1")
+    implementation("androidx.camera:camera-camera2:1.4.1")
+    implementation("androidx.camera:camera-lifecycle:1.4.1")
+    implementation("androidx.camera:camera-view:1.4.1")
+
     debugImplementation(libs.androidx.ui.tooling)
 }

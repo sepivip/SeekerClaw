@@ -81,6 +81,9 @@ fun SettingsScreen() {
     var autoStartOnBoot by remember {
         mutableStateOf(ConfigManager.getAutoStartOnBoot(context))
     }
+    var keepScreenOn by remember {
+        mutableStateOf(ConfigManager.getKeepScreenOn(context))
+    }
 
     // Battery optimization state — refresh when returning from system settings
     val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
@@ -91,6 +94,9 @@ fun SettingsScreen() {
     // Permission states
     var hasLocationPermission by remember {
         mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED)
+    }
+    var hasCameraPermission by remember {
+        mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
     }
     var hasContactsPermission by remember {
         mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED)
@@ -103,6 +109,7 @@ fun SettingsScreen() {
     }
 
     val locationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { hasLocationPermission = it }
+    val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { hasCameraPermission = it }
     val contactsLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { hasContactsPermission = it }
     val smsLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { hasSmsPermission = it }
     val callLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { hasCallPermission = it }
@@ -113,6 +120,7 @@ fun SettingsScreen() {
             if (event == Lifecycle.Event.ON_RESUME) {
                 batteryOptimizationDisabled = powerManager.isIgnoringBatteryOptimizations(context.packageName)
                 hasLocationPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                hasCameraPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
                 hasContactsPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED
                 hasSmsPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED
                 hasCallPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED
@@ -388,6 +396,18 @@ fun SettingsScreen() {
                     "Enabling this prevents the system from stopping your agent while it's running. " +
                     "Highly recommended — without this, your agent may randomly go offline.",
             )
+            SettingRow(
+                label = "Server mode (keep screen awake)",
+                checked = keepScreenOn,
+                onCheckedChange = {
+                    keepScreenOn = it
+                    ConfigManager.setKeepScreenOn(context, it)
+                    showRestartDialog = true
+                },
+                info = "Keeps the display awake while the agent runs. " +
+                    "Useful when using camera automation on a dedicated device. " +
+                    "Higher battery usage and lower physical privacy/security.",
+            )
         }
 
         Spacer(modifier = Modifier.height(28.dp))
@@ -403,6 +423,15 @@ fun SettingsScreen() {
                 .background(SeekerClawColors.Surface, shape)
                 .padding(horizontal = 16.dp),
         ) {
+            PermissionRow(
+                label = "Camera",
+                granted = hasCameraPermission,
+                onRequest = {
+                    requestPermissionOrOpenSettings(context, Manifest.permission.CAMERA, cameraLauncher)
+                },
+                info = "Lets the agent capture a photo for vision tasks like \"check my dog\". " +
+                    "Capture is on-demand when you ask. The app does not stream video continuously.",
+            )
             PermissionRow(
                 label = "GPS Location",
                 granted = hasLocationPermission,

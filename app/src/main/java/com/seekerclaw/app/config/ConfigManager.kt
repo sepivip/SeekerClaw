@@ -34,6 +34,7 @@ object ConfigManager {
     private const val KEY_MODEL = "model"
     private const val KEY_AGENT_NAME = "agent_name"
     private const val KEY_AUTO_START = "auto_start_on_boot"
+    private const val KEY_KEEP_SCREEN_ON = "keep_screen_on"
     private const val KEY_SETUP_COMPLETE = "setup_complete"
     private const val KEY_AUTH_TYPE = "auth_type"
     private const val KEY_SETUP_TOKEN_ENC = "setup_token_enc"
@@ -139,6 +140,13 @@ object ConfigManager {
 
     fun setAutoStartOnBoot(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_AUTO_START, enabled).apply()
+    }
+
+    fun getKeepScreenOn(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_KEEP_SCREEN_ON, false)
+
+    fun setKeepScreenOn(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_KEEP_SCREEN_ON, enabled).apply()
     }
 
     fun updateConfigField(context: Context, field: String, value: String) {

@@ -1418,6 +1418,28 @@ const TOOLS = [
         }
     },
     {
+        name: 'android_camera_capture',
+        description: 'Capture a photo from the device camera. Requires CAMERA permission. Useful for quick snapshots.',
+        input_schema: {
+            type: 'object',
+            properties: {
+                lens: { type: 'string', description: 'Camera lens: "back" (default) or "front"' }
+            }
+        }
+    },
+    {
+        name: 'android_camera_check',
+        description: 'Capture a photo and analyze it with Claude vision. Use only when the user explicitly asks what the camera sees (e.g. "check my dog").',
+        input_schema: {
+            type: 'object',
+            properties: {
+                prompt: { type: 'string', description: 'What to check in the image. Example: "What is my dog doing?"' },
+                lens: { type: 'string', description: 'Camera lens: "back" (default) or "front"' },
+                max_tokens: { type: 'number', description: 'Optional output token cap for vision response (default 400)' }
+            }
+        }
+    },
+    {
         name: 'android_apps_list',
         description: 'List installed apps that can be launched.',
         input_schema: {
@@ -2087,6 +2109,49 @@ async function executeTool(name, input) {
             });
         }
 
+        case 'android_camera_capture': {
+            const lens = input.lens === 'front' ? 'front' : 'back';
+            return await androidBridgeCall('/camera/capture', { lens }, 45000);
+        }
+
+        case 'android_camera_check': {
+            const lens = input.lens === 'front' ? 'front' : 'back';
+            const capture = await androidBridgeCall('/camera/capture', { lens }, 45000);
+            if (!capture || capture.error) {
+                return { error: capture?.error || 'Camera capture failed' };
+            }
+
+            const imagePath = capture.path;
+            if (!imagePath || !fs.existsSync(imagePath)) {
+                return { error: 'Captured image file not found on device' };
+            }
+
+            let imageBase64;
+            try {
+                imageBase64 = fs.readFileSync(imagePath).toString('base64');
+            } catch (e) {
+                return { error: `Failed to read captured image: ${e.message}` };
+            }
+
+            const vision = await visionAnalyzeImage(
+                imageBase64,
+                input.prompt || 'What is happening in this image? Keep the answer concise and practical.',
+                input.max_tokens || 400
+            );
+
+            if (vision.error) {
+                return { error: vision.error };
+            }
+
+            return {
+                success: true,
+                lens: capture.lens || lens,
+                capturedAt: capture.capturedAt || null,
+                path: imagePath,
+                analysis: vision.text
+            };
+        }
+
         case 'android_apps_list': {
             return await androidBridgeCall('/apps/list');
         }
@@ -2477,6 +2542,68 @@ async function androidBridgeCall(endpoint, data = {}, timeoutMs = 10000) {
         req.write(postData);
         req.end();
     });
+}
+
+async function visionAnalyzeImage(imageBase64, prompt, maxTokens = 400) {
+    const safePrompt = (prompt || '').trim() || 'Describe what is happening in this image.';
+    const cappedMaxTokens = Math.max(128, Math.min(parseInt(maxTokens) || 400, 1024));
+    const authHeaders = AUTH_TYPE === 'setup_token'
+        ? { 'Authorization': `Bearer ${ANTHROPIC_KEY}` }
+        : { 'x-api-key': ANTHROPIC_KEY };
+
+    const body = JSON.stringify({
+        model: MODEL,
+        max_tokens: cappedMaxTokens,
+        messages: [
+            {
+                role: 'user',
+                content: [
+                    { type: 'text', text: safePrompt },
+                    {
+                        type: 'image',
+                        source: {
+                            type: 'base64',
+                            media_type: 'image/jpeg',
+                            data: imageBase64
+                        }
+                    }
+                ]
+            }
+        ]
+    });
+
+    const res = await httpRequest({
+        hostname: 'api.anthropic.com',
+        path: '/v1/messages',
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'anthropic-version': '2023-06-01',
+            ...authHeaders,
+        }
+    }, body);
+
+    if (res.status !== 200) {
+        return { error: `Vision API error: ${res.data?.error?.message || res.status}` };
+    }
+
+    const text = (res.data?.content || [])
+        .filter(c => c.type === 'text')
+        .map(c => c.text)
+        .join('\n')
+        .trim();
+
+    if (res.data?.usage) {
+        androidBridgeCall('/stats/tokens', {
+            input_tokens: res.data.usage.input_tokens || 0,
+            output_tokens: res.data.usage.output_tokens || 0,
+        }).catch(() => {});
+    }
+
+    return {
+        text: text || '(No vision response)',
+        usage: res.data?.usage || null
+    };
 }
 
 // ============================================================================
@@ -3045,6 +3172,8 @@ function buildSystemPrompt(matchedSkills = []) {
     lines.push('- android_call: Make phone call (ALWAYS confirm with user first!)');
     lines.push('- android_location: Get GPS location');
     lines.push('- android_tts: Speak text out loud');
+    lines.push('- android_camera_capture: Take a camera snapshot');
+    lines.push('- android_camera_check: Capture + analyze what the camera sees (use for requests like "check my dog")');
     lines.push('- android_apps_list: List installed apps');
     lines.push('- android_apps_launch: Launch an app by package name');
     lines.push('');
@@ -3066,6 +3195,7 @@ function buildSystemPrompt(matchedSkills = []) {
     lines.push('Narrate only when it helps: multi-step work, complex/challenging problems, sensitive actions (e.g., deletions), or when the user explicitly asks.');
     lines.push('Keep narration brief and value-dense; avoid repeating obvious steps.');
     lines.push('Use plain human language for narration unless in a technical context.');
+    lines.push('For visual checks ("what do you see", "check my dog", "look at the room"), call android_camera_check.');
     lines.push('');
 
     // Skills section - OpenClaw semantic selection style
@@ -3381,6 +3511,7 @@ I can:
 - Search the web for current information
 - Save and recall memories
 - Take daily notes
+- Check camera view (vision) and describe what it sees
 - Use specialized skills for specific tasks
 
 Commands:

@@ -29,6 +29,7 @@ import java.util.UUID
 
 class OpenClawService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
+    private var screenWakeLock: PowerManager.WakeLock? = null
     private var uptimeJob: Job? = null
     private var nodeDebugJob: Job? = null
     private val scope = CoroutineScope(Dispatchers.IO)
@@ -49,6 +50,17 @@ class OpenClawService : Service() {
         val pm = getSystemService(POWER_SERVICE) as PowerManager
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "SeekerClaw::Service")
         wakeLock?.acquire()
+
+        // Optional server mode: keep screen awake for camera-driven automation.
+        if (ConfigManager.getKeepScreenOn(this)) {
+            @Suppress("DEPRECATION")
+            val flags = PowerManager.FULL_WAKE_LOCK or
+                PowerManager.ACQUIRE_CAUSES_WAKEUP or
+                PowerManager.ON_AFTER_RELEASE
+            screenWakeLock = pm.newWakeLock(flags, "SeekerClaw::ServerMode")
+            screenWakeLock?.acquire()
+            LogCollector.append("[Service] Server mode enabled: keeping screen awake")
+        }
 
         // Crash loop protection: if we've restarted too many times quickly, stop trying
         val prefs = getSharedPreferences("seekerclaw_crash", MODE_PRIVATE)
@@ -171,6 +183,9 @@ class OpenClawService : Service() {
         androidBridge?.shutdown()
         NodeBridge.stop()
         wakeLock?.let {
+            if (it.isHeld) it.release()
+        }
+        screenWakeLock?.let {
             if (it.isHeld) it.release()
         }
         ServiceState.updateStatus(ServiceStatus.STOPPED)

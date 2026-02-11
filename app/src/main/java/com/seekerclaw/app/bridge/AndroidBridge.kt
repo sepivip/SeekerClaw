@@ -19,6 +19,7 @@ import android.speech.tts.TextToSpeech
 import android.telephony.SmsManager
 import android.util.Log
 import androidx.core.content.ContextCompat
+import com.seekerclaw.app.camera.CameraCaptureActivity
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.util.ServiceState
 import fi.iki.elonen.NanoHTTPD
@@ -102,6 +103,7 @@ class AndroidBridge(
                 "/call" -> handleCall(params)
                 "/location" -> handleLocation()
                 "/tts" -> handleTts(params)
+                "/camera/capture" -> handleCameraCapture(params)
                 "/apps/list" -> handleAppsList()
                 "/apps/launch" -> handleAppsLaunch(params)
                 "/stats/message" -> handleStatsMessage()
@@ -376,6 +378,56 @@ class AndroidBridge(
         tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "seekerclaw_tts")
 
         return jsonResponse(200, mapOf("success" to true, "text" to text))
+    }
+
+    // ==================== Camera ====================
+
+    private fun handleCameraCapture(params: JSONObject): Response {
+        if (!hasPermission(Manifest.permission.CAMERA)) {
+            return jsonResponse(403, mapOf("error" to "CAMERA permission not granted"))
+        }
+
+        val requestId = java.util.UUID.randomUUID().toString()
+        val lens = params.optString("lens", "back").lowercase().let {
+            if (it == "front") "front" else "back"
+        }
+
+        try {
+            val intent = Intent(context, CameraCaptureActivity::class.java).apply {
+                putExtra("requestId", requestId)
+                putExtra("lens", lens)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            return jsonResponse(500, mapOf("error" to "Failed to start camera capture: ${e.message}"))
+        }
+
+        val resultFile = java.io.File(java.io.File(context.filesDir, CameraCaptureActivity.RESULTS_DIR), "$requestId.json")
+        val deadline = System.currentTimeMillis() + 30_000
+        while (System.currentTimeMillis() < deadline) {
+            if (resultFile.exists()) {
+                val result = JSONObject(resultFile.readText())
+                resultFile.delete()
+                val error = result.optString("error", "")
+                val imagePath = result.optString("path", "")
+                val capturedAt = result.optLong("capturedAt", 0L)
+
+                return if (error.isBlank() && imagePath.isNotBlank()) {
+                    jsonResponse(200, mapOf(
+                        "success" to true,
+                        "path" to imagePath,
+                        "lens" to result.optString("lens", lens),
+                        "capturedAt" to capturedAt
+                    ))
+                } else {
+                    jsonResponse(400, mapOf("error" to error.ifBlank { "Camera capture failed" }))
+                }
+            }
+            Thread.sleep(250)
+        }
+
+        return jsonResponse(408, mapOf("error" to "Camera capture timed out"))
     }
 
     // ==================== Apps ====================
