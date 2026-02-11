@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import android.net.Uri
 import android.util.Base64
 import android.util.Log
+import com.seekerclaw.app.Constants
 import java.io.File
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
@@ -128,7 +129,7 @@ object ConfigManager {
             authType = p.getString(KEY_AUTH_TYPE, "api_key") ?: "api_key",
             telegramBotToken = botToken,
             telegramOwnerId = p.getString(KEY_OWNER_ID, "") ?: "",
-            model = p.getString(KEY_MODEL, "claude-opus-4-6") ?: "claude-opus-4-6",
+            model = p.getString(KEY_MODEL, Constants.DEFAULT_MODEL) ?: Constants.DEFAULT_MODEL,
             agentName = p.getString(KEY_AGENT_NAME, "MyAgent") ?: "MyAgent",
             braveApiKey = braveApiKey,
             autoStartOnBoot = p.getBoolean(KEY_AUTO_START, true),
@@ -204,7 +205,8 @@ object ConfigManager {
 
     fun detectAuthType(credential: String): String {
         val trimmed = credential.trim()
-        return if (trimmed.startsWith("sk-ant-oat01-") && trimmed.length >= 80) {
+        return if (trimmed.startsWith(Constants.SETUP_TOKEN_PREFIX) &&
+                   trimmed.length >= Constants.MIN_SETUP_TOKEN_LENGTH) {
             "setup_token"
         } else {
             "api_key"
@@ -216,9 +218,9 @@ object ConfigManager {
         if (trimmed.isBlank()) return "Credential is required"
         return when (authType) {
             "setup_token" -> {
-                if (!trimmed.startsWith("sk-ant-oat01-")) {
-                    "Setup token must start with sk-ant-oat01-"
-                } else if (trimmed.length < 80) {
+                if (!trimmed.startsWith(Constants.SETUP_TOKEN_PREFIX)) {
+                    "Setup token must start with ${Constants.SETUP_TOKEN_PREFIX}"
+                } else if (trimmed.length < Constants.MIN_SETUP_TOKEN_LENGTH) {
                     "Token looks too short. Paste the full setup-token."
                 } else null
             }

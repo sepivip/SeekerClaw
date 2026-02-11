@@ -2,22 +2,26 @@ package com.seekerclaw.app.config
 
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
+import com.seekerclaw.app.Constants
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
+/**
+ * KeystoreHelper - Android Keystore wrapper for secure encryption
+ *
+ * Uses AES-256-GCM encryption backed by Android Keystore hardware/TEE.
+ * Keys are automatically generated and stored securely, never exposed to app code.
+ */
 object KeystoreHelper {
-    private const val KEY_ALIAS = "seekerclaw_config_key"
     private const val ANDROID_KEYSTORE = "AndroidKeyStore"
     private const val TRANSFORMATION = "AES/GCM/NoPadding"
-    private const val GCM_TAG_LENGTH = 128
-    private const val GCM_IV_LENGTH = 12
 
     private fun getOrCreateKey(): SecretKey {
         val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
-        keyStore.getEntry(KEY_ALIAS, null)?.let { entry ->
+        keyStore.getEntry(Constants.KEYSTORE_ALIAS, null)?.let { entry ->
             return (entry as KeyStore.SecretKeyEntry).secretKey
         }
         val keyGenerator = KeyGenerator.getInstance(
@@ -26,12 +30,12 @@ object KeystoreHelper {
         )
         keyGenerator.init(
             KeyGenParameterSpec.Builder(
-                KEY_ALIAS,
+                Constants.KEYSTORE_ALIAS,
                 KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
             )
                 .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
                 .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                .setKeySize(256)
+                .setKeySize(Constants.AES_KEY_SIZE_BITS)
                 .setUserAuthenticationRequired(false)
                 .build()
         )
@@ -48,21 +52,21 @@ object KeystoreHelper {
     }
 
     fun decrypt(encrypted: ByteArray): String {
-        val iv = encrypted.copyOfRange(0, GCM_IV_LENGTH)
-        val ciphertext = encrypted.copyOfRange(GCM_IV_LENGTH, encrypted.size)
+        val iv = encrypted.copyOfRange(0, Constants.GCM_IV_LENGTH_BYTES)
+        val ciphertext = encrypted.copyOfRange(Constants.GCM_IV_LENGTH_BYTES, encrypted.size)
         val cipher = Cipher.getInstance(TRANSFORMATION)
         cipher.init(
             Cipher.DECRYPT_MODE,
             getOrCreateKey(),
-            GCMParameterSpec(GCM_TAG_LENGTH, iv),
+            GCMParameterSpec(Constants.GCM_TAG_LENGTH_BITS, iv),
         )
         return String(cipher.doFinal(ciphertext), Charsets.UTF_8)
     }
 
     fun deleteKey() {
         val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
-        if (keyStore.containsAlias(KEY_ALIAS)) {
-            keyStore.deleteEntry(KEY_ALIAS)
+        if (keyStore.containsAlias(Constants.KEYSTORE_ALIAS)) {
+            keyStore.deleteEntry(Constants.KEYSTORE_ALIAS)
         }
     }
 }

@@ -8,6 +8,7 @@ import android.content.Intent
 import android.os.IBinder
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
+import com.seekerclaw.app.Constants
 import com.seekerclaw.app.MainActivity
 import com.seekerclaw.app.R
 import com.seekerclaw.app.SeekerClawApplication
@@ -44,11 +45,11 @@ class OpenClawService : Service() {
         LogCollector.init(applicationContext)
 
         val notification = createNotification("SeekerClaw is running")
-        startForeground(NOTIFICATION_ID, notification)
+        startForeground(Constants.NOTIFICATION_ID, notification)
 
         // Acquire partial wake lock (CPU stays on)
         val pm = getSystemService(POWER_SERVICE) as PowerManager
-        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "SeekerClaw::Service")
+        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, Constants.WAKE_LOCK_TAG)
         wakeLock?.acquire()
 
         // Optional server mode: keep screen awake for camera-driven automation.
@@ -57,7 +58,7 @@ class OpenClawService : Service() {
             val flags = PowerManager.FULL_WAKE_LOCK or
                 PowerManager.ACQUIRE_CAUSES_WAKEUP or
                 PowerManager.ON_AFTER_RELEASE
-            screenWakeLock = pm.newWakeLock(flags, "SeekerClaw::ServerMode")
+            screenWakeLock = pm.newWakeLock(flags, Constants.SCREEN_WAKE_LOCK_TAG)
             screenWakeLock?.acquire()
             LogCollector.append("[Service] Server mode enabled: keeping screen awake")
         }
@@ -67,13 +68,13 @@ class OpenClawService : Service() {
         val lastStart = prefs.getLong("last_start", 0L)
         val crashCount = prefs.getInt("crash_count", 0)
         val now = System.currentTimeMillis()
-        if (now - lastStart < 30_000 && crashCount >= 3) {
-            LogCollector.append("[Service] Crash loop detected ($crashCount restarts in 30s) — stopping", LogLevel.ERROR)
+        if (now - lastStart < Constants.CRASH_WINDOW_MS && crashCount >= Constants.MAX_CRASH_COUNT) {
+            LogCollector.append("[Service] Crash loop detected ($crashCount restarts in ${Constants.CRASH_WINDOW_MS}ms) — stopping", LogLevel.ERROR)
             ServiceState.updateStatus(ServiceStatus.ERROR)
             stopSelf()
             return START_NOT_STICKY
         }
-        val newCrashCount = if (now - lastStart < 30_000) crashCount + 1 else 0
+        val newCrashCount = if (now - lastStart < Constants.CRASH_WINDOW_MS) crashCount + 1 else 0
         prefs.edit().putLong("last_start", now).putInt("crash_count", newCrashCount).apply()
 
         LogCollector.append("[Service] Starting OpenClaw service... (attempt ${newCrashCount + 1})")
@@ -100,7 +101,7 @@ class OpenClawService : Service() {
 
         // Delete config.json after Node.js has had time to read it (ephemeral credentials)
         scope.launch {
-            delay(5000) // Give Node.js 5s to read config
+            delay(Constants.CONFIG_DELETE_DELAY_MS)
             val configFile = File(workDir, "config.json")
             if (configFile.exists()) {
                 configFile.delete()
@@ -113,7 +114,7 @@ class OpenClawService : Service() {
         try {
             androidBridge = AndroidBridge(applicationContext, bridgeToken)
             androidBridge?.start()
-            LogCollector.append("[Service] AndroidBridge started on 127.0.0.1:8765 (auth required)")
+            LogCollector.append("[Service] AndroidBridge started on 127.0.0.1:${Constants.BRIDGE_PORT} (auth required)")
         } catch (e: Exception) {
             LogCollector.append("[Service] Failed to start AndroidBridge: ${e.message}", LogLevel.ERROR)
         }
@@ -212,8 +213,6 @@ class OpenClawService : Service() {
     }
 
     companion object {
-        private const val NOTIFICATION_ID = 1
-
         fun start(context: Context) {
             val intent = Intent(context, OpenClawService::class.java)
             context.startForegroundService(intent)

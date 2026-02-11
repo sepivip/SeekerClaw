@@ -19,6 +19,7 @@ import android.speech.tts.TextToSpeech
 import android.telephony.SmsManager
 import android.util.Log
 import androidx.core.content.ContextCompat
+import com.seekerclaw.app.Constants
 import com.seekerclaw.app.camera.CameraCaptureActivity
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.util.ServiceState
@@ -30,18 +31,19 @@ import java.util.Locale
 /**
  * AndroidBridge - HTTP server for Node.js <-> Kotlin IPC
  *
- * Runs on localhost:8765 and provides Android-native capabilities
+ * Runs on localhost:${Constants.BRIDGE_PORT} and provides Android-native capabilities
  * to the Node.js agent via simple HTTP POST requests.
+ *
+ * Security: Auth token required, localhost-only binding, per-boot token rotation
  */
 class AndroidBridge(
     private val context: Context,
     private val authToken: String,
-    port: Int = 8765
+    port: Int = Constants.BRIDGE_PORT
 ) : NanoHTTPD("127.0.0.1", port) {
 
     companion object {
         private const val TAG = "AndroidBridge"
-        private const val AUTH_HEADER = "X-Bridge-Token"
     }
 
     private var tts: TextToSpeech? = null
@@ -69,7 +71,7 @@ class AndroidBridge(
         }
 
         // Verify auth token on every request (per-boot random secret)
-        val token = session.headers?.get(AUTH_HEADER.lowercase())
+        val token = session.headers?.get(Constants.BRIDGE_AUTH_HEADER.lowercase())
         if (token != authToken) {
             Log.w(TAG, "Unauthorized request to $uri (bad/missing token)")
             return jsonResponse(403, mapOf("error" to "Unauthorized"))
