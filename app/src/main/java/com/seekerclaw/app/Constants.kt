@@ -44,6 +44,12 @@ object Constants {
     /** Maximum SMS message length (characters) */
     const val MAX_SMS_LENGTH = 1600
 
+    /** Phone number validation: minimum digit count (international standard) */
+    const val PHONE_MIN_DIGITS = 7
+
+    /** Phone number validation: maximum digit count (international standard) */
+    const val PHONE_MAX_DIGITS = 15
+
     // ==================== Watchdog ====================
 
     /** Watchdog check interval (30 seconds) */

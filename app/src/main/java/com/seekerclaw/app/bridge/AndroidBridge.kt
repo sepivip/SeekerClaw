@@ -209,8 +209,8 @@ class AndroidBridge(
     private fun handleClipboardSet(params: JSONObject): Response {
         val content = params.optString("content", "")
 
-        // Validate clipboard size to prevent OOM
-        if (content.toByteArray().size > Constants.MAX_CLIPBOARD_SIZE_BYTES) {
+        // Validate clipboard size to prevent OOM (explicit UTF-8 for consistency)
+        if (content.toByteArray(Charsets.UTF_8).size > Constants.MAX_CLIPBOARD_SIZE_BYTES) {
             return jsonResponse(413, mapOf(
                 "error" to "Clipboard content too large (max ${Constants.MAX_CLIPBOARD_SIZE_BYTES / 1024 / 1024}MB)"
             ))
@@ -274,10 +274,11 @@ class AndroidBridge(
             return jsonResponse(400, mapOf("error" to "Contact name too long (max 100 characters)"))
         }
 
-        // Basic phone validation
+        // Basic phone number validation: allow optional leading '+' and 7-15 digits total
         val phoneDigits = phone.replace(Regex("[^0-9+]"), "")
-        if (phoneDigits.length < 10) {
-            return jsonResponse(400, mapOf("error" to "Invalid phone number format"))
+        val digitCount = phoneDigits.count { it.isDigit() }
+        if (digitCount < Constants.PHONE_MIN_DIGITS || digitCount > Constants.PHONE_MAX_DIGITS) {
+            return jsonResponse(400, mapOf("error" to "Invalid phone number format (requires ${ Constants.PHONE_MIN_DIGITS}-${Constants.PHONE_MAX_DIGITS} digits)"))
         }
 
         // Use intent to add contact (safer, doesn't require raw insert)
@@ -313,10 +314,11 @@ class AndroidBridge(
             ))
         }
 
-        // Basic phone number validation
+        // Basic phone number validation: allow optional leading '+' and 7-15 digits total
         val phoneDigits = phone.replace(Regex("[^0-9+]"), "")
-        if (phoneDigits.length < 10) {
-            return jsonResponse(400, mapOf("error" to "Invalid phone number format"))
+        val digitCount = phoneDigits.count { it.isDigit() }
+        if (digitCount < Constants.PHONE_MIN_DIGITS || digitCount > Constants.PHONE_MAX_DIGITS) {
+            return jsonResponse(400, mapOf("error" to "Invalid phone number format (requires ${Constants.PHONE_MIN_DIGITS}-${Constants.PHONE_MAX_DIGITS} digits)"))
         }
 
         try {

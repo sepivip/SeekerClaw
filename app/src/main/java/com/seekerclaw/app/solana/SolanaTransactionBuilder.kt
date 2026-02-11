@@ -47,7 +47,7 @@ object SolanaTransactionBuilder {
      *
      * @throws UnsupportedOperationException Always - not yet implemented
      */
-    fun buildSolTransfer(from: String, to: String, amountSol: Double): ByteArray {
+    fun buildSolTransfer(from: String, to: String, amountSol: Double): Nothing {
         LogCollector.append("[Solana] buildSolTransfer called but not implemented", LogLevel.WARN)
         throw UnsupportedOperationException(
             "Direct transaction building is not yet implemented. " +
@@ -59,10 +59,9 @@ object SolanaTransactionBuilder {
     /**
      * Broadcast a signed transaction to Solana network
      *
-     * @return Transaction signature, or null if failed
      * @throws UnsupportedOperationException Always - not yet implemented
      */
-    fun broadcastTransaction(signedTxBase64: String): String? {
+    fun broadcastTransaction(signedTxBase64: String): Nothing {
         LogCollector.append("[Solana] broadcastTransaction called but not implemented", LogLevel.WARN)
         throw UnsupportedOperationException(
             "Transaction broadcasting not implemented. " +

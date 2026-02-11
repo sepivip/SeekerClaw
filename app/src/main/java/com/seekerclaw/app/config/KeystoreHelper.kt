@@ -25,9 +25,14 @@ object KeystoreHelper {
     private fun getOrCreateKey(): Result<SecretKey> {
         return try {
             val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
-            keyStore.getEntry(Constants.KEYSTORE_ALIAS, null)?.let { entry ->
-                return Result.Success((entry as KeyStore.SecretKeyEntry).secretKey)
+
+            // Return existing key if present, otherwise create new one
+            val existingEntry = keyStore.getEntry(Constants.KEYSTORE_ALIAS, null)
+            if (existingEntry != null) {
+                return Result.Success((existingEntry as KeyStore.SecretKeyEntry).secretKey)
             }
+
+            // Create new key
             val keyGenerator = KeyGenerator.getInstance(
                 KeyProperties.KEY_ALGORITHM_AES,
                 ANDROID_KEYSTORE,

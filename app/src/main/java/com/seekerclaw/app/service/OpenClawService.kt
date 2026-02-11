@@ -90,7 +90,7 @@ class OpenClawService : Service() {
                 LogCollector.append("[Service] Failed to write config.json: ${result.error}", LogLevel.ERROR)
                 ServiceState.updateStatus(ServiceStatus.ERROR)
                 stopSelf()
-                return
+                return START_NOT_STICKY
             }
             is Result.Success -> {
                 LogCollector.append("[Service] Config written successfully")

@@ -45,6 +45,26 @@ object ConfigManager {
     private fun prefs(context: Context): SharedPreferences =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
+    /**
+     * Helper function to decrypt a field from SharedPreferences.
+     * Returns empty string if field doesn't exist, or Result.Failure if decryption fails.
+     */
+    private fun decryptField(
+        prefs: SharedPreferences,
+        key: String,
+        fieldName: String
+    ): Result<String> {
+        val encrypted = prefs.getString(key, null) ?: return Result.Success("")
+
+        return when (val result = KeystoreHelper.decrypt(Base64.decode(encrypted, Base64.NO_WRAP))) {
+            is Result.Success -> Result.Success(result.data)
+            is Result.Failure -> {
+                LogCollector.append("[Config] Failed to decrypt $fieldName: ${result.error}", LogLevel.WARN)
+                Result.Failure("Failed to decrypt $fieldName: ${result.error}", result.exception)
+            }
+        }
+    }
+
     fun isSetupComplete(context: Context): Boolean =
         prefs(context).getBoolean(KEY_SETUP_COMPLETE, false)
 
@@ -116,68 +136,29 @@ object ConfigManager {
             return Result.Failure("Setup not complete")
         }
 
-        val apiKey = when {
-            p.getString(KEY_API_KEY_ENC, null) != null -> {
-                when (val result = KeystoreHelper.decrypt(Base64.decode(p.getString(KEY_API_KEY_ENC, null)!!, Base64.NO_WRAP))) {
-                    is Result.Success -> result.data
-                    is Result.Failure -> {
-                        LogCollector.append("[Config] Failed to decrypt API key: ${result.error}", LogLevel.WARN)
-                        return Result.Failure("Failed to decrypt API key: ${result.error}", result.exception)
-                    }
-                }
-            }
-            else -> ""
-        }
+        // Decrypt all sensitive fields using helper function
+        val apiKeyResult = decryptField(p, KEY_API_KEY_ENC, "API key")
+        if (apiKeyResult is Result.Failure) return apiKeyResult
 
-        val botToken = when {
-            p.getString(KEY_BOT_TOKEN_ENC, null) != null -> {
-                when (val result = KeystoreHelper.decrypt(Base64.decode(p.getString(KEY_BOT_TOKEN_ENC, null)!!, Base64.NO_WRAP))) {
-                    is Result.Success -> result.data
-                    is Result.Failure -> {
-                        LogCollector.append("[Config] Failed to decrypt bot token: ${result.error}", LogLevel.WARN)
-                        return Result.Failure("Failed to decrypt bot token: ${result.error}", result.exception)
-                    }
-                }
-            }
-            else -> ""
-        }
+        val botTokenResult = decryptField(p, KEY_BOT_TOKEN_ENC, "bot token")
+        if (botTokenResult is Result.Failure) return botTokenResult
 
-        val setupToken = when {
-            p.getString(KEY_SETUP_TOKEN_ENC, null) != null -> {
-                when (val result = KeystoreHelper.decrypt(Base64.decode(p.getString(KEY_SETUP_TOKEN_ENC, null)!!, Base64.NO_WRAP))) {
-                    is Result.Success -> result.data
-                    is Result.Failure -> {
-                        LogCollector.append("[Config] Failed to decrypt setup token: ${result.error}", LogLevel.WARN)
-                        return Result.Failure("Failed to decrypt setup token: ${result.error}", result.exception)
-                    }
-                }
-            }
-            else -> ""
-        }
+        val setupTokenResult = decryptField(p, KEY_SETUP_TOKEN_ENC, "setup token")
+        if (setupTokenResult is Result.Failure) return setupTokenResult
 
-        val braveApiKey = when {
-            p.getString(KEY_BRAVE_API_KEY_ENC, null) != null -> {
-                when (val result = KeystoreHelper.decrypt(Base64.decode(p.getString(KEY_BRAVE_API_KEY_ENC, null)!!, Base64.NO_WRAP))) {
-                    is Result.Success -> result.data
-                    is Result.Failure -> {
-                        LogCollector.append("[Config] Failed to decrypt Brave API key: ${result.error}", LogLevel.WARN)
-                        return Result.Failure("Failed to decrypt Brave API key: ${result.error}", result.exception)
-                    }
-                }
-            }
-            else -> ""
-        }
+        val braveApiKeyResult = decryptField(p, KEY_BRAVE_API_KEY_ENC, "Brave API key")
+        if (braveApiKeyResult is Result.Failure) return braveApiKeyResult
 
         return Result.Success(
             AppConfig(
-                anthropicApiKey = apiKey,
-                setupToken = setupToken,
+                anthropicApiKey = (apiKeyResult as Result.Success).data,
+                setupToken = (setupTokenResult as Result.Success).data,
                 authType = p.getString(KEY_AUTH_TYPE, "api_key") ?: "api_key",
-                telegramBotToken = botToken,
+                telegramBotToken = (botTokenResult as Result.Success).data,
                 telegramOwnerId = p.getString(KEY_OWNER_ID, "") ?: "",
                 model = p.getString(KEY_MODEL, Constants.DEFAULT_MODEL) ?: Constants.DEFAULT_MODEL,
                 agentName = p.getString(KEY_AGENT_NAME, "MyAgent") ?: "MyAgent",
-                braveApiKey = braveApiKey,
+                braveApiKey = (braveApiKeyResult as Result.Success).data,
                 autoStartOnBoot = p.getBoolean(KEY_AUTO_START, true),
             )
         )
