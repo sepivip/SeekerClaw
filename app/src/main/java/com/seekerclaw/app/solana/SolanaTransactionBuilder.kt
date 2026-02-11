@@ -3,27 +3,70 @@ package com.seekerclaw.app.solana
 import android.util.Log
 
 /**
- * Solana transaction builder — currently a stub.
- * Full implementation requires verifying sol4k API compatibility
- * with the project's build setup. Transaction sending works via
- * the MWA sign flow (SolanaAuthActivity).
+ * SolanaTransactionBuilder - Transaction construction for Solana operations
+ *
+ * ⚠️ NOT YET IMPLEMENTED ⚠️
+ *
+ * This is a placeholder for future Solana transaction building capabilities.
+ * Current implementation throws UnsupportedOperationException.
+ *
+ * ## Planned Features:
+ * - SOL transfers
+ * - Token swaps (Jupiter aggregator)
+ * - NFT minting/transfers
+ * - Program interactions
+ *
+ * ## Implementation Strategy:
+ * Two possible approaches:
+ *
+ * ### Option 1: sol4k Integration
+ * - Use sol4k library (org.sol4k:sol4k:0.4.2)
+ * - Pros: Pure Kotlin, type-safe
+ * - Cons: Needs API verification for our use case
+ *
+ * ### Option 2: Raw Transaction Construction
+ * - Build transactions manually per Solana spec
+ * - Pros: No external dependencies, full control
+ * - Cons: Complex, error-prone, hard to maintain
+ *
+ * ## Current Workaround:
+ * Use Mobile Wallet Adapter (MWA) via SolanaAuthActivity for all transaction signing.
+ * External wallet apps handle transaction construction and signing.
+ *
+ * ## See Also:
+ * - SolanaAuthActivity.kt - MWA integration (working)
+ * - SolanaWalletManager.kt - Wallet connection (working)
+ * - PHASE4_SUPERPOWERS.md - Full roadmap
  */
 object SolanaTransactionBuilder {
     private const val TAG = "SolanaTxBuilder"
 
+    /**
+     * Build a SOL transfer transaction
+     *
+     * @throws UnsupportedOperationException Always - not yet implemented
+     */
     fun buildSolTransfer(from: String, to: String, amountSol: Double): ByteArray {
-        // TODO: Implement with verified sol4k API or raw transaction construction
-        // For now, this is handled by returning an error from the bridge
-        Log.w(TAG, "buildSolTransfer not yet implemented — needs sol4k API verification")
+        Log.w(TAG, "buildSolTransfer called but not implemented")
         throw UnsupportedOperationException(
-            "Transaction building requires sol4k integration. " +
-            "Please connect a wallet app that supports MWA transaction construction."
+            "Direct transaction building is not yet implemented. " +
+            "Use Mobile Wallet Adapter (MWA) via SolanaAuthActivity for now. " +
+            "External wallet apps will construct and sign transactions."
         )
     }
 
+    /**
+     * Broadcast a signed transaction to Solana network
+     *
+     * @return Transaction signature, or null if failed
+     * @throws UnsupportedOperationException Always - not yet implemented
+     */
     fun broadcastTransaction(signedTxBase64: String): String? {
-        // TODO: Implement RPC broadcast via sendTransaction
-        Log.w(TAG, "broadcastTransaction not yet implemented")
-        return null
+        Log.w(TAG, "broadcastTransaction called but not implemented")
+        throw UnsupportedOperationException(
+            "Transaction broadcasting not implemented. " +
+            "Use MWA wallets which handle RPC communication internally."
+        )
     }
 }
+
