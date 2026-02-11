@@ -1,8 +1,8 @@
 # OpenClaw Version Tracking
 
 > **Purpose:** Track OpenClaw releases and identify changes to port to SeekerClaw.
-> **Current OpenClaw Version:** 2026.2.9-dev (main 40b11db, 2026-02-09)
-> **Last Sync Review:** 2026-02-09
+> **Current OpenClaw Version:** 2026.2.10-dev (main 029b77c, 2026-02-11)
+> **Last Sync Review:** 2026-02-12
 
 ---
 
@@ -81,14 +81,35 @@ These files in OpenClaw directly affect SeekerClaw behavior. Changes here requir
 
 ## Version History & Changes
 
-### 2026.2.2 (Current - 1c4db91)
+### 2026.2.10-dev (Current - 029b77c)
+- **Release Date:** 2026-02-11
+- **SeekerClaw Sync Status:** Synced (critical fixes ported)
+- **Key Changes Ported:**
+  - [x] Strip `<think>` / `<thinking>` reasoning tags from responses before sendMessage()
+  - [x] Strip `[Historical context:...]` markers from responses
+- **Deferred:**
+  - [ ] Cron session reaper (reap sessions >24h old)
+  - [ ] Timezone-aware time parsing (Intl.DateTimeFormat)
+  - [ ] Session compaction improvements
+  - [ ] Extended thinking support
+
+### 2026.2.9-dev (40b11db)
+- **Release Date:** 2026-02-09
+- **SeekerClaw Sync Status:** Stability fixes ported
+- **Key Changes Ported:**
+  - [x] Cross-process SharedPreferences fix
+  - [x] BRIDGE_TOKEN TDZ fix
+  - [x] Ephemeral credentials (config.json deleted after read)
+  - [x] Per-boot bridge auth token
+
+### 2026.2.2 (1c4db91)
 - **Release Date:** 2026-02-03
-- **SeekerClaw Sync Status:** Partially synced
+- **SeekerClaw Sync Status:** Initial baseline
 - **Key Changes:**
-  - [ ] Review system prompt changes
-  - [ ] Check memory system updates
-  - [ ] Review new skills
-  - [ ] Check tool changes
+  - [x] System prompt adapted for mobile
+  - [x] Memory system (file-based)
+  - [x] Skills system (keyword matching)
+  - [x] Cron system (full port)
 
 ### Baseline (Initial Clone)
 - **SeekerClaw Created:** 2026-02-03
@@ -202,7 +223,7 @@ git pull origin main
 ### Step 2: Generate Diff Report
 ```bash
 # Get the commit range
-OLD_COMMIT="1c4db91"  # Previous version
+OLD_COMMIT="029b77c"  # Previous version
 NEW_COMMIT="HEAD"
 
 # Check critical files

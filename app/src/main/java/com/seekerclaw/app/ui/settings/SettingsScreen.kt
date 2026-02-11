@@ -72,6 +72,7 @@ import com.seekerclaw.app.qr.QrScannerActivity
 import com.seekerclaw.app.service.OpenClawService
 import com.seekerclaw.app.solana.SolanaAuthActivity
 import com.seekerclaw.app.ui.theme.SeekerClawColors
+import com.seekerclaw.app.util.Analytics
 import com.seekerclaw.app.util.LogCollector
 import com.seekerclaw.app.util.LogLevel
 import com.seekerclaw.app.BuildConfig
@@ -287,6 +288,72 @@ fun SettingsScreen() {
             fontWeight = FontWeight.Bold,
             color = SeekerClawColors.TextPrimary,
         )
+
+        Spacer(modifier = Modifier.height(28.dp))
+
+        // Quick Setup — QR Config Import
+        SectionLabel("Quick Setup")
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(SeekerClawColors.Surface, shape)
+                .padding(16.dp),
+        ) {
+            Text(
+                text = "Generate a config QR at seekerclaw.xyz and scan it to set up your agent in seconds.",
+                fontFamily = FontFamily.Default,
+                fontSize = 13.sp,
+                color = SeekerClawColors.TextDim,
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Button(
+                onClick = {
+                    if (!isConfigImporting) {
+                        Analytics.featureUsed("qr_scan")
+                        qrConfigLauncher.launch(Intent(context, QrScannerActivity::class.java))
+                    }
+                },
+                enabled = !isConfigImporting,
+                modifier = Modifier.fillMaxWidth(),
+                shape = shape,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = SeekerClawColors.Primary,
+                    contentColor = androidx.compose.ui.graphics.Color.White,
+                ),
+            ) {
+                if (isConfigImporting) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp,
+                        color = androidx.compose.ui.graphics.Color.White,
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Importing Config\u2026", fontFamily = FontFamily.Default, fontSize = 14.sp)
+                } else {
+                    Text(
+                        "Scan Config QR",
+                        fontFamily = FontFamily.Default,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp,
+                    )
+                }
+            }
+
+            if (configImportError != null) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = configImportError ?: "",
+                    fontFamily = FontFamily.Default,
+                    fontSize = 12.sp,
+                    color = SeekerClawColors.Error,
+                )
+            }
+        }
 
         Spacer(modifier = Modifier.height(28.dp))
 
@@ -548,6 +615,7 @@ fun SettingsScreen() {
                         ConfigManager.clearWalletAddress(context)
                         walletAddress = null
                         walletError = null
+                        Analytics.featureUsed("wallet_disconnected")
                     },
                     modifier = Modifier.fillMaxWidth(),
                     shape = shape,
@@ -577,6 +645,7 @@ fun SettingsScreen() {
                     onClick = {
                         isConnecting = true
                         walletError = null
+                        Analytics.featureUsed("wallet_connected")
                         val requestId = "settings_${System.currentTimeMillis()}"
                         walletRequestId = requestId
                         val intent = Intent(context, SolanaAuthActivity::class.java).apply {
@@ -630,6 +699,7 @@ fun SettingsScreen() {
 
         OutlinedButton(
             onClick = {
+                Analytics.featureUsed("memory_exported")
                 val timestamp = android.text.format.DateFormat.format("yyyyMMdd_HHmm", Date())
                 exportLauncher.launch("seekerclaw_backup_$timestamp.zip")
             },
@@ -650,7 +720,10 @@ fun SettingsScreen() {
         Spacer(modifier = Modifier.height(8.dp))
 
         OutlinedButton(
-            onClick = { showImportDialog = true },
+            onClick = {
+                Analytics.featureUsed("memory_imported")
+                showImportDialog = true
+            },
             modifier = Modifier.fillMaxWidth(),
             shape = shape,
             border = androidx.compose.foundation.BorderStroke(1.dp, androidx.compose.ui.graphics.Color(0xFF374151)),
@@ -662,50 +735,6 @@ fun SettingsScreen() {
                 "Import Memory",
                 fontFamily = FontFamily.Default,
                 fontSize = 14.sp,
-            )
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        OutlinedButton(
-            onClick = {
-                if (!isConfigImporting) {
-                    qrConfigLauncher.launch(Intent(context, QrScannerActivity::class.java))
-                }
-            },
-            enabled = !isConfigImporting,
-            modifier = Modifier.fillMaxWidth(),
-            shape = shape,
-            border = androidx.compose.foundation.BorderStroke(1.dp, androidx.compose.ui.graphics.Color(0xFF374151)),
-            colors = ButtonDefaults.outlinedButtonColors(
-                contentColor = SeekerClawColors.TextPrimary,
-                disabledContentColor = SeekerClawColors.TextDim,
-            ),
-        ) {
-            if (isConfigImporting) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(16.dp),
-                    strokeWidth = 2.dp,
-                    color = SeekerClawColors.Primary,
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Importing Config\u2026", fontFamily = FontFamily.Default, fontSize = 14.sp)
-            } else {
-                Text(
-                    "Scan Config QR",
-                    fontFamily = FontFamily.Default,
-                    fontSize = 14.sp,
-                )
-            }
-        }
-
-        if (configImportError != null) {
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = configImportError ?: "",
-                fontFamily = FontFamily.Default,
-                fontSize = 12.sp,
-                color = SeekerClawColors.Error,
             )
         }
 
@@ -922,6 +951,7 @@ fun SettingsScreen() {
                 TextButton(
                     onClick = {
                         saveField("model", selectedModel)
+                        Analytics.modelSelected(selectedModel)
                         showModelPicker = false
                     },
                 ) {
@@ -1005,6 +1035,7 @@ fun SettingsScreen() {
                 TextButton(
                     onClick = {
                         saveField("authType", selectedAuth)
+                        Analytics.authTypeChanged(selectedAuth)
                         showAuthTypePicker = false
                     },
                 ) {
@@ -1103,6 +1134,7 @@ fun SettingsScreen() {
                 TextButton(onClick = {
                     OpenClawService.stop(context)
                     ConfigManager.clearConfig(context)
+                    Analytics.featureUsed("config_reset")
                     showResetDialog = false
                 }) {
                     Text(
@@ -1303,6 +1335,7 @@ fun SettingsScreen() {
             confirmButton = {
                 TextButton(onClick = {
                     ConfigManager.clearMemory(context)
+                    Analytics.featureUsed("memory_wiped")
                     showClearMemoryDialog = false
                 }) {
                     Text(

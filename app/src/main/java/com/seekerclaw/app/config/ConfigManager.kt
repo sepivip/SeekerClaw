@@ -188,7 +188,11 @@ object ConfigManager {
      * Includes per-boot bridge auth token. File is deleted after Node.js reads it.
      */
     fun writeConfigJson(context: Context, bridgeToken: String) {
-        val config = loadConfig(context) ?: return
+        val config = loadConfig(context)
+        if (config == null) {
+            LogCollector.append("[Config] writeConfigJson: loadConfig returned null (cross-process?)", LogLevel.WARN)
+            return
+        }
         val workspaceDir = File(context.filesDir, "workspace").apply { mkdirs() }
         val credential = config.activeCredential
         val braveField = if (config.braveApiKey.isNotBlank()) {

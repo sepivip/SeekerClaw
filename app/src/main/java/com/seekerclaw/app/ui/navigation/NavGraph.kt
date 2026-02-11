@@ -10,6 +10,7 @@ import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -34,6 +35,7 @@ import com.seekerclaw.app.ui.setup.SetupScreen
 import com.seekerclaw.app.ui.system.SystemScreen
 import com.seekerclaw.app.R
 import com.seekerclaw.app.ui.theme.SeekerClawColors
+import com.seekerclaw.app.util.Analytics
 import kotlinx.serialization.Serializable
 
 // Route definitions
@@ -61,6 +63,23 @@ fun SeekerClawNavHost() {
     val navController = rememberNavController()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = navBackStackEntry?.destination
+
+    // Track screen views
+    DisposableEffect(navController) {
+        val listener = androidx.navigation.NavController.OnDestinationChangedListener { _, dest, _ ->
+            val screenName = when {
+                dest.hasRoute(SetupRoute::class) -> "Setup"
+                dest.hasRoute(DashboardRoute::class) -> "Dashboard"
+                dest.hasRoute(LogsRoute::class) -> "Console"
+                dest.hasRoute(SettingsRoute::class) -> "Settings"
+                dest.hasRoute(SystemRoute::class) -> "System"
+                else -> dest.route ?: "Unknown"
+            }
+            Analytics.logScreenView(screenName)
+        }
+        navController.addOnDestinationChangedListener(listener)
+        onDispose { navController.removeOnDestinationChangedListener(listener) }
+    }
 
     val startDestination: Any = if (ConfigManager.isSetupComplete(context)) {
         DashboardRoute

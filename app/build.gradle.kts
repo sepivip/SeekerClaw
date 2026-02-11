@@ -8,6 +8,7 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.google.services)
 }
 
 // Load signing config from local.properties (not in version control)
@@ -180,6 +181,10 @@ dependencies {
     implementation("androidx.camera:camera-lifecycle:1.4.1")
     implementation("androidx.camera:camera-view:1.4.1")
     implementation("com.google.mlkit:barcode-scanning:17.3.0")
+
+    // Firebase Analytics
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.analytics)
 
     debugImplementation(libs.androidx.ui.tooling)
 }

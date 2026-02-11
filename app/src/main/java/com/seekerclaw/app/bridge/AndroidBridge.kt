@@ -21,6 +21,7 @@ import android.util.Log
 import androidx.core.content.ContextCompat
 import com.seekerclaw.app.camera.CameraCaptureActivity
 import com.seekerclaw.app.config.ConfigManager
+import com.seekerclaw.app.util.Analytics
 import com.seekerclaw.app.util.ServiceState
 import fi.iki.elonen.NanoHTTPD
 import org.json.JSONArray
@@ -476,6 +477,8 @@ class AndroidBridge(
         if (total > 0) {
             ServiceState.addTokens(total)
         }
+        val model = params.optString("model", "unknown")
+        Analytics.messageSent(model, total)
         return jsonResponse(200, mapOf("success" to true, "tokens_added" to total))
     }
 

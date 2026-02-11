@@ -11,6 +11,7 @@ const https = require('https');
 
 const workDir = process.argv[2] || __dirname;
 const debugLog = path.join(workDir, 'node_debug.log');
+let BRIDGE_TOKEN = ''; // declared early to avoid TDZ in redactSecrets; assigned after config load
 
 function log(msg) {
     const safe = typeof redactSecrets === 'function' ? redactSecrets(msg) : msg;
@@ -46,7 +47,7 @@ const ANTHROPIC_KEY = normalizeSecret(config.anthropicApiKey);
 const AUTH_TYPE = config.authType || 'api_key';
 const MODEL = config.model || 'claude-opus-4-6';
 const AGENT_NAME = config.agentName || 'SeekerClaw';
-const BRIDGE_TOKEN = config.bridgeToken || '';
+BRIDGE_TOKEN = config.bridgeToken || '';
 
 if (!BOT_TOKEN || !ANTHROPIC_KEY) {
     log('ERROR: Missing required config (botToken, anthropicApiKey)');
@@ -1067,7 +1068,33 @@ async function telegram(method, body = null) {
     return res.data;
 }
 
+// Strip reasoning tags (<think>, <thinking>, etc.) and internal markers from AI responses.
+// Ported from OpenClaw shared/text/reasoning-tags.ts and pi-embedded-utils.ts
+function cleanResponse(text) {
+    if (!text) return text;
+
+    let cleaned = text;
+
+    // Strip <think>...</think> and variants (think, thinking, thought, antthinking)
+    // Quick check first to avoid regex work on clean text
+    if (/<\s*\/?\s*(?:think(?:ing)?|thought|antthinking)\b/i.test(cleaned)) {
+        // Remove matched pairs: <think>...</think> (including multiline content)
+        cleaned = cleaned.replace(/<\s*(?:think(?:ing)?|thought|antthinking)\b[^>]*>[\s\S]*?<\s*\/\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi, '');
+        // Remove any orphaned opening tags (unclosed thinking block — strip to end)
+        cleaned = cleaned.replace(/<\s*(?:think(?:ing)?|thought|antthinking)\b[^>]*>[\s\S]*/gi, '');
+    }
+
+    // Strip [Historical context: ...] markers
+    cleaned = cleaned.replace(/\[Historical context:[^\]]*\]\n?/gi, '');
+
+    return cleaned.trim();
+}
+
 async function sendMessage(chatId, text, replyTo = null) {
+    // Clean AI artifacts before sending to user
+    text = cleanResponse(text);
+    if (!text) return; // Nothing left after cleaning
+
     // Telegram max message length is 4096
     const chunks = [];
     let remaining = text;

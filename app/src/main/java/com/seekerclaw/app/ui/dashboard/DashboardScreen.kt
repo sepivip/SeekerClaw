@@ -41,6 +41,7 @@ import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.config.modelDisplayName
 import com.seekerclaw.app.service.OpenClawService
 import com.seekerclaw.app.ui.theme.SeekerClawColors
+import com.seekerclaw.app.util.Analytics
 import com.seekerclaw.app.util.LogCollector
 import com.seekerclaw.app.util.LogLevel
 import com.seekerclaw.app.util.ServiceState
@@ -233,7 +234,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}) {
                 }
             }
             val gatewayDotColor = when (status) {
-                ServiceStatus.RUNNING -> SeekerClawColors.Primary
+                ServiceStatus.RUNNING -> SeekerClawColors.Accent
                 ServiceStatus.STARTING -> SeekerClawColors.Warning
                 ServiceStatus.STOPPED -> SeekerClawColors.TextDim
                 ServiceStatus.ERROR -> SeekerClawColors.Error
@@ -247,7 +248,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}) {
             }
             val telegramDotColor = when {
                 !hasBotToken -> SeekerClawColors.Error
-                status == ServiceStatus.RUNNING -> SeekerClawColors.Primary
+                status == ServiceStatus.RUNNING -> SeekerClawColors.Accent
                 status == ServiceStatus.STARTING -> SeekerClawColors.Warning
                 else -> SeekerClawColors.TextDim
             }
@@ -260,7 +261,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}) {
             }
             val aiDotColor = when {
                 !hasCredential -> SeekerClawColors.Error
-                status == ServiceStatus.RUNNING -> SeekerClawColors.Primary
+                status == ServiceStatus.RUNNING -> SeekerClawColors.Accent
                 status == ServiceStatus.STARTING -> SeekerClawColors.Warning
                 else -> SeekerClawColors.TextDim
             }
@@ -294,6 +295,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}) {
         Button(
             onClick = {
                 if (isRunning) {
+                    Analytics.serviceStopped(uptime / 60000)
                     OpenClawService.stop(context)
                 } else {
                     val cfg = ConfigManager.loadConfig(context)
@@ -309,6 +311,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}) {
                         Toast.makeText(context, "$startError Open Settings to fix.", Toast.LENGTH_LONG).show()
                         return@Button
                     }
+                    Analytics.serviceStarted(1)
                     OpenClawService.start(context)
                 }
             },

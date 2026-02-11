@@ -52,6 +52,9 @@ publishing/*.json
 publisher-keypair.json
 *-keypair.json
 
+# Firebase config (contains project-specific API keys)
+app/google-services.json
+
 # OpenClaw reference (tracked separately)
 openclaw-reference/
 

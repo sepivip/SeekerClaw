@@ -48,30 +48,24 @@ class OpenClawService : Service() {
         val notification = createNotification("SeekerClaw is running")
         startForeground(NOTIFICATION_ID, notification)
 
-        val config = ConfigManager.loadConfig(this)
-        LogCollector.append("[Service] Config snapshot: ${ConfigManager.redactedSnapshot(config)}")
-        val validationError = ConfigManager.runtimeValidationError(config)
-        if (validationError != null) {
-            LogCollector.append("[Service] Config invalid: $validationError", LogLevel.ERROR)
-            ServiceState.updateStatus(ServiceStatus.ERROR)
-            stopSelf()
-            return START_NOT_STICKY
-        }
-
         // Acquire partial wake lock (CPU stays on)
         val pm = getSystemService(POWER_SERVICE) as PowerManager
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "SeekerClaw::Service")
         wakeLock?.acquire()
 
         // Optional server mode: keep screen awake for camera-driven automation.
-        if (ConfigManager.getKeepScreenOn(this)) {
-            @Suppress("DEPRECATION")
-            val flags = PowerManager.FULL_WAKE_LOCK or
-                PowerManager.ACQUIRE_CAUSES_WAKEUP or
-                PowerManager.ON_AFTER_RELEASE
-            screenWakeLock = pm.newWakeLock(flags, "SeekerClaw::ServerMode")
-            screenWakeLock?.acquire()
-            LogCollector.append("[Service] Server mode enabled: keeping screen awake")
+        try {
+            if (ConfigManager.getKeepScreenOn(this)) {
+                @Suppress("DEPRECATION")
+                val flags = PowerManager.FULL_WAKE_LOCK or
+                    PowerManager.ACQUIRE_CAUSES_WAKEUP or
+                    PowerManager.ON_AFTER_RELEASE
+                screenWakeLock = pm.newWakeLock(flags, "SeekerClaw::ServerMode")
+                screenWakeLock?.acquire()
+                LogCollector.append("[Service] Server mode enabled: keeping screen awake")
+            }
+        } catch (e: Exception) {
+            LogCollector.append("[Service] Could not read keepScreenOn pref: ${e.message}", LogLevel.WARN)
         }
 
         // Crash loop protection: if we've restarted too many times quickly, stop trying
@@ -95,7 +89,19 @@ class OpenClawService : Service() {
         val bridgeToken = UUID.randomUUID().toString()
 
         // Write config from encrypted storage (includes bridge token for Node.js)
+        // Note: loadConfig() uses SharedPreferences which may be stale in :node process,
+        // but writeConfigJson reads the XML file fresh on first access per process.
         ConfigManager.writeConfigJson(this, bridgeToken)
+
+        // Validate by checking the written file — more reliable than cross-process SharedPreferences
+        val workDir = File(filesDir, "workspace").apply { mkdirs() }
+        val configFile = File(workDir, "config.json")
+        if (!configFile.exists()) {
+            LogCollector.append("[Service] Config not available (config.json not written) — cannot start", LogLevel.ERROR)
+            ServiceState.updateStatus(ServiceStatus.ERROR)
+            stopSelf()
+            return START_NOT_STICKY
+        }
 
         // Seed workspace if first run
         ConfigManager.seedWorkspace(this)
@@ -103,8 +109,7 @@ class OpenClawService : Service() {
         // Extract nodejs-project assets to internal storage
         NodeBridge.extractBundle(applicationContext)
 
-        // Setup workspace and node project directories
-        val workDir = File(filesDir, "workspace").apply { mkdirs() }
+        // Setup node project directory (workDir already created above)
         val nodeProjectDir = filesDir.absolutePath + "/nodejs-project"
 
         // Start Node.js runtime
