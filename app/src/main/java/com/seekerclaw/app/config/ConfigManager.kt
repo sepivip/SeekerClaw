@@ -7,6 +7,7 @@ import android.util.Base64
 import com.seekerclaw.app.Constants
 import com.seekerclaw.app.util.LogCollector
 import com.seekerclaw.app.util.LogLevel
+import com.seekerclaw.app.util.Result
 import java.io.File
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
@@ -56,9 +57,20 @@ object ConfigManager {
             .apply()
     }
 
-    fun saveConfig(context: Context, config: AppConfig) {
-        val encApiKey = KeystoreHelper.encrypt(config.anthropicApiKey)
-        val encBotToken = KeystoreHelper.encrypt(config.telegramBotToken)
+    fun saveConfig(context: Context, config: AppConfig): Result<Unit> {
+        // Encrypt all sensitive fields
+        val encApiKeyResult = KeystoreHelper.encrypt(config.anthropicApiKey)
+        if (encApiKeyResult is Result.Failure) {
+            return Result.Failure("Failed to encrypt API key: ${encApiKeyResult.error}", encApiKeyResult.exception)
+        }
+
+        val encBotTokenResult = KeystoreHelper.encrypt(config.telegramBotToken)
+        if (encBotTokenResult is Result.Failure) {
+            return Result.Failure("Failed to encrypt bot token: ${encBotTokenResult.error}", encBotTokenResult.exception)
+        }
+
+        val encApiKey = (encApiKeyResult as Result.Success).data
+        val encBotToken = (encBotTokenResult as Result.Success).data
 
         val editor = prefs(context).edit()
             .putString(KEY_API_KEY_ENC, Base64.encodeToString(encApiKey, Base64.NO_WRAP))
@@ -72,68 +84,105 @@ object ConfigManager {
 
         // Store setup token separately so switching auth type preserves both
         if (config.setupToken.isNotBlank()) {
-            val encSetupToken = KeystoreHelper.encrypt(config.setupToken)
-            editor.putString(KEY_SETUP_TOKEN_ENC, Base64.encodeToString(encSetupToken, Base64.NO_WRAP))
+            when (val encSetupTokenResult = KeystoreHelper.encrypt(config.setupToken)) {
+                is Result.Success -> {
+                    editor.putString(KEY_SETUP_TOKEN_ENC, Base64.encodeToString(encSetupTokenResult.data, Base64.NO_WRAP))
+                }
+                is Result.Failure -> {
+                    return Result.Failure("Failed to encrypt setup token: ${encSetupTokenResult.error}", encSetupTokenResult.exception)
+                }
+            }
         } else {
             editor.remove(KEY_SETUP_TOKEN_ENC)
         }
 
         if (config.braveApiKey.isNotBlank()) {
-            val encBrave = KeystoreHelper.encrypt(config.braveApiKey)
-            editor.putString(KEY_BRAVE_API_KEY_ENC, Base64.encodeToString(encBrave, Base64.NO_WRAP))
+            when (val encBraveResult = KeystoreHelper.encrypt(config.braveApiKey)) {
+                is Result.Success -> {
+                    editor.putString(KEY_BRAVE_API_KEY_ENC, Base64.encodeToString(encBraveResult.data, Base64.NO_WRAP))
+                }
+                is Result.Failure -> {
+                    return Result.Failure("Failed to encrypt Brave API key: ${encBraveResult.error}", encBraveResult.exception)
+                }
+            }
         } else {
             editor.remove(KEY_BRAVE_API_KEY_ENC)
         }
 
         editor.apply()
+        return Result.Success(Unit)
     }
 
-    fun loadConfig(context: Context): AppConfig? {
+    fun loadConfig(context: Context): Result<AppConfig> {
         val p = prefs(context)
-        if (!p.getBoolean(KEY_SETUP_COMPLETE, false)) return null
-
-        val apiKey = try {
-            val enc = p.getString(KEY_API_KEY_ENC, null)
-            if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
-        } catch (e: Exception) {
-            LogCollector.append("[Config] Failed to decrypt API key: ${e.message}", LogLevel.WARN)
-            ""
+        if (!p.getBoolean(KEY_SETUP_COMPLETE, false)) {
+            return Result.Failure("Setup not complete")
         }
 
-        val botToken = try {
-            val enc = p.getString(KEY_BOT_TOKEN_ENC, null)
-            if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
-        } catch (e: Exception) {
-            LogCollector.append("[Config] Failed to decrypt bot token: ${e.message}", LogLevel.WARN)
-            ""
+        val apiKey = when {
+            p.getString(KEY_API_KEY_ENC, null) != null -> {
+                when (val result = KeystoreHelper.decrypt(Base64.decode(p.getString(KEY_API_KEY_ENC, null)!!, Base64.NO_WRAP))) {
+                    is Result.Success -> result.data
+                    is Result.Failure -> {
+                        LogCollector.append("[Config] Failed to decrypt API key: ${result.error}", LogLevel.WARN)
+                        return Result.Failure("Failed to decrypt API key: ${result.error}", result.exception)
+                    }
+                }
+            }
+            else -> ""
         }
 
-        val setupToken = try {
-            val enc = p.getString(KEY_SETUP_TOKEN_ENC, null)
-            if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
-        } catch (e: Exception) {
-            LogCollector.append("[Config] Failed to decrypt setup token: ${e.message}", LogLevel.WARN)
-            ""
+        val botToken = when {
+            p.getString(KEY_BOT_TOKEN_ENC, null) != null -> {
+                when (val result = KeystoreHelper.decrypt(Base64.decode(p.getString(KEY_BOT_TOKEN_ENC, null)!!, Base64.NO_WRAP))) {
+                    is Result.Success -> result.data
+                    is Result.Failure -> {
+                        LogCollector.append("[Config] Failed to decrypt bot token: ${result.error}", LogLevel.WARN)
+                        return Result.Failure("Failed to decrypt bot token: ${result.error}", result.exception)
+                    }
+                }
+            }
+            else -> ""
         }
 
-        val braveApiKey = try {
-            val enc = p.getString(KEY_BRAVE_API_KEY_ENC, null)
-            if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
-        } catch (e: Exception) {
-            LogCollector.append("[Config] Failed to decrypt Brave API key: ${e.message}", LogLevel.WARN)
-            ""
+        val setupToken = when {
+            p.getString(KEY_SETUP_TOKEN_ENC, null) != null -> {
+                when (val result = KeystoreHelper.decrypt(Base64.decode(p.getString(KEY_SETUP_TOKEN_ENC, null)!!, Base64.NO_WRAP))) {
+                    is Result.Success -> result.data
+                    is Result.Failure -> {
+                        LogCollector.append("[Config] Failed to decrypt setup token: ${result.error}", LogLevel.WARN)
+                        return Result.Failure("Failed to decrypt setup token: ${result.error}", result.exception)
+                    }
+                }
+            }
+            else -> ""
         }
 
-        return AppConfig(
-            anthropicApiKey = apiKey,
-            setupToken = setupToken,
-            authType = p.getString(KEY_AUTH_TYPE, "api_key") ?: "api_key",
-            telegramBotToken = botToken,
-            telegramOwnerId = p.getString(KEY_OWNER_ID, "") ?: "",
-            model = p.getString(KEY_MODEL, Constants.DEFAULT_MODEL) ?: Constants.DEFAULT_MODEL,
-            agentName = p.getString(KEY_AGENT_NAME, "MyAgent") ?: "MyAgent",
-            braveApiKey = braveApiKey,
-            autoStartOnBoot = p.getBoolean(KEY_AUTO_START, true),
+        val braveApiKey = when {
+            p.getString(KEY_BRAVE_API_KEY_ENC, null) != null -> {
+                when (val result = KeystoreHelper.decrypt(Base64.decode(p.getString(KEY_BRAVE_API_KEY_ENC, null)!!, Base64.NO_WRAP))) {
+                    is Result.Success -> result.data
+                    is Result.Failure -> {
+                        LogCollector.append("[Config] Failed to decrypt Brave API key: ${result.error}", LogLevel.WARN)
+                        return Result.Failure("Failed to decrypt Brave API key: ${result.error}", result.exception)
+                    }
+                }
+            }
+            else -> ""
+        }
+
+        return Result.Success(
+            AppConfig(
+                anthropicApiKey = apiKey,
+                setupToken = setupToken,
+                authType = p.getString(KEY_AUTH_TYPE, "api_key") ?: "api_key",
+                telegramBotToken = botToken,
+                telegramOwnerId = p.getString(KEY_OWNER_ID, "") ?: "",
+                model = p.getString(KEY_MODEL, Constants.DEFAULT_MODEL) ?: Constants.DEFAULT_MODEL,
+                agentName = p.getString(KEY_AGENT_NAME, "MyAgent") ?: "MyAgent",
+                braveApiKey = braveApiKey,
+                autoStartOnBoot = p.getBoolean(KEY_AUTO_START, true),
+            )
         )
     }
 
@@ -151,8 +200,13 @@ object ConfigManager {
         prefs(context).edit().putBoolean(KEY_KEEP_SCREEN_ON, enabled).apply()
     }
 
-    fun updateConfigField(context: Context, field: String, value: String) {
-        val config = loadConfig(context) ?: return
+    fun updateConfigField(context: Context, field: String, value: String): Result<Unit> {
+        val configResult = loadConfig(context)
+        if (configResult is Result.Failure) {
+            return Result.Failure("Cannot update config field: ${configResult.error}", configResult.exception)
+        }
+
+        val config = (configResult as Result.Success).data
         val updated = when (field) {
             "anthropicApiKey" -> config.copy(anthropicApiKey = value)
             "setupToken" -> config.copy(setupToken = value)
@@ -162,26 +216,43 @@ object ConfigManager {
             "agentName" -> config.copy(agentName = value)
             "authType" -> config.copy(authType = value)
             "braveApiKey" -> config.copy(braveApiKey = value)
-            else -> return
+            else -> return Result.Failure("Unknown config field: $field")
         }
-        saveConfig(context, updated)
+
+        return saveConfig(context, updated)
     }
 
     fun saveOwnerId(context: Context, ownerId: String) {
         prefs(context).edit().putString(KEY_OWNER_ID, ownerId).apply()
     }
 
-    fun clearConfig(context: Context) {
+    fun clearConfig(context: Context): Result<Unit> {
         prefs(context).edit().clear().apply()
-        KeystoreHelper.deleteKey()
+        return when (val result = KeystoreHelper.deleteKey()) {
+            is Result.Success -> {
+                LogCollector.append("[Config] Config cleared successfully")
+                Result.Success(Unit)
+            }
+            is Result.Failure -> {
+                LogCollector.append("[Config] Failed to delete keystore key: ${result.error}", LogLevel.WARN)
+                // Still return success since prefs were cleared - key deletion is best-effort
+                Result.Success(Unit)
+            }
+        }
     }
 
     /**
      * Write ephemeral config.json to workspace for Node.js to read on startup.
      * Includes per-boot bridge auth token. File is deleted after Node.js reads it.
+     * Returns Result<Unit> - Failure if config cannot be loaded or written.
      */
-    fun writeConfigJson(context: Context, bridgeToken: String) {
-        val config = loadConfig(context) ?: return
+    fun writeConfigJson(context: Context, bridgeToken: String): Result<Unit> {
+        val configResult = loadConfig(context)
+        if (configResult is Result.Failure) {
+            return Result.Failure("Cannot write config.json: ${configResult.error}", configResult.exception)
+        }
+
+        val config = (configResult as Result.Success).data
         val workspaceDir = File(context.filesDir, "workspace").apply { mkdirs() }
         val credential = config.activeCredential
         val braveField = if (config.braveApiKey.isNotBlank()) {
@@ -199,7 +270,14 @@ object ConfigManager {
             |  "bridgeToken": "$bridgeToken"$braveField
             |}
         """.trimMargin()
-        File(workspaceDir, "config.json").writeText(json)
+
+        return try {
+            File(workspaceDir, "config.json").writeText(json)
+            Result.Success(Unit)
+        } catch (e: Exception) {
+            LogCollector.append("[Config] Failed to write config.json: ${e.message}", LogLevel.ERROR)
+            Result.Failure("Failed to write config.json: ${e.message}", e)
+        }
     }
 
     // ==================== Auth Type Detection ====================

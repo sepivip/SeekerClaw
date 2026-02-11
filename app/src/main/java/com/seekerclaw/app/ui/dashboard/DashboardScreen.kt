@@ -40,6 +40,7 @@ import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.config.modelDisplayName
 import com.seekerclaw.app.service.OpenClawService
 import com.seekerclaw.app.ui.theme.SeekerClawColors
+import com.seekerclaw.app.util.Result
 import com.seekerclaw.app.util.ServiceState
 import com.seekerclaw.app.util.ServiceStatus
 import android.content.Context
@@ -54,8 +55,11 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}) {
     val messagesToday by ServiceState.messagesToday.collectAsState()
     val lastActivityTime by ServiceState.lastActivityTime.collectAsState()
 
-    val config = ConfigManager.loadConfig(context)
-    val agentName = config?.agentName?.ifBlank { "SeekerClaw" } ?: "SeekerClaw"
+    val configResult = ConfigManager.loadConfig(context)
+    val agentName = when (configResult) {
+        is Result.Success -> configResult.data.agentName.ifBlank { "SeekerClaw" }
+        is Result.Failure -> "SeekerClaw"
+    }
 
     val isRunning = status == ServiceStatus.RUNNING || status == ServiceStatus.STARTING
 

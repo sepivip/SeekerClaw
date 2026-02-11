@@ -2,6 +2,7 @@ package com.seekerclaw.app.ui.setup
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -52,6 +53,7 @@ import com.seekerclaw.app.ui.components.AsciiLogoCompact
 import com.seekerclaw.app.ui.components.PixelStepIndicator
 import com.seekerclaw.app.ui.components.dotMatrix
 import com.seekerclaw.app.ui.theme.SeekerClawColors
+import com.seekerclaw.app.util.Result
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -126,10 +128,16 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             model = selectedModel,
             agentName = agentName.trim().ifBlank { "SeekerClaw" },
         )
-        ConfigManager.saveConfig(context, config)
-        ConfigManager.seedWorkspace(context)
-        OpenClawService.start(context)
-        onSetupComplete()
+        when (val result = ConfigManager.saveConfig(context, config)) {
+            is Result.Success -> {
+                ConfigManager.seedWorkspace(context)
+                OpenClawService.start(context)
+                onSetupComplete()
+            }
+            is Result.Failure -> {
+                Toast.makeText(context, "Failed to save config: ${result.error}", Toast.LENGTH_LONG).show()
+            }
+        }
     }
 
     val fieldColors = OutlinedTextFieldDefaults.colors(

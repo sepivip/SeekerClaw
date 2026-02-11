@@ -41,9 +41,10 @@ import androidx.compose.ui.unit.sp
 import com.seekerclaw.app.BuildConfig
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.ui.theme.SeekerClawColors
+import com.seekerclaw.app.util.ClaudeUsageData
 import com.seekerclaw.app.util.DeviceInfo
 import com.seekerclaw.app.util.DeviceInfoProvider
-import com.seekerclaw.app.util.ClaudeUsageData
+import com.seekerclaw.app.util.Result
 import com.seekerclaw.app.util.ServiceState
 import com.seekerclaw.app.util.ServiceStatus
 import kotlinx.coroutines.delay
@@ -59,12 +60,17 @@ fun SystemScreen(onBack: () -> Unit) {
     val tokensTotal by ServiceState.tokensTotal.collectAsState()
     val claudeUsage by ServiceState.claudeUsage.collectAsState()
 
-    val config = ConfigManager.loadConfig(context)
-    val agentName = config?.agentName?.ifBlank { "SeekerClaw" } ?: "SeekerClaw"
-    val modelName = config?.model
-        ?.ifBlank { "Not set" }
-        ?.let { formatModelName(it) }
-        ?: "Not set"
+    val configResult = ConfigManager.loadConfig(context)
+    val agentName = when (configResult) {
+        is Result.Success -> configResult.data.agentName.ifBlank { "SeekerClaw" }
+        is Result.Failure -> "SeekerClaw"
+    }
+    val modelName = when (configResult) {
+        is Result.Success -> configResult.data.model
+            .ifBlank { "Not set" }
+            .let { formatModelName(it) }
+        is Result.Failure -> "Not set"
+    }
 
     var deviceInfo by remember { mutableStateOf<DeviceInfo?>(null) }
 

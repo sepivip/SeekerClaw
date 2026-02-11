@@ -16,6 +16,7 @@ import com.seekerclaw.app.bridge.AndroidBridge
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.util.LogCollector
 import com.seekerclaw.app.util.LogLevel
+import com.seekerclaw.app.util.Result
 import com.seekerclaw.app.util.ServiceState
 import com.seekerclaw.app.util.ServiceStatus
 import kotlinx.coroutines.CoroutineScope
@@ -84,7 +85,17 @@ class OpenClawService : Service() {
         val bridgeToken = UUID.randomUUID().toString()
 
         // Write config from encrypted storage (includes bridge token for Node.js)
-        ConfigManager.writeConfigJson(this, bridgeToken)
+        when (val result = ConfigManager.writeConfigJson(this, bridgeToken)) {
+            is Result.Failure -> {
+                LogCollector.append("[Service] Failed to write config.json: ${result.error}", LogLevel.ERROR)
+                ServiceState.updateStatus(ServiceStatus.ERROR)
+                stopSelf()
+                return
+            }
+            is Result.Success -> {
+                LogCollector.append("[Service] Config written successfully")
+            }
+        }
 
         // Seed workspace if first run
         ConfigManager.seedWorkspace(this)

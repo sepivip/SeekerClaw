@@ -68,6 +68,7 @@ import com.seekerclaw.app.config.availableModels
 import com.seekerclaw.app.service.OpenClawService
 import com.seekerclaw.app.solana.SolanaAuthActivity
 import com.seekerclaw.app.ui.theme.SeekerClawColors
+import com.seekerclaw.app.util.Result
 import com.seekerclaw.app.BuildConfig
 import org.json.JSONObject
 import java.io.File
@@ -76,7 +77,9 @@ import java.util.Date
 @Composable
 fun SettingsScreen() {
     val context = LocalContext.current
-    var config by remember { mutableStateOf(ConfigManager.loadConfig(context)) }
+    var config by remember {
+        mutableStateOf(ConfigManager.loadConfig(context).getOrNull())
+    }
 
     var autoStartOnBoot by remember {
         mutableStateOf(ConfigManager.getAutoStartOnBoot(context))
@@ -206,9 +209,15 @@ fun SettingsScreen() {
     }
 
     fun saveField(field: String, value: String) {
-        ConfigManager.updateConfigField(context, field, value)
-        config = ConfigManager.loadConfig(context)
-        showRestartDialog = true
+        when (val result = ConfigManager.updateConfigField(context, field, value)) {
+            is Result.Success -> {
+                config = ConfigManager.loadConfig(context).getOrNull()
+                showRestartDialog = true
+            }
+            is Result.Failure -> {
+                Toast.makeText(context, "Failed to save: ${result.error}", Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     val authTypeLabel = if (config?.authType == "setup_token") "Pro/Max Token" else "API Key"
@@ -1014,8 +1023,15 @@ fun SettingsScreen() {
             confirmButton = {
                 TextButton(onClick = {
                     OpenClawService.stop(context)
-                    ConfigManager.clearConfig(context)
-                    showResetDialog = false
+                    when (val result = ConfigManager.clearConfig(context)) {
+                        is Result.Success -> {
+                            showResetDialog = false
+                        }
+                        is Result.Failure -> {
+                            Toast.makeText(context, "Failed to clear config: ${result.error}", Toast.LENGTH_SHORT).show()
+                            showResetDialog = false
+                        }
+                    }
                 }) {
                     Text(
                         "Confirm",
