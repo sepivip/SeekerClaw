@@ -47,6 +47,14 @@ import com.seekerclaw.app.util.LogLevel
 import com.seekerclaw.app.util.ServiceState
 import com.seekerclaw.app.util.ServiceStatus
 import android.content.Context
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import java.util.Date
 
 @Composable
@@ -65,6 +73,42 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}) {
     val hasCredential = config?.activeCredential?.isNotBlank() == true
     val validationError = ConfigManager.runtimeValidationError(config)
     val latestError = logs.lastOrNull { it.level == LogLevel.ERROR }?.message
+
+    // Fetch API stats from bridge (BAT-32)
+    var apiRequests by remember { mutableStateOf(0) }
+    var apiAvgLatency by remember { mutableStateOf(0) }
+    var monthCost by remember { mutableStateOf(0f) }
+
+    LaunchedEffect(status) {
+        if (status == ServiceStatus.RUNNING) {
+            while (true) {
+                try {
+                    val summary = withContext(Dispatchers.IO) {
+                        val url = java.net.URL("http://127.0.0.1:8765/stats/db-summary")
+                        val conn = url.openConnection() as java.net.HttpURLConnection
+                        conn.requestMethod = "POST"
+                        conn.connectTimeout = 3000
+                        conn.readTimeout = 3000
+                        conn.setRequestProperty("Content-Type", "application/json")
+                        conn.doOutput = true
+                        conn.outputStream.use { it.write("{}".toByteArray()) }
+                        val code = conn.responseCode
+                        val body = if (code in 200..299) conn.inputStream.bufferedReader().use { it.readText() } else null
+                        conn.disconnect()
+                        body?.let { JSONObject(it) }
+                    }
+                    if (summary != null) {
+                        val today = if (summary.has("today") && !summary.isNull("today")) summary.getJSONObject("today") else null
+                        val month = if (summary.has("month") && !summary.isNull("month")) summary.getJSONObject("month") else null
+                        apiRequests = today?.optInt("requests", 0) ?: 0
+                        apiAvgLatency = today?.optInt("avg_latency_ms", 0) ?: 0
+                        monthCost = month?.optDouble("total_cost_estimate", 0.0)?.toFloat() ?: 0f
+                    }
+                } catch (_: Exception) {}
+                delay(30_000)
+            }
+        }
+    }
 
     val isRunning = status == ServiceStatus.RUNNING || status == ServiceStatus.STARTING
 
@@ -289,6 +333,27 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}) {
             )
         }
 
+        // API stats mini row (BAT-32)
+        if (isRunning && apiRequests > 0) {
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(SeekerClawColors.Surface, shape)
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                MiniStat(label = "API", value = "$apiRequests req")
+                MiniStat(label = "LATENCY", value = "${apiAvgLatency}ms")
+                MiniStat(
+                    label = "COST",
+                    value = if (monthCost > 0f) "$${String.format("%.2f", monthCost)}" else "--",
+                )
+            }
+        }
+
         Spacer(modifier = Modifier.height(28.dp))
 
         // Action button
@@ -351,6 +416,27 @@ private fun StatMini(label: String, value: String) {
             text = label,
             fontFamily = FontFamily.Default,
             fontSize = 10.sp,
+            fontWeight = FontWeight.Medium,
+            color = SeekerClawColors.TextDim,
+            letterSpacing = 1.sp,
+        )
+    }
+}
+
+@Composable
+private fun MiniStat(label: String, value: String) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(
+            text = value,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Bold,
+            color = SeekerClawColors.TextPrimary,
+        )
+        Text(
+            text = label,
+            fontFamily = FontFamily.Default,
+            fontSize = 9.sp,
             fontWeight = FontWeight.Medium,
             color = SeekerClawColors.TextDim,
             letterSpacing = 1.sp,
