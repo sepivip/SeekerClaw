@@ -3305,15 +3305,19 @@ function buildSystemPrompt(matchedSkills = []) {
     lines.push('This creates a quoted reply in Telegram. Use when directly responding to a specific question or statement.');
     lines.push('');
 
-    // Runtime section - OpenClaw style
+    // Runtime section (static parts only — dynamic time goes in separate block for caching)
     lines.push('## Runtime');
     lines.push(`Platform: Android ${process.arch} | Node: ${process.version} | Model: ${MODEL}`);
     lines.push(`Channel: telegram | Agent: ${AGENT_NAME}`);
+
+    const stablePrompt = lines.join('\n');
+
+    // Dynamic block — changes every call, must NOT be cached
     const now = new Date();
     const weekday = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][now.getDay()];
-    lines.push(`Current time: ${weekday} ${now.toISOString()} (${now.toLocaleString()})`);
+    const dynamicPrompt = `Current time: ${weekday} ${now.toISOString()} (${now.toLocaleString()})`;
 
-    return lines.join('\n');
+    return { stable: stablePrompt, dynamic: dynamicPrompt };
 }
 
 async function chat(chatId, userMessage) {
@@ -3323,7 +3327,12 @@ async function chat(chatId, userMessage) {
         log(`Matched skills: ${matchedSkills.map(s => s.name).join(', ')}`);
     }
 
-    const systemPrompt = buildSystemPrompt(matchedSkills);
+    const { stable: stablePrompt, dynamic: dynamicPrompt } = buildSystemPrompt(matchedSkills);
+    // Two system blocks: large stable block (cached) + small dynamic block (per-request)
+    const systemBlocks = [
+        { type: 'text', text: stablePrompt, cache_control: { type: 'ephemeral' } },
+        { type: 'text', text: dynamicPrompt },
+    ];
 
     // Add user message to history
     addToConversation(chatId, 'user', userMessage);
@@ -3339,7 +3348,7 @@ async function chat(chatId, userMessage) {
         const body = JSON.stringify({
             model: MODEL,
             max_tokens: 4096,
-            system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
+            system: systemBlocks,
             tools: TOOLS,
             messages: messages
         });
@@ -3377,8 +3386,9 @@ async function chat(chatId, userMessage) {
             }).catch(() => {});
             if (response.usage.cache_read_input_tokens) {
                 log(`[Cache] hit: ${response.usage.cache_read_input_tokens} tokens read from cache`);
-            } else if (response.usage.cache_creation_input_tokens) {
-                log(`[Cache] miss: ${response.usage.cache_creation_input_tokens} tokens written to cache`);
+            }
+            if (response.usage.cache_creation_input_tokens) {
+                log(`[Cache] write: ${response.usage.cache_creation_input_tokens} tokens written to cache`);
             }
         }
 
@@ -3455,7 +3465,7 @@ async function chat(chatId, userMessage) {
         }, JSON.stringify({
             model: MODEL,
             max_tokens: 4096,
-            system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
+            system: systemBlocks,
             messages: messages
         }));
 
@@ -3466,6 +3476,8 @@ async function chat(chatId, userMessage) {
                 androidBridgeCall('/stats/tokens', {
                     input_tokens: response.usage.input_tokens || 0,
                     output_tokens: response.usage.output_tokens || 0,
+                    cache_creation_input_tokens: response.usage.cache_creation_input_tokens || 0,
+                    cache_read_input_tokens: response.usage.cache_read_input_tokens || 0,
                 }).catch(() => {});
             }
         }
