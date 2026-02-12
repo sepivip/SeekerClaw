@@ -302,6 +302,7 @@ const STOP_WORDS = new Set(['the','a','an','is','are','was','were','be','been','
 
 function searchMemory(query, topK = 5) {
     if (!query) return [];
+    topK = Math.max(1, topK || 5);
 
     // Tokenize query into keywords
     const keywords = query.toLowerCase().split(/\s+/)
@@ -311,10 +312,11 @@ function searchMemory(query, topK = 5) {
     // Try SQL.js search first
     if (db && keywords.length > 0) {
         try {
-            // Build WHERE clause with AND logic
-            const conditions = keywords.map((_, i) => `LOWER(text) LIKE ?`);
-            const params = keywords.map(k => `%${k}%`);
-            const sql = `SELECT id, path, source, start_line, end_line, text, updated_at
+            // Build WHERE clause with AND logic, escape SQL LIKE wildcards
+            const escapeLike = (s) => s.replace(/%/g, '\\%').replace(/_/g, '\\_');
+            const conditions = keywords.map(() => `LOWER(text) LIKE ? ESCAPE '\\'`);
+            const params = keywords.map(k => `%${escapeLike(k)}%`);
+            const sql = `SELECT path, start_line, end_line, text, updated_at
                          FROM chunks
                          WHERE ${conditions.join(' AND ')}
                          ORDER BY updated_at DESC
@@ -324,7 +326,7 @@ function searchMemory(query, topK = 5) {
             const rows = db.exec(sql, params);
             if (rows.length > 0 && rows[0].values.length > 0) {
                 const results = rows[0].values.map(row => {
-                    const [id, filePath, source, startLine, endLine, text, updatedAt] = row;
+                    const [filePath, startLine, endLine, text, updatedAt] = row;
                     // Term frequency score
                     const textLower = text.toLowerCase();
                     let tfScore = 0;
@@ -332,12 +334,15 @@ function searchMemory(query, topK = 5) {
                         const matches = textLower.split(kw).length - 1;
                         tfScore += matches;
                     }
-                    // Recency score (0-1, newer = higher)
-                    const age = Date.now() - new Date(updatedAt).getTime();
-                    const recencyScore = Math.max(0, 1 - age / (30 * 86400000)); // 30-day window
+                    // Recency score (0-1, newer = higher) with null guard
+                    const ts = updatedAt ? new Date(updatedAt).getTime() : 0;
+                    const age = Number.isFinite(ts) ? Date.now() - ts : Infinity;
+                    const recencyScore = Number.isFinite(age)
+                        ? Math.max(0, 1 - age / (30 * 86400000))
+                        : 0;
 
                     const score = tfScore * 0.7 + recencyScore * 0.3;
-                    const relPath = filePath.replace(workDir + path.sep, '');
+                    const relPath = path.relative(workDir, filePath) || filePath;
 
                     return {
                         file: relPath,
@@ -1359,7 +1364,7 @@ const TOOLS = [
             type: 'object',
             properties: {
                 query: { type: 'string', description: 'Search term or pattern to find' },
-                max_results: { type: 'number', description: 'Maximum results to return (default 20)' }
+                max_results: { type: 'number', description: 'Maximum results to return (default 10)' }
             },
             required: ['query']
         }
