@@ -99,6 +99,7 @@ const MEMORY_PATH = path.join(workDir, 'MEMORY.md');
 const HEARTBEAT_PATH = path.join(workDir, 'HEARTBEAT.md');
 const MEMORY_DIR = path.join(workDir, 'memory');
 const SKILLS_DIR = path.join(workDir, 'skills');
+const DB_PATH = path.join(workDir, 'seekerclaw.db');
 
 // Ensure directories exist
 if (!fs.existsSync(MEMORY_DIR)) {
@@ -3809,6 +3810,81 @@ async function pollClaudeUsage() {
 }
 
 // ============================================================================
+// SQL.JS DATABASE (WASM-based SQLite for request logging)
+// ============================================================================
+
+let db = null;
+
+async function initDatabase() {
+    try {
+        const initSqlJs = require('./sql-wasm.js');
+        // WASM binary lives in __dirname (bundled assets); DB file in workDir (writable app data)
+        const SQL = await initSqlJs({
+            locateFile: file => path.join(__dirname, file)
+        });
+
+        // Load existing DB or create new (with corrupted DB recovery)
+        if (fs.existsSync(DB_PATH)) {
+            try {
+                const buffer = fs.readFileSync(DB_PATH);
+                db = new SQL.Database(buffer);
+                log('[DB] Loaded existing database');
+            } catch (loadErr) {
+                log(`[DB] Corrupted database, backing up and recreating: ${loadErr.message}`);
+                const backupPath = DB_PATH + '.corrupt.' + Date.now();
+                try { fs.renameSync(DB_PATH, backupPath); } catch (_) {}
+                db = new SQL.Database();
+                log('[DB] Created fresh database after corruption recovery');
+            }
+        } else {
+            db = new SQL.Database();
+            log('[DB] Created new database');
+        }
+
+        // Create tables
+        db.run(`CREATE TABLE IF NOT EXISTS api_request_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            chat_id TEXT,
+            input_tokens INTEGER,
+            output_tokens INTEGER,
+            cache_creation_tokens INTEGER DEFAULT 0,
+            cache_read_tokens INTEGER DEFAULT 0,
+            status INTEGER,
+            retry_count INTEGER DEFAULT 0,
+            duration_ms INTEGER
+        )`);
+
+        // Persist immediately so the file exists on disk right away
+        saveDatabase();
+
+        log('[DB] SQL.js database initialized');
+
+        // Start periodic saves and shutdown hooks only after successful init
+        setInterval(saveDatabase, 60000);
+        process.on('SIGTERM', () => { saveDatabase(); process.exit(0); });
+        process.on('SIGINT', () => { saveDatabase(); process.exit(0); });
+    } catch (err) {
+        log(`[DB] Failed to initialize SQL.js (non-fatal): ${err.message}`);
+        db = null;
+    }
+}
+
+function saveDatabase() {
+    if (!db) return;
+    try {
+        const data = db.export();
+        const buffer = Buffer.from(data);
+        // Atomic write: write to temp file, then rename
+        const tmpPath = DB_PATH + '.tmp';
+        fs.writeFileSync(tmpPath, buffer);
+        fs.renameSync(tmpPath, DB_PATH);
+    } catch (err) {
+        log(`[DB] Save error: ${err.message}`);
+    }
+}
+
+// ============================================================================
 // STARTUP
 // ============================================================================
 
@@ -3817,6 +3893,9 @@ telegram('getMe')
     .then(async result => {
         if (result.ok) {
             log(`Bot connected: @${result.result.username}`);
+
+            // Initialize SQL.js database before polling (non-fatal if WASM fails)
+            await initDatabase();
             // Flush old updates to avoid re-processing messages after restart
             try {
                 const flush = await telegram('getUpdates', { offset: -1, timeout: 0 });
