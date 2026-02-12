@@ -403,7 +403,10 @@ function computeNextRunAtMs(schedule, nowMs) {
             const interval = schedule.everyMs;
             if (interval <= 0) return undefined;
             const elapsed = nowMs - anchor;
-            const periods = Math.ceil(elapsed / interval);
+            // Fix 2 (BAT-21): Use floor+1 to always advance past current time.
+            // Math.ceil can return the current second when nowMs lands exactly
+            // on an interval boundary, causing immediate duplicate fires.
+            const periods = Math.floor(elapsed / interval) + 1;
             return anchor + periods * interval;
         }
 
@@ -638,15 +641,13 @@ const cronService = {
 
     _recomputeNextRuns() {
         const now = Date.now();
-        const ZOMBIE_THRESHOLD = 2 * 3600000; // 2 hours
 
         for (const job of this.store.jobs) {
-            // Clear stuck "running" markers
-            if (job.state.runningAtMs && (now - job.state.runningAtMs) > ZOMBIE_THRESHOLD) {
-                log(`[Cron] Clearing zombie job: ${job.id}`);
+            // Fix 4 (BAT-21): On restart, clear ALL runningAtMs markers.
+            // Nothing can actually be running after a process restart.
+            if (job.state.runningAtMs) {
+                log(`[Cron] Clearing interrupted job marker: ${job.id}`);
                 job.state.runningAtMs = undefined;
-                job.state.lastStatus = 'error';
-                job.state.lastError = 'Job timed out (zombie cleared)';
             }
 
             if (!job.enabled) {
@@ -654,14 +655,28 @@ const cronService = {
                 continue;
             }
 
-            // One-shot "at" jobs that already ran (any terminal status) → disable
-            if (job.schedule.kind === 'at' && (job.state.lastStatus === 'ok' || job.state.lastStatus === 'error')) {
+            // Fix 1 (BAT-21): Any truthy lastStatus means the job already
+            // reached a terminal state (ok, error, skipped). Don't re-fire
+            // one-shot jobs on restart — they ran or were handled already.
+            if (job.schedule.kind === 'at' && job.state.lastStatus) {
                 job.enabled = false;
                 job.state.nextRunAtMs = undefined;
                 continue;
             }
 
-            job.state.nextRunAtMs = computeNextRunAtMs(job.schedule, now);
+            const nextRun = computeNextRunAtMs(job.schedule, now);
+
+            // Fix 1 (BAT-21): One-shot 'at' jobs whose time has passed but
+            // never ran — mark as skipped so they don't re-fire on next restart.
+            if (job.schedule.kind === 'at' && !nextRun && !job.state.lastStatus) {
+                log(`[Cron] Skipping missed one-shot job: ${job.id} "${job.name}"`);
+                job.enabled = false;
+                job.state.lastStatus = 'skipped';
+                job.state.nextRunAtMs = undefined;
+                continue;
+            }
+
+            job.state.nextRunAtMs = nextRun;
         }
 
         saveCronStore(this.store);
@@ -723,6 +738,9 @@ const cronService = {
     async _executeJob(job, nowMs) {
         log(`[Cron] Executing job ${job.id}: "${job.name}"`);
         job.state.runningAtMs = nowMs;
+        // Fix 2 (BAT-21): Clear nextRunAtMs before execution to prevent
+        // the job from being picked up as due again during async execution.
+        job.state.nextRunAtMs = undefined;
 
         const startTime = Date.now();
         let status = 'ok';
@@ -771,7 +789,9 @@ const cronService = {
             // One-shot: disable after any terminal status (ok or error)
             job.enabled = false;
             job.state.nextRunAtMs = undefined;
-            if (job.deleteAfterRun) {
+            // Fix 3 (BAT-21): Only delete on success. Keep errored/skipped
+            // jobs visible in state for debugging and user awareness.
+            if (job.deleteAfterRun && status === 'ok') {
                 const idx = this.store.jobs.indexOf(job);
                 if (idx !== -1) this.store.jobs.splice(idx, 1);
             }
