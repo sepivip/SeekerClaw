@@ -9,7 +9,8 @@ private const val TAG = "StatsClient"
 
 /**
  * Shared client for fetching DB summary stats from the Node.js bridge.
- * Used by both DashboardScreen and SystemScreen (BAT-32).
+ * Used by DashboardScreen and SystemScreen for API analytics (BAT-32),
+ * and by the memory index UI for memory stats (BAT-33).
  */
 data class DbSummary(
     val todayRequests: Int = 0,

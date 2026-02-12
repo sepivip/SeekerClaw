@@ -392,7 +392,7 @@ fun SystemScreen(onBack: () -> Unit) {
         }
 
         // ==================== MEMORY INDEX (BAT-33) ====================
-        if (stats != null && (stats.memoryFilesIndexed > 0 || stats.memoryChunksCount > 0)) {
+        if (stats != null && (stats.memoryFilesIndexed > 0 || stats.memoryChunksCount > 0 || stats.memoryLastIndexed != null)) {
             Spacer(modifier = Modifier.height(24.dp))
 
             SectionLabel("Memory Index")
