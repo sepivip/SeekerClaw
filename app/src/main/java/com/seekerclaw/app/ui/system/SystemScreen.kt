@@ -404,10 +404,13 @@ fun SystemScreen(onBack: () -> Unit) {
             ) {
                 InfoRow("Files", "${stats.memoryFilesIndexed}")
                 InfoRow("Chunks", "${stats.memoryChunksCount}")
+                val lastIndexedFormatted = remember(stats.memoryLastIndexed) {
+                    if (stats.memoryLastIndexed != null)
+                        formatMemoryIndexTime(stats.memoryLastIndexed) else "Never"
+                }
                 InfoRow(
                     label = "Last Indexed",
-                    value = if (stats.memoryLastIndexed != null)
-                        formatMemoryIndexTime(stats.memoryLastIndexed) else "Never",
+                    value = lastIndexedFormatted,
                     isLast = true,
                     dotColor = when {
                         stats.memoryLastIndexed == null -> SeekerClawColors.TextDim

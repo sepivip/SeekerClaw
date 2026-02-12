@@ -107,6 +107,15 @@ object ServiceState {
         }
     }
 
+    /** Delete the bridge token file so stale tokens don't linger after service shutdown. */
+    fun clearBridgeToken() {
+        bridgeToken = null
+        val parent = stateFile?.parentFile ?: return
+        try {
+            File(parent, "bridge_token").delete()
+        } catch (_: Exception) {}
+    }
+
     private fun readBridgeToken() {
         val parent = stateFile?.parentFile ?: return
         try {

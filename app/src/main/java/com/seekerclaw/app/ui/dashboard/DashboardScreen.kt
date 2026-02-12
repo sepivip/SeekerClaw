@@ -85,6 +85,10 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}) {
                     apiRequests = stats.todayRequests
                     apiAvgLatency = stats.todayAvgLatencyMs
                     monthCost = stats.monthCostEstimate
+                } else {
+                    apiRequests = 0
+                    apiAvgLatency = 0
+                    monthCost = 0f
                 }
                 delay(30_000)
             }

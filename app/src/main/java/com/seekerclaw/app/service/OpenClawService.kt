@@ -212,6 +212,7 @@ class OpenClawService : Service() {
         screenWakeLock?.let {
             if (it.isHeld) it.release()
         }
+        ServiceState.clearBridgeToken()
         ServiceState.updateStatus(ServiceStatus.STOPPED)
         ServiceState.updateUptime(0)
 
