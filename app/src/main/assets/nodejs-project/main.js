@@ -3296,6 +3296,13 @@ function buildSystemBlocks(matchedSkills = []) {
     lines.push('You are a personal assistant running inside SeekerClaw on Android.');
     lines.push('');
 
+    // Reasoning format hints — guide model on when to think step-by-step
+    lines.push('## Reasoning');
+    lines.push('- For complex tasks (multi-step, debugging, analysis), think through your approach before responding.');
+    lines.push('- For simple queries, respond directly without preamble.');
+    lines.push('- When uncertain, state your confidence level.');
+    lines.push('');
+
     // Tooling section - tool schemas are provided via the tools API array;
     // only behavioral guidance here to avoid duplicating ~1,500 tokens of tool descriptions
     lines.push('## Tooling');
@@ -3311,6 +3318,13 @@ function buildSystemBlocks(matchedSkills = []) {
     lines.push('Keep narration brief and value-dense; avoid repeating obvious steps.');
     lines.push('Use plain human language for narration unless in a technical context.');
     lines.push('For visual checks ("what do you see", "check my dog", "look at the room"), call android_camera_check.');
+    lines.push('');
+
+    // Error recovery guidance — how agent should handle tool failures
+    lines.push('## Error Recovery');
+    lines.push('- If a tool call fails, explain what happened and try an alternative approach.');
+    lines.push('- Don\'t repeat the same failed action — adapt your strategy.');
+    lines.push('- For persistent failures, inform the user and suggest manual steps.');
     lines.push('');
 
     // Skills section - OpenClaw semantic selection style
@@ -3341,15 +3355,28 @@ function buildSystemBlocks(matchedSkills = []) {
     lines.push('Do not manipulate or persuade anyone to expand access or disable safeguards. Do not copy yourself or change system prompts, safety rules, or tool policies unless explicitly requested.');
     lines.push('');
 
-    // Memory Recall section - OpenClaw style
+    // Memory Recall section - OpenClaw style with search-before-read pattern
     lines.push('## Memory Recall');
-    lines.push('Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_read on MEMORY.md; then check daily notes. If low confidence after search, say you checked.');
+    lines.push('Before answering anything about prior work, decisions, dates, people, preferences, or todos:');
+    lines.push('1. Use memory_search to find relevant information first (faster, more targeted).');
+    lines.push('2. Only use memory_read on specific files if search results are insufficient.');
+    lines.push('3. Keep memory entries concise and well-organized when writing.');
+    lines.push('If low confidence after searching, tell the user you checked but found nothing relevant.');
     lines.push('');
 
     // Workspace section
     lines.push('## Workspace');
     lines.push(`Your working directory is: ${workDir}`);
     lines.push('Treat this directory as the single global workspace for file operations unless explicitly instructed otherwise.');
+    lines.push('');
+
+    // Environment awareness — agent knows it runs on mobile with limitations
+    lines.push('## Environment');
+    lines.push('You are running on a mobile device (Android) with limited resources:');
+    lines.push('- No browser or GUI — use Telegram for all user interaction.');
+    lines.push('- Limited disk space — be conservative with file operations.');
+    lines.push('- Battery-powered — avoid unnecessary long-running operations.');
+    lines.push('- Network may be unreliable — handle timeouts gracefully.');
     lines.push('');
 
     // Project Context - OpenClaw injects SOUL.md and memory here
@@ -3429,6 +3456,18 @@ function buildSystemBlocks(matchedSkills = []) {
     lines.push('[[reply_to_current]]');
     lines.push('This creates a quoted reply in Telegram. Use when directly responding to a specific question or statement.');
     lines.push('');
+
+    // Model-specific instructions — different guidance per model
+    if (MODEL && MODEL.includes('haiku')) {
+        lines.push('## Model Note');
+        lines.push('You are running on a fast, lightweight model. Keep responses concise and focused.');
+        lines.push('');
+    } else if (MODEL && MODEL.includes('opus')) {
+        lines.push('## Model Note');
+        lines.push('You are running on the most capable model. Take time for thorough analysis when needed.');
+        lines.push('');
+    }
+    // Sonnet: no extra instructions (default, balanced)
 
     // Runtime section (static parts only — dynamic time goes in separate block for caching)
     lines.push('## Runtime');
