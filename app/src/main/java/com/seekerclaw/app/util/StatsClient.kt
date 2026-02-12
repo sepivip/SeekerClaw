@@ -1,8 +1,11 @@
 package com.seekerclaw.app.util
 
+import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+
+private const val TAG = "StatsClient"
 
 /**
  * Shared client for fetching DB summary stats from the Node.js bridge.
@@ -69,6 +72,7 @@ suspend fun fetchDbSummary(): DbSummary? = withContext(Dispatchers.IO) {
         )
     } catch (e: Exception) {
         if (e is kotlinx.coroutines.CancellationException) throw e
+        Log.d(TAG, "fetchDbSummary failed: ${e.message}")
         null
     } finally {
         conn?.disconnect()

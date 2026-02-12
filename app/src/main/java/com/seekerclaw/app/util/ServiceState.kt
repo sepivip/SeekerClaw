@@ -102,7 +102,9 @@ object ServiceState {
         val parent = stateFile?.parentFile ?: return
         try {
             File(parent, "bridge_token").writeText(token)
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to write bridge token file: ${e.message}")
+        }
     }
 
     private fun readBridgeToken() {

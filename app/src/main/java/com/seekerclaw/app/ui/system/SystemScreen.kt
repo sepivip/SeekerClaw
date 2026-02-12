@@ -364,7 +364,7 @@ fun SystemScreen(onBack: () -> Unit) {
                 )
                 InfoRow(
                     label = "Error Rate",
-                    value = if (stats.todayRequests > 0 && stats.todayErrors > 0)
+                    value = if (stats.todayErrors > 0)
                         String.format("%.1f%%", stats.todayErrors.toDouble() * 100.0 / stats.todayRequests) else "0%",
                     dotColor = when {
                         stats.todayErrors > 0 -> SeekerClawColors.Warning
@@ -706,15 +706,32 @@ private fun formatTokens(count: Long): String {
 
 private fun formatMemoryIndexTime(isoTimestamp: String): String {
     return try {
-        val parts = isoTimestamp.split("T")
-        if (parts.size < 2) return isoTimestamp
-        val datePart = parts[0]
-        val timePart = parts[1].substringBefore("+").substringBefore("-")
-        val hm = timePart.split(":").take(2).joinToString(":")
-        val todayStr = java.time.LocalDate.now().toString()
-        if (datePart == todayStr) "Today $hm" else "$datePart $hm"
+        // Parse with timezone awareness, converting to local device time
+        val zonedDateTime = try {
+            java.time.OffsetDateTime.parse(isoTimestamp)
+                .atZoneSameInstant(java.time.ZoneId.systemDefault())
+        } catch (_: Exception) {
+            java.time.Instant.parse(isoTimestamp)
+                .atZone(java.time.ZoneId.systemDefault())
+        }
+        val localDate = zonedDateTime.toLocalDate()
+        val localTime = zonedDateTime.toLocalTime()
+        val hm = "%02d:%02d".format(localTime.hour, localTime.minute)
+        val today = java.time.LocalDate.now(java.time.ZoneId.systemDefault())
+        if (localDate == today) "Today $hm" else "$localDate $hm"
     } catch (_: Exception) {
-        isoTimestamp
+        // Fallback: naive string split for non-standard formats
+        try {
+            val parts = isoTimestamp.split("T")
+            if (parts.size < 2) return isoTimestamp
+            val datePart = parts[0]
+            val timePart = parts[1].substringBefore("+").substringBefore("-")
+            val hm = timePart.split(":").take(2).joinToString(":")
+            val todayStr = java.time.LocalDate.now().toString()
+            if (datePart == todayStr) "Today $hm" else "$datePart $hm"
+        } catch (_: Exception) {
+            isoTimestamp
+        }
     }
 }
 
