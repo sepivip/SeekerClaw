@@ -3340,7 +3340,7 @@ async function claudeApiCall(body, chatId) {
     apiCallInFlight = new Promise(r => { resolve = r; });
 
     const startTime = Date.now();
-    const MAX_RETRIES = 3; // max number of retries (not counting initial attempt)
+    const MAX_RETRIES = 3; // 1 initial + up to 3 retries = 4 total attempts max
     try {
         const authHeaders = AUTH_TYPE === 'setup_token'
             ? { 'Authorization': `Bearer ${ANTHROPIC_KEY}` }
@@ -3385,8 +3385,8 @@ async function claudeApiCall(body, chatId) {
                 const retryAfterMs = Math.min(retryAfterRaw * 1000, 30000); // cap at 30s
                 const backoffMs = Math.min(5000 * Math.pow(2, retries), 30000); // 5s, 10s, 20s
                 const waitMs = retryAfterMs > 0 ? retryAfterMs : backoffMs;
+                log(`[Retry] Claude API ${res.status}, retry ${retries + 1}/${MAX_RETRIES}, waiting ${waitMs}ms`);
                 retries++;
-                log(`[Retry] Claude API ${res.status}, retry ${retries}/${MAX_RETRIES}, waiting ${waitMs}ms`);
                 await new Promise(r => setTimeout(r, waitMs));
                 continue;
             }
