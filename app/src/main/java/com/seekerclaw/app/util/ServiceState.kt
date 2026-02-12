@@ -68,9 +68,11 @@ object ServiceState {
     private val _claudeUsage = MutableStateFlow<ClaudeUsageData?>(null)
     val claudeUsage: StateFlow<ClaudeUsageData?> = _claudeUsage
 
-    // Per-boot bridge auth token — set by OpenClawService, read by UI for stats calls
+    // Per-boot bridge auth token — persisted to file for cross-process access.
+    // Set by OpenClawService (:node process), read by UI (main process) via polling.
     @Volatile
     var bridgeToken: String? = null
+        private set
 
     private var stateFile: File? = null
     private var pollingJob: Job? = null
@@ -89,6 +91,31 @@ object ServiceState {
             initialized = true
             Log.i(TAG, "init: restored msgs=${_messageCount.value} today=${_messagesToday.value} tokens=${_tokensTotal.value}")
         }
+    }
+
+    /**
+     * Persist the bridge auth token to a file so the UI process can read it.
+     * Called by OpenClawService in the :node process after generating the token.
+     */
+    fun writeBridgeToken(token: String) {
+        bridgeToken = token
+        val parent = stateFile?.parentFile ?: return
+        try {
+            File(parent, "bridge_token").writeText(token)
+        } catch (_: Exception) {}
+    }
+
+    private fun readBridgeToken() {
+        val parent = stateFile?.parentFile ?: return
+        try {
+            val file = File(parent, "bridge_token")
+            if (!file.exists()) {
+                bridgeToken = null
+                return
+            }
+            val token = file.readText().trim()
+            bridgeToken = token.ifEmpty { null }
+        } catch (_: Exception) {}
     }
 
     fun updateStatus(s: ServiceStatus) {
@@ -126,6 +153,8 @@ object ServiceState {
         _lastActivityTime.value = 0L
         _tokensToday.value = 0L
         _tokensTotal.value = 0L
+        bridgeToken = null
+        try { stateFile?.parentFile?.let { File(it, "bridge_token").delete() } } catch (_: Exception) {}
         writeToFile()
     }
 
@@ -139,6 +168,7 @@ object ServiceState {
         pollingJob = scope.launch {
             while (isActive) {
                 readFromFile()
+                readBridgeToken()
                 readClaudeUsageFile()
                 delay(1000)
             }

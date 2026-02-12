@@ -39,7 +39,11 @@ suspend fun fetchDbSummary(): DbSummary? = withContext(Dispatchers.IO) {
         conn.outputStream.use { it.write("{}".toByteArray()) }
 
         val code = conn.responseCode
-        if (code !in 200..299) return@withContext null
+        if (code !in 200..299) {
+            // Drain error stream to free the connection
+            conn.errorStream?.bufferedReader()?.use { it.readText() }
+            return@withContext null
+        }
 
         val body = conn.inputStream.bufferedReader().use { it.readText() }
         val json = JSONObject(body)
@@ -63,7 +67,8 @@ suspend fun fetchDbSummary(): DbSummary? = withContext(Dispatchers.IO) {
             memoryLastIndexed = if (memory != null && memory.has("last_indexed") && !memory.isNull("last_indexed"))
                 memory.getString("last_indexed") else null,
         )
-    } catch (_: Exception) {
+    } catch (e: Exception) {
+        if (e is kotlinx.coroutines.CancellationException) throw e
         null
     } finally {
         conn?.disconnect()
