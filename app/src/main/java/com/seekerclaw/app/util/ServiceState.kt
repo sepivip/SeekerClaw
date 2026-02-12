@@ -164,8 +164,7 @@ object ServiceState {
         _lastActivityTime.value = 0L
         _tokensToday.value = 0L
         _tokensTotal.value = 0L
-        bridgeToken = null
-        try { stateFile?.parentFile?.let { File(it, "bridge_token").delete() } } catch (_: Exception) {}
+        clearBridgeToken()
         writeToFile()
     }
 

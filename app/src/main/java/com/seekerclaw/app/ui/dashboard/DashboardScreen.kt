@@ -90,7 +90,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}) {
                     apiAvgLatency = 0
                     monthCost = 0f
                 }
-                delay(30_000)
+                delay(if (stats != null) 30_000L else 5_000L)
             }
         } else {
             apiRequests = 0
@@ -334,9 +334,9 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}) {
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                MiniStat(label = "API", value = "$apiRequests req")
-                MiniStat(label = "LATENCY", value = "${apiAvgLatency}ms")
-                MiniStat(
+                StatMini(small = true,label = "API", value = "$apiRequests req")
+                StatMini(small = true,label = "LATENCY", value = "${apiAvgLatency}ms")
+                StatMini(small = true,
                     label = "COST",
                     value = if (monthCost > 0f) "$${String.format("%.2f", monthCost)}" else "--",
                 )
@@ -391,41 +391,20 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}) {
 }
 
 @Composable
-private fun StatMini(label: String, value: String) {
+private fun StatMini(label: String, value: String, small: Boolean = false) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Text(
             text = value,
             fontFamily = FontFamily.Monospace,
-            fontSize = 20.sp,
+            fontSize = if (small) 13.sp else 20.sp,
             fontWeight = FontWeight.Bold,
             color = SeekerClawColors.TextPrimary,
         )
-        Spacer(modifier = Modifier.height(2.dp))
+        if (!small) Spacer(modifier = Modifier.height(2.dp))
         Text(
             text = label,
             fontFamily = FontFamily.Default,
-            fontSize = 10.sp,
-            fontWeight = FontWeight.Medium,
-            color = SeekerClawColors.TextDim,
-            letterSpacing = 1.sp,
-        )
-    }
-}
-
-@Composable
-private fun MiniStat(label: String, value: String) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(
-            text = value,
-            fontFamily = FontFamily.Monospace,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Bold,
-            color = SeekerClawColors.TextPrimary,
-        )
-        Text(
-            text = label,
-            fontFamily = FontFamily.Default,
-            fontSize = 9.sp,
+            fontSize = if (small) 9.sp else 10.sp,
             fontWeight = FontWeight.Medium,
             color = SeekerClawColors.TextDim,
             letterSpacing = 1.sp,

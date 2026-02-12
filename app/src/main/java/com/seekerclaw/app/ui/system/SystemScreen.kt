@@ -82,8 +82,9 @@ fun SystemScreen(onBack: () -> Unit) {
     LaunchedEffect(status) {
         if (status == ServiceStatus.RUNNING) {
             while (true) {
-                dbSummary = fetchDbSummary()
-                delay(30_000)
+                val result = fetchDbSummary()
+                dbSummary = result
+                delay(if (result != null) 30_000L else 5_000L)
             }
         } else {
             dbSummary = null

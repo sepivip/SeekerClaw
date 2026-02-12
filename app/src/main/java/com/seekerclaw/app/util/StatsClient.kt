@@ -39,7 +39,7 @@ suspend fun fetchDbSummary(): DbSummary? = withContext(Dispatchers.IO) {
         conn.setRequestProperty("Content-Type", "application/json")
         conn.setRequestProperty("X-Bridge-Token", token)
         conn.doOutput = true
-        conn.outputStream.use { it.write("{}".toByteArray()) }
+        conn.outputStream.use { it.write("{}".toByteArray(Charsets.UTF_8)) }
 
         val code = conn.responseCode
         if (code !in 200..299) {
