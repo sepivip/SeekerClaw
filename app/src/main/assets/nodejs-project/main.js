@@ -3122,7 +3122,7 @@ function clearConversation(chatId) {
     conversations.set(chatId, []);
 }
 
-function buildSystemPrompt(matchedSkills = []) {
+function buildSystemBlocks(matchedSkills = []) {
     const soul = loadSoul();
     const memory = loadMemory();
     const dailyMemory = loadDailyMemory();
@@ -3188,25 +3188,8 @@ function buildSystemPrompt(matchedSkills = []) {
         lines.push('</available_skills>');
         lines.push('');
 
-        // If specific skills matched (for backwards compatibility with keyword triggers)
-        if (matchedSkills.length > 0) {
-            lines.push('## Active Skills for This Request');
-            lines.push('The following skills have been automatically loaded based on keywords:');
-            lines.push('');
-            for (const skill of matchedSkills) {
-                const emoji = skill.emoji ? `${skill.emoji} ` : '';
-                lines.push(`### ${emoji}${skill.name}`);
-                if (skill.description) {
-                    lines.push(skill.description);
-                    lines.push('');
-                }
-                if (skill.instructions) {
-                    lines.push('**Follow these instructions:**');
-                    lines.push(skill.instructions);
-                    lines.push('');
-                }
-            }
-        }
+        // matchedSkills section is built separately (dynamic, not cached)
+        // — see dynamicLines below
     }
 
     // Safety section - matches OpenClaw exactly
@@ -3305,15 +3288,58 @@ function buildSystemPrompt(matchedSkills = []) {
     lines.push('This creates a quoted reply in Telegram. Use when directly responding to a specific question or statement.');
     lines.push('');
 
-    // Runtime section - OpenClaw style
+    // Runtime section (static parts only — dynamic time goes in separate block for caching)
     lines.push('## Runtime');
     lines.push(`Platform: Android ${process.arch} | Node: ${process.version} | Model: ${MODEL}`);
     lines.push(`Channel: telegram | Agent: ${AGENT_NAME}`);
+
+    const stablePrompt = lines.join('\n') + '\n';
+
+    // Dynamic block — changes every call, must NOT be cached
+    const dynamicLines = [];
     const now = new Date();
     const weekday = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][now.getDay()];
-    lines.push(`Current time: ${weekday} ${now.toISOString()} (${now.toLocaleString()})`);
+    dynamicLines.push(`Current time: ${weekday} ${now.toISOString()} (${now.toLocaleString()})`);
 
-    return lines.join('\n');
+    // Active skills for this specific request (varies per message)
+    if (matchedSkills.length > 0) {
+        dynamicLines.push('');
+        dynamicLines.push('## Active Skills for This Request');
+        dynamicLines.push('The following skills have been automatically loaded based on keywords:');
+        dynamicLines.push('');
+        for (const skill of matchedSkills) {
+            const emoji = skill.emoji ? `${skill.emoji} ` : '';
+            dynamicLines.push(`### ${emoji}${skill.name}`);
+            if (skill.description) {
+                dynamicLines.push(skill.description);
+                dynamicLines.push('');
+            }
+            if (skill.instructions) {
+                dynamicLines.push('**Follow these instructions:**');
+                dynamicLines.push(skill.instructions);
+                dynamicLines.push('');
+            }
+        }
+    }
+
+    return { stable: stablePrompt, dynamic: dynamicLines.join('\n') };
+}
+
+// Report Claude API usage + cache metrics to Android bridge and logs
+function reportUsage(usage) {
+    if (!usage) return;
+    androidBridgeCall('/stats/tokens', {
+        input_tokens: usage.input_tokens || 0,
+        output_tokens: usage.output_tokens || 0,
+        cache_creation_input_tokens: usage.cache_creation_input_tokens || 0,
+        cache_read_input_tokens: usage.cache_read_input_tokens || 0,
+    }).catch(() => {});
+    if (usage.cache_read_input_tokens) {
+        log(`[Cache] hit: ${usage.cache_read_input_tokens} tokens read from cache`);
+    }
+    if (usage.cache_creation_input_tokens) {
+        log(`[Cache] miss: ${usage.cache_creation_input_tokens} tokens written to cache`);
+    }
 }
 
 async function chat(chatId, userMessage) {
@@ -3323,7 +3349,12 @@ async function chat(chatId, userMessage) {
         log(`Matched skills: ${matchedSkills.map(s => s.name).join(', ')}`);
     }
 
-    const systemPrompt = buildSystemPrompt(matchedSkills);
+    const { stable: stablePrompt, dynamic: dynamicPrompt } = buildSystemBlocks(matchedSkills);
+    // Two system blocks: large stable block (cached) + small dynamic block (per-request)
+    const systemBlocks = [
+        { type: 'text', text: stablePrompt, cache_control: { type: 'ephemeral' } },
+        { type: 'text', text: dynamicPrompt },
+    ];
 
     // Add user message to history
     addToConversation(chatId, 'user', userMessage);
@@ -3339,7 +3370,7 @@ async function chat(chatId, userMessage) {
         const body = JSON.stringify({
             model: MODEL,
             max_tokens: 4096,
-            system: systemPrompt,
+            system: systemBlocks,
             tools: TOOLS,
             messages: messages
         });
@@ -3355,6 +3386,7 @@ async function chat(chatId, userMessage) {
             headers: {
                 'Content-Type': 'application/json',
                 'anthropic-version': '2023-06-01',
+                'anthropic-beta': 'prompt-caching-2024-07-31',
                 ...authHeaders,
             }
         }, body);
@@ -3366,13 +3398,8 @@ async function chat(chatId, userMessage) {
 
         response = res.data;
 
-        // Track token usage
-        if (response.usage) {
-            androidBridgeCall('/stats/tokens', {
-                input_tokens: response.usage.input_tokens || 0,
-                output_tokens: response.usage.output_tokens || 0,
-            }).catch(() => {});
-        }
+        // Track token usage (including cache metrics)
+        reportUsage(response.usage);
 
         // Capture rate limit headers (API key users)
         if (AUTH_TYPE === 'api_key' && res.headers) {
@@ -3441,24 +3468,20 @@ async function chat(chatId, userMessage) {
             headers: {
                 'Content-Type': 'application/json',
                 'anthropic-version': '2023-06-01',
+                'anthropic-beta': 'prompt-caching-2024-07-31',
                 ...authHeaders,
             }
         }, JSON.stringify({
             model: MODEL,
             max_tokens: 4096,
-            system: systemPrompt,
+            system: systemBlocks,
             messages: messages
         }));
 
         if (summaryRes.status === 200 && summaryRes.data.content) {
             response = summaryRes.data;
             textContent = response.content.find(c => c.type === 'text');
-            if (response.usage) {
-                androidBridgeCall('/stats/tokens', {
-                    input_tokens: response.usage.input_tokens || 0,
-                    output_tokens: response.usage.output_tokens || 0,
-                }).catch(() => {});
-            }
+            reportUsage(response.usage);
         }
     }
 
