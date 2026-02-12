@@ -13,9 +13,26 @@ const workDir = process.argv[2] || __dirname;
 const debugLog = path.join(workDir, 'node_debug.log');
 let BRIDGE_TOKEN = ''; // declared early to avoid TDZ in redactSecrets; assigned after config load
 
+// Local timestamp with timezone offset (BAT-23)
+function localTimestamp(date) {
+    const d = date || new Date();
+    const off = -d.getTimezoneOffset();
+    const sign = off >= 0 ? '+' : '-';
+    const pad = (n) => String(Math.abs(n)).padStart(2, '0');
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate())
+        + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds())
+        + sign + pad(Math.floor(Math.abs(off) / 60)) + ':' + pad(Math.abs(off) % 60);
+}
+
+function localDateStr(date) {
+    const d = date || new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+}
+
 function log(msg) {
     const safe = typeof redactSecrets === 'function' ? redactSecrets(msg) : msg;
-    const line = `[${new Date().toISOString()}] ${safe}\n`;
+    const line = `[${localTimestamp()}] ${safe}\n`;
     try { fs.appendFileSync(debugLog, line); } catch (_) {}
     console.log('[SeekerClaw] ' + safe);
 }
@@ -256,7 +273,7 @@ function saveMemory(content) {
 }
 
 function getDailyMemoryPath() {
-    const date = new Date().toISOString().split('T')[0];
+    const date = localDateStr();
     return path.join(MEMORY_DIR, `${date}.md`);
 }
 
@@ -281,7 +298,7 @@ function updateHeartbeat() {
     const uptime = Math.floor(process.uptime());
     const content = `# Heartbeat
 
-Last updated: ${now.toISOString()}
+Last updated: ${localTimestamp(now)}
 Uptime: ${Math.floor(uptime / 3600)}h ${Math.floor((uptime % 3600) / 60)}m ${uptime % 60}s
 Memory: ${Math.round(process.memoryUsage().rss / 1024 / 1024)} MB
 Status: Running
@@ -568,7 +585,7 @@ const cronService = {
         saveCronStore(this.store);
         this._armTimer();
 
-        log(`[Cron] Created job ${job.id}: "${job.name}" → next: ${job.state.nextRunAtMs ? new Date(job.state.nextRunAtMs).toISOString() : 'never'}`);
+        log(`[Cron] Created job ${job.id}: "${job.name}" → next: ${job.state.nextRunAtMs ? localTimestamp(new Date(job.state.nextRunAtMs)) : 'never'}`);
         return job;
     },
 
@@ -803,7 +820,7 @@ const cronService = {
                 const backoffIdx = Math.min(job.state.consecutiveErrors - 1, this.ERROR_BACKOFF_MS.length - 1);
                 const backoffNext = nowMs + this.ERROR_BACKOFF_MS[backoffIdx];
                 job.state.nextRunAtMs = Math.max(normalNext, backoffNext);
-                log(`[Cron] Job ${job.id} error #${job.state.consecutiveErrors}, backing off until ${new Date(job.state.nextRunAtMs).toISOString()}`);
+                log(`[Cron] Job ${job.id} error #${job.state.consecutiveErrors}, backing off until ${localTimestamp(new Date(job.state.nextRunAtMs))}`);
             } else {
                 job.state.nextRunAtMs = normalNext;
             }
@@ -1918,7 +1935,7 @@ async function executeTool(name, input) {
                 name: job.name,
                 message: input.message,
                 type: isRecurring ? 'recurring' : 'one-shot',
-                nextRunAt: job.state.nextRunAtMs ? new Date(job.state.nextRunAtMs).toISOString() : null,
+                nextRunAt: job.state.nextRunAtMs ? localTimestamp(new Date(job.state.nextRunAtMs)) : null,
                 nextRunIn: job.state.nextRunAtMs ? formatDuration(job.state.nextRunAtMs - Date.now()) : null,
                 interval: isRecurring ? formatDuration(triggerTime._everyMs) : null,
             };
@@ -1935,9 +1952,9 @@ async function executeTool(name, input) {
                     type: j.schedule.kind,
                     enabled: j.enabled,
                     message: j.payload?.message || j.description,
-                    nextRunAt: j.state.nextRunAtMs ? new Date(j.state.nextRunAtMs).toISOString() : null,
+                    nextRunAt: j.state.nextRunAtMs ? localTimestamp(new Date(j.state.nextRunAtMs)) : null,
                     nextRunIn: j.state.nextRunAtMs ? formatDuration(j.state.nextRunAtMs - Date.now()) : null,
-                    lastRun: j.state.lastRunAtMs ? new Date(j.state.lastRunAtMs).toISOString() : null,
+                    lastRun: j.state.lastRunAtMs ? localTimestamp(new Date(j.state.lastRunAtMs)) : null,
                     lastStatus: j.state.lastStatus || 'never',
                 }))
             };
@@ -3253,7 +3270,7 @@ function buildSystemBlocks(matchedSkills = []) {
 
     // Today's daily memory
     if (dailyMemory) {
-        const date = new Date().toISOString().split('T')[0];
+        const date = localDateStr();
         lines.push(`## memory/${date}.md`);
         lines.push('');
         lines.push(dailyMemory.length > 1500 ? dailyMemory.slice(0, 1500) + '\n...(truncated)' : dailyMemory);
@@ -3301,7 +3318,7 @@ function buildSystemBlocks(matchedSkills = []) {
     const dynamicLines = [];
     const now = new Date();
     const weekday = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][now.getDay()];
-    dynamicLines.push(`Current time: ${weekday} ${now.toISOString()} (${now.toLocaleString()})`);
+    dynamicLines.push(`Current time: ${weekday} ${localTimestamp(now)} (${now.toLocaleString()})`);
 
     // Active skills for this specific request (varies per message)
     if (matchedSkills.length > 0) {
@@ -3441,7 +3458,7 @@ async function claudeApiCall(body, chatId) {
                             `INSERT INTO api_request_log (timestamp, chat_id, input_tokens, output_tokens,
                              cache_creation_tokens, cache_read_tokens, status, retry_count, duration_ms)
                              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                            [new Date().toISOString(), String(chatId || ''), 0, 0, 0, 0, -1, retries, durationMs]
+                            [localTimestamp(), String(chatId || ''), 0, 0, 0, 0, -1, retries, durationMs]
                         );
                     } catch (_) {}
                 }
@@ -3477,7 +3494,7 @@ async function claudeApiCall(body, chatId) {
                     `INSERT INTO api_request_log (timestamp, chat_id, input_tokens, output_tokens,
                      cache_creation_tokens, cache_read_tokens, status, retry_count, duration_ms)
                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                    [new Date().toISOString(), String(chatId || ''),
+                    [localTimestamp(), String(chatId || ''),
                      usage?.input_tokens || 0, usage?.output_tokens || 0,
                      usage?.cache_creation_input_tokens || 0, usage?.cache_read_input_tokens || 0,
                      res.status, retries, durationMs]
@@ -3510,7 +3527,7 @@ async function claudeApiCall(body, chatId) {
                     remaining: parseInt(h['anthropic-ratelimit-tokens-remaining']) || 0,
                     reset: h['anthropic-ratelimit-tokens-reset'] || '',
                 },
-                updated_at: new Date().toISOString(),
+                updated_at: localTimestamp(),
             });
         }
 
@@ -3923,14 +3940,14 @@ async function pollClaudeUsage() {
                     utilization: res.data.seven_day?.utilization || 0,
                     resets_at: res.data.seven_day?.resets_at || '',
                 },
-                updated_at: new Date().toISOString(),
+                updated_at: localTimestamp(),
             });
         } else {
             log(`Claude usage poll: HTTP ${res.status}`);
             writeClaudeUsageState({
                 type: 'oauth',
                 error: `HTTP ${res.status}`,
-                updated_at: new Date().toISOString(),
+                updated_at: localTimestamp(),
             });
         }
     } catch (e) {
