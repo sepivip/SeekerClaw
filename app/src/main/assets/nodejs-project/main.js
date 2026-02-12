@@ -293,6 +293,100 @@ function appendDailyMemory(content) {
     log('Daily memory updated');
 }
 
+// Ranked memory search via SQL.js chunks (BAT-27)
+const STOP_WORDS = new Set(['the','a','an','is','are','was','were','be','been','being',
+    'have','has','had','do','does','did','will','would','could','should','may','might',
+    'shall','can','to','of','in','for','on','by','at','with','from','as','into','about',
+    'that','this','it','i','me','my','we','our','you','your','he','she','they','them',
+    'and','or','but','not','no','if','so','what','when','where','how','who','which']);
+
+function searchMemory(query, topK = 5) {
+    if (!query) return [];
+
+    // Tokenize query into keywords
+    const keywords = query.toLowerCase().split(/\s+/)
+        .filter(w => w.length > 2 && !STOP_WORDS.has(w));
+    if (keywords.length === 0) keywords.push(query.toLowerCase().trim());
+
+    // Try SQL.js search first
+    if (db && keywords.length > 0) {
+        try {
+            // Build WHERE clause with AND logic
+            const conditions = keywords.map((_, i) => `LOWER(text) LIKE ?`);
+            const params = keywords.map(k => `%${k}%`);
+            const sql = `SELECT id, path, source, start_line, end_line, text, updated_at
+                         FROM chunks
+                         WHERE ${conditions.join(' AND ')}
+                         ORDER BY updated_at DESC
+                         LIMIT ?`;
+            params.push(topK * 3); // fetch more for scoring
+
+            const rows = db.exec(sql, params);
+            if (rows.length > 0 && rows[0].values.length > 0) {
+                const results = rows[0].values.map(row => {
+                    const [id, filePath, source, startLine, endLine, text, updatedAt] = row;
+                    // Term frequency score
+                    const textLower = text.toLowerCase();
+                    let tfScore = 0;
+                    for (const kw of keywords) {
+                        const matches = textLower.split(kw).length - 1;
+                        tfScore += matches;
+                    }
+                    // Recency score (0-1, newer = higher)
+                    const age = Date.now() - new Date(updatedAt).getTime();
+                    const recencyScore = Math.max(0, 1 - age / (30 * 86400000)); // 30-day window
+
+                    const score = tfScore * 0.7 + recencyScore * 0.3;
+                    const relPath = filePath.replace(workDir + path.sep, '');
+
+                    return {
+                        file: relPath,
+                        startLine,
+                        endLine,
+                        text: text.slice(0, 500),
+                        score: Math.round(score * 100) / 100,
+                    };
+                });
+
+                // Sort by score descending and take topK
+                results.sort((a, b) => b.score - a.score);
+                return results.slice(0, topK);
+            }
+        } catch (err) {
+            log(`[Memory] Search error, falling back to file scan: ${err.message}`);
+        }
+    }
+
+    // Fallback: basic file-based search
+    const results = [];
+    const searchLower = query.toLowerCase();
+
+    if (fs.existsSync(MEMORY_PATH)) {
+        const lines = fs.readFileSync(MEMORY_PATH, 'utf8').split('\n');
+        lines.forEach((line, idx) => {
+            if (line.toLowerCase().includes(searchLower)) {
+                results.push({ file: 'MEMORY.md', startLine: idx + 1, endLine: idx + 1,
+                    text: line.trim().slice(0, 500), score: 1 });
+            }
+        });
+    }
+
+    if (fs.existsSync(MEMORY_DIR)) {
+        for (const f of fs.readdirSync(MEMORY_DIR).filter(f => f.endsWith('.md'))) {
+            if (results.length >= topK) break;
+            const lines = fs.readFileSync(path.join(MEMORY_DIR, f), 'utf8').split('\n');
+            lines.forEach((line, idx) => {
+                if (results.length < topK && line.toLowerCase().includes(searchLower)) {
+                    results.push({ file: `memory/${f}`, startLine: idx + 1, endLine: idx + 1,
+                        text: line.trim().slice(0, 500), score: 0.5 });
+                }
+            });
+        }
+    }
+
+    return results.slice(0, topK);
+}
+
 function updateHeartbeat() {
     const now = new Date();
     const uptime = Math.floor(process.uptime());
@@ -1700,51 +1794,12 @@ async function executeTool(name, input) {
         }
 
         case 'memory_search': {
-            const maxResults = input.max_results || 20;
-            const query = input.query.toLowerCase();
-            const results = [];
-
-            // Search MEMORY.md
-            const memoryPath = path.join(workDir, 'MEMORY.md');
-            if (fs.existsSync(memoryPath)) {
-                const content = fs.readFileSync(memoryPath, 'utf8');
-                const lines = content.split('\n');
-                lines.forEach((line, idx) => {
-                    if (line.toLowerCase().includes(query)) {
-                        results.push({
-                            file: 'MEMORY.md',
-                            line: idx + 1,
-                            content: line.trim().slice(0, 200)
-                        });
-                    }
-                });
-            }
-
-            // Search daily memory files
-            const memoryDir = path.join(workDir, 'memory');
-            if (fs.existsSync(memoryDir)) {
-                const files = fs.readdirSync(memoryDir).filter(f => f.endsWith('.md'));
-                for (const file of files) {
-                    if (results.length >= maxResults) break;
-                    const filePath = path.join(memoryDir, file);
-                    const content = fs.readFileSync(filePath, 'utf8');
-                    const lines = content.split('\n');
-                    lines.forEach((line, idx) => {
-                        if (results.length < maxResults && line.toLowerCase().includes(query)) {
-                            results.push({
-                                file: `memory/${file}`,
-                                line: idx + 1,
-                                content: line.trim().slice(0, 200)
-                            });
-                        }
-                    });
-                }
-            }
-
+            const maxResults = input.max_results || 10;
+            const results = searchMemory(input.query, maxResults);
             return {
                 query: input.query,
                 count: results.length,
-                results: results.slice(0, maxResults)
+                results
             };
         }
 
