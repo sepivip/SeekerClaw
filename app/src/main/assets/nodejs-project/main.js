@@ -3139,9 +3139,10 @@ function formatDuration(ms) {
 // CLAUDE API
 // ============================================================================
 
-// Conversation history per chat
+// Conversation history per chat (ephemeral — cleared on every restart, BAT-30)
 const conversations = new Map();
 const MAX_HISTORY = 20;
+let sessionStartedAt = Date.now();
 
 function getConversation(chatId) {
     if (!conversations.has(chatId)) {
@@ -3341,6 +3342,8 @@ function buildSystemBlocks(matchedSkills = []) {
     const now = new Date();
     const weekday = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][now.getDay()];
     dynamicLines.push(`Current time: ${weekday} ${localTimestamp(now)} (${now.toLocaleString()})`);
+    const uptimeSec = Math.floor((Date.now() - sessionStartedAt) / 1000);
+    dynamicLines.push(`Session uptime: ${Math.floor(uptimeSec / 60)}m ${uptimeSec % 60}s (conversation context is ephemeral — cleared on each restart)`);
 
     // Active skills for this specific request (varies per message)
     if (matchedSkills.length > 0) {
