@@ -114,6 +114,7 @@ class AndroidBridge(
                 "/solana/sign" -> handleSolanaSign(params)
                 "/solana/send" -> handleSolanaSend(params)
                 "/config/save-owner" -> handleConfigSaveOwner(params)
+                "/stats/db-summary" -> proxyToNodeStats()
                 "/ping" -> jsonResponse(200, mapOf("status" to "ok", "bridge" to "AndroidBridge"))
                 else -> jsonResponse(404, mapOf("error" to "Unknown endpoint: $uri"))
             }
@@ -577,6 +578,29 @@ class AndroidBridge(
     }
 
     // ==================== Helpers ====================
+
+    // Proxy /stats/db-summary to Node.js internal stats server (BAT-31)
+    private fun proxyToNodeStats(): Response {
+        var conn: java.net.HttpURLConnection? = null
+        return try {
+            val url = java.net.URL("http://127.0.0.1:8766/stats/db-summary")
+            conn = url.openConnection() as java.net.HttpURLConnection
+            conn.requestMethod = "GET"
+            conn.connectTimeout = 5000
+            conn.readTimeout = 5000
+
+            val code = conn.responseCode
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            val body = stream?.bufferedReader()?.use { it.readText() } ?: "{}"
+            val status = Response.Status.lookup(code) ?: Response.Status.INTERNAL_ERROR
+            newFixedLengthResponse(status, "application/json", body)
+        } catch (e: Exception) {
+            Log.w(TAG, "Stats proxy failed: ${e.message}")
+            jsonResponse(503, mapOf("error" to "Stats unavailable"))
+        } finally {
+            conn?.disconnect()
+        }
+    }
 
     private fun hasPermission(permission: String): Boolean {
         return ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
