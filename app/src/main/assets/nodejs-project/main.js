@@ -3814,7 +3814,6 @@ async function pollClaudeUsage() {
 // ============================================================================
 
 let db = null;
-let dbDirty = false; // track whether DB has unsaved changes
 
 async function initDatabase() {
     try {
@@ -3857,7 +3856,7 @@ async function initDatabase() {
         )`);
 
         // Persist immediately so the file exists on disk right away
-        saveDatabase(true);
+        saveDatabase();
 
         log('[DB] SQL.js database initialized');
 
@@ -3871,9 +3870,8 @@ async function initDatabase() {
     }
 }
 
-function saveDatabase(force) {
+function saveDatabase() {
     if (!db) return;
-    if (!force && !dbDirty) return; // skip if nothing changed
     try {
         const data = db.export();
         const buffer = Buffer.from(data);
@@ -3881,7 +3879,6 @@ function saveDatabase(force) {
         const tmpPath = DB_PATH + '.tmp';
         fs.writeFileSync(tmpPath, buffer);
         fs.renameSync(tmpPath, DB_PATH);
-        dbDirty = false;
     } catch (err) {
         log(`[DB] Save error: ${err.message}`);
     }
