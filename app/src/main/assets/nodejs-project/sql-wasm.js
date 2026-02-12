@@ -1,4 +1,7 @@
-
+// sql.js v1.12.0 — https://github.com/sql-js/sql.js
+// License: MIT — https://github.com/sql-js/sql.js/blob/master/LICENSE
+// SQLite is in the public domain — https://sqlite.org/copyright.html
+//
 // We are modularizing this manually because the current modularize setting in Emscripten has some issues:
 // https://github.com/kripken/emscripten/issues/5820
 // In addition, When you use emcc's modularization, it still expects to export a global object called `Module`,
