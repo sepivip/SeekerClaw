@@ -2168,10 +2168,10 @@ async function executeTool(name, input) {
                          FROM api_request_log WHERE timestamp LIKE ?`, [today + '%']
                     );
                     if (todayStats.length > 0 && todayStats[0].values.length > 0) {
-                        const [cnt, inp, outp, avgMs, cacheRead, cacheCreate, errors] = todayStats[0].values[0];
+                        const [cnt, inp, outp, avgMs, cacheRead, , errors] = todayStats[0].values[0];
                         const totalTokens = (inp || 0) + (outp || 0);
-                        const cacheHitRate = totalTokens > 0
-                            ? Math.round(((cacheRead || 0) / Math.max(1, (inp || 0))) * 100)
+                        const cacheHitRate = (inp || 0) > 0
+                            ? Math.round(((cacheRead || 0) / (inp || 1)) * 100)
                             : 0;
                         result.apiUsage = {
                             today: {
