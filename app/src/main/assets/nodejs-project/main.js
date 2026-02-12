@@ -1128,6 +1128,28 @@ function cleanResponse(text) {
     return cleaned.trim();
 }
 
+// Convert markdown to Telegram HTML with native blockquote support (BAT-24)
+function toTelegramHtml(text) {
+    // Escape HTML entities first
+    let html = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    // Code blocks (``` ... ```)
+    html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => `<pre>${code.trim()}</pre>`);
+    // Inline code
+    html = html.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+    // Bold (**text** or __text__)
+    html = html.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+    html = html.replace(/__(.+?)__/g, '<b>$1</b>');
+    // Italic (*text* or _text_) — avoid matching inside words
+    html = html.replace(/(?<!\w)\*([^*\n]+)\*(?!\w)/g, '<i>$1</i>');
+    html = html.replace(/(?<!\w)_([^_\n]+)_(?!\w)/g, '<i>$1</i>');
+    // Blockquotes: consecutive > lines become <blockquote>
+    html = html.replace(/(^|\n)(&gt; .+(?:\n&gt; .+)*)/g, (_, pre, block) => {
+        const content = block.replace(/&gt; /g, '').trim();
+        return `${pre}<blockquote>${content}</blockquote>`;
+    });
+    return html;
+}
+
 async function sendMessage(chatId, text, replyTo = null) {
     // Clean AI artifacts before sending to user
     text = cleanResponse(text);
@@ -1144,23 +1166,23 @@ async function sendMessage(chatId, text, replyTo = null) {
     for (const chunk of chunks) {
         let sent = false;
 
-        // Try with Markdown first
+        // Try with HTML first (supports native blockquotes)
         try {
             const result = await telegram('sendMessage', {
                 chat_id: chatId,
-                text: chunk,
+                text: toTelegramHtml(chunk),
                 reply_to_message_id: replyTo,
-                parse_mode: 'Markdown',
+                parse_mode: 'HTML',
             });
             // Check if Telegram actually accepted the message
             if (result && result.ok) {
                 sent = true;
             }
         } catch (e) {
-            // Network error - will retry without markdown
+            // Formatting error or network error - will retry as plain text
         }
 
-        // Only retry without markdown if the first attempt failed
+        // Only retry as plain text if the HTML attempt failed
         if (!sent) {
             try {
                 await telegram('sendMessage', {
