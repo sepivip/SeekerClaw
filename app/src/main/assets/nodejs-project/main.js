@@ -2124,7 +2124,7 @@ async function executeTool(name, input) {
             let totalMessages = 0;
             conversations.forEach(conv => totalMessages += conv.length);
 
-            return {
+            const result = {
                 agent: AGENT_NAME,
                 model: MODEL,
                 uptime: {
@@ -2152,6 +2152,46 @@ async function executeTool(name, input) {
                     skills: loadSkills().length
                 }
             };
+
+            // API usage analytics from SQL.js (BAT-28)
+            if (db) {
+                try {
+                    const today = localDateStr();
+                    const todayStats = db.exec(
+                        `SELECT COUNT(*) as cnt,
+                                COALESCE(SUM(input_tokens), 0) as inp,
+                                COALESCE(SUM(output_tokens), 0) as outp,
+                                COALESCE(AVG(duration_ms), 0) as avg_ms,
+                                COALESCE(SUM(cache_read_tokens), 0) as cache_read,
+                                COALESCE(SUM(cache_creation_tokens), 0) as cache_create,
+                                SUM(CASE WHEN status != 200 THEN 1 ELSE 0 END) as errors
+                         FROM api_request_log WHERE timestamp LIKE ?`, [today + '%']
+                    );
+                    if (todayStats.length > 0 && todayStats[0].values.length > 0) {
+                        const [cnt, inp, outp, avgMs, cacheRead, cacheCreate, errors] = todayStats[0].values[0];
+                        const totalTokens = (inp || 0) + (outp || 0);
+                        const cacheHitRate = totalTokens > 0
+                            ? Math.round(((cacheRead || 0) / Math.max(1, (inp || 0))) * 100)
+                            : 0;
+                        result.apiUsage = {
+                            today: {
+                                requests: cnt || 0,
+                                inputTokens: inp || 0,
+                                outputTokens: outp || 0,
+                                totalTokens,
+                                avgLatencyMs: Math.round(avgMs || 0),
+                                errors: errors || 0,
+                                errorRate: cnt > 0 ? `${Math.round(((errors || 0) / cnt) * 100)}%` : '0%',
+                                cacheHitRate: `${cacheHitRate}%`,
+                            }
+                        };
+                    }
+                } catch (e) {
+                    // Non-fatal — analytics section just won't appear
+                }
+            }
+
+            return result;
         }
 
         case 'memory_stats': {
