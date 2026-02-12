@@ -4068,6 +4068,137 @@ async function initDatabase() {
     }
 }
 
+// Index memory files into chunks table for search (BAT-26)
+function indexMemoryFiles() {
+    if (!db) return;
+    try {
+        const crypto = require('crypto');
+        const filesToIndex = [];
+
+        // Collect MEMORY.md
+        if (fs.existsSync(MEMORY_PATH)) {
+            filesToIndex.push({ path: MEMORY_PATH, source: 'memory' });
+        }
+
+        // Collect daily memory files
+        if (fs.existsSync(MEMORY_DIR)) {
+            const dailyFiles = fs.readdirSync(MEMORY_DIR).filter(f => f.endsWith('.md'));
+            for (const f of dailyFiles) {
+                filesToIndex.push({ path: path.join(MEMORY_DIR, f), source: 'daily' });
+            }
+        }
+
+        let indexed = 0;
+        let skipped = 0;
+
+        for (const file of filesToIndex) {
+            const stat = fs.statSync(file.path);
+            const mtime = stat.mtime.toISOString();
+            const size = stat.size;
+
+            // Check if file already indexed with same mtime+size
+            const existing = db.exec(
+                `SELECT mtime, size FROM files WHERE path = ?`, [file.path]
+            );
+            if (existing.length > 0 && existing[0].values.length > 0) {
+                const [existMtime, existSize] = existing[0].values[0];
+                if (existMtime === mtime && existSize === size) {
+                    skipped++;
+                    continue;
+                }
+            }
+
+            // Read and chunk the file
+            const content = fs.readFileSync(file.path, 'utf8');
+            const hash = crypto.createHash('md5').update(content).digest('hex');
+            const chunks = chunkMarkdown(content);
+
+            // Delete old chunks for this path
+            db.run(`DELETE FROM chunks WHERE path = ?`, [file.path]);
+
+            // Insert new chunks
+            for (const chunk of chunks) {
+                db.run(
+                    `INSERT INTO chunks (path, source, start_line, end_line, hash, text, updated_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                    [file.path, file.source, chunk.startLine, chunk.endLine, hash,
+                     chunk.text, localTimestamp()]
+                );
+            }
+
+            // Update files table
+            db.run(
+                `INSERT OR REPLACE INTO files (path, source, hash, mtime, size)
+                 VALUES (?, ?, ?, ?, ?)`,
+                [file.path, file.source, hash, mtime, size]
+            );
+            indexed++;
+        }
+
+        // Update meta
+        db.run(`INSERT OR REPLACE INTO meta (key, value) VALUES ('last_indexed', ?)`,
+            [localTimestamp()]);
+
+        if (indexed > 0) saveDatabase();
+        log(`[Memory] Indexed ${indexed} files, skipped ${skipped} unchanged`);
+    } catch (err) {
+        log(`[Memory] Indexing error (non-fatal): ${err.message}`);
+    }
+}
+
+// Split markdown content into chunks by headers or paragraphs
+function chunkMarkdown(content) {
+    const lines = content.split('\n');
+    const chunks = [];
+    let current = { text: '', startLine: 1, endLine: 1 };
+
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const lineNum = i + 1;
+
+        // New chunk on ## or ### headers (keep # as single chunk boundary)
+        if (/^#{1,3}\s/.test(line) && current.text.trim()) {
+            current.endLine = lineNum - 1;
+            chunks.push({ ...current, text: current.text.trim() });
+            current = { text: line + '\n', startLine: lineNum, endLine: lineNum };
+        } else {
+            current.text += line + '\n';
+            current.endLine = lineNum;
+        }
+    }
+
+    // Push remaining
+    if (current.text.trim()) {
+        chunks.push({ ...current, text: current.text.trim() });
+    }
+
+    // Split oversized chunks (>2000 chars) by double-newline
+    const result = [];
+    for (const chunk of chunks) {
+        if (chunk.text.length <= 2000) {
+            result.push(chunk);
+        } else {
+            const parts = chunk.text.split(/\n\n+/);
+            let buf = '';
+            let startLine = chunk.startLine;
+            for (const part of parts) {
+                if (buf.length + part.length > 2000 && buf.trim()) {
+                    result.push({ text: buf.trim(), startLine, endLine: startLine });
+                    buf = part + '\n\n';
+                    startLine = chunk.startLine; // approximate
+                } else {
+                    buf += part + '\n\n';
+                }
+            }
+            if (buf.trim()) {
+                result.push({ text: buf.trim(), startLine, endLine: chunk.endLine });
+            }
+        }
+    }
+
+    return result;
+}
+
 function saveDatabase() {
     if (!db) return;
     try {
@@ -4094,6 +4225,7 @@ telegram('getMe')
 
             // Initialize SQL.js database before polling (non-fatal if WASM fails)
             await initDatabase();
+            indexMemoryFiles();
             // Flush old updates to avoid re-processing messages after restart
             try {
                 const flush = await telegram('getUpdates', { offset: -1, timeout: 0 });
