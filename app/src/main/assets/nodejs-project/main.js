@@ -4375,14 +4375,16 @@ function getDbSummary() {
         );
         if (rows.length > 0 && rows[0].values.length > 0) {
             const [cnt, inp, outp, avgMs, cacheRead, errors] = rows[0].values[0];
-            summary.today = {
-                requests: cnt || 0,
-                input_tokens: inp || 0,
-                output_tokens: outp || 0,
-                avg_latency_ms: Math.round(avgMs || 0),
-                errors: errors || 0,
-                cache_hit_rate: (inp || 0) > 0 ? +((cacheRead || 0) / inp).toFixed(2) : 0
-            };
+            if ((cnt || 0) > 0) {
+                summary.today = {
+                    requests: cnt,
+                    input_tokens: inp || 0,
+                    output_tokens: outp || 0,
+                    avg_latency_ms: Math.round(avgMs || 0),
+                    errors: errors || 0,
+                    cache_hit_rate: (inp || 0) > 0 ? +((cacheRead || 0) / inp).toFixed(2) : 0
+                };
+            }
         }
     } catch (e) { /* non-fatal */ }
 
@@ -4396,14 +4398,16 @@ function getDbSummary() {
         );
         if (rows.length > 0 && rows[0].values.length > 0) {
             const [cnt, inp, outp] = rows[0].values[0];
-            // Cost estimate: Sonnet pricing ~$3/M input, ~$15/M output
-            const costEstimate = ((inp || 0) / 1e6) * 3 + ((outp || 0) / 1e6) * 15;
-            summary.month = {
-                requests: cnt || 0,
-                input_tokens: inp || 0,
-                output_tokens: outp || 0,
-                total_cost_estimate: +costEstimate.toFixed(2)
-            };
+            if ((cnt || 0) > 0) {
+                // Cost estimate: Sonnet pricing ~$3/M input, ~$15/M output
+                const costEstimate = ((inp || 0) / 1e6) * 3 + ((outp || 0) / 1e6) * 15;
+                summary.month = {
+                    requests: cnt,
+                    input_tokens: inp || 0,
+                    output_tokens: outp || 0,
+                    total_cost_estimate: +costEstimate.toFixed(2)
+                };
+            }
         }
     } catch (e) { /* non-fatal */ }
 
@@ -4411,11 +4415,16 @@ function getDbSummary() {
         const fileRows = db.exec('SELECT COUNT(*) FROM files');
         const chunkRows = db.exec('SELECT COUNT(*) FROM chunks');
         const metaRows = db.exec("SELECT value FROM meta WHERE key = 'last_indexed'");
-        summary.memory = {
-            files_indexed: fileRows.length > 0 ? fileRows[0].values[0][0] : 0,
-            chunks_count: chunkRows.length > 0 ? chunkRows[0].values[0][0] : 0,
-            last_indexed: metaRows.length > 0 ? metaRows[0].values[0][0] : null
-        };
+        const filesCount = fileRows.length > 0 ? fileRows[0].values[0][0] : 0;
+        const chunksCount = chunkRows.length > 0 ? chunkRows[0].values[0][0] : 0;
+        const lastIndexed = metaRows.length > 0 ? metaRows[0].values[0][0] : null;
+        if (filesCount > 0 || chunksCount > 0 || lastIndexed) {
+            summary.memory = {
+                files_indexed: filesCount,
+                chunks_count: chunksCount,
+                last_indexed: lastIndexed
+            };
+        }
     } catch (e) { /* non-fatal */ }
 
     return summary;
@@ -4430,6 +4439,10 @@ const statsServer = require('http').createServer((req, res) => {
         res.writeHead(404, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Not found' }));
     }
+});
+
+statsServer.on('error', (err) => {
+    log(`[Stats] Internal stats server error (${err.code || 'UNKNOWN'}): ${err.message}`);
 });
 
 statsServer.listen(STATS_PORT, '127.0.0.1', () => {
