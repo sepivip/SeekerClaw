@@ -334,9 +334,10 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}) {
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                StatMini(small = true,label = "API", value = "$apiRequests req")
-                StatMini(small = true,label = "LATENCY", value = "${apiAvgLatency}ms")
-                StatMini(small = true,
+                StatMini(small = true, label = "API", value = "$apiRequests req")
+                StatMini(small = true, label = "LATENCY", value = "${apiAvgLatency}ms")
+                StatMini(
+                    small = true,
                     label = "COST",
                     value = if (monthCost > 0f) "$${String.format("%.2f", monthCost)}" else "--",
                 )
