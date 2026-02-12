@@ -51,10 +51,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import kotlinx.coroutines.Dispatchers
+import com.seekerclaw.app.util.fetchDbSummary
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.withContext
-import org.json.JSONObject
 import java.util.Date
 
 @Composable
@@ -82,31 +80,18 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}) {
     LaunchedEffect(status) {
         if (status == ServiceStatus.RUNNING) {
             while (true) {
-                try {
-                    val summary = withContext(Dispatchers.IO) {
-                        val url = java.net.URL("http://127.0.0.1:8765/stats/db-summary")
-                        val conn = url.openConnection() as java.net.HttpURLConnection
-                        conn.requestMethod = "POST"
-                        conn.connectTimeout = 3000
-                        conn.readTimeout = 3000
-                        conn.setRequestProperty("Content-Type", "application/json")
-                        conn.doOutput = true
-                        conn.outputStream.use { it.write("{}".toByteArray()) }
-                        val code = conn.responseCode
-                        val body = if (code in 200..299) conn.inputStream.bufferedReader().use { it.readText() } else null
-                        conn.disconnect()
-                        body?.let { JSONObject(it) }
-                    }
-                    if (summary != null) {
-                        val today = if (summary.has("today") && !summary.isNull("today")) summary.getJSONObject("today") else null
-                        val month = if (summary.has("month") && !summary.isNull("month")) summary.getJSONObject("month") else null
-                        apiRequests = today?.optInt("requests", 0) ?: 0
-                        apiAvgLatency = today?.optInt("avg_latency_ms", 0) ?: 0
-                        monthCost = month?.optDouble("total_cost_estimate", 0.0)?.toFloat() ?: 0f
-                    }
-                } catch (_: Exception) {}
+                val stats = fetchDbSummary()
+                if (stats != null) {
+                    apiRequests = stats.todayRequests
+                    apiAvgLatency = stats.todayAvgLatencyMs
+                    monthCost = stats.monthCostEstimate
+                }
                 delay(30_000)
             }
+        } else {
+            apiRequests = 0
+            apiAvgLatency = 0
+            monthCost = 0f
         }
     }
 

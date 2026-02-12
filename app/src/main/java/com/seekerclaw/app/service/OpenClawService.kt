@@ -87,6 +87,7 @@ class OpenClawService : Service() {
 
         // Generate per-boot auth token for bridge security
         val bridgeToken = UUID.randomUUID().toString()
+        ServiceState.bridgeToken = bridgeToken
 
         // Write config from encrypted storage (includes bridge token for Node.js)
         // Note: loadConfig() uses SharedPreferences which may be stale in :node process,

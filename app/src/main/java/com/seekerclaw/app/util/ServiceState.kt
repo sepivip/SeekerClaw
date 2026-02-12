@@ -68,6 +68,10 @@ object ServiceState {
     private val _claudeUsage = MutableStateFlow<ClaudeUsageData?>(null)
     val claudeUsage: StateFlow<ClaudeUsageData?> = _claudeUsage
 
+    // Per-boot bridge auth token — set by OpenClawService, read by UI for stats calls
+    @Volatile
+    var bridgeToken: String? = null
+
     private var stateFile: File? = null
     private var pollingJob: Job? = null
     private val scope = CoroutineScope(Dispatchers.IO)

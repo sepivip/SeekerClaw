@@ -44,12 +44,11 @@ import com.seekerclaw.app.ui.theme.SeekerClawColors
 import com.seekerclaw.app.util.DeviceInfo
 import com.seekerclaw.app.util.DeviceInfoProvider
 import com.seekerclaw.app.util.ClaudeUsageData
+import com.seekerclaw.app.util.DbSummary
 import com.seekerclaw.app.util.ServiceState
 import com.seekerclaw.app.util.ServiceStatus
-import kotlinx.coroutines.Dispatchers
+import com.seekerclaw.app.util.fetchDbSummary
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.withContext
-import org.json.JSONObject
 
 @Composable
 fun SystemScreen(onBack: () -> Unit) {
@@ -72,19 +71,22 @@ fun SystemScreen(onBack: () -> Unit) {
     var deviceInfo by remember { mutableStateOf<DeviceInfo?>(null) }
     var dbSummary by remember { mutableStateOf<DbSummary?>(null) }
 
-    // Refresh device info every 5 seconds, DB summary every 30 seconds
+    // Refresh device info every 5 seconds
     LaunchedEffect(Unit) {
         while (true) {
             deviceInfo = DeviceInfoProvider.getDeviceInfo(context)
             delay(5000)
         }
     }
+    // Fetch DB summary every 30s while running; clear on stop
     LaunchedEffect(status) {
         if (status == ServiceStatus.RUNNING) {
             while (true) {
                 dbSummary = fetchDbSummary()
                 delay(30_000)
             }
+        } else {
+            dbSummary = null
         }
     }
 
@@ -362,8 +364,8 @@ fun SystemScreen(onBack: () -> Unit) {
                 )
                 InfoRow(
                     label = "Error Rate",
-                    value = if (stats.todayRequests > 0)
-                        "${(stats.todayErrors * 100) / stats.todayRequests}%" else "0%",
+                    value = if (stats.todayRequests > 0 && stats.todayErrors > 0)
+                        String.format("%.1f%%", stats.todayErrors.toDouble() * 100.0 / stats.todayRequests) else "0%",
                     dotColor = when {
                         stats.todayErrors > 0 -> SeekerClawColors.Warning
                         else -> SeekerClawColors.Accent
@@ -706,72 +708,14 @@ private fun formatMemoryIndexTime(isoTimestamp: String): String {
     return try {
         val parts = isoTimestamp.split("T")
         if (parts.size < 2) return isoTimestamp
+        val datePart = parts[0]
         val timePart = parts[1].substringBefore("+").substringBefore("-")
         val hm = timePart.split(":").take(2).joinToString(":")
-        "Today $hm"
+        val todayStr = java.time.LocalDate.now().toString()
+        if (datePart == todayStr) "Today $hm" else "$datePart $hm"
     } catch (_: Exception) {
         isoTimestamp
     }
 }
 
-// ==================== DB Summary (BAT-32) ====================
-
-private data class DbSummary(
-    val todayRequests: Int = 0,
-    val todayInputTokens: Long = 0,
-    val todayOutputTokens: Long = 0,
-    val todayAvgLatencyMs: Int = 0,
-    val todayErrors: Int = 0,
-    val todayCacheHitRate: Float = 0f,
-    val monthRequests: Int = 0,
-    val monthInputTokens: Long = 0,
-    val monthOutputTokens: Long = 0,
-    val monthCostEstimate: Float = 0f,
-    val memoryFilesIndexed: Int = 0,
-    val memoryChunksCount: Int = 0,
-    val memoryLastIndexed: String? = null,
-)
-
-private suspend fun fetchDbSummary(): DbSummary? = withContext(Dispatchers.IO) {
-    try {
-        val url = java.net.URL("http://127.0.0.1:8765/stats/db-summary")
-        val conn = url.openConnection() as java.net.HttpURLConnection
-        conn.requestMethod = "POST"
-        conn.connectTimeout = 3000
-        conn.readTimeout = 3000
-        conn.setRequestProperty("Content-Type", "application/json")
-        conn.doOutput = true
-        conn.outputStream.use { it.write("{}".toByteArray()) }
-
-        val code = conn.responseCode
-        if (code !in 200..299) {
-            conn.disconnect()
-            return@withContext null
-        }
-        val body = conn.inputStream.bufferedReader().use { it.readText() }
-        conn.disconnect()
-
-        val json = JSONObject(body)
-        val today = if (json.has("today") && !json.isNull("today")) json.getJSONObject("today") else null
-        val month = if (json.has("month") && !json.isNull("month")) json.getJSONObject("month") else null
-        val memory = if (json.has("memory") && !json.isNull("memory")) json.getJSONObject("memory") else null
-
-        DbSummary(
-            todayRequests = today?.optInt("requests", 0) ?: 0,
-            todayInputTokens = today?.optLong("input_tokens", 0) ?: 0,
-            todayOutputTokens = today?.optLong("output_tokens", 0) ?: 0,
-            todayAvgLatencyMs = today?.optInt("avg_latency_ms", 0) ?: 0,
-            todayErrors = today?.optInt("errors", 0) ?: 0,
-            todayCacheHitRate = today?.optDouble("cache_hit_rate", 0.0)?.toFloat() ?: 0f,
-            monthRequests = month?.optInt("requests", 0) ?: 0,
-            monthInputTokens = month?.optLong("input_tokens", 0) ?: 0,
-            monthOutputTokens = month?.optLong("output_tokens", 0) ?: 0,
-            monthCostEstimate = month?.optDouble("total_cost_estimate", 0.0)?.toFloat() ?: 0f,
-            memoryFilesIndexed = memory?.optInt("files_indexed", 0) ?: 0,
-            memoryChunksCount = memory?.optInt("chunks_count", 0) ?: 0,
-            memoryLastIndexed = memory?.optString("last_indexed", null),
-        )
-    } catch (_: Exception) {
-        null
-    }
-}
+// DbSummary and fetchDbSummary are in com.seekerclaw.app.util.StatsClient
