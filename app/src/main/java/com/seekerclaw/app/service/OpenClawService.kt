@@ -87,6 +87,7 @@ class OpenClawService : Service() {
 
         // Generate per-boot auth token for bridge security
         val bridgeToken = UUID.randomUUID().toString()
+        ServiceState.writeBridgeToken(bridgeToken)
 
         // Write config from encrypted storage (includes bridge token for Node.js)
         // Note: loadConfig() uses SharedPreferences which may be stale in :node process,
@@ -211,6 +212,7 @@ class OpenClawService : Service() {
         screenWakeLock?.let {
             if (it.isHeld) it.release()
         }
+        ServiceState.clearBridgeToken()
         ServiceState.updateStatus(ServiceStatus.STOPPED)
         ServiceState.updateUptime(0)
 

@@ -47,6 +47,12 @@ import com.seekerclaw.app.util.LogLevel
 import com.seekerclaw.app.util.ServiceState
 import com.seekerclaw.app.util.ServiceStatus
 import android.content.Context
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import com.seekerclaw.app.util.fetchDbSummary
+import kotlinx.coroutines.delay
 import java.util.Date
 
 @Composable
@@ -65,6 +71,33 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}) {
     val hasCredential = config?.activeCredential?.isNotBlank() == true
     val validationError = ConfigManager.runtimeValidationError(config)
     val latestError = logs.lastOrNull { it.level == LogLevel.ERROR }?.message
+
+    // Fetch API stats from bridge (BAT-32)
+    var apiRequests by remember { mutableStateOf(0) }
+    var apiAvgLatency by remember { mutableStateOf(0) }
+    var monthCost by remember { mutableStateOf(0f) }
+
+    LaunchedEffect(status) {
+        if (status == ServiceStatus.RUNNING) {
+            while (true) {
+                val stats = fetchDbSummary()
+                if (stats != null) {
+                    apiRequests = stats.todayRequests
+                    apiAvgLatency = stats.todayAvgLatencyMs
+                    monthCost = stats.monthCostEstimate
+                } else {
+                    apiRequests = 0
+                    apiAvgLatency = 0
+                    monthCost = 0f
+                }
+                delay(if (stats != null) 30_000L else 5_000L)
+            }
+        } else {
+            apiRequests = 0
+            apiAvgLatency = 0
+            monthCost = 0f
+        }
+    }
 
     val isRunning = status == ServiceStatus.RUNNING || status == ServiceStatus.STARTING
 
@@ -289,6 +322,28 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}) {
             )
         }
 
+        // API stats mini row (BAT-32)
+        if (isRunning && apiRequests > 0) {
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(SeekerClawColors.Surface, shape)
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                StatMini(small = true, label = "API", value = "$apiRequests req")
+                StatMini(small = true, label = "LATENCY", value = "${apiAvgLatency}ms")
+                StatMini(
+                    small = true,
+                    label = "COST",
+                    value = if (monthCost > 0f) "$${String.format("%.2f", monthCost)}" else "--",
+                )
+            }
+        }
+
         Spacer(modifier = Modifier.height(28.dp))
 
         // Action button
@@ -337,20 +392,20 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}) {
 }
 
 @Composable
-private fun StatMini(label: String, value: String) {
+private fun StatMini(label: String, value: String, small: Boolean = false) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Text(
             text = value,
             fontFamily = FontFamily.Monospace,
-            fontSize = 20.sp,
+            fontSize = if (small) 13.sp else 20.sp,
             fontWeight = FontWeight.Bold,
             color = SeekerClawColors.TextPrimary,
         )
-        Spacer(modifier = Modifier.height(2.dp))
+        if (!small) Spacer(modifier = Modifier.height(2.dp))
         Text(
             text = label,
             fontFamily = FontFamily.Default,
-            fontSize = 10.sp,
+            fontSize = if (small) 9.sp else 10.sp,
             fontWeight = FontWeight.Medium,
             color = SeekerClawColors.TextDim,
             letterSpacing = 1.sp,

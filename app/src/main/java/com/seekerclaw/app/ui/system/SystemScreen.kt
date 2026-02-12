@@ -44,8 +44,10 @@ import com.seekerclaw.app.ui.theme.SeekerClawColors
 import com.seekerclaw.app.util.DeviceInfo
 import com.seekerclaw.app.util.DeviceInfoProvider
 import com.seekerclaw.app.util.ClaudeUsageData
+import com.seekerclaw.app.util.DbSummary
 import com.seekerclaw.app.util.ServiceState
 import com.seekerclaw.app.util.ServiceStatus
+import com.seekerclaw.app.util.fetchDbSummary
 import kotlinx.coroutines.delay
 
 @Composable
@@ -67,12 +69,25 @@ fun SystemScreen(onBack: () -> Unit) {
         ?: "Not set"
 
     var deviceInfo by remember { mutableStateOf<DeviceInfo?>(null) }
+    var dbSummary by remember { mutableStateOf<DbSummary?>(null) }
 
     // Refresh device info every 5 seconds
     LaunchedEffect(Unit) {
         while (true) {
             deviceInfo = DeviceInfoProvider.getDeviceInfo(context)
             delay(5000)
+        }
+    }
+    // Fetch DB summary every 30s while running; clear on stop
+    LaunchedEffect(status) {
+        if (status == ServiceStatus.RUNNING) {
+            while (true) {
+                val result = fetchDbSummary()
+                dbSummary = result
+                delay(if (result != null) 30_000L else 5_000L)
+            }
+        } else {
+            dbSummary = null
         }
     }
 
@@ -323,6 +338,87 @@ fun SystemScreen(onBack: () -> Unit) {
                 unit = "tokens",
                 modifier = Modifier.weight(1f),
             )
+        }
+
+        // ==================== API ANALYTICS (BAT-32) ====================
+        val stats = dbSummary
+        if (stats != null && stats.todayRequests > 0) {
+            Spacer(modifier = Modifier.height(24.dp))
+
+            SectionLabel("API Analytics")
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(SeekerClawColors.Surface, shape)
+                    .padding(16.dp),
+            ) {
+                InfoRow("Requests", "${stats.todayRequests} today")
+                InfoRow(
+                    label = "Avg Latency",
+                    value = if (stats.todayAvgLatencyMs > 0) "${stats.todayAvgLatencyMs}ms" else "--",
+                    dotColor = when {
+                        stats.todayAvgLatencyMs > 5000 -> SeekerClawColors.Error
+                        stats.todayAvgLatencyMs > 3000 -> SeekerClawColors.Warning
+                        else -> SeekerClawColors.Accent
+                    },
+                )
+                InfoRow(
+                    label = "Error Rate",
+                    value = if (stats.todayErrors > 0)
+                        String.format("%.1f%%", stats.todayErrors.toDouble() * 100.0 / stats.todayRequests) else "0%",
+                    dotColor = when {
+                        stats.todayErrors > 0 -> SeekerClawColors.Warning
+                        else -> SeekerClawColors.Accent
+                    },
+                )
+                InfoRow(
+                    label = "Cache Hits",
+                    value = "${(stats.todayCacheHitRate * 100).toInt()}%",
+                )
+                if (stats.monthCostEstimate > 0f) {
+                    InfoRow(
+                        label = "Est. Cost",
+                        value = "$${String.format("%.2f", stats.monthCostEstimate)} /mo",
+                        isLast = true,
+                    )
+                } else {
+                    InfoRow(label = "Tokens In/Out",
+                        value = "${formatTokens(stats.todayInputTokens)} / ${formatTokens(stats.todayOutputTokens)}",
+                        isLast = true,
+                    )
+                }
+            }
+        }
+
+        // ==================== MEMORY INDEX (BAT-33) ====================
+        if (stats != null && (stats.memoryFilesIndexed > 0 || stats.memoryChunksCount > 0 || stats.memoryLastIndexed != null)) {
+            Spacer(modifier = Modifier.height(24.dp))
+
+            SectionLabel("Memory Index")
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(SeekerClawColors.Surface, shape)
+                    .padding(16.dp),
+            ) {
+                InfoRow("Files", "${stats.memoryFilesIndexed}")
+                InfoRow("Chunks", "${stats.memoryChunksCount}")
+                val lastIndexedFormatted = remember(stats.memoryLastIndexed) {
+                    if (stats.memoryLastIndexed != null)
+                        formatMemoryIndexTime(stats.memoryLastIndexed) else "Never"
+                }
+                InfoRow(
+                    label = "Last Indexed",
+                    value = lastIndexedFormatted,
+                    isLast = true,
+                    dotColor = when {
+                        stats.memoryLastIndexed == null -> SeekerClawColors.TextDim
+                        else -> SeekerClawColors.Accent
+                    },
+                )
+            }
         }
 
         Spacer(modifier = Modifier.height(32.dp))
@@ -611,3 +707,36 @@ private fun formatTokens(count: Long): String {
         else -> "$count"
     }
 }
+
+private fun formatMemoryIndexTime(isoTimestamp: String): String {
+    return try {
+        // Parse with timezone awareness, converting to local device time
+        val zonedDateTime = try {
+            java.time.OffsetDateTime.parse(isoTimestamp)
+                .atZoneSameInstant(java.time.ZoneId.systemDefault())
+        } catch (_: Exception) {
+            java.time.Instant.parse(isoTimestamp)
+                .atZone(java.time.ZoneId.systemDefault())
+        }
+        val localDate = zonedDateTime.toLocalDate()
+        val localTime = zonedDateTime.toLocalTime()
+        val hm = "%02d:%02d".format(localTime.hour, localTime.minute)
+        val today = java.time.LocalDate.now(java.time.ZoneId.systemDefault())
+        if (localDate == today) "Today $hm" else "$localDate $hm"
+    } catch (_: Exception) {
+        // Fallback: naive string split for non-standard formats
+        try {
+            val parts = isoTimestamp.split("T")
+            if (parts.size < 2) return isoTimestamp
+            val datePart = parts[0]
+            val timePart = parts[1].substringBefore("+").substringBefore("-")
+            val hm = timePart.split(":").take(2).joinToString(":")
+            val todayStr = java.time.LocalDate.now().toString()
+            if (datePart == todayStr) "Today $hm" else "$datePart $hm"
+        } catch (_: Exception) {
+            isoTimestamp
+        }
+    }
+}
+
+// DbSummary and fetchDbSummary are in com.seekerclaw.app.util.StatsClient
