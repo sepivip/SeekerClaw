@@ -4026,6 +4026,33 @@ async function initDatabase() {
             duration_ms INTEGER
         )`);
 
+        // Memory indexing tables (BAT-25)
+        db.run(`CREATE TABLE IF NOT EXISTS chunks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            path TEXT NOT NULL,
+            source TEXT DEFAULT 'memory',
+            start_line INTEGER,
+            end_line INTEGER,
+            hash TEXT,
+            text TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )`);
+        db.run(`CREATE INDEX IF NOT EXISTS idx_chunks_path ON chunks(path)`);
+        db.run(`CREATE INDEX IF NOT EXISTS idx_chunks_source ON chunks(source)`);
+
+        db.run(`CREATE TABLE IF NOT EXISTS files (
+            path TEXT PRIMARY KEY,
+            source TEXT DEFAULT 'memory',
+            hash TEXT,
+            mtime TEXT,
+            size INTEGER
+        )`);
+
+        db.run(`CREATE TABLE IF NOT EXISTS meta (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )`);
+
         // Persist immediately so the file exists on disk right away
         saveDatabase();
 
