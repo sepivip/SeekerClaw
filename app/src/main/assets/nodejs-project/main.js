@@ -3340,43 +3340,60 @@ async function claudeApiCall(body, chatId) {
     apiCallInFlight = new Promise(r => { resolve = r; });
 
     const startTime = Date.now();
+    const MAX_RETRIES = 3;
     try {
         const authHeaders = AUTH_TYPE === 'setup_token'
             ? { 'Authorization': `Bearer ${ANTHROPIC_KEY}` }
             : { 'x-api-key': ANTHROPIC_KEY };
 
         let res;
-        try {
-            res = await httpRequest({
-                hostname: 'api.anthropic.com',
-                path: '/v1/messages',
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'anthropic-version': '2023-06-01',
-                    'anthropic-beta': 'prompt-caching-2024-07-31',
-                    ...authHeaders,
+        let attempt = 0;
+
+        for (attempt = 0; attempt < MAX_RETRIES; attempt++) {
+            try {
+                res = await httpRequest({
+                    hostname: 'api.anthropic.com',
+                    path: '/v1/messages',
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'anthropic-version': '2023-06-01',
+                        'anthropic-beta': 'prompt-caching-2024-07-31',
+                        ...authHeaders,
+                    }
+                }, body);
+            } catch (networkErr) {
+                // Log network/timeout failures to DB before rethrowing
+                const durationMs = Date.now() - startTime;
+                if (db) {
+                    try {
+                        db.run(
+                            `INSERT INTO api_request_log (timestamp, chat_id, input_tokens, output_tokens,
+                             cache_creation_tokens, cache_read_tokens, status, retry_count, duration_ms)
+                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                            [new Date().toISOString(), String(chatId || ''), 0, 0, 0, 0, -1, attempt, durationMs]
+                        );
+                    } catch (_) {}
                 }
-            }, body);
-        } catch (networkErr) {
-            // Log network/timeout failures to DB before rethrowing
-            const durationMs = Date.now() - startTime;
-            if (db) {
-                try {
-                    db.run(
-                        `INSERT INTO api_request_log (timestamp, chat_id, input_tokens, output_tokens,
-                         cache_creation_tokens, cache_read_tokens, status, retry_count, duration_ms)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                        [new Date().toISOString(), String(chatId || ''), 0, 0, 0, 0, -1, 0, durationMs]
-                    );
-                } catch (_) {}
+                throw networkErr;
             }
-            throw networkErr;
+
+            // Retry on rate limit (429) or overloaded (529)
+            if ((res.status === 429 || res.status === 529) && attempt < MAX_RETRIES - 1) {
+                const retryAfter = parseInt(res.headers?.['retry-after']) || 0;
+                const waitMs = retryAfter > 0
+                    ? retryAfter * 1000
+                    : Math.min(5000 * Math.pow(2, attempt), 30000); // 5s, 10s, 20s
+                log(`[Retry] Claude API ${res.status}, attempt ${attempt + 1}/${MAX_RETRIES}, waiting ${waitMs}ms`);
+                await new Promise(r => setTimeout(r, waitMs));
+                continue;
+            }
+            break; // Non-retryable status — proceed
         }
 
         const durationMs = Date.now() - startTime;
 
-        // Log to database
+        // Log to database (final attempt result)
         if (db) {
             try {
                 const usage = res.data?.usage;
@@ -3387,7 +3404,7 @@ async function claudeApiCall(body, chatId) {
                     [new Date().toISOString(), String(chatId || ''),
                      usage?.input_tokens || 0, usage?.output_tokens || 0,
                      usage?.cache_creation_input_tokens || 0, usage?.cache_read_input_tokens || 0,
-                     res.status, 0, durationMs]
+                     res.status, attempt, durationMs]
                 );
             } catch (dbErr) {
                 log(`[DB] Log error: ${dbErr.message}`);
