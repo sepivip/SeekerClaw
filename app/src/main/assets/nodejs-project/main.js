@@ -3343,6 +3343,90 @@ function reportUsage(usage) {
     }
 }
 
+// ============================================================================
+// CLAUDE API CALL WRAPPER (mutex + logging + usage reporting)
+// ============================================================================
+
+let apiCallInFlight = null; // Promise that resolves when current call completes
+
+async function claudeApiCall(body, chatId) {
+    // Serialize: wait for any in-flight API call to complete first
+    while (apiCallInFlight) {
+        await apiCallInFlight;
+    }
+
+    let resolve;
+    apiCallInFlight = new Promise(r => { resolve = r; });
+
+    const startTime = Date.now();
+    try {
+        const authHeaders = AUTH_TYPE === 'setup_token'
+            ? { 'Authorization': `Bearer ${ANTHROPIC_KEY}` }
+            : { 'x-api-key': ANTHROPIC_KEY };
+
+        const res = await httpRequest({
+            hostname: 'api.anthropic.com',
+            path: '/v1/messages',
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'anthropic-version': '2023-06-01',
+                'anthropic-beta': 'prompt-caching-2024-07-31',
+                ...authHeaders,
+            }
+        }, body);
+
+        const durationMs = Date.now() - startTime;
+
+        // Log to database
+        if (db) {
+            try {
+                const usage = res.data?.usage;
+                db.run(
+                    `INSERT INTO api_request_log (timestamp, chat_id, input_tokens, output_tokens,
+                     cache_creation_tokens, cache_read_tokens, status, retry_count, duration_ms)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                    [new Date().toISOString(), String(chatId || ''),
+                     usage?.input_tokens || 0, usage?.output_tokens || 0,
+                     usage?.cache_creation_input_tokens || 0, usage?.cache_read_input_tokens || 0,
+                     res.status, 0, durationMs]
+                );
+            } catch (dbErr) {
+                log(`[DB] Log error: ${dbErr.message}`);
+            }
+        }
+
+        // Report usage metrics + cache status
+        if (res.status === 200) {
+            reportUsage(res.data?.usage);
+        }
+
+        // Capture rate limit headers
+        if (AUTH_TYPE === 'api_key' && res.headers) {
+            const h = res.headers;
+            writeClaudeUsageState({
+                type: 'api_key',
+                requests: {
+                    limit: parseInt(h['anthropic-ratelimit-requests-limit']) || 0,
+                    remaining: parseInt(h['anthropic-ratelimit-requests-remaining']) || 0,
+                    reset: h['anthropic-ratelimit-requests-reset'] || '',
+                },
+                tokens: {
+                    limit: parseInt(h['anthropic-ratelimit-tokens-limit']) || 0,
+                    remaining: parseInt(h['anthropic-ratelimit-tokens-remaining']) || 0,
+                    reset: h['anthropic-ratelimit-tokens-reset'] || '',
+                },
+                updated_at: new Date().toISOString(),
+            });
+        }
+
+        return res;
+    } finally {
+        apiCallInFlight = null;
+        resolve();
+    }
+}
+
 async function chat(chatId, userMessage) {
     // Find skills that match this message
     const matchedSkills = findMatchingSkills(userMessage);
@@ -3376,21 +3460,7 @@ async function chat(chatId, userMessage) {
             messages: messages
         });
 
-        const authHeaders = AUTH_TYPE === 'setup_token'
-            ? { 'Authorization': `Bearer ${ANTHROPIC_KEY}` }
-            : { 'x-api-key': ANTHROPIC_KEY };
-
-        const res = await httpRequest({
-            hostname: 'api.anthropic.com',
-            path: '/v1/messages',
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'anthropic-version': '2023-06-01',
-                'anthropic-beta': 'prompt-caching-2024-07-31',
-                ...authHeaders,
-            }
-        }, body);
+        const res = await claudeApiCall(body, chatId);
 
         if (res.status !== 200) {
             log(`Claude API error: ${res.status} - ${JSON.stringify(res.data)}`);
@@ -3398,28 +3468,6 @@ async function chat(chatId, userMessage) {
         }
 
         response = res.data;
-
-        // Track token usage (including cache metrics)
-        reportUsage(response.usage);
-
-        // Capture rate limit headers (API key users)
-        if (AUTH_TYPE === 'api_key' && res.headers) {
-            const h = res.headers;
-            writeClaudeUsageState({
-                type: 'api_key',
-                requests: {
-                    limit: parseInt(h['anthropic-ratelimit-requests-limit']) || 0,
-                    remaining: parseInt(h['anthropic-ratelimit-requests-remaining']) || 0,
-                    reset: h['anthropic-ratelimit-requests-reset'] || '',
-                },
-                tokens: {
-                    limit: parseInt(h['anthropic-ratelimit-tokens-limit']) || 0,
-                    remaining: parseInt(h['anthropic-ratelimit-tokens-remaining']) || 0,
-                    reset: h['anthropic-ratelimit-tokens-reset'] || '',
-                },
-                updated_at: new Date().toISOString(),
-            });
-        }
 
         // Check if we need to handle tool use
         const toolUses = response.content.filter(c => c.type === 'tool_use');
@@ -3459,30 +3507,16 @@ async function chat(chatId, userMessage) {
     if (!textContent && toolUseCount > 0) {
         log('No text in final tool response, requesting summary...');
         // The tool results are already in messages — just call again without tools
-        const authHeaders = AUTH_TYPE === 'setup_token'
-            ? { 'Authorization': `Bearer ${ANTHROPIC_KEY}` }
-            : { 'x-api-key': ANTHROPIC_KEY };
-        const summaryRes = await httpRequest({
-            hostname: 'api.anthropic.com',
-            path: '/v1/messages',
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'anthropic-version': '2023-06-01',
-                'anthropic-beta': 'prompt-caching-2024-07-31',
-                ...authHeaders,
-            }
-        }, JSON.stringify({
+        const summaryRes = await claudeApiCall(JSON.stringify({
             model: MODEL,
             max_tokens: 4096,
             system: systemBlocks,
             messages: messages
-        }));
+        }), chatId);
 
         if (summaryRes.status === 200 && summaryRes.data.content) {
             response = summaryRes.data;
             textContent = response.content.find(c => c.type === 'text');
-            reportUsage(response.usage);
         }
     }
 
