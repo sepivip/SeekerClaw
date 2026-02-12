@@ -32,7 +32,7 @@
 - **Encryption:** Android Keystore (AES-256-GCM, `userAuthenticationRequired = false`)
 - **Background Service:** Foreground Service with `specialUse` type
 - **IPC:** nodejs-mobile JNI bridge + localhost HTTP
-- **Database:** SQLite via better-sqlite3 (cross-compiled for ARM64)
+- **Database:** SQL.js (WASM-compiled SQLite) — no native bindings needed
 - **Build:** Gradle (Kotlin DSL)
 - **Distribution:** Solana dApp Store (primary), direct APK sideload (fallback)
 
@@ -379,7 +379,7 @@ cd openclaw-reference && git pull
 
 | OpenClaw File | Purpose | SeekerClaw Equivalent |
 |---------------|---------|----------------------|
-| `src/agents/system-prompt.ts` | System prompt builder | `main.js:buildSystemPrompt()` |
+| `src/agents/system-prompt.ts` | System prompt builder | `main.js:buildSystemBlocks()` |
 | `src/agents/skills/workspace.ts` | Skills loading | `main.js:loadSkills()` |
 | `src/memory/manager.ts` | Memory management | `main.js` (simplified) |
 | `src/cron/types.ts` | Cron/scheduling | `main.js:cronService` (ported) |
@@ -482,15 +482,16 @@ _You're not a chatbot. You're becoming someone._
 
 OpenClaw requires **Node 22+** for `node:sqlite`. SeekerClaw runs on **Node 18** (nodejs-mobile limitation).
 
-**Cannot implement:**
-- SQLite-based memory (uses `node:sqlite`)
-- Vector embeddings for semantic search
-- FTS5 full-text search
+**Solved:**
+- SQLite — uses **SQL.js** (WASM-compiled SQLite, v1.12.0) instead of `node:sqlite`. Bundled as `sql-wasm.js` + `sql-wasm.wasm` in assets. Currently used for API request logging (`api_request_log` table); future: conversation storage, FTS5 memory search.
 
-**Workarounds:**
-- File-based memory (MEMORY.md, daily files)
+**Cannot implement (yet):**
+- Vector embeddings for semantic search (needs native bindings)
+
+**Current workarounds:**
+- File-based memory (MEMORY.md, daily files) — future: migrate to SQL.js
 - Keyword matching for skills
-- Full file reads for memory recall
+- Full file reads for memory recall — future: FTS5 via SQL.js
 
 ---
 
