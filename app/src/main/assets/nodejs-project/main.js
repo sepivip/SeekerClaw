@@ -3887,9 +3887,6 @@ function saveDatabase(force) {
     }
 }
 
-// Mark DB dirty (called after inserts — see claudeApiCall in BAT-16)
-function markDbDirty() { dbDirty = true; }
-
 // ============================================================================
 // STARTUP
 // ============================================================================
