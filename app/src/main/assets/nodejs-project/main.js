@@ -3384,7 +3384,7 @@ async function claudeApiCall(body, chatId) {
                 const waitMs = retryAfter > 0
                     ? retryAfter * 1000
                     : Math.min(5000 * Math.pow(2, attempt), 30000); // 5s, 10s, 20s
-                log(`[Retry] Claude API ${res.status}, attempt ${attempt + 1}/${MAX_RETRIES}, waiting ${waitMs}ms`);
+                log(`[Retry] Claude API ${res.status}, attempt ${attempt + 1}/${MAX_RETRIES} failed, retrying in ${waitMs}ms`);
                 await new Promise(r => setTimeout(r, waitMs));
                 continue;
             }
@@ -3393,7 +3393,7 @@ async function claudeApiCall(body, chatId) {
 
         const durationMs = Date.now() - startTime;
 
-        // Log to database (final attempt result)
+        // Log to database (final attempt result; retry_count = number of retries, 0 = first try succeeded)
         if (db) {
             try {
                 const usage = res.data?.usage;
