@@ -3813,6 +3813,9 @@ async function pollClaudeUsage() {
 // ============================================================================
 
 let db = null;
+// DB file lives in workDir (writable app data); WASM files live in __dirname (bundled assets)
+const DB_FILENAME = 'seekerclaw.db';
+const getDbPath = () => path.join(workDir, DB_FILENAME);
 
 async function initDatabase() {
     try {
@@ -3821,13 +3824,21 @@ async function initDatabase() {
             locateFile: file => path.join(__dirname, file)
         });
 
-        const dbPath = path.join(workDir, 'seekerclaw.db');
+        const dbPath = getDbPath();
 
-        // Load existing DB or create new
+        // Load existing DB or create new (with corrupted DB recovery)
         if (fs.existsSync(dbPath)) {
-            const buffer = fs.readFileSync(dbPath);
-            db = new SQL.Database(buffer);
-            log('[DB] Loaded existing database');
+            try {
+                const buffer = fs.readFileSync(dbPath);
+                db = new SQL.Database(buffer);
+                log('[DB] Loaded existing database');
+            } catch (loadErr) {
+                log(`[DB] Corrupted database, backing up and recreating: ${loadErr.message}`);
+                const backupPath = dbPath + '.corrupt.' + Date.now();
+                try { fs.renameSync(dbPath, backupPath); } catch (_) {}
+                db = new SQL.Database();
+                log('[DB] Created fresh database after corruption recovery');
+            }
         } else {
             db = new SQL.Database();
             log('[DB] Created new database');
@@ -3848,6 +3859,11 @@ async function initDatabase() {
         )`);
 
         log('[DB] SQL.js database initialized');
+
+        // Start periodic saves and shutdown hooks only after successful init
+        setInterval(saveDatabase, 60000);
+        process.on('SIGTERM', () => { saveDatabase(); process.exit(0); });
+        process.on('SIGINT', () => { saveDatabase(); process.exit(0); });
     } catch (err) {
         log(`[DB] Failed to initialize SQL.js (non-fatal): ${err.message}`);
         db = null;
@@ -3859,18 +3875,15 @@ function saveDatabase() {
     try {
         const data = db.export();
         const buffer = Buffer.from(data);
-        fs.writeFileSync(path.join(workDir, 'seekerclaw.db'), buffer);
+        // Atomic write: write to temp file, then rename
+        const dbPath = getDbPath();
+        const tmpPath = dbPath + '.tmp';
+        fs.writeFileSync(tmpPath, buffer);
+        fs.renameSync(tmpPath, dbPath);
     } catch (err) {
         log(`[DB] Save error: ${err.message}`);
     }
 }
-
-// Persist to disk every 60s
-setInterval(saveDatabase, 60000);
-
-// Save on clean shutdown
-process.on('SIGTERM', () => { saveDatabase(); process.exit(0); });
-process.on('SIGINT', () => { saveDatabase(); process.exit(0); });
 
 // ============================================================================
 // STARTUP
