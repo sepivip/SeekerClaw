@@ -3329,6 +3329,8 @@ function reportUsage(usage) {
 // ============================================================================
 
 let apiCallInFlight = null; // Promise that resolves when current call completes
+let lastRateLimitTokensRemaining = Infinity;
+let lastRateLimitTokensReset = '';
 
 async function claudeApiCall(body, chatId) {
     // Serialize: wait for any in-flight API call to complete first
@@ -3338,6 +3340,18 @@ async function claudeApiCall(body, chatId) {
 
     let resolve;
     apiCallInFlight = new Promise(r => { resolve = r; });
+
+    // Rate-limit pre-check: delay if token budget is critically low
+    if (lastRateLimitTokensRemaining < 5000) {
+        const resetTime = lastRateLimitTokensReset ? new Date(lastRateLimitTokensReset).getTime() : 0;
+        const now = Date.now();
+        // Wait until the reset time, capped at 15s
+        const waitMs = resetTime > now
+            ? Math.min(resetTime - now, 15000)
+            : Math.min(15000, Math.max(3000, 60000 - (now % 60000)));
+        log(`[RateLimit] Only ${lastRateLimitTokensRemaining} tokens remaining, waiting ${waitMs}ms`);
+        await new Promise(r => setTimeout(r, waitMs));
+    }
 
     const startTime = Date.now();
     const MAX_RETRIES = 3; // 1 initial + up to 3 retries = 4 total attempts max
@@ -3418,9 +3432,12 @@ async function claudeApiCall(body, chatId) {
             reportUsage(res.data?.usage);
         }
 
-        // Capture rate limit headers
+        // Capture rate limit headers and update module-level tracking
         if (AUTH_TYPE === 'api_key' && res.headers) {
             const h = res.headers;
+            const parsedRemaining = parseInt(h['anthropic-ratelimit-tokens-remaining'], 10);
+            lastRateLimitTokensRemaining = Number.isFinite(parsedRemaining) ? parsedRemaining : Infinity;
+            lastRateLimitTokensReset = h['anthropic-ratelimit-tokens-reset'] || '';
             writeClaudeUsageState({
                 type: 'api_key',
                 requests: {
