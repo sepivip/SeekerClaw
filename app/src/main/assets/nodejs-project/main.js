@@ -3188,25 +3188,8 @@ function buildSystemPrompt(matchedSkills = []) {
         lines.push('</available_skills>');
         lines.push('');
 
-        // If specific skills matched (for backwards compatibility with keyword triggers)
-        if (matchedSkills.length > 0) {
-            lines.push('## Active Skills for This Request');
-            lines.push('The following skills have been automatically loaded based on keywords:');
-            lines.push('');
-            for (const skill of matchedSkills) {
-                const emoji = skill.emoji ? `${skill.emoji} ` : '';
-                lines.push(`### ${emoji}${skill.name}`);
-                if (skill.description) {
-                    lines.push(skill.description);
-                    lines.push('');
-                }
-                if (skill.instructions) {
-                    lines.push('**Follow these instructions:**');
-                    lines.push(skill.instructions);
-                    lines.push('');
-                }
-            }
-        }
+        // matchedSkills section is built separately (dynamic, not cached)
+        // — see dynamicLines below
     }
 
     // Safety section - matches OpenClaw exactly
@@ -3313,11 +3296,33 @@ function buildSystemPrompt(matchedSkills = []) {
     const stablePrompt = lines.join('\n');
 
     // Dynamic block — changes every call, must NOT be cached
+    const dynamicLines = [];
     const now = new Date();
     const weekday = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][now.getDay()];
-    const dynamicPrompt = `Current time: ${weekday} ${now.toISOString()} (${now.toLocaleString()})`;
+    dynamicLines.push(`Current time: ${weekday} ${now.toISOString()} (${now.toLocaleString()})`);
 
-    return { stable: stablePrompt, dynamic: dynamicPrompt };
+    // Active skills for this specific request (varies per message)
+    if (matchedSkills.length > 0) {
+        dynamicLines.push('');
+        dynamicLines.push('## Active Skills for This Request');
+        dynamicLines.push('The following skills have been automatically loaded based on keywords:');
+        dynamicLines.push('');
+        for (const skill of matchedSkills) {
+            const emoji = skill.emoji ? `${skill.emoji} ` : '';
+            dynamicLines.push(`### ${emoji}${skill.name}`);
+            if (skill.description) {
+                dynamicLines.push(skill.description);
+                dynamicLines.push('');
+            }
+            if (skill.instructions) {
+                dynamicLines.push('**Follow these instructions:**');
+                dynamicLines.push(skill.instructions);
+                dynamicLines.push('');
+            }
+        }
+    }
+
+    return { stable: stablePrompt, dynamic: dynamicLines.join('\n') };
 }
 
 async function chat(chatId, userMessage) {
@@ -3388,7 +3393,7 @@ async function chat(chatId, userMessage) {
                 log(`[Cache] hit: ${response.usage.cache_read_input_tokens} tokens read from cache`);
             }
             if (response.usage.cache_creation_input_tokens) {
-                log(`[Cache] write: ${response.usage.cache_creation_input_tokens} tokens written to cache`);
+                log(`[Cache] miss: ${response.usage.cache_creation_input_tokens} tokens written to cache`);
             }
         }
 
