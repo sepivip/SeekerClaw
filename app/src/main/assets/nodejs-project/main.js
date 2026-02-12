@@ -2575,9 +2575,6 @@ async function androidBridgeCall(endpoint, data = {}, timeoutMs = 10000) {
 async function visionAnalyzeImage(imageBase64, prompt, maxTokens = 400) {
     const safePrompt = (prompt || '').trim() || 'Describe what is happening in this image.';
     const cappedMaxTokens = Math.max(128, Math.min(parseInt(maxTokens) || 400, 1024));
-    const authHeaders = AUTH_TYPE === 'setup_token'
-        ? { 'Authorization': `Bearer ${ANTHROPIC_KEY}` }
-        : { 'x-api-key': ANTHROPIC_KEY };
 
     const body = JSON.stringify({
         model: MODEL,
@@ -2600,16 +2597,7 @@ async function visionAnalyzeImage(imageBase64, prompt, maxTokens = 400) {
         ]
     });
 
-    const res = await httpRequest({
-        hostname: 'api.anthropic.com',
-        path: '/v1/messages',
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'anthropic-version': '2023-06-01',
-            ...authHeaders,
-        }
-    }, body);
+    const res = await claudeApiCall(body, 'vision');
 
     if (res.status !== 200) {
         return { error: `Vision API error: ${res.data?.error?.message || res.status}` };
@@ -2620,13 +2608,6 @@ async function visionAnalyzeImage(imageBase64, prompt, maxTokens = 400) {
         .map(c => c.text)
         .join('\n')
         .trim();
-
-    if (res.data?.usage) {
-        androidBridgeCall('/stats/tokens', {
-            input_tokens: res.data.usage.input_tokens || 0,
-            output_tokens: res.data.usage.output_tokens || 0,
-        }).catch(() => {});
-    }
 
     return {
         text: text || '(No vision response)',
@@ -3364,17 +3345,34 @@ async function claudeApiCall(body, chatId) {
             ? { 'Authorization': `Bearer ${ANTHROPIC_KEY}` }
             : { 'x-api-key': ANTHROPIC_KEY };
 
-        const res = await httpRequest({
-            hostname: 'api.anthropic.com',
-            path: '/v1/messages',
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'anthropic-version': '2023-06-01',
-                'anthropic-beta': 'prompt-caching-2024-07-31',
-                ...authHeaders,
+        let res;
+        try {
+            res = await httpRequest({
+                hostname: 'api.anthropic.com',
+                path: '/v1/messages',
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'anthropic-version': '2023-06-01',
+                    'anthropic-beta': 'prompt-caching-2024-07-31',
+                    ...authHeaders,
+                }
+            }, body);
+        } catch (networkErr) {
+            // Log network/timeout failures to DB before rethrowing
+            const durationMs = Date.now() - startTime;
+            if (db) {
+                try {
+                    db.run(
+                        `INSERT INTO api_request_log (timestamp, chat_id, input_tokens, output_tokens,
+                         cache_creation_tokens, cache_read_tokens, status, retry_count, duration_ms)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                        [new Date().toISOString(), String(chatId || ''), 0, 0, 0, 0, -1, 0, durationMs]
+                    );
+                } catch (_) {}
             }
-        }, body);
+            throw networkErr;
+        }
 
         const durationMs = Date.now() - startTime;
 
