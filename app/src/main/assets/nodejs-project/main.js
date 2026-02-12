@@ -3293,7 +3293,7 @@ function buildSystemPrompt(matchedSkills = []) {
     lines.push(`Platform: Android ${process.arch} | Node: ${process.version} | Model: ${MODEL}`);
     lines.push(`Channel: telegram | Agent: ${AGENT_NAME}`);
 
-    const stablePrompt = lines.join('\n');
+    const stablePrompt = lines.join('\n') + '\n';
 
     // Dynamic block — changes every call, must NOT be cached
     const dynamicLines = [];
@@ -3484,6 +3484,12 @@ async function chat(chatId, userMessage) {
                     cache_creation_input_tokens: response.usage.cache_creation_input_tokens || 0,
                     cache_read_input_tokens: response.usage.cache_read_input_tokens || 0,
                 }).catch(() => {});
+                if (response.usage.cache_read_input_tokens) {
+                    log(`[Cache] hit: ${response.usage.cache_read_input_tokens} tokens read from cache`);
+                }
+                if (response.usage.cache_creation_input_tokens) {
+                    log(`[Cache] miss: ${response.usage.cache_creation_input_tokens} tokens written to cache`);
+                }
             }
         }
     }
