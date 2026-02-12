@@ -3339,7 +3339,7 @@ async function chat(chatId, userMessage) {
         const body = JSON.stringify({
             model: MODEL,
             max_tokens: 4096,
-            system: systemPrompt,
+            system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
             tools: TOOLS,
             messages: messages
         });
@@ -3355,6 +3355,7 @@ async function chat(chatId, userMessage) {
             headers: {
                 'Content-Type': 'application/json',
                 'anthropic-version': '2023-06-01',
+                'anthropic-beta': 'prompt-caching-2024-07-31',
                 ...authHeaders,
             }
         }, body);
@@ -3366,12 +3367,19 @@ async function chat(chatId, userMessage) {
 
         response = res.data;
 
-        // Track token usage
+        // Track token usage (including cache metrics)
         if (response.usage) {
             androidBridgeCall('/stats/tokens', {
                 input_tokens: response.usage.input_tokens || 0,
                 output_tokens: response.usage.output_tokens || 0,
+                cache_creation_input_tokens: response.usage.cache_creation_input_tokens || 0,
+                cache_read_input_tokens: response.usage.cache_read_input_tokens || 0,
             }).catch(() => {});
+            if (response.usage.cache_read_input_tokens) {
+                log(`[Cache] hit: ${response.usage.cache_read_input_tokens} tokens read from cache`);
+            } else if (response.usage.cache_creation_input_tokens) {
+                log(`[Cache] miss: ${response.usage.cache_creation_input_tokens} tokens written to cache`);
+            }
         }
 
         // Capture rate limit headers (API key users)
@@ -3441,12 +3449,13 @@ async function chat(chatId, userMessage) {
             headers: {
                 'Content-Type': 'application/json',
                 'anthropic-version': '2023-06-01',
+                'anthropic-beta': 'prompt-caching-2024-07-31',
                 ...authHeaders,
             }
         }, JSON.stringify({
             model: MODEL,
             max_tokens: 4096,
-            system: systemPrompt,
+            system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
             messages: messages
         }));
 
