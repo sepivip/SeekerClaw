@@ -3122,7 +3122,7 @@ function clearConversation(chatId) {
     conversations.set(chatId, []);
 }
 
-function buildSystemPrompt(matchedSkills = []) {
+function buildSystemBlocks(matchedSkills = []) {
     const soul = loadSoul();
     const memory = loadMemory();
     const dailyMemory = loadDailyMemory();
@@ -3325,6 +3325,23 @@ function buildSystemPrompt(matchedSkills = []) {
     return { stable: stablePrompt, dynamic: dynamicLines.join('\n') };
 }
 
+// Report Claude API usage + cache metrics to Android bridge and logs
+function reportUsage(usage) {
+    if (!usage) return;
+    androidBridgeCall('/stats/tokens', {
+        input_tokens: usage.input_tokens || 0,
+        output_tokens: usage.output_tokens || 0,
+        cache_creation_input_tokens: usage.cache_creation_input_tokens || 0,
+        cache_read_input_tokens: usage.cache_read_input_tokens || 0,
+    }).catch(() => {});
+    if (usage.cache_read_input_tokens) {
+        log(`[Cache] hit: ${usage.cache_read_input_tokens} tokens read from cache`);
+    }
+    if (usage.cache_creation_input_tokens) {
+        log(`[Cache] miss: ${usage.cache_creation_input_tokens} tokens written to cache`);
+    }
+}
+
 async function chat(chatId, userMessage) {
     // Find skills that match this message
     const matchedSkills = findMatchingSkills(userMessage);
@@ -3332,7 +3349,7 @@ async function chat(chatId, userMessage) {
         log(`Matched skills: ${matchedSkills.map(s => s.name).join(', ')}`);
     }
 
-    const { stable: stablePrompt, dynamic: dynamicPrompt } = buildSystemPrompt(matchedSkills);
+    const { stable: stablePrompt, dynamic: dynamicPrompt } = buildSystemBlocks(matchedSkills);
     // Two system blocks: large stable block (cached) + small dynamic block (per-request)
     const systemBlocks = [
         { type: 'text', text: stablePrompt, cache_control: { type: 'ephemeral' } },
@@ -3382,20 +3399,7 @@ async function chat(chatId, userMessage) {
         response = res.data;
 
         // Track token usage (including cache metrics)
-        if (response.usage) {
-            androidBridgeCall('/stats/tokens', {
-                input_tokens: response.usage.input_tokens || 0,
-                output_tokens: response.usage.output_tokens || 0,
-                cache_creation_input_tokens: response.usage.cache_creation_input_tokens || 0,
-                cache_read_input_tokens: response.usage.cache_read_input_tokens || 0,
-            }).catch(() => {});
-            if (response.usage.cache_read_input_tokens) {
-                log(`[Cache] hit: ${response.usage.cache_read_input_tokens} tokens read from cache`);
-            }
-            if (response.usage.cache_creation_input_tokens) {
-                log(`[Cache] miss: ${response.usage.cache_creation_input_tokens} tokens written to cache`);
-            }
-        }
+        reportUsage(response.usage);
 
         // Capture rate limit headers (API key users)
         if (AUTH_TYPE === 'api_key' && res.headers) {
@@ -3477,20 +3481,7 @@ async function chat(chatId, userMessage) {
         if (summaryRes.status === 200 && summaryRes.data.content) {
             response = summaryRes.data;
             textContent = response.content.find(c => c.type === 'text');
-            if (response.usage) {
-                androidBridgeCall('/stats/tokens', {
-                    input_tokens: response.usage.input_tokens || 0,
-                    output_tokens: response.usage.output_tokens || 0,
-                    cache_creation_input_tokens: response.usage.cache_creation_input_tokens || 0,
-                    cache_read_input_tokens: response.usage.cache_read_input_tokens || 0,
-                }).catch(() => {});
-                if (response.usage.cache_read_input_tokens) {
-                    log(`[Cache] hit: ${response.usage.cache_read_input_tokens} tokens read from cache`);
-                }
-                if (response.usage.cache_creation_input_tokens) {
-                    log(`[Cache] miss: ${response.usage.cache_creation_input_tokens} tokens written to cache`);
-                }
-            }
+            reportUsage(response.usage);
         }
     }
 
