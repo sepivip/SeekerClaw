@@ -3809,6 +3809,70 @@ async function pollClaudeUsage() {
 }
 
 // ============================================================================
+// SQL.JS DATABASE (WASM-based SQLite for request logging)
+// ============================================================================
+
+let db = null;
+
+async function initDatabase() {
+    try {
+        const initSqlJs = require('./sql-wasm.js');
+        const SQL = await initSqlJs({
+            locateFile: file => path.join(__dirname, file)
+        });
+
+        const dbPath = path.join(workDir, 'seekerclaw.db');
+
+        // Load existing DB or create new
+        if (fs.existsSync(dbPath)) {
+            const buffer = fs.readFileSync(dbPath);
+            db = new SQL.Database(buffer);
+            log('[DB] Loaded existing database');
+        } else {
+            db = new SQL.Database();
+            log('[DB] Created new database');
+        }
+
+        // Create tables
+        db.run(`CREATE TABLE IF NOT EXISTS api_request_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            chat_id TEXT,
+            input_tokens INTEGER,
+            output_tokens INTEGER,
+            cache_creation_tokens INTEGER DEFAULT 0,
+            cache_read_tokens INTEGER DEFAULT 0,
+            status INTEGER,
+            retry_count INTEGER DEFAULT 0,
+            duration_ms INTEGER
+        )`);
+
+        log('[DB] SQL.js database initialized');
+    } catch (err) {
+        log(`[DB] Failed to initialize SQL.js (non-fatal): ${err.message}`);
+        db = null;
+    }
+}
+
+function saveDatabase() {
+    if (!db) return;
+    try {
+        const data = db.export();
+        const buffer = Buffer.from(data);
+        fs.writeFileSync(path.join(workDir, 'seekerclaw.db'), buffer);
+    } catch (err) {
+        log(`[DB] Save error: ${err.message}`);
+    }
+}
+
+// Persist to disk every 60s
+setInterval(saveDatabase, 60000);
+
+// Save on clean shutdown
+process.on('SIGTERM', () => { saveDatabase(); process.exit(0); });
+process.on('SIGINT', () => { saveDatabase(); process.exit(0); });
+
+// ============================================================================
 // STARTUP
 // ============================================================================
 
@@ -3817,6 +3881,9 @@ telegram('getMe')
     .then(async result => {
         if (result.ok) {
             log(`Bot connected: @${result.result.username}`);
+
+            // Initialize SQL.js database (non-blocking, non-fatal)
+            await initDatabase();
             // Flush old updates to avoid re-processing messages after restart
             try {
                 const flush = await telegram('getUpdates', { offset: -1, timeout: 0 });
