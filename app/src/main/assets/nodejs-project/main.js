@@ -3435,7 +3435,8 @@ async function claudeApiCall(body, chatId) {
         // Capture rate limit headers and update module-level tracking
         if (AUTH_TYPE === 'api_key' && res.headers) {
             const h = res.headers;
-            lastRateLimitTokensRemaining = parseInt(h['anthropic-ratelimit-tokens-remaining']) || Infinity;
+            const parsedRemaining = parseInt(h['anthropic-ratelimit-tokens-remaining'], 10);
+            lastRateLimitTokensRemaining = Number.isFinite(parsedRemaining) ? parsedRemaining : Infinity;
             lastRateLimitTokensReset = h['anthropic-ratelimit-tokens-reset'] || '';
             writeClaudeUsageState({
                 type: 'api_key',
