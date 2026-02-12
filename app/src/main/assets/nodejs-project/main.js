@@ -3352,6 +3352,41 @@ let apiCallInFlight = null; // Promise that resolves when current call completes
 let lastRateLimitTokensRemaining = Infinity;
 let lastRateLimitTokensReset = '';
 
+// Classify API errors into retryable vs fatal with user-friendly messages (BAT-22)
+function classifyApiError(status, data) {
+    if (status === 401 || status === 403) {
+        return { type: 'auth', retryable: false,
+            userMessage: 'API authentication failed. Please check your API key in Settings.' };
+    }
+    if (status === 402) {
+        return { type: 'billing', retryable: false,
+            userMessage: 'Your API account needs attention — check billing at console.anthropic.com' };
+    }
+    if (status === 429) {
+        const msg = data?.error?.message || '';
+        if (/quota|credit/i.test(msg)) {
+            return { type: 'quota', retryable: false,
+                userMessage: 'API usage quota exceeded. Please try again later or upgrade your plan.' };
+        }
+        return { type: 'rate_limit', retryable: true, userMessage: null };
+    }
+    if (status === 529) {
+        return { type: 'overloaded', retryable: true, userMessage: null };
+    }
+    // Cloudflare errors (520-527)
+    if (status >= 520 && status <= 527) {
+        return { type: 'cloudflare', retryable: true,
+            userMessage: 'Claude API is temporarily unreachable. Retrying...' };
+    }
+    // Other server errors
+    if (status >= 500 && status < 600) {
+        return { type: 'server', retryable: true,
+            userMessage: 'Claude API is temporarily unavailable. Retrying...' };
+    }
+    return { type: 'unknown', retryable: false,
+        userMessage: `Unexpected API error (${status}). Please try again.` };
+}
+
 async function claudeApiCall(body, chatId) {
     // Serialize: wait for any in-flight API call to complete first
     while (apiCallInFlight) {
@@ -3413,18 +3448,23 @@ async function claudeApiCall(body, chatId) {
                 throw networkErr;
             }
 
-            // Retry on rate limit (429) or overloaded (529)
-            if ((res.status === 429 || res.status === 529) && retries < MAX_RETRIES) {
-                const retryAfterRaw = parseInt(res.headers?.['retry-after']) || 0;
-                const retryAfterMs = Math.min(retryAfterRaw * 1000, 30000); // cap at 30s
-                const backoffMs = Math.min(5000 * Math.pow(2, retries), 30000); // 5s, 10s, 20s
-                const waitMs = retryAfterMs > 0 ? retryAfterMs : backoffMs;
-                log(`[Retry] Claude API ${res.status}, retry ${retries + 1}/${MAX_RETRIES}, waiting ${waitMs}ms`);
-                retries++;
-                await new Promise(r => setTimeout(r, waitMs));
-                continue;
+            // Classify error and decide whether to retry (BAT-22)
+            if (res.status !== 200) {
+                const errClass = classifyApiError(res.status, res.data);
+                if (errClass.retryable && retries < MAX_RETRIES) {
+                    const retryAfterRaw = parseInt(res.headers?.['retry-after']) || 0;
+                    const retryAfterMs = Math.min(retryAfterRaw * 1000, 30000);
+                    // Cloudflare errors use longer backoff (5s, 10s, 20s)
+                    const baseMs = errClass.type === 'cloudflare' ? 5000 : 2000;
+                    const backoffMs = Math.min(baseMs * Math.pow(2, retries), 30000);
+                    const waitMs = retryAfterMs > 0 ? retryAfterMs : backoffMs;
+                    log(`[Retry] Claude API ${res.status} (${errClass.type}), retry ${retries + 1}/${MAX_RETRIES}, waiting ${waitMs}ms`);
+                    retries++;
+                    await new Promise(r => setTimeout(r, waitMs));
+                    continue;
+                }
             }
-            break; // Success or non-retryable status
+            break; // Success or non-retryable/exhausted retries
         }
 
         const durationMs = Date.now() - startTime;
@@ -3518,7 +3558,8 @@ async function chat(chatId, userMessage) {
 
         if (res.status !== 200) {
             log(`Claude API error: ${res.status} - ${JSON.stringify(res.data)}`);
-            throw new Error(`API error: ${res.data.error?.message || res.status}`);
+            const errClass = classifyApiError(res.status, res.data);
+            throw new Error(errClass.userMessage || `API error: ${res.status}`);
         }
 
         response = res.data;
