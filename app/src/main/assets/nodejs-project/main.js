@@ -1959,7 +1959,6 @@ async function executeTool(name, input) {
                         const fallback = await searchBrave(input.query, safeCount, safeFreshness);
                         const braveCacheKey = `search:brave:${input.query}:${safeCount}:${safeFreshness}`;
                         cacheSet(braveCacheKey, fallback);
-                        cacheSet(cacheKey, fallback);
                         return fallback;
                     } catch (e2) { return { error: e2.message }; }
                 }
