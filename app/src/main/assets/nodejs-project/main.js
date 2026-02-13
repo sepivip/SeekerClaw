@@ -1982,7 +1982,12 @@ async function executeTool(name, input) {
             try {
                 const res = await webFetch(input.url);
                 if (res.status < 200 || res.status >= 300) {
-                    const detail = typeof res.data === 'string' ? res.data.slice(0, 200) : '';
+                    let detail = '';
+                    if (typeof res.data === 'string') {
+                        detail = res.data.slice(0, 200);
+                    } else if (res.data && typeof res.data === 'object') {
+                        detail = (res.data.error && res.data.error.message) || res.data.message || '';
+                    }
                     throw new Error(`HTTP error (${res.status})${detail ? ': ' + detail : ''}`);
                 }
                 let result;
