@@ -1282,7 +1282,7 @@ function htmlToMarkdown(html) {
 const BRAVE_FRESHNESS_VALUES = new Set(['day', 'week', 'month']);
 
 async function searchBrave(query, count = 5, freshness) {
-    if (!config.braveApiKey) throw new Error('Brave API key not configured');
+    if (!config.braveApiKey) throw new Error('Brave API key not configured (set braveApiKey in Settings)');
     const safeCount = Math.min(Math.max(Number(count) || 5, 1), 10);
     let searchPath = `/res/v1/web/search?q=${encodeURIComponent(query)}&count=${safeCount}`;
     if (freshness && BRAVE_FRESHNESS_VALUES.has(freshness)) searchPath += `&freshness=${freshness}`;
@@ -1306,7 +1306,7 @@ async function searchBrave(query, count = 5, freshness) {
 
 async function searchPerplexity(query) {
     const apiKey = config.perplexityApiKey;
-    if (!apiKey) throw new Error('Perplexity API key not configured');
+    if (!apiKey) throw new Error('Perplexity API key not configured (set perplexityApiKey in Settings)');
 
     // Auto-detect: pplx- prefix → direct API, sk-or- → OpenRouter
     const isDirect = apiKey.startsWith('pplx-');
@@ -1930,7 +1930,10 @@ async function executeTool(name, input) {
 
     switch (name) {
         case 'web_search': {
-            const provider = input.provider || 'brave';
+            const provider = (typeof input.provider === 'string' ? input.provider.toLowerCase() : 'brave');
+            if (provider !== 'brave' && provider !== 'perplexity') {
+                return { error: `Unknown search provider "${input.provider}". Use "brave" or "perplexity".` };
+            }
             const safeCount = Math.min(Math.max(Number(input.count) || 5, 1), 10);
             const safeFreshness = BRAVE_FRESHNESS_VALUES.has(input.freshness) ? input.freshness : '';
             const cacheKey = provider === 'perplexity'
@@ -1944,7 +1947,7 @@ async function executeTool(name, input) {
                 if (provider === 'perplexity') {
                     result = await searchPerplexity(input.query);
                 } else {
-                    result = await searchBrave(input.query, safeCount, input.freshness);
+                    result = await searchBrave(input.query, safeCount, safeFreshness);
                 }
                 cacheSet(cacheKey, result);
                 return result;
@@ -1953,9 +1956,10 @@ async function executeTool(name, input) {
                 if (provider === 'perplexity' && config.braveApiKey) {
                     log(`[WebSearch] Perplexity failed (${e.message}), falling back to Brave`);
                     try {
-                        const fallback = await searchBrave(input.query, 5);
-                        const braveCacheKey = `search:brave:${input.query}:5:`;
+                        const fallback = await searchBrave(input.query, safeCount, safeFreshness);
+                        const braveCacheKey = `search:brave:${input.query}:${safeCount}:${safeFreshness}`;
                         cacheSet(braveCacheKey, fallback);
+                        cacheSet(cacheKey, fallback);
                         return fallback;
                     } catch (e2) { return { error: e2.message }; }
                 }
