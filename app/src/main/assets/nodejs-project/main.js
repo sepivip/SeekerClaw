@@ -3052,9 +3052,14 @@ async function executeTool(name, input) {
             const cmd = (input.command || '').trim();
             if (!cmd) return { error: 'command is required' };
 
-            // Block newlines (could inject additional commands)
-            if (/[\r\n]/.test(cmd)) {
-                return { error: 'Newline characters are not allowed in commands' };
+            // Limit command length to prevent abuse
+            if (cmd.length > 2048) {
+                return { error: 'Command too long (max 2048 characters)' };
+            }
+
+            // Block newlines, null bytes, and Unicode line separators
+            if (/[\r\n\0\u2028\u2029]/.test(cmd)) {
+                return { error: 'Newline, null, or line separator characters are not allowed in commands' };
             }
 
             // Allowlist of safe command base names
@@ -3065,8 +3070,8 @@ async function executeTool(name, input) {
                 'curl', 'ping', 'date', 'df', 'du', 'uname', 'env', 'printenv'
             ]);
 
-            // Extract the base command (first token before whitespace or operators)
-            const firstToken = cmd.split(/[\s;|&<>]/)[0].trim();
+            // Extract the base command (first token before whitespace)
+            const firstToken = cmd.split(/\s/)[0].trim();
             // Reject explicit paths (e.g., /usr/bin/rm, ./evil.sh)
             if (firstToken.includes('/') || firstToken.includes('\\')) {
                 return { error: 'Command paths are not allowed. Use a bare command name from the allowlist.' };
@@ -3075,23 +3080,28 @@ async function executeTool(name, input) {
                 return { error: `Command "${firstToken}" is not in the allowlist. Allowed: ${[...ALLOWED_CMDS].join(', ')}` };
             }
 
-            // Block all shell operators and command substitution unconditionally
-            if (/[;&|`<>]|\$\(/.test(cmd)) {
-                return { error: 'Shell operators (;, &, |, `, <, >, $()) are not allowed. Run one command at a time.' };
+            // Block shell operators, command substitution, and glob patterns
+            if (/[;&|`<>$~{}]|\*|\?/.test(cmd.slice(firstToken.length))) {
+                return { error: 'Shell operators (;, &, |, `, <, >, $, *, ?, ~, {}) are not allowed in arguments. Run one simple command at a time.' };
             }
 
             // Resolve working directory (must be within workspace)
             let cwd = workDir;
             if (input.cwd) {
-                const resolved = safePath(input.cwd);
+                const cwdInput = String(input.cwd).trim();
+                const resolved = safePath(cwdInput);
                 if (!resolved) return { error: 'Access denied: cwd is outside workspace' };
-                if (!fs.existsSync(resolved)) return { error: `cwd does not exist: ${input.cwd}` };
-                const stat = fs.statSync(resolved);
-                if (!stat.isDirectory()) return { error: `cwd is not a directory: ${input.cwd}` };
+                if (!fs.existsSync(resolved)) return { error: `cwd does not exist: ${cwdInput}` };
+                const cwdStat = fs.statSync(resolved);
+                if (!cwdStat.isDirectory()) return { error: `cwd is not a directory: ${cwdInput}` };
                 cwd = resolved;
             }
 
             const timeout = Math.min(input.timeout_ms || 30000, 30000);
+            // Detect shell: Android uses /system/bin/sh, standard Unix uses /bin/sh
+            const shellPath = fs.existsSync('/system/bin/sh') ? '/system/bin/sh' : '/bin/sh';
+            // Minimal environment: only PATH and HOME, no inherited secrets
+            const SAFE_PATH = fs.existsSync('/system/bin') ? '/system/bin:/usr/local/bin:/usr/bin:/bin' : '/usr/local/bin:/usr/bin:/bin';
 
             try {
                 const stdout = execSync(cmd, {
@@ -3099,26 +3109,26 @@ async function executeTool(name, input) {
                     timeout,
                     encoding: 'utf8',
                     maxBuffer: 1024 * 1024, // 1MB
-                    shell: '/bin/sh',
-                    env: { ...process.env, HOME: workDir, PATH: '/usr/local/bin:/usr/bin:/bin' }
+                    shell: shellPath,
+                    env: { HOME: workDir, PATH: SAFE_PATH, TERM: 'dumb' }
                 });
                 log(`shell_exec OK: ${cmd.slice(0, 80)}`);
                 return {
                     success: true,
                     command: cmd,
-                    stdout: stdout.slice(0, 50000), // Cap at 50KB
+                    stdout: stdout.slice(0, 50000),
                     stderr: '',
                     exit_code: 0
                 };
             } catch (e) {
                 // Distinguish timeout from other failures
                 if (e.killed && e.signal) {
-                    log(`shell_exec TIMEOUT (${e.signal}): ${cmd.slice(0, 80)}`);
+                    log(`shell_exec TIMEOUT: ${cmd.slice(0, 80)}`);
                     return {
                         success: false,
                         command: cmd,
                         stdout: (e.stdout || '').slice(0, 50000),
-                        stderr: `Command timed out after ${timeout}ms (signal: ${e.signal})`,
+                        stderr: `Command timed out after ${timeout}ms`,
                         exit_code: e.status || 1
                     };
                 }
