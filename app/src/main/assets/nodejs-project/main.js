@@ -1443,6 +1443,7 @@ async function telegram(method, body = null) {
 
 const MEDIA_DIR = path.join(workDir, 'media', 'inbound');
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB limit for mobile
+const MAX_IMAGE_SIZE = 5 * 1024 * 1024;  // 5MB limit for vision (base64 adds ~33%)
 
 // Extract media info from a Telegram message (returns null if no media)
 function extractMedia(msg) {
@@ -1514,50 +1515,86 @@ async function downloadTelegramFile(fileId, fileName) {
     }
     const remotePath = fileInfo.result.file_path;
 
-    // Step 2: Download binary from Telegram servers
+    // Ensure media directory exists
+    if (!fs.existsSync(MEDIA_DIR)) {
+        await fs.promises.mkdir(MEDIA_DIR, { recursive: true });
+    }
+
+    // Build unique filename with random nonce to prevent collisions
+    const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 100);
+    const nonce = Math.random().toString(36).slice(2, 8);
+    const localName = `${Date.now()}_${nonce}_${safeName}`;
+    const localPath = path.join(MEDIA_DIR, localName);
+
+    // Step 2: Stream download directly to file (no memory buffering)
     const fileUrl = `/file/bot${BOT_TOKEN}/${remotePath}`;
-    const buffer = await new Promise((resolve, reject) => {
-        https.get({
-            hostname: 'api.telegram.org',
-            path: fileUrl,
-        }, (res) => {
-            if (res.statusCode === 301 || res.statusCode === 302) {
-                reject(new Error(`Redirect: ${res.headers.location}`));
-                return;
-            }
-            if (res.statusCode !== 200) {
-                reject(new Error(`Download failed: HTTP ${res.statusCode}`));
-                return;
-            }
-            const chunks = [];
-            let totalBytes = 0;
-            res.on('data', (chunk) => {
-                totalBytes += chunk.length;
-                if (totalBytes > MAX_FILE_SIZE) {
-                    res.destroy();
-                    reject(new Error(`File exceeds ${MAX_FILE_SIZE / 1024 / 1024}MB limit`));
+    const DOWNLOAD_TIMEOUT = 60000; // 60s timeout
+    let totalBytes = 0;
+
+    try {
+        totalBytes = await new Promise((resolve, reject) => {
+            const request = https.get({
+                hostname: 'api.telegram.org',
+                path: fileUrl,
+                timeout: DOWNLOAD_TIMEOUT,
+            }, (res) => {
+                if (res.statusCode === 301 || res.statusCode === 302) {
+                    reject(new Error(`Redirect: ${res.headers.location}`));
+                    res.resume();
                     return;
                 }
-                chunks.push(chunk);
+                if (res.statusCode !== 200) {
+                    reject(new Error(`Download failed: HTTP ${res.statusCode}`));
+                    res.resume();
+                    return;
+                }
+
+                const fileStream = fs.createWriteStream(localPath);
+                let bytes = 0;
+                let done = false;
+
+                const cleanup = (err) => {
+                    if (done) return;
+                    done = true;
+                    fileStream.destroy();
+                    res.destroy();
+                    reject(err);
+                };
+
+                res.on('data', (chunk) => {
+                    bytes += chunk.length;
+                    if (bytes > MAX_FILE_SIZE) {
+                        cleanup(new Error(`File exceeds ${MAX_FILE_SIZE / 1024 / 1024}MB limit`));
+                        return;
+                    }
+                    if (!fileStream.write(chunk)) res.pause();
+                });
+
+                fileStream.on('drain', () => res.resume());
+                res.on('end', () => fileStream.end());
+                fileStream.on('finish', () => {
+                    if (done) return;
+                    done = true;
+                    resolve(bytes);
+                });
+                res.on('error', cleanup);
+                fileStream.on('error', cleanup);
             });
-            res.on('end', () => resolve(Buffer.concat(chunks)));
-            res.on('error', reject);
-        }).on('error', reject);
-    });
 
-    // Step 3: Save to workspace/media/inbound/
-    if (!fs.existsSync(MEDIA_DIR)) {
-        fs.mkdirSync(MEDIA_DIR, { recursive: true });
+            request.on('timeout', () => {
+                request.destroy();
+                reject(new Error('Download timed out'));
+            });
+            request.on('error', reject);
+        });
+    } catch (err) {
+        // Clean up partial file on failure
+        try { await fs.promises.unlink(localPath); } catch { /* ignore */ }
+        throw err;
     }
-    // Sanitize filename: keep only safe chars
-    const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 100);
-    const timestamp = Date.now();
-    const localName = `${timestamp}_${safeName}`;
-    const localPath = path.join(MEDIA_DIR, localName);
-    fs.writeFileSync(localPath, buffer);
 
-    log(`File saved: ${localName} (${buffer.length} bytes)`);
-    return { localPath, localName, size: buffer.length };
+    log(`File saved: ${localName} (${totalBytes} bytes)`);
+    return { localPath, localName, size: totalBytes };
 }
 
 // Strip reasoning tags (<think>, <thinking>, etc.) and internal markers from AI responses.
@@ -4638,6 +4675,9 @@ async function handleMessage(msg) {
         // Process media attachment if present
         let userContent = text || '';
         if (media) {
+            // Sanitize user-controlled metadata before embedding in prompts
+            const safeFileName = (media.file_name || 'file').replace(/[\r\n\0\u2028\u2029\[\]]/g, '_').slice(0, 120);
+            const safeMimeType = (media.mime_type || 'application/octet-stream').replace(/[\r\n\0\u2028\u2029\[\]]/g, '_').slice(0, 60);
             try {
                 if (media.file_size > MAX_FILE_SIZE) {
                     await sendMessage(chatId, `File too large (${(media.file_size / 1024 / 1024).toFixed(1)}MB). Max is ${MAX_FILE_SIZE / 1024 / 1024}MB.`, msg.message_id);
@@ -4645,36 +4685,35 @@ async function handleMessage(msg) {
                 } else {
                     const saved = await downloadTelegramFile(media.file_id, media.file_name);
                     const relativePath = `media/inbound/${saved.localName}`;
+                    const isImage = media.type === 'photo' || (media.mime_type && media.mime_type.startsWith('image/'));
 
-                    if (media.type === 'photo' || (media.mime_type && media.mime_type.startsWith('image/'))) {
-                        // Image: send as Claude vision content block so the agent can SEE it
-                        const imageData = fs.readFileSync(saved.localPath);
+                    if (isImage && saved.size <= MAX_IMAGE_SIZE) {
+                        // Image within vision size limit: send as Claude vision content block
+                        const imageData = await fs.promises.readFile(saved.localPath);
                         const base64 = imageData.toString('base64');
                         const mediaType = media.mime_type || 'image/jpeg';
-                        // Build multimodal content array
-                        const contentBlocks = [];
-                        contentBlocks.push({
-                            type: 'image',
-                            source: { type: 'base64', media_type: mediaType, data: base64 }
-                        });
                         const caption = text || '';
-                        contentBlocks.push({
-                            type: 'text',
-                            text: caption
+                        userContent = [
+                            { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } },
+                            { type: 'text', text: caption
                                 ? `${caption}\n\n[Image saved to ${relativePath} (${saved.size} bytes)]`
                                 : `[User sent an image — saved to ${relativePath} (${saved.size} bytes)]`
-                        });
-                        userContent = contentBlocks;
+                            }
+                        ];
+                    } else if (isImage) {
+                        // Image too large for vision — save but don't base64-encode
+                        const fileNote = `[Image received: ${safeFileName} (${saved.size} bytes, too large for inline vision) — saved to ${relativePath}. Use the read tool to access it.]`;
+                        userContent = text ? `${text}\n\n${fileNote}` : fileNote;
                     } else {
                         // Non-image file: tell the agent where it's saved
-                        const fileNote = `[File received: ${media.file_name} (${saved.size} bytes, ${media.mime_type}) — saved to ${relativePath}. Use the read tool to access it.]`;
+                        const fileNote = `[File received: ${safeFileName} (${saved.size} bytes, ${safeMimeType}) — saved to ${relativePath}. Use the read tool to access it.]`;
                         userContent = text ? `${text}\n\n${fileNote}` : fileNote;
                     }
                     log(`Media processed: ${media.type} → ${relativePath}`);
                 }
             } catch (e) {
                 log(`Media download failed: ${e.message}`);
-                const errorNote = `[File attachment could not be downloaded: ${e.message}]`;
+                const errorNote = `[File attachment could not be downloaded due to an internal error.]`;
                 userContent = text ? `${text}\n\n${errorNote}` : errorNote;
             }
         }
