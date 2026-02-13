@@ -1192,6 +1192,112 @@ function httpRequest(options, body = null) {
 }
 
 // ============================================================================
+// WEB TOOL UTILITIES
+// ============================================================================
+
+// --- In-memory TTL cache (ported from OpenClaw web-shared.ts) ---
+const WEB_CACHE_MAX = 100;
+const WEB_CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
+
+const webCache = new Map(); // key → { value, expiresAt }
+
+function cacheGet(key) {
+    const normKey = key.trim().toLowerCase();
+    const entry = webCache.get(normKey);
+    if (!entry) return null;
+    if (Date.now() > entry.expiresAt) { webCache.delete(normKey); return null; }
+    return entry.value;
+}
+
+function cacheSet(key, value, ttlMs = WEB_CACHE_TTL_MS) {
+    if (ttlMs <= 0) return;
+    const normKey = key.trim().toLowerCase();
+    if (webCache.size >= WEB_CACHE_MAX) {
+        webCache.delete(webCache.keys().next().value); // evict oldest (FIFO)
+    }
+    webCache.set(normKey, { value, expiresAt: Date.now() + ttlMs });
+}
+
+// --- HTML to Markdown converter (ported from OpenClaw web-fetch-utils.ts) ---
+
+function decodeEntities(s) {
+    return s.replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&').replace(/&quot;/gi, '"')
+        .replace(/&#39;/gi, "'").replace(/&lt;/gi, '<').replace(/&gt;/gi, '>')
+        .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCharCode(parseInt(h, 16)))
+        .replace(/&#(\d+);/gi, (_, d) => String.fromCharCode(parseInt(d, 10)));
+}
+
+function stripTags(s) {
+    return decodeEntities(s.replace(/<[^>]+>/g, ''));
+}
+
+function htmlToMarkdown(html) {
+    // Extract title
+    const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+    const title = titleMatch ? stripTags(titleMatch[1]).trim() : undefined;
+
+    let text = html
+        .replace(/<script[\s\S]*?<\/script>/gi, '')
+        .replace(/<style[\s\S]*?<\/style>/gi, '')
+        .replace(/<noscript[\s\S]*?<\/noscript>/gi, '');
+
+    // Convert links, headings, list items to markdown
+    text = text.replace(/<a\s+[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi,
+        (_, href, body) => { const l = stripTags(body).trim(); return l ? `[${l}](${href})` : href; });
+    text = text.replace(/<h([1-6])[^>]*>([\s\S]*?)<\/h\1>/gi,
+        (_, level, body) => `\n${'#'.repeat(Number(level))} ${stripTags(body).trim()}\n`);
+    text = text.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi,
+        (_, body) => { const l = stripTags(body).trim(); return l ? `\n- ${l}` : ''; });
+
+    // Block elements → newlines, strip remaining tags, decode entities, normalize whitespace
+    text = text.replace(/<(br|hr)\s*\/?>/gi, '\n')
+        .replace(/<\/(p|div|section|article|header|footer|table|tr|ul|ol)>/gi, '\n');
+    text = stripTags(text);
+    text = text.replace(/\r/g, '').replace(/[ \t]+\n/g, '\n')
+        .replace(/\n{3,}/g, '\n\n').replace(/[ \t]{2,}/g, ' ').trim();
+
+    return { text, title };
+}
+
+// --- Enhanced HTTP fetch with redirects + SSRF protection ---
+
+async function webFetch(urlString, options = {}) {
+    const maxRedirects = options.maxRedirects || 5;
+    const timeout = options.timeout || 30000;
+    let currentUrl = urlString;
+
+    for (let i = 0; i <= maxRedirects; i++) {
+        const url = new URL(currentUrl);
+
+        // SSRF guard: block private/local addresses
+        if (/^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|0\.|localhost)/i.test(url.hostname)) {
+            throw new Error('Blocked: private/local address');
+        }
+
+        const res = await httpRequest({
+            hostname: url.hostname,
+            path: url.pathname + url.search,
+            method: 'GET',
+            headers: {
+                'User-Agent': 'SeekerClaw/1.0 (Android; +https://seekerclaw.com)',
+                'Accept': options.accept || 'text/html,application/json,text/*',
+                ...(options.headers || {})
+            },
+            timeout
+        });
+
+        // Follow redirects
+        if ([301, 302, 303, 307, 308].includes(res.status) && res.headers?.location) {
+            currentUrl = new URL(res.headers.location, currentUrl).toString();
+            continue;
+        }
+
+        return { ...res, finalUrl: currentUrl };
+    }
+    throw new Error('Too many redirects');
+}
+
+// ============================================================================
 // TELEGRAM API
 // ============================================================================
 
