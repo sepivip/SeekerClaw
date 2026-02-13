@@ -1443,7 +1443,8 @@ async function telegram(method, body = null) {
 
 const MEDIA_DIR = path.join(workDir, 'media', 'inbound');
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB limit for mobile
-const MAX_IMAGE_SIZE = 5 * 1024 * 1024;  // 5MB limit for vision (base64 adds ~33%)
+const MAX_IMAGE_BASE64 = 5 * 1024 * 1024;  // 5MB limit for base64-encoded vision payload
+const MAX_IMAGE_SIZE = Math.floor(MAX_IMAGE_BASE64 * 3 / 4); // raw bytes so base64 stays <= 5MB
 
 // Extract media info from a Telegram message (returns null if no media)
 function extractMedia(msg) {
@@ -1515,8 +1516,14 @@ async function downloadTelegramFile(fileId, fileName) {
     }
     const remotePath = fileInfo.result.file_path;
 
-    // Validate remotePath: only allow safe characters (alphanumeric, slashes, dots, underscores, hyphens)
+    // Validate remotePath: only safe chars, no path traversal
     if (!/^[a-zA-Z0-9\/_.\-]+$/.test(remotePath)) {
+        throw new Error('Invalid file path from Telegram');
+    }
+    if (remotePath.startsWith('/') || remotePath.includes('\\') || remotePath.includes('//')) {
+        throw new Error('Invalid file path from Telegram');
+    }
+    if (remotePath.split('/').some(seg => seg === '.' || seg === '..')) {
         throw new Error('Invalid file path from Telegram');
     }
 
@@ -1586,6 +1593,8 @@ async function downloadTelegramFile(fileId, fileName) {
                     resolve(bytes);
                 });
                 res.on('error', (err) => cleanupAll(err));
+                res.on('aborted', () => cleanupAll(new Error('Download aborted')));
+                res.on('close', () => { if (!done) cleanupAll(new Error('Connection closed')); });
                 fileStream.on('error', (err) => cleanupAll(err));
             });
 
@@ -4713,12 +4722,13 @@ async function handleMessage(msg) {
                         const imageData = await fs.promises.readFile(saved.localPath);
                         const base64 = imageData.toString('base64');
                         const caption = text || '';
+                        // Align content block ordering with visionAnalyzeImage: [text, image]
                         userContent = [
-                            { type: 'image', source: { type: 'base64', media_type: media.mime_type, data: base64 } },
                             { type: 'text', text: caption
                                 ? `${caption}\n\n[Image saved to ${relativePath} (${saved.size} bytes)]`
                                 : `[User sent an image — saved to ${relativePath} (${saved.size} bytes)]`
-                            }
+                            },
+                            { type: 'image', source: { type: 'base64', media_type: media.mime_type, data: base64 } }
                         ];
                     } else if (isImage) {
                         // Image not usable for inline vision — save but don't base64-encode
