@@ -1548,7 +1548,7 @@ const TOOLS = [
                 url: { type: 'string', description: 'The URL to fetch' },
                 method: { type: 'string', enum: ['GET', 'POST', 'PUT', 'DELETE'], description: 'HTTP method (default: GET)' },
                 headers: { type: 'object', description: 'Custom HTTP headers (e.g. {"Authorization": "Bearer sk-..."})' },
-                body: { description: 'Request body for POST/PUT. String or JSON object.' },
+                body: { type: ['string', 'object'], description: 'Request body for POST/PUT. String or JSON object.' },
                 raw: { type: 'boolean', description: 'If true, return raw text without markdown conversion' }
             },
             required: ['url']
