@@ -3300,14 +3300,9 @@ async function executeTool(name, input) {
 
             // Detect shell: Android uses /system/bin/sh, standard Unix uses /bin/sh
             const shellPath = fs.existsSync('/system/bin/sh') ? '/system/bin/sh' : '/bin/sh';
-            // Use the running process's PATH (set correctly by nodejs-mobile at
-            // runtime) so node/npm/npx resolve on Android. If process.env.PATH is
-            // empty/unset, fall back to a PATH that includes the Node binary dir
-            // so node/npm/npx can still resolve.
-            const FALLBACK_PATH = '/system/bin:/usr/local/bin:/usr/bin:/bin';
-            const envPath = (process.env.PATH || '').trim();
-            const nodeDir = path.dirname(process.execPath || '');
-            const SAFE_PATH = envPath || (nodeDir ? `${nodeDir}:${FALLBACK_PATH}` : FALLBACK_PATH);
+            // Inherit nodejs-mobile's full process env so child processes can
+            // find node/npm/npx (Android system PATH alone doesn't include them).
+            // Override HOME to workspace and set TERM for clean output.
 
             // Use async exec to avoid blocking the event loop
             return new Promise((resolve) => {
@@ -3317,7 +3312,7 @@ async function executeTool(name, input) {
                     encoding: 'utf8',
                     maxBuffer: 1024 * 1024, // 1MB
                     shell: shellPath,
-                    env: { HOME: workDir, PATH: SAFE_PATH, TERM: 'dumb' }
+                    env: { ...process.env, HOME: workDir, TERM: 'dumb' }
                 }, (err, stdout, stderr) => {
                     if (err) {
                         if (err.killed && err.signal) {
