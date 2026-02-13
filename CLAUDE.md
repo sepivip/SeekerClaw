@@ -21,6 +21,20 @@
 - **Phase 1 (PoC):** Mock OpenClaw with a simple Node.js Telegram bot (`grammy`/`telegraf`) that responds to a hardcoded message. Proves Node.js runs on device, Telegram round-trip works.
 - **Phase 2 (App Shell):** Replace mock with real OpenClaw gateway bundle. Full setup flow, all screens, watchdog, boot receiver.
 
+## Version Tracking (KEEP UPDATED)
+
+> **When updating OpenClaw or nodejs-mobile, update these version strings in ONE place:**
+> **`app/build.gradle.kts`** → `buildConfigField` for `OPENCLAW_VERSION` and `NODEJS_VERSION`
+>
+> The app version (`versionName` / `versionCode`) is also in `app/build.gradle.kts`.
+> All UI screens read versions from `BuildConfig` — no hardcoded strings in Kotlin code.
+
+| Version | Current | Location |
+|---------|---------|----------|
+| **App** | `1.2.0` (code 3) | `app/build.gradle.kts` → `versionName` / `versionCode` |
+| **OpenClaw** | `2026.2.6` | `app/build.gradle.kts` → `OPENCLAW_VERSION` buildConfigField |
+| **Node.js** | `18 LTS` | `app/build.gradle.kts` → `NODEJS_VERSION` buildConfigField |
+
 ## Tech Stack
 
 - **Language:** Kotlin
@@ -287,6 +301,34 @@ The agent's memory is sacred. These files live in the workspace directory and mu
 | "WIPE MEMORY" in Settings | YES (intentional) |
 | "RESET CONFIG" in Settings | Config only, memory preserved |
 | Factory reset | YES (use export first!) |
+
+---
+
+## Agent Self-Awareness (NEVER SKIP)
+
+> **RULE: When adding or changing features that affect what the agent can do, you MUST update the agent's system prompt and tool descriptions so the agent knows about its own capabilities.**
+
+The agent only knows what we tell it. If we add a new tool, database table, bridge endpoint, or capability but don't update the system prompt or tool descriptions, the agent will tell users "I can't do that" — even though it can.
+
+### What to Update
+
+| Change | Update Required |
+|--------|----------------|
+| New tool added to TOOLS array | Tool `description` must explain what it does and what data it accesses |
+| New bridge endpoint | Add to `buildSystemBlocks()` Android Bridge section |
+| New database table or query | Mention in relevant tool descriptions + `buildSystemBlocks()` Data & Analytics section |
+| Changed tool behavior | Update tool `description` to reflect new behavior |
+| New system capability | Add to `buildSystemBlocks()` in the appropriate section |
+
+### Where to Update (in `main.js`)
+
+1. **Tool descriptions** — `TOOLS` array (each tool has a `description` field). Be specific: say "SQL.js database" not "search files", say "API usage analytics" not "stats".
+2. **System prompt** — `buildSystemBlocks()` function. Sections include: Identity, Tooling, Skills, Memory Recall, Data & Analytics, Android Bridge, Runtime info, etc.
+
+### Example
+
+Bad: Adding `memory_search` tool with description "Search memory files"
+Good: Adding `memory_search` tool with description "Search your SQL.js database (seekerclaw.db) for memory content. All memory files are indexed into searchable chunks — this performs ranked keyword search with recency weighting, returning top matches with file paths and line numbers."
 
 ---
 

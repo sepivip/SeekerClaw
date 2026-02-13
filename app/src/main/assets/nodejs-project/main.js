@@ -1359,7 +1359,7 @@ const TOOLS = [
     },
     {
         name: 'memory_search',
-        description: 'Search across all memory files (MEMORY.md and daily files) for keywords or patterns. Returns matching lines with file paths and line numbers.',
+        description: 'Search your SQL.js database (seekerclaw.db) for memory content. All memory files are indexed into searchable chunks — this performs ranked keyword search with recency weighting, returning top matches with file paths and line numbers.',
         input_schema: {
             type: 'object',
             properties: {
@@ -1497,7 +1497,7 @@ const TOOLS = [
     },
     {
         name: 'session_status',
-        description: 'Get current session information including uptime, memory usage, model, and conversation stats.',
+        description: 'Get current session info including uptime, memory usage, model, conversation stats, AND API usage analytics from your SQL.js database (today\'s request count, token usage, avg latency, error rate, cache hit rate).',
         input_schema: {
             type: 'object',
             properties: {}
@@ -1505,7 +1505,7 @@ const TOOLS = [
     },
     {
         name: 'memory_stats',
-        description: 'Get memory system statistics: file sizes, daily file count, total storage used.',
+        description: 'Get memory system statistics: file sizes, daily file count, total storage used, and database index status.',
         input_schema: {
             type: 'object',
             properties: {}
@@ -3377,6 +3377,16 @@ function buildSystemBlocks(matchedSkills = []) {
     lines.push('- Limited disk space — be conservative with file operations.');
     lines.push('- Battery-powered — avoid unnecessary long-running operations.');
     lines.push('- Network may be unreliable — handle timeouts gracefully.');
+    lines.push('');
+
+    // Data & Analytics — agent knows about its SQL.js database
+    lines.push('## Data & Analytics');
+    lines.push('You have a local SQL.js database (SQLite compiled to WASM) that powers several of your tools:');
+    lines.push('- **memory_search** uses ranked keyword search across indexed memory chunks (not just flat file grep).');
+    lines.push('- **session_status** includes API usage analytics: request counts, token usage, latency, error rates, and cache hit rates from today\'s requests.');
+    lines.push('- **memory_stats** reports memory file counts and sizes.');
+    lines.push('All memory files (MEMORY.md + daily notes) are automatically indexed into searchable chunks on startup and when files change.');
+    lines.push('Your API requests are logged with token counts and latency — use session_status to see your own usage stats.');
     lines.push('');
 
     // Project Context - OpenClaw injects SOUL.md and memory here

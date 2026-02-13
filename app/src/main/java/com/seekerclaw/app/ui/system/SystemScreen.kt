@@ -131,15 +131,16 @@ fun SystemScreen(onBack: () -> Unit) {
                 .background(SeekerClawColors.Surface, shape)
                 .padding(16.dp),
         ) {
-            InfoRow("Version", BuildConfig.VERSION_NAME)
+            InfoRow("Version", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+            InfoRow("OpenClaw", BuildConfig.OPENCLAW_VERSION)
             InfoRow(
                 label = "Node.js",
-                value = when (status) {
+                value = "${BuildConfig.NODEJS_VERSION} — ${when (status) {
                     ServiceStatus.RUNNING -> "Running"
                     ServiceStatus.STARTING -> "Starting"
                     ServiceStatus.STOPPED -> "Stopped"
                     ServiceStatus.ERROR -> "Error"
-                },
+                }}",
                 dotColor = when (status) {
                     ServiceStatus.RUNNING -> SeekerClawColors.Accent
                     ServiceStatus.STARTING -> SeekerClawColors.Warning
@@ -342,7 +343,7 @@ fun SystemScreen(onBack: () -> Unit) {
 
         // ==================== API ANALYTICS (BAT-32) ====================
         val stats = dbSummary
-        if (stats != null && stats.todayRequests > 0) {
+        if (status == ServiceStatus.RUNNING || status == ServiceStatus.STARTING) {
             Spacer(modifier = Modifier.height(24.dp))
 
             SectionLabel("API Analytics")
@@ -353,11 +354,12 @@ fun SystemScreen(onBack: () -> Unit) {
                     .background(SeekerClawColors.Surface, shape)
                     .padding(16.dp),
             ) {
-                InfoRow("Requests", "${stats.todayRequests} today")
+                InfoRow("Requests", if (stats != null) "${stats.todayRequests} today" else "--")
                 InfoRow(
                     label = "Avg Latency",
-                    value = if (stats.todayAvgLatencyMs > 0) "${stats.todayAvgLatencyMs}ms" else "--",
+                    value = if (stats != null && stats.todayAvgLatencyMs > 0) "${stats.todayAvgLatencyMs}ms" else "--",
                     dotColor = when {
+                        stats == null -> SeekerClawColors.TextDim
                         stats.todayAvgLatencyMs > 5000 -> SeekerClawColors.Error
                         stats.todayAvgLatencyMs > 3000 -> SeekerClawColors.Warning
                         else -> SeekerClawColors.Accent
@@ -365,18 +367,20 @@ fun SystemScreen(onBack: () -> Unit) {
                 )
                 InfoRow(
                     label = "Error Rate",
-                    value = if (stats.todayErrors > 0)
-                        String.format("%.1f%%", stats.todayErrors.toDouble() * 100.0 / stats.todayRequests) else "0%",
+                    value = if (stats != null && stats.todayRequests > 0 && stats.todayErrors > 0)
+                        String.format("%.1f%%", stats.todayErrors.toDouble() * 100.0 / stats.todayRequests)
+                    else if (stats != null) "0%" else "--",
                     dotColor = when {
+                        stats == null -> SeekerClawColors.TextDim
                         stats.todayErrors > 0 -> SeekerClawColors.Warning
                         else -> SeekerClawColors.Accent
                     },
                 )
                 InfoRow(
                     label = "Cache Hits",
-                    value = "${(stats.todayCacheHitRate * 100).toInt()}%",
+                    value = if (stats != null) "${(stats.todayCacheHitRate * 100).toInt()}%" else "--",
                 )
-                if (stats.monthCostEstimate > 0f) {
+                if (stats != null && stats.monthCostEstimate > 0f) {
                     InfoRow(
                         label = "Est. Cost",
                         value = "$${String.format("%.2f", stats.monthCostEstimate)} /mo",
@@ -384,15 +388,15 @@ fun SystemScreen(onBack: () -> Unit) {
                     )
                 } else {
                     InfoRow(label = "Tokens In/Out",
-                        value = "${formatTokens(stats.todayInputTokens)} / ${formatTokens(stats.todayOutputTokens)}",
+                        value = if (stats != null)
+                            "${formatTokens(stats.todayInputTokens)} / ${formatTokens(stats.todayOutputTokens)}"
+                        else "--",
                         isLast = true,
                     )
                 }
             }
-        }
 
-        // ==================== MEMORY INDEX (BAT-33) ====================
-        if (stats != null && (stats.memoryFilesIndexed > 0 || stats.memoryChunksCount > 0 || stats.memoryLastIndexed != null)) {
+            // ==================== MEMORY INDEX (BAT-33) ====================
             Spacer(modifier = Modifier.height(24.dp))
 
             SectionLabel("Memory Index")
@@ -403,18 +407,18 @@ fun SystemScreen(onBack: () -> Unit) {
                     .background(SeekerClawColors.Surface, shape)
                     .padding(16.dp),
             ) {
-                InfoRow("Files", "${stats.memoryFilesIndexed}")
-                InfoRow("Chunks", "${stats.memoryChunksCount}")
-                val lastIndexedFormatted = remember(stats.memoryLastIndexed) {
-                    if (stats.memoryLastIndexed != null)
-                        formatMemoryIndexTime(stats.memoryLastIndexed) else "Never"
+                InfoRow("Files", if (stats != null) "${stats.memoryFilesIndexed}" else "--")
+                InfoRow("Chunks", if (stats != null) "${stats.memoryChunksCount}" else "--")
+                val lastIndexedRaw = stats?.memoryLastIndexed
+                val lastIndexedFormatted = remember(lastIndexedRaw) {
+                    if (lastIndexedRaw != null) formatMemoryIndexTime(lastIndexedRaw) else "--"
                 }
                 InfoRow(
                     label = "Last Indexed",
-                    value = lastIndexedFormatted,
+                    value = if (stats != null) lastIndexedFormatted else "--",
                     isLast = true,
                     dotColor = when {
-                        stats.memoryLastIndexed == null -> SeekerClawColors.TextDim
+                        stats == null || lastIndexedRaw == null -> SeekerClawColors.TextDim
                         else -> SeekerClawColors.Accent
                     },
                 )

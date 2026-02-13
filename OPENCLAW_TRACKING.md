@@ -1,8 +1,9 @@
 # OpenClaw Version Tracking
 
 > **Purpose:** Track OpenClaw releases and identify changes to port to SeekerClaw.
-> **Current OpenClaw Version:** 2026.2.10-dev (main 029b77c, 2026-02-11)
+> **Current OpenClaw Version:** 2026.2.12 (main bdd0c12, 2026-02-12)
 > **Last Sync Review:** 2026-02-12
+> **Parity Plan:** See `PARITY_PLAN.md`
 
 ---
 

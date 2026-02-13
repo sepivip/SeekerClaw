@@ -796,8 +796,8 @@ fun SettingsScreen() {
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             InfoRow("Version", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
-            InfoRow("OpenClaw", "2026.2.6")
-            InfoRow("Node.js", "18 LTS")
+            InfoRow("OpenClaw", BuildConfig.OPENCLAW_VERSION)
+            InfoRow("Node.js", BuildConfig.NODEJS_VERSION)
         }
 
         Spacer(modifier = Modifier.height(24.dp))
