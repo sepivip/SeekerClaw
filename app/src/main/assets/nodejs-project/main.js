@@ -1518,11 +1518,12 @@ const TOOLS = [
     },
     {
         name: 'web_fetch',
-        description: 'Fetch and read the content of a webpage. Use this to get detailed information from a specific URL.',
+        description: 'Fetch and read a webpage. Returns clean markdown with links and headings preserved. Supports HTML, JSON, and plain text. Follows redirects automatically.',
         input_schema: {
             type: 'object',
             properties: {
-                url: { type: 'string', description: 'The URL to fetch' }
+                url: { type: 'string', description: 'The URL to fetch' },
+                raw: { type: 'boolean', description: 'If true, return raw text without markdown conversion' }
             },
             required: ['url']
         }
@@ -1973,24 +1974,44 @@ async function executeTool(name, input) {
         }
 
         case 'web_fetch': {
+            const fetchCacheKey = `fetch:${input.url}`;
+            const fetchCached = cacheGet(fetchCacheKey);
+            if (fetchCached) { log('[WebFetch] Cache hit'); return fetchCached; }
+
             try {
-                const url = new URL(input.url);
-                const res = await httpRequest({
-                    hostname: url.hostname,
-                    path: url.pathname + url.search,
-                    method: 'GET',
-                    headers: { 'User-Agent': 'SeekerClaw/1.0' }
-                });
-                // Basic HTML to text conversion
-                let text = typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
-                text = text.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
-                text = text.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
-                text = text.replace(/<[^>]+>/g, ' ');
-                text = text.replace(/\s+/g, ' ').trim();
-                // Limit length
-                return { content: text.slice(0, 8000) };
+                const res = await webFetch(input.url);
+                let result;
+
+                if (typeof res.data === 'object') {
+                    // JSON response
+                    const json = JSON.stringify(res.data, null, 2);
+                    result = { content: json.slice(0, 50000), type: 'json', url: res.finalUrl };
+                } else if (typeof res.data === 'string') {
+                    const contentType = (res.headers && res.headers['content-type']) || '';
+                    if (contentType.includes('text/html') || res.data.trim().startsWith('<')) {
+                        if (input.raw) {
+                            // Raw mode: basic strip only
+                            let text = res.data.replace(/<script[\s\S]*?<\/script>/gi, '');
+                            text = text.replace(/<style[\s\S]*?<\/style>/gi, '');
+                            text = text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+                            result = { content: text.slice(0, 50000), type: 'text', url: res.finalUrl };
+                        } else {
+                            // Markdown conversion (default)
+                            const { text, title } = htmlToMarkdown(res.data);
+                            result = { content: text.slice(0, 50000), title, type: 'markdown', url: res.finalUrl };
+                        }
+                    } else {
+                        // Plain text
+                        result = { content: res.data.slice(0, 50000), type: 'text', url: res.finalUrl };
+                    }
+                } else {
+                    result = { content: String(res.data).slice(0, 50000), type: 'text', url: res.finalUrl };
+                }
+
+                cacheSet(fetchCacheKey, result);
+                return result;
             } catch (e) {
-                return { error: e.message };
+                return { error: e.message, url: input.url };
             }
         }
 
@@ -3522,6 +3543,8 @@ function buildSystemBlocks(matchedSkills = []) {
     lines.push('Tools are provided via the tools API. Call tools exactly as listed by name.');
     lines.push('For visual checks ("what do you see", "check my dog"), call android_camera_check.');
     lines.push('**Swap workflow:** Always use solana_quote first to show the user what they\'ll get, then solana_swap to execute. Never swap without confirming the quote with the user first.');
+    lines.push('**Web search:** Use web_search with provider=perplexity for complex questions needing synthesized answers. Use Brave (default) for quick lookups.');
+    lines.push('**Web fetch:** Use web_fetch to read any webpage. Returns markdown with links and headings preserved. Supports up to 50K chars.');
     lines.push('');
 
     // Tool Call Style - OpenClaw style
