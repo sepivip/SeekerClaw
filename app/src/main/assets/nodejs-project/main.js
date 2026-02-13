@@ -3112,11 +3112,14 @@ async function executeTool(name, input) {
 
             // Detect shell: Android uses /system/bin/sh, standard Unix uses /bin/sh
             const shellPath = fs.existsSync('/system/bin/sh') ? '/system/bin/sh' : '/bin/sh';
-            // Build PATH: include Node.js binary dir so node/npm/npx resolve,
-            // plus standard system directories. No full process.env inheritance.
-            const nodeBinDir = path.dirname(process.execPath);
-            const systemPaths = fs.existsSync('/system/bin') ? '/system/bin:/usr/local/bin:/usr/bin:/bin' : '/usr/local/bin:/usr/bin:/bin';
-            const SAFE_PATH = `${nodeBinDir}:${systemPaths}`;
+            // Use the running process's PATH (set correctly by nodejs-mobile at
+            // runtime) so node/npm/npx resolve on Android. If process.env.PATH is
+            // empty/unset, fall back to a PATH that includes the Node binary dir
+            // so node/npm/npx can still resolve.
+            const FALLBACK_PATH = '/system/bin:/usr/local/bin:/usr/bin:/bin';
+            const envPath = (process.env.PATH || '').trim();
+            const nodeDir = path.dirname(process.execPath || '');
+            const SAFE_PATH = envPath || (nodeDir ? `${nodeDir}:${FALLBACK_PATH}` : FALLBACK_PATH);
 
             // Use async exec to avoid blocking the event loop
             return new Promise((resolve) => {
