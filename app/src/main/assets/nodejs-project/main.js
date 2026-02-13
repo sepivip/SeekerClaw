@@ -2174,7 +2174,7 @@ const TOOLS = [
     },
     {
         name: 'delete',
-        description: 'Delete a file from the workspace directory. Cannot delete protected system files (SOUL.md, MEMORY.md, IDENTITY.md, USER.md, HEARTBEAT.md, config.yaml, seekerclaw.db). Cannot delete directories — only individual files. Use this to clean up temporary files, old media downloads, or files you no longer need.',
+        description: 'Delete a file from the workspace directory. Cannot delete protected system files (SOUL.md, MEMORY.md, IDENTITY.md, USER.md, HEARTBEAT.md, config.json, config.yaml, seekerclaw.db). Cannot delete directories — only individual files. Use this to clean up temporary files, old media downloads, or files you no longer need.',
         input_schema: {
             type: 'object',
             properties: {
@@ -3356,7 +3356,7 @@ async function executeTool(name, input) {
         case 'delete': {
             const PROTECTED_FILES = new Set([
                 'SOUL.md', 'MEMORY.md', 'IDENTITY.md', 'USER.md',
-                'HEARTBEAT.md', 'config.yaml', 'seekerclaw.db'
+                'HEARTBEAT.md', 'config.json', 'config.yaml', 'seekerclaw.db'
             ]);
 
             if (!input.path) return { error: 'path is required' };
@@ -3374,14 +3374,21 @@ async function executeTool(name, input) {
                 return { error: `File not found: ${input.path}` };
             }
 
-            const stat = fs.statSync(filePath);
-            if (stat.isDirectory()) {
-                return { error: 'Cannot delete directories. Delete individual files instead.' };
-            }
+            try {
+                const stat = fs.statSync(filePath);
+                if (stat.isDirectory()) {
+                    return { error: 'Cannot delete directories. Delete individual files instead.' };
+                }
 
-            fs.unlinkSync(filePath);
-            log(`File deleted: ${input.path}`);
-            return { success: true, path: input.path, deleted: true };
+                fs.unlinkSync(filePath);
+                // Sanitize path for logging (strip control chars)
+                const safLogPath = String(input.path).replace(/[\r\n\0\u2028\u2029]/g, '_');
+                log(`File deleted: ${safLogPath}`);
+                return { success: true, path: input.path, deleted: true };
+            } catch (err) {
+                log(`Error deleting file: ${err && err.message ? err.message : String(err)}`);
+                return { error: `Failed to delete file: ${err && err.message ? err.message : String(err)}` };
+            }
         }
 
         default:
@@ -4017,7 +4024,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('**Web fetch:** Use web_fetch to read webpages or call APIs. Supports custom headers (Bearer auth), POST/PUT/DELETE methods, and request bodies. Returns markdown (default), JSON, or plain text. Use raw=true for stripped text. Up to 50K chars.');
     lines.push('**Shell execution:** Use shell_exec to run commands on the device. Sandboxed to workspace directory with a predefined allowlist (see tool description). Use for npm install, running scripts (node script.js), file operations, curl, and system info. 30s timeout. No chaining, redirection, or command substitution — one command at a time.');
     lines.push('**File attachments:** When the user sends photos, documents, or other files via Telegram, they are automatically downloaded to media/inbound/ in your workspace. Images are shown to you directly (vision). For other files, you are told the path — use the read tool to access them. Supported: photos, documents (PDF, etc.), video, audio, voice notes.');
-    lines.push('**File deletion:** Use the delete tool to clean up temporary files, old media downloads, or files you no longer need. Protected system files (SOUL.md, MEMORY.md, IDENTITY.md, USER.md, HEARTBEAT.md, config.yaml, seekerclaw.db) cannot be deleted. Directories cannot be deleted — remove files individually.');
+    lines.push('**File deletion:** Use the delete tool to clean up temporary files, old media downloads, or files you no longer need. Protected system files (SOUL.md, MEMORY.md, IDENTITY.md, USER.md, HEARTBEAT.md, config.json, seekerclaw.db) cannot be deleted. Directories cannot be deleted — remove files individually.');
     lines.push('');
 
     // Tool Call Style - OpenClaw style
