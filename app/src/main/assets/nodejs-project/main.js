@@ -1974,13 +1974,17 @@ async function executeTool(name, input) {
         }
 
         case 'web_fetch': {
-            const fetchCacheKey = `fetch:${input.url}:${input.raw ? 'raw' : 'md'}`;
+            const rawMode = input.raw === true;
+            const fetchCacheKey = `fetch:${input.url}:${rawMode ? 'raw' : 'md'}`;
             const fetchCached = cacheGet(fetchCacheKey);
             if (fetchCached) { log('[WebFetch] Cache hit'); return fetchCached; }
 
             try {
                 const res = await webFetch(input.url);
-                if (res.status !== 200) throw new Error(`HTTP error (${res.status})`);
+                if (res.status < 200 || res.status >= 300) {
+                    const detail = typeof res.data === 'string' ? res.data.slice(0, 200) : '';
+                    throw new Error(`HTTP error (${res.status})${detail ? ': ' + detail : ''}`);
+                }
                 let result;
 
                 if (typeof res.data === 'object') {
@@ -1990,7 +1994,7 @@ async function executeTool(name, input) {
                 } else if (typeof res.data === 'string') {
                     const contentType = (res.headers && res.headers['content-type']) || '';
                     if (contentType.includes('text/html') || /^\s*</.test(res.data)) {
-                        if (input.raw) {
+                        if (rawMode) {
                             // Raw mode: basic strip only
                             let text = res.data.replace(/<script[\s\S]*?<\/script>/gi, '');
                             text = text.replace(/<style[\s\S]*?<\/style>/gi, '');
@@ -3545,7 +3549,7 @@ function buildSystemBlocks(matchedSkills = []) {
     lines.push('For visual checks ("what do you see", "check my dog"), call android_camera_check.');
     lines.push('**Swap workflow:** Always use solana_quote first to show the user what they\'ll get, then solana_swap to execute. Never swap without confirming the quote with the user first.');
     lines.push('**Web search:** Use web_search with provider=perplexity for complex questions needing synthesized answers. Use Brave (default) for quick lookups.');
-    lines.push('**Web fetch:** Use web_fetch to read any webpage. Returns markdown with links and headings preserved. Supports up to 50K chars.');
+    lines.push('**Web fetch:** Use web_fetch to read any webpage. Returns markdown (default), JSON, or plain text depending on response type. Use raw=true for stripped text. Supports up to 50K chars.');
     lines.push('');
 
     // Tool Call Style - OpenClaw style
