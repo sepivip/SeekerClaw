@@ -66,6 +66,10 @@ const MODEL = config.model || 'claude-opus-4-6';
 const AGENT_NAME = config.agentName || 'SeekerClaw';
 BRIDGE_TOKEN = config.bridgeToken || '';
 
+// Normalize optional API keys in-place (clipboard paste can include hidden line breaks)
+if (config.braveApiKey) config.braveApiKey = normalizeSecret(config.braveApiKey);
+if (config.perplexityApiKey) config.perplexityApiKey = normalizeSecret(config.perplexityApiKey);
+
 if (!BOT_TOKEN || !ANTHROPIC_KEY) {
     log('ERROR: Missing required config (botToken, anthropicApiKey)');
     process.exit(1);
@@ -89,6 +93,12 @@ function redactSecrets(msg) {
     msg = msg.replace(/sk-ant-[a-zA-Z0-9_-]{10,}/g, 'sk-ant-***');
     // Redact bot tokens (digits:alphanumeric)
     msg = msg.replace(/\d{8,}:[A-Za-z0-9_-]{20,}/g, '***:***');
+    // Redact Brave API keys
+    msg = msg.replace(/BSA[a-zA-Z0-9_-]{10,}/g, 'BSA***');
+    // Redact Perplexity API keys (pplx-...)
+    msg = msg.replace(/pplx-[a-zA-Z0-9_-]{10,}/g, 'pplx-***');
+    // Redact OpenRouter API keys (sk-or-...)
+    msg = msg.replace(/sk-or-[a-zA-Z0-9_-]{10,}/g, 'sk-or-***');
     // Redact bridge tokens (UUID format)
     if (BRIDGE_TOKEN) msg = msg.replace(new RegExp(BRIDGE_TOKEN.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&'), 'g'), '***bridge-token***');
     return msg;
@@ -1267,6 +1277,69 @@ function htmlToMarkdown(html) {
     return { text, title };
 }
 
+// --- Web search providers ---
+
+const BRAVE_FRESHNESS_VALUES = new Set(['day', 'week', 'month']);
+
+async function searchBrave(query, count = 5, freshness) {
+    if (!config.braveApiKey) throw new Error('Brave API key not configured (set braveApiKey in Settings)');
+    const safeCount = Math.min(Math.max(Number(count) || 5, 1), 10);
+    let searchPath = `/res/v1/web/search?q=${encodeURIComponent(query)}&count=${safeCount}`;
+    if (freshness && BRAVE_FRESHNESS_VALUES.has(freshness)) searchPath += `&freshness=${freshness}`;
+
+    const res = await httpRequest({
+        hostname: 'api.search.brave.com',
+        path: searchPath,
+        method: 'GET',
+        headers: { 'X-Subscription-Token': config.braveApiKey }
+    });
+
+    if (res.status !== 200) {
+        const detail = res.data?.error?.message || (typeof res.data === 'string' ? res.data : '');
+        throw new Error(`Brave Search API error (${res.status})${detail ? ': ' + detail : ''}`);
+    }
+    if (!res.data?.web?.results) return { provider: 'brave', results: [], message: 'No results found' };
+    return {
+        provider: 'brave',
+        results: res.data.web.results.map(r => ({
+            title: r.title, url: r.url, snippet: r.description
+        }))
+    };
+}
+
+async function searchPerplexity(query) {
+    const apiKey = config.perplexityApiKey;
+    if (!apiKey) throw new Error('Perplexity API key not configured (set perplexityApiKey in Settings)');
+
+    // Auto-detect: pplx- prefix → direct API, sk-or- → OpenRouter
+    const isDirect = apiKey.startsWith('pplx-');
+    const isOpenRouter = apiKey.startsWith('sk-or-');
+    if (!isDirect && !isOpenRouter) throw new Error('Perplexity API key must start with pplx- (direct) or sk-or- (OpenRouter)');
+    const baseUrl = isDirect ? 'api.perplexity.ai' : 'openrouter.ai';
+    const urlPath = isDirect ? '/chat/completions' : '/api/v1/chat/completions';
+    const model = isDirect ? 'sonar-pro' : 'perplexity/sonar-pro';
+
+    const res = await httpRequest({
+        hostname: baseUrl,
+        path: urlPath,
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`,
+            'HTTP-Referer': 'https://seekerclaw.com',
+            'X-Title': 'SeekerClaw Web Search'
+        }
+    }, { model, messages: [{ role: 'user', content: query }] });
+
+    if (res.status !== 200) {
+        const detail = res.data?.error?.message || res.data?.message || '';
+        throw new Error(`Perplexity API error via ${isDirect ? 'direct' : 'OpenRouter'} (${res.status})${detail ? ': ' + detail : ''}`);
+    }
+    const content = res.data?.choices?.[0]?.message?.content || 'No response';
+    const citations = res.data?.citations || [];
+    return { provider: 'perplexity', answer: content, citations };
+}
+
 // --- Enhanced HTTP fetch with redirects + SSRF protection ---
 
 async function webFetch(urlString, options = {}) {
@@ -1431,11 +1504,14 @@ async function sendTyping(chatId) {
 const TOOLS = [
     {
         name: 'web_search',
-        description: 'Search the web using Brave Search. Use this to find current information, news, or answers to questions.',
+        description: 'Search the web for current information. Uses Brave Search by default, or Perplexity Sonar for AI-synthesized answers with citations.',
         input_schema: {
             type: 'object',
             properties: {
-                query: { type: 'string', description: 'The search query' }
+                query: { type: 'string', description: 'The search query' },
+                provider: { type: 'string', enum: ['brave', 'perplexity'], description: 'Search provider. Default: brave. Use perplexity for complex questions needing synthesized answers.' },
+                count: { type: 'number', description: 'Number of results (brave only, 1-10, default 5)' },
+                freshness: { type: 'string', enum: ['day', 'week', 'month'], description: 'Freshness filter (brave only)' }
             },
             required: ['query']
         }
@@ -1860,25 +1936,38 @@ async function executeTool(name, input) {
 
     switch (name) {
         case 'web_search': {
-            if (!config.braveApiKey) {
-                return { error: 'Brave Search API key not configured. Ask owner to add braveApiKey to config.' };
+            const provider = (typeof input.provider === 'string' ? input.provider.toLowerCase() : 'brave');
+            if (provider !== 'brave' && provider !== 'perplexity') {
+                return { error: `Unknown search provider "${provider}". Use "brave" or "perplexity".` };
             }
+            const safeCount = Math.min(Math.max(Number(input.count) || 5, 1), 10);
+            const safeFreshness = BRAVE_FRESHNESS_VALUES.has(input.freshness) ? input.freshness : '';
+            const cacheKey = provider === 'perplexity'
+                ? `search:perplexity:${input.query}`
+                : `search:brave:${input.query}:${safeCount}:${safeFreshness}`;
+            const cached = cacheGet(cacheKey);
+            if (cached) { log('[WebSearch] Cache hit'); return cached; }
+
             try {
-                const res = await httpRequest({
-                    hostname: 'api.search.brave.com',
-                    path: `/res/v1/web/search?q=${encodeURIComponent(input.query)}&count=5`,
-                    method: 'GET',
-                    headers: { 'X-Subscription-Token': config.braveApiKey }
-                });
-                if (res.data.web && res.data.web.results) {
-                    return res.data.web.results.slice(0, 5).map(r => ({
-                        title: r.title,
-                        url: r.url,
-                        snippet: r.description
-                    }));
+                let result;
+                if (provider === 'perplexity') {
+                    result = await searchPerplexity(input.query);
+                } else {
+                    result = await searchBrave(input.query, safeCount, safeFreshness);
                 }
-                return { error: 'No results found' };
+                cacheSet(cacheKey, result);
+                return result;
             } catch (e) {
+                // Fallback: if perplexity fails and brave is available, try brave
+                if (provider === 'perplexity' && config.braveApiKey) {
+                    log(`[WebSearch] Perplexity failed (${e.message}), falling back to Brave`);
+                    try {
+                        const fallback = await searchBrave(input.query, safeCount, safeFreshness);
+                        const braveCacheKey = `search:brave:${input.query}:${safeCount}:${safeFreshness}`;
+                        cacheSet(braveCacheKey, fallback);
+                        return fallback;
+                    } catch (e2) { return { error: e2.message }; }
+                }
                 return { error: e.message };
             }
         }
