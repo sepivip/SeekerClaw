@@ -1294,7 +1294,10 @@ async function searchBrave(query, count = 5, freshness) {
         headers: { 'X-Subscription-Token': config.braveApiKey }
     });
 
-    if (res.status !== 200) throw new Error(`Brave Search API error (${res.status})`);
+    if (res.status !== 200) {
+        const detail = res.data?.error?.message || (typeof res.data === 'string' ? res.data : '');
+        throw new Error(`Brave Search API error (${res.status})${detail ? ': ' + detail : ''}`);
+    }
     if (!res.data?.web?.results) return { provider: 'brave', results: [], message: 'No results found' };
     return {
         provider: 'brave',
@@ -1328,7 +1331,10 @@ async function searchPerplexity(query) {
         }
     }, { model, messages: [{ role: 'user', content: query }] });
 
-    if (res.status !== 200) throw new Error(`Perplexity API error via ${isDirect ? 'direct' : 'OpenRouter'} (${res.status})`);
+    if (res.status !== 200) {
+        const detail = res.data?.error?.message || res.data?.message || '';
+        throw new Error(`Perplexity API error via ${isDirect ? 'direct' : 'OpenRouter'} (${res.status})${detail ? ': ' + detail : ''}`);
+    }
     const content = res.data?.choices?.[0]?.message?.content || 'No response';
     const citations = res.data?.citations || [];
     return { provider: 'perplexity', answer: content, citations };
