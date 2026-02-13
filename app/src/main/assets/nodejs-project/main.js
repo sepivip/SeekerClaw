@@ -3010,14 +3010,16 @@ async function executeTool(name, input) {
             if (!chatId) return { error: 'chat_id is required' };
             if (!emoji && !remove) return { error: 'emoji is required (or set remove: true)' };
             try {
-                const reactions = remove || !emoji ? [] : [{ type: 'emoji', emoji }];
+                // When removing: empty array clears all reactions; when setting: pass the emoji
+                const reactions = remove ? [] : (emoji ? [{ type: 'emoji', emoji }] : []);
                 const result = await telegram('setMessageReaction', {
                     chat_id: chatId,
                     message_id: msgId,
                     reaction: reactions,
                 });
                 if (result.ok) {
-                    log(`Reaction ${remove ? 'removed (all)' : 'set: ' + emoji} on msg ${msgId} in chat ${chatId}`);
+                    const logAction = remove ? `removed${emoji ? ': ' + emoji : ' (all)'}` : 'set: ' + emoji;
+                    log(`Reaction ${logAction} on msg ${msgId} in chat ${chatId}`);
                     return { ok: true, action: remove ? 'removed' : 'reacted', emoji, message_id: msgId, chat_id: chatId };
                 } else {
                     // Check for invalid reaction emoji in Telegram error response
@@ -4421,8 +4423,8 @@ function handleReactionUpdate(reaction) {
     const rawName = reaction.user?.first_name || 'Someone';
     const userName = rawName.replace(/[\[\]\n\r\u2028\u2029]/g, '').slice(0, 50);
 
-    // Filter by notification mode
-    if (REACTION_NOTIFICATIONS === 'own' && userId !== OWNER_ID) return;
+    // Filter by notification mode (skip all in "own" mode if owner not yet detected)
+    if (REACTION_NOTIFICATIONS === 'own' && (!OWNER_ID || userId !== OWNER_ID)) return;
 
     // Extract the new emoji(s) — Telegram sends the full new reaction list
     const newEmojis = (reaction.new_reaction || [])
@@ -4461,7 +4463,8 @@ function handleReactionUpdate(reaction) {
 
 let offset = 0;
 let pollErrors = 0;
-// Track the last incoming user message per chat (for reactions), to avoid cross-chat races
+// Track the last incoming user message per chat so the dynamic system prompt can
+// provide the correct message_id/chat_id for the telegram_react tool.
 const lastIncomingMessages = new Map(); // chatId -> { messageId, chatId }
 
 // Per-chat message queue: prevents concurrent handleMessage() for the same chat
