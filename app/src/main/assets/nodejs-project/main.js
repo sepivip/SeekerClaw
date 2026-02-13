@@ -1974,12 +1974,13 @@ async function executeTool(name, input) {
         }
 
         case 'web_fetch': {
-            const fetchCacheKey = `fetch:${input.url}`;
+            const fetchCacheKey = `fetch:${input.url}:${input.raw ? 'raw' : 'md'}`;
             const fetchCached = cacheGet(fetchCacheKey);
             if (fetchCached) { log('[WebFetch] Cache hit'); return fetchCached; }
 
             try {
                 const res = await webFetch(input.url);
+                if (res.status !== 200) throw new Error(`HTTP error (${res.status})`);
                 let result;
 
                 if (typeof res.data === 'object') {
@@ -1988,7 +1989,7 @@ async function executeTool(name, input) {
                     result = { content: json.slice(0, 50000), type: 'json', url: res.finalUrl };
                 } else if (typeof res.data === 'string') {
                     const contentType = (res.headers && res.headers['content-type']) || '';
-                    if (contentType.includes('text/html') || res.data.trim().startsWith('<')) {
+                    if (contentType.includes('text/html') || /^\s*</.test(res.data)) {
                         if (input.raw) {
                             // Raw mode: basic strip only
                             let text = res.data.replace(/<script[\s\S]*?<\/script>/gi, '');
