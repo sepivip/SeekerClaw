@@ -1202,6 +1202,7 @@ const WEB_CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
 const webCache = new Map(); // key → { value, expiresAt }
 
 function cacheGet(key) {
+    if (typeof key !== 'string' || !key) return null;
     const normKey = key.trim().toLowerCase();
     const entry = webCache.get(normKey);
     if (!entry) return null;
@@ -1210,7 +1211,7 @@ function cacheGet(key) {
 }
 
 function cacheSet(key, value, ttlMs = WEB_CACHE_TTL_MS) {
-    if (ttlMs <= 0) return;
+    if (typeof key !== 'string' || !key || ttlMs <= 0) return;
     const normKey = key.trim().toLowerCase();
     if (webCache.size >= WEB_CACHE_MAX) {
         webCache.delete(webCache.keys().next().value); // evict oldest (FIFO)
@@ -1223,8 +1224,14 @@ function cacheSet(key, value, ttlMs = WEB_CACHE_TTL_MS) {
 function decodeEntities(s) {
     return s.replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&').replace(/&quot;/gi, '"')
         .replace(/&#39;/gi, "'").replace(/&lt;/gi, '<').replace(/&gt;/gi, '>')
-        .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCharCode(parseInt(h, 16)))
-        .replace(/&#(\d+);/gi, (_, d) => String.fromCharCode(parseInt(d, 10)));
+        .replace(/&#x([0-9a-f]+);/gi, (match, h) => {
+            const code = parseInt(h, 16);
+            return (code >= 0 && code <= 0x10FFFF) ? String.fromCodePoint(code) : match;
+        })
+        .replace(/&#(\d+);/gi, (match, d) => {
+            const code = parseInt(d, 10);
+            return (code >= 0 && code <= 0x10FFFF) ? String.fromCodePoint(code) : match;
+        });
 }
 
 function stripTags(s) {
@@ -1232,6 +1239,7 @@ function stripTags(s) {
 }
 
 function htmlToMarkdown(html) {
+    if (typeof html !== 'string') return { text: '', title: undefined };
     // Extract title
     const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
     const title = titleMatch ? stripTags(titleMatch[1]).trim() : undefined;
@@ -1264,18 +1272,28 @@ function htmlToMarkdown(html) {
 async function webFetch(urlString, options = {}) {
     const maxRedirects = options.maxRedirects || 5;
     const timeout = options.timeout || 30000;
+    const deadline = Date.now() + timeout; // cumulative timeout for entire redirect chain
     let currentUrl = urlString;
 
     for (let i = 0; i <= maxRedirects; i++) {
         const url = new URL(currentUrl);
 
-        // SSRF guard: block private/local addresses
-        if (/^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|0\.|localhost)/i.test(url.hostname)) {
+        // Protocol validation: only allow HTTPS
+        if (url.protocol !== 'https:') {
+            throw new Error('Unsupported URL protocol: ' + url.protocol);
+        }
+
+        // SSRF guard: block private/local/reserved addresses
+        if (/^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|0\.|localhost)/i.test(url.hostname)) {
             throw new Error('Blocked: private/local address');
         }
 
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) throw new Error('Request timeout (redirect chain)');
+
         const res = await httpRequest({
             hostname: url.hostname,
+            port: url.port || 443,
             path: url.pathname + url.search,
             method: 'GET',
             headers: {
@@ -1283,7 +1301,7 @@ async function webFetch(urlString, options = {}) {
                 'Accept': options.accept || 'text/html,application/json,text/*',
                 ...(options.headers || {})
             },
-            timeout
+            timeout: Math.min(remaining, timeout)
         });
 
         // Follow redirects
