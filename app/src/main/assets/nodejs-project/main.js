@@ -66,6 +66,10 @@ const MODEL = config.model || 'claude-opus-4-6';
 const AGENT_NAME = config.agentName || 'SeekerClaw';
 BRIDGE_TOKEN = config.bridgeToken || '';
 
+// Normalize optional API keys in-place (clipboard paste can include hidden line breaks)
+if (config.braveApiKey) config.braveApiKey = normalizeSecret(config.braveApiKey);
+if (config.perplexityApiKey) config.perplexityApiKey = normalizeSecret(config.perplexityApiKey);
+
 if (!BOT_TOKEN || !ANTHROPIC_KEY) {
     log('ERROR: Missing required config (botToken, anthropicApiKey)');
     process.exit(1);
@@ -1275,10 +1279,13 @@ function htmlToMarkdown(html) {
 
 // --- Web search providers ---
 
+const BRAVE_FRESHNESS_VALUES = new Set(['day', 'week', 'month']);
+
 async function searchBrave(query, count = 5, freshness) {
     if (!config.braveApiKey) throw new Error('Brave API key not configured');
-    let searchPath = `/res/v1/web/search?q=${encodeURIComponent(query)}&count=${Math.min(Math.max(count, 1), 10)}`;
-    if (freshness) searchPath += `&freshness=${freshness}`;
+    const safeCount = Math.min(Math.max(Number(count) || 5, 1), 10);
+    let searchPath = `/res/v1/web/search?q=${encodeURIComponent(query)}&count=${safeCount}`;
+    if (freshness && BRAVE_FRESHNESS_VALUES.has(freshness)) searchPath += `&freshness=${freshness}`;
 
     const res = await httpRequest({
         hostname: 'api.search.brave.com',
@@ -1302,7 +1309,9 @@ async function searchPerplexity(query) {
     if (!apiKey) throw new Error('Perplexity API key not configured');
 
     // Auto-detect: pplx- prefix → direct API, sk-or- → OpenRouter
-    const isDirect = apiKey.toLowerCase().startsWith('pplx-');
+    const isDirect = apiKey.startsWith('pplx-');
+    const isOpenRouter = apiKey.startsWith('sk-or-');
+    if (!isDirect && !isOpenRouter) throw new Error('Perplexity API key must start with pplx- (direct) or sk-or- (OpenRouter)');
     const baseUrl = isDirect ? 'api.perplexity.ai' : 'openrouter.ai';
     const urlPath = isDirect ? '/chat/completions' : '/api/v1/chat/completions';
     const model = isDirect ? 'sonar-pro' : 'perplexity/sonar-pro';
@@ -1922,9 +1931,11 @@ async function executeTool(name, input) {
     switch (name) {
         case 'web_search': {
             const provider = input.provider || 'brave';
+            const safeCount = Math.min(Math.max(Number(input.count) || 5, 1), 10);
+            const safeFreshness = BRAVE_FRESHNESS_VALUES.has(input.freshness) ? input.freshness : '';
             const cacheKey = provider === 'perplexity'
                 ? `search:perplexity:${input.query}`
-                : `search:brave:${input.query}:${input.count || 5}:${input.freshness || ''}`;
+                : `search:brave:${input.query}:${safeCount}:${safeFreshness}`;
             const cached = cacheGet(cacheKey);
             if (cached) { log('[WebSearch] Cache hit'); return cached; }
 
@@ -1933,7 +1944,7 @@ async function executeTool(name, input) {
                 if (provider === 'perplexity') {
                     result = await searchPerplexity(input.query);
                 } else {
-                    result = await searchBrave(input.query, input.count || 5, input.freshness);
+                    result = await searchBrave(input.query, safeCount, input.freshness);
                 }
                 cacheSet(cacheKey, result);
                 return result;
