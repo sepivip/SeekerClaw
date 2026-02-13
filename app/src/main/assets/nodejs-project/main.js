@@ -1290,7 +1290,7 @@ async function searchBrave(query, count = 5, freshness) {
     if (!res.data?.web?.results) return { provider: 'brave', results: [], message: 'No results found' };
     return {
         provider: 'brave',
-        results: res.data.web.results.slice(0, count).map(r => ({
+        results: res.data.web.results.map(r => ({
             title: r.title, url: r.url, snippet: r.description
         }))
     };
@@ -1318,7 +1318,7 @@ async function searchPerplexity(query) {
         }
     }, { model, messages: [{ role: 'user', content: query }] });
 
-    if (res.status !== 200) throw new Error(`Perplexity API error (${res.status})`);
+    if (res.status !== 200) throw new Error(`Perplexity API error via ${isDirect ? 'direct' : 'OpenRouter'} (${res.status})`);
     const content = res.data?.choices?.[0]?.message?.content || 'No response';
     const citations = res.data?.citations || [];
     return { provider: 'perplexity', answer: content, citations };
@@ -1940,7 +1940,8 @@ async function executeTool(name, input) {
                     log(`[WebSearch] Perplexity failed (${e.message}), falling back to Brave`);
                     try {
                         const fallback = await searchBrave(input.query, 5);
-                        cacheSet(cacheKey, fallback);
+                        const braveCacheKey = `search:brave:${input.query}:5:`;
+                        cacheSet(braveCacheKey, fallback);
                         return fallback;
                     } catch (e2) { return { error: e2.message }; }
                 }
