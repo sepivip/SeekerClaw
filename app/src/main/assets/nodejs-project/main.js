@@ -1981,6 +1981,19 @@ const TOOLS = [
             },
             required: ['message_id', 'chat_id']
         }
+    },
+    {
+        name: 'shell_exec',
+        description: 'Execute a shell command in a sandboxed environment. Working directory is restricted to your workspace. Only allowed commands: node, npm, npx, cat, ls, mkdir, cp, mv, echo, pwd, which, head, tail, wc, sort, uniq, grep, find, chmod, tar, gzip, gunzip, curl, ping, date, df, du, uname, env, printenv. Max 30s timeout. Use this to install npm packages, run scripts, check system info, or extend your capabilities.',
+        input_schema: {
+            type: 'object',
+            properties: {
+                command: { type: 'string', description: 'Shell command to execute (e.g., "npm install axios", "node script.js", "ls -la")' },
+                cwd: { type: 'string', description: 'Working directory relative to workspace (default: workspace root). Must be within workspace.' },
+                timeout_ms: { type: 'number', description: 'Timeout in milliseconds (default: 30000, max: 30000)' }
+            },
+            required: ['command']
+        }
     }
 ];
 
@@ -3034,6 +3047,74 @@ async function executeTool(name, input) {
             }
         }
 
+        case 'shell_exec': {
+            const { execSync } = require('child_process');
+            const cmd = (input.command || '').trim();
+            if (!cmd) return { error: 'command is required' };
+
+            // Allowlist of safe command base names
+            const ALLOWED_CMDS = new Set([
+                'node', 'npm', 'npx',
+                'cat', 'ls', 'mkdir', 'cp', 'mv', 'echo', 'pwd', 'which',
+                'head', 'tail', 'wc', 'sort', 'uniq', 'grep', 'find',
+                'chmod', 'tar', 'gzip', 'gunzip',
+                'curl', 'ping', 'date', 'df', 'du', 'uname', 'env', 'printenv'
+            ]);
+
+            // Extract the base command (first token, strip path prefix)
+            const firstToken = cmd.split(/[\s;|&]/)[0].trim();
+            const baseName = path.basename(firstToken);
+            if (!ALLOWED_CMDS.has(baseName)) {
+                return { error: `Command "${baseName}" is not in the allowlist. Allowed: ${[...ALLOWED_CMDS].join(', ')}` };
+            }
+
+            // Block shell operators that could chain disallowed commands
+            if (/[;|&`$]/.test(cmd.replace(/\$\{[^}]*\}/g, '').replace(/\$[A-Za-z_]\w*/g, ''))) {
+                // Allow single & only in npm commands (background), but block ;, |, &&, ||, `, $()
+                const hasChaining = /;/.test(cmd) || /\|/.test(cmd) || /&&/.test(cmd) || /\|\|/.test(cmd) || /`/.test(cmd) || /\$\(/.test(cmd);
+                if (hasChaining) {
+                    return { error: 'Shell operators (;, |, &&, ||, `, $()) are not allowed. Run one command at a time.' };
+                }
+            }
+
+            // Resolve working directory (must be within workspace)
+            let cwd = workDir;
+            if (input.cwd) {
+                const resolved = safePath(input.cwd);
+                if (!resolved) return { error: 'Access denied: cwd is outside workspace' };
+                cwd = resolved;
+            }
+
+            const timeout = Math.min(input.timeout_ms || 30000, 30000);
+
+            try {
+                const stdout = execSync(cmd, {
+                    cwd,
+                    timeout,
+                    encoding: 'utf8',
+                    maxBuffer: 1024 * 1024, // 1MB
+                    env: { ...process.env, HOME: workDir, PATH: process.env.PATH }
+                });
+                log(`shell_exec OK: ${cmd.slice(0, 80)}`);
+                return {
+                    success: true,
+                    command: cmd,
+                    stdout: stdout.slice(0, 50000), // Cap at 50KB
+                    stderr: '',
+                    exit_code: 0
+                };
+            } catch (e) {
+                log(`shell_exec FAIL (exit ${e.status || '?'}): ${cmd.slice(0, 80)}`);
+                return {
+                    success: false,
+                    command: cmd,
+                    stdout: (e.stdout || '').slice(0, 50000),
+                    stderr: (e.stderr || e.message || '').slice(0, 10000),
+                    exit_code: e.status || 1
+                };
+            }
+        }
+
         default:
             return { error: `Unknown tool: ${name}` };
     }
@@ -3665,6 +3746,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('**Swap workflow:** Always use solana_quote first to show the user what they\'ll get, then solana_swap to execute. Never swap without confirming the quote with the user first.');
     lines.push('**Web search:** Use web_search with provider=perplexity for complex questions needing synthesized answers. Use Brave (default) for quick lookups.');
     lines.push('**Web fetch:** Use web_fetch to read webpages or call APIs. Supports custom headers (Bearer auth), POST/PUT/DELETE methods, and request bodies. Returns markdown (default), JSON, or plain text. Use raw=true for stripped text. Up to 50K chars.');
+    lines.push('**Shell execution:** Use shell_exec to run commands on the device. Sandboxed to workspace directory. Allowed: node, npm, npx, cat, ls, mkdir, cp, mv, grep, find, curl, and other common utilities. Use this to install npm packages (npm install <pkg>), run scripts (node script.js), or check system info. 30s timeout. No shell chaining (;, |, &&).');
     lines.push('');
 
     // Tool Call Style - OpenClaw style
