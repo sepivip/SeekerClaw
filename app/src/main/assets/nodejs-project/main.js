@@ -4721,8 +4721,11 @@ async function handleMessage(msg) {
                             }
                         ];
                     } else if (isImage) {
-                        // Image too large for vision — save but don't base64-encode
-                        const fileNote = `[Image received: ${safeFileName} (${saved.size} bytes, too large for inline vision) — saved to ${relativePath}. Use the read tool to access it.]`;
+                        // Image not usable for inline vision — save but don't base64-encode
+                        const visionReason = !VISION_MIMES.has(media.mime_type)
+                            ? 'unsupported format for inline vision'
+                            : 'too large for inline vision';
+                        const fileNote = `[Image received: ${safeFileName} (${saved.size} bytes, ${visionReason}) — saved to ${relativePath}. Use the read tool to access it.]`;
                         userContent = text ? `${text}\n\n${fileNote}` : fileNote;
                     } else {
                         // Non-image file: tell the agent where it's saved
