@@ -1938,7 +1938,7 @@ async function executeTool(name, input) {
         case 'web_search': {
             const provider = (typeof input.provider === 'string' ? input.provider.toLowerCase() : 'brave');
             if (provider !== 'brave' && provider !== 'perplexity') {
-                return { error: `Unknown search provider "${input.provider}". Use "brave" or "perplexity".` };
+                return { error: `Unknown search provider "${provider}". Use "brave" or "perplexity".` };
             }
             const safeCount = Math.min(Math.max(Number(input.count) || 5, 1), 10);
             const safeFreshness = BRAVE_FRESHNESS_VALUES.has(input.freshness) ? input.freshness : '';
