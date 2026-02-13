@@ -89,6 +89,12 @@ function redactSecrets(msg) {
     msg = msg.replace(/sk-ant-[a-zA-Z0-9_-]{10,}/g, 'sk-ant-***');
     // Redact bot tokens (digits:alphanumeric)
     msg = msg.replace(/\d{8,}:[A-Za-z0-9_-]{20,}/g, '***:***');
+    // Redact Brave API keys
+    msg = msg.replace(/BSA[a-zA-Z0-9_-]{10,}/g, 'BSA***');
+    // Redact Perplexity API keys (pplx-...)
+    msg = msg.replace(/pplx-[a-zA-Z0-9_-]{10,}/g, 'pplx-***');
+    // Redact OpenRouter API keys (sk-or-...)
+    msg = msg.replace(/sk-or-[a-zA-Z0-9_-]{10,}/g, 'sk-or-***');
     // Redact bridge tokens (UUID format)
     if (BRIDGE_TOKEN) msg = msg.replace(new RegExp(BRIDGE_TOKEN.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&'), 'g'), '***bridge-token***');
     return msg;
@@ -1267,6 +1273,57 @@ function htmlToMarkdown(html) {
     return { text, title };
 }
 
+// --- Web search providers ---
+
+async function searchBrave(query, count = 5, freshness) {
+    if (!config.braveApiKey) throw new Error('Brave API key not configured');
+    let searchPath = `/res/v1/web/search?q=${encodeURIComponent(query)}&count=${Math.min(Math.max(count, 1), 10)}`;
+    if (freshness) searchPath += `&freshness=${freshness}`;
+
+    const res = await httpRequest({
+        hostname: 'api.search.brave.com',
+        path: searchPath,
+        method: 'GET',
+        headers: { 'X-Subscription-Token': config.braveApiKey }
+    });
+
+    if (!res.data?.web?.results) return { provider: 'brave', results: [], message: 'No results found' };
+    return {
+        provider: 'brave',
+        results: res.data.web.results.slice(0, count).map(r => ({
+            title: r.title, url: r.url, snippet: r.description
+        }))
+    };
+}
+
+async function searchPerplexity(query) {
+    const apiKey = config.perplexityApiKey;
+    if (!apiKey) throw new Error('Perplexity API key not configured');
+
+    // Auto-detect: pplx- prefix → direct API, sk-or- → OpenRouter
+    const isDirect = apiKey.toLowerCase().startsWith('pplx-');
+    const baseUrl = isDirect ? 'api.perplexity.ai' : 'openrouter.ai';
+    const urlPath = isDirect ? '/chat/completions' : '/api/v1/chat/completions';
+    const model = isDirect ? 'sonar-pro' : 'perplexity/sonar-pro';
+
+    const res = await httpRequest({
+        hostname: baseUrl,
+        path: urlPath,
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`,
+            'HTTP-Referer': 'https://seekerclaw.com',
+            'X-Title': 'SeekerClaw Web Search'
+        }
+    }, { model, messages: [{ role: 'user', content: query }] });
+
+    if (res.status !== 200) throw new Error(`Perplexity API error (${res.status})`);
+    const content = res.data?.choices?.[0]?.message?.content || 'No response';
+    const citations = res.data?.citations || [];
+    return { provider: 'perplexity', answer: content, citations };
+}
+
 // --- Enhanced HTTP fetch with redirects + SSRF protection ---
 
 async function webFetch(urlString, options = {}) {
@@ -1431,11 +1488,14 @@ async function sendTyping(chatId) {
 const TOOLS = [
     {
         name: 'web_search',
-        description: 'Search the web using Brave Search. Use this to find current information, news, or answers to questions.',
+        description: 'Search the web for current information. Uses Brave Search by default, or Perplexity Sonar for AI-synthesized answers with citations.',
         input_schema: {
             type: 'object',
             properties: {
-                query: { type: 'string', description: 'The search query' }
+                query: { type: 'string', description: 'The search query' },
+                provider: { type: 'string', enum: ['brave', 'perplexity'], description: 'Search provider. Default: brave. Use perplexity for complex questions needing synthesized answers.' },
+                count: { type: 'number', description: 'Number of results (brave only, 1-10, default 5)' },
+                freshness: { type: 'string', enum: ['day', 'week', 'month'], description: 'Freshness filter (brave only)' }
             },
             required: ['query']
         }
@@ -1860,25 +1920,30 @@ async function executeTool(name, input) {
 
     switch (name) {
         case 'web_search': {
-            if (!config.braveApiKey) {
-                return { error: 'Brave Search API key not configured. Ask owner to add braveApiKey to config.' };
-            }
+            const provider = input.provider || 'brave';
+            const cacheKey = `search:${provider}:${input.query}:${input.count || 5}:${input.freshness || ''}`;
+            const cached = cacheGet(cacheKey);
+            if (cached) { log('[WebSearch] Cache hit'); return cached; }
+
             try {
-                const res = await httpRequest({
-                    hostname: 'api.search.brave.com',
-                    path: `/res/v1/web/search?q=${encodeURIComponent(input.query)}&count=5`,
-                    method: 'GET',
-                    headers: { 'X-Subscription-Token': config.braveApiKey }
-                });
-                if (res.data.web && res.data.web.results) {
-                    return res.data.web.results.slice(0, 5).map(r => ({
-                        title: r.title,
-                        url: r.url,
-                        snippet: r.description
-                    }));
+                let result;
+                if (provider === 'perplexity') {
+                    result = await searchPerplexity(input.query);
+                } else {
+                    result = await searchBrave(input.query, input.count || 5, input.freshness);
                 }
-                return { error: 'No results found' };
+                cacheSet(cacheKey, result);
+                return result;
             } catch (e) {
+                // Fallback: if perplexity fails and brave is available, try brave
+                if (provider === 'perplexity' && config.braveApiKey) {
+                    log(`[WebSearch] Perplexity failed (${e.message}), falling back to Brave`);
+                    try {
+                        const fallback = await searchBrave(input.query, 5);
+                        cacheSet(cacheKey, fallback);
+                        return fallback;
+                    } catch (e2) { return { error: e2.message }; }
+                }
                 return { error: e.message };
             }
         }
