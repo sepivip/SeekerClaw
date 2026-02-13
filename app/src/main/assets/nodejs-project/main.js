@@ -4679,22 +4679,35 @@ async function handleMessage(msg) {
             const safeFileName = (media.file_name || 'file').replace(/[\r\n\0\u2028\u2029\[\]]/g, '_').slice(0, 120);
             const safeMimeType = (media.mime_type || 'application/octet-stream').replace(/[\r\n\0\u2028\u2029\[\]]/g, '_').slice(0, 60);
             try {
+                if (!media.file_size) {
+                    log(`Media file_size unknown (0) — size will be enforced during download`);
+                }
                 if (media.file_size > MAX_FILE_SIZE) {
-                    await sendMessage(chatId, `File too large (${(media.file_size / 1024 / 1024).toFixed(1)}MB). Max is ${MAX_FILE_SIZE / 1024 / 1024}MB.`, msg.message_id);
-                    if (!text) return; // No text either, nothing to process
+                    const sizeMb = (media.file_size / 1024 / 1024).toFixed(1);
+                    const maxMb = (MAX_FILE_SIZE / 1024 / 1024).toFixed(1);
+                    await sendMessage(chatId, `File too large (${sizeMb}MB). Max is ${maxMb}MB.`, msg.message_id);
+                    const tooLargeNote = `[File attachment was rejected: too large (${sizeMb}MB).]`;
+                    if (text) {
+                        userContent = `${text}\n\n${tooLargeNote}`;
+                    } else {
+                        return;
+                    }
                 } else {
                     const saved = await downloadTelegramFile(media.file_id, media.file_name);
                     const relativePath = `media/inbound/${saved.localName}`;
                     const isImage = media.type === 'photo' || (media.mime_type && media.mime_type.startsWith('image/'));
 
+                    // Validate mime type against Claude vision-supported formats
+                    const VISION_MIMES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
+                    const visionMime = VISION_MIMES.has(media.mime_type) ? media.mime_type : 'image/jpeg';
+
                     if (isImage && saved.size <= MAX_IMAGE_SIZE) {
                         // Image within vision size limit: send as Claude vision content block
                         const imageData = await fs.promises.readFile(saved.localPath);
                         const base64 = imageData.toString('base64');
-                        const mediaType = media.mime_type || 'image/jpeg';
                         const caption = text || '';
                         userContent = [
-                            { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } },
+                            { type: 'image', source: { type: 'base64', media_type: visionMime, data: base64 } },
                             { type: 'text', text: caption
                                 ? `${caption}\n\n[Image saved to ${relativePath} (${saved.size} bytes)]`
                                 : `[User sent an image — saved to ${relativePath} (${saved.size} bytes)]`
