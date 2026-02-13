@@ -3004,7 +3004,7 @@ async function executeTool(name, input) {
         case 'telegram_react': {
             const msgId = input.message_id;
             const chatId = input.chat_id;
-            const emoji = (input.emoji || '').trim();
+            const emoji = String(input.emoji ?? '').trim();
             const remove = input.remove === true;
             if (!msgId) return { error: 'message_id is required' };
             if (!chatId) return { error: 'chat_id is required' };
@@ -3881,7 +3881,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     const uptimeSec = Math.floor((Date.now() - sessionStartedAt) / 1000);
     dynamicLines.push(`Session uptime: ${Math.floor(uptimeSec / 60)}m ${uptimeSec % 60}s (conversation context is ephemeral — cleared on each restart)`);
     const lastMsg = chatId ? lastIncomingMessages.get(String(chatId)) : null;
-    if (lastMsg && REACTION_NOTIFICATIONS !== 'off') {
+    if (lastMsg && REACTION_GUIDANCE !== 'off') {
         dynamicLines.push(`Current message_id: ${lastMsg.messageId}, chat_id: ${lastMsg.chatId} (use with telegram_react to react to this message)`);
     }
 
@@ -4417,7 +4417,9 @@ function handleReactionUpdate(reaction) {
 
     const userId = String(reaction.user?.id || '');
     const msgId = reaction.message_id;
-    const userName = reaction.user?.first_name || 'Someone';
+    // Sanitize untrusted userName to prevent prompt injection (strip control chars, markers)
+    const rawName = reaction.user?.first_name || 'Someone';
+    const userName = rawName.replace(/[\[\]\n\r\u2028\u2029]/g, '').slice(0, 50);
 
     // Filter by notification mode
     if (REACTION_NOTIFICATIONS === 'own' && userId !== OWNER_ID) return;
@@ -4444,14 +4446,13 @@ function handleReactionUpdate(reaction) {
     log(`Reaction: ${eventText}`);
 
     // Queue through chatQueues to avoid race conditions with concurrent message handling.
-    // We don't use enqueueMessage/handleMessage to avoid spoofing the owner identity.
-    const chatKey = String(chatId);
-    const prev = chatQueues.get(chatKey) || Promise.resolve();
+    // Use numeric chatId as key (same as enqueueMessage) so reactions serialize with messages.
+    const prev = chatQueues.get(chatId) || Promise.resolve();
     const task = prev.then(() => {
         addToConversation(chatId, 'user', `[system event] ${eventText}`);
     }).catch(e => log(`Reaction queue error: ${e.message}`));
-    chatQueues.set(chatKey, task);
-    task.then(() => { if (chatQueues.get(chatKey) === task) chatQueues.delete(chatKey); });
+    chatQueues.set(chatId, task);
+    task.then(() => { if (chatQueues.get(chatId) === task) chatQueues.delete(chatId); });
 }
 
 // ============================================================================
@@ -4485,7 +4486,8 @@ async function poll() {
             const result = await telegram('getUpdates', {
                 offset: offset,
                 timeout: 30,
-                allowed_updates: ['message', 'message_reaction']
+                allowed_updates: REACTION_NOTIFICATIONS !== 'off'
+                    ? ['message', 'message_reaction'] : ['message']
             });
 
             // Handle Telegram rate limiting (429)
