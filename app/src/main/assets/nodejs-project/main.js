@@ -1347,6 +1347,7 @@ async function webFetch(urlString, options = {}) {
     const timeout = options.timeout || 30000;
     const deadline = Date.now() + timeout; // cumulative timeout for entire redirect chain
     let currentUrl = urlString;
+    let lastStatus = 0;
 
     for (let i = 0; i <= maxRedirects; i++) {
         const url = new URL(currentUrl);
@@ -1364,14 +1365,17 @@ async function webFetch(urlString, options = {}) {
         const remaining = deadline - Date.now();
         if (remaining <= 0) throw new Error('Request timeout (redirect chain)');
 
-        const method = (i === 0) ? (options.method || 'GET') : 'GET'; // downgrade to GET on redirect
-        const reqBody = (i === 0) ? (options.body || null) : null;
+        // 301/302/303 → downgrade to GET; 307/308 → preserve method+body
+        const isMethodPreserving = lastStatus === 307 || lastStatus === 308;
+        const method = (i === 0 || isMethodPreserving) ? (options.method || 'GET') : 'GET';
+        const reqBody = (i === 0 || isMethodPreserving) ? (options.body !== undefined ? options.body : null) : null;
         const reqHeaders = {
             'User-Agent': 'SeekerClaw/1.0 (Android; +https://seekerclaw.com)',
             'Accept': options.accept || 'text/html,application/json,text/*',
             ...(options.headers || {})
         };
-        if (reqBody && typeof reqBody === 'object' && !reqHeaders['Content-Type'] && !reqHeaders['content-type']) {
+        const hasContentType = Object.keys(reqHeaders).some(k => k.toLowerCase() === 'content-type');
+        if (reqBody && typeof reqBody === 'object' && !hasContentType) {
             reqHeaders['Content-Type'] = 'application/json';
         }
 
@@ -1386,6 +1390,7 @@ async function webFetch(urlString, options = {}) {
 
         // Follow redirects
         if ([301, 302, 303, 307, 308].includes(res.status) && res.headers?.location) {
+            lastStatus = res.status;
             currentUrl = new URL(res.headers.location, currentUrl).toString();
             continue;
         }
@@ -1986,9 +1991,15 @@ async function executeTool(name, input) {
         case 'web_fetch': {
             const rawMode = input.raw === true;
             const fetchMethod = (typeof input.method === 'string' ? input.method.toUpperCase() : 'GET');
+            const ALLOWED_METHODS = new Set(['GET', 'POST', 'PUT', 'DELETE']);
+            if (!ALLOWED_METHODS.has(fetchMethod)) {
+                return { error: `Unsupported HTTP method "${fetchMethod}". Use GET, POST, PUT, or DELETE.` };
+            }
             const isGet = fetchMethod === 'GET';
+            const hasCustomHeaders = input.headers && typeof input.headers === 'object' && !Array.isArray(input.headers);
+            const useCache = isGet && !hasCustomHeaders;
             const fetchCacheKey = `fetch:${input.url}:${rawMode ? 'raw' : 'md'}`;
-            if (isGet) {
+            if (useCache) {
                 const fetchCached = cacheGet(fetchCacheKey);
                 if (fetchCached) { log('[WebFetch] Cache hit'); return fetchCached; }
             }
@@ -1996,7 +2007,15 @@ async function executeTool(name, input) {
             try {
                 const fetchOptions = {};
                 if (input.method) fetchOptions.method = fetchMethod;
-                if (input.headers && typeof input.headers === 'object') fetchOptions.headers = input.headers;
+                if (hasCustomHeaders) {
+                    // Filter dangerous prototype keys
+                    const safeHeaders = {};
+                    for (const [k, v] of Object.entries(input.headers)) {
+                        if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
+                        safeHeaders[k] = String(v);
+                    }
+                    fetchOptions.headers = safeHeaders;
+                }
                 if (input.body !== undefined) fetchOptions.body = input.body;
                 const res = await webFetch(input.url, fetchOptions);
                 if (res.status < 200 || res.status >= 300) {
@@ -2036,7 +2055,7 @@ async function executeTool(name, input) {
                     result = { content: String(res.data).slice(0, 50000), type: 'text', url: res.finalUrl };
                 }
 
-                if (isGet) cacheSet(fetchCacheKey, result);
+                if (useCache) cacheSet(fetchCacheKey, result);
                 return result;
             } catch (e) {
                 return { error: e.message, url: input.url };
