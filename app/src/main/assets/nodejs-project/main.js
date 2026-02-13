@@ -1347,7 +1347,10 @@ async function webFetch(urlString, options = {}) {
     const timeout = options.timeout || 30000;
     const deadline = Date.now() + timeout; // cumulative timeout for entire redirect chain
     let currentUrl = urlString;
-    let lastStatus = 0;
+    let currentMethod = options.method || 'GET';
+    let currentBody = options.body !== undefined ? options.body : null;
+    const customHeaders = options.headers ? { ...options.headers } : {};
+    const originUrl = new URL(urlString);
 
     for (let i = 0; i <= maxRedirects; i++) {
         const url = new URL(currentUrl);
@@ -1365,17 +1368,19 @@ async function webFetch(urlString, options = {}) {
         const remaining = deadline - Date.now();
         if (remaining <= 0) throw new Error('Request timeout (redirect chain)');
 
-        // 301/302/303 → downgrade to GET; 307/308 → preserve method+body
-        const isMethodPreserving = lastStatus === 307 || lastStatus === 308;
-        const method = (i === 0 || isMethodPreserving) ? (options.method || 'GET') : 'GET';
-        const reqBody = (i === 0 || isMethodPreserving) ? (options.body !== undefined ? options.body : null) : null;
+        // Strip sensitive headers on cross-origin redirect
         const reqHeaders = {
             'User-Agent': 'SeekerClaw/1.0 (Android; +https://seekerclaw.com)',
-            'Accept': options.accept || 'text/html,application/json,text/*',
-            ...(options.headers || {})
+            'Accept': options.accept || 'text/html,application/json,text/*'
         };
+        for (const [k, v] of Object.entries(customHeaders)) {
+            const lower = k.toLowerCase();
+            // Strip auth headers on cross-origin redirects
+            if (url.origin !== originUrl.origin && (lower === 'authorization' || lower === 'cookie')) continue;
+            reqHeaders[k] = v;
+        }
         const hasContentType = Object.keys(reqHeaders).some(k => k.toLowerCase() === 'content-type');
-        if (reqBody && typeof reqBody === 'object' && !hasContentType) {
+        if (currentBody && typeof currentBody === 'object' && !hasContentType) {
             reqHeaders['Content-Type'] = 'application/json';
         }
 
@@ -1383,15 +1388,21 @@ async function webFetch(urlString, options = {}) {
             hostname: url.hostname,
             port: url.port || 443,
             path: url.pathname + url.search,
-            method,
+            method: currentMethod,
             headers: reqHeaders,
             timeout: Math.min(remaining, timeout)
-        }, reqBody);
+        }, currentBody);
 
         // Follow redirects
         if ([301, 302, 303, 307, 308].includes(res.status) && res.headers?.location) {
-            lastStatus = res.status;
             currentUrl = new URL(res.headers.location, currentUrl).toString();
+            if (res.status === 307 || res.status === 308) {
+                // Preserve method + body
+            } else {
+                // 301/302/303 → downgrade to GET, drop body
+                currentMethod = 'GET';
+                currentBody = null;
+            }
             continue;
         }
 
@@ -1996,8 +2007,19 @@ async function executeTool(name, input) {
                 return { error: `Unsupported HTTP method "${fetchMethod}". Use GET, POST, PUT, or DELETE.` };
             }
             const isGet = fetchMethod === 'GET';
-            const hasCustomHeaders = input.headers && typeof input.headers === 'object' && !Array.isArray(input.headers);
-            const useCache = isGet && !hasCustomHeaders;
+            const hasBody = input.body !== undefined && input.body !== null;
+
+            // Build safe headers (filter prototype pollution + stringify values)
+            const safeHeaders = {};
+            if (input.headers && typeof input.headers === 'object' && !Array.isArray(input.headers)) {
+                for (const [k, v] of Object.entries(input.headers)) {
+                    if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
+                    if (v === undefined || v === null) continue;
+                    safeHeaders[k] = String(v);
+                }
+            }
+            const hasCustomHeaders = Object.keys(safeHeaders).length > 0;
+            const useCache = isGet && !hasCustomHeaders && !hasBody;
             const fetchCacheKey = `fetch:${input.url}:${rawMode ? 'raw' : 'md'}`;
             if (useCache) {
                 const fetchCached = cacheGet(fetchCacheKey);
@@ -2007,15 +2029,7 @@ async function executeTool(name, input) {
             try {
                 const fetchOptions = {};
                 if (input.method) fetchOptions.method = fetchMethod;
-                if (hasCustomHeaders) {
-                    // Filter dangerous prototype keys
-                    const safeHeaders = {};
-                    for (const [k, v] of Object.entries(input.headers)) {
-                        if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
-                        safeHeaders[k] = String(v);
-                    }
-                    fetchOptions.headers = safeHeaders;
-                }
+                if (hasCustomHeaders) fetchOptions.headers = safeHeaders;
                 if (input.body !== undefined) fetchOptions.body = input.body;
                 const res = await webFetch(input.url, fetchOptions);
                 if (res.status < 200 || res.status >= 300) {
