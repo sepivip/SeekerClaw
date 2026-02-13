@@ -66,6 +66,11 @@ const MODEL = config.model || 'claude-opus-4-6';
 const AGENT_NAME = config.agentName || 'SeekerClaw';
 BRIDGE_TOKEN = config.bridgeToken || '';
 
+// Reaction config: "off" | "own" | "all" (default: "own")
+const REACTION_NOTIFICATIONS = config.reactionNotifications || 'own';
+// Reaction guidance in system prompt: "off" | "minimal" | "full" (default: "minimal")
+const REACTION_GUIDANCE = config.reactionGuidance || 'minimal';
+
 // Normalize optional API keys in-place (clipboard paste can include hidden line breaks)
 if (config.braveApiKey) config.braveApiKey = normalizeSecret(config.braveApiKey);
 if (config.perplexityApiKey) config.perplexityApiKey = normalizeSecret(config.perplexityApiKey);
@@ -1955,6 +1960,19 @@ const TOOLS = [
             },
             required: ['inputToken', 'outputToken', 'amount']
         }
+    },
+    {
+        name: 'telegram_react',
+        description: 'Send a reaction emoji to a Telegram message via the setMessageReaction API. Use sparingly — at most 1 reaction per 5-10 exchanges. Pass the message_id from the current conversation context and a single standard emoji.',
+        input_schema: {
+            type: 'object',
+            properties: {
+                message_id: { type: 'number', description: 'The Telegram message_id to react to' },
+                emoji: { type: 'string', description: 'A single emoji to react with (e.g., "👍", "❤️", "🔥", "😂", "🤔")' },
+                remove: { type: 'boolean', description: 'Set to true to remove your reaction instead of adding one (default: false)' }
+            },
+            required: ['message_id', 'emoji']
+        }
     }
 ];
 
@@ -2975,6 +2993,33 @@ async function executeTool(name, input) {
             }
         }
 
+        case 'telegram_react': {
+            const msgId = input.message_id;
+            const emoji = (input.emoji || '').trim();
+            const remove = input.remove === true;
+            if (!msgId) return { error: 'message_id is required' };
+            if (!emoji && !remove) return { error: 'emoji is required (or set remove: true)' };
+            try {
+                const reactions = remove || !emoji ? [] : [{ type: 'emoji', emoji }];
+                const result = await telegram('setMessageReaction', {
+                    chat_id: OWNER_ID,
+                    message_id: msgId,
+                    reaction: reactions,
+                });
+                if (result.ok) {
+                    log(`Reaction ${remove ? 'removed' : 'set'}: ${emoji} on msg ${msgId}`);
+                    return { ok: true, action: remove ? 'removed' : 'reacted', emoji, message_id: msgId };
+                } else {
+                    return { ok: false, warning: result.description || 'Reaction failed' };
+                }
+            } catch (e) {
+                if (e.message && e.message.includes('REACTION_INVALID')) {
+                    return { ok: false, warning: `Invalid reaction emoji "${emoji}" — Telegram may not support it` };
+                }
+                return { error: e.message };
+            }
+        }
+
         default:
             return { error: `Unknown tool: ${name}` };
     }
@@ -3764,6 +3809,35 @@ function buildSystemBlocks(matchedSkills = []) {
     lines.push('This creates a quoted reply in Telegram. Use when directly responding to a specific question or statement.');
     lines.push('');
 
+    // Reactions section — injected based on reactionGuidance config
+    if (REACTION_GUIDANCE !== 'off') {
+        lines.push('## Reactions');
+        lines.push(`Reactions are enabled for Telegram in ${REACTION_NOTIFICATIONS} mode.`);
+        lines.push('You can react to messages using the telegram_react tool with a message_id and emoji.');
+        lines.push('');
+        if (REACTION_GUIDANCE === 'full') {
+            lines.push('React ONLY when truly relevant:');
+            lines.push('- Acknowledge important user requests or confirmations');
+            lines.push('- Express genuine sentiment (humor, appreciation) sparingly');
+            lines.push('- Avoid reacting to routine messages or your own replies');
+            lines.push('- Guideline: at most 1 reaction per 5-10 exchanges.');
+            lines.push('');
+            lines.push('When users react to your messages, treat reactions as soft CTAs:');
+            lines.push('- 👀 = interested, may want elaboration');
+            lines.push('- 🔥 = strong approval, you\'re on track');
+            lines.push('- 🤔 = unclear, consider clarifying');
+            lines.push('- ❤️/👍 = acknowledged positively');
+            lines.push('- 😂 = humor landed');
+            lines.push('');
+            lines.push('Respond naturally when appropriate — not every reaction needs a reply. Read the vibe like a human would.');
+        } else {
+            // minimal guidance
+            lines.push('Use reactions sparingly — at most 1 per 5-10 exchanges.');
+            lines.push('When users react to your messages, treat them as soft signals (👀=curious, 🔥=approval, 🤔=confusion). Respond naturally when appropriate.');
+        }
+        lines.push('');
+    }
+
     // Model-specific instructions — different guidance per model
     if (MODEL && MODEL.includes('haiku')) {
         lines.push('## Model Note');
@@ -3790,6 +3864,9 @@ function buildSystemBlocks(matchedSkills = []) {
     dynamicLines.push(`Current time: ${weekday} ${localTimestamp(now)} (${now.toLocaleString()})`);
     const uptimeSec = Math.floor((Date.now() - sessionStartedAt) / 1000);
     dynamicLines.push(`Session uptime: ${Math.floor(uptimeSec / 60)}m ${uptimeSec % 60}s (conversation context is ephemeral — cleared on each restart)`);
+    if (lastIncomingMessageId && REACTION_GUIDANCE !== 'off') {
+        dynamicLines.push(`Current message_id: ${lastIncomingMessageId} (use with telegram_react to react to this message)`);
+    }
 
     // Active skills for this specific request (varies per message)
     if (matchedSkills.length > 0) {
@@ -4278,6 +4355,7 @@ async function handleMessage(msg) {
 
         // Regular message - send to Claude (text includes quoted context if replying)
         await sendTyping(chatId);
+        lastIncomingMessageId = msg.message_id;
 
         let response = await chat(chatId, text);
 
@@ -4313,11 +4391,58 @@ async function handleMessage(msg) {
 }
 
 // ============================================================================
+// REACTION HANDLING
+// ============================================================================
+
+function handleReactionUpdate(reaction) {
+    const chatId = reaction.chat?.id;
+    const userId = String(reaction.user?.id || '');
+    const msgId = reaction.message_id;
+    const userName = reaction.user?.first_name || 'Someone';
+
+    // Filter by notification mode
+    if (REACTION_NOTIFICATIONS === 'own' && userId !== OWNER_ID) return;
+
+    // Extract the new emoji(s) — Telegram sends the full new reaction list
+    const newEmojis = (reaction.new_reaction || [])
+        .filter(r => r.type === 'emoji')
+        .map(r => r.emoji);
+    const oldEmojis = (reaction.old_reaction || [])
+        .filter(r => r.type === 'emoji')
+        .map(r => r.emoji);
+
+    // Determine what was added vs removed
+    const added = newEmojis.filter(e => !oldEmojis.includes(e));
+    const removed = oldEmojis.filter(e => !newEmojis.includes(e));
+
+    if (added.length === 0 && removed.length === 0) return;
+
+    // Build event description
+    const parts = [];
+    if (added.length > 0) parts.push(`added ${added.join('')}`);
+    if (removed.length > 0) parts.push(`removed ${removed.join('')}`);
+    const eventText = `Telegram reaction ${parts.join(', ')} by ${userName} on message ${msgId}`;
+    log(`Reaction: ${eventText}`);
+
+    // Inject as a system event into the conversation so the agent sees it
+    if (chatId) {
+        const syntheticMsg = {
+            chat: { id: chatId },
+            from: { id: Number(OWNER_ID), first_name: 'System' },
+            text: `[system] ${eventText}`,
+            message_id: msgId,
+        };
+        enqueueMessage(syntheticMsg);
+    }
+}
+
+// ============================================================================
 // POLLING LOOP
 // ============================================================================
 
 let offset = 0;
 let pollErrors = 0;
+let lastIncomingMessageId = null; // Track the message_id of the current user message (for reactions)
 
 // Per-chat message queue: prevents concurrent handleMessage() for the same chat
 const chatQueues = new Map(); // chatId -> Promise chain
@@ -4341,7 +4466,7 @@ async function poll() {
             const result = await telegram('getUpdates', {
                 offset: offset,
                 timeout: 30,
-                allowed_updates: ['message']
+                allowed_updates: ['message', 'message_reaction']
             });
 
             // Handle Telegram rate limiting (429)
@@ -4357,6 +4482,9 @@ async function poll() {
                     offset = update.update_id + 1;
                     if (update.message) {
                         enqueueMessage(update.message);
+                    }
+                    if (update.message_reaction && REACTION_NOTIFICATIONS !== 'off') {
+                        handleReactionUpdate(update.message_reaction);
                     }
                 }
             }
