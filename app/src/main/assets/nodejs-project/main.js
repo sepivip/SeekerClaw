@@ -1981,6 +1981,19 @@ const TOOLS = [
             },
             required: ['message_id', 'chat_id']
         }
+    },
+    {
+        name: 'shell_exec',
+        description: 'Execute a shell command in a sandboxed environment. Working directory is restricted to your workspace. Only a predefined allowlist of safe commands is permitted (node, npm, npx, common Unix utilities, curl). No shell chaining or redirection. Max 30s timeout. Use this to install npm packages, run scripts, check system info, or extend your capabilities.',
+        input_schema: {
+            type: 'object',
+            properties: {
+                command: { type: 'string', description: 'Shell command to execute (e.g., "npm install axios", "node script.js", "ls -la")' },
+                cwd: { type: 'string', description: 'Working directory relative to workspace (default: workspace root). Must be within workspace.' },
+                timeout_ms: { type: 'number', description: 'Timeout in milliseconds (default: 30000, max: 30000)' }
+            },
+            required: ['command']
+        }
     }
 ];
 
@@ -3034,6 +3047,118 @@ async function executeTool(name, input) {
             }
         }
 
+        case 'shell_exec': {
+            const { exec } = require('child_process');
+            const cmd = (input.command || '').trim();
+            if (!cmd) return { error: 'command is required' };
+
+            // Limit command length to prevent abuse
+            if (cmd.length > 2048) {
+                return { error: 'Command too long (max 2048 characters)' };
+            }
+
+            // Block newlines, null bytes, and Unicode line separators
+            if (/[\r\n\0\u2028\u2029]/.test(cmd)) {
+                return { error: 'Newline, null, or line separator characters are not allowed in commands' };
+            }
+
+            // Allowlist of safe command base names
+            // Note: node/npm/npx can execute arbitrary code by design — this is the tool's
+            // intended purpose (self-extending agent). The allowlist prevents accidental use
+            // of destructive system commands (rm, kill, etc.), not full sandboxing.
+            const ALLOWED_CMDS = new Set([
+                'node', 'npm', 'npx',
+                'cat', 'ls', 'mkdir', 'cp', 'mv', 'echo', 'pwd', 'which',
+                'head', 'tail', 'wc', 'sort', 'uniq', 'grep', 'find',
+                'curl', 'ping', 'date', 'df', 'du', 'uname', 'printenv'
+            ]);
+
+            // Extract the base command (first token before whitespace)
+            const firstToken = cmd.split(/\s/)[0].trim();
+            // Reject explicit paths (e.g., /usr/bin/rm, ./evil.sh)
+            if (firstToken.includes('/') || firstToken.includes('\\')) {
+                return { error: 'Command paths are not allowed. Use a bare command name from the allowlist.' };
+            }
+            if (!ALLOWED_CMDS.has(firstToken)) {
+                return { error: `Command "${firstToken}" is not in the allowlist. Allowed: ${[...ALLOWED_CMDS].join(', ')}` };
+            }
+
+            // Block shell operators, command substitution, and glob patterns (incl. brackets)
+            if (/[;&|`<>$~{}\[\]]|\*|\?/.test(cmd.slice(firstToken.length))) {
+                return { error: 'Shell operators (;, &, |, `, <, >, $, *, ?, ~, {}, []) are not allowed in arguments. Run one simple command at a time.' };
+            }
+
+            // Resolve working directory (must be within workspace)
+            let cwd = workDir;
+            if (input.cwd) {
+                const cwdInput = String(input.cwd).trim();
+                const resolved = safePath(cwdInput);
+                if (!resolved) return { error: 'Access denied: cwd is outside workspace' };
+                if (!fs.existsSync(resolved)) return { error: `cwd does not exist: ${cwdInput}` };
+                const cwdStat = fs.statSync(resolved);
+                if (!cwdStat.isDirectory()) return { error: `cwd is not a directory: ${cwdInput}` };
+                cwd = resolved;
+            }
+
+            // Validate and clamp timeout to [1, 30000]ms
+            let timeout = 30000;
+            if (input.timeout_ms !== undefined) {
+                const t = Number(input.timeout_ms);
+                if (!Number.isFinite(t) || t <= 0) {
+                    return { error: 'timeout_ms must be a positive number (max 30000)' };
+                }
+                timeout = Math.min(Math.max(t, 1), 30000);
+            }
+
+            // Detect shell: Android uses /system/bin/sh, standard Unix uses /bin/sh
+            const shellPath = fs.existsSync('/system/bin/sh') ? '/system/bin/sh' : '/bin/sh';
+            // Minimal environment: only PATH and HOME, no inherited secrets
+            const SAFE_PATH = fs.existsSync('/system/bin') ? '/system/bin:/usr/local/bin:/usr/bin:/bin' : '/usr/local/bin:/usr/bin:/bin';
+
+            // Use async exec to avoid blocking the event loop
+            return new Promise((resolve) => {
+                exec(cmd, {
+                    cwd,
+                    timeout,
+                    encoding: 'utf8',
+                    maxBuffer: 1024 * 1024, // 1MB
+                    shell: shellPath,
+                    env: { HOME: workDir, PATH: SAFE_PATH, TERM: 'dumb' }
+                }, (err, stdout, stderr) => {
+                    if (err) {
+                        if (err.killed && err.signal) {
+                            log(`shell_exec TIMEOUT: ${cmd.slice(0, 80)}`);
+                            resolve({
+                                success: false,
+                                command: cmd,
+                                stdout: (stdout || '').slice(0, 50000),
+                                stderr: `Command timed out after ${timeout}ms`,
+                                exit_code: err.code || 1
+                            });
+                        } else {
+                            log(`shell_exec FAIL (exit ${err.code || '?'}): ${cmd.slice(0, 80)}`);
+                            resolve({
+                                success: false,
+                                command: cmd,
+                                stdout: (stdout || '').slice(0, 50000),
+                                stderr: (stderr || '').slice(0, 10000) || err.message || 'Unknown error',
+                                exit_code: err.code || 1
+                            });
+                        }
+                    } else {
+                        log(`shell_exec OK: ${cmd.slice(0, 80)}`);
+                        resolve({
+                            success: true,
+                            command: cmd,
+                            stdout: (stdout || '').slice(0, 50000),
+                            stderr: (stderr || '').slice(0, 10000),
+                            exit_code: 0
+                        });
+                    }
+                });
+            });
+        }
+
         default:
             return { error: `Unknown tool: ${name}` };
     }
@@ -3665,6 +3790,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('**Swap workflow:** Always use solana_quote first to show the user what they\'ll get, then solana_swap to execute. Never swap without confirming the quote with the user first.');
     lines.push('**Web search:** Use web_search with provider=perplexity for complex questions needing synthesized answers. Use Brave (default) for quick lookups.');
     lines.push('**Web fetch:** Use web_fetch to read webpages or call APIs. Supports custom headers (Bearer auth), POST/PUT/DELETE methods, and request bodies. Returns markdown (default), JSON, or plain text. Use raw=true for stripped text. Up to 50K chars.');
+    lines.push('**Shell execution:** Use shell_exec to run commands on the device. Sandboxed to workspace directory with a predefined allowlist (see tool description). Use for npm install, running scripts (node script.js), file operations, curl, and system info. 30s timeout. No chaining, redirection, or command substitution — one command at a time.');
     lines.push('');
 
     // Tool Call Style - OpenClaw style
