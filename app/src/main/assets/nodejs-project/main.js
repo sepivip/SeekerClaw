@@ -1287,6 +1287,7 @@ async function searchBrave(query, count = 5, freshness) {
         headers: { 'X-Subscription-Token': config.braveApiKey }
     });
 
+    if (res.status !== 200) throw new Error(`Brave Search API error (${res.status})`);
     if (!res.data?.web?.results) return { provider: 'brave', results: [], message: 'No results found' };
     return {
         provider: 'brave',
@@ -1921,7 +1922,9 @@ async function executeTool(name, input) {
     switch (name) {
         case 'web_search': {
             const provider = input.provider || 'brave';
-            const cacheKey = `search:${provider}:${input.query}:${input.count || 5}:${input.freshness || ''}`;
+            const cacheKey = provider === 'perplexity'
+                ? `search:perplexity:${input.query}`
+                : `search:brave:${input.query}:${input.count || 5}:${input.freshness || ''}`;
             const cached = cacheGet(cacheKey);
             if (cached) { log('[WebSearch] Cache hit'); return cached; }
 
