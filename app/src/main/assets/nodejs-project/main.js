@@ -1347,6 +1347,10 @@ async function webFetch(urlString, options = {}) {
     const timeout = options.timeout || 30000;
     const deadline = Date.now() + timeout; // cumulative timeout for entire redirect chain
     let currentUrl = urlString;
+    let currentMethod = options.method || 'GET';
+    let currentBody = options.body !== undefined ? options.body : null;
+    const customHeaders = options.headers ? { ...options.headers } : {};
+    const originUrl = new URL(urlString);
 
     for (let i = 0; i <= maxRedirects; i++) {
         const url = new URL(currentUrl);
@@ -1364,22 +1368,41 @@ async function webFetch(urlString, options = {}) {
         const remaining = deadline - Date.now();
         if (remaining <= 0) throw new Error('Request timeout (redirect chain)');
 
+        // Strip sensitive headers on cross-origin redirect
+        const reqHeaders = {
+            'User-Agent': 'SeekerClaw/1.0 (Android; +https://seekerclaw.com)',
+            'Accept': options.accept || 'text/html,application/json,text/*'
+        };
+        for (const [k, v] of Object.entries(customHeaders)) {
+            const lower = k.toLowerCase();
+            // Strip auth headers on cross-origin redirects
+            if (url.origin !== originUrl.origin && (lower === 'authorization' || lower === 'cookie')) continue;
+            reqHeaders[k] = v;
+        }
+        const hasContentType = Object.keys(reqHeaders).some(k => k.toLowerCase() === 'content-type');
+        if (currentBody && typeof currentBody === 'object' && !hasContentType) {
+            reqHeaders['Content-Type'] = 'application/json';
+        }
+
         const res = await httpRequest({
             hostname: url.hostname,
             port: url.port || 443,
             path: url.pathname + url.search,
-            method: 'GET',
-            headers: {
-                'User-Agent': 'SeekerClaw/1.0 (Android; +https://seekerclaw.com)',
-                'Accept': options.accept || 'text/html,application/json,text/*',
-                ...(options.headers || {})
-            },
+            method: currentMethod,
+            headers: reqHeaders,
             timeout: Math.min(remaining, timeout)
-        });
+        }, currentBody);
 
         // Follow redirects
         if ([301, 302, 303, 307, 308].includes(res.status) && res.headers?.location) {
             currentUrl = new URL(res.headers.location, currentUrl).toString();
+            if (res.status === 307 || res.status === 308) {
+                // Preserve method + body
+            } else {
+                // 301/302/303 → downgrade to GET, drop body
+                currentMethod = 'GET';
+                currentBody = null;
+            }
             continue;
         }
 
@@ -1518,11 +1541,14 @@ const TOOLS = [
     },
     {
         name: 'web_fetch',
-        description: 'Fetch and read a webpage. Returns clean markdown with links and headings preserved. Supports HTML, JSON, and plain text. Follows redirects automatically.',
+        description: 'Fetch a URL with full HTTP support. Returns markdown (HTML), JSON, or text. Supports custom headers (Bearer auth), methods (POST/PUT/DELETE), and request bodies for authenticated API calls.',
         input_schema: {
             type: 'object',
             properties: {
                 url: { type: 'string', description: 'The URL to fetch' },
+                method: { type: 'string', enum: ['GET', 'POST', 'PUT', 'DELETE'], description: 'HTTP method (default: GET)' },
+                headers: { type: 'object', description: 'Custom HTTP headers (e.g. {"Authorization": "Bearer sk-..."})' },
+                body: { type: ['string', 'object'], description: 'Request body for POST/PUT. String or JSON object.' },
                 raw: { type: 'boolean', description: 'If true, return raw text without markdown conversion' }
             },
             required: ['url']
@@ -1975,12 +2001,37 @@ async function executeTool(name, input) {
 
         case 'web_fetch': {
             const rawMode = input.raw === true;
+            const fetchMethod = (typeof input.method === 'string' ? input.method.toUpperCase() : 'GET');
+            const ALLOWED_METHODS = new Set(['GET', 'POST', 'PUT', 'DELETE']);
+            if (!ALLOWED_METHODS.has(fetchMethod)) {
+                return { error: `Unsupported HTTP method "${fetchMethod}". Use GET, POST, PUT, or DELETE.` };
+            }
+            const isGet = fetchMethod === 'GET';
+            const hasBody = input.body !== undefined && input.body !== null;
+
+            // Build safe headers (filter prototype pollution + stringify values)
+            const safeHeaders = {};
+            if (input.headers && typeof input.headers === 'object' && !Array.isArray(input.headers)) {
+                for (const [k, v] of Object.entries(input.headers)) {
+                    if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
+                    if (v === undefined || v === null) continue;
+                    safeHeaders[k] = String(v);
+                }
+            }
+            const hasCustomHeaders = Object.keys(safeHeaders).length > 0;
+            const useCache = isGet && !hasCustomHeaders && !hasBody;
             const fetchCacheKey = `fetch:${input.url}:${rawMode ? 'raw' : 'md'}`;
-            const fetchCached = cacheGet(fetchCacheKey);
-            if (fetchCached) { log('[WebFetch] Cache hit'); return fetchCached; }
+            if (useCache) {
+                const fetchCached = cacheGet(fetchCacheKey);
+                if (fetchCached) { log('[WebFetch] Cache hit'); return fetchCached; }
+            }
 
             try {
-                const res = await webFetch(input.url);
+                const fetchOptions = {};
+                if (input.method) fetchOptions.method = fetchMethod;
+                if (hasCustomHeaders) fetchOptions.headers = safeHeaders;
+                if (input.body !== undefined) fetchOptions.body = input.body;
+                const res = await webFetch(input.url, fetchOptions);
                 if (res.status < 200 || res.status >= 300) {
                     let detail = '';
                     if (typeof res.data === 'string') {
@@ -2018,7 +2069,7 @@ async function executeTool(name, input) {
                     result = { content: String(res.data).slice(0, 50000), type: 'text', url: res.finalUrl };
                 }
 
-                cacheSet(fetchCacheKey, result);
+                if (useCache) cacheSet(fetchCacheKey, result);
                 return result;
             } catch (e) {
                 return { error: e.message, url: input.url };
@@ -3554,7 +3605,7 @@ function buildSystemBlocks(matchedSkills = []) {
     lines.push('For visual checks ("what do you see", "check my dog"), call android_camera_check.');
     lines.push('**Swap workflow:** Always use solana_quote first to show the user what they\'ll get, then solana_swap to execute. Never swap without confirming the quote with the user first.');
     lines.push('**Web search:** Use web_search with provider=perplexity for complex questions needing synthesized answers. Use Brave (default) for quick lookups.');
-    lines.push('**Web fetch:** Use web_fetch to read any webpage. Returns markdown (default), JSON, or plain text depending on response type. Use raw=true for stripped text. Supports up to 50K chars.');
+    lines.push('**Web fetch:** Use web_fetch to read webpages or call APIs. Supports custom headers (Bearer auth), POST/PUT/DELETE methods, and request bodies. Returns markdown (default), JSON, or plain text. Use raw=true for stripped text. Up to 50K chars.');
     lines.push('');
 
     // Tool Call Style - OpenClaw style
