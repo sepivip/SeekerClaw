@@ -2003,7 +2003,7 @@ async function executeTool(name, input) {
                         } else {
                             // Markdown conversion (default)
                             const { text, title } = htmlToMarkdown(res.data);
-                            result = { content: text.slice(0, 50000), title, type: 'markdown', url: res.finalUrl };
+                            result = { content: text.slice(0, 50000), ...(title && { title }), type: 'markdown', url: res.finalUrl };
                         }
                     } else {
                         // Plain text
