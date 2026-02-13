@@ -1963,15 +1963,16 @@ const TOOLS = [
     },
     {
         name: 'telegram_react',
-        description: 'Send a reaction emoji to a Telegram message via the setMessageReaction API. Use sparingly — at most 1 reaction per 5-10 exchanges. Pass the message_id from the current conversation context and a single standard emoji.',
+        description: 'Send a reaction emoji to a Telegram message via the setMessageReaction API. Use sparingly — at most 1 reaction per 5-10 exchanges. Pass the message_id and chat_id from the current conversation context and a single standard emoji.',
         input_schema: {
             type: 'object',
             properties: {
                 message_id: { type: 'number', description: 'The Telegram message_id to react to' },
-                emoji: { type: 'string', description: 'A single emoji to react with (e.g., "👍", "❤️", "🔥", "😂", "🤔")' },
+                chat_id: { type: 'number', description: 'The Telegram chat_id where the message is' },
+                emoji: { type: 'string', description: 'A single emoji to react with (e.g., "👍", "❤️", "🔥", "😂", "🤔"). Required when adding a reaction; not needed when remove is true.' },
                 remove: { type: 'boolean', description: 'Set to true to remove your reaction instead of adding one (default: false)' }
             },
-            required: ['message_id', 'emoji']
+            required: ['message_id', 'chat_id']
         }
     }
 ];
@@ -2995,27 +2996,31 @@ async function executeTool(name, input) {
 
         case 'telegram_react': {
             const msgId = input.message_id;
+            const chatId = input.chat_id;
             const emoji = (input.emoji || '').trim();
             const remove = input.remove === true;
             if (!msgId) return { error: 'message_id is required' };
+            if (!chatId) return { error: 'chat_id is required' };
             if (!emoji && !remove) return { error: 'emoji is required (or set remove: true)' };
             try {
                 const reactions = remove || !emoji ? [] : [{ type: 'emoji', emoji }];
                 const result = await telegram('setMessageReaction', {
-                    chat_id: OWNER_ID,
+                    chat_id: chatId,
                     message_id: msgId,
                     reaction: reactions,
                 });
                 if (result.ok) {
-                    log(`Reaction ${remove ? 'removed' : 'set'}: ${emoji} on msg ${msgId}`);
-                    return { ok: true, action: remove ? 'removed' : 'reacted', emoji, message_id: msgId };
+                    log(`Reaction ${remove ? 'removed' : 'set'}: ${emoji} on msg ${msgId} in chat ${chatId}`);
+                    return { ok: true, action: remove ? 'removed' : 'reacted', emoji, message_id: msgId, chat_id: chatId };
                 } else {
-                    return { ok: false, warning: result.description || 'Reaction failed' };
+                    // Check for invalid reaction emoji in Telegram error response
+                    const desc = result.description || '';
+                    if (desc.includes('REACTION_INVALID')) {
+                        return { ok: false, warning: `Invalid reaction emoji "${emoji}" — Telegram may not support it` };
+                    }
+                    return { ok: false, warning: desc || 'Reaction failed' };
                 }
             } catch (e) {
-                if (e.message && e.message.includes('REACTION_INVALID')) {
-                    return { ok: false, warning: `Invalid reaction emoji "${emoji}" — Telegram may not support it` };
-                }
                 return { error: e.message };
             }
         }
@@ -3812,7 +3817,11 @@ function buildSystemBlocks(matchedSkills = []) {
     // Reactions section — injected based on reactionGuidance config
     if (REACTION_GUIDANCE !== 'off') {
         lines.push('## Reactions');
-        lines.push(`Reactions are enabled for Telegram in ${REACTION_NOTIFICATIONS} mode.`);
+        if (REACTION_NOTIFICATIONS === 'off') {
+            lines.push('Reaction notifications are disabled for Telegram, but you can still use reactions when appropriate.');
+        } else {
+            lines.push(`Reactions are enabled for Telegram in ${REACTION_NOTIFICATIONS} mode.`);
+        }
         lines.push('You can react to messages using the telegram_react tool with a message_id and emoji.');
         lines.push('');
         if (REACTION_GUIDANCE === 'full') {
@@ -3864,8 +3873,8 @@ function buildSystemBlocks(matchedSkills = []) {
     dynamicLines.push(`Current time: ${weekday} ${localTimestamp(now)} (${now.toLocaleString()})`);
     const uptimeSec = Math.floor((Date.now() - sessionStartedAt) / 1000);
     dynamicLines.push(`Session uptime: ${Math.floor(uptimeSec / 60)}m ${uptimeSec % 60}s (conversation context is ephemeral — cleared on each restart)`);
-    if (lastIncomingMessageId && REACTION_GUIDANCE !== 'off') {
-        dynamicLines.push(`Current message_id: ${lastIncomingMessageId} (use with telegram_react to react to this message)`);
+    if (lastIncomingMessageId && REACTION_NOTIFICATIONS !== 'off') {
+        dynamicLines.push(`Current message_id: ${lastIncomingMessageId}, chat_id: ${lastIncomingChatId} (use with telegram_react to react to this message)`);
     }
 
     // Active skills for this specific request (varies per message)
@@ -4356,6 +4365,7 @@ async function handleMessage(msg) {
         // Regular message - send to Claude (text includes quoted context if replying)
         await sendTyping(chatId);
         lastIncomingMessageId = msg.message_id;
+        lastIncomingChatId = chatId;
 
         let response = await chat(chatId, text);
 
@@ -4424,15 +4434,10 @@ function handleReactionUpdate(reaction) {
     const eventText = `Telegram reaction ${parts.join(', ')} by ${userName} on message ${msgId}`;
     log(`Reaction: ${eventText}`);
 
-    // Inject as a system event into the conversation so the agent sees it
+    // Inject directly into conversation history (not via enqueueMessage/handleMessage
+    // to avoid spoofing the owner identity and bypassing the owner-only check)
     if (chatId) {
-        const syntheticMsg = {
-            chat: { id: chatId },
-            from: { id: Number(OWNER_ID), first_name: 'System' },
-            text: `[system] ${eventText}`,
-            message_id: msgId,
-        };
-        enqueueMessage(syntheticMsg);
+        addToConversation(chatId, 'user', `[system event] ${eventText}`);
     }
 }
 
@@ -4443,6 +4448,7 @@ function handleReactionUpdate(reaction) {
 let offset = 0;
 let pollErrors = 0;
 let lastIncomingMessageId = null; // Track the message_id of the current user message (for reactions)
+let lastIncomingChatId = null;    // Track the chat_id of the current user message (for reactions)
 
 // Per-chat message queue: prevents concurrent handleMessage() for the same chat
 const chatQueues = new Map(); // chatId -> Promise chain
