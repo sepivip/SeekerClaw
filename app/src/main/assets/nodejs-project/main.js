@@ -1993,11 +1993,11 @@ async function executeTool(name, input) {
                     result = { content: json.slice(0, 50000), type: 'json', url: res.finalUrl };
                 } else if (typeof res.data === 'string') {
                     const contentType = (res.headers && res.headers['content-type']) || '';
-                    if (contentType.includes('text/html') || /^\s*</.test(res.data)) {
+                    if (contentType.includes('text/html') || /^\s*(?:<!DOCTYPE html|<html\b)/i.test(res.data)) {
                         if (rawMode) {
                             // Raw mode: basic strip only
-                            let text = res.data.replace(/<script[\s\S]*?<\/script>/gi, '');
-                            text = text.replace(/<style[\s\S]*?<\/style>/gi, '');
+                            let text = res.data.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
+                            text = text.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
                             text = text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
                             result = { content: text.slice(0, 50000), type: 'text', url: res.finalUrl };
                         } else {
