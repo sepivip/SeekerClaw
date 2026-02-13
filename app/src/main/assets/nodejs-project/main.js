@@ -3048,7 +3048,7 @@ async function executeTool(name, input) {
         }
 
         case 'shell_exec': {
-            const { execSync } = require('child_process');
+            const { exec } = require('child_process');
             const cmd = (input.command || '').trim();
             if (!cmd) return { error: 'command is required' };
 
@@ -3063,11 +3063,14 @@ async function executeTool(name, input) {
             }
 
             // Allowlist of safe command base names
+            // Note: node/npm/npx can execute arbitrary code by design — this is the tool's
+            // intended purpose (self-extending agent). The allowlist prevents accidental use
+            // of destructive system commands (rm, kill, etc.), not full sandboxing.
             const ALLOWED_CMDS = new Set([
                 'node', 'npm', 'npx',
                 'cat', 'ls', 'mkdir', 'cp', 'mv', 'echo', 'pwd', 'which',
                 'head', 'tail', 'wc', 'sort', 'uniq', 'grep', 'find',
-                'curl', 'ping', 'date', 'df', 'du', 'uname', 'env', 'printenv'
+                'curl', 'ping', 'date', 'df', 'du', 'uname', 'printenv'
             ]);
 
             // Extract the base command (first token before whitespace)
@@ -3080,9 +3083,9 @@ async function executeTool(name, input) {
                 return { error: `Command "${firstToken}" is not in the allowlist. Allowed: ${[...ALLOWED_CMDS].join(', ')}` };
             }
 
-            // Block shell operators, command substitution, and glob patterns
-            if (/[;&|`<>$~{}]|\*|\?/.test(cmd.slice(firstToken.length))) {
-                return { error: 'Shell operators (;, &, |, `, <, >, $, *, ?, ~, {}) are not allowed in arguments. Run one simple command at a time.' };
+            // Block shell operators, command substitution, and glob patterns (incl. brackets)
+            if (/[;&|`<>$~{}\[\]]|\*|\?/.test(cmd.slice(firstToken.length))) {
+                return { error: 'Shell operators (;, &, |, `, <, >, $, *, ?, ~, {}, []) are not allowed in arguments. Run one simple command at a time.' };
             }
 
             // Resolve working directory (must be within workspace)
@@ -3097,50 +3100,63 @@ async function executeTool(name, input) {
                 cwd = resolved;
             }
 
-            const timeout = Math.min(input.timeout_ms || 30000, 30000);
+            // Validate and clamp timeout to [1, 30000]ms
+            let timeout = 30000;
+            if (input.timeout_ms !== undefined) {
+                const t = Number(input.timeout_ms);
+                if (!Number.isFinite(t) || t <= 0) {
+                    return { error: 'timeout_ms must be a positive number (max 30000)' };
+                }
+                timeout = Math.min(Math.max(t, 1), 30000);
+            }
+
             // Detect shell: Android uses /system/bin/sh, standard Unix uses /bin/sh
             const shellPath = fs.existsSync('/system/bin/sh') ? '/system/bin/sh' : '/bin/sh';
             // Minimal environment: only PATH and HOME, no inherited secrets
             const SAFE_PATH = fs.existsSync('/system/bin') ? '/system/bin:/usr/local/bin:/usr/bin:/bin' : '/usr/local/bin:/usr/bin:/bin';
 
-            try {
-                const stdout = execSync(cmd, {
+            // Use async exec to avoid blocking the event loop
+            return new Promise((resolve) => {
+                exec(cmd, {
                     cwd,
                     timeout,
                     encoding: 'utf8',
                     maxBuffer: 1024 * 1024, // 1MB
                     shell: shellPath,
                     env: { HOME: workDir, PATH: SAFE_PATH, TERM: 'dumb' }
+                }, (err, stdout, stderr) => {
+                    if (err) {
+                        if (err.killed && err.signal) {
+                            log(`shell_exec TIMEOUT: ${cmd.slice(0, 80)}`);
+                            resolve({
+                                success: false,
+                                command: cmd,
+                                stdout: (stdout || '').slice(0, 50000),
+                                stderr: `Command timed out after ${timeout}ms`,
+                                exit_code: err.code || 1
+                            });
+                        } else {
+                            log(`shell_exec FAIL (exit ${err.code || '?'}): ${cmd.slice(0, 80)}`);
+                            resolve({
+                                success: false,
+                                command: cmd,
+                                stdout: (stdout || '').slice(0, 50000),
+                                stderr: (stderr || '').slice(0, 10000) || err.message || 'Unknown error',
+                                exit_code: err.code || 1
+                            });
+                        }
+                    } else {
+                        log(`shell_exec OK: ${cmd.slice(0, 80)}`);
+                        resolve({
+                            success: true,
+                            command: cmd,
+                            stdout: (stdout || '').slice(0, 50000),
+                            stderr: (stderr || '').slice(0, 10000),
+                            exit_code: 0
+                        });
+                    }
                 });
-                log(`shell_exec OK: ${cmd.slice(0, 80)}`);
-                return {
-                    success: true,
-                    command: cmd,
-                    stdout: stdout.slice(0, 50000),
-                    stderr: '',
-                    exit_code: 0
-                };
-            } catch (e) {
-                // Distinguish timeout from other failures
-                if (e.killed && e.signal) {
-                    log(`shell_exec TIMEOUT: ${cmd.slice(0, 80)}`);
-                    return {
-                        success: false,
-                        command: cmd,
-                        stdout: (e.stdout || '').slice(0, 50000),
-                        stderr: `Command timed out after ${timeout}ms`,
-                        exit_code: e.status || 1
-                    };
-                }
-                log(`shell_exec FAIL (exit ${e.status || '?'}): ${cmd.slice(0, 80)}`);
-                return {
-                    success: false,
-                    command: cmd,
-                    stdout: (e.stdout || '').slice(0, 50000),
-                    stderr: (e.stderr || '').slice(0, 10000) || e.message || 'Unknown error',
-                    exit_code: e.status || 1
-                };
-            }
+            });
         }
 
         default:
