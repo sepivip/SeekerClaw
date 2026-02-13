@@ -66,10 +66,17 @@ const MODEL = config.model || 'claude-opus-4-6';
 const AGENT_NAME = config.agentName || 'SeekerClaw';
 BRIDGE_TOKEN = config.bridgeToken || '';
 
-// Reaction config: "off" | "own" | "all" (default: "own")
-const REACTION_NOTIFICATIONS = config.reactionNotifications || 'own';
-// Reaction guidance in system prompt: "off" | "minimal" | "full" (default: "minimal")
-const REACTION_GUIDANCE = config.reactionGuidance || 'minimal';
+// Reaction config with validation
+const VALID_REACTION_NOTIFICATIONS = new Set(['off', 'own', 'all']);
+const VALID_REACTION_GUIDANCE = new Set(['off', 'minimal', 'full']);
+const REACTION_NOTIFICATIONS = VALID_REACTION_NOTIFICATIONS.has(config.reactionNotifications)
+    ? config.reactionNotifications : 'own';
+const REACTION_GUIDANCE = VALID_REACTION_GUIDANCE.has(config.reactionGuidance)
+    ? config.reactionGuidance : 'minimal';
+if (config.reactionNotifications && !VALID_REACTION_NOTIFICATIONS.has(config.reactionNotifications))
+    log(`WARNING: Invalid reactionNotifications "${config.reactionNotifications}" — using "own"`);
+if (config.reactionGuidance && !VALID_REACTION_GUIDANCE.has(config.reactionGuidance))
+    log(`WARNING: Invalid reactionGuidance "${config.reactionGuidance}" — using "minimal"`);
 
 // Normalize optional API keys in-place (clipboard paste can include hidden line breaks)
 if (config.braveApiKey) config.braveApiKey = normalizeSecret(config.braveApiKey);
@@ -3010,7 +3017,7 @@ async function executeTool(name, input) {
                     reaction: reactions,
                 });
                 if (result.ok) {
-                    log(`Reaction ${remove ? 'removed' : 'set'}: ${emoji} on msg ${msgId} in chat ${chatId}`);
+                    log(`Reaction ${remove ? 'removed (all)' : 'set: ' + emoji} on msg ${msgId} in chat ${chatId}`);
                     return { ok: true, action: remove ? 'removed' : 'reacted', emoji, message_id: msgId, chat_id: chatId };
                 } else {
                     // Check for invalid reaction emoji in Telegram error response
@@ -3609,7 +3616,7 @@ function clearConversation(chatId) {
     conversations.set(chatId, []);
 }
 
-function buildSystemBlocks(matchedSkills = []) {
+function buildSystemBlocks(matchedSkills = [], chatId = null) {
     const soul = loadSoul();
     const memory = loadMemory();
     const dailyMemory = loadDailyMemory();
@@ -3873,8 +3880,9 @@ function buildSystemBlocks(matchedSkills = []) {
     dynamicLines.push(`Current time: ${weekday} ${localTimestamp(now)} (${now.toLocaleString()})`);
     const uptimeSec = Math.floor((Date.now() - sessionStartedAt) / 1000);
     dynamicLines.push(`Session uptime: ${Math.floor(uptimeSec / 60)}m ${uptimeSec % 60}s (conversation context is ephemeral — cleared on each restart)`);
-    if (lastIncomingMessageId && REACTION_NOTIFICATIONS !== 'off') {
-        dynamicLines.push(`Current message_id: ${lastIncomingMessageId}, chat_id: ${lastIncomingChatId} (use with telegram_react to react to this message)`);
+    const lastMsg = chatId ? lastIncomingMessages.get(String(chatId)) : null;
+    if (lastMsg && REACTION_NOTIFICATIONS !== 'off') {
+        dynamicLines.push(`Current message_id: ${lastMsg.messageId}, chat_id: ${lastMsg.chatId} (use with telegram_react to react to this message)`);
     }
 
     // Active skills for this specific request (varies per message)
@@ -4102,7 +4110,7 @@ async function chat(chatId, userMessage) {
         log(`Matched skills: ${matchedSkills.map(s => s.name).join(', ')}`);
     }
 
-    const { stable: stablePrompt, dynamic: dynamicPrompt } = buildSystemBlocks(matchedSkills);
+    const { stable: stablePrompt, dynamic: dynamicPrompt } = buildSystemBlocks(matchedSkills, chatId);
     // Two system blocks: large stable block (cached) + small dynamic block (per-request)
     const systemBlocks = [
         { type: 'text', text: stablePrompt, cache_control: { type: 'ephemeral' } },
@@ -4364,8 +4372,7 @@ async function handleMessage(msg) {
 
         // Regular message - send to Claude (text includes quoted context if replying)
         await sendTyping(chatId);
-        lastIncomingMessageId = msg.message_id;
-        lastIncomingChatId = chatId;
+        lastIncomingMessages.set(String(chatId), { messageId: msg.message_id, chatId });
 
         let response = await chat(chatId, text);
 
@@ -4406,6 +4413,8 @@ async function handleMessage(msg) {
 
 function handleReactionUpdate(reaction) {
     const chatId = reaction.chat?.id;
+    if (!chatId) return; // Malformed update — no chat info
+
     const userId = String(reaction.user?.id || '');
     const msgId = reaction.message_id;
     const userName = reaction.user?.first_name || 'Someone';
@@ -4434,11 +4443,15 @@ function handleReactionUpdate(reaction) {
     const eventText = `Telegram reaction ${parts.join(', ')} by ${userName} on message ${msgId}`;
     log(`Reaction: ${eventText}`);
 
-    // Inject directly into conversation history (not via enqueueMessage/handleMessage
-    // to avoid spoofing the owner identity and bypassing the owner-only check)
-    if (chatId) {
+    // Queue through chatQueues to avoid race conditions with concurrent message handling.
+    // We don't use enqueueMessage/handleMessage to avoid spoofing the owner identity.
+    const chatKey = String(chatId);
+    const prev = chatQueues.get(chatKey) || Promise.resolve();
+    const task = prev.then(() => {
         addToConversation(chatId, 'user', `[system event] ${eventText}`);
-    }
+    }).catch(e => log(`Reaction queue error: ${e.message}`));
+    chatQueues.set(chatKey, task);
+    task.then(() => { if (chatQueues.get(chatKey) === task) chatQueues.delete(chatKey); });
 }
 
 // ============================================================================
@@ -4447,8 +4460,8 @@ function handleReactionUpdate(reaction) {
 
 let offset = 0;
 let pollErrors = 0;
-let lastIncomingMessageId = null; // Track the message_id of the current user message (for reactions)
-let lastIncomingChatId = null;    // Track the chat_id of the current user message (for reactions)
+// Track the last incoming user message per chat (for reactions), to avoid cross-chat races
+const lastIncomingMessages = new Map(); // chatId -> { messageId, chatId }
 
 // Per-chat message queue: prevents concurrent handleMessage() for the same chat
 const chatQueues = new Map(); // chatId -> Promise chain

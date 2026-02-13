@@ -58,6 +58,10 @@ app/google-services.json
 # OpenClaw reference (tracked separately)
 openclaw-reference/
 
+# Environment secrets
+.env
+.env.*
+
 # Agent/tooling configs
 .agent/
 .agents/
