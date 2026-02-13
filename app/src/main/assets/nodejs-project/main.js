@@ -1364,18 +1364,25 @@ async function webFetch(urlString, options = {}) {
         const remaining = deadline - Date.now();
         if (remaining <= 0) throw new Error('Request timeout (redirect chain)');
 
+        const method = (i === 0) ? (options.method || 'GET') : 'GET'; // downgrade to GET on redirect
+        const reqBody = (i === 0) ? (options.body || null) : null;
+        const reqHeaders = {
+            'User-Agent': 'SeekerClaw/1.0 (Android; +https://seekerclaw.com)',
+            'Accept': options.accept || 'text/html,application/json,text/*',
+            ...(options.headers || {})
+        };
+        if (reqBody && typeof reqBody === 'object' && !reqHeaders['Content-Type'] && !reqHeaders['content-type']) {
+            reqHeaders['Content-Type'] = 'application/json';
+        }
+
         const res = await httpRequest({
             hostname: url.hostname,
             port: url.port || 443,
             path: url.pathname + url.search,
-            method: 'GET',
-            headers: {
-                'User-Agent': 'SeekerClaw/1.0 (Android; +https://seekerclaw.com)',
-                'Accept': options.accept || 'text/html,application/json,text/*',
-                ...(options.headers || {})
-            },
+            method,
+            headers: reqHeaders,
             timeout: Math.min(remaining, timeout)
-        });
+        }, reqBody);
 
         // Follow redirects
         if ([301, 302, 303, 307, 308].includes(res.status) && res.headers?.location) {
@@ -1518,11 +1525,14 @@ const TOOLS = [
     },
     {
         name: 'web_fetch',
-        description: 'Fetch and read a webpage. Returns clean markdown with links and headings preserved. Supports HTML, JSON, and plain text. Follows redirects automatically.',
+        description: 'Fetch a URL with full HTTP support. Returns markdown (HTML), JSON, or text. Supports custom headers (Bearer auth), methods (POST/PUT/DELETE), and request bodies for authenticated API calls.',
         input_schema: {
             type: 'object',
             properties: {
                 url: { type: 'string', description: 'The URL to fetch' },
+                method: { type: 'string', enum: ['GET', 'POST', 'PUT', 'DELETE'], description: 'HTTP method (default: GET)' },
+                headers: { type: 'object', description: 'Custom HTTP headers (e.g. {"Authorization": "Bearer sk-..."})' },
+                body: { description: 'Request body for POST/PUT. String or JSON object.' },
                 raw: { type: 'boolean', description: 'If true, return raw text without markdown conversion' }
             },
             required: ['url']
@@ -1975,12 +1985,20 @@ async function executeTool(name, input) {
 
         case 'web_fetch': {
             const rawMode = input.raw === true;
+            const fetchMethod = (typeof input.method === 'string' ? input.method.toUpperCase() : 'GET');
+            const isGet = fetchMethod === 'GET';
             const fetchCacheKey = `fetch:${input.url}:${rawMode ? 'raw' : 'md'}`;
-            const fetchCached = cacheGet(fetchCacheKey);
-            if (fetchCached) { log('[WebFetch] Cache hit'); return fetchCached; }
+            if (isGet) {
+                const fetchCached = cacheGet(fetchCacheKey);
+                if (fetchCached) { log('[WebFetch] Cache hit'); return fetchCached; }
+            }
 
             try {
-                const res = await webFetch(input.url);
+                const fetchOptions = {};
+                if (input.method) fetchOptions.method = fetchMethod;
+                if (input.headers && typeof input.headers === 'object') fetchOptions.headers = input.headers;
+                if (input.body !== undefined) fetchOptions.body = input.body;
+                const res = await webFetch(input.url, fetchOptions);
                 if (res.status < 200 || res.status >= 300) {
                     let detail = '';
                     if (typeof res.data === 'string') {
@@ -2018,7 +2036,7 @@ async function executeTool(name, input) {
                     result = { content: String(res.data).slice(0, 50000), type: 'text', url: res.finalUrl };
                 }
 
-                cacheSet(fetchCacheKey, result);
+                if (isGet) cacheSet(fetchCacheKey, result);
                 return result;
             } catch (e) {
                 return { error: e.message, url: input.url };
@@ -3554,7 +3572,7 @@ function buildSystemBlocks(matchedSkills = []) {
     lines.push('For visual checks ("what do you see", "check my dog"), call android_camera_check.');
     lines.push('**Swap workflow:** Always use solana_quote first to show the user what they\'ll get, then solana_swap to execute. Never swap without confirming the quote with the user first.');
     lines.push('**Web search:** Use web_search with provider=perplexity for complex questions needing synthesized answers. Use Brave (default) for quick lookups.');
-    lines.push('**Web fetch:** Use web_fetch to read any webpage. Returns markdown (default), JSON, or plain text depending on response type. Use raw=true for stripped text. Supports up to 50K chars.');
+    lines.push('**Web fetch:** Use web_fetch to read webpages or call APIs. Supports custom headers (Bearer auth), POST/PUT/DELETE methods, and request bodies. Returns markdown (default), JSON, or plain text. Use raw=true for stripped text. Up to 50K chars.');
     lines.push('');
 
     // Tool Call Style - OpenClaw style
