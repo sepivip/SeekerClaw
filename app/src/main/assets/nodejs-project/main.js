@@ -1437,6 +1437,183 @@ async function telegram(method, body = null) {
     return res.data;
 }
 
+// ============================================================================
+// TELEGRAM FILE DOWNLOADS
+// ============================================================================
+
+const MEDIA_DIR = path.join(workDir, 'media', 'inbound');
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB limit for mobile
+const MAX_IMAGE_BASE64 = 5 * 1024 * 1024;  // 5MB limit for base64-encoded vision payload
+const MAX_IMAGE_SIZE = Math.floor(MAX_IMAGE_BASE64 * 3 / 4); // raw bytes so base64 stays <= 5MB
+
+// Extract media info from a Telegram message (returns null if no media)
+function extractMedia(msg) {
+    if (msg.document) {
+        return {
+            type: 'document',
+            file_id: msg.document.file_id,
+            file_size: msg.document.file_size || 0,
+            mime_type: msg.document.mime_type || 'application/octet-stream',
+            file_name: msg.document.file_name || 'document'
+        };
+    }
+    if (msg.photo && msg.photo.length > 0) {
+        // Pick largest photo (last in array)
+        const photo = msg.photo[msg.photo.length - 1];
+        return {
+            type: 'photo',
+            file_id: photo.file_id,
+            file_size: photo.file_size || 0,
+            mime_type: 'image/jpeg',
+            file_name: `photo_${Date.now()}.jpg`
+        };
+    }
+    if (msg.video) {
+        return {
+            type: 'video',
+            file_id: msg.video.file_id,
+            file_size: msg.video.file_size || 0,
+            mime_type: msg.video.mime_type || 'video/mp4',
+            file_name: msg.video.file_name || `video_${Date.now()}.mp4`
+        };
+    }
+    if (msg.audio) {
+        return {
+            type: 'audio',
+            file_id: msg.audio.file_id,
+            file_size: msg.audio.file_size || 0,
+            mime_type: msg.audio.mime_type || 'audio/mpeg',
+            file_name: msg.audio.file_name || `audio_${Date.now()}.mp3`
+        };
+    }
+    if (msg.voice) {
+        return {
+            type: 'voice',
+            file_id: msg.voice.file_id,
+            file_size: msg.voice.file_size || 0,
+            mime_type: msg.voice.mime_type || 'audio/ogg',
+            file_name: `voice_${Date.now()}.ogg`
+        };
+    }
+    if (msg.video_note) {
+        return {
+            type: 'video_note',
+            file_id: msg.video_note.file_id,
+            file_size: msg.video_note.file_size || 0,
+            mime_type: 'video/mp4',
+            file_name: `videonote_${Date.now()}.mp4`
+        };
+    }
+    return null;
+}
+
+// Download a file from Telegram by file_id → save to workspace/media/inbound/
+async function downloadTelegramFile(fileId, fileName) {
+    // Step 1: Get file path from Telegram
+    const fileInfo = await telegram('getFile', { file_id: fileId });
+    if (!fileInfo.ok || !fileInfo.result?.file_path) {
+        throw new Error('Telegram getFile failed: ' + (fileInfo.description || 'unknown error'));
+    }
+    const remotePath = fileInfo.result.file_path;
+
+    // Validate remotePath: only safe chars, no path traversal
+    if (!/^[a-zA-Z0-9\/_.\-]+$/.test(remotePath)) {
+        throw new Error('Invalid file path from Telegram');
+    }
+    if (remotePath.startsWith('/') || remotePath.includes('\\') || remotePath.includes('//')) {
+        throw new Error('Invalid file path from Telegram');
+    }
+    if (remotePath.split('/').some(seg => seg === '.' || seg === '..')) {
+        throw new Error('Invalid file path from Telegram');
+    }
+
+    // Ensure media directory exists
+    if (!fs.existsSync(MEDIA_DIR)) {
+        await fs.promises.mkdir(MEDIA_DIR, { recursive: true });
+    }
+
+    // Build unique filename with random nonce to prevent collisions
+    const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 100);
+    const nonce = Math.random().toString(36).slice(2, 8);
+    const localName = `${Date.now()}_${nonce}_${safeName}`;
+    const localPath = path.join(MEDIA_DIR, localName);
+
+    // Step 2: Stream download directly to file (no memory buffering)
+    const fileUrl = `/file/bot${BOT_TOKEN}/${remotePath}`;
+    const DOWNLOAD_TIMEOUT = 60000; // 60s timeout
+    let totalBytes = 0;
+
+    try {
+        totalBytes = await new Promise((resolve, reject) => {
+            let activeRes = null;
+            let activeStream = null;
+            let done = false;
+
+            const cleanupAll = (err) => {
+                if (done) return;
+                done = true;
+                if (activeStream) activeStream.destroy();
+                if (activeRes) activeRes.destroy();
+                reject(err);
+            };
+
+            const request = https.get({
+                hostname: 'api.telegram.org',
+                path: fileUrl,
+                timeout: DOWNLOAD_TIMEOUT,
+            }, (res) => {
+                activeRes = res;
+                if (res.statusCode === 301 || res.statusCode === 302) {
+                    cleanupAll(new Error('Download failed: unexpected redirect'));
+                    return;
+                }
+                if (res.statusCode !== 200) {
+                    cleanupAll(new Error(`Download failed: HTTP ${res.statusCode}`));
+                    return;
+                }
+
+                const fileStream = fs.createWriteStream(localPath);
+                activeStream = fileStream;
+                let bytes = 0;
+
+                res.on('data', (chunk) => {
+                    bytes += chunk.length;
+                    if (bytes > MAX_FILE_SIZE) {
+                        cleanupAll(new Error(`File exceeds ${MAX_FILE_SIZE / 1024 / 1024}MB limit`));
+                        return;
+                    }
+                    if (!fileStream.write(chunk)) res.pause();
+                });
+
+                fileStream.on('drain', () => res.resume());
+                res.on('end', () => fileStream.end());
+                fileStream.on('finish', () => {
+                    if (done) return;
+                    done = true;
+                    resolve(bytes);
+                });
+                res.on('error', (err) => cleanupAll(err));
+                res.on('aborted', () => cleanupAll(new Error('Download aborted')));
+                res.on('close', () => { if (!done) cleanupAll(new Error('Connection closed')); });
+                fileStream.on('error', (err) => cleanupAll(err));
+            });
+
+            request.on('timeout', () => {
+                request.destroy();
+                cleanupAll(new Error('Download timed out'));
+            });
+            request.on('error', (err) => cleanupAll(err));
+        });
+    } catch (err) {
+        // Clean up partial file on failure
+        try { await fs.promises.unlink(localPath); } catch { /* ignore */ }
+        throw err;
+    }
+
+    log(`File saved: ${localName} (${totalBytes} bytes)`);
+    return { localPath, localName, size: totalBytes };
+}
+
 // Strip reasoning tags (<think>, <thinking>, etc.) and internal markers from AI responses.
 // Ported from OpenClaw shared/text/reasoning-tags.ts and pi-embedded-utils.ts
 function cleanResponse(text) {
@@ -3797,6 +3974,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('**Web search:** Use web_search with provider=perplexity for complex questions needing synthesized answers. Use Brave (default) for quick lookups.');
     lines.push('**Web fetch:** Use web_fetch to read webpages or call APIs. Supports custom headers (Bearer auth), POST/PUT/DELETE methods, and request bodies. Returns markdown (default), JSON, or plain text. Use raw=true for stripped text. Up to 50K chars.');
     lines.push('**Shell execution:** Use shell_exec to run commands on the device. Sandboxed to workspace directory with a predefined allowlist (see tool description). Use for npm install, running scripts (node script.js), file operations, curl, and system info. 30s timeout. No chaining, redirection, or command substitution — one command at a time.');
+    lines.push('**File attachments:** When the user sends photos, documents, or other files via Telegram, they are automatically downloaded to media/inbound/ in your workspace. Images are shown to you directly (vision). For other files, you are told the path — use the read tool to access them. Supported: photos, documents (PDF, etc.), video, audio, voice notes.');
     lines.push('');
 
     // Tool Call Style - OpenClaw style
@@ -4238,8 +4416,12 @@ async function claudeApiCall(body, chatId) {
 }
 
 async function chat(chatId, userMessage) {
-    // Find skills that match this message
-    const matchedSkills = findMatchingSkills(userMessage);
+    // userMessage can be a string or an array of content blocks (for vision)
+    // Extract text for skill matching
+    const textForSkills = typeof userMessage === 'string'
+        ? userMessage
+        : (userMessage.find(b => b.type === 'text')?.text || '');
+    const matchedSkills = findMatchingSkills(textForSkills);
     if (matchedSkills.length > 0) {
         log(`Matched skills: ${matchedSkills.map(s => s.name).join(', ')}`);
     }
@@ -4448,9 +4630,11 @@ How to handle matching requests
 async function handleMessage(msg) {
     const chatId = msg.chat.id;
     const senderId = String(msg.from?.id);
-    const rawText = (msg.text || '').trim();
+    const rawText = (msg.text || msg.caption || '').trim();
+    const media = extractMedia(msg);
 
-    if (!rawText) return;
+    // Skip messages with no text AND no media
+    if (!rawText && !media) return;
 
     // Extract quoted/replied message context (ported from OpenClaw)
     // Handles: direct replies, inline quotes, external replies (forwards/cross-group)
@@ -4490,7 +4674,7 @@ async function handleMessage(msg) {
         return;
     }
 
-    log(`Message: ${rawText.slice(0, 100)}${rawText.length > 100 ? '...' : ''}${msg.reply_to_message ? ' [reply]' : ''}`);
+    log(`Message: ${rawText ? rawText.slice(0, 100) + (rawText.length > 100 ? '...' : '') : '(no text)'}${media ? ` [${media.type}]` : ''}${msg.reply_to_message ? ' [reply]' : ''}`);
 
     try {
         // Check for commands (use rawText so /commands work even in replies)
@@ -4508,7 +4692,69 @@ async function handleMessage(msg) {
         await sendTyping(chatId);
         lastIncomingMessages.set(String(chatId), { messageId: msg.message_id, chatId });
 
-        let response = await chat(chatId, text);
+        // Process media attachment if present
+        let userContent = text || '';
+        if (media) {
+            // Sanitize user-controlled metadata before embedding in prompts
+            const safeFileName = (media.file_name || 'file').replace(/[\r\n\0\u2028\u2029\[\]]/g, '_').slice(0, 120);
+            const safeMimeType = (media.mime_type || 'application/octet-stream').replace(/[\r\n\0\u2028\u2029\[\]]/g, '_').slice(0, 60);
+            try {
+                if (!media.file_size) {
+                    log(`Media file_size unknown (0) — size will be enforced during download`);
+                }
+                if (media.file_size && media.file_size > MAX_FILE_SIZE) {
+                    const sizeMb = (media.file_size / 1024 / 1024).toFixed(1);
+                    const maxMb = (MAX_FILE_SIZE / 1024 / 1024).toFixed(1);
+                    await sendMessage(chatId, `File too large (${sizeMb}MB). Max is ${maxMb}MB.`, msg.message_id);
+                    const tooLargeNote = `[File attachment was rejected: too large (${sizeMb}MB).]`;
+                    if (text) {
+                        userContent = `${text}\n\n${tooLargeNote}`;
+                    } else {
+                        return;
+                    }
+                } else {
+                    const saved = await downloadTelegramFile(media.file_id, media.file_name);
+                    const relativePath = `media/inbound/${saved.localName}`;
+                    const isImage = media.type === 'photo' || (media.mime_type && media.mime_type.startsWith('image/'));
+
+                    // Claude vision-supported image formats
+                    const VISION_MIMES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
+
+                    if (isImage && VISION_MIMES.has(media.mime_type) && saved.size <= MAX_IMAGE_SIZE) {
+                        // Supported image within vision size limit: send as Claude vision content block
+                        const imageData = await fs.promises.readFile(saved.localPath);
+                        const base64 = imageData.toString('base64');
+                        const caption = text || '';
+                        // Align content block ordering with visionAnalyzeImage: [text, image]
+                        userContent = [
+                            { type: 'text', text: caption
+                                ? `${caption}\n\n[Image saved to ${relativePath} (${saved.size} bytes)]`
+                                : `[User sent an image — saved to ${relativePath} (${saved.size} bytes)]`
+                            },
+                            { type: 'image', source: { type: 'base64', media_type: media.mime_type, data: base64 } }
+                        ];
+                    } else if (isImage) {
+                        // Image not usable for inline vision — save but don't base64-encode
+                        const visionReason = !VISION_MIMES.has(media.mime_type)
+                            ? 'unsupported format for inline vision'
+                            : 'too large for inline vision';
+                        const fileNote = `[Image received: ${safeFileName} (${saved.size} bytes, ${visionReason}) — saved to ${relativePath}. Use the read tool to access it.]`;
+                        userContent = text ? `${text}\n\n${fileNote}` : fileNote;
+                    } else {
+                        // Non-image file: tell the agent where it's saved
+                        const fileNote = `[File received: ${safeFileName} (${saved.size} bytes, ${safeMimeType}) — saved to ${relativePath}. Use the read tool to access it.]`;
+                        userContent = text ? `${text}\n\n${fileNote}` : fileNote;
+                    }
+                    log(`Media processed: ${media.type} → ${relativePath}`);
+                }
+            } catch (e) {
+                log(`Media download failed: ${e.message}`);
+                const errorNote = `[File attachment could not be downloaded due to an internal error.]`;
+                userContent = text ? `${text}\n\n${errorNote}` : errorNote;
+            }
+        }
+
+        let response = await chat(chatId, userContent);
 
         // Handle special tokens (OpenClaw-style)
         // SILENT_REPLY - discard the message
