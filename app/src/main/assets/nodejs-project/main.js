@@ -4705,7 +4705,7 @@ async function claudeApiCall(body, chatId) {
                      usage?.cache_creation_input_tokens || 0, usage?.cache_read_input_tokens || 0,
                      res.status, retries, durationMs]
                 );
-                writeDbSummaryFile();
+                markDbSummaryDirty();
             } catch (dbErr) {
                 log(`[DB] Log error: ${dbErr.message}`);
             }
@@ -5677,12 +5677,18 @@ function getDbSummary() {
 }
 
 // Write DB summary to file for cross-process UI access (like claude_usage_state)
+let dbSummaryDirty = false;
 function writeDbSummaryFile() {
+    dbSummaryDirty = false;
     try {
         const summary = getDbSummary();
-        fs.writeFileSync(path.join(workDir, 'db_summary_state'), JSON.stringify(summary));
+        const targetPath = path.join(workDir, 'db_summary_state');
+        const tmpPath = targetPath + '.tmp';
+        fs.writeFileSync(tmpPath, JSON.stringify(summary));
+        fs.renameSync(tmpPath, targetPath);
     } catch (_) {}
 }
+function markDbSummaryDirty() { dbSummaryDirty = true; }
 
 const statsServer = require('http').createServer((req, res) => {
     if (req.method === 'GET' && req.url === '/stats/db-summary') {
@@ -5717,7 +5723,7 @@ telegram('getMe')
             await initDatabase();
             indexMemoryFiles();
             writeDbSummaryFile();
-            setInterval(writeDbSummaryFile, 30000);
+            setInterval(() => { if (dbSummaryDirty) writeDbSummaryFile(); }, 30000);
 
             // Flush old updates to avoid re-processing messages after restart
             try {
