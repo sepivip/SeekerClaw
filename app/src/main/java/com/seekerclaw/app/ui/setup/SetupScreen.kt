@@ -411,7 +411,9 @@ private fun ClaudeApiStep(
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
     val isToken = authType == "setup_token"
     val uriHandler = LocalUriHandler.current
-    val isValid = apiKey.length >= 20 && apiKeyError == null
+    val isValid = apiKey.trim().isNotBlank() &&
+        ConfigManager.validateCredential(apiKey.trim(), authType) == null &&
+        apiKeyError == null
 
     Column(modifier = Modifier.fillMaxWidth()) {
         SectionLabel("Authentication")
@@ -592,11 +594,14 @@ private fun TelegramStep(
                 supportingText = botTokenError?.let { err ->
                     { Text(err, fontSize = 12.sp) }
                 },
-                trailingIcon = if (botToken.isNotBlank() && botTokenError == null) {
+                trailingIcon = if (
+                    botToken.trim().matches(Regex("^\\d+:[A-Za-z0-9_-]+$")) &&
+                    botTokenError == null
+                ) {
                     {
                         Icon(
                             Icons.Default.CheckCircle,
-                            contentDescription = "Valid",
+                            contentDescription = "Valid format",
                             tint = SeekerClawColors.Accent,
                             modifier = Modifier.size(20.dp),
                         )

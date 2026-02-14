@@ -31,6 +31,7 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -222,8 +223,12 @@ fun SetupStepIndicator(
     currentStep: Int,
     labels: List<String>,
     modifier: Modifier = Modifier,
+    circleSize: Dp = 32.dp,
+    stepWidth: Dp = 48.dp,
+    connectorHeight: Dp = 2.dp,
 ) {
     val totalSteps = labels.size
+    val connectorTopPadding = (circleSize.value / 2).dp - (connectorHeight / 2)
 
     Row(
         modifier = modifier.fillMaxWidth(),
@@ -236,11 +241,11 @@ fun SetupStepIndicator(
             // Step column (circle + label)
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.width(48.dp),
+                modifier = Modifier.width(stepWidth),
             ) {
                 Box(
                     modifier = Modifier
-                        .size(32.dp)
+                        .size(circleSize)
                         .background(
                             color = when {
                                 isCompleted -> SeekerClawColors.Accent
@@ -283,6 +288,7 @@ fun SetupStepIndicator(
                             else SeekerClawColors.TextDim,
                     textAlign = TextAlign.Center,
                     maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
 
@@ -291,8 +297,8 @@ fun SetupStepIndicator(
                 Box(
                     modifier = Modifier
                         .weight(1f)
-                        .padding(top = 15.dp) // vertically center with 32dp circles
-                        .height(2.dp)
+                        .padding(top = connectorTopPadding)
+                        .height(connectorHeight)
                         .background(
                             if (i < currentStep) SeekerClawColors.Accent
                             else SeekerClawColors.TextDim.copy(alpha = 0.2f)
