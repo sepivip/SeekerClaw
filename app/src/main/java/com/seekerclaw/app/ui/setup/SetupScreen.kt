@@ -4,7 +4,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -51,12 +51,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asComposePath
-import androidx.compose.ui.graphics.drawscope.scale
-import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.SpanStyle
@@ -69,6 +66,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import com.seekerclaw.app.R
 import com.seekerclaw.app.config.AppConfig
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.config.availableModels
@@ -211,10 +209,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
         Spacer(modifier = Modifier.height(12.dp))
 
         // Logo
-        SeekerClawLogo(
-            size = 56.dp,
-            color = SeekerClawColors.Primary,
-        )
+        SeekerClawLogo(size = 56.dp)
 
         Spacer(modifier = Modifier.height(12.dp))
 
@@ -940,47 +935,17 @@ private fun SectionLabel(title: String) {
 }
 
 // ============================================================================
-// SEEKER CLAW LOGO — Canvas rendering of the app icon claw
+// SEEKER CLAW LOGO — Vector drawable from design/symbol.svg
 // ============================================================================
-
-private const val CLAW_PATH_1 =
-    "M277.14,111C245.78,147.28 226.53,196.4 226.53,250.48" +
-    "C226.53,312.41 251.78,367.84 291.55,404.93" +
-    "C267.02,414.55 239.39,419.95 210.16,419.95" +
-    "C180.13,419.95 151.79,414.25 126.78,404.14" +
-    "C114.13,376.68 107,345.61 107,312.7" +
-    "C107,205.93 182.04,118.49 277.14,111Z"
-
-private const val CLAW_PATH_2 =
-    "M422.25,194.81C395.32,234.48 352.86,265.79 300.62,279.78" +
-    "C240.8,295.81 180.73,285.77 134.6,256.96" +
-    "C131.67,283.14 133.6,311.23 141.16,339.46" +
-    "C148.93,368.46 161.78,394.36 178.01,415.91" +
-    "C207.81,421.02 239.67,419.86 271.46,411.35" +
-    "C374.59,383.71 439.63,288.6 422.25,194.81Z"
 
 @Composable
 private fun SeekerClawLogo(
-    size: Dp = 64.dp,
-    color: Color = SeekerClawColors.Primary,
+    size: Dp = 56.dp,
     modifier: Modifier = Modifier,
 ) {
-    val path1 = remember {
-        androidx.core.graphics.PathParser.createPathFromPathData(CLAW_PATH_1).asComposePath()
-    }
-    val path2 = remember {
-        androidx.core.graphics.PathParser.createPathFromPathData(CLAW_PATH_2).asComposePath()
-    }
-
-    Canvas(modifier = modifier.size(size)) {
-        val canvasScale = this.size.width / 532f
-        scale(canvasScale, pivot = Offset.Zero) {
-            translate(left = 93.1f, top = 93.1f) {
-                scale(0.65f, pivot = Offset.Zero) {
-                    drawPath(path1, color = color)
-                    drawPath(path2, color = color)
-                }
-            }
-        }
-    }
+    Image(
+        painter = painterResource(R.drawable.ic_seekerclaw_symbol),
+        contentDescription = null,
+        modifier = modifier.size(size),
+    )
 }
