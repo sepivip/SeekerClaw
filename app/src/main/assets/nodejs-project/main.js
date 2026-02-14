@@ -2173,6 +2173,18 @@ const TOOLS = [
         }
     },
     {
+        name: 'js_eval',
+        description: 'Execute JavaScript code inside the running Node.js process. Use this instead of shell_exec when you need Node.js APIs or JS computation. Code runs via AsyncFunction in the same process with access to require() for Node.js built-ins (fs, path, http, crypto, etc.) and bundled modules. child_process is blocked for security. Returns the value of the last expression (or resolved Promise value). Objects/arrays are JSON-serialized. Output captured from console.log/warn/error. 30s timeout (cannot abort sync infinite loops — avoid them). Runs on the main event loop so long-running sync operations will block other tasks. Use for: data processing, JSON manipulation, math, date calculations, HTTP requests via http/https, file operations via fs.',
+        input_schema: {
+            type: 'object',
+            properties: {
+                code: { type: 'string', description: 'JavaScript code to execute. The return value of the last expression is captured. Use console.log() for output. Async/await is supported.' },
+                timeout_ms: { type: 'number', description: 'Timeout in milliseconds (default: 30000, max: 30000)' }
+            },
+            required: ['code']
+        }
+    },
+    {
         name: 'delete',
         description: 'Delete a file from the workspace directory. Cannot delete protected system files (SOUL.md, MEMORY.md, IDENTITY.md, USER.md, HEARTBEAT.md, config.json, config.yaml, seekerclaw.db). Cannot delete directories — only individual files. Use this to clean up temporary files, old media downloads, or files you no longer need.',
         input_schema: {
@@ -3355,6 +3367,95 @@ async function executeTool(name, input) {
             });
         }
 
+        case 'js_eval': {
+            const code = (input.code || '').trim();
+            if (!code) return { error: 'code is required' };
+            if (code.length > 10000) return { error: 'Code too long (max 10000 characters)' };
+            if (/\0/.test(code)) return { error: 'Null bytes are not allowed in code' };
+
+            let timeout = 30000;
+            if (input.timeout_ms !== undefined) {
+                const t = Number(input.timeout_ms);
+                if (!Number.isFinite(t) || t <= 0) {
+                    return { error: 'timeout_ms must be a positive number (max 30000)' };
+                }
+                timeout = Math.min(Math.max(t, 1), 30000);
+            }
+
+            // Capture console output
+            const logs = [];
+            const pushLog = (prefix, args) => logs.push((prefix ? prefix + ' ' : '') + args.map(a => {
+                if (typeof a === 'object' && a !== null) try { return JSON.stringify(a); } catch { return String(a); }
+                return String(a);
+            }).join(' '));
+            const mockConsole = {
+                log: (...args) => pushLog('', args),
+                info: (...args) => pushLog('', args),
+                warn: (...args) => pushLog('[warn]', args),
+                error: (...args) => pushLog('[error]', args),
+                debug: (...args) => pushLog('[debug]', args),
+                trace: (...args) => pushLog('[trace]', args),
+                dir: (obj) => pushLog('', [obj]),
+                table: (data) => pushLog('[table]', [data]),
+                time: () => {}, timeEnd: () => {}, timeLog: () => {},
+                assert: (cond, ...args) => { if (!cond) pushLog('[assert]', args.length ? args : ['Assertion failed']); },
+                clear: () => {},
+                count: () => {}, countReset: () => {},
+                group: () => {}, groupEnd: () => {}, groupCollapsed: () => {},
+            };
+
+            // Sandboxed require: block child_process to prevent bypassing shell_exec allowlist
+            const BLOCKED_MODULES = new Set(['child_process', 'cluster', 'worker_threads', 'vm', 'v8', 'perf_hooks']);
+            const sandboxedRequire = (mod) => {
+                if (BLOCKED_MODULES.has(mod)) {
+                    throw new Error(`Module "${mod}" is blocked in js_eval for security. Use shell_exec for command execution.`);
+                }
+                return require(mod);
+            };
+
+            let timerId;
+            try {
+                // AsyncFunction allows top-level await
+                const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
+                const fn = new AsyncFunction('console', 'require', '__dirname', '__filename', code);
+
+                const resultPromise = fn(mockConsole, sandboxedRequire, workDir, path.join(workDir, 'eval.js'));
+                const timeoutPromise = new Promise((_, rej) => {
+                    timerId = setTimeout(() => rej(new Error(`Execution timed out after ${timeout}ms`)), timeout);
+                });
+
+                const result = await Promise.race([resultPromise, timeoutPromise]);
+                clearTimeout(timerId);
+                const output = logs.join('\n');
+
+                // Serialize result: JSON for objects/arrays, String for primitives
+                let resultStr;
+                if (result === undefined) {
+                    resultStr = undefined;
+                } else if (typeof result === 'object' && result !== null) {
+                    try { resultStr = JSON.stringify(result, null, 2).slice(0, 50000); } catch { resultStr = String(result).slice(0, 50000); }
+                } else {
+                    resultStr = String(result).slice(0, 50000);
+                }
+
+                log(`js_eval OK (${code.length} chars)`);
+                return {
+                    success: true,
+                    result: resultStr,
+                    output: output ? output.slice(0, 50000) : undefined,
+                };
+            } catch (err) {
+                clearTimeout(timerId);
+                const output = logs.join('\n');
+                log(`js_eval FAIL: ${err.message.slice(0, 100)}`);
+                return {
+                    success: false,
+                    error: err.message.slice(0, 5000),
+                    output: output ? output.slice(0, 50000) : undefined,
+                };
+            }
+        }
+
         case 'delete': {
             const PROTECTED_FILES = new Set([
                 'SOUL.md', 'MEMORY.md', 'IDENTITY.md', 'USER.md',
@@ -4141,6 +4242,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('**Web search:** Use web_search with provider=perplexity for complex questions needing synthesized answers. Use Brave (default) for quick lookups.');
     lines.push('**Web fetch:** Use web_fetch to read webpages or call APIs. Supports custom headers (Bearer auth), POST/PUT/DELETE methods, and request bodies. Returns markdown (default), JSON, or plain text. Use raw=true for stripped text. Up to 50K chars.');
     lines.push('**Shell execution:** Use shell_exec to run commands on the device. Sandboxed to workspace directory with a predefined allowlist of common Unix utilities (ls, cat, grep, find, curl, etc.). Note: node/npm/npx are NOT available — use for file operations, curl, and system info only. 30s timeout. No chaining, redirection, or command substitution — one command at a time.');
+    lines.push('**JavaScript execution:** Use js_eval to run JavaScript code inside the Node.js process. Supports async/await, require(), and most Node.js built-ins (fs, path, http, crypto, etc. — child_process and vm are blocked). Use for computation, data processing, JSON manipulation, HTTP requests, or anything that needs JavaScript. 30s timeout. Prefer js_eval over shell_exec when the task involves data processing or logic.');
     lines.push('**File attachments:** When the user sends photos, documents, or other files via Telegram, they are automatically downloaded to media/inbound/ in your workspace. Images are shown to you directly (vision). For other files, you are told the path — use the read tool to access them. Supported: photos, documents (PDF, etc.), video, audio, voice notes.');
     lines.push('**File deletion:** Use the delete tool to clean up temporary files, old media downloads, or files you no longer need. Protected system files (SOUL.md, MEMORY.md, IDENTITY.md, USER.md, HEARTBEAT.md, config.json, seekerclaw.db) cannot be deleted. Directories cannot be deleted — remove files individually.');
     lines.push('');
@@ -4354,6 +4456,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('## Runtime Environment');
     lines.push('- Running inside nodejs-mobile on Android (Node.js runs as libnode.so via JNI, not a standalone binary)');
     lines.push('- node/npm/npx are NOT available via shell_exec (no standalone node binary exists on this device)');
+    lines.push('- js_eval runs JavaScript inside the Node.js process — use it for computation, data processing, HTTP requests, or any task needing JS');
     lines.push('- shell_exec is limited to common Unix utilities: ls, cat, grep, find, curl, etc.');
     lines.push(`- Workspace: ${workDir}`);
     lines.push('- shell_exec: one command at a time, 30s timeout, no chaining (; | && > <)');
