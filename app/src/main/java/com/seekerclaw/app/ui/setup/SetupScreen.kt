@@ -4,16 +4,21 @@ import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -24,10 +29,19 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.MenuAnchorType
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.SmartToy
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.HelpOutline
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -37,10 +51,21 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asComposePath
+import androidx.compose.ui.graphics.drawscope.scale
+import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -48,8 +73,7 @@ import com.seekerclaw.app.config.AppConfig
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.config.availableModels
 import com.seekerclaw.app.service.OpenClawService
-import com.seekerclaw.app.ui.components.AsciiLogoCompact
-import com.seekerclaw.app.ui.components.PixelStepIndicator
+import com.seekerclaw.app.ui.components.SetupStepIndicator
 import com.seekerclaw.app.ui.components.dotMatrix
 import com.seekerclaw.app.ui.theme.SeekerClawColors
 
@@ -184,37 +208,46 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             )
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(12.dp))
 
-        // Header
-        if (SeekerClawColors.UseDotMatrix) {
-            AsciiLogoCompact(color = SeekerClawColors.Primary)
-        } else {
-            Text(
-                text = "SEEKER//CLAW",
-                fontFamily = FontFamily.Monospace,
-                fontSize = 28.sp,
-                fontWeight = FontWeight.Bold,
-                color = SeekerClawColors.Primary,
-                letterSpacing = 1.sp,
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = "Personal AI Agent",
-                fontFamily = FontFamily.Monospace,
-                fontSize = 13.sp,
-                color = SeekerClawColors.TextDim,
-            )
-        }
-
-        Spacer(modifier = Modifier.height(28.dp))
-
-        PixelStepIndicator(
-            currentStep = currentStep,
-            totalSteps = 4,
+        // Logo
+        SeekerClawLogo(
+            size = 56.dp,
+            color = SeekerClawColors.Primary,
         )
 
-        Spacer(modifier = Modifier.height(28.dp))
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Branded title
+        Text(
+            text = buildAnnotatedString {
+                withStyle(SpanStyle(color = SeekerClawColors.TextPrimary, fontWeight = FontWeight.ExtraBold)) {
+                    append("Seeker")
+                }
+                withStyle(SpanStyle(color = SeekerClawColors.Primary, fontWeight = FontWeight.ExtraBold)) {
+                    append("Claw")
+                }
+            },
+            fontSize = 28.sp,
+        )
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        Text(
+            text = "Your personal AI agent, running on your phone",
+            fontSize = 13.sp,
+            color = SeekerClawColors.TextDim,
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // Step indicator
+        SetupStepIndicator(
+            currentStep = currentStep,
+            labels = listOf("Welcome", "Claude", "Telegram", "Options"),
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
 
         // Error message
         if (errorMessage != null) {
@@ -280,43 +313,50 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
 @Composable
 private fun WelcomeStep(onNext: () -> Unit) {
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
+    val uriHandler = LocalUriHandler.current
 
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(
-            text = "Welcome",
-            fontFamily = FontFamily.Monospace,
-            fontSize = 20.sp,
-            fontWeight = FontWeight.Bold,
-            color = SeekerClawColors.TextPrimary,
-        )
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        Text(
-            text = """
-                SeekerClaw turns your phone into a 24/7 personal AI agent.
-
-                You'll need:
-
-                1. Claude API key or Pro/Max token
-                   API key or run: claude setup-token
-
-                2. Telegram Bot
-                   Create one via @BotFather
-
-                3. Your Telegram User ID
-                   You'll see how
-            """.trimIndent(),
-            fontFamily = FontFamily.Monospace,
+            text = "SeekerClaw turns your phone into a 24/7 personal AI agent. " +
+                   "To get started, you\u2019ll need:",
             fontSize = 14.sp,
             color = SeekerClawColors.TextPrimary,
             lineHeight = 22.sp,
         )
 
-        Spacer(modifier = Modifier.height(32.dp))
+        Spacer(modifier = Modifier.height(20.dp))
+
+        // Requirements card
+        SetupCard {
+            RequirementRow(
+                icon = Icons.Default.Key,
+                title = "Claude API Key",
+                subtitle = "From console.anthropic.com, or a Pro/Max token",
+            )
+            HorizontalDivider(
+                color = SeekerClawColors.CardBorder,
+                modifier = Modifier.padding(vertical = 14.dp),
+            )
+            RequirementRow(
+                icon = Icons.Default.SmartToy,
+                title = "Telegram Bot",
+                subtitle = "Create one via @BotFather in Telegram",
+            )
+            HorizontalDivider(
+                color = SeekerClawColors.CardBorder,
+                modifier = Modifier.padding(vertical = 14.dp),
+            )
+            RequirementRow(
+                icon = Icons.Default.Person,
+                title = "Your Telegram User ID",
+                subtitle = "Optional \u2014 can be auto-detected",
+            )
+        }
+
+        Spacer(modifier = Modifier.height(28.dp))
 
         Button(
             onClick = onNext,
@@ -326,14 +366,32 @@ private fun WelcomeStep(onNext: () -> Unit) {
             shape = shape,
             colors = ButtonDefaults.buttonColors(
                 containerColor = SeekerClawColors.Primary,
-                contentColor = androidx.compose.ui.graphics.Color.White,
+                contentColor = Color.White,
             ),
         ) {
             Text(
                 "Get Started",
-                fontFamily = FontFamily.Monospace,
                 fontSize = 16.sp,
                 fontWeight = FontWeight.Bold,
+            )
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        TextButton(
+            onClick = { uriHandler.openUri("https://seekerclaw.xyz/quick-setup.html") },
+        ) {
+            Icon(
+                Icons.Default.HelpOutline,
+                contentDescription = null,
+                tint = SeekerClawColors.TextDim,
+                modifier = Modifier.size(16.dp),
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                "Need help? Quick setup guide",
+                fontSize = 13.sp,
+                color = SeekerClawColors.TextDim,
             )
         }
     }
@@ -352,104 +410,124 @@ private fun ClaudeApiStep(
 ) {
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
     val isToken = authType == "setup_token"
+    val uriHandler = LocalUriHandler.current
+    val isValid = apiKey.trim().isNotBlank() &&
+        ConfigManager.validateCredential(apiKey.trim(), authType) == null &&
+        apiKeyError == null
 
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Text(
-            text = "Step 1: Claude Auth",
-            fontFamily = FontFamily.Monospace,
-            fontSize = 18.sp,
-            fontWeight = FontWeight.Bold,
-            color = SeekerClawColors.TextPrimary,
-        )
+    Column(modifier = Modifier.fillMaxWidth()) {
+        SectionLabel("Authentication")
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(10.dp))
 
-        // Auth type selector
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            listOf("api_key" to "API Key", "setup_token" to "Pro/Max Token").forEach { (type, label) ->
-                val isSelected = authType == type
-                Button(
-                    onClick = { onAuthTypeChange(type) },
-                    modifier = Modifier.weight(1f).height(42.dp),
-                    shape = shape,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = if (isSelected) SeekerClawColors.Primary.copy(alpha = 0.15f)
-                            else SeekerClawColors.Surface,
-                        contentColor = if (isSelected) SeekerClawColors.Primary
-                            else SeekerClawColors.TextDim,
-                    ),
-                ) {
+        SetupCard {
+            // Auth type toggle
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                listOf("api_key" to "API Key", "setup_token" to "Pro/Max Token").forEach { (type, label) ->
+                    val isSelected = authType == type
+                    Button(
+                        onClick = { onAuthTypeChange(type) },
+                        modifier = Modifier.weight(1f).height(42.dp),
+                        shape = shape,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (isSelected) SeekerClawColors.Primary.copy(alpha = 0.15f)
+                                else SeekerClawColors.Background,
+                            contentColor = if (isSelected) SeekerClawColors.Primary
+                                else SeekerClawColors.TextDim,
+                        ),
+                    ) {
+                        Text(
+                            text = label,
+                            fontSize = 12.sp,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Instructions with clickable link
+            if (isToken) {
+                Text(
+                    text = "Run in your terminal:",
+                    fontSize = 13.sp,
+                    color = SeekerClawColors.TextSecondary,
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "claude setup-token",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 13.sp,
+                    color = SeekerClawColors.Primary,
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Requires Claude Pro or Max subscription.",
+                    fontSize = 12.sp,
+                    color = SeekerClawColors.TextDim,
+                )
+            } else {
+                Row {
                     Text(
-                        text = label,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 12.sp,
-                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                        text = "Get your API key from ",
+                        fontSize = 13.sp,
+                        color = SeekerClawColors.TextSecondary,
+                    )
+                    Text(
+                        text = "console.anthropic.com",
+                        fontSize = 13.sp,
+                        color = SeekerClawColors.Primary,
+                        modifier = Modifier.clickable {
+                            uriHandler.openUri("https://console.anthropic.com/settings/keys")
+                        },
                     )
                 }
             }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            OutlinedTextField(
+                value = apiKey,
+                onValueChange = onApiKeyChange,
+                label = {
+                    Text(
+                        if (isToken) "Setup Token" else "API Key",
+                        fontSize = 12.sp,
+                    )
+                },
+                placeholder = {
+                    Text(
+                        if (isToken) "sk-ant-oat01-\u2026" else "sk-ant-api03-\u2026",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 14.sp,
+                        color = SeekerClawColors.TextDim,
+                    )
+                },
+                modifier = Modifier.fillMaxWidth(),
+                visualTransformation = PasswordVisualTransformation(),
+                singleLine = true,
+                isError = apiKeyError != null,
+                trailingIcon = if (isValid) {
+                    {
+                        Icon(
+                            Icons.Default.CheckCircle,
+                            contentDescription = "Valid",
+                            tint = SeekerClawColors.Accent,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                } else null,
+                supportingText = apiKeyError?.let { err ->
+                    { Text(err, fontSize = 12.sp) }
+                },
+                colors = fieldColors,
+                shape = shape,
+            )
         }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Text(
-            text = if (isToken) {
-                """
-                    Run in your terminal:
-                    claude setup-token
-
-                    Paste the generated token below.
-                    Requires Claude Pro or Max subscription.
-                """.trimIndent()
-            } else {
-                """
-                    Get your API key from:
-                    console.anthropic.com/settings/keys
-
-                    Click "Create Key" and paste it below.
-                """.trimIndent()
-            },
-            fontFamily = FontFamily.Monospace,
-            fontSize = 13.sp,
-            color = SeekerClawColors.TextSecondary,
-            lineHeight = 20.sp,
-        )
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        OutlinedTextField(
-            value = apiKey,
-            onValueChange = onApiKeyChange,
-            label = {
-                Text(
-                    if (isToken) "Setup Token" else "API Key",
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 12.sp,
-                )
-            },
-            placeholder = {
-                Text(
-                    if (isToken) "sk-ant-oat01-\u2026" else "sk-ant-api03-\u2026",
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 14.sp,
-                    color = SeekerClawColors.TextDim,
-                )
-            },
-            modifier = Modifier.fillMaxWidth(),
-            visualTransformation = PasswordVisualTransformation(),
-            singleLine = true,
-            isError = apiKeyError != null,
-            supportingText = apiKeyError?.let { err ->
-                { Text(err, fontFamily = FontFamily.Monospace, fontSize = 12.sp) }
-            },
-            colors = fieldColors,
-            shape = shape,
-        )
 
         Spacer(modifier = Modifier.height(28.dp))
 
@@ -474,92 +552,131 @@ private fun TelegramStep(
 ) {
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
 
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Text(
-            text = "Step 2: Telegram",
-            fontFamily = FontFamily.Monospace,
-            fontSize = 18.sp,
-            fontWeight = FontWeight.Bold,
-            color = SeekerClawColors.TextPrimary,
-        )
+    Column(modifier = Modifier.fillMaxWidth()) {
+        SectionLabel("Telegram Connection")
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(10.dp))
 
-        Text(
-            text = "Bot Token",
-            fontFamily = FontFamily.Monospace,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Medium,
-            color = SeekerClawColors.TextSecondary,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Spacer(modifier = Modifier.height(4.dp))
-        Text(
-            text = """
-                1. Open Telegram, search @BotFather
-                2. Send /newbot and follow prompts
-                3. Copy the token it gives you
-            """.trimIndent(),
-            fontFamily = FontFamily.Monospace,
-            fontSize = 12.sp,
-            color = SeekerClawColors.TextDim,
-            lineHeight = 18.sp,
-            modifier = Modifier.fillMaxWidth(),
-        )
+        SetupCard {
+            // Bot token
+            Text(
+                text = "Bot Token",
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
+                color = SeekerClawColors.TextPrimary,
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "Open Telegram \u2192 @BotFather \u2192 /newbot \u2192 copy the token.",
+                fontSize = 12.sp,
+                color = SeekerClawColors.TextDim,
+                lineHeight = 18.sp,
+            )
 
-        Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
-        OutlinedTextField(
-            value = botToken,
-            onValueChange = onBotTokenChange,
-            label = { Text("Bot Token", fontFamily = FontFamily.Monospace, fontSize = 12.sp) },
-            placeholder = { Text("123456789:ABC\u2026", fontFamily = FontFamily.Monospace, fontSize = 14.sp, color = SeekerClawColors.TextDim) },
-            modifier = Modifier.fillMaxWidth(),
-            visualTransformation = PasswordVisualTransformation(),
-            singleLine = true,
-            isError = botTokenError != null,
-            supportingText = botTokenError?.let { err ->
-                { Text(err, fontFamily = FontFamily.Monospace, fontSize = 12.sp) }
-            },
-            colors = fieldColors,
-            shape = shape,
-        )
+            OutlinedTextField(
+                value = botToken,
+                onValueChange = onBotTokenChange,
+                label = { Text("Bot Token", fontSize = 12.sp) },
+                placeholder = {
+                    Text(
+                        "123456789:ABC\u2026",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 14.sp,
+                        color = SeekerClawColors.TextDim,
+                    )
+                },
+                modifier = Modifier.fillMaxWidth(),
+                visualTransformation = PasswordVisualTransformation(),
+                singleLine = true,
+                isError = botTokenError != null,
+                supportingText = botTokenError?.let { err ->
+                    { Text(err, fontSize = 12.sp) }
+                },
+                trailingIcon = if (
+                    botToken.trim().matches(Regex("^\\d+:[A-Za-z0-9_-]+$")) &&
+                    botTokenError == null
+                ) {
+                    {
+                        Icon(
+                            Icons.Default.CheckCircle,
+                            contentDescription = "Valid format",
+                            tint = SeekerClawColors.Accent,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                } else {
+                    null
+                },
+                colors = fieldColors,
+                shape = shape,
+            )
 
-        Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
-        Text(
-            text = "User ID (optional)",
-            fontFamily = FontFamily.Monospace,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Medium,
-            color = SeekerClawColors.TextSecondary,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Spacer(modifier = Modifier.height(4.dp))
-        Text(
-            text = "Leave empty to auto-detect. The first person to message your bot becomes the owner.",
-            fontFamily = FontFamily.Monospace,
-            fontSize = 12.sp,
-            color = SeekerClawColors.TextDim,
-            lineHeight = 18.sp,
-            modifier = Modifier.fillMaxWidth(),
-        )
+            HorizontalDivider(color = SeekerClawColors.CardBorder)
 
-        Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
-        OutlinedTextField(
-            value = ownerId,
-            onValueChange = onOwnerIdChange,
-            label = { Text("User ID", fontFamily = FontFamily.Monospace, fontSize = 12.sp) },
-            placeholder = { Text("auto-detect", fontFamily = FontFamily.Monospace, fontSize = 14.sp, color = SeekerClawColors.TextDim) },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-            colors = fieldColors,
-            shape = shape,
-        )
+            // User ID with auto-detect badge
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "User ID",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = SeekerClawColors.TextPrimary,
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "(optional)",
+                    fontSize = 12.sp,
+                    color = SeekerClawColors.TextDim,
+                )
+                if (ownerId.isBlank()) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "AUTO-DETECT",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = SeekerClawColors.Accent,
+                        letterSpacing = 0.5.sp,
+                        modifier = Modifier
+                            .background(
+                                SeekerClawColors.Accent.copy(alpha = 0.12f),
+                                RoundedCornerShape(4.dp),
+                            )
+                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "Leave empty \u2014 the first person to message your bot becomes the owner.",
+                fontSize = 12.sp,
+                color = SeekerClawColors.TextDim,
+                lineHeight = 18.sp,
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            OutlinedTextField(
+                value = ownerId,
+                onValueChange = onOwnerIdChange,
+                label = { Text("User ID", fontSize = 12.sp) },
+                placeholder = {
+                    Text(
+                        "auto-detect",
+                        fontSize = 14.sp,
+                        color = SeekerClawColors.TextDim,
+                    )
+                },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                colors = fieldColors,
+                shape = shape,
+            )
+        }
 
         Spacer(modifier = Modifier.height(28.dp))
 
@@ -586,87 +703,106 @@ private fun OptionsStep(
 ) {
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
 
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Text(
-            text = "Step 3: Options",
-            fontFamily = FontFamily.Monospace,
-            fontSize = 18.sp,
-            fontWeight = FontWeight.Bold,
-            color = SeekerClawColors.TextPrimary,
-        )
+    Column(modifier = Modifier.fillMaxWidth()) {
+        SectionLabel("Configuration")
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(10.dp))
 
-        Text(
-            text = "Choose your AI model and name your agent.",
-            fontFamily = FontFamily.Monospace,
-            fontSize = 13.sp,
-            color = SeekerClawColors.TextSecondary,
-        )
+        SetupCard {
+            // Model
+            Text(
+                text = "AI Model",
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
+                color = SeekerClawColors.TextPrimary,
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "Choose the Claude model that powers your agent.",
+                fontSize = 12.sp,
+                color = SeekerClawColors.TextDim,
+            )
 
-        Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
-        ExposedDropdownMenuBox(
-            expanded = modelDropdownExpanded,
-            onExpandedChange = onModelDropdownExpandedChange,
-        ) {
+            ExposedDropdownMenuBox(
+                expanded = modelDropdownExpanded,
+                onExpandedChange = onModelDropdownExpandedChange,
+            ) {
+                OutlinedTextField(
+                    value = availableModels.first { it.id == selectedModel }.let { "${it.displayName} (${it.description})" },
+                    onValueChange = {},
+                    readOnly = true,
+                    label = { Text("Model", fontSize = 12.sp) },
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = modelDropdownExpanded) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .menuAnchor(MenuAnchorType.PrimaryNotEditable),
+                    colors = fieldColors,
+                    shape = shape,
+                )
+                ExposedDropdownMenu(
+                    expanded = modelDropdownExpanded,
+                    onDismissRequest = { onModelDropdownExpandedChange(false) },
+                ) {
+                    availableModels.forEach { model ->
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    "${model.displayName} (${model.description})",
+                                    color = SeekerClawColors.TextPrimary,
+                                )
+                            },
+                            onClick = {
+                                onModelChange(model.id)
+                                onModelDropdownExpandedChange(false)
+                            },
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            HorizontalDivider(color = SeekerClawColors.CardBorder)
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Agent name
+            Text(
+                text = "Agent Name",
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
+                color = SeekerClawColors.TextPrimary,
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "Give your agent a name. You can change this later.",
+                fontSize = 12.sp,
+                color = SeekerClawColors.TextDim,
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
             OutlinedTextField(
-                value = availableModels.first { it.id == selectedModel }.let { "${it.displayName} (${it.description})" },
-                onValueChange = {},
-                readOnly = true,
-                label = { Text("Model", fontFamily = FontFamily.Monospace, fontSize = 12.sp) },
-                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = modelDropdownExpanded) },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .menuAnchor(MenuAnchorType.PrimaryNotEditable),
+                value = agentName,
+                onValueChange = onAgentNameChange,
+                label = { Text("Agent Name", fontSize = 12.sp) },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
                 colors = fieldColors,
                 shape = shape,
             )
-            ExposedDropdownMenu(
-                expanded = modelDropdownExpanded,
-                onDismissRequest = { onModelDropdownExpandedChange(false) },
-            ) {
-                availableModels.forEach { model ->
-                    DropdownMenuItem(
-                        text = {
-                            Text(
-                                "${model.displayName} (${model.description})",
-                                fontFamily = FontFamily.Monospace,
-                                color = SeekerClawColors.TextPrimary,
-                            )
-                        },
-                        onClick = {
-                            onModelChange(model.id)
-                            onModelDropdownExpandedChange(false)
-                        },
-                    )
-                }
-            }
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
-
-        OutlinedTextField(
-            value = agentName,
-            onValueChange = onAgentNameChange,
-            label = { Text("Agent Name", fontFamily = FontFamily.Monospace, fontSize = 12.sp) },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-            colors = fieldColors,
-            shape = shape,
-        )
-
-        Spacer(modifier = Modifier.height(32.dp))
+        Spacer(modifier = Modifier.height(28.dp))
 
         TextButton(
             onClick = onBack,
+            modifier = Modifier.align(Alignment.CenterHorizontally),
         ) {
             Text(
                 text = "Back",
-                fontFamily = FontFamily.Monospace,
                 fontSize = 14.sp,
                 color = SeekerClawColors.TextDim,
             )
@@ -682,12 +818,17 @@ private fun OptionsStep(
             shape = shape,
             colors = ButtonDefaults.buttonColors(
                 containerColor = SeekerClawColors.Primary,
-                contentColor = androidx.compose.ui.graphics.Color.White,
+                contentColor = Color.White,
             ),
         ) {
+            Icon(
+                Icons.Default.PlayArrow,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp),
+            )
+            Spacer(modifier = Modifier.width(8.dp))
             Text(
                 "Initialize Agent",
-                fontFamily = FontFamily.Monospace,
                 fontSize = 16.sp,
                 fontWeight = FontWeight.Bold,
             )
@@ -711,7 +852,6 @@ private fun NavButtons(
         TextButton(onClick = onBack) {
             Text(
                 text = "Back",
-                fontFamily = FontFamily.Monospace,
                 fontSize = 14.sp,
                 color = SeekerClawColors.TextDim,
             )
@@ -723,17 +863,124 @@ private fun NavButtons(
             shape = shape,
             colors = ButtonDefaults.buttonColors(
                 containerColor = SeekerClawColors.Primary,
-                contentColor = androidx.compose.ui.graphics.Color.White,
+                contentColor = Color.White,
                 disabledContainerColor = SeekerClawColors.Surface,
                 disabledContentColor = SeekerClawColors.TextDim,
             ),
         ) {
             Text(
                 text = "Next",
-                fontFamily = FontFamily.Monospace,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Bold,
             )
+        }
+    }
+}
+
+// ============================================================================
+// SHARED COMPOSABLES — Card wrapper, requirement row, section label
+// ============================================================================
+
+@Composable
+private fun SetupCard(
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(SeekerClawColors.Surface, shape)
+            .border(1.dp, SeekerClawColors.CardBorder, shape)
+            .padding(20.dp),
+        content = content,
+    )
+}
+
+@Composable
+private fun RequirementRow(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = SeekerClawColors.Primary,
+            modifier = Modifier.size(22.dp),
+        )
+        Spacer(modifier = Modifier.width(14.dp))
+        Column {
+            Text(
+                text = title,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
+                color = SeekerClawColors.TextPrimary,
+            )
+            Text(
+                text = subtitle,
+                fontSize = 12.sp,
+                color = SeekerClawColors.TextDim,
+            )
+        }
+    }
+}
+
+@Composable
+private fun SectionLabel(title: String) {
+    Text(
+        text = title,
+        fontSize = 11.sp,
+        fontWeight = FontWeight.Medium,
+        color = SeekerClawColors.TextDim,
+        letterSpacing = 1.sp,
+        modifier = Modifier.fillMaxWidth(),
+    )
+}
+
+// ============================================================================
+// SEEKER CLAW LOGO — Canvas rendering of the app icon claw
+// ============================================================================
+
+private const val CLAW_PATH_1 =
+    "M277.14,111C245.78,147.28 226.53,196.4 226.53,250.48" +
+    "C226.53,312.41 251.78,367.84 291.55,404.93" +
+    "C267.02,414.55 239.39,419.95 210.16,419.95" +
+    "C180.13,419.95 151.79,414.25 126.78,404.14" +
+    "C114.13,376.68 107,345.61 107,312.7" +
+    "C107,205.93 182.04,118.49 277.14,111Z"
+
+private const val CLAW_PATH_2 =
+    "M422.25,194.81C395.32,234.48 352.86,265.79 300.62,279.78" +
+    "C240.8,295.81 180.73,285.77 134.6,256.96" +
+    "C131.67,283.14 133.6,311.23 141.16,339.46" +
+    "C148.93,368.46 161.78,394.36 178.01,415.91" +
+    "C207.81,421.02 239.67,419.86 271.46,411.35" +
+    "C374.59,383.71 439.63,288.6 422.25,194.81Z"
+
+@Composable
+private fun SeekerClawLogo(
+    size: Dp = 64.dp,
+    color: Color = SeekerClawColors.Primary,
+    modifier: Modifier = Modifier,
+) {
+    val path1 = remember {
+        androidx.core.graphics.PathParser.createPathFromPathData(CLAW_PATH_1).asComposePath()
+    }
+    val path2 = remember {
+        androidx.core.graphics.PathParser.createPathFromPathData(CLAW_PATH_2).asComposePath()
+    }
+
+    Canvas(modifier = modifier.size(size)) {
+        val canvasScale = this.size.width / 532f
+        scale(canvasScale, pivot = Offset.Zero) {
+            translate(left = 93.1f, top = 93.1f) {
+                scale(0.65f, pivot = Offset.Zero) {
+                    drawPath(path1, color = color)
+                    drawPath(path2, color = color)
+                }
+            }
         }
     }
 }
