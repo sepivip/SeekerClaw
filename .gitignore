@@ -28,6 +28,9 @@ local.properties
 # Android Studio
 *.iml
 .idea/
+
+# VS Code
+.vscode/
 .DS_Store
 .kotlin/
 
