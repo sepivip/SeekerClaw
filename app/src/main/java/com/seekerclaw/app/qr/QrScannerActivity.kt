@@ -46,11 +46,14 @@ class QrScannerActivity : ComponentActivity() {
 
     private val cameraExecutor = Executors.newSingleThreadExecutor()
     private val processingFrame = AtomicBoolean(false)
+    private val hasResult = AtomicBoolean(false)
 
-    private var hasResult = false
     private var cameraProvider: ProcessCameraProvider? = null
     private var imageAnalysis: ImageAnalysis? = null
     private var camera: Camera? = null
+
+    // Observable permission state that triggers camera init in Compose
+    private val cameraPermissionGranted = mutableStateOf(false)
 
     private val scanner = BarcodeScanning.getClient(
         BarcodeScannerOptions.Builder()
@@ -64,8 +67,7 @@ class QrScannerActivity : ComponentActivity() {
         if (!granted) {
             finishWithError("Camera permission is required to scan config QR")
         } else {
-            // Recreate so DisposableEffect re-runs and starts the camera
-            recreate()
+            cameraPermissionGranted.value = true
         }
     }
 
@@ -73,9 +75,13 @@ class QrScannerActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) !=
-            PackageManager.PERMISSION_GRANTED
-        ) {
+        val hasPerm = ContextCompat.checkSelfPermission(
+            this, Manifest.permission.CAMERA
+        ) == PackageManager.PERMISSION_GRANTED
+
+        if (hasPerm) {
+            cameraPermissionGranted.value = true
+        } else {
             permissionLauncher.launch(Manifest.permission.CAMERA)
         }
 
@@ -83,8 +89,7 @@ class QrScannerActivity : ComponentActivity() {
             SeekerClawTheme {
                 QrScannerContent(
                     onQrDetected = { raw ->
-                        if (!hasResult) {
-                            hasResult = true
+                        if (hasResult.compareAndSet(false, true)) {
                             imageAnalysis?.clearAnalyzer()
                             setResult(
                                 Activity.RESULT_OK,
@@ -94,6 +99,7 @@ class QrScannerActivity : ComponentActivity() {
                         }
                     },
                     onCancel = { finishCancelled() },
+                    onError = { finishWithError(it) },
                 )
             }
         }
@@ -103,9 +109,11 @@ class QrScannerActivity : ComponentActivity() {
     private fun QrScannerContent(
         onQrDetected: (String) -> Unit,
         onCancel: () -> Unit,
+        onError: (String) -> Unit,
     ) {
         val context = LocalContext.current
         val lifecycleOwner = LocalLifecycleOwner.current
+        val permissionGranted by cameraPermissionGranted
 
         var torchAvailable by remember { mutableStateOf(false) }
         var torchEnabled by remember { mutableStateOf(false) }
@@ -117,13 +125,9 @@ class QrScannerActivity : ComponentActivity() {
             }
         }
 
-        // Camera lifecycle management
-        DisposableEffect(lifecycleOwner) {
-            val hasPerm = ContextCompat.checkSelfPermission(
-                context, Manifest.permission.CAMERA
-            ) == PackageManager.PERMISSION_GRANTED
-
-            if (hasPerm) {
+        // Camera lifecycle — keyed on permission state so it starts when granted
+        DisposableEffect(lifecycleOwner, permissionGranted) {
+            if (permissionGranted) {
                 val providerFuture = ProcessCameraProvider.getInstance(context)
                 providerFuture.addListener({
                     try {
@@ -141,7 +145,7 @@ class QrScannerActivity : ComponentActivity() {
 
                         analysis.setAnalyzer(cameraExecutor) { imageProxy ->
                             val mediaImage = imageProxy.image
-                            if (mediaImage == null || hasResult) {
+                            if (mediaImage == null || hasResult.get()) {
                                 imageProxy.close()
                                 return@setAnalyzer
                             }
@@ -155,7 +159,7 @@ class QrScannerActivity : ComponentActivity() {
                             )
                             scanner.process(input)
                                 .addOnSuccessListener { barcodes ->
-                                    if (hasResult) return@addOnSuccessListener
+                                    if (hasResult.get()) return@addOnSuccessListener
                                     val raw = barcodes.firstNotNullOfOrNull {
                                         it.rawValue?.trim()
                                     }
@@ -185,9 +189,7 @@ class QrScannerActivity : ComponentActivity() {
                         torchAvailable = camera?.cameraInfo?.hasFlashUnit() == true
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed to start camera", e)
-                        (context as? QrScannerActivity)?.finishWithError(
-                            e.message ?: "Failed to start camera"
-                        )
+                        onError(e.message ?: "Failed to start camera")
                     }
                 }, ContextCompat.getMainExecutor(context))
             }
