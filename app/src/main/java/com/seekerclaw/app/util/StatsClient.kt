@@ -8,7 +8,8 @@ import org.json.JSONObject
 private const val TAG = "StatsClient"
 
 /**
- * Shared client for fetching DB summary stats from the Node.js bridge.
+ * Shared client for fetching DB summary stats from the Node.js stats server.
+ * Calls the internal stats server on port 8766 directly (no bridge proxy).
  * Used by DashboardScreen and SystemScreen for API analytics (BAT-32),
  * and by the memory index UI for memory stats (BAT-33).
  */
@@ -29,22 +30,18 @@ data class DbSummary(
 )
 
 suspend fun fetchDbSummary(): DbSummary? = withContext(Dispatchers.IO) {
-    val token = ServiceState.bridgeToken ?: return@withContext null
     var conn: java.net.HttpURLConnection? = null
     try {
-        val url = java.net.URL("http://127.0.0.1:8765/stats/db-summary")
+        // Call Node.js internal stats server directly (no bridge proxy needed)
+        val url = java.net.URL("http://127.0.0.1:8766/stats/db-summary")
         conn = url.openConnection() as java.net.HttpURLConnection
-        conn.requestMethod = "POST"
-        conn.connectTimeout = 3000
-        conn.readTimeout = 3000
-        conn.setRequestProperty("Content-Type", "application/json")
-        conn.setRequestProperty("X-Bridge-Token", token)
-        conn.doOutput = true
-        conn.outputStream.use { it.write("{}".toByteArray(Charsets.UTF_8)) }
+        conn.requestMethod = "GET"
+        conn.connectTimeout = 5000
+        conn.readTimeout = 5000
 
         val code = conn.responseCode
         if (code !in 200..299) {
-            // Drain error stream to free the connection
+            Log.w(TAG, "fetchDbSummary HTTP $code")
             conn.errorStream?.bufferedReader()?.use { it.readText() }
             return@withContext null
         }
@@ -73,7 +70,7 @@ suspend fun fetchDbSummary(): DbSummary? = withContext(Dispatchers.IO) {
         )
     } catch (e: Exception) {
         if (e is kotlinx.coroutines.CancellationException) throw e
-        Log.d(TAG, "fetchDbSummary failed: ${e.message}")
+        Log.w(TAG, "fetchDbSummary failed: ${e.message}")
         null
     } finally {
         conn?.disconnect()
