@@ -4042,12 +4042,12 @@ async function generateSessionSummary(chatId) {
     return text || null;
 }
 
-async function saveSessionSummary(chatId, trigger) {
+async function saveSessionSummary(chatId, trigger, { force = false } = {}) {
     const track = getSessionTrack(chatId);
 
-    // Per-chatId debounce: at least 1 min between summaries for the same chat
+    // Per-chatId debounce: at least 1 min between summaries (skipped for manual/shutdown)
     const now = Date.now();
-    if (now - track.lastSummaryTime < 60000) return;
+    if (!force && now - track.lastSummaryTime < 60000) return;
 
     // Mark debounce immediately to prevent concurrent saves for this chat
     track.lastSummaryTime = now;
@@ -4072,7 +4072,7 @@ async function saveSessionSummary(chatId, trigger) {
 
         // Write the summary file
         const header = `# Session Summary — ${localTimestamp()}\n\n`;
-        const meta = `> Trigger: ${trigger} | Messages: ${track.messageCount} | Model: ${MODEL}\n\n`;
+        const meta = `> Trigger: ${trigger} | Exchanges: ${track.messageCount} | Model: ${MODEL}\n\n`;
         fs.writeFileSync(finalPath, header + meta + summary + '\n', 'utf8');
 
         log(`[SessionSummary] Saved: ${path.basename(finalPath)} (trigger: ${trigger})`);
@@ -4701,8 +4701,8 @@ async function chat(chatId, userMessage) {
     const track = getSessionTrack(chatId);
     track.lastMessageTime = Date.now();
     track.messageCount++;
-    if (track.messageCount >= CHECKPOINT_MESSAGES ||
-        (track.lastSummaryTime > 0 && Date.now() - track.lastSummaryTime > CHECKPOINT_INTERVAL_MS)) {
+    const sinceLastSummary = Date.now() - (track.lastSummaryTime || sessionStartedAt);
+    if (track.messageCount >= CHECKPOINT_MESSAGES || sinceLastSummary > CHECKPOINT_INTERVAL_MS) {
         saveSessionSummary(chatId, 'checkpoint').catch(e => log(`[SessionSummary] ${e.message}`));
     }
 
@@ -4756,6 +4756,7 @@ Web Search: ${config.braveApiKey ? 'Enabled' : 'Disabled'}`;
 
         case '/reset':
             clearConversation(chatId);
+            sessionTracking.delete(chatId);
             return 'Conversation history cleared. Starting fresh!';
 
         case '/new': {
@@ -4763,12 +4764,10 @@ Web Search: ${config.braveApiKey ? 'Enabled' : 'Disabled'}`;
             const conv = getConversation(chatId);
             const hadEnough = conv.length >= MIN_MESSAGES_FOR_SUMMARY;
             if (hadEnough) {
-                await saveSessionSummary(chatId, 'manual');
+                await saveSessionSummary(chatId, 'manual', { force: true });
             }
             clearConversation(chatId);
-            const newTrack = getSessionTrack(chatId);
-            newTrack.messageCount = 0;
-            newTrack.lastMessageTime = 0;
+            sessionTracking.delete(chatId);
             return hadEnough ? 'Session saved and cleared. Starting fresh!' : 'Conversation cleared (too short to summarize). Starting fresh!';
         }
 
@@ -5248,7 +5247,7 @@ async function initDatabase() {
                 const summaries = [];
                 for (const [chatId, conv] of conversations) {
                     if (conv.length >= MIN_MESSAGES_FOR_SUMMARY) {
-                        summaries.push(saveSessionSummary(chatId, 'shutdown'));
+                        summaries.push(saveSessionSummary(chatId, 'shutdown', { force: true }));
                     }
                 }
                 if (summaries.length > 0) {
