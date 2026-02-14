@@ -130,9 +130,12 @@ class QrScannerActivity : ComponentActivity() {
 
         // Camera lifecycle — keyed on permission state so it starts when granted
         DisposableEffect(lifecycleOwner, permissionGranted) {
+            var disposed = false
+
             if (permissionGranted) {
                 val providerFuture = ProcessCameraProvider.getInstance(context)
                 providerFuture.addListener({
+                    if (disposed) return@addListener
                     try {
                         val provider = providerFuture.get()
                         cameraProvider = provider
@@ -198,6 +201,7 @@ class QrScannerActivity : ComponentActivity() {
             }
 
             onDispose {
+                disposed = true
                 runCatching { cameraProvider?.unbindAll() }
             }
         }
