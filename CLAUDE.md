@@ -41,7 +41,7 @@
 | Version | Current | Location |
 |---------|---------|----------|
 | **App** | `1.2.0` (code 3) | `app/build.gradle.kts` → `versionName` / `versionCode` |
-| **OpenClaw** | `2026.2.6` | `app/build.gradle.kts` → `OPENCLAW_VERSION` buildConfigField |
+| **OpenClaw** | `2026.2.13` | `app/build.gradle.kts` → `OPENCLAW_VERSION` buildConfigField |
 | **Node.js** | `18 LTS` | `app/build.gradle.kts` → `NODEJS_VERSION` buildConfigField |
 
 ## Tech Stack
@@ -392,8 +392,8 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 > **IMPORTANT:** SeekerClaw must stay in sync with OpenClaw updates. See `OPENCLAW_TRACKING.md` for full details.
 
 ### Current Versions
-- **OpenClaw Reference:** 2026.2.2 (commit 1c4db91)
-- **Last Sync Review:** 2026-02-05
+- **OpenClaw Reference:** 2026.2.13 (commit 71f357d)
+- **Last Sync Review:** 2026-02-14
 
 ### Quick Update Check
 ```bash

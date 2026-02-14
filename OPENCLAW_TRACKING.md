@@ -1,8 +1,8 @@
 # OpenClaw Version Tracking
 
 > **Purpose:** Track OpenClaw releases and identify changes to port to SeekerClaw.
-> **Current OpenClaw Version:** 2026.2.12 (main bdd0c12, 2026-02-12)
-> **Last Sync Review:** 2026-02-12
+> **Current OpenClaw Version:** 2026.2.13 (main 71f357d, 2026-02-14)
+> **Last Sync Review:** 2026-02-14
 > **Parity Plan:** See `PARITY_PLAN.md`
 
 ---
@@ -82,7 +82,28 @@ These files in OpenClaw directly affect SeekerClaw behavior. Changes here requir
 
 ## Version History & Changes
 
-### 2026.2.10-dev (Current - 029b77c)
+### 2026.2.13 (Current - 71f357d)
+- **Release Date:** 2026-02-14
+- **SeekerClaw Sync Status:** Key changes ported
+- **Key Changes Ported:**
+  - [x] web-fetch: Accept header prefers `text/markdown` (Cloudflare Markdown for Agents)
+  - [x] web-fetch: cf-markdown extractor for pre-rendered markdown responses
+  - [x] web-search: Perplexity freshness/recency filter support
+  - [x] Error handling: distinct user messages for rate limit vs overloaded
+- **Skipped (not applicable):**
+  - Memory QMD search mode default change (no QMD in SeekerClaw)
+  - Discord skill rewrite (no Discord channel)
+  - Skills-install archive hardening (no skill install)
+  - Telegram poll support (defer)
+  - Telegram replyToMode default change (SeekerClaw uses direct polling)
+- **Notable upstream:**
+  - 60+ commits, tags v2026.2.12 and v2026.2.13
+  - Many security hardening fixes (channels, browser, media, archives)
+  - New providers: Hugging Face, MiniMax CN, vLLM
+  - Podman container support
+  - Write-ahead delivery queue for crash recovery
+
+### 2026.2.10-dev (029b77c)
 - **Release Date:** 2026-02-11
 - **SeekerClaw Sync Status:** Synced (critical fixes ported)
 - **Key Changes Ported:**
@@ -224,7 +245,7 @@ git pull origin main
 ### Step 2: Generate Diff Report
 ```bash
 # Get the commit range
-OLD_COMMIT="029b77c"  # Previous version
+OLD_COMMIT="71f357d"  # Previous version
 NEW_COMMIT="HEAD"
 
 # Check critical files

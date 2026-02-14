@@ -1308,6 +1308,7 @@ function htmlToMarkdown(html) {
 // --- Web search providers ---
 
 const BRAVE_FRESHNESS_VALUES = new Set(['day', 'week', 'month']);
+const PERPLEXITY_RECENCY_MAP = { day: 'day', week: 'week', month: 'month' };
 
 async function searchBrave(query, count = 5, freshness) {
     if (!config.braveApiKey) throw new Error('Brave API key not configured (set braveApiKey in Settings)');
@@ -1335,7 +1336,7 @@ async function searchBrave(query, count = 5, freshness) {
     };
 }
 
-async function searchPerplexity(query) {
+async function searchPerplexity(query, freshness) {
     const apiKey = config.perplexityApiKey;
     if (!apiKey) throw new Error('Perplexity API key not configured (set perplexityApiKey in Settings)');
 
@@ -1347,6 +1348,10 @@ async function searchPerplexity(query) {
     const urlPath = isDirect ? '/chat/completions' : '/api/v1/chat/completions';
     const model = isDirect ? 'sonar-pro' : 'perplexity/sonar-pro';
 
+    const body = { model, messages: [{ role: 'user', content: query }] };
+    const recencyFilter = freshness && PERPLEXITY_RECENCY_MAP[freshness];
+    if (recencyFilter) body.search_recency_filter = recencyFilter;
+
     const res = await httpRequest({
         hostname: baseUrl,
         path: urlPath,
@@ -1357,7 +1362,7 @@ async function searchPerplexity(query) {
             'HTTP-Referer': 'https://seekerclaw.com',
             'X-Title': 'SeekerClaw Web Search'
         }
-    }, { model, messages: [{ role: 'user', content: query }] });
+    }, body);
 
     if (res.status !== 200) {
         const detail = res.data?.error?.message || res.data?.message || '';
@@ -1399,7 +1404,7 @@ async function webFetch(urlString, options = {}) {
         // Strip sensitive headers on cross-origin redirect
         const reqHeaders = {
             'User-Agent': 'SeekerClaw/1.0 (Android; +https://seekerclaw.com)',
-            'Accept': options.accept || 'text/html,application/json,text/*'
+            'Accept': options.accept || 'text/markdown, text/html;q=0.9, */*;q=0.1'
         };
         for (const [k, v] of Object.entries(customHeaders)) {
             const lower = k.toLowerCase();
@@ -1750,7 +1755,7 @@ const TOOLS = [
                 query: { type: 'string', description: 'The search query' },
                 provider: { type: 'string', enum: ['brave', 'perplexity'], description: 'Search provider. Default: brave. Use perplexity for complex questions needing synthesized answers.' },
                 count: { type: 'number', description: 'Number of results (brave only, 1-10, default 5)' },
-                freshness: { type: 'string', enum: ['day', 'week', 'month'], description: 'Freshness filter (brave only)' }
+                freshness: { type: 'string', enum: ['day', 'week', 'month'], description: 'Freshness filter. Brave: filters by discovery time. Perplexity: sets search_recency_filter.' }
             },
             required: ['query']
         }
@@ -2236,7 +2241,7 @@ async function executeTool(name, input) {
             const safeCount = Math.min(Math.max(Number(input.count) || 5, 1), 10);
             const safeFreshness = BRAVE_FRESHNESS_VALUES.has(input.freshness) ? input.freshness : '';
             const cacheKey = provider === 'perplexity'
-                ? `search:perplexity:${input.query}`
+                ? `search:perplexity:${input.query}:${safeFreshness || 'default'}`
                 : `search:brave:${input.query}:${safeCount}:${safeFreshness}`;
             const cached = cacheGet(cacheKey);
             if (cached) { log('[WebSearch] Cache hit'); return cached; }
@@ -2244,7 +2249,7 @@ async function executeTool(name, input) {
             try {
                 let result;
                 if (provider === 'perplexity') {
-                    result = await searchPerplexity(input.query);
+                    result = await searchPerplexity(input.query, safeFreshness);
                 } else {
                     result = await searchBrave(input.query, safeCount, safeFreshness);
                 }
@@ -2315,7 +2320,14 @@ async function executeTool(name, input) {
                     result = { content: json.slice(0, 50000), type: 'json', url: res.finalUrl };
                 } else if (typeof res.data === 'string') {
                     const contentType = (res.headers && res.headers['content-type']) || '';
-                    if (contentType.includes('text/html') || /^\s*(?:<!DOCTYPE html|<html\b)/i.test(res.data)) {
+                    if (contentType.includes('text/markdown')) {
+                        // Cloudflare Markdown for Agents: server returned pre-rendered markdown
+                        if (rawMode) {
+                            result = { content: res.data.slice(0, 50000), type: 'text', url: res.finalUrl };
+                        } else {
+                            result = { content: res.data.slice(0, 50000), type: 'markdown', extractor: 'cf-markdown', url: res.finalUrl };
+                        }
+                    } else if (contentType.includes('text/html') || /^\s*(?:<!DOCTYPE html|<html\b)/i.test(res.data)) {
                         if (rawMode) {
                             // Raw mode: basic strip only
                             let text = res.data.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
@@ -4577,10 +4589,12 @@ function classifyApiError(status, data) {
             return { type: 'quota', retryable: false,
                 userMessage: 'API usage quota exceeded. Please try again later or upgrade your plan.' };
         }
-        return { type: 'rate_limit', retryable: true, userMessage: null };
+        return { type: 'rate_limit', retryable: true,
+            userMessage: 'API rate limit reached. Please try again later.' };
     }
     if (status === 529) {
-        return { type: 'overloaded', retryable: true, userMessage: null };
+        return { type: 'overloaded', retryable: true,
+            userMessage: 'Claude API is temporarily overloaded. Please try again in a moment.' };
     }
     // Cloudflare errors (520-527)
     if (status >= 520 && status <= 527) {
