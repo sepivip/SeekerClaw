@@ -4,16 +4,11 @@ import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.graphics.Typeface
 import android.os.Bundle
 import android.util.Log
-import android.view.Gravity
-import android.view.ViewGroup
-import android.widget.Button
-import android.widget.FrameLayout
-import android.widget.LinearLayout
-import android.widget.TextView
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
@@ -21,11 +16,24 @@ import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
+import com.seekerclaw.app.ui.theme.SeekerClawTheme
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -36,9 +44,6 @@ class QrScannerActivity : ComponentActivity() {
         private const val TAG = "QrScannerActivity"
     }
 
-    private lateinit var previewView: PreviewView
-    private lateinit var torchButton: Button
-
     private val cameraExecutor = Executors.newSingleThreadExecutor()
     private val processingFrame = AtomicBoolean(false)
 
@@ -46,7 +51,6 @@ class QrScannerActivity : ComponentActivity() {
     private var cameraProvider: ProcessCameraProvider? = null
     private var imageAnalysis: ImageAnalysis? = null
     private var camera: Camera? = null
-    private var torchEnabled = false
 
     private val scanner = BarcodeScanning.getClient(
         BarcodeScannerOptions.Builder()
@@ -57,175 +61,159 @@ class QrScannerActivity : ComponentActivity() {
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
-        if (granted) {
-            startCamera()
-        } else {
+        if (!granted) {
             finishWithError("Camera permission is required to scan config QR")
         }
+        // If granted, the Compose UI will start the camera via DisposableEffect
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
 
-        previewView = PreviewView(this).apply {
-            implementationMode = PreviewView.ImplementationMode.PERFORMANCE
-        }
-
-        val root = FrameLayout(this)
-        root.addView(
-            previewView,
-            FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT
-            )
-        )
-
-        val topBar = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(12), dp(12), dp(12), dp(12))
-            setBackgroundColor(0xB30B0F1A.toInt())
-        }
-
-        val title = TextView(this).apply {
-            text = "Scan SeekerClaw Config QR"
-            textSize = 14f
-            setTextColor(0xFFEAF0FF.toInt())
-            setTypeface(typeface, Typeface.BOLD)
-        }
-
-        torchButton = Button(this).apply {
-            text = "Torch"
-            isAllCaps = false
-            isEnabled = false
-            setOnClickListener { toggleTorch() }
-        }
-
-        val cancelButton = Button(this).apply {
-            text = "Cancel"
-            isAllCaps = false
-            setOnClickListener { finishCancelled() }
-        }
-
-        topBar.addView(
-            title,
-            LinearLayout.LayoutParams(
-                0,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                1f
-            )
-        )
-        topBar.addView(
-            torchButton,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { marginEnd = dp(8) }
-        )
-        topBar.addView(
-            cancelButton,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-        )
-
-        root.addView(
-            topBar,
-            FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                Gravity.TOP
-            )
-        )
-
-        setContentView(root)
-
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) ==
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) !=
             PackageManager.PERMISSION_GRANTED
         ) {
-            startCamera()
-        } else {
             permissionLauncher.launch(Manifest.permission.CAMERA)
+        }
+
+        setContent {
+            SeekerClawTheme {
+                QrScannerContent(
+                    onQrDetected = { raw ->
+                        if (!hasResult) {
+                            hasResult = true
+                            imageAnalysis?.clearAnalyzer()
+                            setResult(
+                                Activity.RESULT_OK,
+                                Intent().putExtra(EXTRA_QR_TEXT, raw)
+                            )
+                            finish()
+                        }
+                    },
+                    onCancel = { finishCancelled() },
+                )
+            }
         }
     }
 
-    private fun startCamera() {
-        val providerFuture = ProcessCameraProvider.getInstance(this)
-        providerFuture.addListener({
-            try {
-                val provider = providerFuture.get()
-                cameraProvider = provider
+    @Composable
+    private fun QrScannerContent(
+        onQrDetected: (String) -> Unit,
+        onCancel: () -> Unit,
+    ) {
+        val context = LocalContext.current
+        val lifecycleOwner = LocalLifecycleOwner.current
 
-                val preview = Preview.Builder().build().also {
-                    it.surfaceProvider = previewView.surfaceProvider
-                }
+        var torchAvailable by remember { mutableStateOf(false) }
+        var torchEnabled by remember { mutableStateOf(false) }
+        var isDetected by remember { mutableStateOf(false) }
 
-                val analysis = ImageAnalysis.Builder()
-                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                    .setImageQueueDepth(1)
-                    .build()
-
-                analysis.setAnalyzer(cameraExecutor) { imageProxy ->
-                    val mediaImage = imageProxy.image
-                    if (mediaImage == null || hasResult) {
-                        imageProxy.close()
-                        return@setAnalyzer
-                    }
-                    if (!processingFrame.compareAndSet(false, true)) {
-                        imageProxy.close()
-                        return@setAnalyzer
-                    }
-
-                    val input = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
-                    scanner.process(input)
-                        .addOnSuccessListener { barcodes ->
-                            if (hasResult) return@addOnSuccessListener
-                            val raw = barcodes.firstNotNullOfOrNull { it.rawValue?.trim() }
-                            if (!raw.isNullOrBlank()) {
-                                hasResult = true
-                                imageAnalysis?.clearAnalyzer()
-                                setResult(
-                                    Activity.RESULT_OK,
-                                    Intent().putExtra(EXTRA_QR_TEXT, raw)
-                                )
-                                finish()
-                            }
-                        }
-                        .addOnFailureListener { e ->
-                            Log.w(TAG, "QR scan frame failed: ${e.message}")
-                        }
-                        .addOnCompleteListener {
-                            processingFrame.set(false)
-                            imageProxy.close()
-                        }
-                }
-
-                imageAnalysis = analysis
-                provider.unbindAll()
-                camera = provider.bindToLifecycle(
-                    this,
-                    CameraSelector.DEFAULT_BACK_CAMERA,
-                    preview,
-                    analysis
-                )
-
-                val hasFlash = camera?.cameraInfo?.hasFlashUnit() == true
-                torchButton.isEnabled = hasFlash
-                torchButton.text = if (hasFlash) "Torch" else "No torch"
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to start camera", e)
-                finishWithError("Failed to start QR scanner: ${e.message}")
+        val previewView = remember {
+            PreviewView(context).apply {
+                implementationMode = PreviewView.ImplementationMode.PERFORMANCE
             }
-        }, ContextCompat.getMainExecutor(this))
-    }
+        }
 
-    private fun toggleTorch() {
-        val cam = camera ?: return
-        if (cam.cameraInfo.hasFlashUnit() != true) return
-        torchEnabled = !torchEnabled
-        cam.cameraControl.enableTorch(torchEnabled)
-        torchButton.text = if (torchEnabled) "Torch On" else "Torch"
+        // Camera lifecycle management
+        DisposableEffect(lifecycleOwner) {
+            val hasPerm = ContextCompat.checkSelfPermission(
+                context, Manifest.permission.CAMERA
+            ) == PackageManager.PERMISSION_GRANTED
+
+            if (hasPerm) {
+                val providerFuture = ProcessCameraProvider.getInstance(context)
+                providerFuture.addListener({
+                    try {
+                        val provider = providerFuture.get()
+                        cameraProvider = provider
+
+                        val preview = Preview.Builder().build().also {
+                            it.surfaceProvider = previewView.surfaceProvider
+                        }
+
+                        val analysis = ImageAnalysis.Builder()
+                            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                            .setImageQueueDepth(1)
+                            .build()
+
+                        analysis.setAnalyzer(cameraExecutor) { imageProxy ->
+                            val mediaImage = imageProxy.image
+                            if (mediaImage == null || hasResult) {
+                                imageProxy.close()
+                                return@setAnalyzer
+                            }
+                            if (!processingFrame.compareAndSet(false, true)) {
+                                imageProxy.close()
+                                return@setAnalyzer
+                            }
+
+                            val input = InputImage.fromMediaImage(
+                                mediaImage, imageProxy.imageInfo.rotationDegrees
+                            )
+                            scanner.process(input)
+                                .addOnSuccessListener { barcodes ->
+                                    if (hasResult) return@addOnSuccessListener
+                                    val raw = barcodes.firstNotNullOfOrNull {
+                                        it.rawValue?.trim()
+                                    }
+                                    if (!raw.isNullOrBlank()) {
+                                        isDetected = true
+                                        onQrDetected(raw)
+                                    }
+                                }
+                                .addOnFailureListener { e ->
+                                    Log.w(TAG, "QR scan frame failed: ${e.message}")
+                                }
+                                .addOnCompleteListener {
+                                    processingFrame.set(false)
+                                    imageProxy.close()
+                                }
+                        }
+
+                        imageAnalysis = analysis
+                        provider.unbindAll()
+                        camera = provider.bindToLifecycle(
+                            lifecycleOwner,
+                            CameraSelector.DEFAULT_BACK_CAMERA,
+                            preview,
+                            analysis
+                        )
+
+                        torchAvailable = camera?.cameraInfo?.hasFlashUnit() == true
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to start camera", e)
+                    }
+                }, ContextCompat.getMainExecutor(context))
+            }
+
+            onDispose {
+                runCatching { cameraProvider?.unbindAll() }
+            }
+        }
+
+        // UI layers
+        Box(modifier = Modifier.fillMaxSize()) {
+            // Layer 0: Camera preview
+            AndroidView(
+                factory = { previewView },
+                modifier = Modifier.fillMaxSize(),
+            )
+
+            // Layer 1: Themed overlay
+            ScannerOverlay(
+                torchAvailable = torchAvailable,
+                torchEnabled = torchEnabled,
+                isDetected = isDetected,
+                onToggleTorch = {
+                    val cam = camera ?: return@ScannerOverlay
+                    if (cam.cameraInfo.hasFlashUnit() != true) return@ScannerOverlay
+                    torchEnabled = !torchEnabled
+                    cam.cameraControl.enableTorch(torchEnabled)
+                },
+                onCancel = onCancel,
+            )
+        }
     }
 
     private fun finishCancelled() {
@@ -239,10 +227,6 @@ class QrScannerActivity : ComponentActivity() {
             Intent().putExtra(EXTRA_ERROR, message)
         )
         finish()
-    }
-
-    private fun dp(value: Int): Int {
-        return (value * resources.displayMetrics.density).toInt()
     }
 
     override fun onDestroy() {
