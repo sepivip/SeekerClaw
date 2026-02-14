@@ -1,6 +1,15 @@
 # CLAUDE.md — SeekerClaw Project Guide
 
-> **Product spec:** See `MVP.md` | **Build instructions:** See `PROMPT.md` | **Background research:** See `RESEARCH.md`
+> **Product spec:** See `MVP.md` | **Build instructions:** See `PROMPT.md` | **Background research:** See `RESEARCH.md` | **Source of truth:** See `PROJECT.md`
+
+## PROJECT.md — Source of Truth
+
+- Read `PROJECT.md` before any feature work
+- After shipping any feature: update **Shipped** section + **Changelog**
+- After starting any feature: move it to **In Progress**
+- Keep **Limitations** section honest — if it doesn't work, list it
+- **One-Liner** and **Elevator Pitch** should always reflect current state
+- Update **Stats** periodically (tool count, skill count, lines of code)
 
 ## Design Principle: UX First
 
