@@ -3413,13 +3413,13 @@ async function executeTool(name, input) {
                 return require(mod);
             };
 
+            let timerId;
             try {
                 // AsyncFunction allows top-level await
                 const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
-                const fn = new AsyncFunction('console', 'require', '__dirname', code);
+                const fn = new AsyncFunction('console', 'require', '__dirname', '__filename', code);
 
-                let timerId;
-                const resultPromise = fn(mockConsole, sandboxedRequire, workDir);
+                const resultPromise = fn(mockConsole, sandboxedRequire, workDir, path.join(workDir, 'eval.js'));
                 const timeoutPromise = new Promise((_, rej) => {
                     timerId = setTimeout(() => rej(new Error(`Execution timed out after ${timeout}ms`)), timeout);
                 });
@@ -3445,6 +3445,7 @@ async function executeTool(name, input) {
                     output: output ? output.slice(0, 50000) : undefined,
                 };
             } catch (err) {
+                clearTimeout(timerId);
                 const output = logs.join('\n');
                 log(`js_eval FAIL: ${err.message.slice(0, 100)}`);
                 return {
