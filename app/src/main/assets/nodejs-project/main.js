@@ -3300,14 +3300,17 @@ async function executeTool(name, input) {
 
             // Detect shell: Android uses /system/bin/sh, standard Unix uses /bin/sh
             const shellPath = fs.existsSync('/system/bin/sh') ? '/system/bin/sh' : '/bin/sh';
-            // Use the running process's PATH (set correctly by nodejs-mobile at
-            // runtime) so node/npm/npx resolve on Android. If process.env.PATH is
-            // empty/unset, fall back to a PATH that includes the Node binary dir
-            // so node/npm/npx can still resolve.
-            const FALLBACK_PATH = '/system/bin:/usr/local/bin:/usr/bin:/bin';
-            const envPath = (process.env.PATH || '').trim();
-            const nodeDir = path.dirname(process.execPath || '');
-            const SAFE_PATH = envPath || (nodeDir ? `${nodeDir}:${FALLBACK_PATH}` : FALLBACK_PATH);
+            // Build child env from process.env (needed for nodejs-mobile paths)
+            // but strip any vars that could leak secrets to child processes.
+            const childEnv = { ...process.env, HOME: workDir, TERM: 'dumb' };
+            // Remove sensitive patterns (API keys, tokens, credentials)
+            for (const key of Object.keys(childEnv)) {
+                const k = key.toUpperCase();
+                if (k.includes('KEY') || k.includes('TOKEN') || k.includes('SECRET') ||
+                    k.includes('PASSWORD') || k.includes('CREDENTIAL') || k.includes('AUTH')) {
+                    delete childEnv[key];
+                }
+            }
 
             // Use async exec to avoid blocking the event loop
             return new Promise((resolve) => {
@@ -3317,7 +3320,7 @@ async function executeTool(name, input) {
                     encoding: 'utf8',
                     maxBuffer: 1024 * 1024, // 1MB
                     shell: shellPath,
-                    env: { HOME: workDir, PATH: SAFE_PATH, TERM: 'dumb' }
+                    env: childEnv
                 }, (err, stdout, stderr) => {
                     if (err) {
                         if (err.killed && err.signal) {
@@ -4232,6 +4235,14 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('## Runtime');
     lines.push(`Platform: Android ${process.arch} | Node: ${process.version} | Model: ${MODEL}`);
     lines.push(`Channel: telegram | Agent: ${AGENT_NAME}`);
+    lines.push('');
+    lines.push('## Runtime Environment');
+    lines.push('- Running inside nodejs-mobile on Android (not standalone Node)');
+    lines.push('- node/npm/npx available via shell_exec (see tool description for full allowlist)');
+    lines.push(`- Workspace: ${workDir}`);
+    lines.push('- npm install runs in workspace (packages go to workspace/node_modules/)');
+    lines.push('- shell_exec: one command at a time, 30s timeout, no chaining (; | && > <)');
+    lines.push('- Workspace layout: media/inbound/ (Telegram files), skills/ (SKILL.md files), memory/ (daily logs)');
 
     const stablePrompt = lines.join('\n') + '\n';
 
