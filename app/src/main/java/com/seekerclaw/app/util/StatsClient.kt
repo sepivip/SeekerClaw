@@ -4,12 +4,14 @@ import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import java.io.File
 
 private const val TAG = "StatsClient"
 
 /**
- * Shared client for fetching DB summary stats from the Node.js stats server.
- * Calls the internal stats server on port 8766 directly (no bridge proxy).
+ * Shared client for fetching DB summary stats written by the Node.js process.
+ * Reads from workspace/db_summary_state file (cross-process file IPC, same
+ * pattern as claude_usage_state and bridge_token).
  * Used by DashboardScreen and SystemScreen for API analytics (BAT-32),
  * and by the memory index UI for memory stats (BAT-33).
  */
@@ -30,23 +32,14 @@ data class DbSummary(
 )
 
 suspend fun fetchDbSummary(): DbSummary? = withContext(Dispatchers.IO) {
-    var conn: java.net.HttpURLConnection? = null
     try {
-        // Call Node.js internal stats server directly (no bridge proxy needed)
-        val url = java.net.URL("http://127.0.0.1:8766/stats/db-summary")
-        conn = url.openConnection() as java.net.HttpURLConnection
-        conn.requestMethod = "GET"
-        conn.connectTimeout = 5000
-        conn.readTimeout = 5000
+        val filesDir = ServiceState.filesDir ?: return@withContext null
+        val file = File(filesDir, "workspace/db_summary_state")
+        if (!file.exists()) return@withContext null
 
-        val code = conn.responseCode
-        if (code !in 200..299) {
-            Log.w(TAG, "fetchDbSummary HTTP $code")
-            conn.errorStream?.bufferedReader()?.use { it.readText() }
-            return@withContext null
-        }
+        val body = file.readText()
+        if (body.isBlank()) return@withContext null
 
-        val body = conn.inputStream.bufferedReader().use { it.readText() }
         val json = JSONObject(body)
         val today = if (json.has("today") && !json.isNull("today")) json.getJSONObject("today") else null
         val month = if (json.has("month") && !json.isNull("month")) json.getJSONObject("month") else null
@@ -72,7 +65,5 @@ suspend fun fetchDbSummary(): DbSummary? = withContext(Dispatchers.IO) {
         if (e is kotlinx.coroutines.CancellationException) throw e
         Log.w(TAG, "fetchDbSummary failed: ${e.message}")
         null
-    } finally {
-        conn?.disconnect()
     }
 }

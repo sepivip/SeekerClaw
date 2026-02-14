@@ -4705,6 +4705,7 @@ async function claudeApiCall(body, chatId) {
                      usage?.cache_creation_input_tokens || 0, usage?.cache_read_input_tokens || 0,
                      res.status, retries, durationMs]
                 );
+                writeDbSummaryFile();
             } catch (dbErr) {
                 log(`[DB] Log error: ${dbErr.message}`);
             }
@@ -5675,6 +5676,14 @@ function getDbSummary() {
     return summary;
 }
 
+// Write DB summary to file for cross-process UI access (like claude_usage_state)
+function writeDbSummaryFile() {
+    try {
+        const summary = getDbSummary();
+        fs.writeFileSync(path.join(workDir, 'db_summary_state'), JSON.stringify(summary));
+    } catch (_) {}
+}
+
 const statsServer = require('http').createServer((req, res) => {
     if (req.method === 'GET' && req.url === '/stats/db-summary') {
         const summary = getDbSummary();
@@ -5707,6 +5716,9 @@ telegram('getMe')
             // Initialize SQL.js database before polling (non-fatal if WASM fails)
             await initDatabase();
             indexMemoryFiles();
+            writeDbSummaryFile();
+            setInterval(writeDbSummaryFile, 30000);
+
             // Flush old updates to avoid re-processing messages after restart
             try {
                 const flush = await telegram('getUpdates', { offset: -1, timeout: 0 });
