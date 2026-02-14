@@ -8,7 +8,7 @@ SeekerClaw turns a Solana Seeker phone into a 24/7 personal AI agent you control
 
 ## Elevator Pitch
 
-SeekerClaw embeds a full Node.js runtime inside an Android app, running an OpenClaw-compatible AI gateway as a foreground service. Users interact with their agent through Telegram — the app itself is minimal (setup, status, logs, settings). The agent has 34 tools, 16 skills, ranked memory search, cron scheduling, Android device control, Solana wallet integration, and web intelligence — all running locally on the phone, 24/7.
+SeekerClaw embeds a full Node.js runtime inside an Android app, running an OpenClaw-compatible AI gateway as a foreground service. Users interact with their agent through Telegram — the app itself is minimal (setup, status, logs, settings). The agent has 43 tools, 16 skills, ranked memory search, cron scheduling, Android device control, Solana wallet integration, and web intelligence — all running locally on the phone, 24/7.
 
 ## What It Is
 
@@ -67,7 +67,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 - **Web fetch** — HTML-to-markdown, JSON, caching, redirects, custom headers/methods/bodies
 - **15-minute cache** — 100 entries max, FIFO eviction
 
-### Android Bridge (12 tools)
+### Android Bridge (13 tools)
 - **Device info** — Battery level/charging, storage stats
 - **Clipboard** — Read and write
 - **Contacts** — Search by name (requires READ_CONTACTS)
@@ -113,8 +113,9 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 | `/memory` | Show long-term memory |
 | `/skills` | List installed skills |
 
-### Skills (16 bundled)
-crypto-prices, movie-tv, github, recipe, exchange-rates, dictionary, sms, phone-call, device-status, location, speak, openclaw-sync, solana-wallet, solana-mobile, solana-mobile-dev, solana-dapp
+### Skills (16 flat + 18 directory-based, seeded on first launch)
+**Flat skills (agent-created format):** crypto-prices, movie-tv, github, recipe, exchange-rates, dictionary, sms, phone-call, device-status, location, speak, openclaw-sync, solana-wallet, solana-mobile, solana-mobile-dev, solana-dapp
+**Directory skills (OpenClaw format, seeded by ConfigManager.kt):** weather, research, briefing, reminders, notes, translate, calculator, summarize, timer, define, news, todo, bookmark, joke, quote, crypto-prices, movie-tv, github
 
 ### Security
 - API key redaction in logs
@@ -192,7 +193,7 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 |--------|-------|
 | Total commits | 78 |
 | PRs merged | 39+ |
-| Tools | 34 |
+| Tools | 43 |
 | Skills | 16 |
 | Android Bridge endpoints | 17+ |
 | Telegram commands | 7 |
