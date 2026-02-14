@@ -1533,7 +1533,7 @@ async function downloadTelegramFile(fileId, fileName) {
     }
 
     // Build unique filename with random nonce to prevent collisions
-    const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 100);
+    const safeName = (fileName || 'file').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 100);
     const nonce = Math.random().toString(36).slice(2, 8);
     const localName = `${Date.now()}_${nonce}_${safeName}`;
     const localPath = path.join(MEDIA_DIR, localName);
@@ -1548,6 +1548,7 @@ async function downloadTelegramFile(fileId, fileName) {
             let activeRes = null;
             let activeStream = null;
             let done = false;
+            let endReceived = false; // Track if all data was received
 
             const cleanupAll = (err) => {
                 if (done) return;
@@ -1586,15 +1587,25 @@ async function downloadTelegramFile(fileId, fileName) {
                 });
 
                 fileStream.on('drain', () => res.resume());
-                res.on('end', () => fileStream.end());
+                res.on('end', () => {
+                    endReceived = true; // All data received from network
+                    fileStream.end();
+                });
                 fileStream.on('finish', () => {
                     if (done) return;
                     done = true;
                     resolve(bytes);
                 });
                 res.on('error', (err) => cleanupAll(err));
-                res.on('aborted', () => cleanupAll(new Error('Download aborted')));
-                res.on('close', () => { if (!done) cleanupAll(new Error('Connection closed')); });
+                res.on('aborted', () => {
+                    if (!endReceived) cleanupAll(new Error('Download aborted'));
+                });
+                // Only treat 'close' as error if we haven't received all data yet.
+                // On mobile networks, TCP close often races ahead of fileStream finish
+                // even when all data was successfully received.
+                res.on('close', () => {
+                    if (!done && !endReceived) cleanupAll(new Error('Connection closed'));
+                });
                 fileStream.on('error', (err) => cleanupAll(err));
             });
 
