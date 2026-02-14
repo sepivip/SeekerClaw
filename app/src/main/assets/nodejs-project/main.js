@@ -3957,6 +3957,15 @@ const conversations = new Map();
 const MAX_HISTORY = 20;
 let sessionStartedAt = Date.now();
 
+// Session summary tracking (BAT-57)
+let lastMessageTime = 0;
+let sessionMessageCount = 0;
+let lastSummaryTime = 0;
+const IDLE_TIMEOUT_MS = 10 * 60 * 1000;       // 10 min idle → trigger summary
+const CHECKPOINT_MESSAGES = 50;                 // Every 50 messages → checkpoint
+const CHECKPOINT_INTERVAL_MS = 30 * 60 * 1000; // 30 min active chat → checkpoint
+const MIN_MESSAGES_FOR_SUMMARY = 3;             // Don't summarize tiny sessions
+
 function getConversation(chatId) {
     if (!conversations.has(chatId)) {
         conversations.set(chatId, []);
@@ -3975,6 +3984,95 @@ function addToConversation(chatId, role, content) {
 
 function clearConversation(chatId) {
     conversations.set(chatId, []);
+}
+
+// Session slug generator (OpenClaw-style adj-noun, BAT-57)
+const SLUG_ADJ = ['amber','brisk','calm','clear','cool','crisp','dawn','ember','fast','fresh',
+    'gentle','keen','kind','lucky','mellow','mild','neat','nimble','quick','quiet',
+    'rapid','sharp','swift','tender','tidy','vivid','warm','wild'];
+const SLUG_NOUN = ['atlas','bloom','breeze','canyon','cedar','cloud','comet','coral','cove','crest',
+    'daisy','dune','falcon','fjord','forest','glade','harbor','haven','lagoon','meadow',
+    'mist','nexus','orbit','pine','reef','ridge','river','sage','shell','shore',
+    'summit','trail','valley','willow','zephyr'];
+
+function generateSlug() {
+    const adj = SLUG_ADJ[Math.floor(Math.random() * SLUG_ADJ.length)];
+    const noun = SLUG_NOUN[Math.floor(Math.random() * SLUG_NOUN.length)];
+    return `${adj}-${noun}`;
+}
+
+// Session summary functions (BAT-57)
+async function generateSessionSummary(chatId) {
+    const conv = conversations.get(chatId);
+    if (!conv || conv.length < MIN_MESSAGES_FOR_SUMMARY) return null;
+
+    // Build a condensed view of the conversation (last 20 messages max)
+    const messagesToSummarize = conv.slice(-20);
+    const summaryInput = messagesToSummarize.map(m => {
+        const text = typeof m.content === 'string' ? m.content :
+            Array.isArray(m.content) ? m.content
+                .filter(c => c.type === 'text')
+                .map(c => c.text).join('\n') : '';
+        return `${m.role}: ${text.slice(0, 500)}`;
+    }).join('\n\n');
+
+    // Call Claude with a lightweight summary request
+    const body = JSON.stringify({
+        model: MODEL,
+        max_tokens: 500,
+        system: [{ type: 'text', text: 'You are a session summarizer. Output ONLY the summary, no preamble.' }],
+        messages: [{
+            role: 'user',
+            content: 'Summarize this conversation in 3-5 bullet points. Focus on: decisions made, tasks completed, new information learned, action items. Skip: greetings, small talk, repeated information. Format: markdown bullets, concise, factual.\n\n' + summaryInput
+        }]
+    });
+
+    const res = await claudeApiCall(body, chatId);
+    if (res.status !== 200) {
+        log(`[SessionSummary] API error: ${res.status}`);
+        return null;
+    }
+
+    const text = res.data.content?.find(c => c.type === 'text')?.text;
+    return text || null;
+}
+
+async function saveSessionSummary(chatId, trigger) {
+    // Prevent duplicate summaries (debounce: at least 1 min between summaries)
+    const now = Date.now();
+    if (now - lastSummaryTime < 60000) return;
+
+    try {
+        const summary = await generateSessionSummary(chatId);
+        if (!summary) return;
+
+        // Generate descriptive filename: YYYY-MM-DD-slug.md
+        const dateStr = localDateStr();
+        const slug = generateSlug();
+        const filename = `${dateStr}-${slug}.md`;
+        let finalPath = path.join(MEMORY_DIR, filename);
+
+        // Avoid collision
+        if (fs.existsSync(finalPath)) {
+            finalPath = path.join(MEMORY_DIR, `${dateStr}-${slug}-${Date.now() % 10000}.md`);
+        }
+
+        // Write the summary file
+        const header = `# Session Summary — ${localTimestamp()}\n\n`;
+        const meta = `> Trigger: ${trigger} | Messages: ${sessionMessageCount} | Model: ${MODEL}\n\n`;
+        fs.writeFileSync(finalPath, header + meta + summary + '\n', 'utf8');
+
+        log(`[SessionSummary] Saved: ${path.basename(finalPath)} (trigger: ${trigger})`);
+
+        // Re-index memory files so new summary is immediately searchable
+        indexMemoryFiles();
+
+        // Reset counters
+        lastSummaryTime = now;
+        sessionMessageCount = 0;
+    } catch (err) {
+        log(`[SessionSummary] Error: ${err.message}`);
+    }
 }
 
 function buildSystemBlocks(matchedSkills = [], chatId = null) {
@@ -4242,6 +4340,15 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push(`- Workspace: ${workDir}`);
     lines.push('- shell_exec: one command at a time, 30s timeout, no chaining (; | && > <)');
     lines.push('- Workspace layout: media/inbound/ (Telegram files), skills/ (SKILL.md files), memory/ (daily logs)');
+    lines.push('');
+    lines.push('## Session Memory');
+    lines.push('Sessions are automatically summarized and saved to memory/ when:');
+    lines.push('- Idle for 10+ minutes (no messages)');
+    lines.push('- Every 50 messages (periodic checkpoint)');
+    lines.push('- On /new command (manual save + clear)');
+    lines.push('- On shutdown/restart');
+    lines.push('Summaries are indexed into SQL.js chunks and immediately searchable via memory_search.');
+    lines.push('You do NOT need to manually save session context — it happens automatically.');
 
     const stablePrompt = lines.join('\n') + '\n';
 
@@ -4578,6 +4685,14 @@ async function chat(chatId, userMessage) {
     // Update conversation history with final response
     addToConversation(chatId, 'assistant', assistantMessage);
 
+    // Session summary tracking (BAT-57)
+    lastMessageTime = Date.now();
+    sessionMessageCount++;
+    if (sessionMessageCount >= CHECKPOINT_MESSAGES ||
+        (lastSummaryTime > 0 && Date.now() - lastSummaryTime > CHECKPOINT_INTERVAL_MS)) {
+        saveSessionSummary(chatId, 'checkpoint').catch(e => log(`[SessionSummary] ${e.message}`));
+    }
+
     return assistantMessage;
 }
 
@@ -4600,7 +4715,8 @@ I can:
 
 Commands:
 /status - Show system status
-/reset - Clear conversation history
+/new - Save session summary & start fresh
+/reset - Clear conversation history (no summary)
 /soul - Show my personality
 /memory - Show long-term memory
 /skills - List installed skills
@@ -4628,6 +4744,14 @@ Web Search: ${config.braveApiKey ? 'Enabled' : 'Disabled'}`;
         case '/reset':
             clearConversation(chatId);
             return 'Conversation history cleared. Starting fresh!';
+
+        case '/new': {
+            // Save summary of current session before clearing (BAT-57)
+            await saveSessionSummary(chatId, 'manual');
+            clearConversation(chatId);
+            sessionMessageCount = 0;
+            return 'Session saved and cleared. Starting fresh!';
+        }
 
         case '/soul': {
             const soul = loadSoul();
@@ -5096,8 +5220,29 @@ async function initDatabase() {
 
         // Start periodic saves and shutdown hooks only after successful init
         setInterval(saveDatabase, 60000);
-        process.on('SIGTERM', () => { saveDatabase(); process.exit(0); });
-        process.on('SIGINT', () => { saveDatabase(); process.exit(0); });
+
+        // Graceful shutdown with session summary (BAT-57)
+        async function gracefulShutdown(signal) {
+            log(`[Shutdown] ${signal} received, saving session summary...`);
+            try {
+                const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 5000));
+                const summaries = [];
+                for (const [chatId, conv] of conversations) {
+                    if (conv.length >= MIN_MESSAGES_FOR_SUMMARY) {
+                        summaries.push(saveSessionSummary(chatId, 'shutdown'));
+                    }
+                }
+                if (summaries.length > 0) {
+                    await Promise.race([Promise.all(summaries), timeout]);
+                }
+            } catch (err) {
+                log(`[Shutdown] Summary failed: ${err.message}`);
+            }
+            saveDatabase();
+            process.exit(0);
+        }
+        process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+        process.on('SIGINT', () => gracefulShutdown('SIGINT'));
     } catch (err) {
         log(`[DB] Failed to initialize SQL.js (non-fatal): ${err.message}`);
         db = null;
@@ -5371,6 +5516,18 @@ telegram('getMe')
             }
             poll();
             startClaudeUsagePolling();
+
+            // Idle session summary timer (BAT-57) — check every 60s
+            setInterval(() => {
+                if (lastMessageTime > 0 && Date.now() - lastMessageTime > IDLE_TIMEOUT_MS) {
+                    lastMessageTime = 0; // Reset FIRST to prevent re-trigger on next tick
+                    conversations.forEach((conv, chatId) => {
+                        if (conv.length >= MIN_MESSAGES_FOR_SUMMARY) {
+                            saveSessionSummary(chatId, 'idle').catch(e => log(`[SessionSummary] ${e.message}`));
+                        }
+                    });
+                }
+            }, 60000);
         } else {
             log(`ERROR: ${JSON.stringify(result)}`);
             process.exit(1);
