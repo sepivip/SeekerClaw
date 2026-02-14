@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -207,6 +208,95 @@ fun PixelStepIndicator(
                             if (i < currentStep) activeColor.copy(alpha = 0.5f)
                             else inactiveColor.copy(alpha = 0.5f)
                         )
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Setup step indicator — numbered circles with labels and connecting lines
+ */
+@Composable
+fun SetupStepIndicator(
+    currentStep: Int,
+    labels: List<String>,
+    modifier: Modifier = Modifier,
+) {
+    val totalSteps = labels.size
+
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.Top,
+    ) {
+        for (i in 0 until totalSteps) {
+            val isCompleted = i < currentStep
+            val isCurrent = i == currentStep
+
+            // Step column (circle + label)
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.width(48.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(32.dp)
+                        .background(
+                            color = when {
+                                isCompleted -> SeekerClawColors.Accent
+                                isCurrent -> SeekerClawColors.Primary
+                                else -> SeekerClawColors.Surface
+                            },
+                            shape = CircleShape,
+                        )
+                        .then(
+                            if (!isCompleted && !isCurrent)
+                                Modifier.border(1.dp, SeekerClawColors.TextDim.copy(alpha = 0.4f), CircleShape)
+                            else Modifier
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (isCompleted) {
+                        Text(
+                            text = "\u2713",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White,
+                        )
+                    } else {
+                        Text(
+                            text = "${i + 1}",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isCurrent) Color.White else SeekerClawColors.TextDim,
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                Text(
+                    text = labels[i],
+                    fontSize = 10.sp,
+                    fontWeight = if (isCurrent) FontWeight.Medium else FontWeight.Normal,
+                    color = if (isCurrent || isCompleted) SeekerClawColors.TextPrimary
+                            else SeekerClawColors.TextDim,
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                )
+            }
+
+            // Connecting line between steps
+            if (i < totalSteps - 1) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(top = 15.dp) // vertically center with 32dp circles
+                        .height(2.dp)
+                        .background(
+                            if (i < currentStep) SeekerClawColors.Accent
+                            else SeekerClawColors.TextDim.copy(alpha = 0.2f)
+                        ),
                 )
             }
         }
