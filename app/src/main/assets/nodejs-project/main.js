@@ -94,6 +94,14 @@ if (!OWNER_ID) {
     log(`Agent: ${AGENT_NAME} | Model: ${MODEL} | Auth: ${authLabel} | Owner: ${OWNER_ID}`);
 }
 
+// Diagnostic: log runtime environment for shell_exec debugging (temporary — remove after fix)
+log(`[ENV] process.execPath: ${process.execPath || '(not set)'}`);
+log(`[ENV] process.argv[0]: ${process.argv[0] || '(not set)'}`);
+log(`[ENV] __dirname: ${__dirname || '(not set)'}`);
+log(`[ENV] process.env.PATH: ${process.env.PATH || '(not set)'}`);
+log(`[ENV] process.env.HOME: ${process.env.HOME || '(not set)'}`);
+log(`[ENV] process.arch: ${process.arch} | process.platform: ${process.platform}`);
+
 // ============================================================================
 // SECURITY HELPERS
 // ============================================================================
