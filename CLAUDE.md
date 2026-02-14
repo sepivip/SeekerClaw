@@ -160,10 +160,12 @@ REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, POST_NOTIFICATIONS
 
 ## Model List
 
-Available models for the dropdown:
-- `claude-sonnet-4-20250514` — default, balanced (cost/quality)
-- `claude-opus-4-5` — smartest, most expensive
-- `claude-haiku-3-5` — fast, cheapest
+Available models for the dropdown (using API aliases — auto-resolve to latest snapshot):
+- `claude-opus-4-6` — smartest, most expensive (Opus 4.6)
+- `claude-sonnet-4-5` — default, balanced (Sonnet 4.5)
+- `claude-haiku-4-5` — fast, cheapest (Haiku 4.5)
+
+Defined in `app/src/main/java/com/seekerclaw/app/config/Models.kt`.
 
 Model list can be updated via app update or future remote config.
 
@@ -176,7 +178,7 @@ Base64-encoded JSON:
   "anthropic_api_key": "sk-ant-api03-...",
   "telegram_bot_token": "123456789:ABCdefGHI...",
   "telegram_owner_id": "987654321",
-  "model": "claude-sonnet-4-20250514",
+  "model": "claude-sonnet-4-5",
   "agent_name": "MyAgent"
 }
 ```
@@ -335,6 +337,13 @@ Good: Adding `memory_search` tool with description "Search your SQL.js database 
 ## Key Implementation Details
 
 - **nodejs-mobile:** Community fork at https://github.com/niccolobocook/nodejs-mobile — pin to latest stable release at dev start. Adapt their React Native integration guide for pure Kotlin (no React Native).
+- **nodejs-mobile JNI architecture (IMPORTANT):** Node.js runs as `libnode.so` loaded via `System.loadLibrary("node")` through JNI — there is **NO standalone `node` binary** on the device. Key implications:
+  - `process.execPath` typically points to Android's app process launcher (e.g., `/system/bin/app_process` or `/system/bin/app_process64`), **not** a Node.js binary path
+  - `process.env.PATH` primarily contains Android system directories (e.g., `/system/bin`, `/vendor/bin`)
+  - `node`, `npm`, `npx` commands **cannot** be found or executed via `shell_exec` / `child_process`
+  - `shell_exec` uses Android's `/system/bin/sh` (toybox) — completely separate from the Node.js process
+  - To run JavaScript code, tools must use `eval()`/`require()` inside the existing Node.js process (see BAT-59: `js_eval` tool)
+  - All existing tools (read, write, web_fetch, etc.) already work within the Node.js process — they don't shell out
 - **Phase 1 mock:** Create `assets/openclaw/` with `package.json` and `index.js` that starts a Telegram bot (`grammy`/`telegraf`), responds to a hardcoded message from the owner, and sends heartbeat pings back to the Android bridge.
 - **Phase 2 real:** Replace mock with actual OpenClaw gateway bundle. Config, workspace, and all features work as documented.
 - **Logs:** Capture Node.js stdout/stderr via nodejs-mobile event bridge. Ring buffer of last 1000 lines in memory. Write to `logs/openclaw.log` with rotation at 10MB.

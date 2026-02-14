@@ -94,14 +94,6 @@ if (!OWNER_ID) {
     log(`Agent: ${AGENT_NAME} | Model: ${MODEL} | Auth: ${authLabel} | Owner: ${OWNER_ID}`);
 }
 
-// Diagnostic: log runtime environment for shell_exec debugging (temporary — remove after fix)
-log(`[ENV] process.execPath: ${process.execPath || '(not set)'}`);
-log(`[ENV] process.argv[0]: ${process.argv[0] || '(not set)'}`);
-log(`[ENV] __dirname: ${__dirname || '(not set)'}`);
-log(`[ENV] process.env.PATH: ${process.env.PATH || '(not set)'}`);
-log(`[ENV] process.env.HOME: ${process.env.HOME || '(not set)'}`);
-log(`[ENV] process.arch: ${process.arch} | process.platform: ${process.platform}`);
-
 // ============================================================================
 // SECURITY HELPERS
 // ============================================================================
@@ -2169,11 +2161,11 @@ const TOOLS = [
     },
     {
         name: 'shell_exec',
-        description: 'Execute a shell command in a sandboxed environment. Working directory is restricted to your workspace. Only a predefined allowlist of safe commands is permitted (node, npm, npx, common Unix utilities, curl). No shell chaining or redirection. Max 30s timeout. Use this to install npm packages, run scripts, check system info, or extend your capabilities.',
+        description: 'Execute a shell command in a sandboxed environment. Working directory is restricted to your workspace. Only a predefined allowlist of safe commands is permitted (common Unix utilities like ls, cat, grep, find, curl). No shell chaining or redirection. Max 30s timeout. Note: node/npm/npx are NOT available (Node.js runs as a JNI library, not a standalone binary). Use for file operations, curl, and system info.',
         input_schema: {
             type: 'object',
             properties: {
-                command: { type: 'string', description: 'Shell command to execute (e.g., "npm install axios", "node script.js", "ls -la")' },
+                command: { type: 'string', description: 'Shell command to execute (e.g., "ls -la", "cat file.txt", "curl https://example.com", "grep pattern README.md")' },
                 cwd: { type: 'string', description: 'Working directory relative to workspace (default: workspace root). Must be within workspace.' },
                 timeout_ms: { type: 'number', description: 'Timeout in milliseconds (default: 30000, max: 30000)' }
             },
@@ -3258,12 +3250,11 @@ async function executeTool(name, input) {
                 return { error: 'Newline, null, or line separator characters are not allowed in commands' };
             }
 
-            // Allowlist of safe command base names
-            // Note: node/npm/npx can execute arbitrary code by design — this is the tool's
-            // intended purpose (self-extending agent). The allowlist prevents accidental use
-            // of destructive system commands (rm, kill, etc.), not full sandboxing.
+            // Allowlist of safe command base names.
+            // Note: node/npm/npx are NOT available — nodejs-mobile runs as libnode.so via JNI,
+            // not as a standalone binary. The allowlist prevents use of destructive system
+            // commands (rm, kill, etc.).
             const ALLOWED_CMDS = new Set([
-                'node', 'npm', 'npx',
                 'cat', 'ls', 'mkdir', 'cp', 'mv', 'echo', 'pwd', 'which',
                 'head', 'tail', 'wc', 'sort', 'uniq', 'grep', 'find',
                 'curl', 'ping', 'date', 'df', 'du', 'uname', 'printenv'
@@ -4033,7 +4024,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('**Swap workflow:** Always use solana_quote first to show the user what they\'ll get, then solana_swap to execute. Never swap without confirming the quote with the user first.');
     lines.push('**Web search:** Use web_search with provider=perplexity for complex questions needing synthesized answers. Use Brave (default) for quick lookups.');
     lines.push('**Web fetch:** Use web_fetch to read webpages or call APIs. Supports custom headers (Bearer auth), POST/PUT/DELETE methods, and request bodies. Returns markdown (default), JSON, or plain text. Use raw=true for stripped text. Up to 50K chars.');
-    lines.push('**Shell execution:** Use shell_exec to run commands on the device. Sandboxed to workspace directory with a predefined allowlist (see tool description). Use for npm install, running scripts (node script.js), file operations, curl, and system info. 30s timeout. No chaining, redirection, or command substitution — one command at a time.');
+    lines.push('**Shell execution:** Use shell_exec to run commands on the device. Sandboxed to workspace directory with a predefined allowlist of common Unix utilities (ls, cat, grep, find, curl, etc.). Note: node/npm/npx are NOT available — use for file operations, curl, and system info only. 30s timeout. No chaining, redirection, or command substitution — one command at a time.');
     lines.push('**File attachments:** When the user sends photos, documents, or other files via Telegram, they are automatically downloaded to media/inbound/ in your workspace. Images are shown to you directly (vision). For other files, you are told the path — use the read tool to access them. Supported: photos, documents (PDF, etc.), video, audio, voice notes.');
     lines.push('**File deletion:** Use the delete tool to clean up temporary files, old media downloads, or files you no longer need. Protected system files (SOUL.md, MEMORY.md, IDENTITY.md, USER.md, HEARTBEAT.md, config.json, seekerclaw.db) cannot be deleted. Directories cannot be deleted — remove files individually.');
     lines.push('');
@@ -4245,10 +4236,10 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push(`Channel: telegram | Agent: ${AGENT_NAME}`);
     lines.push('');
     lines.push('## Runtime Environment');
-    lines.push('- Running inside nodejs-mobile on Android (not standalone Node)');
-    lines.push('- node/npm/npx available via shell_exec (see tool description for full allowlist)');
+    lines.push('- Running inside nodejs-mobile on Android (Node.js runs as libnode.so via JNI, not a standalone binary)');
+    lines.push('- node/npm/npx are NOT available via shell_exec (no standalone node binary exists on this device)');
+    lines.push('- shell_exec is limited to common Unix utilities: ls, cat, grep, find, curl, etc.');
     lines.push(`- Workspace: ${workDir}`);
-    lines.push('- npm install runs in workspace (packages go to workspace/node_modules/)');
     lines.push('- shell_exec: one command at a time, 30s timeout, no chaining (; | && > <)');
     lines.push('- Workspace layout: media/inbound/ (Telegram files), skills/ (SKILL.md files), memory/ (daily logs)');
 
