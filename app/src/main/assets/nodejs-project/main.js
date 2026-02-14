@@ -4065,9 +4065,13 @@ async function saveSessionSummary(chatId, trigger, { force = false } = {}) {
         const filename = `${dateStr}-${slug}.md`;
         let finalPath = path.join(MEMORY_DIR, filename);
 
-        // Avoid collision
+        // Avoid collision: increment counter until a free name is found
         if (fs.existsSync(finalPath)) {
-            finalPath = path.join(MEMORY_DIR, `${dateStr}-${slug}-${Date.now() % 10000}.md`);
+            let counter = 1;
+            do {
+                finalPath = path.join(MEMORY_DIR, `${dateStr}-${slug}-${counter}.md`);
+                counter++;
+            } while (fs.existsSync(finalPath));
         }
 
         // Write the summary file
@@ -4083,6 +4087,7 @@ async function saveSessionSummary(chatId, trigger, { force = false } = {}) {
         // Reset message counter
         track.messageCount = 0;
     } catch (err) {
+        track.lastSummaryTime = 0; // Reset debounce on error so transient failures don't block retries
         log(`[SessionSummary] Error: ${err.message}`);
     }
 }
