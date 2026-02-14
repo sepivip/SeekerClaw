@@ -3957,14 +3957,19 @@ const conversations = new Map();
 const MAX_HISTORY = 20;
 let sessionStartedAt = Date.now();
 
-// Session summary tracking (BAT-57)
-let lastMessageTime = 0;
-let sessionMessageCount = 0;
-let lastSummaryTime = 0;
+// Session summary tracking — per-chatId state (BAT-57)
+const sessionTracking = new Map(); // chatId → { lastMessageTime, messageCount, lastSummaryTime }
 const IDLE_TIMEOUT_MS = 10 * 60 * 1000;       // 10 min idle → trigger summary
 const CHECKPOINT_MESSAGES = 50;                 // Every 50 messages → checkpoint
 const CHECKPOINT_INTERVAL_MS = 30 * 60 * 1000; // 30 min active chat → checkpoint
 const MIN_MESSAGES_FOR_SUMMARY = 3;             // Don't summarize tiny sessions
+
+function getSessionTrack(chatId) {
+    if (!sessionTracking.has(chatId)) {
+        sessionTracking.set(chatId, { lastMessageTime: 0, messageCount: 0, lastSummaryTime: 0 });
+    }
+    return sessionTracking.get(chatId);
+}
 
 function getConversation(chatId) {
     if (!conversations.has(chatId)) {
@@ -4038,13 +4043,21 @@ async function generateSessionSummary(chatId) {
 }
 
 async function saveSessionSummary(chatId, trigger) {
-    // Prevent duplicate summaries (debounce: at least 1 min between summaries)
+    const track = getSessionTrack(chatId);
+
+    // Per-chatId debounce: at least 1 min between summaries for the same chat
     const now = Date.now();
-    if (now - lastSummaryTime < 60000) return;
+    if (now - track.lastSummaryTime < 60000) return;
+
+    // Mark debounce immediately to prevent concurrent saves for this chat
+    track.lastSummaryTime = now;
 
     try {
         const summary = await generateSessionSummary(chatId);
-        if (!summary) return;
+        if (!summary) {
+            track.lastSummaryTime = 0; // Reset if no summary generated
+            return;
+        }
 
         // Generate descriptive filename: YYYY-MM-DD-slug.md
         const dateStr = localDateStr();
@@ -4059,7 +4072,7 @@ async function saveSessionSummary(chatId, trigger) {
 
         // Write the summary file
         const header = `# Session Summary — ${localTimestamp()}\n\n`;
-        const meta = `> Trigger: ${trigger} | Messages: ${sessionMessageCount} | Model: ${MODEL}\n\n`;
+        const meta = `> Trigger: ${trigger} | Messages: ${track.messageCount} | Model: ${MODEL}\n\n`;
         fs.writeFileSync(finalPath, header + meta + summary + '\n', 'utf8');
 
         log(`[SessionSummary] Saved: ${path.basename(finalPath)} (trigger: ${trigger})`);
@@ -4067,9 +4080,8 @@ async function saveSessionSummary(chatId, trigger) {
         // Re-index memory files so new summary is immediately searchable
         indexMemoryFiles();
 
-        // Reset counters
-        lastSummaryTime = now;
-        sessionMessageCount = 0;
+        // Reset message counter
+        track.messageCount = 0;
     } catch (err) {
         log(`[SessionSummary] Error: ${err.message}`);
     }
@@ -4686,10 +4698,11 @@ async function chat(chatId, userMessage) {
     addToConversation(chatId, 'assistant', assistantMessage);
 
     // Session summary tracking (BAT-57)
-    lastMessageTime = Date.now();
-    sessionMessageCount++;
-    if (sessionMessageCount >= CHECKPOINT_MESSAGES ||
-        (lastSummaryTime > 0 && Date.now() - lastSummaryTime > CHECKPOINT_INTERVAL_MS)) {
+    const track = getSessionTrack(chatId);
+    track.lastMessageTime = Date.now();
+    track.messageCount++;
+    if (track.messageCount >= CHECKPOINT_MESSAGES ||
+        (track.lastSummaryTime > 0 && Date.now() - track.lastSummaryTime > CHECKPOINT_INTERVAL_MS)) {
         saveSessionSummary(chatId, 'checkpoint').catch(e => log(`[SessionSummary] ${e.message}`));
     }
 
@@ -4747,10 +4760,16 @@ Web Search: ${config.braveApiKey ? 'Enabled' : 'Disabled'}`;
 
         case '/new': {
             // Save summary of current session before clearing (BAT-57)
-            await saveSessionSummary(chatId, 'manual');
+            const conv = getConversation(chatId);
+            const hadEnough = conv.length >= MIN_MESSAGES_FOR_SUMMARY;
+            if (hadEnough) {
+                await saveSessionSummary(chatId, 'manual');
+            }
             clearConversation(chatId);
-            sessionMessageCount = 0;
-            return 'Session saved and cleared. Starting fresh!';
+            const newTrack = getSessionTrack(chatId);
+            newTrack.messageCount = 0;
+            newTrack.lastMessageTime = 0;
+            return hadEnough ? 'Session saved and cleared. Starting fresh!' : 'Conversation cleared (too short to summarize). Starting fresh!';
         }
 
         case '/soul': {
@@ -5517,16 +5536,18 @@ telegram('getMe')
             poll();
             startClaudeUsagePolling();
 
-            // Idle session summary timer (BAT-57) — check every 60s
+            // Idle session summary timer (BAT-57) — check every 60s per-chatId
             setInterval(() => {
-                if (lastMessageTime > 0 && Date.now() - lastMessageTime > IDLE_TIMEOUT_MS) {
-                    lastMessageTime = 0; // Reset FIRST to prevent re-trigger on next tick
-                    conversations.forEach((conv, chatId) => {
-                        if (conv.length >= MIN_MESSAGES_FOR_SUMMARY) {
+                const now = Date.now();
+                sessionTracking.forEach((track, chatId) => {
+                    if (track.lastMessageTime > 0 && now - track.lastMessageTime > IDLE_TIMEOUT_MS) {
+                        track.lastMessageTime = 0; // Reset FIRST to prevent re-trigger on next tick
+                        const conv = conversations.get(chatId);
+                        if (conv && conv.length >= MIN_MESSAGES_FOR_SUMMARY) {
                             saveSessionSummary(chatId, 'idle').catch(e => log(`[SessionSummary] ${e.message}`));
                         }
-                    });
-                }
+                    }
+                });
             }, 60000);
         } else {
             log(`ERROR: ${JSON.stringify(result)}`);
