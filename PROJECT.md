@@ -33,7 +33,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 | AI Provider | Anthropic Claude API | Sonnet 4.5 default |
 | Messaging | Telegram Bot API (grammy) | — |
 | Database | SQL.js (WASM SQLite) | 1.12.0 |
-| OpenClaw Parity | OpenClaw gateway (ported) | 2026.2.6 |
+| OpenClaw Parity | OpenClaw gateway (ported) | 2026.2.13 |
 | Web Search | Brave Search + Perplexity Sonar | — |
 | Wallet | Solana Web3.js + Jupiter API | — |
 | Build | Gradle (Kotlin DSL) | — |
@@ -216,7 +216,7 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 | "NFT tracking" (JSON-LD, llms.txt) | Not implemented | Remove from website |
 | "DeFi automation" (OG meta, JSON-LD) | Swap tools exist, no automated DeFi | Tone down claim |
 | "Get on dApp Store" button | Link is `href="#"`, not submitted | Fix link or mark "Coming Soon" |
-| "OpenClaw v2026.2.12 parity" (roadmap) | Tracking v2026.2.6 | Update website version |
+| "OpenClaw v2026.2.12 parity" (roadmap) | Tracking v2026.2.13 | Update website version |
 | "150,000+ Seeker Devices" | Market estimate, not users | Fine as-is (addressable market) |
 | "Open-source" (privacy page) | Repo is public | Verify license |
 
