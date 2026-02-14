@@ -4806,7 +4806,18 @@ async function chat(chatId, userMessage) {
         }
     }
 
-    const assistantMessage = textContent ? textContent.text : '(No response)';
+    // If no text after all retries, don't send a confusing "(No response)" to the user.
+    // Return SILENT_REPLY so handleMessage() silently drops it.
+    // Store a placeholder in conversation history so context isn't broken.
+    if (!textContent) {
+        const placeholder = toolUseCount > 0
+            ? '[Completed tool operations without a text response]'
+            : '[No response generated]';
+        addToConversation(chatId, 'assistant', placeholder);
+        log(`No text content in response (tools used: ${toolUseCount}), returning SILENT_REPLY`);
+        return 'SILENT_REPLY';
+    }
+    const assistantMessage = textContent.text;
 
     // Update conversation history with final response
     addToConversation(chatId, 'assistant', assistantMessage);
@@ -5031,7 +5042,20 @@ async function handleMessage(msg) {
                         return;
                     }
                 } else {
-                    const saved = await downloadTelegramFile(media.file_id, media.file_name);
+                    // Retry once for transient network errors
+                    let saved;
+                    const TRANSIENT_ERRORS = /timeout|timed out|aborted|ECONNRESET|ETIMEDOUT|Connection closed/i;
+                    try {
+                        saved = await downloadTelegramFile(media.file_id, media.file_name);
+                    } catch (firstErr) {
+                        if (TRANSIENT_ERRORS.test(firstErr.message)) {
+                            log(`Media download failed (transient: ${firstErr.message}), retrying in 2s...`);
+                            await new Promise(r => setTimeout(r, 2000));
+                            saved = await downloadTelegramFile(media.file_id, media.file_name);
+                        } else {
+                            throw firstErr;
+                        }
+                    }
                     const relativePath = `media/inbound/${saved.localName}`;
                     const isImage = media.type === 'photo' || (media.mime_type && media.mime_type.startsWith('image/'));
 
@@ -5067,7 +5091,8 @@ async function handleMessage(msg) {
                 }
             } catch (e) {
                 log(`Media download failed: ${e.message}`);
-                const errorNote = `[File attachment could not be downloaded due to an internal error.]`;
+                const reason = e.message || 'unknown error';
+                const errorNote = `[File attachment could not be downloaded: ${reason}]`;
                 userContent = text ? `${text}\n\n${errorNote}` : errorNote;
             }
         }
