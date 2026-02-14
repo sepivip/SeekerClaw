@@ -187,11 +187,17 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             .verticalScroll(scrollState),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        // Skip link
+        // Header row: logo left, skip right
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.End,
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
+            Image(
+                painter = painterResource(R.drawable.ic_seekerclaw_logo_horizontal),
+                contentDescription = null,
+                modifier = Modifier.height(36.dp),
+            )
             Text(
                 text = "Skip",
                 fontFamily = FontFamily.Monospace,
@@ -203,21 +209,13 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             )
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
-
-        // Branded logo (symbol + wordmark)
-        Image(
-            painter = painterResource(R.drawable.ic_seekerclaw_logo_horizontal),
-            contentDescription = null,
-            modifier = Modifier.height(50.dp),
-        )
-
         Spacer(modifier = Modifier.height(4.dp))
 
         Text(
             text = "Your personal AI agent, running on your phone",
             fontSize = 13.sp,
             color = SeekerClawColors.TextDim,
+            modifier = Modifier.fillMaxWidth(),
         )
 
         Spacer(modifier = Modifier.height(24.dp))
