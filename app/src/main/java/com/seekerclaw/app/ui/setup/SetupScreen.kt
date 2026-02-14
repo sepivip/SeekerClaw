@@ -592,6 +592,18 @@ private fun TelegramStep(
                 supportingText = botTokenError?.let { err ->
                     { Text(err, fontSize = 12.sp) }
                 },
+                trailingIcon = if (botToken.isNotBlank() && botTokenError == null) {
+                    {
+                        Icon(
+                            Icons.Default.CheckCircle,
+                            contentDescription = "Valid",
+                            tint = SeekerClawColors.Accent,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                } else {
+                    null
+                },
                 colors = fieldColors,
                 shape = shape,
             )
@@ -835,7 +847,6 @@ private fun NavButtons(
         TextButton(onClick = onBack) {
             Text(
                 text = "Back",
-                fontFamily = FontFamily.Monospace,
                 fontSize = 14.sp,
                 color = SeekerClawColors.TextDim,
             )
@@ -854,7 +865,6 @@ private fun NavButtons(
         ) {
             Text(
                 text = "Next",
-                fontFamily = FontFamily.Monospace,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Bold,
             )
