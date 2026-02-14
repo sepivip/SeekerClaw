@@ -63,8 +63,10 @@ class QrScannerActivity : ComponentActivity() {
     ) { granted ->
         if (!granted) {
             finishWithError("Camera permission is required to scan config QR")
+        } else {
+            // Recreate so DisposableEffect re-runs and starts the camera
+            recreate()
         }
-        // If granted, the Compose UI will start the camera via DisposableEffect
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -183,6 +185,9 @@ class QrScannerActivity : ComponentActivity() {
                         torchAvailable = camera?.cameraInfo?.hasFlashUnit() == true
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed to start camera", e)
+                        (context as? QrScannerActivity)?.finishWithError(
+                            e.message ?: "Failed to start camera"
+                        )
                     }
                 }, ContextCompat.getMainExecutor(context))
             }

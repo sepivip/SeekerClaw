@@ -1,6 +1,5 @@
 package com.seekerclaw.app.qr
 
-import androidx.compose.animation.core.InfiniteTransition
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -8,7 +7,6 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,6 +24,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.FlashOff
 import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -38,6 +37,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
@@ -134,7 +134,7 @@ private fun ScannerOverlayCanvas(
     Canvas(
         modifier = Modifier
             .fillMaxSize()
-            .graphicsLayer { alpha = 0.99f } // force offscreen buffer for BlendMode.Clear
+            .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
     ) {
         val canvasW = size.width
         val canvasH = size.height
@@ -211,14 +211,13 @@ private fun ScannerTopBar(
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
         // Back arrow
-        Icon(
-            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-            contentDescription = "Cancel",
-            tint = SeekerClawColors.TextPrimary,
-            modifier = Modifier
-                .size(24.dp)
-                .clickable(onClick = onBack),
-        )
+        IconButton(onClick = onBack) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                contentDescription = "Cancel",
+                tint = SeekerClawColors.TextPrimary,
+            )
+        }
 
         // Title
         Text(
@@ -232,17 +231,16 @@ private fun ScannerTopBar(
 
         // Torch toggle
         if (torchAvailable) {
-            Icon(
-                imageVector = if (torchEnabled) Icons.Filled.FlashOn else Icons.Filled.FlashOff,
-                contentDescription = if (torchEnabled) "Torch on" else "Torch off",
-                tint = if (torchEnabled) SeekerClawColors.Warning else SeekerClawColors.TextDim,
-                modifier = Modifier
-                    .size(24.dp)
-                    .clickable(onClick = onToggleTorch),
-            )
+            IconButton(onClick = onToggleTorch) {
+                Icon(
+                    imageVector = if (torchEnabled) Icons.Filled.FlashOn else Icons.Filled.FlashOff,
+                    contentDescription = if (torchEnabled) "Torch on" else "Torch off",
+                    tint = if (torchEnabled) SeekerClawColors.Warning else SeekerClawColors.TextDim,
+                )
+            }
         } else {
             // Invisible spacer to keep title centered
-            Spacer(modifier = Modifier.size(24.dp))
+            Spacer(modifier = Modifier.size(48.dp))
         }
     }
 }
