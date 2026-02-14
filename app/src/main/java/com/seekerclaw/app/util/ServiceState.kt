@@ -75,6 +75,9 @@ object ServiceState {
         private set
 
     private var stateFile: File? = null
+
+    /** App files directory — exposed for cross-process file reads (e.g. stats). */
+    val filesDir: File? get() = stateFile?.parentFile
     private var pollingJob: Job? = null
     private val scope = CoroutineScope(Dispatchers.IO)
     private var initialized = false
