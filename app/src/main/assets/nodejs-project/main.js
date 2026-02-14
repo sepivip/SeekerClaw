@@ -3966,7 +3966,7 @@ const MIN_MESSAGES_FOR_SUMMARY = 3;             // Don't summarize tiny sessions
 
 function getSessionTrack(chatId) {
     if (!sessionTracking.has(chatId)) {
-        sessionTracking.set(chatId, { lastMessageTime: 0, messageCount: 0, lastSummaryTime: 0 });
+        sessionTracking.set(chatId, { lastMessageTime: 0, messageCount: 0, lastSummaryTime: 0, firstMessageTime: 0 });
     }
     return sessionTracking.get(chatId);
 }
@@ -4042,7 +4042,7 @@ async function generateSessionSummary(chatId) {
     return text || null;
 }
 
-async function saveSessionSummary(chatId, trigger, { force = false } = {}) {
+async function saveSessionSummary(chatId, trigger, { force = false, skipIndex = false } = {}) {
     const track = getSessionTrack(chatId);
 
     // Per-chatId debounce: at least 1 min between summaries (skipped for manual/shutdown)
@@ -4054,10 +4054,7 @@ async function saveSessionSummary(chatId, trigger, { force = false } = {}) {
 
     try {
         const summary = await generateSessionSummary(chatId);
-        if (!summary) {
-            track.lastSummaryTime = 0; // Reset if no summary generated
-            return;
-        }
+        if (!summary) return; // Debounce stays set — prevents repeated calls for short conversations
 
         // Generate descriptive filename: YYYY-MM-DD-slug.md
         const dateStr = localDateStr();
@@ -4082,12 +4079,12 @@ async function saveSessionSummary(chatId, trigger, { force = false } = {}) {
         log(`[SessionSummary] Saved: ${path.basename(finalPath)} (trigger: ${trigger})`);
 
         // Re-index memory files so new summary is immediately searchable
-        indexMemoryFiles();
+        if (!skipIndex) indexMemoryFiles();
 
         // Reset message counter
         track.messageCount = 0;
     } catch (err) {
-        track.lastSummaryTime = 0; // Reset debounce on error so transient failures don't block retries
+        // Keep lastSummaryTime set — prevents rapid retry spam on persistent errors
         log(`[SessionSummary] Error: ${err.message}`);
     }
 }
@@ -4600,6 +4597,11 @@ async function claudeApiCall(body, chatId) {
 }
 
 async function chat(chatId, userMessage) {
+    // Mark active immediately to prevent idle timer triggering during in-flight API calls
+    const track = getSessionTrack(chatId);
+    track.lastMessageTime = Date.now();
+    if (!track.firstMessageTime) track.firstMessageTime = track.lastMessageTime;
+
     // userMessage can be a string or an array of content blocks (for vision)
     // Extract text for skill matching
     const textForSkills = typeof userMessage === 'string'
@@ -4703,12 +4705,14 @@ async function chat(chatId, userMessage) {
     addToConversation(chatId, 'assistant', assistantMessage);
 
     // Session summary tracking (BAT-57)
-    const track = getSessionTrack(chatId);
-    track.lastMessageTime = Date.now();
-    track.messageCount++;
-    const sinceLastSummary = Date.now() - (track.lastSummaryTime || sessionStartedAt);
-    if (track.messageCount >= CHECKPOINT_MESSAGES || sinceLastSummary > CHECKPOINT_INTERVAL_MS) {
-        saveSessionSummary(chatId, 'checkpoint').catch(e => log(`[SessionSummary] ${e.message}`));
+    {
+        const trk = getSessionTrack(chatId);
+        trk.lastMessageTime = Date.now();
+        trk.messageCount++;
+        const sinceLastSummary = Date.now() - (trk.lastSummaryTime || trk.firstMessageTime || Date.now());
+        if (trk.messageCount >= CHECKPOINT_MESSAGES || sinceLastSummary > CHECKPOINT_INTERVAL_MS) {
+            saveSessionSummary(chatId, 'checkpoint').catch(e => log(`[SessionSummary] ${e.message}`));
+        }
     }
 
     return assistantMessage;
@@ -5241,36 +5245,39 @@ async function initDatabase() {
 
         log('[DB] SQL.js database initialized');
 
-        // Start periodic saves and shutdown hooks only after successful init
+        // Start periodic saves only after successful init
         setInterval(saveDatabase, 60000);
 
-        // Graceful shutdown with session summary (BAT-57)
-        async function gracefulShutdown(signal) {
-            log(`[Shutdown] ${signal} received, saving session summary...`);
-            try {
-                const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 5000));
-                const summaries = [];
-                for (const [chatId, conv] of conversations) {
-                    if (conv.length >= MIN_MESSAGES_FOR_SUMMARY) {
-                        summaries.push(saveSessionSummary(chatId, 'shutdown', { force: true }));
-                    }
-                }
-                if (summaries.length > 0) {
-                    await Promise.race([Promise.all(summaries), timeout]);
-                }
-            } catch (err) {
-                log(`[Shutdown] Summary failed: ${err.message}`);
-            }
-            saveDatabase();
-            process.exit(0);
-        }
-        process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-        process.on('SIGINT', () => gracefulShutdown('SIGINT'));
     } catch (err) {
         log(`[DB] Failed to initialize SQL.js (non-fatal): ${err.message}`);
         db = null;
     }
 }
+
+// Graceful shutdown with session summary (BAT-57)
+// Registered outside initDatabase so shutdown hooks work even if DB init fails
+async function gracefulShutdown(signal) {
+    log(`[Shutdown] ${signal} received, saving session summary...`);
+    try {
+        const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 5000));
+        const summaries = [];
+        for (const [chatId, conv] of conversations) {
+            if (conv.length >= MIN_MESSAGES_FOR_SUMMARY) {
+                summaries.push(saveSessionSummary(chatId, 'shutdown', { force: true, skipIndex: true }));
+            }
+        }
+        if (summaries.length > 0) {
+            await Promise.race([Promise.all(summaries), timeout]);
+            indexMemoryFiles(); // Single re-index after all summaries
+        }
+    } catch (err) {
+        log(`[Shutdown] Summary failed: ${err.message}`);
+    }
+    saveDatabase();
+    process.exit(0);
+}
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 // Index memory files into chunks table for search (BAT-26)
 function indexMemoryFiles() {
