@@ -4227,6 +4227,14 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('## Runtime');
     lines.push(`Platform: Android ${process.arch} | Node: ${process.version} | Model: ${MODEL}`);
     lines.push(`Channel: telegram | Agent: ${AGENT_NAME}`);
+    lines.push('');
+    lines.push('## Runtime Environment');
+    lines.push('- Running inside nodejs-mobile on Android (not standalone Node)');
+    lines.push('- node/npm/npx available via shell_exec (see tool description for full allowlist)');
+    lines.push(`- Workspace: ${workDir}`);
+    lines.push('- npm install runs in workspace (packages go to workspace/node_modules/)');
+    lines.push('- shell_exec: one command at a time, 30s timeout, no chaining (; | && > <)');
+    lines.push('- Workspace layout: media/inbound/ (Telegram files), skills/ (SKILL.md files), memory/ (daily logs)');
 
     const stablePrompt = lines.join('\n') + '\n';
 
