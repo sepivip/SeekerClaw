@@ -338,8 +338,8 @@ Good: Adding `memory_search` tool with description "Search your SQL.js database 
 
 - **nodejs-mobile:** Community fork at https://github.com/niccolobocook/nodejs-mobile — pin to latest stable release at dev start. Adapt their React Native integration guide for pure Kotlin (no React Native).
 - **nodejs-mobile JNI architecture (IMPORTANT):** Node.js runs as `libnode.so` loaded via `System.loadLibrary("node")` through JNI — there is **NO standalone `node` binary** on the device. Key implications:
-  - `process.execPath` returns `/system/bin/app_process64` (Android's app process launcher), NOT a node path
-  - `process.env.PATH` contains only Android system directories (`/system/bin`, `/vendor/bin`, etc.)
+  - `process.execPath` typically points to Android's app process launcher (e.g., `/system/bin/app_process` or `/system/bin/app_process64`), **not** a Node.js binary path
+  - `process.env.PATH` primarily contains Android system directories (e.g., `/system/bin`, `/vendor/bin`)
   - `node`, `npm`, `npx` commands **cannot** be found or executed via `shell_exec` / `child_process`
   - `shell_exec` uses Android's `/system/bin/sh` (toybox) — completely separate from the Node.js process
   - To run JavaScript code, tools must use `eval()`/`require()` inside the existing Node.js process (see BAT-59: `js_eval` tool)
