@@ -945,7 +945,7 @@ private fun SeekerClawLogo(
 ) {
     Image(
         painter = painterResource(R.drawable.ic_seekerclaw_symbol),
-        contentDescription = "SeekerClaw",
+        contentDescription = null,
         modifier = modifier.size(size),
     )
 }
