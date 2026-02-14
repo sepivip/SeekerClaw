@@ -156,21 +156,15 @@ private fun ScannerOverlayCanvas(
         // --- Corner brackets (4 L-shapes) ---
         val bColor = bracketColor.copy(alpha = cornerAlpha)
 
-        // Top-left
-        drawLine(bColor, Offset(zoneRect.left, zoneRect.top), Offset(zoneRect.left + bracketLen, zoneRect.top), bracketWidth, StrokeCap.Round)
-        drawLine(bColor, Offset(zoneRect.left, zoneRect.top), Offset(zoneRect.left, zoneRect.top + bracketLen), bracketWidth, StrokeCap.Round)
+        fun drawCornerBracket(corner: Offset, hSign: Float, vSign: Float) {
+            drawLine(bColor, corner, Offset(corner.x + hSign * bracketLen, corner.y), bracketWidth, StrokeCap.Round)
+            drawLine(bColor, corner, Offset(corner.x, corner.y + vSign * bracketLen), bracketWidth, StrokeCap.Round)
+        }
 
-        // Top-right
-        drawLine(bColor, Offset(zoneRect.right, zoneRect.top), Offset(zoneRect.right - bracketLen, zoneRect.top), bracketWidth, StrokeCap.Round)
-        drawLine(bColor, Offset(zoneRect.right, zoneRect.top), Offset(zoneRect.right, zoneRect.top + bracketLen), bracketWidth, StrokeCap.Round)
-
-        // Bottom-left
-        drawLine(bColor, Offset(zoneRect.left, zoneRect.bottom), Offset(zoneRect.left + bracketLen, zoneRect.bottom), bracketWidth, StrokeCap.Round)
-        drawLine(bColor, Offset(zoneRect.left, zoneRect.bottom), Offset(zoneRect.left, zoneRect.bottom - bracketLen), bracketWidth, StrokeCap.Round)
-
-        // Bottom-right
-        drawLine(bColor, Offset(zoneRect.right, zoneRect.bottom), Offset(zoneRect.right - bracketLen, zoneRect.bottom), bracketWidth, StrokeCap.Round)
-        drawLine(bColor, Offset(zoneRect.right, zoneRect.bottom), Offset(zoneRect.right, zoneRect.bottom - bracketLen), bracketWidth, StrokeCap.Round)
+        drawCornerBracket(Offset(zoneRect.left, zoneRect.top), 1f, 1f)      // Top-left
+        drawCornerBracket(Offset(zoneRect.right, zoneRect.top), -1f, 1f)     // Top-right
+        drawCornerBracket(Offset(zoneRect.left, zoneRect.bottom), 1f, -1f)   // Bottom-left
+        drawCornerBracket(Offset(zoneRect.right, zoneRect.bottom), -1f, -1f) // Bottom-right
 
         // --- Scan line (horizontal sweep) ---
         val lineY = zoneRect.top + (zonePx * scanLineProgress)
@@ -214,7 +208,7 @@ private fun ScannerTopBar(
         IconButton(onClick = onBack) {
             Icon(
                 imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                contentDescription = "Cancel",
+                contentDescription = "Back",
                 tint = SeekerClawColors.TextPrimary,
             )
         }

@@ -91,11 +91,14 @@ class QrScannerActivity : ComponentActivity() {
                     onQrDetected = { raw ->
                         if (hasResult.compareAndSet(false, true)) {
                             imageAnalysis?.clearAnalyzer()
-                            setResult(
-                                Activity.RESULT_OK,
-                                Intent().putExtra(EXTRA_QR_TEXT, raw)
-                            )
-                            finish()
+                            // Brief delay so "QR Detected" text shows before finishing
+                            window.decorView.postDelayed({
+                                setResult(
+                                    Activity.RESULT_OK,
+                                    Intent().putExtra(EXTRA_QR_TEXT, raw)
+                                )
+                                finish()
+                            }, 300)
                         }
                     },
                     onCancel = { finishCancelled() },
@@ -214,7 +217,7 @@ class QrScannerActivity : ComponentActivity() {
                 isDetected = isDetected,
                 onToggleTorch = {
                     val cam = camera ?: return@ScannerOverlay
-                    if (cam.cameraInfo.hasFlashUnit() != true) return@ScannerOverlay
+                    if (!cam.cameraInfo.hasFlashUnit()) return@ScannerOverlay
                     torchEnabled = !torchEnabled
                     cam.cameraControl.enableTorch(torchEnabled)
                 },
