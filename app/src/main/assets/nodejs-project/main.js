@@ -4054,7 +4054,11 @@ async function saveSessionSummary(chatId, trigger, { force = false, skipIndex = 
 
     try {
         const summary = await generateSessionSummary(chatId);
-        if (!summary) return; // Debounce stays set — prevents repeated calls for short conversations
+        if (!summary) {
+            // Use shorter backoff (10s) for null — allows retry sooner if messages arrive
+            track.lastSummaryTime = now - 50000;
+            return;
+        }
 
         // Generate descriptive filename: YYYY-MM-DD-slug.md
         const dateStr = localDateStr();
