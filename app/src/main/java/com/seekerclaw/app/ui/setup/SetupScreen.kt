@@ -56,12 +56,9 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -208,22 +205,11 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        // Logo
-        SeekerClawLogo(size = 56.dp)
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        // Branded title
-        Text(
-            text = buildAnnotatedString {
-                withStyle(SpanStyle(color = SeekerClawColors.TextPrimary, fontWeight = FontWeight.ExtraBold)) {
-                    append("Seeker")
-                }
-                withStyle(SpanStyle(color = SeekerClawColors.Primary, fontWeight = FontWeight.ExtraBold)) {
-                    append("Claw")
-                }
-            },
-            fontSize = 28.sp,
+        // Branded logo (symbol + wordmark)
+        Image(
+            painter = painterResource(R.drawable.ic_seekerclaw_logo_horizontal),
+            contentDescription = null,
+            modifier = Modifier.height(50.dp),
         )
 
         Spacer(modifier = Modifier.height(4.dp))
@@ -934,18 +920,3 @@ private fun SectionLabel(title: String) {
     )
 }
 
-// ============================================================================
-// SEEKER CLAW LOGO — Vector drawable from design/symbol.svg
-// ============================================================================
-
-@Composable
-private fun SeekerClawLogo(
-    size: Dp = 56.dp,
-    modifier: Modifier = Modifier,
-) {
-    Image(
-        painter = painterResource(R.drawable.ic_seekerclaw_symbol),
-        contentDescription = null,
-        modifier = modifier.size(size),
-    )
-}
