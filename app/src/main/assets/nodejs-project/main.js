@@ -2174,7 +2174,7 @@ const TOOLS = [
     },
     {
         name: 'js_eval',
-        description: 'Execute JavaScript code inside the running Node.js process. Use this instead of shell_exec when you need Node.js APIs, npm packages, or JS computation. Code runs via AsyncFunction in the same process with access to require(), fs, path, http, crypto, and all Node.js built-ins. Returns the value of the last expression (or the resolved value if it returns a Promise). Output is captured from console.log/warn/error calls. 30s timeout. Use for: data processing, JSON manipulation, math, date calculations, HTTP requests via http/https modules, file operations via fs, or any task that needs JavaScript.',
+        description: 'Execute JavaScript code inside the running Node.js process. Use this instead of shell_exec when you need Node.js APIs or JS computation. Code runs via AsyncFunction in the same process with access to require() for Node.js built-ins (fs, path, http, crypto, etc.) and bundled modules. child_process is blocked for security. Returns the value of the last expression (or resolved Promise value). Objects/arrays are JSON-serialized. Output captured from console.log/warn/error. 30s timeout (cannot abort sync infinite loops — avoid them). Runs on the main event loop so long-running sync operations will block other tasks. Use for: data processing, JSON manipulation, math, date calculations, HTTP requests via http/https, file operations via fs.',
         input_schema: {
             type: 'object',
             properties: {
@@ -3371,6 +3371,7 @@ async function executeTool(name, input) {
             const code = (input.code || '').trim();
             if (!code) return { error: 'code is required' };
             if (code.length > 10000) return { error: 'Code too long (max 10000 characters)' };
+            if (/\0/.test(code)) return { error: 'Null bytes are not allowed in code' };
 
             let timeout = 30000;
             if (input.timeout_ms !== undefined) {
@@ -3383,30 +3384,64 @@ async function executeTool(name, input) {
 
             // Capture console output
             const logs = [];
+            const pushLog = (prefix, args) => logs.push((prefix ? prefix + ' ' : '') + args.map(a => {
+                if (typeof a === 'object' && a !== null) try { return JSON.stringify(a); } catch { return String(a); }
+                return String(a);
+            }).join(' '));
             const mockConsole = {
-                log: (...args) => logs.push(args.map(String).join(' ')),
-                warn: (...args) => logs.push('[warn] ' + args.map(String).join(' ')),
-                error: (...args) => logs.push('[error] ' + args.map(String).join(' ')),
-                info: (...args) => logs.push(args.map(String).join(' ')),
+                log: (...args) => pushLog('', args),
+                info: (...args) => pushLog('', args),
+                warn: (...args) => pushLog('[warn]', args),
+                error: (...args) => pushLog('[error]', args),
+                debug: (...args) => pushLog('[debug]', args),
+                trace: (...args) => pushLog('[trace]', args),
+                dir: (obj) => pushLog('', [obj]),
+                table: (data) => pushLog('[table]', [data]),
+                time: () => {}, timeEnd: () => {}, timeLog: () => {},
+                assert: (cond, ...args) => { if (!cond) pushLog('[assert]', args.length ? args : ['Assertion failed']); },
+                clear: () => {},
+                count: () => {}, countReset: () => {},
+                group: () => {}, groupEnd: () => {}, groupCollapsed: () => {},
+            };
+
+            // Sandboxed require: block child_process to prevent bypassing shell_exec allowlist
+            const BLOCKED_MODULES = new Set(['child_process', 'cluster', 'worker_threads', 'vm', 'v8', 'perf_hooks']);
+            const sandboxedRequire = (mod) => {
+                if (BLOCKED_MODULES.has(mod)) {
+                    throw new Error(`Module "${mod}" is blocked in js_eval for security. Use shell_exec for command execution.`);
+                }
+                return require(mod);
             };
 
             try {
                 // AsyncFunction allows top-level await
                 const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
-                const fn = new AsyncFunction('console', 'require', '__filename', '__dirname', code);
+                const fn = new AsyncFunction('console', 'require', '__dirname', code);
 
-                const resultPromise = fn(mockConsole, require, __filename, __dirname);
-                const timeoutPromise = new Promise((_, rej) =>
-                    setTimeout(() => rej(new Error(`Execution timed out after ${timeout}ms`)), timeout)
-                );
+                let timerId;
+                const resultPromise = fn(mockConsole, sandboxedRequire, workDir);
+                const timeoutPromise = new Promise((_, rej) => {
+                    timerId = setTimeout(() => rej(new Error(`Execution timed out after ${timeout}ms`)), timeout);
+                });
 
                 const result = await Promise.race([resultPromise, timeoutPromise]);
+                clearTimeout(timerId);
                 const output = logs.join('\n');
+
+                // Serialize result: JSON for objects/arrays, String for primitives
+                let resultStr;
+                if (result === undefined) {
+                    resultStr = undefined;
+                } else if (typeof result === 'object' && result !== null) {
+                    try { resultStr = JSON.stringify(result, null, 2).slice(0, 50000); } catch { resultStr = String(result).slice(0, 50000); }
+                } else {
+                    resultStr = String(result).slice(0, 50000);
+                }
 
                 log(`js_eval OK (${code.length} chars)`);
                 return {
                     success: true,
-                    result: result !== undefined ? String(result).slice(0, 50000) : undefined,
+                    result: resultStr,
                     output: output ? output.slice(0, 50000) : undefined,
                 };
             } catch (err) {
