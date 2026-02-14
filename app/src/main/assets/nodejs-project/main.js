@@ -3300,9 +3300,17 @@ async function executeTool(name, input) {
 
             // Detect shell: Android uses /system/bin/sh, standard Unix uses /bin/sh
             const shellPath = fs.existsSync('/system/bin/sh') ? '/system/bin/sh' : '/bin/sh';
-            // Inherit nodejs-mobile's full process env so child processes can
-            // find node/npm/npx (Android system PATH alone doesn't include them).
-            // Override HOME to workspace and set TERM for clean output.
+            // Build child env from process.env (needed for nodejs-mobile paths)
+            // but strip any vars that could leak secrets to child processes.
+            const childEnv = { ...process.env, HOME: workDir, TERM: 'dumb' };
+            // Remove sensitive patterns (API keys, tokens, credentials)
+            for (const key of Object.keys(childEnv)) {
+                const k = key.toUpperCase();
+                if (k.includes('KEY') || k.includes('TOKEN') || k.includes('SECRET') ||
+                    k.includes('PASSWORD') || k.includes('CREDENTIAL') || k.includes('AUTH')) {
+                    delete childEnv[key];
+                }
+            }
 
             // Use async exec to avoid blocking the event loop
             return new Promise((resolve) => {
@@ -3312,7 +3320,7 @@ async function executeTool(name, input) {
                     encoding: 'utf8',
                     maxBuffer: 1024 * 1024, // 1MB
                     shell: shellPath,
-                    env: { ...process.env, HOME: workDir, TERM: 'dumb' }
+                    env: childEnv
                 }, (err, stdout, stderr) => {
                     if (err) {
                         if (err.killed && err.signal) {
