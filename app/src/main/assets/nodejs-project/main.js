@@ -1128,18 +1128,34 @@ function loadSkills() {
 
         for (const entry of entries) {
             if (entry.isDirectory()) {
+                // OpenClaw format: directory with SKILL.md inside
                 const skillPath = path.join(SKILLS_DIR, entry.name, 'SKILL.md');
                 if (fs.existsSync(skillPath)) {
                     try {
                         const content = fs.readFileSync(skillPath, 'utf8');
                         const skill = parseSkillFile(content, path.join(SKILLS_DIR, entry.name));
                         if (skill.name) {
+                            skill.filePath = skillPath;
                             skills.push(skill);
                             log(`Loaded skill: ${skill.name} (triggers: ${skill.triggers.join(', ')})`);
                         }
                     } catch (e) {
                         log(`Error loading skill ${entry.name}: ${e.message}`);
                     }
+                }
+            } else if (entry.isFile() && entry.name.endsWith('.md')) {
+                // Flat .md skill files (SeekerClaw format)
+                const filePath = path.join(SKILLS_DIR, entry.name);
+                try {
+                    const content = fs.readFileSync(filePath, 'utf8');
+                    const skill = parseSkillFile(content, SKILLS_DIR);
+                    if (skill.name) {
+                        skill.filePath = filePath;
+                        skills.push(skill);
+                        log(`Loaded skill: ${skill.name} (triggers: ${skill.triggers.join(', ')})`);
+                    }
+                } catch (e) {
+                    log(`Error loading skill ${entry.name}: ${e.message}`);
                 }
             }
         }
@@ -2487,8 +2503,8 @@ async function executeTool(name, input) {
                 return { error: `Skill not found: ${input.name}. Use skill name from <available_skills> list.` };
             }
 
-            // Read the full SKILL.md content
-            const skillPath = path.join(skill.dir, 'SKILL.md');
+            // Read skill content (supports both directory SKILL.md and flat .md files)
+            const skillPath = skill.filePath || path.join(skill.dir, 'SKILL.md');
             if (!fs.existsSync(skillPath)) {
                 return { error: `Skill file not found: ${skillPath}` };
             }
