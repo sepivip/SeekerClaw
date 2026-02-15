@@ -56,7 +56,7 @@ import kotlinx.coroutines.delay
 import java.util.Date
 
 @Composable
-fun DashboardScreen(onNavigateToSystem: () -> Unit = {}) {
+fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: () -> Unit = {}) {
     val context = LocalContext.current
     val status by ServiceState.status.collectAsState()
     val uptime by ServiceState.uptime.collectAsState()
@@ -154,12 +154,13 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}) {
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        // Status card (tappable → System screen)
+        // Status card (tappable → System screen, or Settings if config needed)
+        val configNeeded = statusText == "Config Needed"
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(SeekerClawColors.Surface, shape)
-                .clickable { onNavigateToSystem() }
+                .clickable { if (configNeeded) onNavigateToSettings() else onNavigateToSystem() }
                 .padding(20.dp),
         ) {
             Row(
@@ -184,7 +185,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}) {
                     )
                 }
                 Text(
-                    text = "System >",
+                    text = if (configNeeded) "Settings >" else "System >",
                     fontFamily = FontFamily.Default,
                     fontSize = 12.sp,
                     color = SeekerClawColors.TextDim,

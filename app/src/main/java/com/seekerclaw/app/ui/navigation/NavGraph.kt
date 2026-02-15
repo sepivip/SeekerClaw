@@ -175,7 +175,16 @@ fun SeekerClawNavHost() {
                 DashboardScreen(
                     onNavigateToSystem = {
                         navController.navigate(SystemRoute)
-                    }
+                    },
+                    onNavigateToSettings = {
+                        navController.navigate(SettingsRoute) {
+                            popUpTo(navController.graph.findStartDestination().id) {
+                                saveState = true
+                            }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    },
                 )
             }
             composable<SystemRoute> {
