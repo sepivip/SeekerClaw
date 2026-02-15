@@ -2362,6 +2362,10 @@ async function executeTool(name, input) {
                 } else {
                     result = await searchDDG(input.query, safeCount);
                 }
+                // Treat empty DDG results as failure to trigger fallback (CAPTCHA returns 200 but no parseable results)
+                if (result.results && result.results.length === 0 && result.message && provider === 'duckduckgo') {
+                    throw new Error(result.message);
+                }
                 cacheSet(cacheKey, result);
                 return result;
             } catch (e) {
@@ -2389,6 +2393,8 @@ async function executeTool(name, input) {
                             ? `search:brave:${input.query}:${safeCount}:${safeFreshness}`
                             : `search:${fb}:${input.query}:${safeCount}`;
                         cacheSet(fbCacheKey, fallback);
+                        // Also cache under original key so subsequent queries don't re-hit the failing provider
+                        cacheSet(cacheKey, fallback);
                         return fallback;
                     } catch (fbErr) {
                         log(`[WebSearch] ${fb} fallback also failed: ${fbErr.message}`);
