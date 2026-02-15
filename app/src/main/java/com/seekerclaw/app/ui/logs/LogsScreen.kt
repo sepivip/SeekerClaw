@@ -17,7 +17,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.AlertDialog
@@ -25,6 +27,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
@@ -57,19 +61,23 @@ fun LogsScreen() {
     var autoScroll by remember { mutableStateOf(true) }
 
     var showClearDialog by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
 
     // Filter toggles — all enabled by default
     var showInfo by remember { mutableStateOf(true) }
     var showWarn by remember { mutableStateOf(true) }
     var showError by remember { mutableStateOf(true) }
 
-    val filteredLogs = remember(logs, showInfo, showWarn, showError) {
+    val filteredLogs = remember(logs, showInfo, showWarn, showError, searchQuery) {
         logs.filter { entry ->
-            when (entry.level) {
+            val levelMatch = when (entry.level) {
                 LogLevel.INFO -> showInfo
                 LogLevel.WARN -> showWarn
                 LogLevel.ERROR -> showError
             }
+            val searchMatch = searchQuery.isBlank() ||
+                entry.message.contains(searchQuery, ignoreCase = true)
+            levelMatch && searchMatch
         }
     }
 
@@ -150,7 +158,55 @@ fun LogsScreen() {
             color = SeekerClawColors.TextDim,
         )
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Search bar
+        OutlinedTextField(
+            value = searchQuery,
+            onValueChange = { searchQuery = it },
+            placeholder = {
+                Text(
+                    "Search logs\u2026",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 13.sp,
+                )
+            },
+            leadingIcon = {
+                Icon(
+                    Icons.Default.Search,
+                    contentDescription = "Search",
+                    tint = SeekerClawColors.TextDim,
+                    modifier = Modifier.size(18.dp),
+                )
+            },
+            trailingIcon = {
+                if (searchQuery.isNotEmpty()) {
+                    IconButton(onClick = { searchQuery = "" }) {
+                        Icon(
+                            Icons.Default.Close,
+                            contentDescription = "Clear search",
+                            tint = SeekerClawColors.TextDim,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                }
+            },
+            singleLine = true,
+            textStyle = androidx.compose.ui.text.TextStyle(
+                fontFamily = FontFamily.Monospace,
+                fontSize = 13.sp,
+                color = SeekerClawColors.TextPrimary,
+            ),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = SeekerClawColors.Primary,
+                unfocusedBorderColor = SeekerClawColors.TextDim.copy(alpha = 0.3f),
+                cursorColor = SeekerClawColors.Primary,
+            ),
+            shape = shape,
+            modifier = Modifier.fillMaxWidth(),
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
 
         // Terminal window
         Box(
