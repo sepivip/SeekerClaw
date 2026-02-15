@@ -277,7 +277,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}) {
                 !hasBotToken -> "Bot token missing"
                 status == ServiceStatus.RUNNING -> "Message relay"
                 status == ServiceStatus.STARTING -> "Connecting..."
-                else -> "Configured"
+                else -> "Offline"
             }
             val telegramDotColor = when {
                 !hasBotToken -> SeekerClawColors.Error
@@ -290,7 +290,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}) {
                 !hasCredential -> "Credential missing"
                 status == ServiceStatus.RUNNING -> modelDisplayName(config?.model)
                 status == ServiceStatus.STARTING -> "Loading model..."
-                else -> modelDisplayName(config?.model)
+                else -> "Offline"
             }
             val aiDotColor = when {
                 !hasCredential -> SeekerClawColors.Error
