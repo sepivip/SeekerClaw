@@ -173,6 +173,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
         )
     }
     var showNotificationDialog by remember { mutableStateOf(!hasNotificationPermission) }
+    var isStarting by remember { mutableStateOf(false) }
 
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -182,6 +183,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
     }
 
     fun saveAndStart() {
+        if (isStarting) return
         if (apiKey.isBlank()) {
             apiKeyError = "Required"
             errorMessage = "Claude API key is required"
@@ -202,6 +204,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             return
         }
 
+        isStarting = true
         val trimmedKey = apiKey.trim()
         val config = AppConfig(
             anthropicApiKey = if (authType == "api_key") trimmedKey else "",
@@ -357,6 +360,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                 agentName = agentName,
                 onAgentNameChange = { agentName = it },
                 fieldColors = fieldColors,
+                isStarting = isStarting,
                 onStartAgent = ::saveAndStart,
                 onBack = { currentStep = 2 },
             )
@@ -865,6 +869,7 @@ private fun OptionsStep(
     agentName: String,
     onAgentNameChange: (String) -> Unit,
     fieldColors: androidx.compose.material3.TextFieldColors,
+    isStarting: Boolean,
     onStartAgent: () -> Unit,
     onBack: () -> Unit,
 ) {
@@ -979,6 +984,7 @@ private fun OptionsStep(
 
         Button(
             onClick = onStartAgent,
+            enabled = !isStarting,
             modifier = Modifier
                 .fillMaxWidth()
                 .height(56.dp),
@@ -986,19 +992,35 @@ private fun OptionsStep(
             colors = ButtonDefaults.buttonColors(
                 containerColor = SeekerClawColors.Primary,
                 contentColor = Color.White,
+                disabledContainerColor = SeekerClawColors.Primary.copy(alpha = 0.6f),
+                disabledContentColor = Color.White.copy(alpha = 0.7f),
             ),
         ) {
-            Icon(
-                Icons.Default.PlayArrow,
-                contentDescription = null,
-                modifier = Modifier.size(20.dp),
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(
-                "Initialize Agent",
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Bold,
-            )
+            if (isStarting) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(20.dp),
+                    color = Color.White,
+                    strokeWidth = 2.dp,
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    "Starting\u2026",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+            } else {
+                Icon(
+                    Icons.Default.PlayArrow,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    "Initialize Agent",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
         }
     }
 }
