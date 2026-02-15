@@ -1,5 +1,8 @@
 package com.seekerclaw.app.ui.navigation
 
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.HorizontalDivider
@@ -149,10 +152,15 @@ fun SeekerClawNavHost() {
             }
         },
     ) { innerPadding ->
+        val fadeSpec = tween<Float>(durationMillis = 200)
         NavHost(
             navController = navController,
             startDestination = startDestination,
             modifier = Modifier.padding(innerPadding),
+            enterTransition = { fadeIn(animationSpec = fadeSpec) },
+            exitTransition = { fadeOut(animationSpec = fadeSpec) },
+            popEnterTransition = { fadeIn(animationSpec = fadeSpec) },
+            popExitTransition = { fadeOut(animationSpec = fadeSpec) },
         ) {
             composable<SetupRoute> {
                 SetupScreen(
