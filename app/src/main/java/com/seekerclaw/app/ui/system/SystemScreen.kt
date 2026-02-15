@@ -61,8 +61,8 @@ fun SystemScreen(onBack: () -> Unit) {
     val tokensTotal by ServiceState.tokensTotal.collectAsState()
     val claudeUsage by ServiceState.claudeUsage.collectAsState()
 
-    val config = ConfigManager.loadConfig(context)
-    val agentName = config?.agentName?.ifBlank { "SeekerClaw" } ?: "SeekerClaw"
+    val config = remember { ConfigManager.loadConfig(context) }
+    val agentName = remember(config) { config?.agentName?.ifBlank { "SeekerClaw" } ?: "SeekerClaw" }
     val modelName = config?.model
         ?.ifBlank { "Not set" }
         ?.let { formatModelName(it) }
