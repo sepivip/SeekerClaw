@@ -90,10 +90,11 @@ object ConfigManager {
         }
 
         val persisted = editor.commit()
-        if (!persisted) {
+        if (persisted) {
+            configVersion.intValue++
+        } else {
             LogCollector.append("[Config] Failed to persist config (commit=false)", LogLevel.ERROR)
         }
-        configVersion.intValue++
     }
 
     fun loadConfig(context: Context): AppConfig? {
@@ -181,11 +182,13 @@ object ConfigManager {
 
     fun saveOwnerId(context: Context, ownerId: String) {
         prefs(context).edit().putString(KEY_OWNER_ID, ownerId).apply()
+        configVersion.intValue++
     }
 
     fun clearConfig(context: Context) {
         prefs(context).edit().clear().apply()
         KeystoreHelper.deleteKey()
+        configVersion.intValue++
     }
 
     /**
@@ -271,6 +274,7 @@ object ConfigManager {
             .putString(KEY_WALLET_ADDRESS, address)
             .putString(KEY_WALLET_LABEL, label)
             .apply()
+        configVersion.intValue++
         writeWalletConfig(context)
     }
 
@@ -279,6 +283,7 @@ object ConfigManager {
             .remove(KEY_WALLET_ADDRESS)
             .remove(KEY_WALLET_LABEL)
             .apply()
+        configVersion.intValue++
         val walletFile = File(File(context.filesDir, "workspace"), "solana_wallet.json")
         if (walletFile.exists()) walletFile.delete()
     }
