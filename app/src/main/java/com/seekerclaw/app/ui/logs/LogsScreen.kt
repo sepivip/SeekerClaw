@@ -172,9 +172,9 @@ fun LogsScreen() {
                         Text(
                             text = "[$timeStr] ${entry.message}",
                             color = color,
-                            fontSize = 11.sp,
+                            fontSize = 12.sp,
                             fontFamily = FontFamily.Monospace,
-                            lineHeight = 16.sp,
+                            lineHeight = 18.sp,
                             modifier = Modifier.padding(vertical = 1.dp),
                         )
                     }
