@@ -152,14 +152,15 @@ fun SeekerClawNavHost() {
             }
         },
     ) { innerPadding ->
+        val fadeSpec = tween<Float>(durationMillis = 200)
         NavHost(
             navController = navController,
             startDestination = startDestination,
             modifier = Modifier.padding(innerPadding),
-            enterTransition = { fadeIn(animationSpec = tween(200)) },
-            exitTransition = { fadeOut(animationSpec = tween(200)) },
-            popEnterTransition = { fadeIn(animationSpec = tween(200)) },
-            popExitTransition = { fadeOut(animationSpec = tween(200)) },
+            enterTransition = { fadeIn(animationSpec = fadeSpec) },
+            exitTransition = { fadeOut(animationSpec = fadeSpec) },
+            popEnterTransition = { fadeIn(animationSpec = fadeSpec) },
+            popExitTransition = { fadeOut(animationSpec = fadeSpec) },
         ) {
             composable<SetupRoute> {
                 SetupScreen(
