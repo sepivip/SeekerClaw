@@ -51,6 +51,8 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.os.Handler
+import android.os.Looper
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
@@ -108,18 +110,23 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
     var isOnline by remember { mutableStateOf(true) }
     DisposableEffect(context) {
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        val activeNetwork = cm.getNetworkCapabilities(cm.activeNetwork)
-        isOnline = activeNetwork?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+        val caps = cm.getNetworkCapabilities(cm.activeNetwork)
+        isOnline = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
 
+        val mainHandler = Handler(Looper.getMainLooper())
         val callback = object : ConnectivityManager.NetworkCallback() {
-            override fun onAvailable(network: Network) { isOnline = true }
-            override fun onLost(network: Network) { isOnline = false }
+            override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+                mainHandler.post { isOnline = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) }
+            }
+            override fun onLost(network: Network) {
+                mainHandler.post { isOnline = false }
+            }
         }
         val request = NetworkRequest.Builder()
             .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
             .build()
         cm.registerNetworkCallback(request, callback)
-        onDispose { cm.unregisterNetworkCallback(callback) }
+        onDispose { runCatching { cm.unregisterNetworkCallback(callback) } }
     }
 
     val isRunning = status == ServiceStatus.RUNNING || status == ServiceStatus.STARTING
