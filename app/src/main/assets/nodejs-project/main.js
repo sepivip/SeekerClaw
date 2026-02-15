@@ -4449,6 +4449,15 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('- For persistent failures, inform the user and suggest manual steps.');
     lines.push('');
 
+    // Telegram formatting — headers aren't rendered, guide the agent
+    lines.push('## Telegram Formatting');
+    lines.push('- Do NOT use markdown headers (##, ###) — Telegram doesn\'t render them.');
+    lines.push('- Use **bold text** for section titles instead.');
+    lines.push('- Use emoji + bold for structure: **💰 Prices Right Now**');
+    lines.push('- Telegram supports: **bold**, _italic_, `code`, ```code blocks```, and blockquotes.');
+    lines.push('- Keep responses scannable with line breaks and emoji, not headers.');
+    lines.push('');
+
     // Skills section - OpenClaw semantic selection style
     if (allSkills.length > 0) {
         lines.push('## Skills (mandatory)');
