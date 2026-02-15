@@ -49,6 +49,13 @@ import com.seekerclaw.app.util.LogLevel
 import com.seekerclaw.app.util.ServiceState
 import com.seekerclaw.app.util.ServiceStatus
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
+import android.os.Handler
+import android.os.Looper
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -100,6 +107,33 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
             apiAvgLatency = 0
             monthCost = 0f
         }
+    }
+
+    // Network connectivity observer
+    var isOnline by remember { mutableStateOf(true) }
+    DisposableEffect(context) {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val caps = cm.getNetworkCapabilities(cm.activeNetwork)
+        isOnline = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
+
+        val mainHandler = Handler(Looper.getMainLooper())
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                val netCaps = cm.getNetworkCapabilities(network)
+                isOnline = netCaps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
+            }
+            override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+                isOnline = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+            }
+            override fun onLost(network: Network) {
+                isOnline = false
+            }
+        }
+        val request = NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .build()
+        cm.registerNetworkCallback(request, callback, mainHandler)
+        onDispose { runCatching { cm.unregisterNetworkCallback(callback) } }
     }
 
     val isRunning = status == ServiceStatus.RUNNING || status == ServiceStatus.STARTING
@@ -155,7 +189,34 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
             color = SeekerClawColors.TextDim,
         )
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(if (!isOnline) 16.dp else 24.dp))
+
+        // Network offline banner
+        if (!isOnline) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(SeekerClawColors.Warning.copy(alpha = 0.15f), shape)
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(SeekerClawColors.Warning),
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Text(
+                    text = "No internet connection",
+                    fontFamily = FontFamily.Default,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = SeekerClawColors.Warning,
+                )
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+        }
 
         // Status card (tappable → System screen, or Settings if config needed)
         val configNeeded = statusText == "Config Needed"
