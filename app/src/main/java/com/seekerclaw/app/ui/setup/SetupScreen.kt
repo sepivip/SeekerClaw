@@ -9,6 +9,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
@@ -20,6 +21,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -37,6 +39,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.CheckCircle
@@ -157,7 +160,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
         ConfigManager.saveConfig(context, config)
         ConfigManager.seedWorkspace(context)
         OpenClawService.start(context)
-        onSetupComplete()
+        currentStep = 4
     }
 
     val fieldColors = OutlinedTextFieldDefaults.colors(
@@ -196,49 +199,51 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             .verticalScroll(scrollState),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        // Header row: logo left, skip right
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Image(
-                painter = painterResource(R.drawable.ic_seekerclaw_logo_horizontal),
-                contentDescription = null,
-                modifier = Modifier.height(36.dp),
-            )
+        if (currentStep < 4) {
+            // Header row: logo left, skip right
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Image(
+                    painter = painterResource(R.drawable.ic_seekerclaw_logo_horizontal),
+                    contentDescription = null,
+                    modifier = Modifier.height(36.dp),
+                )
+                Text(
+                    text = "Skip",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 14.sp,
+                    color = SeekerClawColors.TextDim,
+                    modifier = Modifier
+                        .clickable { skipSetup() }
+                        .padding(4.dp),
+                )
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
+
             Text(
-                text = "Skip",
-                fontFamily = FontFamily.Monospace,
-                fontSize = 14.sp,
+                text = "Your personal AI agent, running on your phone",
+                fontSize = 13.sp,
                 color = SeekerClawColors.TextDim,
-                modifier = Modifier
-                    .clickable { skipSetup() }
-                    .padding(4.dp),
+                modifier = Modifier.fillMaxWidth(),
             )
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // Step indicator
+            SetupStepIndicator(
+                currentStep = currentStep,
+                labels = listOf("Welcome", "Claude", "Telegram", "Options"),
+            )
+
+            Spacer(modifier = Modifier.height(24.dp))
         }
 
-        Spacer(modifier = Modifier.height(4.dp))
-
-        Text(
-            text = "Your personal AI agent, running on your phone",
-            fontSize = 13.sp,
-            color = SeekerClawColors.TextDim,
-            modifier = Modifier.fillMaxWidth(),
-        )
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        // Step indicator
-        SetupStepIndicator(
-            currentStep = currentStep,
-            labels = listOf("Welcome", "Claude", "Telegram", "Options"),
-        )
-
-        Spacer(modifier = Modifier.height(24.dp))
-
         // Error message
-        if (errorMessage != null) {
+        if (errorMessage != null && currentStep < 4) {
             Text(
                 text = errorMessage!!,
                 fontFamily = FontFamily.Monospace,
@@ -291,6 +296,10 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                 fieldColors = fieldColors,
                 onStartAgent = ::saveAndStart,
                 onBack = { currentStep = 2 },
+            )
+            4 -> SetupSuccessStep(
+                agentName = agentName.ifBlank { "SeekerClaw" },
+                onContinue = onSetupComplete,
             )
         }
 
@@ -819,6 +828,74 @@ private fun OptionsStep(
                 "Initialize Agent",
                 fontSize = 16.sp,
                 fontWeight = FontWeight.Bold,
+            )
+        }
+    }
+}
+
+@Composable
+private fun SetupSuccessStep(
+    agentName: String,
+    onContinue: () -> Unit,
+) {
+    val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
+
+    // Auto-navigate after 2 seconds
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.delay(2000)
+        onContinue()
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 48.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        // Checkmark circle
+        Box(
+            modifier = Modifier
+                .size(80.dp)
+                .background(SeekerClawColors.Accent.copy(alpha = 0.15f), CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                Icons.Rounded.Check,
+                contentDescription = "Success",
+                tint = SeekerClawColors.Accent,
+                modifier = Modifier.size(40.dp),
+            )
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        Text(
+            text = "You're all set!",
+            fontFamily = FontFamily.Default,
+            fontWeight = FontWeight.Bold,
+            fontSize = 22.sp,
+            color = SeekerClawColors.TextPrimary,
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Text(
+            text = "$agentName is starting up. Opening dashboard\u2026",
+            fontFamily = FontFamily.Default,
+            fontSize = 14.sp,
+            color = SeekerClawColors.TextDim,
+        )
+
+        Spacer(modifier = Modifier.height(32.dp))
+
+        // Manual continue button (in case user doesn't want to wait)
+        TextButton(onClick = onContinue) {
+            Text(
+                text = "Go to Dashboard",
+                fontFamily = FontFamily.Default,
+                fontWeight = FontWeight.Medium,
+                fontSize = 14.sp,
+                color = SeekerClawColors.Primary,
             )
         }
     }
