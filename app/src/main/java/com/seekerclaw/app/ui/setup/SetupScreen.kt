@@ -1,6 +1,8 @@
 package com.seekerclaw.app.ui.setup
 
 import android.Manifest
+import android.app.Activity
+import android.content.Intent
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -27,6 +29,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -46,8 +49,10 @@ import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -69,9 +74,13 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.seekerclaw.app.R
 import com.seekerclaw.app.config.AppConfig
+import com.seekerclaw.app.config.ConfigClaimImporter
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.config.availableModels
+import com.seekerclaw.app.qr.QrScannerActivity
 import com.seekerclaw.app.service.OpenClawService
+import com.seekerclaw.app.util.Analytics
+import kotlinx.coroutines.launch
 import com.seekerclaw.app.ui.components.SetupStepIndicator
 import com.seekerclaw.app.ui.components.dotMatrix
 import com.seekerclaw.app.ui.theme.SeekerClawColors
@@ -102,6 +111,55 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
     var botTokenError by remember { mutableStateOf<String?>(null) }
 
     var currentStep by remember { mutableIntStateOf(0) }
+    var isQrImporting by remember { mutableStateOf(false) }
+    var qrError by remember { mutableStateOf<String?>(null) }
+
+    val scope = rememberCoroutineScope()
+    val qrScanLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val scanError = result.data?.getStringExtra(QrScannerActivity.EXTRA_ERROR)
+        if (!scanError.isNullOrBlank()) {
+            qrError = scanError
+            return@rememberLauncherForActivityResult
+        }
+        if (result.resultCode != Activity.RESULT_OK) return@rememberLauncherForActivityResult
+
+        val qrText = result.data?.getStringExtra(QrScannerActivity.EXTRA_QR_TEXT)
+        if (qrText.isNullOrBlank()) {
+            qrError = "No QR data received"
+            return@rememberLauncherForActivityResult
+        }
+
+        isQrImporting = true
+        qrError = null
+        scope.launch {
+            ConfigClaimImporter.fetchFromQr(qrText)
+                .onSuccess { imported ->
+                    val cfg = imported.config
+                    if (cfg.authType == "setup_token") {
+                        authType = "setup_token"
+                        apiKey = cfg.setupToken
+                    } else {
+                        authType = "api_key"
+                        apiKey = cfg.anthropicApiKey
+                    }
+                    botToken = cfg.telegramBotToken
+                    ownerId = cfg.telegramOwnerId
+                    selectedModel = cfg.model.takeIf { m ->
+                        availableModels.any { it.id == m }
+                    } ?: availableModels[0].id
+                    agentName = cfg.agentName
+                    isQrImporting = false
+                    errorMessage = null
+                    currentStep = 3 // Jump to Options for review
+                }
+                .onFailure { err ->
+                    isQrImporting = false
+                    qrError = err.message ?: "Config import failed"
+                }
+        }
+    }
 
     fun skipSetup() {
         ConfigManager.markSetupSkipped(context)
@@ -255,7 +313,15 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
         }
 
         when (currentStep) {
-            0 -> WelcomeStep(onNext = { currentStep = 1 })
+            0 -> WelcomeStep(
+                onNext = { currentStep = 1 },
+                onScanQr = {
+                    Analytics.featureUsed("qr_scan_setup")
+                    qrScanLauncher.launch(Intent(context, QrScannerActivity::class.java))
+                },
+                isQrImporting = isQrImporting,
+                qrError = qrError,
+            )
             1 -> ClaudeApiStep(
                 apiKey = apiKey,
                 onApiKeyChange = { newValue ->
@@ -354,7 +420,12 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
 }
 
 @Composable
-private fun WelcomeStep(onNext: () -> Unit) {
+private fun WelcomeStep(
+    onNext: () -> Unit,
+    onScanQr: () -> Unit = {},
+    isQrImporting: Boolean = false,
+    qrError: String? = null,
+) {
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
     val uriHandler = LocalUriHandler.current
 
@@ -401,8 +472,10 @@ private fun WelcomeStep(onNext: () -> Unit) {
 
         Spacer(modifier = Modifier.height(28.dp))
 
+        // QR scan button
         Button(
-            onClick = onNext,
+            onClick = onScanQr,
+            enabled = !isQrImporting,
             modifier = Modifier
                 .fillMaxWidth()
                 .height(52.dp),
@@ -412,10 +485,61 @@ private fun WelcomeStep(onNext: () -> Unit) {
                 contentColor = Color.White,
             ),
         ) {
+            if (isQrImporting) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    strokeWidth = 2.dp,
+                    color = Color.White,
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    "Importing\u2026",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+            } else {
+                Icon(
+                    Icons.Default.QrCodeScanner,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    "Scan Config QR",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+        }
+
+        if (qrError != null) {
+            Spacer(modifier = Modifier.height(8.dp))
             Text(
-                "Get Started",
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Bold,
+                text = qrError,
+                fontFamily = FontFamily.Monospace,
+                color = SeekerClawColors.Error,
+                fontSize = 12.sp,
+            )
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        // Manual setup button
+        Button(
+            onClick = onNext,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(48.dp),
+            shape = shape,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = SeekerClawColors.Surface,
+                contentColor = SeekerClawColors.TextPrimary,
+            ),
+        ) {
+            Text(
+                "Enter Manually",
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Medium,
             )
         }
 
