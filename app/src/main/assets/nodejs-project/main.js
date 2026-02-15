@@ -65,6 +65,7 @@ const AUTH_TYPE = config.authType || 'api_key';
 const MODEL = config.model || 'claude-opus-4-6';
 const AGENT_NAME = config.agentName || 'SeekerClaw';
 BRIDGE_TOKEN = config.bridgeToken || '';
+const USER_AGENT = 'SeekerClaw/1.0 (Android; +https://seekerclaw.com)';
 
 // Reaction config with validation
 const VALID_REACTION_NOTIFICATIONS = new Set(['off', 'own', 'all']);
@@ -1373,6 +1374,60 @@ async function searchPerplexity(query, freshness) {
     return { provider: 'perplexity', answer: content, citations };
 }
 
+async function searchDDG(query, count = 5) {
+    const safePath = `/html/?q=${encodeURIComponent(query)}`;
+    const res = await httpRequest({
+        hostname: 'html.duckduckgo.com',
+        path: safePath,
+        method: 'GET',
+        headers: {
+            'User-Agent': USER_AGENT,
+            'Accept': 'text/html'
+        }
+    });
+
+    if (res.status !== 200) {
+        throw new Error(`DuckDuckGo search error (${res.status})`);
+    }
+    const html = typeof res.data === 'string' ? res.data : String(res.data);
+
+    // Parse DDG HTML results — patterns match DDG's current HTML format (double-quoted attributes).
+    // May need updating if DDG changes their markup.
+    const results = [];
+    const resultBlocks = html.split(/<div[^>]*class="(?:result\b|results_links\b)[^"]*"[^>]*>/i);
+    for (let i = 1; i < resultBlocks.length && results.length < count; i++) {
+        const block = resultBlocks[i];
+        // Extract URL from <a class="result__a" href="...">
+        const urlMatch = block.match(/<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>/i);
+        // Extract title text from that same <a> tag
+        const titleMatch = block.match(/<a[^>]*class="result__a"[^>]*>([\s\S]*?)<\/a>/i);
+        // Extract snippet from <a class="result__snippet" ...>
+        const snippetMatch = block.match(/<a[^>]*class="result__snippet"[^>]*>([\s\S]*?)<\/a>/i);
+
+        if (urlMatch && titleMatch) {
+            let url = decodeEntities(urlMatch[1]).trim();
+            // DDG wraps URLs through a redirect — extract actual URL
+            const uddgMatch = url.match(/[?&]uddg=([^&]+)/);
+            if (uddgMatch) url = decodeURIComponent(uddgMatch[1]);
+            const title = stripTags(titleMatch[1]).trim();
+            const snippet = snippetMatch ? stripTags(snippetMatch[1]).trim() : '';
+            if (title && (url.startsWith('http://') || url.startsWith('https://'))) {
+                results.push({ title, url, snippet });
+            }
+        }
+    }
+
+    if (results.length === 0) {
+        // Distinguish parse failure from genuine empty results
+        if (html.length > 500) {
+            log(`[DDG] HTML received (${html.length} chars) but no results parsed — markup may have changed`);
+            return { provider: 'duckduckgo', results: [], message: 'Results could not be parsed — DuckDuckGo markup may have changed' };
+        }
+        return { provider: 'duckduckgo', results: [], message: 'No results found' };
+    }
+    return { provider: 'duckduckgo', results };
+}
+
 // --- Enhanced HTTP fetch with redirects + SSRF protection ---
 
 async function webFetch(urlString, options = {}) {
@@ -1403,7 +1458,7 @@ async function webFetch(urlString, options = {}) {
 
         // Strip sensitive headers on cross-origin redirect
         const reqHeaders = {
-            'User-Agent': 'SeekerClaw/1.0 (Android; +https://seekerclaw.com)',
+            'User-Agent': USER_AGENT,
             'Accept': options.accept || 'text/markdown, text/html;q=0.9, */*;q=0.1'
         };
         for (const [k, v] of Object.entries(customHeaders)) {
@@ -1748,14 +1803,14 @@ async function sendTyping(chatId) {
 const TOOLS = [
     {
         name: 'web_search',
-        description: 'Search the web for current information. Uses Brave Search by default, or Perplexity Sonar for AI-synthesized answers with citations.',
+        description: 'Search the web for current information. Works out of the box with DuckDuckGo (no API key). Automatically uses Brave if its API key is configured (better quality). Perplexity Sonar available for AI-synthesized answers with citations.',
         input_schema: {
             type: 'object',
             properties: {
                 query: { type: 'string', description: 'The search query' },
-                provider: { type: 'string', enum: ['brave', 'perplexity'], description: 'Search provider. Default: brave. Use perplexity for complex questions needing synthesized answers.' },
-                count: { type: 'number', description: 'Number of results (brave only, 1-10, default 5)' },
-                freshness: { type: 'string', enum: ['day', 'week', 'month'], description: 'Freshness filter. Brave: filters by discovery time. Perplexity: sets search_recency_filter.' }
+                provider: { type: 'string', enum: ['auto', 'brave', 'duckduckgo', 'perplexity'], description: 'Search provider. Default: auto (Brave if key configured, else DuckDuckGo). Use perplexity for complex questions needing synthesized answers.' },
+                count: { type: 'number', description: 'Number of results (brave/duckduckgo, 1-10, default 5)' },
+                freshness: { type: 'string', enum: ['day', 'week', 'month'], description: 'Freshness filter. Brave: filters by discovery time. Perplexity: sets search_recency_filter. Not supported by DuckDuckGo.' }
             },
             required: ['query']
         }
@@ -2234,15 +2289,22 @@ async function executeTool(name, input) {
 
     switch (name) {
         case 'web_search': {
-            const provider = (typeof input.provider === 'string' ? input.provider.toLowerCase() : 'brave');
-            if (provider !== 'brave' && provider !== 'perplexity') {
-                return { error: `Unknown search provider "${provider}". Use "brave" or "perplexity".` };
+            const rawProvider = (typeof input.provider === 'string' ? input.provider.toLowerCase() : 'auto');
+            const VALID_PROVIDERS = new Set(['auto', 'brave', 'duckduckgo', 'perplexity']);
+            if (!VALID_PROVIDERS.has(rawProvider)) {
+                return { error: `Unknown search provider "${rawProvider}". Use "auto", "brave", "duckduckgo", or "perplexity".` };
             }
+            // Resolve 'auto': Brave if key configured, else DuckDuckGo
+            const provider = rawProvider === 'auto'
+                ? (config.braveApiKey ? 'brave' : 'duckduckgo')
+                : rawProvider;
             const safeCount = Math.min(Math.max(Number(input.count) || 5, 1), 10);
             const safeFreshness = BRAVE_FRESHNESS_VALUES.has(input.freshness) ? input.freshness : '';
             const cacheKey = provider === 'perplexity'
                 ? `search:perplexity:${input.query}:${safeFreshness || 'default'}`
-                : `search:brave:${input.query}:${safeCount}:${safeFreshness}`;
+                : provider === 'brave'
+                    ? `search:brave:${input.query}:${safeCount}:${safeFreshness}`
+                    : `search:duckduckgo:${input.query}:${safeCount}`;
             const cached = cacheGet(cacheKey);
             if (cached) { log('[WebSearch] Cache hit'); return cached; }
 
@@ -2250,23 +2312,42 @@ async function executeTool(name, input) {
                 let result;
                 if (provider === 'perplexity') {
                     result = await searchPerplexity(input.query, safeFreshness);
-                } else {
+                } else if (provider === 'brave') {
                     result = await searchBrave(input.query, safeCount, safeFreshness);
+                } else {
+                    result = await searchDDG(input.query, safeCount);
                 }
                 cacheSet(cacheKey, result);
                 return result;
             } catch (e) {
-                // Fallback: if perplexity fails and brave is available, try brave
-                if (provider === 'perplexity' && config.braveApiKey) {
-                    log(`[WebSearch] Perplexity failed (${e.message}), falling back to Brave`);
-                    try {
-                        const fallback = await searchBrave(input.query, safeCount, safeFreshness);
-                        const braveCacheKey = `search:brave:${input.query}:${safeCount}:${safeFreshness}`;
-                        cacheSet(braveCacheKey, fallback);
-                        return fallback;
-                    } catch (e2) { return { error: e2.message }; }
+                // Fallback chain: perplexity → brave → ddg, brave → ddg
+                log(`[WebSearch] ${provider} failed (${e.message}), trying fallback`);
+                const fallbacks = [];
+                if (provider === 'perplexity') {
+                    if (config.braveApiKey) fallbacks.push('brave');
+                    fallbacks.push('duckduckgo');
+                } else if (provider === 'brave') {
+                    fallbacks.push('duckduckgo');
                 }
-                return { error: e.message };
+                for (const fb of fallbacks) {
+                    try {
+                        log(`[WebSearch] Falling back to ${fb}`);
+                        const fallback = fb === 'brave'
+                            ? await searchBrave(input.query, safeCount, safeFreshness)
+                            : await searchDDG(input.query, safeCount);
+                        const fbCacheKey = fb === 'brave'
+                            ? `search:brave:${input.query}:${safeCount}:${safeFreshness}`
+                            : `search:duckduckgo:${input.query}:${safeCount}`;
+                        cacheSet(fbCacheKey, fallback);
+                        return fallback;
+                    } catch (fbErr) {
+                        log(`[WebSearch] ${fb} fallback also failed: ${fbErr.message}`);
+                    }
+                }
+                const displayName = { brave: 'Brave', duckduckgo: 'DuckDuckGo', perplexity: 'Perplexity' }[provider] || provider;
+                return { error: fallbacks.length > 0
+                    ? `Search failed: ${displayName} (${e.message}), fallback providers also failed`
+                    : `${displayName} search failed: ${e.message}. No fallback providers available.` };
             }
         }
 
@@ -2720,7 +2801,8 @@ async function executeTool(name, input) {
                     arch: process.arch
                 },
                 features: {
-                    webSearch: !!config.braveApiKey,
+                    webSearch: true,
+                    webSearchProvider: config.braveApiKey ? 'brave' : 'duckduckgo',
                     reminders: true,
                     skills: loadSkills().length
                 }
@@ -4278,7 +4360,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('Tools are provided via the tools API. Call tools exactly as listed by name.');
     lines.push('For visual checks ("what do you see", "check my dog"), call android_camera_check.');
     lines.push('**Swap workflow:** Always use solana_quote first to show the user what they\'ll get, then solana_swap to execute. Never swap without confirming the quote with the user first.');
-    lines.push('**Web search:** Use web_search with provider=perplexity for complex questions needing synthesized answers. Use Brave (default) for quick lookups.');
+    lines.push('**Web search:** web_search works out of the box — DuckDuckGo is the zero-config default. If a Brave API key is configured, Brave is used automatically (better quality). DuckDuckGo and Brave return search results as {title, url, snippet}. Use provider=perplexity for complex questions — it returns a synthesized answer with citations.');
     lines.push('**Web fetch:** Use web_fetch to read webpages or call APIs. Supports custom headers (Bearer auth), POST/PUT/DELETE methods, and request bodies. Returns markdown (default), JSON, or plain text. Use raw=true for stripped text. Up to 50K chars.');
     lines.push('**Shell execution:** Use shell_exec to run commands on the device. Sandboxed to workspace directory with a predefined allowlist of common Unix utilities (ls, cat, grep, find, curl, etc.). Note: node/npm/npx are NOT available — use for file operations, curl, and system info only. 30s timeout. No chaining, redirection, or command substitution — one command at a time.');
     lines.push('**JavaScript execution:** Use js_eval to run JavaScript code inside the Node.js process. Supports async/await, require(), and most Node.js built-ins (fs, path, http, crypto, etc. — child_process and vm are blocked). Use for computation, data processing, JSON manipulation, HTTP requests, or anything that needs JavaScript. 30s timeout. Prefer js_eval over shell_exec when the task involves data processing or logic.');
@@ -4921,7 +5003,7 @@ Memory: ${Math.round(memUsage.rss / 1024 / 1024)} MB
 Node: ${process.version}
 Platform: ${process.platform} ${process.arch}
 Conversation: ${getConversation(chatId).length} messages
-Web Search: ${config.braveApiKey ? 'Enabled' : 'Disabled'}`;
+Web Search: ${config.braveApiKey ? 'Brave' : 'DuckDuckGo'}`;
         }
 
         case '/reset':
