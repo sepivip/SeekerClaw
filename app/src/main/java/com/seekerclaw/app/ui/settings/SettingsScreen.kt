@@ -1160,6 +1160,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                     ConfigManager.clearConfig(context)
                     Analytics.featureUsed("config_reset")
                     showResetDialog = false
+                    onRunSetupAgain()
                 }) {
                     Text(
                         "Confirm",
