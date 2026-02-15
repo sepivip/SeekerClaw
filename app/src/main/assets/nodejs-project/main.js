@@ -1417,8 +1417,11 @@ async function searchDDG(query, count = 5) {
     }
 
     if (results.length === 0) {
-        // Distinguish parse failure from genuine empty results — log HTML size for debugging
-        if (html.length > 500) log(`[DDG] HTML received (${html.length} chars) but no results parsed — markup may have changed`);
+        // Distinguish parse failure from genuine empty results
+        if (html.length > 500) {
+            log(`[DDG] HTML received (${html.length} chars) but no results parsed — markup may have changed`);
+            return { provider: 'duckduckgo', results: [], message: 'Results could not be parsed — DuckDuckGo markup may have changed' };
+        }
         return { provider: 'duckduckgo', results: [], message: 'No results found' };
     }
     return { provider: 'duckduckgo', results };
@@ -2341,7 +2344,7 @@ async function executeTool(name, input) {
                     }
                 }
                 return { error: fallbacks.length > 0
-                    ? `Search failed: ${provider} (${e.message}), fallback providers also unavailable`
+                    ? `Search failed: ${provider} (${e.message}), fallback providers also failed`
                     : `${provider === 'duckduckgo' ? 'DuckDuckGo' : provider} search failed: ${e.message}. No fallback providers available.` };
             }
         }
