@@ -28,7 +28,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -58,6 +60,7 @@ import java.util.Date
 @Composable
 fun DashboardScreen(onNavigateToSystem: () -> Unit = {}) {
     val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
     val status by ServiceState.status.collectAsState()
     val uptime by ServiceState.uptime.collectAsState()
     val messageCount by ServiceState.messageCount.collectAsState()
@@ -349,6 +352,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}) {
         // Action button
         Button(
             onClick = {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 if (isRunning) {
                     Analytics.serviceStopped(uptime / 60000)
                     OpenClawService.stop(context)

@@ -47,7 +47,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import com.seekerclaw.app.ui.theme.SeekerClawColors
 import com.seekerclaw.app.util.LogCollector
 import com.seekerclaw.app.util.LogLevel
@@ -56,6 +58,7 @@ import java.util.Date
 @Composable
 fun LogsScreen() {
     val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
     val logs by LogCollector.logs.collectAsState()
     val listState = rememberLazyListState()
     var autoScroll by remember { mutableStateOf(true) }
@@ -280,7 +283,10 @@ fun LogsScreen() {
             )
             Switch(
                 checked = autoScroll,
-                onCheckedChange = { autoScroll = it },
+                onCheckedChange = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    autoScroll = it
+                },
                 colors = SwitchDefaults.colors(
                     checkedThumbColor = Color.White,
                     checkedTrackColor = SeekerClawColors.Primary,
@@ -304,7 +310,7 @@ fun LogsScreen() {
                 activeColor = SeekerClawColors.LogInfo,
                 shape = shape,
                 modifier = Modifier.weight(1f),
-                onClick = { showInfo = !showInfo },
+                onClick = { haptic.performHapticFeedback(HapticFeedbackType.LongPress); showInfo = !showInfo },
             )
             FilterChip(
                 label = "Warn",
@@ -312,7 +318,7 @@ fun LogsScreen() {
                 activeColor = SeekerClawColors.Warning,
                 shape = shape,
                 modifier = Modifier.weight(1f),
-                onClick = { showWarn = !showWarn },
+                onClick = { haptic.performHapticFeedback(HapticFeedbackType.LongPress); showWarn = !showWarn },
             )
             FilterChip(
                 label = "Error",
@@ -320,7 +326,7 @@ fun LogsScreen() {
                 activeColor = SeekerClawColors.Error,
                 shape = shape,
                 modifier = Modifier.weight(1f),
-                onClick = { showError = !showError },
+                onClick = { haptic.performHapticFeedback(HapticFeedbackType.LongPress); showError = !showError },
             )
         }
     }
