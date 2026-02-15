@@ -3,6 +3,8 @@ package com.seekerclaw.app.ui.setup
 import android.Manifest
 import android.app.Activity
 import android.content.Intent
+import com.seekerclaw.app.util.LogCollector
+import com.seekerclaw.app.util.LogLevel
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -204,21 +206,28 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             return
         }
 
+        errorMessage = null
         isStarting = true
-        val trimmedKey = apiKey.trim()
-        val config = AppConfig(
-            anthropicApiKey = if (authType == "api_key") trimmedKey else "",
-            setupToken = if (authType == "setup_token") trimmedKey else "",
-            authType = authType,
-            telegramBotToken = botToken.trim(),
-            telegramOwnerId = ownerId.trim(),
-            model = selectedModel,
-            agentName = agentName.trim().ifBlank { "SeekerClaw" },
-        )
-        ConfigManager.saveConfig(context, config)
-        ConfigManager.seedWorkspace(context)
-        OpenClawService.start(context)
-        currentStep = 4
+        try {
+            val trimmedKey = apiKey.trim()
+            val config = AppConfig(
+                anthropicApiKey = if (authType == "api_key") trimmedKey else "",
+                setupToken = if (authType == "setup_token") trimmedKey else "",
+                authType = authType,
+                telegramBotToken = botToken.trim(),
+                telegramOwnerId = ownerId.trim(),
+                model = selectedModel,
+                agentName = agentName.trim().ifBlank { "SeekerClaw" },
+            )
+            ConfigManager.saveConfig(context, config)
+            ConfigManager.seedWorkspace(context)
+            OpenClawService.start(context)
+            currentStep = 4
+        } catch (e: Exception) {
+            LogCollector.append("[Setup] Failed to start agent: ${e.message}", LogLevel.ERROR)
+            isStarting = false
+            errorMessage = e.message ?: "Failed to start agent"
+        }
     }
 
     val fieldColors = OutlinedTextFieldDefaults.colors(
