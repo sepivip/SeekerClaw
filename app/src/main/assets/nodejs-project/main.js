@@ -65,6 +65,7 @@ const AUTH_TYPE = config.authType || 'api_key';
 const MODEL = config.model || 'claude-opus-4-6';
 const AGENT_NAME = config.agentName || 'SeekerClaw';
 BRIDGE_TOKEN = config.bridgeToken || '';
+const USER_AGENT = 'SeekerClaw/1.0 (Android; +https://seekerclaw.com)';
 
 // Reaction config with validation
 const VALID_REACTION_NOTIFICATIONS = new Set(['off', 'own', 'all']);
@@ -1380,7 +1381,7 @@ async function searchDDG(query, count = 5) {
         path: safePath,
         method: 'GET',
         headers: {
-            'User-Agent': 'SeekerClaw/1.0 (Android; +https://seekerclaw.com)',
+            'User-Agent': USER_AGENT,
             'Accept': 'text/html'
         }
     });
@@ -1393,7 +1394,7 @@ async function searchDDG(query, count = 5) {
     // Parse DDG HTML results — patterns match DDG's current HTML format (double-quoted attributes).
     // May need updating if DDG changes their markup.
     const results = [];
-    const resultBlocks = html.split(/<div[^>]*class="[^"]*result[^"]*"[^>]*>/i);
+    const resultBlocks = html.split(/<div[^>]*class="(?:result\b|results_links\b)[^"]*"[^>]*>/i);
     for (let i = 1; i < resultBlocks.length && results.length < count; i++) {
         const block = resultBlocks[i];
         // Extract URL from <a class="result__a" href="...">
@@ -1457,7 +1458,7 @@ async function webFetch(urlString, options = {}) {
 
         // Strip sensitive headers on cross-origin redirect
         const reqHeaders = {
-            'User-Agent': 'SeekerClaw/1.0 (Android; +https://seekerclaw.com)',
+            'User-Agent': USER_AGENT,
             'Accept': options.accept || 'text/markdown, text/html;q=0.9, */*;q=0.1'
         };
         for (const [k, v] of Object.entries(customHeaders)) {
