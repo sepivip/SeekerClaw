@@ -4450,11 +4450,12 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('');
 
     // Telegram formatting — headers aren't rendered, guide the agent
-    lines.push('## Telegram Formatting');
-    lines.push('- Do NOT use markdown headers (##, ###) — Telegram doesn\'t render them.');
+    lines.push('**Telegram Formatting (for user-visible Telegram replies)**');
+    lines.push('- In Telegram replies, do NOT use markdown headers (##, ###) — Telegram doesn\'t render them.');
+    lines.push('- Headers like ## may appear in this system prompt, but must NOT be used in messages you send to users.');
     lines.push('- Use **bold text** for section titles instead.');
     lines.push('- Use emoji + bold for structure: **💰 Prices Right Now**');
-    lines.push('- Telegram supports: **bold**, _italic_, `code`, ```code blocks```, and blockquotes.');
+    lines.push('- Use markdown-style **bold**, _italic_, `code`, ```code blocks``` and blockquotes; these will be converted for Telegram. Do NOT use raw HTML tags in replies.');
     lines.push('- Keep responses scannable with line breaks and emoji, not headers.');
     lines.push('');
 
