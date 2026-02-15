@@ -4,8 +4,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.Typography
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -175,15 +173,11 @@ private val AppTypography = Typography(
     ),
 )
 
-val LocalSeekerClawColors = staticCompositionLocalOf { SeekerClawColors }
-
 @Composable
 fun SeekerClawTheme(content: @Composable () -> Unit) {
-    CompositionLocalProvider(LocalSeekerClawColors provides SeekerClawColors) {
-        MaterialTheme(
-            colorScheme = DarkColorScheme,
-            typography = AppTypography,
-            content = content,
-        )
-    }
+    MaterialTheme(
+        colorScheme = DarkColorScheme,
+        typography = AppTypography,
+        content = content,
+    )
 }
