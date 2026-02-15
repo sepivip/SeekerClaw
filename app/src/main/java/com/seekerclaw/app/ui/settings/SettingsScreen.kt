@@ -1388,8 +1388,14 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
 
     // ==================== Clear Memory Dialog ====================
     if (showClearMemoryDialog) {
+        var wipeConfirmText by remember { mutableStateOf("") }
+        val wipeConfirmed = wipeConfirmText.equals("WIPE", ignoreCase = true)
+
         AlertDialog(
-            onDismissRequest = { showClearMemoryDialog = false },
+            onDismissRequest = {
+                showClearMemoryDialog = false
+                wipeConfirmText = ""
+            },
             title = {
                 Text(
                     "Wipe Memory",
@@ -1399,30 +1405,61 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                 )
             },
             text = {
-                Text(
-                    "This will delete all memory files. The agent will lose all accumulated knowledge. This cannot be undone.",
-                    fontFamily = FontFamily.Default,
-                    fontSize = 13.sp,
-                    color = SeekerClawColors.TextSecondary,
-                    lineHeight = 20.sp,
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        "This will delete all memory files. The agent will lose all accumulated knowledge. This cannot be undone.",
+                        fontFamily = FontFamily.Default,
+                        fontSize = 13.sp,
+                        color = SeekerClawColors.TextSecondary,
+                        lineHeight = 20.sp,
+                    )
+                    OutlinedTextField(
+                        value = wipeConfirmText,
+                        onValueChange = { wipeConfirmText = it },
+                        label = {
+                            Text(
+                                "Type WIPE to confirm",
+                                fontFamily = FontFamily.Default,
+                                fontSize = 13.sp,
+                            )
+                        },
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = SeekerClawColors.Error,
+                            unfocusedBorderColor = SeekerClawColors.TextDim,
+                            focusedLabelColor = SeekerClawColors.Error,
+                            unfocusedLabelColor = SeekerClawColors.TextDim,
+                            cursorColor = SeekerClawColors.Error,
+                            focusedTextColor = SeekerClawColors.TextPrimary,
+                            unfocusedTextColor = SeekerClawColors.TextPrimary,
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
             },
             confirmButton = {
-                TextButton(onClick = {
-                    ConfigManager.clearMemory(context)
-                    Analytics.featureUsed("memory_wiped")
-                    showClearMemoryDialog = false
-                }) {
+                TextButton(
+                    onClick = {
+                        ConfigManager.clearMemory(context)
+                        Analytics.featureUsed("memory_wiped")
+                        showClearMemoryDialog = false
+                        wipeConfirmText = ""
+                    },
+                    enabled = wipeConfirmed,
+                ) {
                     Text(
                         "Confirm",
                         fontFamily = FontFamily.Default,
                         fontWeight = FontWeight.Bold,
-                        color = SeekerClawColors.Error,
+                        color = if (wipeConfirmed) SeekerClawColors.Error else SeekerClawColors.TextDim,
                     )
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showClearMemoryDialog = false }) {
+                TextButton(onClick = {
+                    showClearMemoryDialog = false
+                    wipeConfirmText = ""
+                }) {
                     Text(
                         "Cancel",
                         fontFamily = FontFamily.Default,
