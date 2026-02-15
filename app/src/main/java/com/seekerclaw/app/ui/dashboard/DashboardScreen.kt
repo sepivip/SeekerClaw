@@ -274,30 +274,30 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
                 ServiceStatus.ERROR -> SeekerClawColors.Error
             }
 
-            val telegramSubtitle = when {
-                !hasBotToken -> "Bot token missing"
-                status == ServiceStatus.RUNNING -> "Message relay"
-                status == ServiceStatus.STARTING -> "Connecting..."
-                else -> "Configured"
+            val telegramSubtitle = if (!hasBotToken) "Bot token missing" else when (status) {
+                ServiceStatus.RUNNING -> "Message relay"
+                ServiceStatus.STARTING -> "Connecting..."
+                ServiceStatus.ERROR -> "Relay error"
+                ServiceStatus.STOPPED -> "Offline"
             }
-            val telegramDotColor = when {
-                !hasBotToken -> SeekerClawColors.Error
-                status == ServiceStatus.RUNNING -> SeekerClawColors.Accent
-                status == ServiceStatus.STARTING -> SeekerClawColors.Warning
-                else -> SeekerClawColors.TextDim
+            val telegramDotColor = if (!hasBotToken) SeekerClawColors.Error else when (status) {
+                ServiceStatus.RUNNING -> SeekerClawColors.Accent
+                ServiceStatus.STARTING -> SeekerClawColors.Warning
+                ServiceStatus.ERROR -> SeekerClawColors.Error
+                ServiceStatus.STOPPED -> SeekerClawColors.TextDim
             }
 
-            val aiSubtitle = when {
-                !hasCredential -> "Credential missing"
-                status == ServiceStatus.RUNNING -> modelDisplayName(config?.model)
-                status == ServiceStatus.STARTING -> "Loading model..."
-                else -> modelDisplayName(config?.model)
+            val aiSubtitle = if (!hasCredential) "Credential missing" else when (status) {
+                ServiceStatus.RUNNING -> modelDisplayName(config?.model)
+                ServiceStatus.STARTING -> "Loading model..."
+                ServiceStatus.ERROR -> "Model error"
+                ServiceStatus.STOPPED -> "Offline"
             }
-            val aiDotColor = when {
-                !hasCredential -> SeekerClawColors.Error
-                status == ServiceStatus.RUNNING -> SeekerClawColors.Accent
-                status == ServiceStatus.STARTING -> SeekerClawColors.Warning
-                else -> SeekerClawColors.TextDim
+            val aiDotColor = if (!hasCredential) SeekerClawColors.Error else when (status) {
+                ServiceStatus.RUNNING -> SeekerClawColors.Accent
+                ServiceStatus.STARTING -> SeekerClawColors.Warning
+                ServiceStatus.ERROR -> SeekerClawColors.Error
+                ServiceStatus.STOPPED -> SeekerClawColors.TextDim
             }
 
             UplinkCard(
