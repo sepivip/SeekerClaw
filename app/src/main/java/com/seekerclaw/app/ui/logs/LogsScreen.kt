@@ -82,6 +82,7 @@ fun LogsScreen() {
     }
 
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
+    val timePattern = if (android.text.format.DateFormat.is24HourFormat(context)) "HH:mm:ss" else "hh:mm:ss a"
 
     LaunchedEffect(filteredLogs.size, autoScroll) {
         if (autoScroll && filteredLogs.isNotEmpty()) {
@@ -123,8 +124,7 @@ fun LogsScreen() {
                         appendLine("SeekerClaw Logs — ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US).format(Date())}")
                         appendLine("─".repeat(40))
                         filteredLogs.forEach { entry ->
-                            val pattern = if (android.text.format.DateFormat.is24HourFormat(context)) "HH:mm:ss" else "hh:mm:ss a"
-                            val timeStr = android.text.format.DateFormat.format(pattern, Date(entry.timestamp))
+                            val timeStr = android.text.format.DateFormat.format(timePattern, Date(entry.timestamp))
                             appendLine("[${entry.level.name}] [$timeStr] ${entry.message}")
                         }
                     }
@@ -249,8 +249,7 @@ fun LogsScreen() {
                             LogLevel.WARN -> SeekerClawColors.Warning
                             LogLevel.ERROR -> SeekerClawColors.Error
                         }
-                        val pattern = if (android.text.format.DateFormat.is24HourFormat(context)) "HH:mm:ss" else "hh:mm:ss a"
-                        val timeStr = android.text.format.DateFormat.format(pattern, Date(entry.timestamp))
+                        val timeStr = android.text.format.DateFormat.format(timePattern, Date(entry.timestamp))
                         Text(
                             text = "[$timeStr] ${entry.message}",
                             color = color,
