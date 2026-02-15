@@ -77,12 +77,15 @@ import com.seekerclaw.app.ui.theme.SeekerClawColors
 fun SetupScreen(onSetupComplete: () -> Unit) {
     val context = LocalContext.current
 
-    var apiKey by remember { mutableStateOf("") }
-    var authType by remember { mutableStateOf("api_key") }
-    var botToken by remember { mutableStateOf("") }
-    var ownerId by remember { mutableStateOf("") }
-    var selectedModel by remember { mutableStateOf(availableModels[0].id) }
-    var agentName by remember { mutableStateOf("SeekerClaw") }
+    // Pre-fill from existing config (for "Run Setup Again" flow)
+    val existingConfig = remember { ConfigManager.loadConfig(context) }
+
+    var apiKey by remember { mutableStateOf(existingConfig?.activeCredential ?: "") }
+    var authType by remember { mutableStateOf(existingConfig?.authType ?: "api_key") }
+    var botToken by remember { mutableStateOf(existingConfig?.telegramBotToken ?: "") }
+    var ownerId by remember { mutableStateOf(existingConfig?.telegramOwnerId ?: "") }
+    var selectedModel by remember { mutableStateOf(existingConfig?.model ?: availableModels[0].id) }
+    var agentName by remember { mutableStateOf(existingConfig?.agentName ?: "SeekerClaw") }
     var modelDropdownExpanded by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var apiKeyError by remember { mutableStateOf<String?>(null) }

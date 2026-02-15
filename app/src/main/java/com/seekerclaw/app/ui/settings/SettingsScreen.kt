@@ -82,7 +82,7 @@ import java.io.File
 import java.util.Date
 
 @Composable
-fun SettingsScreen() {
+fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
     val context = LocalContext.current
     var config by remember { mutableStateOf(ConfigManager.loadConfig(context)) }
 
@@ -137,6 +137,7 @@ fun SettingsScreen() {
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
+    var showRunSetupDialog by remember { mutableStateOf(false) }
     var showResetDialog by remember { mutableStateOf(false) }
     var showClearMemoryDialog by remember { mutableStateOf(false) }
     var showImportDialog by remember { mutableStateOf(false) }
@@ -738,6 +739,29 @@ fun SettingsScreen() {
             )
         }
 
+        Spacer(modifier = Modifier.height(28.dp))
+
+        // Run Setup Again
+        SectionLabel("Setup")
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        OutlinedButton(
+            onClick = { showRunSetupDialog = true },
+            modifier = Modifier.fillMaxWidth(),
+            shape = shape,
+            border = androidx.compose.foundation.BorderStroke(1.dp, androidx.compose.ui.graphics.Color(0xFF374151)),
+            colors = ButtonDefaults.outlinedButtonColors(
+                contentColor = SeekerClawColors.TextPrimary,
+            ),
+        ) {
+            Text(
+                "Run Setup Again",
+                fontFamily = FontFamily.Default,
+                fontSize = 14.sp,
+            )
+        }
+
         Spacer(modifier = Modifier.height(32.dp))
 
         // Danger zone
@@ -1299,6 +1323,55 @@ fun SettingsScreen() {
                     showApplyConfigDialog = false
                     pendingConfigImport = null
                 }) {
+                    Text(
+                        "Cancel",
+                        fontFamily = FontFamily.Default,
+                        color = SeekerClawColors.TextDim,
+                    )
+                }
+            },
+            containerColor = SeekerClawColors.Surface,
+            shape = shape,
+        )
+    }
+
+    // ==================== Run Setup Again Dialog ====================
+    if (showRunSetupDialog) {
+        AlertDialog(
+            onDismissRequest = { showRunSetupDialog = false },
+            title = {
+                Text(
+                    "Run Setup Again",
+                    fontFamily = FontFamily.Default,
+                    fontWeight = FontWeight.Bold,
+                    color = SeekerClawColors.TextPrimary,
+                )
+            },
+            text = {
+                Text(
+                    "This will restart the setup flow. Your current config will be overwritten when you complete setup.",
+                    fontFamily = FontFamily.Default,
+                    fontSize = 13.sp,
+                    color = SeekerClawColors.TextSecondary,
+                    lineHeight = 20.sp,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showRunSetupDialog = false
+                    OpenClawService.stop(context)
+                    onRunSetupAgain()
+                }) {
+                    Text(
+                        "Continue",
+                        fontFamily = FontFamily.Default,
+                        fontWeight = FontWeight.Bold,
+                        color = SeekerClawColors.Primary,
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRunSetupDialog = false }) {
                     Text(
                         "Cancel",
                         fontFamily = FontFamily.Default,

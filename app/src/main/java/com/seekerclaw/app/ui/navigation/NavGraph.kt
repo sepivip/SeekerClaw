@@ -179,7 +179,15 @@ fun SeekerClawNavHost() {
                 LogsScreen()
             }
             composable<SettingsRoute> {
-                SettingsScreen()
+                SettingsScreen(
+                    onRunSetupAgain = {
+                        navController.navigate(SetupRoute) {
+                            popUpTo(navController.graph.findStartDestination().id) {
+                                inclusive = true
+                            }
+                        }
+                    }
+                )
             }
         }
     }
