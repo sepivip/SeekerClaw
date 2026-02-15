@@ -5,9 +5,6 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.Typography
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
@@ -18,21 +15,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 // ============================================================================
-// THEME SYSTEM — Multiple swappable themes for SeekerClaw
+// DARKOPS THEME — SeekerClaw's single theme
 // ============================================================================
 
 /**
- * Available themes
- */
-enum class SeekerClawThemeStyle(val displayName: String) {
-    DARKOPS("DarkOps"),     // Cyberpunk dark navy + crimson red
-    TERMINAL("Terminal"),   // CRT phosphor green terminal
-    PIXEL("Pixel"),         // 8-bit arcade with dot matrix
-    CLEAN("Clean"),         // Original minimal dark theme
-}
-
-/**
- * Color palette interface — all themes provide these colors
+ * Color palette for the DarkOps theme
  */
 data class ThemeColors(
     // Backgrounds
@@ -75,9 +62,6 @@ data class ThemeColors(
     val useScanlines: Boolean,
 )
 
-// ============================================================================
-// DARKOPS THEME — Cyberpunk dark navy + crimson red + green status
-// ============================================================================
 val DarkOpsThemeColors = ThemeColors(
     background = Color(0xFF0A0A0F),
     surface = Color(0xFF16161F),
@@ -110,191 +94,70 @@ val DarkOpsThemeColors = ThemeColors(
 )
 
 // ============================================================================
-// TERMINAL THEME — CRT phosphor green
-// ============================================================================
-val TerminalThemeColors = ThemeColors(
-    background = Color(0xFF050808),
-    surface = Color(0xFF0A1210),
-    surfaceHighlight = Color(0xFF0F1A16),
-    cardBorder = Color(0xFF00FF4125),
-
-    primary = Color(0xFF00FF41),
-    primaryDim = Color(0xFF00AA2A),
-    primaryGlow = Color(0x3300FF41),
-
-    error = Color(0xFFFF003C),
-    errorDim = Color(0xFFAA0028),
-    errorGlow = Color(0x33FF003C),
-
-    warning = Color(0xFFFFB000),
-    accent = Color(0xFFFF2D2D),
-
-    logInfo = Color(0xFF00AAFF),       // Blue CRT
-
-    textPrimary = Color(0xFF00FF41),
-    textSecondary = Color(0xFF00AA2A),
-    textDim = Color(0xFF006618),
-
-    scanline = Color(0x0800FF41),
-    dotMatrix = Color(0x0800FF41),
-
-    cornerRadius = 2.dp,
-    useDotMatrix = false,
-    useScanlines = false,
-)
-
-// ============================================================================
-// PIXEL THEME — 8-bit arcade with dot matrix background
-// ============================================================================
-val PixelThemeColors = ThemeColors(
-    background = Color(0xFF0A0A0A),
-    surface = Color(0xFF141414),
-    surfaceHighlight = Color(0xFF1E1E1E),
-    cardBorder = Color(0xFF00FF4140),
-
-    primary = Color(0xFF00FF41),
-    primaryDim = Color(0xFF00CC33),
-    primaryGlow = Color(0x4000FF41),
-
-    error = Color(0xFFFF2020),
-    errorDim = Color(0xFFCC1818),
-    errorGlow = Color(0x40FF2020),
-
-    warning = Color(0xFFFFCC00),
-    accent = Color(0xFFFF6B00), // Orange for arcade feel
-
-    logInfo = Color(0xFF00AAFF),       // Blue pixel
-
-    textPrimary = Color(0xFF00FF41),
-    textSecondary = Color(0xFF00CC33),
-    textDim = Color(0xFF007722),
-
-    scanline = Color(0x0500FF41),
-    dotMatrix = Color(0x1200FF41),
-
-    cornerRadius = 0.dp, // Perfect pixel squares
-    useDotMatrix = true,
-    useScanlines = true,
-)
-
-// ============================================================================
-// CLEAN THEME — Original minimal dark (OpenClaw style)
-// ============================================================================
-val CleanThemeColors = ThemeColors(
-    background = Color(0xFF0D0D0D),
-    surface = Color(0xFF1A1A1A),
-    surfaceHighlight = Color(0xFF242424),
-    cardBorder = Color(0x0FFFFFFF),
-
-    primary = Color(0xFF00C805),
-    primaryDim = Color(0xFF00A004),
-    primaryGlow = Color(0x3300C805),
-
-    error = Color(0xFFFF4444),
-    errorDim = Color(0xFFCC3636),
-    errorGlow = Color(0x33FF4444),
-
-    warning = Color(0xFFFBBF24),
-    accent = Color(0xFFA78BFA), // Purple — OpenClaw brand
-
-    logInfo = Color(0xFF60A5FA),       // Tailwind blue-400
-
-    textPrimary = Color(0xDEFFFFFF), // White at 87%
-    textSecondary = Color(0x80FFFFFF), // White at 50%
-    textDim = Color(0x40FFFFFF), // White at 25%
-
-    scanline = Color(0x00000000),
-    dotMatrix = Color(0x00000000),
-
-    cornerRadius = 8.dp,
-    useDotMatrix = false,
-    useScanlines = false,
-)
-
-// ============================================================================
-// ACTIVE THEME — Observable state for theme switching
-// ============================================================================
-object ThemeManager {
-    var currentStyle by mutableStateOf(SeekerClawThemeStyle.DARKOPS)
-        private set
-
-    fun setTheme(style: SeekerClawThemeStyle) {
-        currentStyle = style
-    }
-
-    fun getColors(): ThemeColors = when (currentStyle) {
-        SeekerClawThemeStyle.DARKOPS -> DarkOpsThemeColors
-        SeekerClawThemeStyle.TERMINAL -> TerminalThemeColors
-        SeekerClawThemeStyle.PIXEL -> PixelThemeColors
-        SeekerClawThemeStyle.CLEAN -> CleanThemeColors
-    }
-}
-
-// ============================================================================
-// BACKWARDS COMPATIBLE — SeekerClawColors delegates to active theme
+// SeekerClawColors — Global color accessor (DarkOps only)
 // ============================================================================
 object SeekerClawColors {
-    val Background: Color get() = ThemeManager.getColors().background
-    val Surface: Color get() = ThemeManager.getColors().surface
-    val SurfaceHighlight: Color get() = ThemeManager.getColors().surfaceHighlight
-    val CardBorder: Color get() = ThemeManager.getColors().cardBorder
+    val Background: Color get() = DarkOpsThemeColors.background
+    val Surface: Color get() = DarkOpsThemeColors.surface
+    val SurfaceHighlight: Color get() = DarkOpsThemeColors.surfaceHighlight
+    val CardBorder: Color get() = DarkOpsThemeColors.cardBorder
 
-    val Primary: Color get() = ThemeManager.getColors().primary
-    val PrimaryDim: Color get() = ThemeManager.getColors().primaryDim
-    val PrimaryGlow: Color get() = ThemeManager.getColors().primaryGlow
+    val Primary: Color get() = DarkOpsThemeColors.primary
+    val PrimaryDim: Color get() = DarkOpsThemeColors.primaryDim
+    val PrimaryGlow: Color get() = DarkOpsThemeColors.primaryGlow
 
-    val Error: Color get() = ThemeManager.getColors().error
-    val ErrorDim: Color get() = ThemeManager.getColors().errorDim
-    val ErrorGlow: Color get() = ThemeManager.getColors().errorGlow
+    val Error: Color get() = DarkOpsThemeColors.error
+    val ErrorDim: Color get() = DarkOpsThemeColors.errorDim
+    val ErrorGlow: Color get() = DarkOpsThemeColors.errorGlow
 
-    val Warning: Color get() = ThemeManager.getColors().warning
-    val Accent: Color get() = ThemeManager.getColors().accent
-    val LogInfo: Color get() = ThemeManager.getColors().logInfo
+    val Warning: Color get() = DarkOpsThemeColors.warning
+    val Accent: Color get() = DarkOpsThemeColors.accent
+    val LogInfo: Color get() = DarkOpsThemeColors.logInfo
 
-    val TextPrimary: Color get() = ThemeManager.getColors().textPrimary
-    val TextSecondary: Color get() = ThemeManager.getColors().textSecondary
-    val TextDim: Color get() = ThemeManager.getColors().textDim
+    val TextPrimary: Color get() = DarkOpsThemeColors.textPrimary
+    val TextSecondary: Color get() = DarkOpsThemeColors.textSecondary
+    val TextDim: Color get() = DarkOpsThemeColors.textDim
 
-    val Scanline: Color get() = ThemeManager.getColors().scanline
-    val DotMatrix: Color get() = ThemeManager.getColors().dotMatrix
+    val Scanline: Color get() = DarkOpsThemeColors.scanline
+    val DotMatrix: Color get() = DarkOpsThemeColors.dotMatrix
 
-    val CornerRadius: Dp get() = ThemeManager.getColors().cornerRadius
-    val UseDotMatrix: Boolean get() = ThemeManager.getColors().useDotMatrix
-    val UseScanlines: Boolean get() = ThemeManager.getColors().useScanlines
+    val CornerRadius: Dp get() = DarkOpsThemeColors.cornerRadius
+    val UseDotMatrix: Boolean get() = DarkOpsThemeColors.useDotMatrix
+    val UseScanlines: Boolean get() = DarkOpsThemeColors.useScanlines
 }
 
 // ============================================================================
 // MATERIAL THEME INTEGRATION
 // ============================================================================
-private fun createDarkColorScheme(colors: ThemeColors) = darkColorScheme(
-    primary = colors.primary,
+private val DarkColorScheme = darkColorScheme(
+    primary = DarkOpsThemeColors.primary,
     onPrimary = Color.Black,
-    secondary = colors.accent,
+    secondary = DarkOpsThemeColors.accent,
     onSecondary = Color.Black,
-    background = colors.background,
-    onBackground = colors.textPrimary,
-    surface = colors.surface,
-    onSurface = colors.textPrimary,
-    surfaceVariant = colors.surfaceHighlight,
-    onSurfaceVariant = colors.textSecondary,
-    error = colors.error,
+    background = DarkOpsThemeColors.background,
+    onBackground = DarkOpsThemeColors.textPrimary,
+    surface = DarkOpsThemeColors.surface,
+    onSurface = DarkOpsThemeColors.textPrimary,
+    surfaceVariant = DarkOpsThemeColors.surfaceHighlight,
+    onSurfaceVariant = DarkOpsThemeColors.textSecondary,
+    error = DarkOpsThemeColors.error,
     onError = Color.Black,
 )
 
-private fun createTypography(colors: ThemeColors) = Typography(
+private val AppTypography = Typography(
     bodyLarge = TextStyle(
         fontFamily = FontFamily.Default,
         fontWeight = FontWeight.Normal,
         fontSize = 15.sp,
         lineHeight = 22.sp,
-        color = colors.textPrimary,
+        color = DarkOpsThemeColors.textPrimary,
     ),
     bodyMedium = TextStyle(
         fontFamily = FontFamily.Default,
         fontWeight = FontWeight.Normal,
         fontSize = 13.sp,
         lineHeight = 18.sp,
-        color = colors.textSecondary,
+        color = DarkOpsThemeColors.textSecondary,
     ),
     titleLarge = TextStyle(
         fontFamily = FontFamily.Default,
@@ -316,11 +179,10 @@ val LocalSeekerClawColors = staticCompositionLocalOf { SeekerClawColors }
 
 @Composable
 fun SeekerClawTheme(content: @Composable () -> Unit) {
-    val colors = ThemeManager.getColors()
     CompositionLocalProvider(LocalSeekerClawColors provides SeekerClawColors) {
         MaterialTheme(
-            colorScheme = createDarkColorScheme(colors),
-            typography = createTypography(colors),
+            colorScheme = DarkColorScheme,
+            typography = AppTypography,
             content = content,
         )
     }

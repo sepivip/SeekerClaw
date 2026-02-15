@@ -612,15 +612,6 @@ const battery = await androidBridgeCall('/battery');
 
 ---
 
-## Theme System
+## Theme
 
-SeekerClaw supports multiple swappable themes:
-
-| Theme | Style | Features |
-|-------|-------|----------|
-| **Terminal** | CRT phosphor green | Sharp corners, classic terminal |
-| **Pixel** | 8-bit arcade | Dot matrix background, pixel-perfect |
-| **Clean** | OpenClaw style | Rounded corners, white text |
-
-Themes are defined in `Theme.kt` with `ThemeManager` for runtime switching.
-Theme selection persists via SharedPreferences (TODO).
+SeekerClaw uses a single **DarkOps** theme (dark navy + crimson red + green status). Colors are defined in `Theme.kt` via `DarkOpsThemeColors` and accessed globally through the `SeekerClawColors` object.
