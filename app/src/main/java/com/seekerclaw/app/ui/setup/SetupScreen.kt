@@ -84,7 +84,13 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
     var authType by remember { mutableStateOf(existingConfig?.authType ?: "api_key") }
     var botToken by remember { mutableStateOf(existingConfig?.telegramBotToken ?: "") }
     var ownerId by remember { mutableStateOf(existingConfig?.telegramOwnerId ?: "") }
-    var selectedModel by remember { mutableStateOf(existingConfig?.model ?: availableModels[0].id) }
+    var selectedModel by remember {
+        mutableStateOf(
+            existingConfig?.model?.takeIf { model ->
+                availableModels.any { it.id == model }
+            } ?: availableModels[0].id
+        )
+    }
     var agentName by remember { mutableStateOf(existingConfig?.agentName ?: "SeekerClaw") }
     var modelDropdownExpanded by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }

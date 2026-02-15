@@ -1360,6 +1360,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                 TextButton(onClick = {
                     showRunSetupDialog = false
                     OpenClawService.stop(context)
+                    Analytics.featureUsed("setup_rerun")
                     onRunSetupAgain()
                 }) {
                     Text(
