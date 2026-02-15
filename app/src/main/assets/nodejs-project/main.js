@@ -1446,18 +1446,22 @@ async function searchDDGLite(query, count = 5) {
     }
     const html = typeof res.data === 'string' ? res.data : String(res.data);
 
-    // DDG Lite uses table-based layout with result-link and result-snippet classes
+    // DDG Lite uses table-based layout — split by result-link anchors and find snippets within each block
     const results = [];
-    const linkMatches = [...html.matchAll(/<a[^>]*class="result-link"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi)];
-    const snippetMatches = [...html.matchAll(/<td[^>]*class="result-snippet"[^>]*>([\s\S]*?)<\/td>/gi)];
-
-    for (let i = 0; i < linkMatches.length && results.length < count; i++) {
-        let url = decodeEntities(linkMatches[i][1]).trim();
+    const blocks = html.split(/<a[^>]*class="result-link"/i);
+    for (let i = 1; i < blocks.length && results.length < count; i++) {
+        const block = blocks[i];
+        // Extract URL and title from the result-link anchor
+        const urlMatch = block.match(/href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i);
+        if (!urlMatch) continue;
+        let url = decodeEntities(urlMatch[1]).trim();
         // DDG Lite also wraps URLs through redirects
         const uddgMatch = url.match(/[?&]uddg=([^&]+)/);
         if (uddgMatch) url = decodeURIComponent(uddgMatch[1]);
-        const title = stripTags(linkMatches[i][2]).trim();
-        const snippet = snippetMatches[i] ? stripTags(snippetMatches[i][1]).trim() : '';
+        const title = stripTags(urlMatch[2]).trim();
+        // Extract snippet from the same block (co-located, no index alignment needed)
+        const snippetMatch = block.match(/<td[^>]*class="result-snippet"[^>]*>([\s\S]*?)<\/td>/i);
+        const snippet = snippetMatch ? stripTags(snippetMatch[1]).trim() : '';
         if (title && (url.startsWith('http://') || url.startsWith('https://'))) {
             results.push({ title, url, snippet });
         }
@@ -2389,6 +2393,10 @@ async function executeTool(name, input) {
                         if (fb === 'brave') fallback = await searchBrave(input.query, safeCount, safeFreshness);
                         else if (fb === 'duckduckgo-lite') fallback = await searchDDGLite(input.query, safeCount);
                         else fallback = await searchDDG(input.query, safeCount);
+                        // Treat empty DDG results (CAPTCHA) as failure to continue fallback chain
+                        if (fb === 'duckduckgo' && fallback.results && fallback.results.length === 0 && fallback.message) {
+                            throw new Error(fallback.message);
+                        }
                         const fbCacheKey = fb === 'brave'
                             ? `search:brave:${input.query}:${safeCount}:${safeFreshness}`
                             : `search:${fb}:${input.query}:${safeCount}`;
