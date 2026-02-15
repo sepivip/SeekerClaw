@@ -183,7 +183,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
         Spacer(modifier = Modifier.height(2.dp))
 
         Text(
-            text = agentName,
+            text = "Your AI Agent",
             fontFamily = FontFamily.Default,
             fontSize = 14.sp,
             color = SeekerClawColors.TextDim,
