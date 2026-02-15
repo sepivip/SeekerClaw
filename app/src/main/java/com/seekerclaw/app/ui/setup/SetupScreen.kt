@@ -204,6 +204,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             return
         }
 
+        errorMessage = null
         isStarting = true
         try {
             val trimmedKey = apiKey.trim()
