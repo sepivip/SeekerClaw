@@ -52,7 +52,9 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -1562,6 +1564,7 @@ private fun SettingRow(
     onCheckedChange: (Boolean) -> Unit,
     info: String? = null,
 ) {
+    val haptic = LocalHapticFeedback.current
     var showInfo by remember { mutableStateOf(false) }
 
     Row(
@@ -1594,7 +1597,10 @@ private fun SettingRow(
         }
         Switch(
             checked = checked,
-            onCheckedChange = onCheckedChange,
+            onCheckedChange = {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                onCheckedChange(it)
+            },
             colors = SwitchDefaults.colors(
                 checkedThumbColor = androidx.compose.ui.graphics.Color.White,
                 checkedTrackColor = androidx.compose.ui.graphics.Color(0xFF10B981),
@@ -1638,6 +1644,7 @@ private fun PermissionRow(
     onRequest: () -> Unit,
     info: String? = null,
 ) {
+    val haptic = LocalHapticFeedback.current
     var showInfo by remember { mutableStateOf(false) }
 
     Row(
@@ -1670,7 +1677,12 @@ private fun PermissionRow(
         }
         Switch(
             checked = granted,
-            onCheckedChange = { if (!granted) onRequest() },
+            onCheckedChange = {
+                if (!granted) {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    onRequest()
+                }
+            },
             colors = SwitchDefaults.colors(
                 checkedThumbColor = androidx.compose.ui.graphics.Color.White,
                 checkedTrackColor = androidx.compose.ui.graphics.Color(0xFF10B981),
