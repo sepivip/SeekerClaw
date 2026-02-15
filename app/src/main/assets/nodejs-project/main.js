@@ -1428,6 +1428,55 @@ async function searchDDG(query, count = 5) {
     return { provider: 'duckduckgo', results };
 }
 
+// DDG Lite fallback — lite.duckduckgo.com bypasses CAPTCHAs that block html.duckduckgo.com on phone IPs
+async function searchDDGLite(query, count = 5) {
+    const safePath = `/lite?q=${encodeURIComponent(query)}`;
+    const res = await httpRequest({
+        hostname: 'lite.duckduckgo.com',
+        path: safePath,
+        method: 'GET',
+        headers: {
+            'User-Agent': USER_AGENT,
+            'Accept': 'text/html'
+        }
+    });
+
+    if (res.status !== 200) {
+        throw new Error(`DuckDuckGo Lite search error (${res.status})`);
+    }
+    const html = typeof res.data === 'string' ? res.data : String(res.data);
+
+    // DDG Lite uses table-based layout — split by result-link anchors and find snippets within each block
+    const results = [];
+    const blocks = html.split(/<a[^>]*class="result-link"/i);
+    for (let i = 1; i < blocks.length && results.length < count; i++) {
+        const block = blocks[i];
+        // Extract URL and title from the result-link anchor
+        const urlMatch = block.match(/href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i);
+        if (!urlMatch) continue;
+        let url = decodeEntities(urlMatch[1]).trim();
+        // DDG Lite also wraps URLs through redirects
+        const uddgMatch = url.match(/[?&]uddg=([^&]+)/);
+        if (uddgMatch) url = decodeURIComponent(uddgMatch[1]);
+        const title = stripTags(urlMatch[2]).trim();
+        // Extract snippet from the same block (co-located, no index alignment needed)
+        const snippetMatch = block.match(/<td[^>]*class="result-snippet"[^>]*>([\s\S]*?)<\/td>/i);
+        const snippet = snippetMatch ? stripTags(snippetMatch[1]).trim() : '';
+        if (title && (url.startsWith('http://') || url.startsWith('https://'))) {
+            results.push({ title, url, snippet });
+        }
+    }
+
+    if (results.length === 0) {
+        if (html.length > 500) {
+            log(`[DDG Lite] HTML received (${html.length} chars) but no results parsed — markup may have changed`);
+            return { provider: 'duckduckgo-lite', results: [], message: 'Results could not be parsed — DuckDuckGo Lite markup may have changed' };
+        }
+        return { provider: 'duckduckgo-lite', results: [], message: 'No results found' };
+    }
+    return { provider: 'duckduckgo-lite', results };
+}
+
 // --- Enhanced HTTP fetch with redirects + SSRF protection ---
 
 async function webFetch(urlString, options = {}) {
@@ -2317,34 +2366,49 @@ async function executeTool(name, input) {
                 } else {
                     result = await searchDDG(input.query, safeCount);
                 }
+                // Treat empty DDG results as failure to trigger fallback (CAPTCHA returns 200 but no parseable results)
+                if (result.results && result.results.length === 0 && result.message && provider === 'duckduckgo') {
+                    throw new Error(result.message);
+                }
                 cacheSet(cacheKey, result);
                 return result;
             } catch (e) {
-                // Fallback chain: perplexity → brave → ddg, brave → ddg
+                // Fallback chain: perplexity → brave → ddg → ddg-lite, brave → ddg → ddg-lite, ddg → ddg-lite
                 log(`[WebSearch] ${provider} failed (${e.message}), trying fallback`);
                 const fallbacks = [];
                 if (provider === 'perplexity') {
                     if (config.braveApiKey) fallbacks.push('brave');
                     fallbacks.push('duckduckgo');
+                    fallbacks.push('duckduckgo-lite');
                 } else if (provider === 'brave') {
                     fallbacks.push('duckduckgo');
+                    fallbacks.push('duckduckgo-lite');
+                } else if (provider === 'duckduckgo') {
+                    fallbacks.push('duckduckgo-lite');
                 }
                 for (const fb of fallbacks) {
                     try {
                         log(`[WebSearch] Falling back to ${fb}`);
-                        const fallback = fb === 'brave'
-                            ? await searchBrave(input.query, safeCount, safeFreshness)
-                            : await searchDDG(input.query, safeCount);
+                        let fallback;
+                        if (fb === 'brave') fallback = await searchBrave(input.query, safeCount, safeFreshness);
+                        else if (fb === 'duckduckgo-lite') fallback = await searchDDGLite(input.query, safeCount);
+                        else fallback = await searchDDG(input.query, safeCount);
+                        // Treat empty DDG results (CAPTCHA) as failure to continue fallback chain
+                        if (fb === 'duckduckgo' && fallback.results && fallback.results.length === 0 && fallback.message) {
+                            throw new Error(fallback.message);
+                        }
                         const fbCacheKey = fb === 'brave'
                             ? `search:brave:${input.query}:${safeCount}:${safeFreshness}`
-                            : `search:duckduckgo:${input.query}:${safeCount}`;
+                            : `search:${fb}:${input.query}:${safeCount}`;
                         cacheSet(fbCacheKey, fallback);
+                        // Also cache under original key so subsequent queries don't re-hit the failing provider
+                        cacheSet(cacheKey, fallback);
                         return fallback;
                     } catch (fbErr) {
                         log(`[WebSearch] ${fb} fallback also failed: ${fbErr.message}`);
                     }
                 }
-                const displayName = { brave: 'Brave', duckduckgo: 'DuckDuckGo', perplexity: 'Perplexity' }[provider] || provider;
+                const displayName = { brave: 'Brave', duckduckgo: 'DuckDuckGo', 'duckduckgo-lite': 'DuckDuckGo Lite', perplexity: 'Perplexity' }[provider] || provider;
                 return { error: fallbacks.length > 0
                     ? `Search failed: ${displayName} (${e.message}), fallback providers also failed`
                     : `${displayName} search failed: ${e.message}. No fallback providers available.` };
