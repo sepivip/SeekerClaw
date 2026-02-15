@@ -2343,9 +2343,10 @@ async function executeTool(name, input) {
                         log(`[WebSearch] ${fb} fallback also failed: ${fbErr.message}`);
                     }
                 }
+                const displayName = { brave: 'Brave', duckduckgo: 'DuckDuckGo', perplexity: 'Perplexity' }[provider] || provider;
                 return { error: fallbacks.length > 0
-                    ? `Search failed: ${provider} (${e.message}), fallback providers also failed`
-                    : `${provider === 'duckduckgo' ? 'DuckDuckGo' : provider} search failed: ${e.message}. No fallback providers available.` };
+                    ? `Search failed: ${displayName} (${e.message}), fallback providers also failed`
+                    : `${displayName} search failed: ${e.message}. No fallback providers available.` };
             }
         }
 
