@@ -75,7 +75,8 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
     val lastActivityTime by ServiceState.lastActivityTime.collectAsState()
     val logs by LogCollector.logs.collectAsState()
 
-    val config = remember { ConfigManager.loadConfig(context) }
+    // Re-read config when service status changes (config edits trigger restart)
+    val config = remember(status) { ConfigManager.loadConfig(context) }
     val agentName = remember(config) { config?.agentName?.ifBlank { "SeekerClaw" } ?: "SeekerClaw" }
     val hasBotToken = remember(config) { config?.telegramBotToken?.isNotBlank() == true }
     val hasCredential = remember(config) { config?.activeCredential?.isNotBlank() == true }
