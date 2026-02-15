@@ -75,11 +75,12 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
     val lastActivityTime by ServiceState.lastActivityTime.collectAsState()
     val logs by LogCollector.logs.collectAsState()
 
-    val config = ConfigManager.loadConfig(context)
-    val agentName = config?.agentName?.ifBlank { "SeekerClaw" } ?: "SeekerClaw"
-    val hasBotToken = config?.telegramBotToken?.isNotBlank() == true
-    val hasCredential = config?.activeCredential?.isNotBlank() == true
-    val validationError = ConfigManager.runtimeValidationError(config)
+    val cfgVersion by ConfigManager.configVersion
+    val config = remember(cfgVersion) { ConfigManager.loadConfig(context) }
+    val agentName = remember(config) { config?.agentName?.ifBlank { "SeekerClaw" } ?: "SeekerClaw" }
+    val hasBotToken = remember(config) { config?.telegramBotToken?.isNotBlank() == true }
+    val hasCredential = remember(config) { config?.activeCredential?.isNotBlank() == true }
+    val validationError = remember(config) { ConfigManager.runtimeValidationError(config) }
     val latestError = logs.lastOrNull { it.level == LogLevel.ERROR }?.message
 
     // Fetch API stats from bridge (BAT-32)

@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import android.net.Uri
 import android.util.Base64
 import android.util.Log
+import androidx.compose.runtime.mutableIntStateOf
 import com.seekerclaw.app.util.LogCollector
 import com.seekerclaw.app.util.LogLevel
 import java.io.File
@@ -29,6 +30,9 @@ data class AppConfig(
 }
 
 object ConfigManager {
+    /** Incremented on every saveConfig(); observe in `remember(configVersion)`. */
+    val configVersion = mutableIntStateOf(0)
+
     private const val PREFS_NAME = "seekerclaw_prefs"
     private const val KEY_API_KEY_ENC = "api_key_enc"
     private const val KEY_BOT_TOKEN_ENC = "bot_token_enc"
@@ -86,7 +90,9 @@ object ConfigManager {
         }
 
         val persisted = editor.commit()
-        if (!persisted) {
+        if (persisted) {
+            configVersion.intValue++
+        } else {
             LogCollector.append("[Config] Failed to persist config (commit=false)", LogLevel.ERROR)
         }
     }
@@ -176,11 +182,13 @@ object ConfigManager {
 
     fun saveOwnerId(context: Context, ownerId: String) {
         prefs(context).edit().putString(KEY_OWNER_ID, ownerId).apply()
+        configVersion.intValue++
     }
 
     fun clearConfig(context: Context) {
         prefs(context).edit().clear().apply()
         KeystoreHelper.deleteKey()
+        configVersion.intValue++
     }
 
     /**
@@ -266,6 +274,7 @@ object ConfigManager {
             .putString(KEY_WALLET_ADDRESS, address)
             .putString(KEY_WALLET_LABEL, label)
             .apply()
+        configVersion.intValue++
         writeWalletConfig(context)
     }
 
@@ -274,6 +283,7 @@ object ConfigManager {
             .remove(KEY_WALLET_ADDRESS)
             .remove(KEY_WALLET_LABEL)
             .apply()
+        configVersion.intValue++
         val walletFile = File(File(context.filesDir, "workspace"), "solana_wallet.json")
         if (walletFile.exists()) walletFile.delete()
     }
