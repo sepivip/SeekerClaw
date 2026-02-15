@@ -1213,6 +1213,7 @@ let cachedSkills = [];
 function httpRequest(options, body = null) {
     return new Promise((resolve, reject) => {
         const req = https.request(options, (res) => {
+            res.setEncoding('utf8'); // Handle multi-byte chars (emoji) split across chunks
             let data = '';
             res.on('data', chunk => data += chunk);
             res.on('end', () => {
@@ -3704,6 +3705,7 @@ async function androidBridgeCall(endpoint, data = {}, timeoutMs = 10000) {
             },
             timeout: timeoutMs
         }, (res) => {
+            res.setEncoding('utf8');
             let body = '';
             res.on('data', chunk => body += chunk);
             res.on('end', () => {
@@ -3816,6 +3818,7 @@ async function solanaRpc(method, params = []) {
         };
 
         const req = https.request(options, (res) => {
+            res.setEncoding('utf8');
             let body = '';
             res.on('data', chunk => body += chunk);
             res.on('end', () => {
