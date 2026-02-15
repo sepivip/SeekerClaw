@@ -4717,8 +4717,10 @@ async function claudeApiCall(body, chatId) {
     const startTime = Date.now();
     const MAX_RETRIES = 3; // 1 initial + up to 3 retries = 4 total attempts max
     try {
-        // Setup tokens and API keys both use x-api-key for the Messages API
-        const authHeaders = { 'x-api-key': ANTHROPIC_KEY };
+        // Setup tokens (OAuth) use Bearer auth; regular API keys use x-api-key
+        const authHeaders = AUTH_TYPE === 'setup_token'
+            ? { 'Authorization': `Bearer ${ANTHROPIC_KEY}` }
+            : { 'x-api-key': ANTHROPIC_KEY };
 
         let res;
         let retries = 0;
@@ -4733,7 +4735,9 @@ async function claudeApiCall(body, chatId) {
                     headers: {
                         'Content-Type': 'application/json',
                         'anthropic-version': '2023-06-01',
-                        'anthropic-beta': 'prompt-caching-2024-07-31',
+                        'anthropic-beta': AUTH_TYPE === 'setup_token'
+                            ? 'prompt-caching-2024-07-31,oauth-2025-04-20'
+                            : 'prompt-caching-2024-07-31',
                         ...authHeaders,
                     }
                 }, body);
