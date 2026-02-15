@@ -1390,7 +1390,8 @@ async function searchDDG(query, count = 5) {
     }
     const html = typeof res.data === 'string' ? res.data : String(res.data);
 
-    // Parse DDG HTML results — each result is in a <div class="result">
+    // Parse DDG HTML results — patterns match DDG's current HTML format (double-quoted attributes).
+    // May need updating if DDG changes their markup.
     const results = [];
     const resultBlocks = html.split(/<div[^>]*class="[^"]*result[^"]*"[^>]*>/i);
     for (let i = 1; i < resultBlocks.length && results.length < count; i++) {
@@ -1409,7 +1410,7 @@ async function searchDDG(query, count = 5) {
             if (uddgMatch) url = decodeURIComponent(uddgMatch[1]);
             const title = stripTags(titleMatch[1]).trim();
             const snippet = snippetMatch ? stripTags(snippetMatch[1]).trim() : '';
-            if (title && url.startsWith('http')) {
+            if (title && (url.startsWith('http://') || url.startsWith('https://'))) {
                 results.push({ title, url, snippet });
             }
         }
@@ -2324,14 +2325,18 @@ async function executeTool(name, input) {
                         const fallback = fb === 'brave'
                             ? await searchBrave(input.query, safeCount, safeFreshness)
                             : await searchDDG(input.query, safeCount);
-                        const fbCacheKey = `search:${fb}:${input.query}:${safeCount}:${safeFreshness}`;
+                        const fbCacheKey = fb === 'brave'
+                            ? `search:brave:${input.query}:${safeCount}:${safeFreshness}`
+                            : `search:duckduckgo:${input.query}:${safeCount}`;
                         cacheSet(fbCacheKey, fallback);
                         return fallback;
                     } catch (fbErr) {
                         log(`[WebSearch] ${fb} fallback also failed: ${fbErr.message}`);
                     }
                 }
-                return { error: e.message };
+                return { error: fallbacks.length > 0
+                    ? `Search failed: ${provider} (${e.message}), fallback providers also unavailable`
+                    : e.message };
             }
         }
 
@@ -4344,7 +4349,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('Tools are provided via the tools API. Call tools exactly as listed by name.');
     lines.push('For visual checks ("what do you see", "check my dog"), call android_camera_check.');
     lines.push('**Swap workflow:** Always use solana_quote first to show the user what they\'ll get, then solana_swap to execute. Never swap without confirming the quote with the user first.');
-    lines.push('**Web search:** web_search works out of the box — DuckDuckGo is the zero-config default. If a Brave API key is configured, Brave is used automatically (better quality). Use provider=perplexity for complex questions needing synthesized answers. All providers return the same format (title, url, snippet).');
+    lines.push('**Web search:** web_search works out of the box — DuckDuckGo is the zero-config default. If a Brave API key is configured, Brave is used automatically (better quality). DuckDuckGo and Brave return search results as {title, url, snippet}. Use provider=perplexity for complex questions — it returns a synthesized answer with citations.');
     lines.push('**Web fetch:** Use web_fetch to read webpages or call APIs. Supports custom headers (Bearer auth), POST/PUT/DELETE methods, and request bodies. Returns markdown (default), JSON, or plain text. Use raw=true for stripped text. Up to 50K chars.');
     lines.push('**Shell execution:** Use shell_exec to run commands on the device. Sandboxed to workspace directory with a predefined allowlist of common Unix utilities (ls, cat, grep, find, curl, etc.). Note: node/npm/npx are NOT available — use for file operations, curl, and system info only. 30s timeout. No chaining, redirection, or command substitution — one command at a time.');
     lines.push('**JavaScript execution:** Use js_eval to run JavaScript code inside the Node.js process. Supports async/await, require(), and most Node.js built-ins (fs, path, http, crypto, etc. — child_process and vm are blocked). Use for computation, data processing, JSON manipulation, HTTP requests, or anything that needs JavaScript. 30s timeout. Prefer js_eval over shell_exec when the task involves data processing or logic.');
