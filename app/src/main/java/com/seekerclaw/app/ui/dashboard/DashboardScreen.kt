@@ -115,17 +115,20 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
 
         val mainHandler = Handler(Looper.getMainLooper())
         val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                isOnline = true
+            }
             override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
-                mainHandler.post { isOnline = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) }
+                isOnline = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
             }
             override fun onLost(network: Network) {
-                mainHandler.post { isOnline = false }
+                isOnline = false
             }
         }
         val request = NetworkRequest.Builder()
             .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
             .build()
-        cm.registerNetworkCallback(request, callback)
+        cm.registerNetworkCallback(request, callback, mainHandler)
         onDispose { runCatching { cm.unregisterNetworkCallback(callback) } }
     }
 
