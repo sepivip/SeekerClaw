@@ -3,6 +3,8 @@ package com.seekerclaw.app.ui.setup
 import android.Manifest
 import android.app.Activity
 import android.content.Intent
+import com.seekerclaw.app.util.LogCollector
+import com.seekerclaw.app.util.LogLevel
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -222,6 +224,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             OpenClawService.start(context)
             currentStep = 4
         } catch (e: Exception) {
+            LogCollector.append("[Setup] Failed to start agent: ${e.message}", LogLevel.ERROR)
             isStarting = false
             errorMessage = e.message ?: "Failed to start agent"
         }
