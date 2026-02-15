@@ -116,7 +116,8 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
         val mainHandler = Handler(Looper.getMainLooper())
         val callback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
-                isOnline = true
+                val netCaps = cm.getNetworkCapabilities(network)
+                isOnline = netCaps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
             }
             override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
                 isOnline = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
