@@ -1582,10 +1582,7 @@ private fun SettingRow(
                 color = SeekerClawColors.TextPrimary,
             )
             if (info != null) {
-                IconButton(
-                    onClick = { showInfo = true },
-                    modifier = Modifier.size(20.dp),
-                ) {
+                IconButton(onClick = { showInfo = true }) {
                     Icon(
                         Icons.Outlined.Info,
                         contentDescription = "More info about $label",
@@ -1662,10 +1659,7 @@ private fun PermissionRow(
                 color = SeekerClawColors.TextPrimary,
             )
             if (info != null) {
-                IconButton(
-                    onClick = { showInfo = true },
-                    modifier = Modifier.size(20.dp),
-                ) {
+                IconButton(onClick = { showInfo = true }) {
                     Icon(
                         Icons.Outlined.Info,
                         contentDescription = "More info about $label",
