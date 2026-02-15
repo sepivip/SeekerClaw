@@ -458,19 +458,19 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
             ConfigField(
                 label = "Brave API Key",
                 value = config?.braveApiKey?.let { key ->
-                    if (key.isBlank()) "Not set (web search disabled)"
+                    if (key.isBlank()) "Not set — using DuckDuckGo"
                     else if (key.length > 12) "${key.take(8)}${"*".repeat(8)}${key.takeLast(4)}"
                     else "*".repeat(key.length)
-                } ?: "Not set (web search disabled)",
+                } ?: "Not set — using DuckDuckGo",
                 onClick = {
                     editField = "braveApiKey"
                     editLabel = "Brave API Key"
                     editValue = config?.braveApiKey ?: ""
                 },
                 showDivider = false,
-                info = "Optional. Lets your agent search the web using Brave Search. " +
+                info = "Optional. Lets your agent search the web using Brave Search (better quality). " +
                     "Get a free key at brave.com/search/api. " +
-                    "Without this, the agent cannot look things up online.",
+                    "Without this, DuckDuckGo is used (no key required).",
             )
         }
 
