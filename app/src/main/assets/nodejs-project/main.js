@@ -4573,7 +4573,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     // Runtime section (static parts only — dynamic time goes in separate block for caching)
     lines.push('## Runtime');
     lines.push(`Platform: Android ${process.arch} | Node: ${process.version} | Model: ${MODEL}`);
-    lines.push(`Channel: telegram | Agent: ${AGENT_NAME}`);
+    lines.push(`Channel: telegram | Agent: ${AGENT_NAME} | Auth: ${AUTH_TYPE === 'setup_token' ? 'Claude Pro/Max (setup token)' : 'API key'}`);
     lines.push('');
     lines.push('## Runtime Environment');
     lines.push('- Running inside nodejs-mobile on Android (Node.js runs as libnode.so via JNI, not a standalone binary)');
@@ -4717,9 +4717,8 @@ async function claudeApiCall(body, chatId) {
     const startTime = Date.now();
     const MAX_RETRIES = 3; // 1 initial + up to 3 retries = 4 total attempts max
     try {
-        const authHeaders = AUTH_TYPE === 'setup_token'
-            ? { 'Authorization': `Bearer ${ANTHROPIC_KEY}` }
-            : { 'x-api-key': ANTHROPIC_KEY };
+        // Setup tokens and API keys both use x-api-key for the Messages API
+        const authHeaders = { 'x-api-key': ANTHROPIC_KEY };
 
         let res;
         let retries = 0;
