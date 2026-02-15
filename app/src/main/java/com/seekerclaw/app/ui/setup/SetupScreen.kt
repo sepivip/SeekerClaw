@@ -348,7 +348,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                 }
             },
             containerColor = SeekerClawColors.Surface,
-            shape = RoundedCornerShape(SeekerClawColors.CornerRadius),
+            shape = shape,
         )
     }
 }
