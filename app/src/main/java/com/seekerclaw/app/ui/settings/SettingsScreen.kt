@@ -1678,8 +1678,10 @@ private fun PermissionRow(
         Switch(
             checked = granted,
             onCheckedChange = {
-                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                if (!granted) onRequest()
+                if (!granted) {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    onRequest()
+                }
             },
             colors = SwitchDefaults.colors(
                 checkedThumbColor = androidx.compose.ui.graphics.Color.White,

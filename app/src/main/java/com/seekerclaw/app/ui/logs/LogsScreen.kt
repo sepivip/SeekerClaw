@@ -310,7 +310,10 @@ fun LogsScreen() {
                 activeColor = SeekerClawColors.LogInfo,
                 shape = shape,
                 modifier = Modifier.weight(1f),
-                onClick = { haptic.performHapticFeedback(HapticFeedbackType.LongPress); showInfo = !showInfo },
+                onClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    showInfo = !showInfo
+                },
             )
             FilterChip(
                 label = "Warn",
@@ -318,7 +321,10 @@ fun LogsScreen() {
                 activeColor = SeekerClawColors.Warning,
                 shape = shape,
                 modifier = Modifier.weight(1f),
-                onClick = { haptic.performHapticFeedback(HapticFeedbackType.LongPress); showWarn = !showWarn },
+                onClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    showWarn = !showWarn
+                },
             )
             FilterChip(
                 label = "Error",
@@ -326,7 +332,10 @@ fun LogsScreen() {
                 activeColor = SeekerClawColors.Error,
                 shape = shape,
                 modifier = Modifier.weight(1f),
-                onClick = { haptic.performHapticFeedback(HapticFeedbackType.LongPress); showError = !showError },
+                onClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    showError = !showError
+                },
             )
         }
     }
