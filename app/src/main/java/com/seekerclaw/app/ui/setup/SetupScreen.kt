@@ -205,20 +205,25 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
         }
 
         isStarting = true
-        val trimmedKey = apiKey.trim()
-        val config = AppConfig(
-            anthropicApiKey = if (authType == "api_key") trimmedKey else "",
-            setupToken = if (authType == "setup_token") trimmedKey else "",
-            authType = authType,
-            telegramBotToken = botToken.trim(),
-            telegramOwnerId = ownerId.trim(),
-            model = selectedModel,
-            agentName = agentName.trim().ifBlank { "SeekerClaw" },
-        )
-        ConfigManager.saveConfig(context, config)
-        ConfigManager.seedWorkspace(context)
-        OpenClawService.start(context)
-        currentStep = 4
+        try {
+            val trimmedKey = apiKey.trim()
+            val config = AppConfig(
+                anthropicApiKey = if (authType == "api_key") trimmedKey else "",
+                setupToken = if (authType == "setup_token") trimmedKey else "",
+                authType = authType,
+                telegramBotToken = botToken.trim(),
+                telegramOwnerId = ownerId.trim(),
+                model = selectedModel,
+                agentName = agentName.trim().ifBlank { "SeekerClaw" },
+            )
+            ConfigManager.saveConfig(context, config)
+            ConfigManager.seedWorkspace(context)
+            OpenClawService.start(context)
+            currentStep = 4
+        } catch (e: Exception) {
+            isStarting = false
+            errorMessage = e.message ?: "Failed to start agent"
+        }
     }
 
     val fieldColors = OutlinedTextFieldDefaults.colors(
