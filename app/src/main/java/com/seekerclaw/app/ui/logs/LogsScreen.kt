@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -50,6 +51,7 @@ import java.util.Date
 
 @Composable
 fun LogsScreen() {
+    val context = LocalContext.current
     val logs by LogCollector.logs.collectAsState()
     val listState = rememberLazyListState()
     var autoScroll by remember { mutableStateOf(true) }
@@ -85,7 +87,7 @@ fun LogsScreen() {
             .background(SeekerClawColors.Background)
             .padding(20.dp),
     ) {
-        // Header — icon + title + trash button
+        // Header — icon + title + share/trash buttons
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -107,12 +109,37 @@ fun LogsScreen() {
                     color = SeekerClawColors.TextPrimary,
                 )
             }
-            IconButton(onClick = { showClearDialog = true }) {
-                Icon(
-                    Icons.Default.Delete,
-                    contentDescription = "Clear logs",
-                    tint = SeekerClawColors.TextDim,
-                )
+            Row {
+                IconButton(onClick = {
+                    val logText = buildString {
+                        appendLine("SeekerClaw Logs — ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US).format(Date())}")
+                        appendLine("─".repeat(40))
+                        filteredLogs.forEach { entry ->
+                            val pattern = if (android.text.format.DateFormat.is24HourFormat(context)) "HH:mm:ss" else "hh:mm:ss a"
+                            val timeStr = android.text.format.DateFormat.format(pattern, Date(entry.timestamp))
+                            appendLine("[${entry.level.name}] [$timeStr] ${entry.message}")
+                        }
+                    }
+                    val sendIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(android.content.Intent.EXTRA_TEXT, logText)
+                        putExtra(android.content.Intent.EXTRA_SUBJECT, "SeekerClaw Logs")
+                    }
+                    context.startActivity(android.content.Intent.createChooser(sendIntent, "Share Logs"))
+                }) {
+                    Icon(
+                        Icons.Default.Share,
+                        contentDescription = "Share logs",
+                        tint = SeekerClawColors.TextDim,
+                    )
+                }
+                IconButton(onClick = { showClearDialog = true }) {
+                    Icon(
+                        Icons.Default.Delete,
+                        contentDescription = "Clear logs",
+                        tint = SeekerClawColors.TextDim,
+                    )
+                }
             }
         }
 
@@ -166,7 +193,6 @@ fun LogsScreen() {
                             LogLevel.WARN -> SeekerClawColors.Warning
                             LogLevel.ERROR -> SeekerClawColors.Error
                         }
-                        val context = LocalContext.current
                         val pattern = if (android.text.format.DateFormat.is24HourFormat(context)) "HH:mm:ss" else "hh:mm:ss a"
                         val timeStr = android.text.format.DateFormat.format(pattern, Date(entry.timestamp))
                         Text(
