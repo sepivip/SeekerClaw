@@ -24,6 +24,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenuItem
@@ -113,17 +114,13 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                     PackageManager.PERMISSION_GRANTED
         )
     }
+    var showNotificationDialog by remember { mutableStateOf(!hasNotificationPermission) }
 
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         hasNotificationPermission = granted
-    }
-
-    LaunchedEffect(Unit) {
-        if (!hasNotificationPermission) {
-            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-        }
+        showNotificationDialog = false
     }
 
     fun saveAndStart() {
@@ -304,6 +301,55 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
         }
 
         Spacer(modifier = Modifier.height(32.dp))
+    }
+
+    // Notification permission explanation dialog
+    if (showNotificationDialog) {
+        AlertDialog(
+            onDismissRequest = { showNotificationDialog = false },
+            title = {
+                Text(
+                    "Enable Notifications",
+                    fontFamily = FontFamily.Default,
+                    fontWeight = FontWeight.Bold,
+                    color = SeekerClawColors.TextPrimary,
+                )
+            },
+            text = {
+                Text(
+                    "SeekerClaw runs your AI agent in the background. " +
+                        "Notifications let you know when the agent starts, stops, " +
+                        "or needs attention \u2014 even when the app isn\u2019t open.",
+                    fontFamily = FontFamily.Default,
+                    fontSize = 13.sp,
+                    color = SeekerClawColors.TextSecondary,
+                    lineHeight = 20.sp,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                }) {
+                    Text(
+                        "Enable",
+                        fontFamily = FontFamily.Default,
+                        fontWeight = FontWeight.Bold,
+                        color = SeekerClawColors.Primary,
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showNotificationDialog = false }) {
+                    Text(
+                        "Not Now",
+                        fontFamily = FontFamily.Default,
+                        color = SeekerClawColors.TextDim,
+                    )
+                }
+            },
+            containerColor = SeekerClawColors.Surface,
+            shape = shape,
+        )
     }
 }
 
