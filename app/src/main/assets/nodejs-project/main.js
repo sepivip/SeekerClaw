@@ -4293,6 +4293,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('Keep narration brief and value-dense; avoid repeating obvious steps.');
     lines.push('Use plain human language for narration unless in a technical context.');
     lines.push('For visual checks ("what do you see", "check my dog", "look at the room"), call android_camera_check.');
+    lines.push('For long waits, avoid rapid poll loops: use shell_exec with enough timeout or check status on-demand rather than in a tight loop.');
     lines.push('');
 
     // Error recovery guidance — how agent should handle tool failures

@@ -1,8 +1,8 @@
 # OpenClaw Version Tracking
 
 > **Purpose:** Track OpenClaw releases and identify changes to port to SeekerClaw.
-> **Current OpenClaw Version:** 2026.2.13 (main 71f357d, 2026-02-14)
-> **Last Sync Review:** 2026-02-14
+> **Current OpenClaw Version:** 2026.2.14 (main e927fd1, 2026-02-15)
+> **Last Sync Review:** 2026-02-15
 > **Parity Plan:** See `PARITY_PLAN.md`
 
 ---
@@ -82,7 +82,26 @@ These files in OpenClaw directly affect SeekerClaw behavior. Changes here requir
 
 ## Version History & Changes
 
-### 2026.2.13 (Current - 71f357d)
+### 2026.2.14 (Current - e927fd1)
+- **Release Date:** 2026-02-15
+- **SeekerClaw Sync Status:** Key changes ported
+- **Key Changes Ported:**
+  - [x] System prompt: poll loop avoidance guidance for shell_exec
+- **Skipped (not applicable):**
+  - Sub-agent orchestration (subagents tool, system message handling) — no sub-agents
+  - Sandbox/container workspace path resolution — no Docker on mobile
+  - Memory QMD/embedding refactoring — requires Node 22+ / node:sqlite
+  - Skills refresh watch optimization (SKILL.md glob patterns) — no file watcher
+  - Cron normalize partial agentTurn payloads — SeekerClaw uses reminder-only payloads
+  - Cron sub-agent wait/poll logic — no sub-agent system
+  - Web/auto-reply test infrastructure refactoring — test-only
+- **Notable upstream:**
+  - New `subagents` tool (list/steer/kill sub-agent runs)
+  - Cron jobs now wait for sub-agent completion before delivering
+  - Heavy test refactoring across web, cron, memory subsystems
+  - Skills watcher switched to SKILL.md glob patterns to avoid FD exhaustion
+
+### 2026.2.13 (71f357d)
 - **Release Date:** 2026-02-14
 - **SeekerClaw Sync Status:** Key changes ported
 - **Key Changes Ported:**
