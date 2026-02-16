@@ -569,11 +569,9 @@ private fun StatCard(
                     Modifier
                         .clip(shape)
                         .drawBehind {
-                            drawLine(
+                            drawRect(
                                 color = accentColor,
-                                start = Offset(0f, 0f),
-                                end = Offset(0f, size.height),
-                                strokeWidth = 4.dp.toPx(),
+                                size = androidx.compose.ui.geometry.Size(4.dp.toPx(), size.height),
                             )
                         }
                 } else Modifier

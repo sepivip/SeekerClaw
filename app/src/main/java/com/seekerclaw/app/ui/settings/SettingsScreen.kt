@@ -538,18 +538,18 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                     .background(SeekerClawColors.Surface, shape)
                     .padding(horizontal = 16.dp),
             ) {
-            val allPermissionsOff = !hasCameraPermission && !hasLocationPermission &&
-                !hasContactsPermission && !hasSmsPermission && !hasCallPermission
-            if (allPermissionsOff) {
-                Text(
-                    text = "Enable permissions to unlock device features (camera, GPS, SMS, etc.)",
-                    fontFamily = FontFamily.Default,
-                    fontSize = 12.sp,
-                    color = SeekerClawColors.TextSecondary,
-                    lineHeight = 18.sp,
-                    modifier = Modifier.padding(top = 12.dp, bottom = 4.dp),
-                )
-            }
+                val allPermissionsOff = !hasCameraPermission && !hasLocationPermission &&
+                    !hasContactsPermission && !hasSmsPermission && !hasCallPermission
+                if (allPermissionsOff) {
+                    Text(
+                        text = "Enable permissions to unlock device features (camera, GPS, SMS, etc.)",
+                        fontFamily = FontFamily.Default,
+                        fontSize = 12.sp,
+                        color = SeekerClawColors.TextSecondary,
+                        lineHeight = 18.sp,
+                        modifier = Modifier.padding(top = 12.dp, bottom = 4.dp),
+                    )
+                }
             PermissionRow(
                 label = "Camera",
                 granted = hasCameraPermission,
