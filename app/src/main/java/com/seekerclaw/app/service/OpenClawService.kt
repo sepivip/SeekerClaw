@@ -107,6 +107,9 @@ class OpenClawService : Service() {
         // Seed workspace if first run
         ConfigManager.seedWorkspace(this)
 
+        // Generate PLATFORM.md with current device state (fresh every boot)
+        ConfigManager.writePlatformMd(this)
+
         // Extract nodejs-project assets to internal storage
         NodeBridge.extractBundle(applicationContext)
 
