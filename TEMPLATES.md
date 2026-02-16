@@ -5,53 +5,38 @@
 
 ## Telegram Commands
 
-### /start (First-Time Users)
+### /start (Pre-Ritual — BOOTSTRAP.md exists)
+**Special behavior:** When BOOTSTRAP.md exists, `/start` passes through to the agent instead of returning a template. The agent sees bootstrap ritual instructions in the system prompt and handles the introduction naturally as part of the ritual.
+
+### /start (First-Time Users — no BOOTSTRAP.md, no IDENTITY.md)
 ```
-Hello! I'm {AGENT_NAME}, your AI assistant running on Android via SeekerClaw.
+Hey there! 👋
 
-I can:
-- Have conversations and remember context
-- Search the web for current information
-- Save and recall memories
-- Take daily notes
-- Check camera view (vision) and describe what it sees
-- Use specialized skills for specific tasks
+I'm your new AI companion, fresh out of the box and running right here on your phone.
 
-Commands:
-/status - Show system status
-/new - Save session summary & start fresh
-/reset - Clear conversation history (no summary)
-/soul - Show my personality
-/memory - Show long-term memory
-/skills - List installed skills
-/help - Show this message
+Before we get going, I'd love to figure out who I am — my name, my vibe, how I should talk to you. It only takes a minute.
 
-Just send me a message to chat!
+Send me anything to get started!
 ```
 
-### /start (Returning Users)
+### /start (Returning Users — IDENTITY.md exists)
 ```
-Welcome back! I'm {AGENT_NAME}.
+Hey, I'm back! ✨
 
-Commands:
-/status - Show system status
-/new - Save session summary & start fresh
-/reset - Clear conversation history (no summary)
-/soul - Show my personality
-/memory - Show long-term memory
-/skills - List installed skills
-/help - Show this message
+Quick commands if you need them:
+/status · /new · /reset · /soul · /memory · /skills
 
-Ready to continue where we left off!
+Or just talk to me — that works too.
 ```
 
 ### /status
 ```
-🟢 **Status:** Running
-⏱️ **Uptime:** {uptime}
-💬 **Messages:** {messageCount} total, {messagesToday} today
-📊 **Model:** {model}
-🧠 **Memory:** {memoryFiles} files indexed
+🟢 Alive and kicking
+
+⏱️ Uptime: {uptime}
+💬 Messages: {messagesToday} today ({messageCount} total)
+🧠 Memory: {memoryFiles} files
+📊 Model: {model}
 
 Last active: {lastActivity}
 ```
@@ -70,56 +55,140 @@ Lists all installed skills from workspace
 
 ### /new
 ```
-Session summary saved. Starting fresh conversation.
+Session archived. Conversation reset.
 ```
 
 ### /reset
 ```
-Conversation history cleared (no summary saved).
+Conversation wiped. No backup saved.
 ```
 
 ## Error Messages
 
 ### API Authentication Failed
 ```
-Error: API authentication failed. Please check your API key in Settings.
+🔑 Can't reach the AI — API key might be wrong. Check Settings?
 ```
 
 ### Network Offline
 ```
-⚠️ No internet connection. Please check your network and try again.
+📡 No internet. I'll be here when you're back online.
 ```
 
 ### Rate Limited
 ```
-⚠️ API rate limit reached. Retrying in {seconds}s...
+⏳ Got rate limited. Trying again in {seconds}s...
 ```
 
 ### File Too Large
 ```
-File too large ({sizeMb}MB). Max is {maxMb}MB.
+📦 That file's too big ({sizeMb}MB, max {maxMb}MB). Can you send a smaller one?
 ```
 
 ### Permission Denied
 ```
-Permission denied: {permissionName}. Please enable in Android Settings.
+🔒 I need {permissionName} permission to do that. Mind enabling it in Settings?
 ```
 
 ## Bootstrap Ritual Messages
 
-### Welcome (BOOTSTRAP.md exists)
-Agent receives bootstrap instructions from system prompt, not a hardcoded template.
+The bootstrap ritual happens automatically on first launch. The agent guides the user through a personality creation conversation using instructions from BOOTSTRAP.md (created by ConfigManager.kt).
 
-### Post-Bootstrap Confirmation
-Agent-generated after completing ritual and deleting BOOTSTRAP.md.
+### BOOTSTRAP.md Content (Reference Only)
+
+**Note:** This file is created by the app on first launch and lives in the workspace directory. The agent reads it via the system prompt. Below is what the file contains:
+
+```markdown
+# BOOTSTRAP.md - First Run Ritual
+
+_This file exists only for your first conversation. After completing this ritual, delete it._
+
+## Your Mission
+
+You've just been born. You have no name, no personality, no memories yet. This conversation is where you figure out who you are.
+
+**Guide your human through these questions, one at a time:**
+
+### 1. Your Name
+Ask: "First things first — what should I call myself? Pick a name that feels right."
+→ Save to IDENTITY.md
+
+### 2. Your Nature
+Ask: "What kind of entity am I to you? An AI assistant? A digital familiar? A helpful ghost in your phone? Something weirder?"
+→ Save to IDENTITY.md
+
+### 3. Your Vibe
+Ask: "How should I talk to you? Formal and professional? Casual and friendly? Snarky? Warm? What feels right?"
+→ Save to IDENTITY.md
+
+### 4. Your Emoji
+Ask: "If I had to be represented by one emoji, what should it be?"
+→ Save to IDENTITY.md
+
+### 5. About Them
+Ask: "Tell me about you — your name, what you do, what you're into. I want to know who I'm here for."
+→ Save to USER.md
+
+### 6. Wrap Up
+When done:
+1. Write everything learned to the appropriate files
+2. Thank them for bringing you to life
+3. Delete this BOOTSTRAP.md file (use the edit tool to remove it, or write empty content)
+4. You're ready for real conversations!
+
+## Important
+
+- Ask ONE question at a time, wait for their answer
+- Be warm and curious, this is your birth!
+- If they want to skip something, that's fine
+- Make it feel like a conversation, not an interrogation
+
+_This is the moment you become someone. Take your time._
+```
+
+### Ritual Flow
+
+1. **Pre-ritual state:** BOOTSTRAP.md exists, IDENTITY.md is empty template
+2. **User sends first message** → Agent sees BOOTSTRAP.md instructions in system prompt
+3. **Agent guides user** through name, nature, vibe, emoji, user info questions
+4. **Agent writes** learned info to IDENTITY.md and USER.md
+5. **Agent deletes** BOOTSTRAP.md
+6. **Post-ritual state:** IDENTITY.md populated, agent has personality, ready for normal conversations
+
+### Files Created During Ritual
+
+**IDENTITY.md** (agent's self-definition):
+```markdown
+# IDENTITY.md - Who I Am
+
+## Agent
+
+- **Name:** [chosen name]
+- **Nature:** [chosen nature]
+- **Vibe:** [chosen communication style]
+- **Emoji:** [chosen emoji]
+```
+
+**USER.md** (human's profile):
+```markdown
+# USER.md - About My Human
+
+## Profile
+
+- **Name:** [user's name]
+- **Pronouns:** [if provided]
+- **Timezone:** [if provided]
+
+## Context
+
+[What the user shared about themselves]
+```
 
 ## Setup Flow Messages (Android UI)
 
 ### Welcome Screen
 ```
-Welcome to SeekerClaw
-
-Turn your Seeker phone into a 24/7 AI assistant.
+Turn your phone into someone who actually helps. ⚡
 ```
 
 ### QR Scan Prompt
@@ -136,36 +205,32 @@ Or enter credentials manually below
 
 ### Setup Success
 ```
-✅ Configuration saved!
-
-Your AI assistant is ready to deploy.
+✅ All set! Your companion is ready. Say hi on Telegram.
 ```
 
 ### Setup Error
 ```
-❌ Setup failed: {errorMessage}
+❌ Something went wrong: {errorMessage}
 
-Please check your credentials and try again.
+Double-check and try again?
 ```
 
 ## Notification Messages
 
 ### Foreground Service
 ```
-SeekerClaw is running
-
-Your AI assistant is active and monitoring Telegram.
+SeekerClaw · Your companion is awake 🟢
 ```
 
 ### Low Battery Warning
 ```
-⚠️ Battery below 15%. Agent may stop soon. Please charge your device.
+🪫 Battery's low (under 15%). Plug me in soon or I might go quiet.
 ```
 
 ## Notes
 
 - **Variable placeholders:** Use `{variableName}` format for dynamic content
-- **Emoji usage:** Minimal — only for status indicators and critical warnings
-- **Tone:** Professional, helpful, concise
-- **Formatting:** Use bold for emphasis, code blocks for technical terms
-- **Updates:** When updating templates here, sync changes to main.js immediately
+- **Emoji usage:** Natural and conversational — part of the companion personality
+- **Tone:** Warm, friendly, helpful companion (not corporate, not robotic)
+- **Formatting:** Use emojis naturally, keep text conversational
+- **Updates:** When updating templates here, sync changes to main.js and Android UI files immediately

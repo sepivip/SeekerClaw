@@ -33,7 +33,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 | AI Provider | Anthropic Claude API | Sonnet 4.5 default |
 | Messaging | Telegram Bot API (grammy) | — |
 | Database | SQL.js (WASM SQLite) | 1.12.0 |
-| OpenClaw Parity | OpenClaw gateway (ported) | 2026.2.13 |
+| OpenClaw Parity | OpenClaw gateway (ported) | 2026.2.14 |
 | Web Search | Brave Search + Perplexity Sonar | — |
 | Wallet | Solana Web3.js + Jupiter API | — |
 | Build | Gradle (Kotlin DSL) | — |
@@ -41,10 +41,11 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 ## Features — Shipped
 
 ### AI Agent Core
-- **Claude integration** — Sonnet 4.5 (default), Opus 4.6, Haiku 4.5 selectable. Prompt caching, retry with backoff, rate-limit throttling, user-friendly error messages
-- **Telegram bot** — HTML formatting, native blockquotes, bidirectional reactions, file download with vision, long message chunking, quoted replies via `[[reply_to_current]]`
+- **Claude integration** — Sonnet 4.5 (default), Opus 4.6, Haiku 4.5 selectable. Prompt caching, retry with backoff, rate-limit throttling, user-friendly error messages. OAuth/setup token support for Claude Pro/Max users.
+- **Telegram bot** — HTML formatting (no markdown headers), native blockquotes, bidirectional reactions, file download with vision, file upload (telegram_send_file tool), long message chunking, quoted replies via `[[reply_to_current]]`, emoji rendering fixed
 - **SILENT_REPLY protocol** — Agent silently drops messages when it has nothing useful to say
 - **Ephemeral session awareness** — Agent knows context resets on restart
+- **PLATFORM.md auto-generation** — Device state (model, RAM, storage, battery, permissions, wallet) written on every service start
 
 ### Memory System
 - **SOUL.md** — Agent personality (user-editable)
@@ -63,7 +64,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 - **Zombie detection** — 2-hour threshold with error backoff
 
 ### Web Intelligence
-- **Web search** — Brave Search (default) + Perplexity Sonar (AI-synthesized answers)
+- **Web search** — Brave Search (default) + DuckDuckGo Lite (zero-config fallback) + Perplexity Sonar (AI-synthesized answers)
 - **Web fetch** — HTML-to-markdown, JSON, caching, redirects, custom headers/methods/bodies
 - **15-minute cache** — 100 entries max, FIFO eviction
 
@@ -84,8 +85,8 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 - **Connected wallet** — Get address from SeekerClaw app
 - **Send SOL** — Transfer with wallet approval on phone
 - **Token prices** — Real-time USD prices via Jupiter
-- **Swap quotes** — Jupiter DEX aggregator quotes with price impact
-- **Token swaps** — Execute swaps with wallet approval, transaction verification
+- **Swap quotes** — Jupiter Ultra API quotes with price impact
+- **Token swaps** — Gasless swaps via Jupiter Ultra API with MWA sign-only flow, v0 transaction validation
 
 ### Execution
 - **Shell exec** — 22 sandboxed Unix commands (cat, ls, curl, grep, find, etc.), workspace-restricted
@@ -126,11 +127,12 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 - Swap transaction verification (checks payer and programs)
 
 ### App (Android)
-- **4 themes** — DarkOps (default), Terminal, Pixel, Clean
-- **Setup wizard** — QR scan or manual API key entry
-- **Dashboard** — Status, uptime, message stats, active uplinks, mini terminal
-- **Logs viewer** — Color-coded, auto-scrolling monospace
-- **Settings** — Edit config, model dropdown, auto-start, battery optimization, export/import, danger zone
+- **Single theme** — DarkOps (dark navy + crimson red + green status), 12dp corners
+- **Setup wizard** — QR scan or manual API key entry, OAuth/setup token support, haptic feedback
+- **Dashboard** — Status with pulse animation (running) + dimming (stopped), uptime, message stats, active uplinks, mini terminal
+- **Logs viewer** — Color-coded, auto-scrolling monospace, stable keys for performance
+- **Settings** — Collapsible sections with animation, edit config with masked fields, model dropdown, auto-start, battery optimization, export/import, visual escalation for danger zone, semantic action colors (green positive, red danger)
+- **System screen** — API usage stats, memory index status, colored accent borders on stat cards
 - **Foreground service** — START_STICKY with wake lock, boot receiver, watchdog (30s health check)
 
 ## Features — In Progress
@@ -185,22 +187,22 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 - **Ephemeral context** — Conversation history resets on Node.js restart (mitigated by session summaries)
 - **Single channel** — Telegram only (no Discord, WhatsApp, etc.)
 - **dApp Store not live** — Build pipeline exists but app hasn't been submitted yet
-- **No light theme** — Dark only (4 dark theme variants)
+- **No light theme** — Dark only (DarkOps single theme)
 
 ## Stats
 
 | Metric | Count |
 |--------|-------|
-| Total commits | 78 |
-| PRs merged | 39+ |
-| Tools | 43 |
+| Total commits | ~90 |
+| PRs merged | 81+ |
+| Tools | 44 (telegram_send_file added) |
 | Skills | 16 |
-| Android Bridge endpoints | 17+ |
+| Android Bridge endpoints | 18+ (MWA sign-only added) |
 | Telegram commands | 7 |
-| Lines of JS (main.js) | 5,735 |
-| Lines of Kotlin | 9,252 |
+| Lines of JS (main.js) | ~6,100 |
+| Lines of Kotlin | ~9,600 |
 | SQL.js tables | 4 |
-| Themes | 4 |
+| Themes | 1 (DarkOps only) |
 
 ## Links
 
@@ -216,7 +218,7 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 | "NFT tracking" (JSON-LD, llms.txt) | Not implemented | Remove from website |
 | "DeFi automation" (OG meta, JSON-LD) | Swap tools exist, no automated DeFi | Tone down claim |
 | "Get on dApp Store" button | Link is `href="#"`, not submitted | Fix link or mark "Coming Soon" |
-| "OpenClaw v2026.2.12 parity" (roadmap) | Tracking v2026.2.13 | Update website version |
+| "OpenClaw v2026.2.12 parity" (roadmap) | Tracking v2026.2.14 | Update website version |
 | "150,000+ Seeker Devices" | Market estimate, not users | Fine as-is (addressable market) |
 | "Open-source" (privacy page) | Repo is public | Verify license |
 
@@ -224,6 +226,21 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Date | Feature | PR |
 |------|---------|-----|
+| 2026-02-16 | Animations, collapsible sections & layout fixes | #81 (BAT-92) |
+| 2026-02-16 | Semantic action colors (green positive, red danger) | #80 (BAT-92) |
+| 2026-02-16 | telegram_send_file tool | #79 (BAT-68) |
+| 2026-02-16 | Jupiter Ultra API for gasless swaps | #78 (BAT-66) |
+| 2026-02-16 | Stable keys for LogsScreen performance | #77 (BAT-100) |
+| 2026-02-16 | Auto-generate PLATFORM.md on startup | #76 (BAT-102) |
+| 2026-02-15 | Fix emoji rendering (UTF-8 encoding) | #75 (BAT-101) |
+| 2026-02-15 | Telegram formatting rules in system prompt | #74 (BAT-97) |
+| 2026-02-15 | OAuth/setup token Bearer auth | #73 (BAT-98) |
+| 2026-02-15 | DuckDuckGo Lite fallback for web search | #72 (BAT-99) |
+| 2026-02-15 | Cache loadConfig to prevent recomposition reads | #69 (BAT-93) |
+| 2026-02-15 | Fix isStarting stuck on failure | #70 (BAT-94) |
+| 2026-02-14 | Fix info icon touch targets | #68 (BAT-71) |
+| 2026-02-14 | Network error indicators on Dashboard | #67 (BAT-85) |
+| 2026-02-14 | Haptic feedback on Setup buttons | #66 (BAT-87) |
 | 2026-02-14 | Flat .md skill loading fix | #39 (BAT-61) |
 | 2026-02-14 | File download race condition fix | #38 (BAT-60) |
 | 2026-02-14 | SILENT_REPLY for empty responses | #37 (BAT-60) |
