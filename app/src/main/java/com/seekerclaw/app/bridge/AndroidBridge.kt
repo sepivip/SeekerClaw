@@ -573,7 +573,11 @@ class AndroidBridge(
             return jsonResponse(400, mapOf("error" to "transaction (base64) is required"))
         }
 
-        val txBytes = android.util.Base64.decode(txBase64, android.util.Base64.NO_WRAP)
+        val txBytes = try {
+            android.util.Base64.decode(txBase64, android.util.Base64.NO_WRAP)
+        } catch (e: IllegalArgumentException) {
+            return jsonResponse(400, mapOf("error" to "transaction is invalid base64"))
+        }
         val requestId = java.util.UUID.randomUUID().toString()
 
         val intent = Intent(context, com.seekerclaw.app.solana.SolanaAuthActivity::class.java).apply {

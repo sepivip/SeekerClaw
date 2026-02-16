@@ -3346,6 +3346,9 @@ async function executeTool(name, input) {
                 if (!order.transaction) {
                     return { error: 'Jupiter Ultra did not return a transaction.' };
                 }
+                if (!order.requestId) {
+                    return { error: 'Jupiter Ultra did not return a requestId.' };
+                }
 
                 // Step 2: Verify transaction before sending to wallet
                 // skipPayerCheck: Ultra uses Jupiter's fee payer (gasless)
@@ -4129,10 +4132,19 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
         offset += 32;
     }
 
-    // First account is fee payer (skip for Ultra — Jupiter pays fees)
-    if (accountKeys.length > 0 && !skipPayerCheck) {
-        if (accountKeys[0] !== expectedPayerBase58) {
-            return { valid: false, error: `Fee payer mismatch: expected ${expectedPayerBase58}, got ${accountKeys[0]}` };
+    if (accountKeys.length > 0) {
+        if (!skipPayerCheck) {
+            // Standard mode: ensure connected wallet is the fee payer
+            if (accountKeys[0] !== expectedPayerBase58) {
+                return { valid: false, error: `Fee payer mismatch: expected ${expectedPayerBase58}, got ${accountKeys[0]}` };
+            }
+        } else {
+            // Ultra gasless mode: Jupiter pays fees, but wallet must still be a required signer
+            const requiredSignerCount = Math.min(numRequired, accountKeys.length);
+            const requiredSigners = accountKeys.slice(0, requiredSignerCount);
+            if (!requiredSigners.includes(expectedPayerBase58)) {
+                return { valid: false, error: `Signer mismatch: expected ${expectedPayerBase58} to be among required signers` };
+            }
         }
     }
 
