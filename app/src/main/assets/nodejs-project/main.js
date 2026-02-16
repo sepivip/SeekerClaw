@@ -3620,6 +3620,150 @@ async function executeTool(name, input) {
             }
         }
 
+        // ========== JUPITER API TOOLS ==========
+        // Requires Jupiter API key from Settings → Solana Wallet
+        // Get free key at portal.jup.ag
+
+        case 'jupiter_trigger_create': {
+            if (!config.jupiterApiKey) {
+                return {
+                    error: 'Jupiter API key required',
+                    guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings → Solana Wallet → Jupiter API Key'
+                };
+            }
+
+            // TODO: Implement trigger order creation
+            // 1. Resolve input/output tokens (use resolveToken)
+            // 2. Get connected wallet address
+            // 3. Call POST /trigger/v1/createOrder with Jupiter API
+            // 4. Return order details (orderId, triggerPrice, expiry)
+            return { error: 'Jupiter trigger orders: Implementation in progress (BAT-109)' };
+        }
+
+        case 'jupiter_trigger_list': {
+            if (!config.jupiterApiKey) {
+                return {
+                    error: 'Jupiter API key required',
+                    guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings → Solana Wallet → Jupiter API Key'
+                };
+            }
+
+            // TODO: Implement trigger order listing
+            // 1. Get connected wallet address
+            // 2. Call GET /trigger/v1/getTriggerOrders?wallet=...&orderStatus=...
+            // 3. Return formatted list of orders
+            return { error: 'Jupiter trigger list: Implementation in progress (BAT-109)' };
+        }
+
+        case 'jupiter_trigger_cancel': {
+            if (!config.jupiterApiKey) {
+                return {
+                    error: 'Jupiter API key required',
+                    guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings → Solana Wallet → Jupiter API Key'
+                };
+            }
+
+            // TODO: Implement trigger order cancellation
+            // 1. Get connected wallet address
+            // 2. Call POST /trigger/v1/cancelOrder with orderId
+            // 3. Return confirmation
+            return { error: 'Jupiter trigger cancel: Implementation in progress (BAT-109)' };
+        }
+
+        case 'jupiter_dca_create': {
+            if (!config.jupiterApiKey) {
+                return {
+                    error: 'Jupiter API key required',
+                    guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings → Solana Wallet → Jupiter API Key'
+                };
+            }
+
+            // TODO: Implement DCA order creation
+            // 1. Resolve input/output tokens
+            // 2. Get connected wallet address
+            // 3. Convert cycleInterval to API format
+            // 4. Call POST /recurring/v1/createOrder
+            // 5. Return DCA details (orderId, schedule, cycles)
+            return { error: 'Jupiter DCA orders: Implementation in progress (BAT-109)' };
+        }
+
+        case 'jupiter_dca_list': {
+            if (!config.jupiterApiKey) {
+                return {
+                    error: 'Jupiter API key required',
+                    guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings → Solana Wallet → Jupiter API Key'
+                };
+            }
+
+            // TODO: Implement DCA order listing
+            // 1. Get connected wallet address
+            // 2. Call GET /recurring/v1/getRecurringOrders?wallet=...&orderStatus=...&recurringType=...
+            // 3. Return formatted list of DCA orders
+            return { error: 'Jupiter DCA list: Implementation in progress (BAT-109)' };
+        }
+
+        case 'jupiter_dca_cancel': {
+            if (!config.jupiterApiKey) {
+                return {
+                    error: 'Jupiter API key required',
+                    guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings → Solana Wallet → Jupiter API Key'
+                };
+            }
+
+            // TODO: Implement DCA order cancellation
+            // 1. Get connected wallet address
+            // 2. Call POST /recurring/v1/cancelOrder with orderId
+            // 3. Return confirmation
+            return { error: 'Jupiter DCA cancel: Implementation in progress (BAT-109)' };
+        }
+
+        case 'jupiter_token_search': {
+            if (!config.jupiterApiKey) {
+                return {
+                    error: 'Jupiter API key required',
+                    guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings → Solana Wallet → Jupiter API Key'
+                };
+            }
+
+            // TODO: Implement token search
+            // 1. Call GET /tokens/v2/search?query=...
+            // 2. Parse and format results (name, symbol, price, mcap, liquidity)
+            // 3. Return top matches
+            return { error: 'Jupiter token search: Implementation in progress (BAT-109)' };
+        }
+
+        case 'jupiter_token_security': {
+            if (!config.jupiterApiKey) {
+                return {
+                    error: 'Jupiter API key required',
+                    guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings → Solana Wallet → Jupiter API Key'
+                };
+            }
+
+            // TODO: Implement token security check (Shield)
+            // 1. Resolve token to mint address
+            // 2. Call GET /ultra/v1/shield?mints=...
+            // 3. Parse warnings (freeze authority, mint authority, low liquidity, etc.)
+            // 4. Return safety assessment
+            return { error: 'Jupiter token security: Implementation in progress (BAT-109)' };
+        }
+
+        case 'jupiter_wallet_holdings': {
+            if (!config.jupiterApiKey) {
+                return {
+                    error: 'Jupiter API key required',
+                    guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings → Solana Wallet → Jupiter API Key'
+                };
+            }
+
+            // TODO: Implement wallet holdings view
+            // 1. Get wallet address (from input or connected wallet)
+            // 2. Call GET /ultra/v1/holdings/{address}
+            // 3. Parse and format token list (symbol, amount, USD value)
+            // 4. Return holdings summary
+            return { error: 'Jupiter wallet holdings: Implementation in progress (BAT-109)' };
+        }
+
         case 'telegram_react': {
             const msgId = input.message_id;
             const chatId = input.chat_id;
