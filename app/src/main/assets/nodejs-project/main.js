@@ -4087,25 +4087,24 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
         'Eo7WjKq67rjJQSZxS6z3YkapzY3eMj6Xy8X5EQVn5UaB', // Meteora pools
     ]);
 
-    // Versioned transactions start with a prefix byte (0x80 = v0)
+    // Full serialized transaction: [sig_count] [signatures...] [message]
+    // Skip signature section to reach the message
     let offset = 0;
-    const prefix = txBuf[offset];
-    offset++;
+    const numSigs = readCompactU16(txBuf, offset);
+    offset = numSigs.offset;
+    offset += numSigs.value * 64; // skip signature slots
 
-    if (prefix !== 0x80) {
+    // Message starts here — check for v0 prefix (0x80)
+    const prefix = txBuf[offset];
+    const isV0 = prefix === 0x80;
+
+    if (!isV0) {
         // Legacy transaction — Ultra always uses v0, so reject legacy in gasless mode
         if (skipPayerCheck) {
             return { valid: false, error: 'Expected v0 transaction for Ultra gasless flow, got legacy format' };
         }
-        // Legacy: signatures count + signatures + message
-        // For legacy, payer is the first account in the account keys
-        // Skip signatures section
-        offset = 0; // reset for legacy
-        const numSigs = readCompactU16(txBuf, offset);
-        offset = numSigs.offset;
-        offset += numSigs.value * 64; // skip signature slots
 
-        // Message starts here
+        // Legacy message: header (3 bytes) + account keys + blockhash + instructions
         const numRequired = txBuf[offset]; offset++;
         const numReadonlySigned = txBuf[offset]; offset++;
         const numReadonlyUnsigned = txBuf[offset]; offset++;
@@ -4113,7 +4112,7 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
         offset = numAccounts.offset;
 
         // First account is fee payer
-        if (numAccounts.value > 0 && !skipPayerCheck) {
+        if (numAccounts.value > 0) {
             const payer = base58Encode(txBuf.slice(offset, offset + 32));
             if (payer !== expectedPayerBase58) {
                 return { valid: false, error: `Fee payer mismatch: expected ${expectedPayerBase58}, got ${payer}` };
@@ -4122,8 +4121,10 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
         return { valid: true }; // Legacy tx basic check passed
     }
 
-    // V0 transaction format
-    // After prefix: num_required_signatures (1), num_readonly_signed (1), num_readonly_unsigned (1)
+    // V0 transaction format — skip prefix byte
+    offset++;
+
+    // Message header: num_required_signatures (1), num_readonly_signed (1), num_readonly_unsigned (1)
     const numRequired = txBuf[offset]; offset++;
     const numReadonlySigned = txBuf[offset]; offset++;
     const numReadonlyUnsigned = txBuf[offset]; offset++;
