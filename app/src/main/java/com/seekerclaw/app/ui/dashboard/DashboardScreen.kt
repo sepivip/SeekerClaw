@@ -442,7 +442,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
                 .height(52.dp),
             shape = shape,
             colors = ButtonDefaults.buttonColors(
-                containerColor = if (isRunning) Color(0xFF374151) else SeekerClawColors.Primary,
+                containerColor = if (isRunning) SeekerClawColors.Primary else SeekerClawColors.ActionPrimary,
                 contentColor = Color.White,
             ),
         ) {

@@ -325,7 +325,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                 modifier = Modifier.fillMaxWidth(),
                 shape = shape,
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = SeekerClawColors.Primary,
+                    containerColor = SeekerClawColors.ActionPrimary,
                     contentColor = androidx.compose.ui.graphics.Color.White,
                 ),
             ) {
@@ -663,9 +663,9 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                         .height(48.dp),
                     shape = shape,
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = SeekerClawColors.Primary,
+                        containerColor = SeekerClawColors.ActionPrimary,
                         contentColor = androidx.compose.ui.graphics.Color.White,
-                        disabledContainerColor = SeekerClawColors.Primary.copy(alpha = 0.4f),
+                        disabledContainerColor = SeekerClawColors.ActionPrimary.copy(alpha = 0.4f),
                         disabledContentColor = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.6f),
                     ),
                 ) {
@@ -776,8 +776,8 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
             modifier = Modifier.fillMaxWidth(),
             shape = shape,
             colors = ButtonDefaults.buttonColors(
-                containerColor = androidx.compose.ui.graphics.Color(0xFF4A1515),
-                contentColor = androidx.compose.ui.graphics.Color.White,
+                containerColor = SeekerClawColors.ActionDanger,
+                contentColor = SeekerClawColors.ActionDangerText,
             ),
         ) {
             Text(
@@ -795,8 +795,8 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
             modifier = Modifier.fillMaxWidth(),
             shape = shape,
             colors = ButtonDefaults.buttonColors(
-                containerColor = androidx.compose.ui.graphics.Color(0xFF4A1515),
-                contentColor = androidx.compose.ui.graphics.Color.White,
+                containerColor = SeekerClawColors.ActionDanger,
+                contentColor = SeekerClawColors.ActionDangerText,
             ),
         ) {
             Text(
@@ -905,7 +905,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                         "Save",
                         fontFamily = FontFamily.Default,
                         fontWeight = FontWeight.Bold,
-                        color = SeekerClawColors.Primary,
+                        color = SeekerClawColors.ActionPrimary,
                     )
                 }
             },
@@ -985,7 +985,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                         "Save",
                         fontFamily = FontFamily.Default,
                         fontWeight = FontWeight.Bold,
-                        color = SeekerClawColors.Primary,
+                        color = SeekerClawColors.ActionPrimary,
                     )
                 }
             },
@@ -1069,7 +1069,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                         "Save",
                         fontFamily = FontFamily.Default,
                         fontWeight = FontWeight.Bold,
-                        color = SeekerClawColors.Primary,
+                        color = SeekerClawColors.ActionPrimary,
                     )
                 }
             },
@@ -1482,7 +1482,7 @@ private fun SectionLabel(title: String) {
         fontFamily = FontFamily.Default,
         fontSize = 11.sp,
         fontWeight = FontWeight.Medium,
-        color = SeekerClawColors.TextDim,
+        color = SeekerClawColors.TextSecondary,
         letterSpacing = 1.sp,
     )
 }
@@ -1533,7 +1533,7 @@ private fun ConfigField(
                     text = "Edit",
                     fontFamily = FontFamily.Default,
                     fontSize = 12.sp,
-                    color = SeekerClawColors.Primary,
+                    color = SeekerClawColors.TextInteractive,
                 )
             }
         }
