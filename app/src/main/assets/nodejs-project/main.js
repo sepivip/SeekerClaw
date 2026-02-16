@@ -2270,14 +2270,13 @@ const TOOLS = [
     },
     {
         name: 'solana_swap',
-        description: 'Swap tokens using Jupiter DEX aggregator. IMPORTANT: This prompts the user to approve the transaction in their wallet app on the phone. ALWAYS confirm with the user and show the quote first before calling this tool.',
+        description: 'Swap tokens using Jupiter Ultra (gasless, no SOL needed for fees). IMPORTANT: This prompts the user to approve the transaction in their wallet app on the phone. ALWAYS confirm with the user and show the quote first before calling this tool.',
         input_schema: {
             type: 'object',
             properties: {
                 inputToken: { type: 'string', description: 'Token to sell — symbol (e.g., "SOL") or mint address' },
                 outputToken: { type: 'string', description: 'Token to buy — symbol (e.g., "USDC") or mint address' },
                 amount: { type: 'number', description: 'Amount of inputToken to sell (in human units, e.g., 1.5 SOL)' },
-                slippageBps: { type: 'number', description: 'Slippage tolerance in basis points (default: 100 = 1%). Use lower for stablecoins, higher for volatile tokens.' }
             },
             required: ['inputToken', 'outputToken', 'amount']
         }
@@ -3337,58 +3336,70 @@ async function executeTool(name, input) {
 
                 if (inputToken.decimals === null) return { error: `Cannot determine decimals for input token ${input.inputToken}. Use a known symbol or verified mint.` };
 
-                // Step 1: Get quote
+                // Jupiter Ultra flow: gasless, RPC-less swaps
                 const amountRaw = Math.round(input.amount * Math.pow(10, inputToken.decimals));
-                const slippageBps = input.slippageBps || 100;
 
-                log(`[Jupiter] Getting quote: ${input.amount} ${inputToken.symbol} → ${outputToken.symbol} (slippage: ${slippageBps}bps)`);
-                const quote = await jupiterQuote(inputToken.address, outputToken.address, amountRaw, slippageBps);
+                // Step 1: Get Ultra order (quote + unsigned tx in one call)
+                log(`[Jupiter Ultra] Getting order: ${input.amount} ${inputToken.symbol} → ${outputToken.symbol}`);
+                const order = await jupiterUltraOrder(inputToken.address, outputToken.address, amountRaw, userPublicKey);
 
-                // Step 2: Build swap transaction
-                log(`[Jupiter] Building swap tx for ${userPublicKey}`);
-                const swapResult = await jupiterSwap(quote, userPublicKey);
-
-                if (!swapResult.swapTransaction) {
-                    return { error: 'Jupiter did not return a swap transaction.' };
+                if (!order.transaction) {
+                    return { error: 'Jupiter Ultra did not return a transaction.' };
+                }
+                if (!order.requestId) {
+                    return { error: 'Jupiter Ultra did not return a requestId.' };
                 }
 
-                // Step 3: Verify transaction before sending to wallet
+                // Step 2: Verify transaction before sending to wallet
+                // skipPayerCheck: Ultra uses Jupiter's fee payer (gasless)
                 try {
-                    const verification = verifySwapTransaction(swapResult.swapTransaction, userPublicKey);
+                    const verification = verifySwapTransaction(order.transaction, userPublicKey, { skipPayerCheck: true });
                     if (!verification.valid) {
-                        log(`[Jupiter] Swap tx verification FAILED: ${verification.error}`);
+                        log(`[Jupiter Ultra] Order tx verification FAILED: ${verification.error}`);
                         return { error: `Swap transaction rejected: ${verification.error}` };
                     }
-                    log('[Jupiter] Swap tx verified — payer and programs OK');
+                    log('[Jupiter Ultra] Order tx verified — programs OK');
                 } catch (verifyErr) {
-                    log(`[Jupiter] Swap tx verification error: ${verifyErr.message}`);
+                    log(`[Jupiter Ultra] Order tx verification error: ${verifyErr.message}`);
                     return { error: `Could not verify swap transaction: ${verifyErr.message}` };
                 }
 
-                // Step 4: Send to wallet for signing + broadcast (120s timeout for user approval)
-                log('[Jupiter] Sending to wallet for approval...');
-                const result = await androidBridgeCall('/solana/sign', {
-                    transaction: swapResult.swapTransaction
+                // Step 3: Send to wallet for sign-only (120s timeout for user approval)
+                // Ultra flow: wallet signs but does NOT broadcast
+                log('[Jupiter Ultra] Sending to wallet for approval (sign-only)...');
+                const signResult = await androidBridgeCall('/solana/sign-only', {
+                    transaction: order.transaction
                 }, 120000);
 
-                if (result.error) return { error: result.error };
-                if (!result.signature) return { error: 'No signature returned from wallet.' };
+                if (signResult.error) return { error: signResult.error };
+                if (!signResult.signedTransaction) return { error: 'No signed transaction returned from wallet.' };
 
-                // Convert signature to base58
-                const sigBytes = Buffer.from(result.signature, 'base64');
-                const sigBase58 = base58Encode(sigBytes);
+                // Step 4: Execute via Jupiter Ultra (Jupiter broadcasts the tx)
+                log('[Jupiter Ultra] Executing signed transaction...');
+                const execResult = await jupiterUltraExecute(signResult.signedTransaction, order.requestId);
+
+                if (execResult.status === 'Failed') {
+                    return { error: `Swap failed: ${execResult.error || 'Transaction execution failed'}` };
+                }
+                if (!execResult.signature) {
+                    return { error: 'Jupiter Ultra execute returned no signature.' };
+                }
 
                 const outDecimals = outputToken.decimals || 6;
-                const outAmount = parseInt(quote.outAmount) / Math.pow(10, outDecimals);
+                const inDecimals = inputToken.decimals || 9;
 
                 const response = {
                     success: true,
-                    signature: sigBase58,
+                    signature: execResult.signature,
                     inputToken: inputToken.symbol,
                     outputToken: outputToken.symbol,
-                    inputAmount: input.amount,
-                    expectedOutput: outAmount,
-                    slippageBps,
+                    inputAmount: execResult.inputAmount
+                        ? parseInt(execResult.inputAmount) / Math.pow(10, inDecimals)
+                        : input.amount,
+                    outputAmount: execResult.outputAmount
+                        ? parseInt(execResult.outputAmount) / Math.pow(10, outDecimals)
+                        : null,
+                    gasless: true,
                 };
                 const warnings = [];
                 if (inputToken.warning) warnings.push(inputToken.warning);
@@ -4046,9 +4057,11 @@ async function jupiterQuote(inputMint, outputMint, amountRaw, slippageBps = 100)
 
 // Verify a Jupiter swap transaction before sending to wallet
 // Decodes the versioned transaction and checks:
-// 1. Fee payer matches user's public key
+// 1. Fee payer matches user's public key (unless skipPayerCheck is set)
 // 2. Only known/trusted programs are referenced
-function verifySwapTransaction(txBase64, expectedPayerBase58) {
+// Options: { skipPayerCheck: true } for Jupiter Ultra (Jupiter pays fees)
+function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
+    const { skipPayerCheck = false } = options;
     const txBuf = Buffer.from(txBase64, 'base64');
 
     // Known safe programs (Jupiter, System, Token, Compute Budget, etc.)
@@ -4074,22 +4087,24 @@ function verifySwapTransaction(txBase64, expectedPayerBase58) {
         'Eo7WjKq67rjJQSZxS6z3YkapzY3eMj6Xy8X5EQVn5UaB', // Meteora pools
     ]);
 
-    // Versioned transactions start with a prefix byte (0x80 = v0)
+    // Full serialized transaction: [sig_count] [signatures...] [message]
+    // Skip signature section to reach the message
     let offset = 0;
+    const numSigs = readCompactU16(txBuf, offset);
+    offset = numSigs.offset;
+    offset += numSigs.value * 64; // skip signature slots
+
+    // Message starts here — check for v0 prefix (0x80)
     const prefix = txBuf[offset];
-    offset++;
+    const isV0 = prefix === 0x80;
 
-    if (prefix !== 0x80) {
-        // Legacy transaction — different format, but still check payer
-        // Legacy: signatures count + signatures + message
-        // For legacy, payer is the first account in the account keys
-        // Skip signatures section
-        offset = 0; // reset for legacy
-        const numSigs = readCompactU16(txBuf, offset);
-        offset = numSigs.offset;
-        offset += numSigs.value * 64; // skip signature slots
+    if (!isV0) {
+        // Legacy transaction — Ultra always uses v0, so reject legacy in gasless mode
+        if (skipPayerCheck) {
+            return { valid: false, error: 'Expected v0 transaction for Ultra gasless flow, got legacy format' };
+        }
 
-        // Message starts here
+        // Legacy message: header (3 bytes) + account keys + blockhash + instructions
         const numRequired = txBuf[offset]; offset++;
         const numReadonlySigned = txBuf[offset]; offset++;
         const numReadonlyUnsigned = txBuf[offset]; offset++;
@@ -4106,8 +4121,10 @@ function verifySwapTransaction(txBase64, expectedPayerBase58) {
         return { valid: true }; // Legacy tx basic check passed
     }
 
-    // V0 transaction format
-    // After prefix: num_required_signatures (1), num_readonly_signed (1), num_readonly_unsigned (1)
+    // V0 transaction format — skip prefix byte
+    offset++;
+
+    // Message header: num_required_signatures (1), num_readonly_signed (1), num_readonly_unsigned (1)
     const numRequired = txBuf[offset]; offset++;
     const numReadonlySigned = txBuf[offset]; offset++;
     const numReadonlyUnsigned = txBuf[offset]; offset++;
@@ -4122,10 +4139,19 @@ function verifySwapTransaction(txBase64, expectedPayerBase58) {
         offset += 32;
     }
 
-    // First account is fee payer
     if (accountKeys.length > 0) {
-        if (accountKeys[0] !== expectedPayerBase58) {
-            return { valid: false, error: `Fee payer mismatch: expected ${expectedPayerBase58}, got ${accountKeys[0]}` };
+        if (!skipPayerCheck) {
+            // Standard mode: ensure connected wallet is the fee payer
+            if (accountKeys[0] !== expectedPayerBase58) {
+                return { valid: false, error: `Fee payer mismatch: expected ${expectedPayerBase58}, got ${accountKeys[0]}` };
+            }
+        } else {
+            // Ultra gasless mode: Jupiter pays fees, but wallet must still be a required signer
+            const requiredSignerCount = Math.min(numRequired, accountKeys.length);
+            const requiredSigners = accountKeys.slice(0, requiredSignerCount);
+            if (!requiredSigners.includes(expectedPayerBase58)) {
+                return { valid: false, error: `Signer mismatch: expected ${expectedPayerBase58} to be among required signers` };
+            }
         }
     }
 
@@ -4178,23 +4204,42 @@ function readCompactU16(buf, offset) {
     return { value, offset: pos };
 }
 
-// Jupiter Swap API — returns base64 transaction
-async function jupiterSwap(quoteResponse, userPublicKey) {
+// Jupiter Ultra API — get order (quote + unsigned tx in one call, gasless)
+async function jupiterUltraOrder(inputMint, outputMint, amount, taker) {
+    const params = new URLSearchParams({
+        inputMint,
+        outputMint,
+        amount: String(amount),
+        taker,
+    });
+
     const res = await httpRequest({
-        hostname: 'quote-api.jup.ag',
-        path: '/v6/swap',
+        hostname: 'lite-api.jup.ag',
+        path: `/ultra/v1/order?${params.toString()}`,
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+    });
+
+    if (res.status !== 200) {
+        throw new Error(`Jupiter Ultra order failed: ${res.status} - ${JSON.stringify(res.data)}`);
+    }
+    return res.data;
+}
+
+// Jupiter Ultra API — execute signed transaction (Jupiter broadcasts)
+async function jupiterUltraExecute(signedTransaction, requestId) {
+    const res = await httpRequest({
+        hostname: 'lite-api.jup.ag',
+        path: '/ultra/v1/execute',
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
     }, JSON.stringify({
-        quoteResponse,
-        userPublicKey,
-        wrapAndUnwrapSol: true,
-        dynamicComputeUnitLimit: true,
-        prioritizationFeeLamports: 'auto',
+        signedTransaction,
+        requestId,
     }));
 
     if (res.status !== 200) {
-        throw new Error(`Jupiter swap failed: ${res.status} - ${JSON.stringify(res.data)}`);
+        throw new Error(`Jupiter Ultra execute failed: ${res.status} - ${JSON.stringify(res.data)}`);
     }
     return res.data;
 }

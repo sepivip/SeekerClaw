@@ -112,6 +112,7 @@ class AndroidBridge(
                 "/solana/authorize" -> handleSolanaAuthorize()
                 "/solana/address" -> handleSolanaAddress()
                 "/solana/sign" -> handleSolanaSign(params)
+                "/solana/sign-only" -> handleSolanaSignOnly(params)
                 "/solana/send" -> handleSolanaSend(params)
                 "/config/save-owner" -> handleConfigSaveOwner(params)
                 "/stats/db-summary" -> proxyToNodeStats()
@@ -552,6 +553,53 @@ class AndroidBridge(
 
                 return if (sigB64.isNotBlank()) {
                     jsonResponse(200, mapOf("signature" to sigB64, "success" to true))
+                } else {
+                    jsonResponse(400, mapOf("error" to error.ifBlank { "Transaction rejected by user" }))
+                }
+            }
+            Thread.sleep(300)
+        }
+        return jsonResponse(408, mapOf("error" to "Signing timed out"))
+    }
+
+    /**
+     * Sign-only endpoint for Jupiter Ultra flow.
+     * Returns the full signed transaction (base64) without broadcasting.
+     * Jupiter Ultra handles broadcasting via /execute.
+     */
+    private fun handleSolanaSignOnly(params: JSONObject): Response {
+        val txBase64 = params.optString("transaction", "")
+        if (txBase64.isBlank()) {
+            return jsonResponse(400, mapOf("error" to "transaction (base64) is required"))
+        }
+
+        val txBytes = try {
+            android.util.Base64.decode(txBase64, android.util.Base64.NO_WRAP)
+        } catch (e: IllegalArgumentException) {
+            return jsonResponse(400, mapOf("error" to "transaction is invalid base64"))
+        }
+        val requestId = java.util.UUID.randomUUID().toString()
+
+        val intent = Intent(context, com.seekerclaw.app.solana.SolanaAuthActivity::class.java).apply {
+            putExtra("action", "signOnly")
+            putExtra("requestId", requestId)
+            putExtra("transaction", txBytes)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(intent)
+
+        val resultsDir = java.io.File(context.filesDir, com.seekerclaw.app.solana.SolanaAuthActivity.RESULTS_DIR)
+        val resultFile = java.io.File(resultsDir, "$requestId.json")
+        val deadline = System.currentTimeMillis() + 120_000
+        while (System.currentTimeMillis() < deadline) {
+            if (resultFile.exists()) {
+                val result = JSONObject(resultFile.readText())
+                resultFile.delete()
+                val signedTx = result.optString("signedTransaction", "")
+                val error = result.optString("error", "")
+
+                return if (signedTx.isNotBlank()) {
+                    jsonResponse(200, mapOf("signedTransaction" to signedTx, "success" to true))
                 } else {
                     jsonResponse(400, mapOf("error" to error.ifBlank { "Transaction rejected by user" }))
                 }
