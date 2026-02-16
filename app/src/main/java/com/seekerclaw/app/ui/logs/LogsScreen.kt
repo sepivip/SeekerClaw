@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -254,10 +255,10 @@ fun LogsScreen() {
                         .fillMaxSize()
                         .padding(horizontal = 14.dp, vertical = 10.dp),
                 ) {
-                    items(
+                    itemsIndexed(
                         filteredLogs,
-                        key = { entry -> "${entry.timestamp}_${entry.level.name}_${entry.message.hashCode()}" },
-                    ) { entry ->
+                        key = { index, _ -> index },
+                    ) { index, entry ->
                         val color = when (entry.level) {
                             LogLevel.INFO -> SeekerClawColors.LogInfo
                             LogLevel.WARN -> SeekerClawColors.Warning
