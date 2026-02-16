@@ -4093,7 +4093,10 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
     offset++;
 
     if (prefix !== 0x80) {
-        // Legacy transaction — different format, but still check payer
+        // Legacy transaction — Ultra always uses v0, so reject legacy in gasless mode
+        if (skipPayerCheck) {
+            return { valid: false, error: 'Expected v0 transaction for Ultra gasless flow, got legacy format' };
+        }
         // Legacy: signatures count + signatures + message
         // For legacy, payer is the first account in the account keys
         // Skip signatures section
