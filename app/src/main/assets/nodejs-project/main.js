@@ -4260,9 +4260,9 @@ async function executeTool(name, input) {
                         name: token.name,
                         address: token.address,
                         decimals: token.decimals,
-                        price: token.price ? `$${token.price}` : 'N/A',
-                        marketCap: token.marketCap ? `$${(token.marketCap / 1e6).toFixed(2)}M` : 'N/A',
-                        liquidity: token.liquidity ? `$${(token.liquidity / 1e6).toFixed(2)}M` : 'N/A',
+                        price: (token.price !== null && token.price !== undefined) ? `$${token.price}` : 'N/A',
+                        marketCap: (token.marketCap !== null && token.marketCap !== undefined) ? `$${(token.marketCap / 1e6).toFixed(2)}M` : 'N/A',
+                        liquidity: (token.liquidity !== null && token.liquidity !== undefined) ? `$${(token.liquidity / 1e6).toFixed(2)}M` : 'N/A',
                         verified: token.verified || false
                     }))
                 };
@@ -4387,7 +4387,7 @@ async function executeTool(name, input) {
                         balance: holding.balance,
                         decimals: holding.decimals,
                         valueUsd: `$${(holding.valueUsd || 0).toFixed(2)}`,
-                        price: holding.price ? `$${holding.price}` : 'N/A'
+                        price: (holding.price !== null && holding.price !== undefined) ? `$${holding.price}` : 'N/A'
                     }))
                 };
             } catch (e) {
