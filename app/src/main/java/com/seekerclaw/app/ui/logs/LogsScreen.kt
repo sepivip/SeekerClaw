@@ -246,7 +246,10 @@ fun LogsScreen() {
                         .fillMaxSize()
                         .padding(horizontal = 14.dp, vertical = 10.dp),
                 ) {
-                    items(filteredLogs) { entry ->
+                    items(
+                        filteredLogs,
+                        key = { entry -> "${entry.timestamp}_${entry.message.hashCode()}" },
+                    ) { entry ->
                         val color = when (entry.level) {
                             LogLevel.INFO -> SeekerClawColors.LogInfo
                             LogLevel.WARN -> SeekerClawColors.Warning
