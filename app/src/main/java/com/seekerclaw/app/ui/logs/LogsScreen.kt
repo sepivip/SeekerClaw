@@ -248,7 +248,7 @@ fun LogsScreen() {
                 ) {
                     items(
                         filteredLogs,
-                        key = { entry -> "${entry.timestamp}_${entry.message.hashCode()}" },
+                        key = { entry -> "${entry.timestamp}_${entry.level.name}_${entry.message.hashCode()}" },
                     ) { entry ->
                         val color = when (entry.level) {
                             LogLevel.INFO -> SeekerClawColors.LogInfo
