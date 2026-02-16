@@ -3652,7 +3652,13 @@ async function executeTool(name, input) {
                         error: 'Could not resolve input token',
                         details: inputToken?.ambiguous
                             ? `Multiple tokens match "${input.inputToken}". Please use the full mint address.`
-                            : `Token "${input.inputToken}" not found on Jupiter's verified list.`
+                            : `Token "${input.inputToken}" not found.`
+                    };
+                }
+                if (inputToken.warning && inputToken.decimals == null) {
+                    return {
+                        error: 'Unverified input token with missing metadata',
+                        details: `${inputToken.warning}\n\nThe token is missing decimal metadata, which is required for amount calculations. Only verified tokens on Jupiter's token list can be used.`
                     };
                 }
                 if (!outputToken || outputToken.ambiguous) {
@@ -3660,7 +3666,13 @@ async function executeTool(name, input) {
                         error: 'Could not resolve output token',
                         details: outputToken?.ambiguous
                             ? `Multiple tokens match "${input.outputToken}". Please use the full mint address.`
-                            : `Token "${input.outputToken}" not found on Jupiter's verified list.`
+                            : `Token "${input.outputToken}" not found.`
+                    };
+                }
+                if (outputToken.warning && outputToken.decimals == null) {
+                    return {
+                        error: 'Unverified output token with missing metadata',
+                        details: `${outputToken.warning}\n\nThe token is missing decimal metadata, which is required for amount calculations. Only verified tokens on Jupiter's token list can be used.`
                     };
                 }
 
@@ -3703,10 +3715,27 @@ async function executeTool(name, input) {
                 }
 
                 // 6. Compute expiryTime: use provided value, or default to 30 days from now
-                let expiryTime = input.expiryTime;
-                if (expiryTime == null) {
+                let expiryTime;
+                if (input.expiryTime == null) {
                     const THIRTY_DAYS_IN_MS = 30 * 24 * 60 * 60 * 1000;
                     expiryTime = Math.floor((Date.now() + THIRTY_DAYS_IN_MS) / 1000);
+                } else {
+                    const expiryTimeNum = Number(input.expiryTime);
+                    const nowInSeconds = Math.floor(Date.now() / 1000);
+                    if (!Number.isFinite(expiryTimeNum) || expiryTimeNum <= 0) {
+                        return {
+                            error: 'Invalid expiryTime',
+                            details: 'expiryTime must be a positive finite Unix timestamp in seconds'
+                        };
+                    }
+                    if (expiryTimeNum <= nowInSeconds) {
+                        return {
+                            error: 'Invalid expiryTime',
+                            details: 'expiryTime must be a Unix timestamp in the future'
+                        };
+                    }
+                    // Normalize to integer Unix timestamp in seconds
+                    expiryTime = Math.floor(expiryTimeNum);
                 }
 
                 // 7. Call Jupiter Trigger API
@@ -3914,7 +3943,13 @@ async function executeTool(name, input) {
                         error: 'Could not resolve input token',
                         details: inputToken?.ambiguous
                             ? `Multiple tokens match "${input.inputToken}". Please use the full mint address.`
-                            : `Token "${input.inputToken}" not found on Jupiter's verified list.`
+                            : `Token "${input.inputToken}" not found.`
+                    };
+                }
+                if (inputToken.warning && inputToken.decimals == null) {
+                    return {
+                        error: 'Unverified input token with missing metadata',
+                        details: `${inputToken.warning}\n\nThe token is missing decimal metadata, which is required for amount calculations. Only verified tokens on Jupiter's token list can be used.`
                     };
                 }
                 if (!outputToken || outputToken.ambiguous) {
@@ -3922,7 +3957,13 @@ async function executeTool(name, input) {
                         error: 'Could not resolve output token',
                         details: outputToken?.ambiguous
                             ? `Multiple tokens match "${input.outputToken}". Please use the full mint address.`
-                            : `Token "${input.outputToken}" not found on Jupiter's verified list.`
+                            : `Token "${input.outputToken}" not found.`
+                    };
+                }
+                if (outputToken.warning && outputToken.decimals == null) {
+                    return {
+                        error: 'Unverified output token with missing metadata',
+                        details: `${outputToken.warning}\n\nThe token is missing decimal metadata, which is required for amount calculations. Only verified tokens on Jupiter's token list can be used.`
                     };
                 }
 
@@ -5035,6 +5076,9 @@ function isValidSolanaAddress(address) {
 function parseInputAmountToLamports(amount, decimals) {
     if (decimals == null) {
         throw new Error('Token is missing decimal metadata; cannot calculate input amount in base units.');
+    }
+    if (!Number.isInteger(decimals) || decimals < 0) {
+        throw new Error('decimals must be a non-negative integer');
     }
     const amountStr = String(amount).trim();
     if (amountStr.length === 0) {
