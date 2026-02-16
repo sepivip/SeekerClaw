@@ -4193,7 +4193,7 @@ async function resolveToken(input) {
     return null;
 }
 
-// Jupiter Swap API v1 - Quote endpoint (Metis routing)
+// Jupiter Swap API v6 - Quote endpoint (Metis routing)
 async function jupiterQuote(inputMint, outputMint, amountRaw, slippageBps = 100) {
     const params = new URLSearchParams({
         inputMint,
@@ -4204,7 +4204,7 @@ async function jupiterQuote(inputMint, outputMint, amountRaw, slippageBps = 100)
 
     const res = await httpRequest({
         hostname: 'api.jup.ag',
-        path: `/swap/v1/quote?${params.toString()}`,
+        path: `/swap/v6/quote?${params.toString()}`,
         method: 'GET',
         headers: { 'Accept': 'application/json' },
     });
