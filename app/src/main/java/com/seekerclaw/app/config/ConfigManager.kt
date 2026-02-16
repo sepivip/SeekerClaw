@@ -21,7 +21,6 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import java.util.TimeZone
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
@@ -316,6 +315,14 @@ object ConfigManager {
      * Written on every service start so the agent has fresh device awareness.
      */
     fun writePlatformMd(context: Context) {
+        try {
+            writePlatformMdInternal(context)
+        } catch (e: Exception) {
+            LogCollector.append("[Service] Failed to generate PLATFORM.md: ${e.message ?: "unknown error"}", LogLevel.WARN)
+        }
+    }
+
+    private fun writePlatformMdInternal(context: Context) {
         val workspaceDir = File(context.filesDir, "workspace").apply { mkdirs() }
 
         // Device
@@ -340,18 +347,22 @@ object ConfigManager {
         val batteryIntent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         val batteryLevel = batteryIntent?.let { intent ->
             val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
-            val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, 100)
-            if (scale > 0) (level * 100) / scale else -1
-        } ?: -1
+            val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
+            if (level >= 0 && scale > 0) (level * 100) / scale else 0
+        } ?: 0
         val plugged = batteryIntent?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0
         val isCharging = plugged != 0
-        val chargeType = when (plugged) {
+        val chargeType: String? = when (plugged) {
             BatteryManager.BATTERY_PLUGGED_AC -> "AC"
             BatteryManager.BATTERY_PLUGGED_USB -> "USB"
             BatteryManager.BATTERY_PLUGGED_WIRELESS -> "Wireless"
-            else -> ""
+            else -> null
         }
-        val batteryStatus = if (isCharging) "Charging ($chargeType)" else "Not charging"
+        val batteryStatus = if (isCharging) {
+            if (chargeType != null) "Charging ($chargeType)" else "Charging"
+        } else {
+            "Not charging"
+        }
 
         // Permissions
         fun perm(permission: String): String =
@@ -382,7 +393,7 @@ object ConfigManager {
         val agentName = config?.agentName ?: "Unknown"
         val authType = config?.authType ?: "api_key"
         val authLabel = if (authType == "setup_token") "Claude Pro/Max (setup token)" else "API key"
-        val aiModel = config?.model ?: "claude-sonnet-4-5-20250929"
+        val aiModel = config?.model ?: "claude-opus-4-6"
 
         // Timestamp
         val sdf = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.US)
@@ -394,8 +405,8 @@ object ConfigManager {
             appendLine("## Device")
             appendLine("- Model: $manufacturer $deviceModel")
             appendLine("- Android: $androidVersion (SDK $sdkVersion)")
-            appendLine("- RAM: ${String.format("%,d", ramAvailMb)} MB available / ${String.format("%,d", ramTotalMb)} MB total")
-            appendLine("- Storage: ${"%.1f".format(storageUsedGb)} GB used / ${"%.1f".format(storageTotalGb)} GB total")
+            appendLine("- RAM: ${String.format(Locale.US, "%,d", ramAvailMb)} MB available / ${String.format(Locale.US, "%,d", ramTotalMb)} MB total")
+            appendLine("- Storage: ${String.format(Locale.US, "%.1f", storageUsedGb)} GB used / ${String.format(Locale.US, "%.1f", storageTotalGb)} GB total")
             appendLine()
             appendLine("## Battery")
             appendLine("- Level: $batteryLevel%")
