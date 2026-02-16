@@ -3381,6 +3381,9 @@ async function executeTool(name, input) {
                 if (execResult.status === 'Failed') {
                     return { error: `Swap failed: ${execResult.error || 'Transaction execution failed'}` };
                 }
+                if (!execResult.signature) {
+                    return { error: 'Jupiter Ultra execute returned no signature.' };
+                }
 
                 const outDecimals = outputToken.decimals || 6;
                 const inDecimals = inputToken.decimals || 9;

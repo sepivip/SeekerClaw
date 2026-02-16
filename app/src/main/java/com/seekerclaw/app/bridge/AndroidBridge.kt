@@ -588,7 +588,8 @@ class AndroidBridge(
         }
         context.startActivity(intent)
 
-        val resultFile = java.io.File(java.io.File(context.filesDir, "solana_results"), "$requestId.json")
+        val resultsDir = java.io.File(context.filesDir, com.seekerclaw.app.solana.SolanaAuthActivity.RESULTS_DIR)
+        val resultFile = java.io.File(resultsDir, "$requestId.json")
         val deadline = System.currentTimeMillis() + 120_000
         while (System.currentTimeMillis() < deadline) {
             if (resultFile.exists()) {
