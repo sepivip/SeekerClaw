@@ -5257,8 +5257,29 @@ async function chat(chatId, userMessage) {
 
 async function handleCommand(chatId, command, args) {
     switch (command) {
-        case '/start':
-            return `Hello! I'm ${AGENT_NAME}, your AI assistant running on Android via SeekerClaw.
+        case '/start': {
+            // Templates defined in TEMPLATES.md — update there first, then sync here
+            const identity = loadIdentity();
+            const isReturningUser = !!identity;
+
+            if (isReturningUser) {
+                // Brief personalized greeting for returning users
+                const agentName = identity.split('\n')[0].replace(/^#\s*/, '').trim() || AGENT_NAME;
+                return `Welcome back! I'm ${agentName}.
+
+Commands:
+/status - Show system status
+/new - Save session summary & start fresh
+/reset - Clear conversation history (no summary)
+/soul - Show my personality
+/memory - Show long-term memory
+/skills - List installed skills
+/help - Show this message
+
+Ready to continue where we left off!`;
+            } else {
+                // Full welcome for first-time users
+                return `Hello! I'm ${AGENT_NAME}, your AI assistant running on Android via SeekerClaw.
 
 I can:
 - Have conversations and remember context
@@ -5278,6 +5299,8 @@ Commands:
 /help - Show this message
 
 Just send me a message to chat!`;
+            }
+        }
 
         case '/help':
             return handleCommand(chatId, '/start', '');
