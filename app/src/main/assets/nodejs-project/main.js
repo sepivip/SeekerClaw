@@ -3675,10 +3675,16 @@ async function executeTool(name, input) {
                 const walletAddress = walletConfig.publicKey;
 
                 // 3. Convert input amount to proper units (multiply by decimals)
+                if (inputToken.decimals === null) {
+                    return {
+                        error: 'Could not determine input token decimals',
+                        details: `Token "${input.inputToken}" is missing decimal metadata; cannot calculate input amount in base units.`
+                    };
+                }
                 const inputAmountLamports = Math.floor(input.inputAmount * Math.pow(10, inputToken.decimals));
 
                 // 4. Call Jupiter Trigger API
-                const reqBody = JSON.stringify({
+                const reqBody = {
                     inputMint: inputToken.address,
                     outputMint: outputToken.address,
                     inputAmount: inputAmountLamports.toString(),
@@ -3686,7 +3692,7 @@ async function executeTool(name, input) {
                     orderType: input.orderType || 'limit',
                     expiryTime: input.expiryTime || null,
                     walletAddress: walletAddress
-                });
+                };
 
                 const res = await httpRequest({
                     hostname: 'api.jup.ag',
@@ -3695,15 +3701,14 @@ async function executeTool(name, input) {
                     headers: {
                         'Content-Type': 'application/json',
                         'x-api-key': config.jupiterApiKey
-                    },
-                    body: reqBody
-                });
+                    }
+                }, reqBody);
 
-                if (res.statusCode !== 200) {
-                    return { error: `Jupiter API error: ${res.statusCode}`, details: res.body };
+                if (res.status !== 200) {
+                    return { error: `Jupiter API error: ${res.status}`, details: res.data };
                 }
 
-                const data = JSON.parse(res.body);
+                const data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
                 const warnings = [];
                 if (inputToken.warning) warnings.push(`⚠️ ${inputToken.symbol}: ${inputToken.warning}`);
                 if (outputToken.warning) warnings.push(`⚠️ ${outputToken.symbol}: ${outputToken.warning}`);
@@ -3741,9 +3746,15 @@ async function executeTool(name, input) {
                 const walletConfig = JSON.parse(fs.readFileSync(walletConfigPath, 'utf8'));
                 const walletAddress = walletConfig.publicKey;
 
-                // 2. Build query params
+                // 2. Build query params (align with schema: use `status` and `page`)
                 const params = new URLSearchParams({ wallet: walletAddress });
-                if (input.orderStatus) params.append('orderStatus', input.orderStatus);
+                if (input.status) {
+                    // Jupiter API expects this as `orderStatus`
+                    params.append('orderStatus', input.status);
+                }
+                if (input.page !== undefined && input.page !== null) {
+                    params.append('page', String(input.page));
+                }
 
                 // 3. Call Jupiter Trigger API
                 const res = await httpRequest({
@@ -3755,11 +3766,11 @@ async function executeTool(name, input) {
                     }
                 });
 
-                if (res.statusCode !== 200) {
-                    return { error: `Jupiter API error: ${res.statusCode}`, details: res.body };
+                if (res.status !== 200) {
+                    return { error: `Jupiter API error: ${res.status}`, details: res.data };
                 }
 
-                const data = JSON.parse(res.body);
+                const data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
                 const orders = data.orders || [];
 
                 return {
@@ -3800,10 +3811,10 @@ async function executeTool(name, input) {
                 const walletAddress = walletConfig.publicKey;
 
                 // 2. Call Jupiter Trigger API
-                const reqBody = JSON.stringify({
+                const reqBody = {
                     orderId: input.orderId,
                     walletAddress: walletAddress
-                });
+                };
 
                 const res = await httpRequest({
                     hostname: 'api.jup.ag',
@@ -3812,15 +3823,14 @@ async function executeTool(name, input) {
                     headers: {
                         'Content-Type': 'application/json',
                         'x-api-key': config.jupiterApiKey
-                    },
-                    body: reqBody
-                });
+                    }
+                }, reqBody);
 
-                if (res.statusCode !== 200) {
-                    return { error: `Jupiter API error: ${res.statusCode}`, details: res.body };
+                if (res.status !== 200) {
+                    return { error: `Jupiter API error: ${res.status}`, details: res.data };
                 }
 
-                const data = JSON.parse(res.body);
+                const data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
                 return {
                     success: true,
                     orderId: input.orderId,
@@ -3870,19 +3880,31 @@ async function executeTool(name, input) {
                 const walletConfig = JSON.parse(fs.readFileSync(walletConfigPath, 'utf8'));
                 const walletAddress = walletConfig.publicKey;
 
-                // 3. Convert input amount and cycle interval
-                const inputAmountLamports = Math.floor(input.inputAmount * Math.pow(10, inputToken.decimals));
-                const cycleIntervalSeconds = input.cycleInterval * 60; // Convert minutes to seconds
+                // 3. Convert amount and cycle interval (align with schema: amountPerCycle and enum)
+                if (inputToken.decimals === null) {
+                    return {
+                        error: 'Could not determine input token decimals',
+                        details: `Token "${input.inputToken}" is missing decimal metadata; cannot calculate input amount in base units.`
+                    };
+                }
+                const inputAmountLamports = Math.floor(input.amountPerCycle * Math.pow(10, inputToken.decimals));
+
+                // Map enum cycleInterval (hourly/daily/weekly) to seconds
+                const intervalMap = { hourly: 3600, daily: 86400, weekly: 604800 };
+                const cycleIntervalSeconds = intervalMap[input.cycleInterval];
+                if (!cycleIntervalSeconds) {
+                    return { error: `Invalid cycleInterval: "${input.cycleInterval}". Must be "hourly", "daily", or "weekly".` };
+                }
 
                 // 4. Call Jupiter Recurring API
-                const reqBody = JSON.stringify({
+                const reqBody = {
                     inputMint: inputToken.address,
                     outputMint: outputToken.address,
                     inputAmount: inputAmountLamports.toString(),
                     cycleInterval: cycleIntervalSeconds,
                     totalCycles: input.totalCycles || null,
                     walletAddress: walletAddress
-                });
+                };
 
                 const res = await httpRequest({
                     hostname: 'api.jup.ag',
@@ -3891,15 +3913,14 @@ async function executeTool(name, input) {
                     headers: {
                         'Content-Type': 'application/json',
                         'x-api-key': config.jupiterApiKey
-                    },
-                    body: reqBody
-                });
+                    }
+                }, reqBody);
 
-                if (res.statusCode !== 200) {
-                    return { error: `Jupiter API error: ${res.statusCode}`, details: res.body };
+                if (res.status !== 200) {
+                    return { error: `Jupiter API error: ${res.status}`, details: res.data };
                 }
 
-                const data = JSON.parse(res.body);
+                const data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
                 const warnings = [];
                 if (inputToken.warning) warnings.push(`⚠️ ${inputToken.symbol}: ${inputToken.warning}`);
                 if (outputToken.warning) warnings.push(`⚠️ ${outputToken.symbol}: ${outputToken.warning}`);
@@ -3909,8 +3930,8 @@ async function executeTool(name, input) {
                     orderId: data.orderId,
                     inputToken: `${inputToken.symbol} (${inputToken.address})`,
                     outputToken: `${outputToken.symbol} (${outputToken.address})`,
-                    inputAmount: input.inputAmount,
-                    cycleInterval: `${input.cycleInterval} minutes`,
+                    amountPerCycle: input.amountPerCycle,
+                    cycleInterval: input.cycleInterval,
                     totalCycles: input.totalCycles || 'Unlimited',
                     warnings: warnings.length > 0 ? warnings : undefined
                 };
@@ -3936,10 +3957,14 @@ async function executeTool(name, input) {
                 const walletConfig = JSON.parse(fs.readFileSync(walletConfigPath, 'utf8'));
                 const walletAddress = walletConfig.publicKey;
 
-                // 2. Build query params
+                // 2. Build query params (align with schema: use `status` and `page`)
                 const params = new URLSearchParams({ wallet: walletAddress });
-                if (input.orderStatus) params.append('orderStatus', input.orderStatus);
-                if (input.recurringType) params.append('recurringType', input.recurringType);
+                if (input.status) {
+                    params.append('orderStatus', input.status);
+                }
+                if (input.page !== undefined && input.page !== null) {
+                    params.append('page', String(input.page));
+                }
 
                 // 3. Call Jupiter Recurring API
                 const res = await httpRequest({
@@ -3951,11 +3976,11 @@ async function executeTool(name, input) {
                     }
                 });
 
-                if (res.statusCode !== 200) {
-                    return { error: `Jupiter API error: ${res.statusCode}`, details: res.body };
+                if (res.status !== 200) {
+                    return { error: `Jupiter API error: ${res.status}`, details: res.data };
                 }
 
-                const data = JSON.parse(res.body);
+                const data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
                 const orders = data.orders || [];
 
                 return {
@@ -3997,10 +4022,10 @@ async function executeTool(name, input) {
                 const walletAddress = walletConfig.publicKey;
 
                 // 2. Call Jupiter Recurring API
-                const reqBody = JSON.stringify({
+                const reqBody = {
                     orderId: input.orderId,
                     walletAddress: walletAddress
-                });
+                };
 
                 const res = await httpRequest({
                     hostname: 'api.jup.ag',
@@ -4009,15 +4034,14 @@ async function executeTool(name, input) {
                     headers: {
                         'Content-Type': 'application/json',
                         'x-api-key': config.jupiterApiKey
-                    },
-                    body: reqBody
-                });
+                    }
+                }, reqBody);
 
-                if (res.statusCode !== 200) {
-                    return { error: `Jupiter API error: ${res.statusCode}`, details: res.body };
+                if (res.status !== 200) {
+                    return { error: `Jupiter API error: ${res.status}`, details: res.data };
                 }
 
-                const data = JSON.parse(res.body);
+                const data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
                 return {
                     success: true,
                     orderId: input.orderId,
@@ -4052,11 +4076,11 @@ async function executeTool(name, input) {
                     }
                 });
 
-                if (res.statusCode !== 200) {
-                    return { error: `Jupiter API error: ${res.statusCode}`, details: res.body };
+                if (res.status !== 200) {
+                    return { error: `Jupiter API error: ${res.status}`, details: res.data };
                 }
 
-                const data = JSON.parse(res.body);
+                const data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
                 const tokens = data.tokens || [];
 
                 return {
@@ -4109,11 +4133,11 @@ async function executeTool(name, input) {
                     }
                 });
 
-                if (res.statusCode !== 200) {
-                    return { error: `Jupiter API error: ${res.statusCode}`, details: res.body };
+                if (res.status !== 200) {
+                    return { error: `Jupiter API error: ${res.status}`, details: res.data };
                 }
 
-                const data = JSON.parse(res.body);
+                const data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
                 const tokenData = data[token.address] || {};
                 const warnings = [];
                 if (tokenData.freezeAuthority) warnings.push('❄️ FREEZE RISK - Token has freeze authority enabled');
@@ -4146,8 +4170,8 @@ async function executeTool(name, input) {
             }
 
             try {
-                // Get wallet address (from input or connected wallet)
-                let walletAddress = input.wallet;
+                // Get wallet address (align with schema: use `address` not `wallet`)
+                let walletAddress = input.address;
                 if (!walletAddress) {
                     const walletConfigPath = path.join(workDir, 'solana_wallet.json');
                     if (!fs.existsSync(walletConfigPath)) {
@@ -4167,11 +4191,11 @@ async function executeTool(name, input) {
                     }
                 });
 
-                if (res.statusCode !== 200) {
-                    return { error: `Jupiter API error: ${res.statusCode}`, details: res.body };
+                if (res.status !== 200) {
+                    return { error: `Jupiter API error: ${res.status}`, details: res.data };
                 }
 
-                const data = JSON.parse(res.body);
+                const data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
                 const holdings = data.holdings || [];
                 const totalValue = holdings.reduce((sum, h) => sum + (h.valueUsd || 0), 0);
 
