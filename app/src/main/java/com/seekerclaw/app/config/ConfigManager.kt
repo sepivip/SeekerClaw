@@ -229,13 +229,13 @@ object ConfigManager {
      */
     private fun escapeJson(value: String): String {
         return value
-            .replace("\\", "\\\\")  // Backslash must be first
-            .replace("\"", "\\\"")  // Quotes
-            .replace("\n", "\\n")   // Newline
-            .replace("\r", "\\r")   // Carriage return
-            .replace("\t", "\\t")   // Tab
-            .replace("\u2028", "\\u2028")  // Unicode line separator
-            .replace("\u2029", "\\u2029")  // Unicode paragraph separator
+            .replace("\\", "\\\\")    // Backslash must be first
+            .replace("\"", "\\\"")    // Quotes
+            .replace("\n", "\\n")     // Newline
+            .replace("\r", "\\r")     // Carriage return
+            .replace("\t", "\\t")     // Tab
+            .replace("\u2028", "\\\\u2028")  // Unicode line separator
+            .replace("\u2029", "\\\\u2029")  // Unicode paragraph separator
     }
 
     /**
