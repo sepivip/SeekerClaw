@@ -2387,10 +2387,10 @@ const TOOLS = [
         input_schema: {
             type: 'object',
             properties: {
-                status: { type: 'string', enum: ['active', 'history'], description: 'Filter by status: "active" for open orders, "history" for filled/cancelled orders' },
+                status: { type: 'string', enum: ['active', 'history'], description: 'Filter by status: "active" for open orders, "history" for filled/cancelled orders. Optional - omit to see all orders.' },
                 page: { type: 'number', description: 'Page number for pagination (default: 1)' }
             },
-            required: ['status']
+            required: []
         }
     },
     {
@@ -2425,10 +2425,10 @@ const TOOLS = [
         input_schema: {
             type: 'object',
             properties: {
-                status: { type: 'string', enum: ['active', 'history'], description: 'Filter by status: "active" for running DCA orders, "history" for completed/cancelled' },
+                status: { type: 'string', enum: ['active', 'history'], description: 'Filter by status: "active" for running DCA orders, "history" for completed/cancelled. Optional - omit to see all orders.' },
                 page: { type: 'number', description: 'Page number for pagination (default: 1)' }
             },
-            required: ['status']
+            required: []
         }
     },
     {
@@ -3672,22 +3672,16 @@ async function executeTool(name, input) {
                     return { error: e.message };
                 }
 
-                // 3. Validate and convert input amount
-                const inputAmount = Number(input.inputAmount);
-                if (!Number.isFinite(inputAmount) || inputAmount <= 0) {
+                // 3. Validate and convert input amount (using BigInt for precision safety)
+                let inputAmountLamports;
+                try {
+                    inputAmountLamports = parseInputAmountToLamports(input.inputAmount, inputToken.decimals);
+                } catch (e) {
                     return {
                         error: 'Invalid input amount',
-                        details: `Input amount "${input.inputAmount}" must be a finite number greater than 0.`
+                        details: e.message
                     };
                 }
-                if (inputToken.decimals === null) {
-                    return {
-                        error: 'Could not determine input token decimals',
-                        details: `Token "${input.inputToken}" is missing decimal metadata; cannot calculate input amount in base units.`
-                    };
-                }
-                // Use Math.round for precision (avoid systematic rounding down)
-                const inputAmountLamports = Math.round(inputAmount * Math.pow(10, inputToken.decimals));
 
                 // 4. Compute expiryTime: use provided value, or default to 30 days from now
                 let expiryTime = input.expiryTime;
@@ -3700,7 +3694,7 @@ async function executeTool(name, input) {
                 const reqBody = {
                     inputMint: inputToken.address,
                     outputMint: outputToken.address,
-                    inputAmount: inputAmountLamports.toString(),
+                    inputAmount: inputAmountLamports, // Already a string from parseInputAmountToLamports
                     triggerPrice: input.triggerPrice.toString(),
                     orderType: input.orderType || 'limit',
                     expiryTime: expiryTime,
@@ -3921,22 +3915,16 @@ async function executeTool(name, input) {
                     return { error: e.message };
                 }
 
-                // 3. Validate and convert amount (align with schema: amountPerCycle and enum)
-                const amountPerCycleNum = Number(input.amountPerCycle);
-                if (!Number.isFinite(amountPerCycleNum) || amountPerCycleNum <= 0) {
+                // 3. Validate and convert amount (using BigInt for precision safety)
+                let inputAmountLamports;
+                try {
+                    inputAmountLamports = parseInputAmountToLamports(input.amountPerCycle, inputToken.decimals);
+                } catch (e) {
                     return {
                         error: 'Invalid amountPerCycle',
-                        details: `amountPerCycle must be a positive number in human units; received "${input.amountPerCycle}".`
+                        details: e.message
                     };
                 }
-                if (inputToken.decimals === null) {
-                    return {
-                        error: 'Could not determine input token decimals',
-                        details: `Token "${input.inputToken}" is missing decimal metadata; cannot calculate input amount in base units.`
-                    };
-                }
-                // Use Math.round for better precision (avoid systematic rounding down)
-                const inputAmountLamports = Math.round(amountPerCycleNum * Math.pow(10, inputToken.decimals));
 
                 // Map enum cycleInterval (hourly/daily/weekly) to seconds
                 const intervalMap = { hourly: 3600, daily: 86400, weekly: 604800 };
@@ -3962,7 +3950,7 @@ async function executeTool(name, input) {
                 const reqBody = {
                     inputMint: inputToken.address,
                     outputMint: outputToken.address,
-                    inputAmount: inputAmountLamports.toString(),
+                    inputAmount: inputAmountLamports, // Already a string from parseInputAmountToLamports
                     cycleInterval: cycleIntervalSeconds,
                     totalCycles: totalCycles,
                     walletAddress: walletAddress
@@ -4152,9 +4140,31 @@ async function executeTool(name, input) {
             }
 
             try {
-                // Build query params
-                const params = new URLSearchParams({ query: input.query });
-                if (input.limit) params.append('limit', input.limit.toString());
+                const DEFAULT_LIMIT = 10;
+                const MAX_LIMIT = 100;
+
+                // Validate and normalize query
+                const rawQuery = typeof input.query === 'string' ? input.query.trim() : '';
+                if (!rawQuery) {
+                    return {
+                        error: 'Token search query is required',
+                        details: 'Provide a non-empty search query, for example a token symbol, name, or address.'
+                    };
+                }
+
+                // Validate and normalize limit
+                let limit = DEFAULT_LIMIT;
+                if (input.limit !== undefined && input.limit !== null) {
+                    const parsedLimit = Number(input.limit);
+                    if (Number.isFinite(parsedLimit) && parsedLimit > 0) {
+                        // Use an integer limit and cap to MAX_LIMIT
+                        const normalizedLimit = Math.floor(parsedLimit);
+                        limit = Math.min(normalizedLimit, MAX_LIMIT);
+                    }
+                }
+
+                // Build query params with validated values
+                const params = new URLSearchParams({ query: rawQuery, limit: limit.toString() });
 
                 // Call Jupiter Tokens API
                 const res = await httpRequest({
@@ -4989,6 +4999,37 @@ function isValidSolanaAddress(address) {
     if (!address || typeof address !== 'string') return false;
     const base58Regex = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
     return base58Regex.test(address.trim());
+}
+
+// Parse input amount to lamports using BigInt for precision safety
+function parseInputAmountToLamports(amount, decimals) {
+    if (decimals == null) {
+        throw new Error('Token is missing decimal metadata; cannot calculate input amount in base units.');
+    }
+    const amountStr = String(amount).trim();
+    if (amountStr.length === 0) {
+        throw new Error('Input amount must not be empty.');
+    }
+    // Allow only simple decimal numbers: digits, optional single dot, no signs or exponents
+    if (!/^\d+(\.\d+)?$/.test(amountStr)) {
+        throw new Error(`Input amount "${amountStr}" must be a positive decimal number without exponent notation.`);
+    }
+    const parts = amountStr.split('.');
+    const integerPart = parts[0];
+    const fractionPart = parts[1] || '';
+    if (fractionPart.length > decimals) {
+        throw new Error(`Input amount has more fractional digits than supported (${decimals}).`);
+    }
+    // Pad the fractional part to the token's decimals
+    const paddedFraction = fractionPart.padEnd(decimals, '0');
+    const fullDigits = integerPart + paddedFraction;
+    // Remove leading zeros, but keep at least one digit
+    const normalizedDigits = fullDigits.replace(/^0+/, '') || '0';
+    const lamports = BigInt(normalizedDigits);
+    if (lamports <= 0n) {
+        throw new Error('Input amount must be greater than 0.');
+    }
+    return lamports.toString(); // Return as string for JSON serialization
 }
 
 // Get connected wallet address from solana_wallet.json
