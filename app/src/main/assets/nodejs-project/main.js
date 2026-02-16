@@ -3765,7 +3765,7 @@ async function executeTool(name, input) {
             const MAX_SEND_SIZE = 50 * 1024 * 1024; // 50MB Telegram bot limit
             const MAX_PHOTO_SIZE = 10 * 1024 * 1024; // 10MB for sendPhoto
             if (stat.size > MAX_SEND_SIZE) {
-                return { error: `File too large (${(stat.size / 1024 / 1024).toFixed(1)}MB). Telegram bot limit is 50MB.` };
+                return { error: `📦 That file's too big (${(stat.size / 1024 / 1024).toFixed(1)}MB, max 50MB). Can you send a smaller one?` };
             }
 
             const ext = path.extname(filePath).toLowerCase();
@@ -4947,7 +4947,7 @@ let lastRateLimitTokensReset = '';
 function classifyApiError(status, data) {
     if (status === 401 || status === 403) {
         return { type: 'auth', retryable: false,
-            userMessage: 'API authentication failed. Please check your API key in Settings.' };
+            userMessage: '🔑 Can\'t reach the AI — API key might be wrong. Check Settings?' };
     }
     if (status === 402) {
         return { type: 'billing', retryable: false,
@@ -4960,7 +4960,7 @@ function classifyApiError(status, data) {
                 userMessage: 'API usage quota exceeded. Please try again later or upgrade your plan.' };
         }
         return { type: 'rate_limit', retryable: true,
-            userMessage: 'API rate limit reached. Please try again later.' };
+            userMessage: '⏳ Got rate limited. Trying again in a moment...' };
     }
     if (status === 529) {
         return { type: 'overloaded', retryable: true,
@@ -5259,46 +5259,33 @@ async function handleCommand(chatId, command, args) {
     switch (command) {
         case '/start': {
             // Templates defined in TEMPLATES.md — update there first, then sync here
+            const bootstrap = loadBootstrap();
             const identity = loadIdentity();
-            const isReturningUser = !!identity;
 
-            if (isReturningUser) {
-                // Brief personalized greeting for returning users
+            // Option B: If BOOTSTRAP.md exists, pass through to agent (ritual mode)
+            if (bootstrap) {
+                return null; // Falls through to agent call with ritual instructions in system prompt
+            }
+
+            // Post-ritual or fallback
+            if (identity) {
+                // Returning user (IDENTITY.md exists)
                 const agentName = identity.split('\n')[0].replace(/^#\s*/, '').trim() || AGENT_NAME;
-                return `Welcome back! I'm ${agentName}.
+                return `Hey, I'm back! ✨
 
-Commands:
-/status - Show system status
-/new - Save session summary & start fresh
-/reset - Clear conversation history (no summary)
-/soul - Show my personality
-/memory - Show long-term memory
-/skills - List installed skills
-/help - Show this message
+Quick commands if you need them:
+/status · /new · /reset · /soul · /memory · /skills
 
-Ready to continue where we left off!`;
+Or just talk to me — that works too.`;
             } else {
-                // Full welcome for first-time users
-                return `Hello! I'm ${AGENT_NAME}, your AI assistant running on Android via SeekerClaw.
+                // First-time (no BOOTSTRAP.md, no IDENTITY.md — rare edge case)
+                return `Hey there! 👋
 
-I can:
-- Have conversations and remember context
-- Search the web for current information
-- Save and recall memories
-- Take daily notes
-- Check camera view (vision) and describe what it sees
-- Use specialized skills for specific tasks
+I'm your new AI companion, fresh out of the box and running right here on your phone.
 
-Commands:
-/status - Show system status
-/new - Save session summary & start fresh
-/reset - Clear conversation history (no summary)
-/soul - Show my personality
-/memory - Show long-term memory
-/skills - List installed skills
-/help - Show this message
+Before we get going, I'd love to figure out who I am — my name, my vibe, how I should talk to you. It only takes a minute.
 
-Just send me a message to chat!`;
+Send me anything to get started!`;
             }
         }
 
@@ -5307,22 +5294,38 @@ Just send me a message to chat!`;
 
         case '/status': {
             const uptime = Math.floor(process.uptime());
-            const memUsage = process.memoryUsage();
-            return `*Status*
-Agent: ${AGENT_NAME}
-Model: ${MODEL}
-Uptime: ${Math.floor(uptime / 3600)}h ${Math.floor((uptime % 3600) / 60)}m ${uptime % 60}s
-Memory: ${Math.round(memUsage.rss / 1024 / 1024)} MB
-Node: ${process.version}
-Platform: ${process.platform} ${process.arch}
-Conversation: ${getConversation(chatId).length} messages
-Web Search: ${config.braveApiKey ? 'Brave' : 'DuckDuckGo'}`;
+            const uptimeFormatted = `${Math.floor(uptime / 3600)}h ${Math.floor((uptime % 3600) / 60)}m ${uptime % 60}s`;
+
+            // Get today's message count
+            const today = new Date().toISOString().split('T')[0];
+            const todayCount = sessionTracking.has(chatId) && sessionTracking.get(chatId).date === today
+                ? sessionTracking.get(chatId).messageCount
+                : 0;
+            const totalCount = getConversation(chatId).length;
+
+            // Get memory file count
+            const memoryDir = path.join(WORKSPACE_DIR, 'memory');
+            let memoryFileCount = 0;
+            try {
+                if (fs.existsSync(memoryDir)) {
+                    memoryFileCount = fs.readdirSync(memoryDir).filter(f => f.endsWith('.md')).length;
+                }
+            } catch (e) { /* ignore */ }
+
+            return `🟢 Alive and kicking
+
+⏱️ Uptime: ${uptimeFormatted}
+💬 Messages: ${todayCount} today (${totalCount} total)
+🧠 Memory: ${memoryFileCount} files
+📊 Model: ${MODEL}
+
+Last active: just now`;
         }
 
         case '/reset':
             clearConversation(chatId);
             sessionTracking.delete(chatId);
-            return 'Conversation history cleared. Starting fresh!';
+            return 'Conversation wiped. No backup saved.';
 
         case '/new': {
             // Save summary of current session before clearing (BAT-57)
@@ -5333,7 +5336,7 @@ Web Search: ${config.braveApiKey ? 'Brave' : 'DuckDuckGo'}`;
             }
             clearConversation(chatId);
             sessionTracking.delete(chatId);
-            return hadEnough ? 'Session saved and cleared. Starting fresh!' : 'Conversation cleared (too short to summarize). Starting fresh!';
+            return 'Session archived. Conversation reset.';
         }
 
         case '/soul': {
@@ -5472,7 +5475,7 @@ async function handleMessage(msg) {
                 if (media.file_size && media.file_size > MAX_FILE_SIZE) {
                     const sizeMb = (media.file_size / 1024 / 1024).toFixed(1);
                     const maxMb = (MAX_FILE_SIZE / 1024 / 1024).toFixed(1);
-                    await sendMessage(chatId, `File too large (${sizeMb}MB). Max is ${maxMb}MB.`, msg.message_id);
+                    await sendMessage(chatId, `📦 That file's too big (${sizeMb}MB, max ${maxMb}MB). Can you send a smaller one?`, msg.message_id);
                     const tooLargeNote = `[File attachment was rejected: too large (${sizeMb}MB).]`;
                     if (text) {
                         userContent = `${text}\n\n${tooLargeNote}`;
