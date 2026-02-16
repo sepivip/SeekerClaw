@@ -242,8 +242,8 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .alpha(if (isRunning) 1f else 0.6f)
                 .background(SeekerClawColors.Surface, shape)
+                .alpha(if (isRunning) 1f else 0.6f)
                 .clickable { if (configNeeded) onNavigateToSettings() else onNavigateToSystem() }
                 .padding(20.dp),
         ) {
@@ -257,8 +257,8 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
                         modifier = Modifier
                             .size(10.dp)
                             .clip(CircleShape)
-                            .alpha(if (isRunning) pulseAlpha else 1f)
-                            .background(statusColor),
+                            .background(statusColor)
+                            .alpha(if (isRunning) pulseAlpha else 1f),
                     )
                     Spacer(modifier = Modifier.width(12.dp))
                     Text(
@@ -548,8 +548,8 @@ private fun UplinkCard(
             modifier = Modifier
                 .size(10.dp)
                 .clip(CircleShape)
-                .alpha(dotAlpha)
-                .background(dotColor),
+                .background(dotColor)
+                .alpha(dotAlpha),
         )
     }
 }
