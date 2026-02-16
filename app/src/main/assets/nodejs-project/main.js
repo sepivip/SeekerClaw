@@ -113,8 +113,7 @@ function redactSecrets(msg) {
     msg = msg.replace(/pplx-[a-zA-Z0-9_-]{10,}/g, 'pplx-***');
     // Redact OpenRouter API keys (sk-or-...)
     msg = msg.replace(/sk-or-[a-zA-Z0-9_-]{10,}/g, 'sk-or-***');
-    // Redact Jupiter API keys (exact value replacement - format unknown)
-    if (typeof config !== 'undefined' && config.jupiterApiKey) msg = msg.replace(new RegExp(config.jupiterApiKey.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&'), 'g'), '***jupiter-api-key***');
+    // Jupiter API keys: no pattern-based redaction (unknown format, optional feature)
     // Redact bridge tokens (UUID format)
     if (BRIDGE_TOKEN) msg = msg.replace(new RegExp(BRIDGE_TOKEN.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&'), 'g'), '***bridge-token***');
     return msg;
