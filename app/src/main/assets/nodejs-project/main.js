@@ -3640,7 +3640,7 @@ async function executeTool(name, input) {
             if (!config.jupiterApiKey) {
                 return {
                     error: 'Jupiter API key required',
-                    guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings → Solana Wallet → Jupiter API Key'
+                    guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings > Configuration > Jupiter API Key'
                 };
             }
 
@@ -3674,23 +3674,37 @@ async function executeTool(name, input) {
                 const walletConfig = JSON.parse(fs.readFileSync(walletConfigPath, 'utf8'));
                 const walletAddress = walletConfig.publicKey;
 
-                // 3. Convert input amount to proper units (multiply by decimals)
+                // 3. Validate and convert input amount
+                const inputAmount = Number(input.inputAmount);
+                if (!Number.isFinite(inputAmount) || inputAmount <= 0) {
+                    return {
+                        error: 'Invalid input amount',
+                        details: `Input amount "${input.inputAmount}" must be a finite number greater than 0.`
+                    };
+                }
                 if (inputToken.decimals === null) {
                     return {
                         error: 'Could not determine input token decimals',
                         details: `Token "${input.inputToken}" is missing decimal metadata; cannot calculate input amount in base units.`
                     };
                 }
-                const inputAmountLamports = Math.floor(input.inputAmount * Math.pow(10, inputToken.decimals));
+                const inputAmountLamports = Math.floor(inputAmount * Math.pow(10, inputToken.decimals));
 
-                // 4. Call Jupiter Trigger API
+                // 4. Compute expiryTime: use provided value, or default to 30 days from now
+                let expiryTime = input.expiryTime;
+                if (expiryTime == null) {
+                    const THIRTY_DAYS_IN_MS = 30 * 24 * 60 * 60 * 1000;
+                    expiryTime = Math.floor((Date.now() + THIRTY_DAYS_IN_MS) / 1000);
+                }
+
+                // 5. Call Jupiter Trigger API
                 const reqBody = {
                     inputMint: inputToken.address,
                     outputMint: outputToken.address,
                     inputAmount: inputAmountLamports.toString(),
                     triggerPrice: input.triggerPrice.toString(),
                     orderType: input.orderType || 'limit',
-                    expiryTime: input.expiryTime || null,
+                    expiryTime: expiryTime,
                     walletAddress: walletAddress
                 };
 
@@ -3721,7 +3735,7 @@ async function executeTool(name, input) {
                     outputToken: `${outputToken.symbol} (${outputToken.address})`,
                     inputAmount: input.inputAmount,
                     triggerPrice: input.triggerPrice,
-                    expiryTime: input.expiryTime || 'No expiry',
+                    expiryTime: expiryTime,
                     warnings: warnings.length > 0 ? warnings : undefined
                 };
             } catch (e) {
@@ -3733,7 +3747,7 @@ async function executeTool(name, input) {
             if (!config.jupiterApiKey) {
                 return {
                     error: 'Jupiter API key required',
-                    guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings → Solana Wallet → Jupiter API Key'
+                    guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings > Configuration > Jupiter API Key'
                 };
             }
 
@@ -3797,7 +3811,7 @@ async function executeTool(name, input) {
             if (!config.jupiterApiKey) {
                 return {
                     error: 'Jupiter API key required',
-                    guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings → Solana Wallet → Jupiter API Key'
+                    guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings > Configuration > Jupiter API Key'
                 };
             }
 
@@ -3846,7 +3860,7 @@ async function executeTool(name, input) {
             if (!config.jupiterApiKey) {
                 return {
                     error: 'Jupiter API key required',
-                    guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings → Solana Wallet → Jupiter API Key'
+                    guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings > Configuration > Jupiter API Key'
                 };
             }
 
@@ -3880,14 +3894,21 @@ async function executeTool(name, input) {
                 const walletConfig = JSON.parse(fs.readFileSync(walletConfigPath, 'utf8'));
                 const walletAddress = walletConfig.publicKey;
 
-                // 3. Convert amount and cycle interval (align with schema: amountPerCycle and enum)
+                // 3. Validate and convert amount (align with schema: amountPerCycle and enum)
+                const amountPerCycleNum = Number(input.amountPerCycle);
+                if (!Number.isFinite(amountPerCycleNum) || amountPerCycleNum <= 0) {
+                    return {
+                        error: 'Invalid amountPerCycle',
+                        details: `amountPerCycle must be a positive number in human units; received "${input.amountPerCycle}".`
+                    };
+                }
                 if (inputToken.decimals === null) {
                     return {
                         error: 'Could not determine input token decimals',
                         details: `Token "${input.inputToken}" is missing decimal metadata; cannot calculate input amount in base units.`
                     };
                 }
-                const inputAmountLamports = Math.floor(input.amountPerCycle * Math.pow(10, inputToken.decimals));
+                const inputAmountLamports = Math.floor(amountPerCycleNum * Math.pow(10, inputToken.decimals));
 
                 // Map enum cycleInterval (hourly/daily/weekly) to seconds
                 const intervalMap = { hourly: 3600, daily: 86400, weekly: 604800 };
@@ -3944,7 +3965,7 @@ async function executeTool(name, input) {
             if (!config.jupiterApiKey) {
                 return {
                     error: 'Jupiter API key required',
-                    guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings → Solana Wallet → Jupiter API Key'
+                    guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings > Configuration > Jupiter API Key'
                 };
             }
 
@@ -4008,7 +4029,7 @@ async function executeTool(name, input) {
             if (!config.jupiterApiKey) {
                 return {
                     error: 'Jupiter API key required',
-                    guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings → Solana Wallet → Jupiter API Key'
+                    guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings > Configuration > Jupiter API Key'
                 };
             }
 
@@ -4057,7 +4078,7 @@ async function executeTool(name, input) {
             if (!config.jupiterApiKey) {
                 return {
                     error: 'Jupiter API key required',
-                    guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings → Solana Wallet → Jupiter API Key'
+                    guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings > Configuration > Jupiter API Key'
                 };
             }
 
@@ -4106,7 +4127,7 @@ async function executeTool(name, input) {
             if (!config.jupiterApiKey) {
                 return {
                     error: 'Jupiter API key required',
-                    guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings → Solana Wallet → Jupiter API Key'
+                    guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings > Configuration > Jupiter API Key'
                 };
             }
 
@@ -4165,7 +4186,7 @@ async function executeTool(name, input) {
             if (!config.jupiterApiKey) {
                 return {
                     error: 'Jupiter API key required',
-                    guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings → Solana Wallet → Jupiter API Key'
+                    guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings > Configuration > Jupiter API Key'
                 };
             }
 
@@ -4179,6 +4200,14 @@ async function executeTool(name, input) {
                     }
                     const walletConfig = JSON.parse(fs.readFileSync(walletConfigPath, 'utf8'));
                     walletAddress = walletConfig.publicKey;
+                }
+
+                // Validate wallet address before using in URL path
+                if (!isValidSolanaAddress(walletAddress)) {
+                    return {
+                        error: 'Invalid Solana wallet address',
+                        details: `Address "${walletAddress}" is not a valid base58-encoded Solana public key.`
+                    };
                 }
 
                 // Call Jupiter Holdings API
@@ -4888,6 +4917,13 @@ async function fetchJupiterTokenList() {
 }
 
 // Resolve token symbol or mint address → token object, or { ambiguous, candidates } if multiple matches
+// Validate Solana wallet address (base58 format, 32-44 chars)
+function isValidSolanaAddress(address) {
+    if (!address || typeof address !== 'string') return false;
+    const base58Regex = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+    return base58Regex.test(address.trim());
+}
+
 async function resolveToken(input) {
     if (!input || typeof input !== 'string') return null;
     const trimmed = input.trim();
@@ -5420,7 +5456,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('- **Token Search** (jupiter_token_search): Find tokens by name/symbol with prices, market caps, and liquidity data. Better than basic token lists.');
     lines.push('- **Security Check** (jupiter_token_security): Check token safety before swapping. Detects scams, rugs, honeypots, freeze authority, low liquidity. ALWAYS check unknown tokens.');
     lines.push('- **Holdings** (jupiter_wallet_holdings): View all tokens in a wallet with USD values and metadata.');
-    lines.push('If user tries these features without API key: explain the feature, then guide them to get a free key at portal.jup.ag and add it in Settings → Solana Wallet → Jupiter API Key.');
+    lines.push('If user tries these features without API key: explain the feature, then guide them to get a free key at portal.jup.ag and add it in Settings > Configuration > Jupiter API Key.');
     lines.push('**Web search:** web_search works out of the box — DuckDuckGo is the zero-config default. If a Brave API key is configured, Brave is used automatically (better quality). DuckDuckGo and Brave return search results as {title, url, snippet}. Use provider=perplexity for complex questions — it returns a synthesized answer with citations.');
     lines.push('**Web fetch:** Use web_fetch to read webpages or call APIs. Supports custom headers (Bearer auth), POST/PUT/DELETE methods, and request bodies. Returns markdown (default), JSON, or plain text. Use raw=true for stripped text. Up to 50K chars.');
     lines.push('**Shell execution:** Use shell_exec to run commands on the device. Sandboxed to workspace directory with a predefined allowlist of common Unix utilities (ls, cat, grep, find, curl, etc.). Note: node/npm/npx are NOT available — use for file operations, curl, and system info only. 30s timeout. No chaining, redirection, or command substitution — one command at a time.');
