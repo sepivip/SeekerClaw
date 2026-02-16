@@ -2366,6 +2366,117 @@ const TOOLS = [
         }
     },
     {
+        name: 'jupiter_trigger_create',
+        description: 'Create a limit order or stop-loss order on Jupiter. Requires Jupiter API key (get free at portal.jup.ag). Order executes automatically when price condition is met. Use for: buy at lower price (limit buy), sell at higher price (limit sell), or stop-loss protection.',
+        input_schema: {
+            type: 'object',
+            properties: {
+                inputToken: { type: 'string', description: 'Token to sell — symbol (e.g., "SOL") or mint address' },
+                outputToken: { type: 'string', description: 'Token to buy — symbol (e.g., "USDC") or mint address' },
+                inputAmount: { type: 'number', description: 'Amount of inputToken to sell (in human units)' },
+                triggerPrice: { type: 'number', description: 'Price at which order triggers (outputToken per inputToken, e.g., 90 means 1 SOL = 90 USDC)' },
+                orderType: { type: 'string', enum: ['limit', 'stop'], description: 'Order type: "limit" (execute when price is favorable) or "stop" (stop-loss, execute when price hits threshold)' },
+                expiryTime: { type: 'number', description: 'Order expiration timestamp (Unix seconds). Optional, defaults to 30 days from now.' }
+            },
+            required: ['inputToken', 'outputToken', 'inputAmount', 'triggerPrice']
+        }
+    },
+    {
+        name: 'jupiter_trigger_list',
+        description: 'List your active or historical limit/stop orders on Jupiter. Shows order status, prices, amounts, and expiration. Requires Jupiter API key.',
+        input_schema: {
+            type: 'object',
+            properties: {
+                status: { type: 'string', enum: ['active', 'history'], description: 'Filter by status: "active" for open orders, "history" for filled/cancelled orders' },
+                page: { type: 'number', description: 'Page number for pagination (default: 1)' }
+            },
+            required: ['status']
+        }
+    },
+    {
+        name: 'jupiter_trigger_cancel',
+        description: 'Cancel an active limit or stop order on Jupiter. Requires the order ID from jupiter_trigger_list. Requires Jupiter API key.',
+        input_schema: {
+            type: 'object',
+            properties: {
+                orderId: { type: 'string', description: 'The order ID to cancel (get from jupiter_trigger_list)' }
+            },
+            required: ['orderId']
+        }
+    },
+    {
+        name: 'jupiter_dca_create',
+        description: 'Create a recurring DCA (Dollar Cost Averaging) order on Jupiter. Automatically buys tokens on a schedule to average out price. Perfect for building positions over time. Requires Jupiter API key.',
+        input_schema: {
+            type: 'object',
+            properties: {
+                inputToken: { type: 'string', description: 'Token to sell (usually stablecoin like "USDC") — symbol or mint address' },
+                outputToken: { type: 'string', description: 'Token to buy — symbol (e.g., "SOL", "JUP") or mint address' },
+                amountPerCycle: { type: 'number', description: 'Amount of inputToken to spend per cycle (in human units)' },
+                cycleInterval: { type: 'string', enum: ['hourly', 'daily', 'weekly'], description: 'How often to execute the buy: "hourly", "daily", or "weekly"' },
+                totalCycles: { type: 'number', description: 'Total number of cycles to run (e.g., 30 for 30 days of daily buys). Optional, defaults to unlimited until cancelled.' }
+            },
+            required: ['inputToken', 'outputToken', 'amountPerCycle', 'cycleInterval']
+        }
+    },
+    {
+        name: 'jupiter_dca_list',
+        description: 'List your active or historical DCA (recurring) orders on Jupiter. Shows schedule, amounts, cycles completed, and next execution time. Requires Jupiter API key.',
+        input_schema: {
+            type: 'object',
+            properties: {
+                status: { type: 'string', enum: ['active', 'history'], description: 'Filter by status: "active" for running DCA orders, "history" for completed/cancelled' },
+                page: { type: 'number', description: 'Page number for pagination (default: 1)' }
+            },
+            required: ['status']
+        }
+    },
+    {
+        name: 'jupiter_dca_cancel',
+        description: 'Cancel an active DCA (recurring) order on Jupiter. Stops all future executions. Requires the order ID from jupiter_dca_list. Requires Jupiter API key.',
+        input_schema: {
+            type: 'object',
+            properties: {
+                orderId: { type: 'string', description: 'The DCA order ID to cancel (get from jupiter_dca_list)' }
+            },
+            required: ['orderId']
+        }
+    },
+    {
+        name: 'jupiter_token_search',
+        description: 'Search for Solana tokens by name or symbol using Jupiter\'s comprehensive token database. Returns detailed info including price, market cap, liquidity, holder count, and security audit status. Better than basic token lists.',
+        input_schema: {
+            type: 'object',
+            properties: {
+                query: { type: 'string', description: 'Token name or symbol to search for (e.g., "Bonk", "JUP", "Wrapped SOL")' },
+                limit: { type: 'number', description: 'Max number of results (default: 10)' }
+            },
+            required: ['query']
+        }
+    },
+    {
+        name: 'jupiter_token_security',
+        description: 'Check token safety using Jupiter Shield. Scans for red flags: freeze authority enabled, mint authority active, low liquidity, honeypots, or other scam indicators. ALWAYS check before swapping unknown tokens. Requires Jupiter API key.',
+        input_schema: {
+            type: 'object',
+            properties: {
+                token: { type: 'string', description: 'Token symbol (e.g., "BONK") or mint address to check' }
+            },
+            required: ['token']
+        }
+    },
+    {
+        name: 'jupiter_wallet_holdings',
+        description: 'View all tokens held by a Solana wallet address. Returns complete list with balances, USD values, and token metadata. More detailed than basic Solana RPC. Requires Jupiter API key.',
+        input_schema: {
+            type: 'object',
+            properties: {
+                address: { type: 'string', description: 'Solana wallet address to check (defaults to your connected wallet if not specified)' }
+            },
+            required: []
+        }
+    },
+    {
         name: 'telegram_react',
         description: 'Send a reaction emoji to a Telegram message via the setMessageReaction API. Use sparingly — at most 1 reaction per 5-10 exchanges. Pass the message_id and chat_id from the current conversation context and a single standard emoji.',
         input_schema: {
