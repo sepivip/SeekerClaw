@@ -471,10 +471,26 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                     editLabel = "Brave API Key"
                     editValue = config?.braveApiKey ?: ""
                 },
-                showDivider = false,
                 info = "Optional. Lets your agent search the web using Brave Search (better quality). " +
                     "Get a free key at brave.com/search/api. " +
                     "Without this, DuckDuckGo is used (no key required).",
+            )
+            ConfigField(
+                label = "Jupiter API Key",
+                value = config?.jupiterApiKey?.let { key ->
+                    if (key.isBlank()) "Not set — swaps disabled"
+                    else if (key.length > 12) "${key.take(8)}${"*".repeat(8)}${key.takeLast(4)}"
+                    else "*".repeat(key.length)
+                } ?: "Not set — swaps disabled",
+                onClick = {
+                    editField = "jupiterApiKey"
+                    editLabel = "Jupiter API Key"
+                    editValue = config?.jupiterApiKey ?: ""
+                },
+                showDivider = false,
+                info = "Optional. Required for Solana token swaps. " +
+                    "Get a free key at portal.jup.ag (free tier: 60 req/min). " +
+                    "Without this, swap and quote tools will not work.",
             )
             }
         }
