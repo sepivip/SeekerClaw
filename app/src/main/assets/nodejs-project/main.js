@@ -1577,15 +1577,15 @@ async function telegramSendFile(method, params, fieldName, filePath, fileName, f
     const crypto = require('crypto');
     const boundary = '----TgFile' + crypto.randomBytes(16).toString('hex');
 
-    // Sanitize header values: strip CR/LF and escape quotes
-    const sanitize = (s) => String(s).replace(/[\r\n]/g, '').replace(/"/g, "'");
+    // Sanitize header values: strip CR/LF/null/Unicode line separators and escape quotes
+    const sanitize = (s) => String(s).replace(/[\r\n\0\u2028\u2029]/g, '').replace(/"/g, "'");
     const safeFileName = sanitize(fileName);
 
     // Build non-file form parts
     const headerParts = [];
     for (const [key, value] of Object.entries(params)) {
         headerParts.push(Buffer.from(
-            `--${boundary}\r\nContent-Disposition: form-data; name="${sanitize(key)}"\r\n\r\n${String(value).replace(/[\r\n]/g, ' ')}\r\n`
+            `--${boundary}\r\nContent-Disposition: form-data; name="${sanitize(key)}"\r\n\r\n${String(value).replace(/[\r\n\0\u2028\u2029]/g, ' ')}\r\n`
         ));
     }
     const fileHeader = Buffer.from(
@@ -1598,6 +1598,7 @@ async function telegramSendFile(method, params, fieldName, filePath, fileName, f
     const totalSize = preambleSize + fileSize + footer.length;
 
     return new Promise((resolve, reject) => {
+        let rs = null;
         const req = https.request({
             hostname: 'api.telegram.org',
             path: `/bot${BOT_TOKEN}/${method}`,
@@ -1615,15 +1616,15 @@ async function telegramSendFile(method, params, fieldName, filePath, fileName, f
                 catch { resolve({ ok: false, description: data }); }
             });
         });
-        req.on('error', reject);
-        req.setTimeout(120000, () => { req.destroy(); reject(new Error('Upload timed out')); });
+        req.on('error', err => { if (rs) rs.destroy(); reject(err); });
+        req.setTimeout(120000, () => { if (rs) rs.destroy(); req.destroy(); reject(new Error('Upload timed out')); });
 
         // Write form preamble
         for (const part of headerParts) req.write(part);
         req.write(fileHeader);
 
         // Stream file content to avoid loading entire file into memory
-        const rs = fs.createReadStream(filePath);
+        rs = fs.createReadStream(filePath);
         rs.on('data', chunk => { if (!req.write(chunk)) rs.pause(); });
         req.on('drain', () => rs.resume());
         rs.on('end', () => { req.write(footer); req.end(); });
