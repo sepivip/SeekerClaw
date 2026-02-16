@@ -1563,6 +1563,88 @@ async function telegram(method, body = null) {
     return res.data;
 }
 
+/**
+ * Send a file to Telegram using multipart/form-data with streaming upload.
+ * @param {string} method - Telegram API method (sendDocument, sendPhoto, etc.)
+ * @param {Object} params - Non-file form fields (chat_id, caption, etc.)
+ * @param {string} fieldName - Form field name for the file (document, photo, audio, etc.)
+ * @param {string} filePath - Absolute path to file on disk
+ * @param {string} fileName - Filename for Content-Disposition
+ * @param {number} fileSize - File size in bytes (from stat)
+ * @returns {Promise<Object>} Telegram API response
+ */
+async function telegramSendFile(method, params, fieldName, filePath, fileName, fileSize) {
+    const crypto = require('crypto');
+    const boundary = '----TgFile' + crypto.randomBytes(16).toString('hex');
+
+    // Sanitize header values: strip CR/LF/null/Unicode line separators and escape quotes
+    const sanitize = (s) => String(s).replace(/[\r\n\0\u2028\u2029]/g, '').replace(/"/g, "'");
+    const safeFileName = sanitize(fileName);
+
+    // Build non-file form parts
+    const headerParts = [];
+    for (const [key, value] of Object.entries(params)) {
+        headerParts.push(Buffer.from(
+            `--${boundary}\r\nContent-Disposition: form-data; name="${sanitize(key)}"\r\n\r\n${String(value).replace(/[\r\n\0\u2028\u2029]/g, ' ')}\r\n`
+        ));
+    }
+    const fileHeader = Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="${sanitize(fieldName)}"; filename="${safeFileName}"\r\nContent-Type: application/octet-stream\r\n\r\n`
+    );
+    const footer = Buffer.from(`\r\n--${boundary}--\r\n`);
+
+    // Compute total Content-Length for streaming (no full-file buffer needed)
+    const preambleSize = headerParts.reduce((sum, b) => sum + b.length, 0) + fileHeader.length;
+    const totalSize = preambleSize + fileSize + footer.length;
+
+    return new Promise((resolve, reject) => {
+        let rs = null;
+        const req = https.request({
+            hostname: 'api.telegram.org',
+            path: `/bot${BOT_TOKEN}/${method}`,
+            method: 'POST',
+            headers: {
+                'Content-Type': `multipart/form-data; boundary=${boundary}`,
+                'Content-Length': totalSize,
+            },
+        }, (res) => {
+            let data = '';
+            res.setEncoding('utf8');
+            res.on('data', chunk => data += chunk);
+            res.on('end', () => {
+                try { resolve(JSON.parse(data)); }
+                catch { resolve({ ok: false, description: data }); }
+            });
+        });
+        req.on('error', err => { if (rs) rs.destroy(); reject(err); });
+        req.setTimeout(120000, () => { if (rs) rs.destroy(); req.destroy(); reject(new Error('Upload timed out')); });
+
+        // Write form preamble
+        for (const part of headerParts) req.write(part);
+        req.write(fileHeader);
+
+        // Stream file content to avoid loading entire file into memory
+        rs = fs.createReadStream(filePath);
+        rs.on('data', chunk => { if (!req.write(chunk)) rs.pause(); });
+        req.on('drain', () => rs.resume());
+        rs.on('end', () => { req.write(footer); req.end(); });
+        rs.on('error', err => { req.destroy(); reject(err); });
+    });
+}
+
+/** Map file extension to Telegram send method + field name */
+function detectTelegramFileType(ext) {
+    const PHOTO_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp']);
+    const VIDEO_EXTS = new Set(['.mp4', '.mov', '.avi', '.mkv', '.webm']);
+    const AUDIO_EXTS = new Set(['.mp3', '.m4a', '.aac', '.wav', '.flac']);
+    const VOICE_EXTS = new Set(['.ogg', '.oga']);
+    if (PHOTO_EXTS.has(ext)) return { method: 'sendPhoto', field: 'photo' };
+    if (VIDEO_EXTS.has(ext)) return { method: 'sendVideo', field: 'video' };
+    if (AUDIO_EXTS.has(ext)) return { method: 'sendAudio', field: 'audio' };
+    if (VOICE_EXTS.has(ext)) return { method: 'sendVoice', field: 'voice' };
+    return { method: 'sendDocument', field: 'document' };
+}
+
 // ============================================================================
 // TELEGRAM FILE DOWNLOADS
 // ============================================================================
@@ -2318,6 +2400,20 @@ const TOOLS = [
                 timeout_ms: { type: 'number', description: 'Timeout in milliseconds (default: 30000, max: 30000)' }
             },
             required: ['code']
+        }
+    },
+    {
+        name: 'telegram_send_file',
+        description: 'Send a file from the workspace to the current Telegram chat. Auto-detects type from extension (photo, video, audio, voice, document). Use for sharing reports, images, exported files, camera captures, or any workspace file with the user. Telegram bot limit: 50MB. Photos up to 10MB are sent as photos; larger images are automatically sent as documents.',
+        input_schema: {
+            type: 'object',
+            properties: {
+                path: { type: 'string', description: 'File path relative to workspace (e.g., "media/inbound/photo.jpg", "report.csv")' },
+                chat_id: { type: 'number', description: 'The Telegram chat_id to send to (from conversation context)' },
+                caption: { type: 'string', description: 'Optional caption/message to send with the file' },
+                type: { type: 'string', enum: ['document', 'photo', 'audio', 'voice', 'video'], description: 'Override auto-detected file type. Usually not needed.' }
+            },
+            required: ['path', 'chat_id']
         }
     },
     {
@@ -3653,6 +3749,70 @@ async function executeTool(name, input) {
             }
         }
 
+        case 'telegram_send_file': {
+            if (!input.path) return { error: 'path is required' };
+            if (!input.chat_id) return { error: 'chat_id is required' };
+
+            const filePath = safePath(input.path);
+            if (!filePath) return { error: 'Access denied: path outside workspace' };
+            if (!fs.existsSync(filePath)) return { error: `File not found: ${input.path}` };
+
+            let stat;
+            try { stat = fs.statSync(filePath); } catch (e) { return { error: `Cannot stat file: ${e.message}` }; }
+            if (stat.isDirectory()) return { error: 'Cannot send a directory. Specify a file path.' };
+            if (stat.size === 0) return { error: 'Cannot send empty file (0 bytes)' };
+
+            const MAX_SEND_SIZE = 50 * 1024 * 1024; // 50MB Telegram bot limit
+            const MAX_PHOTO_SIZE = 10 * 1024 * 1024; // 10MB for sendPhoto
+            if (stat.size > MAX_SEND_SIZE) {
+                return { error: `File too large (${(stat.size / 1024 / 1024).toFixed(1)}MB). Telegram bot limit is 50MB.` };
+            }
+
+            const ext = path.extname(filePath).toLowerCase();
+            const fileName = path.basename(filePath);
+            let detected = detectTelegramFileType(ext);
+
+            // Manual type override
+            if (input.type) {
+                const TYPE_MAP = {
+                    document: { method: 'sendDocument', field: 'document' },
+                    photo: { method: 'sendPhoto', field: 'photo' },
+                    audio: { method: 'sendAudio', field: 'audio' },
+                    voice: { method: 'sendVoice', field: 'voice' },
+                    video: { method: 'sendVideo', field: 'video' },
+                };
+                detected = TYPE_MAP[input.type] || detected;
+            }
+
+            // Photos > 10MB must be sent as document (applies to both auto-detected and overridden)
+            if (detected.method === 'sendPhoto' && stat.size > MAX_PHOTO_SIZE) {
+                const safLogName = fileName.replace(/[\r\n\0\u2028\u2029]/g, '_');
+                log(`[TgSendFile] Photo ${safLogName} is ${(stat.size / 1024 / 1024).toFixed(1)}MB — downgrading to document`);
+                detected = { method: 'sendDocument', field: 'document' };
+            }
+
+            try {
+                const params = { chat_id: String(input.chat_id) };
+                if (input.caption) params.caption = String(input.caption).slice(0, 1024);
+
+                const safLogName = fileName.replace(/[\r\n\0\u2028\u2029]/g, '_');
+                log(`[TgSendFile] ${detected.method}: ${safLogName} (${(stat.size / 1024).toFixed(1)}KB) → chat ${input.chat_id}`);
+                const result = await telegramSendFile(detected.method, params, detected.field, filePath, fileName, stat.size);
+
+                if (result && result.ok === true) {
+                    log(`[TgSendFile] Sent successfully`);
+                    return { success: true, method: detected.method, file: input.path, size: stat.size };
+                } else {
+                    const desc = (result && result.description) || 'Unknown error';
+                    log(`[TgSendFile] Failed: ${desc}`);
+                    return { error: `Telegram API error: ${desc}` };
+                }
+            } catch (e) {
+                log(`[TgSendFile] Error: ${e && e.message ? e.message : String(e)}`);
+                return { error: e && e.message ? e.message : String(e) };
+            }
+        }
+
         case 'delete': {
             const PROTECTED_FILES = new Set([
                 'SOUL.md', 'MEMORY.md', 'IDENTITY.md', 'USER.md',
@@ -4476,7 +4636,8 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('**Web fetch:** Use web_fetch to read webpages or call APIs. Supports custom headers (Bearer auth), POST/PUT/DELETE methods, and request bodies. Returns markdown (default), JSON, or plain text. Use raw=true for stripped text. Up to 50K chars.');
     lines.push('**Shell execution:** Use shell_exec to run commands on the device. Sandboxed to workspace directory with a predefined allowlist of common Unix utilities (ls, cat, grep, find, curl, etc.). Note: node/npm/npx are NOT available — use for file operations, curl, and system info only. 30s timeout. No chaining, redirection, or command substitution — one command at a time.');
     lines.push('**JavaScript execution:** Use js_eval to run JavaScript code inside the Node.js process. Supports async/await, require(), and most Node.js built-ins (fs, path, http, crypto, etc. — child_process and vm are blocked). Use for computation, data processing, JSON manipulation, HTTP requests, or anything that needs JavaScript. 30s timeout. Prefer js_eval over shell_exec when the task involves data processing or logic.');
-    lines.push('**File attachments:** When the user sends photos, documents, or other files via Telegram, they are automatically downloaded to media/inbound/ in your workspace. Images are shown to you directly (vision). For other files, you are told the path — use the read tool to access them. Supported: photos, documents (PDF, etc.), video, audio, voice notes.');
+    lines.push('**File attachments (inbound):** When the user sends photos, documents, or other files via Telegram, they are automatically downloaded to media/inbound/ in your workspace. Images are shown to you directly (vision). For other files, you are told the path — use the read tool to access them. Supported: photos, documents (PDF, etc.), video, audio, voice notes.');
+    lines.push('**File sending (outbound):** Use telegram_send_file to send any workspace file to the user\'s Telegram chat. Auto-detects type from extension (photo, video, audio, document). Use for sharing reports, camera captures, exported CSVs, generated images, or any file the user needs. Max 50MB, photos max 10MB.');
     lines.push('**File deletion:** Use the delete tool to clean up temporary files, old media downloads, or files you no longer need. Protected system files (SOUL.md, MEMORY.md, IDENTITY.md, USER.md, HEARTBEAT.md, config.json, seekerclaw.db) cannot be deleted. Directories cannot be deleted — remove files individually.');
     lines.push('');
 
@@ -4730,7 +4891,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     dynamicLines.push(`Session uptime: ${Math.floor(uptimeSec / 60)}m ${uptimeSec % 60}s (conversation context is ephemeral — cleared on each restart)`);
     const lastMsg = chatId ? lastIncomingMessages.get(String(chatId)) : null;
     if (lastMsg && REACTION_GUIDANCE !== 'off') {
-        dynamicLines.push(`Current message_id: ${lastMsg.messageId}, chat_id: ${lastMsg.chatId} (use with telegram_react to react to this message)`);
+        dynamicLines.push(`Current message_id: ${lastMsg.messageId}, chat_id: ${lastMsg.chatId} (use with telegram_react or telegram_send_file)`);
     }
 
     // Active skills for this specific request (varies per message)
