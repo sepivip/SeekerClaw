@@ -3307,11 +3307,10 @@ async function executeTool(name, input) {
             if (!address) {
                 try {
                     address = getConnectedWalletAddress();
-                } catch (_) {
-                    // No wallet connected, address will remain undefined
+                } catch (e) {
+                    return { error: e.message };
                 }
             }
-            if (!address) return { error: 'No wallet address provided and no wallet connected.' };
 
             const balanceResult = await solanaRpc('getBalance', [address]);
             if (balanceResult.error) return { error: balanceResult.error };
@@ -3348,11 +3347,10 @@ async function executeTool(name, input) {
             if (!address) {
                 try {
                     address = getConnectedWalletAddress();
-                } catch (_) {
-                    // No wallet connected, address will remain undefined
+                } catch (e) {
+                    return { error: e.message };
                 }
             }
-            if (!address) return { error: 'No wallet address provided and no wallet connected.' };
 
             const limit = Math.min(input.limit || 10, 50);
             const signatures = await solanaRpc('getSignaturesForAddress', [address, { limit }]);
@@ -4347,7 +4345,7 @@ async function executeTool(name, input) {
                     try {
                         walletAddress = getConnectedWalletAddress();
                     } catch (e) {
-                        return { error: 'No wallet specified. Provide wallet address or connect a wallet in Settings.' };
+                        return { error: e.message };
                     }
                 }
 
