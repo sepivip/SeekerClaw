@@ -1,14 +1,27 @@
 package com.seekerclaw.app.config
 
+import android.Manifest
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.SharedPreferences
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.BatteryManager
+import android.os.Build
+import android.os.StatFs
 import android.util.Base64
 import android.util.Log
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.core.content.ContextCompat
+import com.seekerclaw.app.BuildConfig
 import com.seekerclaw.app.util.LogCollector
 import com.seekerclaw.app.util.LogLevel
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
@@ -294,6 +307,140 @@ object ConfigManager {
         val workspaceDir = File(context.filesDir, "workspace").apply { mkdirs() }
         val json = """{"publicKey": "$address", "label": "$label"}"""
         File(workspaceDir, "solana_wallet.json").writeText(json)
+    }
+
+    // ==================== Platform Info ====================
+
+    /**
+     * Generate PLATFORM.md with current device state.
+     * Written on every service start so the agent has fresh device awareness.
+     */
+    fun writePlatformMd(context: Context) {
+        val workspaceDir = File(context.filesDir, "workspace").apply { mkdirs() }
+
+        // Device
+        val deviceModel = Build.MODEL
+        val manufacturer = Build.MANUFACTURER.replaceFirstChar { it.uppercase() }
+        val androidVersion = Build.VERSION.RELEASE
+        val sdkVersion = Build.VERSION.SDK_INT
+
+        // Memory (RAM)
+        val am = context.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+        val memInfo = android.app.ActivityManager.MemoryInfo()
+        am.getMemoryInfo(memInfo)
+        val ramTotalMb = memInfo.totalMem / (1024 * 1024)
+        val ramAvailMb = memInfo.availMem / (1024 * 1024)
+
+        // Storage
+        val stat = StatFs(context.filesDir.path)
+        val storageTotalGb = stat.totalBytes / (1024.0 * 1024.0 * 1024.0)
+        val storageUsedGb = (stat.totalBytes - stat.availableBytes) / (1024.0 * 1024.0 * 1024.0)
+
+        // Battery
+        val batteryIntent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        val batteryLevel = batteryIntent?.let { intent ->
+            val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+            val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, 100)
+            if (scale > 0) (level * 100) / scale else -1
+        } ?: -1
+        val plugged = batteryIntent?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0
+        val isCharging = plugged != 0
+        val chargeType = when (plugged) {
+            BatteryManager.BATTERY_PLUGGED_AC -> "AC"
+            BatteryManager.BATTERY_PLUGGED_USB -> "USB"
+            BatteryManager.BATTERY_PLUGGED_WIRELESS -> "Wireless"
+            else -> ""
+        }
+        val batteryStatus = if (isCharging) "Charging ($chargeType)" else "Not charging"
+
+        // Permissions
+        fun perm(permission: String): String =
+            if (ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED) "granted" else "denied"
+
+        val permCamera = perm(Manifest.permission.CAMERA)
+        val permSms = perm(Manifest.permission.SEND_SMS)
+        val permPhone = perm(Manifest.permission.CALL_PHONE)
+        val permContacts = perm(Manifest.permission.READ_CONTACTS)
+        val permLocation = perm(Manifest.permission.ACCESS_FINE_LOCATION)
+        val permNotifications = perm(Manifest.permission.POST_NOTIFICATIONS)
+
+        // Wallet
+        val walletAddress = getWalletAddress(context)
+        val walletLabel = getWalletLabel(context)
+
+        // Versions
+        val appVersion = BuildConfig.VERSION_NAME
+        val appCode = BuildConfig.VERSION_CODE
+        val openclawVersion = BuildConfig.OPENCLAW_VERSION
+        val nodejsVersion = BuildConfig.NODEJS_VERSION
+
+        // Paths
+        val workspacePath = workspaceDir.absolutePath
+
+        // Config
+        val config = loadConfig(context)
+        val agentName = config?.agentName ?: "Unknown"
+        val authType = config?.authType ?: "api_key"
+        val authLabel = if (authType == "setup_token") "Claude Pro/Max (setup token)" else "API key"
+        val aiModel = config?.model ?: "claude-sonnet-4-5-20250929"
+
+        // Timestamp
+        val sdf = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.US)
+        val generated = sdf.format(Date())
+
+        val md = buildString {
+            appendLine("# Platform")
+            appendLine()
+            appendLine("## Device")
+            appendLine("- Model: $manufacturer $deviceModel")
+            appendLine("- Android: $androidVersion (SDK $sdkVersion)")
+            appendLine("- RAM: ${String.format("%,d", ramAvailMb)} MB available / ${String.format("%,d", ramTotalMb)} MB total")
+            appendLine("- Storage: ${"%.1f".format(storageUsedGb)} GB used / ${"%.1f".format(storageTotalGb)} GB total")
+            appendLine()
+            appendLine("## Battery")
+            appendLine("- Level: $batteryLevel%")
+            appendLine("- Status: $batteryStatus")
+            appendLine()
+            appendLine("## Permissions")
+            appendLine("- Camera: $permCamera")
+            appendLine("- SMS: $permSms")
+            appendLine("- Phone: $permPhone")
+            appendLine("- Contacts: $permContacts")
+            appendLine("- Location: $permLocation")
+            appendLine("- Notifications: $permNotifications")
+            appendLine()
+            if (walletAddress != null) {
+                appendLine("## Wallet")
+                appendLine("- Address: $walletAddress")
+                if (walletLabel.isNotBlank()) appendLine("- Label: $walletLabel")
+                appendLine()
+            } else {
+                appendLine("## Wallet")
+                appendLine("- Not connected")
+                appendLine()
+            }
+            appendLine("## Versions")
+            appendLine("- App: $appVersion (build $appCode)")
+            appendLine("- OpenClaw: $openclawVersion")
+            appendLine("- Node.js: $nodejsVersion")
+            appendLine()
+            appendLine("## Agent")
+            appendLine("- Name: $agentName")
+            appendLine("- Model: $aiModel")
+            appendLine("- Auth: $authLabel")
+            appendLine()
+            appendLine("## Paths")
+            appendLine("- Workspace: $workspacePath")
+            appendLine("- Media: media/inbound/")
+            appendLine("- Skills: skills/")
+            appendLine("- Memory: memory/")
+            appendLine()
+            appendLine("---")
+            append("Generated: $generated")
+        }
+
+        File(workspaceDir, "PLATFORM.md").writeText(md)
+        LogCollector.append("[Service] PLATFORM.md written")
     }
 
     /**
