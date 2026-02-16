@@ -2530,6 +2530,18 @@ const TOOLS = [
         }
     },
     {
+        name: 'telegram_delete',
+        description: 'Delete a message from a Telegram chat. The bot can always delete its own messages. In groups, the bot can delete user messages only if it has admin permissions. Messages older than 48 hours cannot be deleted by non-admin bots.',
+        input_schema: {
+            type: 'object',
+            properties: {
+                message_id: { type: 'number', description: 'The message_id to delete' },
+                chat_id: { type: 'number', description: 'The chat_id where the message is located' }
+            },
+            required: ['message_id', 'chat_id']
+        }
+    },
+    {
         name: 'delete',
         description: 'Delete a file from the workspace directory. Cannot delete protected system files (SOUL.md, MEMORY.md, IDENTITY.md, USER.md, HEARTBEAT.md, config.json, config.yaml, seekerclaw.db). Cannot delete directories — only individual files. Use this to clean up temporary files, old media downloads, or files you no longer need.',
         input_schema: {
@@ -3797,6 +3809,38 @@ async function executeTool(name, input) {
             }
         }
 
+        case 'telegram_delete': {
+            const msgId = input.message_id;
+            const chatId = input.chat_id;
+            if (!msgId) return { error: 'message_id is required' };
+            if (!chatId) return { error: 'chat_id is required' };
+            try {
+                const result = await telegram('deleteMessage', {
+                    chat_id: chatId,
+                    message_id: msgId,
+                });
+                if (result.ok) {
+                    log(`Deleted message ${msgId} in chat ${chatId}`);
+                    return { ok: true, action: 'deleted', message_id: msgId, chat_id: chatId };
+                } else {
+                    const desc = result.description || '';
+                    // Telegram error messages for common failures
+                    if (desc.includes('MESSAGE_ID_INVALID') || desc.includes('message not found')) {
+                        return { ok: false, warning: 'Message not found or already deleted' };
+                    }
+                    if (desc.includes('MESSAGE_DELETE_FORBIDDEN') || desc.includes('not enough rights')) {
+                        return { ok: false, warning: 'Cannot delete message (no permission or message too old)' };
+                    }
+                    if (desc.includes('message can\'t be deleted')) {
+                        return { ok: false, warning: 'Message cannot be deleted (older than 48h or no admin rights)' };
+                    }
+                    return { ok: false, warning: desc || 'Delete failed' };
+                }
+            } catch (e) {
+                return { error: e.message };
+            }
+        }
+
         case 'shell_exec': {
             const { exec } = require('child_process');
             const cmd = (input.command || '').trim();
@@ -4926,6 +4970,14 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('Tools are provided via the tools API. Call tools exactly as listed by name.');
     lines.push('For visual checks ("what do you see", "check my dog"), call android_camera_check.');
     lines.push('**Swap workflow:** Always use solana_quote first to show the user what they\'ll get, then solana_swap to execute. Never swap without confirming the quote with the user first.');
+    lines.push('**Jupiter Advanced Features (requires API key):**');
+    lines.push('- **Limit Orders** (jupiter_trigger_create/list/cancel): Set buy/sell orders that execute when price hits target. Perfect for "buy SOL if it drops to $80" or "sell when it hits $100".');
+    lines.push('- **Stop-Loss** (jupiter_trigger_create with orderType=stop): Protect against losses. Auto-sells when price drops below threshold.');
+    lines.push('- **DCA Orders** (jupiter_dca_create/list/cancel): Dollar Cost Averaging — automatically buy tokens on a schedule (hourly/daily/weekly). Great for building positions over time.');
+    lines.push('- **Token Search** (jupiter_token_search): Find tokens by name/symbol with prices, market caps, and liquidity data. Better than basic token lists.');
+    lines.push('- **Security Check** (jupiter_token_security): Check token safety before swapping. Detects scams, rugs, honeypots, freeze authority, low liquidity. ALWAYS check unknown tokens.');
+    lines.push('- **Holdings** (jupiter_wallet_holdings): View all tokens in a wallet with USD values and metadata.');
+    lines.push('If user tries these features without API key: explain the feature, then guide them to get a free key at portal.jup.ag and add it in Settings → Solana Wallet → Jupiter API Key.');
     lines.push('**Web search:** web_search works out of the box — DuckDuckGo is the zero-config default. If a Brave API key is configured, Brave is used automatically (better quality). DuckDuckGo and Brave return search results as {title, url, snippet}. Use provider=perplexity for complex questions — it returns a synthesized answer with citations.');
     lines.push('**Web fetch:** Use web_fetch to read webpages or call APIs. Supports custom headers (Bearer auth), POST/PUT/DELETE methods, and request bodies. Returns markdown (default), JSON, or plain text. Use raw=true for stripped text. Up to 50K chars.');
     lines.push('**Shell execution:** Use shell_exec to run commands on the device. Sandboxed to workspace directory with a predefined allowlist of common Unix utilities (ls, cat, grep, find, curl, etc.). Note: node/npm/npx are NOT available — use for file operations, curl, and system info only. 30s timeout. No chaining, redirection, or command substitution — one command at a time.');
