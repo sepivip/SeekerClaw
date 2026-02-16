@@ -876,7 +876,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
             },
             text = {
                 Column {
-                    if (editField == "anthropicApiKey" || editField == "setupToken" || editField == "telegramBotToken" || editField == "braveApiKey") {
+                    if (editField == "anthropicApiKey" || editField == "setupToken" || editField == "telegramBotToken" || editField == "braveApiKey" || editField == "jupiterApiKey") {
                         Text(
                             "Changing this requires an agent restart.",
                             fontFamily = FontFamily.Default,
@@ -911,6 +911,9 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                         val trimmed = editValue.trim()
                         if (field == "braveApiKey") {
                             // Allow empty to disable web search
+                            saveField(field, trimmed)
+                        } else if (field == "jupiterApiKey") {
+                            // Allow empty to disable swaps
                             saveField(field, trimmed)
                         } else if (field == "setupToken") {
                             // Allow empty to clear, auto-switch auth type if setting a token

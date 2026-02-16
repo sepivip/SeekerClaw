@@ -224,6 +224,21 @@ object ConfigManager {
     }
 
     /**
+     * Escape string for safe JSON interpolation.
+     * Handles quotes, backslashes, newlines, and control characters.
+     */
+    private fun escapeJson(value: String): String {
+        return value
+            .replace("\\", "\\\\")  // Backslash must be first
+            .replace("\"", "\\\"")  // Quotes
+            .replace("\n", "\\n")   // Newline
+            .replace("\r", "\\r")   // Carriage return
+            .replace("\t", "\\t")   // Tab
+            .replace("\u2028", "\\u2028")  // Unicode line separator
+            .replace("\u2029", "\\u2029")  // Unicode paragraph separator
+    }
+
+    /**
      * Write ephemeral config.json to workspace for Node.js to read on startup.
      * Includes per-boot bridge auth token. File is deleted after Node.js reads it.
      */
@@ -234,24 +249,24 @@ object ConfigManager {
             return
         }
         val workspaceDir = File(context.filesDir, "workspace").apply { mkdirs() }
-        val credential = config.activeCredential
+        val credential = escapeJson(config.activeCredential)
         val braveField = if (config.braveApiKey.isNotBlank()) {
             """,
-            |  "braveApiKey": "${config.braveApiKey}""""
+            |  "braveApiKey": "${escapeJson(config.braveApiKey)}""""
         } else ""
         val jupiterField = if (config.jupiterApiKey.isNotBlank()) {
             """,
-            |  "jupiterApiKey": "${config.jupiterApiKey}""""
+            |  "jupiterApiKey": "${escapeJson(config.jupiterApiKey)}""""
         } else ""
         val json = """
             |{
-            |  "botToken": "${config.telegramBotToken}",
-            |  "ownerId": "${config.telegramOwnerId}",
+            |  "botToken": "${escapeJson(config.telegramBotToken)}",
+            |  "ownerId": "${escapeJson(config.telegramOwnerId)}",
             |  "anthropicApiKey": "$credential",
-            |  "authType": "${config.authType}",
-            |  "model": "${config.model}",
-            |  "agentName": "${config.agentName}",
-            |  "bridgeToken": "$bridgeToken"$braveField$jupiterField
+            |  "authType": "${escapeJson(config.authType)}",
+            |  "model": "${escapeJson(config.model)}",
+            |  "agentName": "${escapeJson(config.agentName)}",
+            |  "bridgeToken": "${escapeJson(bridgeToken)}"$braveField$jupiterField
             |}
         """.trimMargin()
         File(workspaceDir, "config.json").writeText(json)
