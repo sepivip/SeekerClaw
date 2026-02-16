@@ -3683,20 +3683,39 @@ async function executeTool(name, input) {
                     };
                 }
 
-                // 4. Compute expiryTime: use provided value, or default to 30 days from now
+                // 4. Validate triggerPrice (must be positive finite number)
+                const triggerPriceNum = Number(input.triggerPrice);
+                if (!Number.isFinite(triggerPriceNum) || triggerPriceNum <= 0) {
+                    return {
+                        error: 'Invalid trigger price',
+                        details: 'triggerPrice must be a positive finite number'
+                    };
+                }
+
+                // 5. Validate orderType (must be 'limit' or 'stop')
+                const orderType = input.orderType || 'limit';
+                const allowedOrderTypes = ['limit', 'stop'];
+                if (!allowedOrderTypes.includes(orderType)) {
+                    return {
+                        error: 'Invalid orderType',
+                        details: "orderType must be one of: 'limit', 'stop'"
+                    };
+                }
+
+                // 6. Compute expiryTime: use provided value, or default to 30 days from now
                 let expiryTime = input.expiryTime;
                 if (expiryTime == null) {
                     const THIRTY_DAYS_IN_MS = 30 * 24 * 60 * 60 * 1000;
                     expiryTime = Math.floor((Date.now() + THIRTY_DAYS_IN_MS) / 1000);
                 }
 
-                // 5. Call Jupiter Trigger API
+                // 7. Call Jupiter Trigger API
                 const reqBody = {
                     inputMint: inputToken.address,
                     outputMint: outputToken.address,
                     inputAmount: inputAmountLamports, // Already a string from parseInputAmountToLamports
-                    triggerPrice: input.triggerPrice.toString(),
-                    orderType: input.orderType || 'limit',
+                    triggerPrice: triggerPriceNum.toString(),
+                    orderType: orderType,
                     expiryTime: expiryTime,
                     walletAddress: walletAddress
                 };
@@ -4053,6 +4072,17 @@ async function executeTool(name, input) {
                 const data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
                 const orders = data.orders || [];
 
+                // Helper to convert seconds to human-readable interval
+                const formatCycleInterval = (seconds) => {
+                    if (seconds === 3600) return 'hourly';
+                    if (seconds === 86400) return 'daily';
+                    if (seconds === 604800) return 'weekly';
+                    // Fallback for custom intervals
+                    if (seconds < 3600) return `${seconds / 60} minutes`;
+                    if (seconds < 86400) return `${seconds / 3600} hours`;
+                    return `${seconds / 86400} days`;
+                };
+
                 return {
                     success: true,
                     count: orders.length,
@@ -4061,7 +4091,7 @@ async function executeTool(name, input) {
                         inputToken: order.inputMint,
                         outputToken: order.outputMint,
                         inputAmount: order.inputAmount,
-                        cycleInterval: `${order.cycleInterval / 60} minutes`,
+                        cycleInterval: formatCycleInterval(order.cycleInterval),
                         totalCycles: order.totalCycles || 'Unlimited',
                         completedCycles: order.completedCycles || 0,
                         status: order.status,
@@ -5012,7 +5042,7 @@ function parseInputAmountToLamports(amount, decimals) {
     }
     // Allow only simple decimal numbers: digits, optional single dot, no signs or exponents
     if (!/^\d+(\.\d+)?$/.test(amountStr)) {
-        throw new Error(`Input amount "${amountStr}" must be a positive decimal number without exponent notation.`);
+        throw new Error(`Input amount "${amountStr}" must be a positive decimal number without signs or scientific/exponential notation (e.g., "1e6" or "1.5e-3" are not supported).`);
     }
     const parts = amountStr.split('.');
     const integerPart = parts[0];
