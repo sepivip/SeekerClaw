@@ -2375,7 +2375,7 @@ const TOOLS = [
                 outputToken: { type: 'string', description: 'Token to buy — symbol (e.g., "USDC") or mint address' },
                 inputAmount: { type: 'number', description: 'Amount of inputToken to sell (in human units)' },
                 triggerPrice: { type: 'number', description: 'Price at which order triggers (outputToken per inputToken, e.g., 90 means 1 SOL = 90 USDC)' },
-                orderType: { type: 'string', enum: ['limit', 'stop'], description: 'Order type: "limit" (execute when price is favorable) or "stop" (stop-loss, execute when price hits threshold)' },
+                orderType: { type: 'string', enum: ['limit', 'stop'], description: 'Order type: "limit" (execute when price is favorable) or "stop" (stop-loss, execute when price hits threshold). Optional, defaults to "limit".' },
                 expiryTime: { type: 'number', description: 'Order expiration timestamp (Unix seconds). Optional, defaults to 30 days from now.' }
             },
             required: ['inputToken', 'outputToken', 'inputAmount', 'triggerPrice']
@@ -3769,7 +3769,7 @@ async function executeTool(name, input) {
                 return {
                     success: true,
                     orderId: data.orderId,
-                    orderType: input.orderType || 'limit',
+                    orderType: orderType,
                     inputToken: `${inputToken.symbol} (${inputToken.address})`,
                     outputToken: `${outputToken.symbol} (${outputToken.address})`,
                     inputAmount: input.inputAmount,
