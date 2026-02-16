@@ -494,7 +494,7 @@ private fun WelcomeStep(
                 .height(52.dp),
             shape = shape,
             colors = ButtonDefaults.buttonColors(
-                containerColor = SeekerClawColors.Primary,
+                containerColor = SeekerClawColors.ActionPrimary,
                 contentColor = Color.White,
             ),
         ) {
@@ -999,9 +999,9 @@ private fun OptionsStep(
                 .height(56.dp),
             shape = shape,
             colors = ButtonDefaults.buttonColors(
-                containerColor = SeekerClawColors.Primary,
+                containerColor = SeekerClawColors.ActionPrimary,
                 contentColor = Color.White,
-                disabledContainerColor = SeekerClawColors.Primary.copy(alpha = 0.6f),
+                disabledContainerColor = SeekerClawColors.ActionPrimary.copy(alpha = 0.6f),
                 disabledContentColor = Color.White.copy(alpha = 0.7f),
             ),
         ) {
@@ -1128,7 +1128,7 @@ private fun NavButtons(
             enabled = nextEnabled,
             shape = shape,
             colors = ButtonDefaults.buttonColors(
-                containerColor = SeekerClawColors.Primary,
+                containerColor = SeekerClawColors.ActionPrimary,
                 contentColor = Color.White,
                 disabledContainerColor = SeekerClawColors.Surface,
                 disabledContentColor = SeekerClawColors.TextDim,

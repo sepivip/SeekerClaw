@@ -42,6 +42,11 @@ data class ThemeColors(
     // Accent (secondary highlight)
     val accent: Color,
 
+    // Semantic actions
+    val actionPrimary: Color,      // Green — positive actions (Deploy, Initialize, Connect)
+    val actionDanger: Color,       // Dark red bg — destructive actions (Reset, Wipe)
+    val actionDangerText: Color,   // Lighter red — danger button text
+
     // Log info (blue for info-level logs)
     val logInfo: Color,
 
@@ -49,6 +54,7 @@ data class ThemeColors(
     val textPrimary: Color,
     val textSecondary: Color,
     val textDim: Color,
+    val textInteractive: Color,    // 70% white — "Edit"/"Change" labels
 
     // Special effects
     val scanline: Color,
@@ -77,11 +83,16 @@ val DarkOpsThemeColors = ThemeColors(
     warning = Color(0xFFFBBF24),       // Tailwind yellow-400
     accent = Color(0xFF4ADE80),        // Tailwind green-400 (status/online)
 
+    actionPrimary = Color(0xFF00C805), // Green — Deploy, Initialize, Connect
+    actionDanger = Color(0xFF8B0000),  // Dark red bg — Reset, Wipe
+    actionDangerText = Color(0xFFFF6B6B), // Lighter red text for danger buttons
+
     logInfo = Color(0xFF60A5FA),       // Tailwind blue-400
 
     textPrimary = Color(0xF0FFFFFF),   // White ~94%
     textSecondary = Color(0xFF9CA3AF), // Tailwind gray-400
     textDim = Color(0xFF9CA3AF),       // Tailwind gray-400 (WCAG AA ~5.5:1)
+    textInteractive = Color(0xB3FFFFFF), // 70% white — Edit labels
 
     scanline = Color(0x00000000),
     dotMatrix = Color(0x00000000),
@@ -110,11 +121,17 @@ object SeekerClawColors {
 
     val Warning: Color get() = DarkOpsThemeColors.warning
     val Accent: Color get() = DarkOpsThemeColors.accent
+
+    val ActionPrimary: Color get() = DarkOpsThemeColors.actionPrimary
+    val ActionDanger: Color get() = DarkOpsThemeColors.actionDanger
+    val ActionDangerText: Color get() = DarkOpsThemeColors.actionDangerText
+
     val LogInfo: Color get() = DarkOpsThemeColors.logInfo
 
     val TextPrimary: Color get() = DarkOpsThemeColors.textPrimary
     val TextSecondary: Color get() = DarkOpsThemeColors.textSecondary
     val TextDim: Color get() = DarkOpsThemeColors.textDim
+    val TextInteractive: Color get() = DarkOpsThemeColors.textInteractive
 
     val Scanline: Color get() = DarkOpsThemeColors.scanline
     val DotMatrix: Color get() = DarkOpsThemeColors.dotMatrix
