@@ -4215,7 +4215,7 @@ async function jupiterQuote(inputMint, outputMint, amountRaw, slippageBps = 100)
 
     const res = await httpRequest({
         hostname: 'api.jup.ag',
-        path: `/swap/v6/quote?${params.toString()}`,
+        path: `/swap/v1/quote?${params.toString()}`,
         method: 'GET',
         headers
     });
