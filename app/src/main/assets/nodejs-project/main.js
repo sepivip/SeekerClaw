@@ -82,6 +82,7 @@ if (config.reactionGuidance && !VALID_REACTION_GUIDANCE.has(config.reactionGuida
 // Normalize optional API keys in-place (clipboard paste can include hidden line breaks)
 if (config.braveApiKey) config.braveApiKey = normalizeSecret(config.braveApiKey);
 if (config.perplexityApiKey) config.perplexityApiKey = normalizeSecret(config.perplexityApiKey);
+if (config.jupiterApiKey) config.jupiterApiKey = normalizeSecret(config.jupiterApiKey);
 
 if (!BOT_TOKEN || !ANTHROPIC_KEY) {
     log('ERROR: Missing required config (botToken, anthropicApiKey)');
@@ -112,6 +113,8 @@ function redactSecrets(msg) {
     msg = msg.replace(/pplx-[a-zA-Z0-9_-]{10,}/g, 'pplx-***');
     // Redact OpenRouter API keys (sk-or-...)
     msg = msg.replace(/sk-or-[a-zA-Z0-9_-]{10,}/g, 'sk-or-***');
+    // Redact Jupiter API keys (exact value replacement - format unknown)
+    if (config.jupiterApiKey) msg = msg.replace(new RegExp(config.jupiterApiKey.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&'), 'g'), '***jupiter-api-key***');
     // Redact bridge tokens (UUID format)
     if (BRIDGE_TOKEN) msg = msg.replace(new RegExp(BRIDGE_TOKEN.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&'), 'g'), '***bridge-token***');
     return msg;
@@ -4195,6 +4198,10 @@ async function resolveToken(input) {
 
 // Jupiter Swap API v6 - Quote endpoint (Metis routing)
 async function jupiterQuote(inputMint, outputMint, amountRaw, slippageBps = 100) {
+    if (!config.jupiterApiKey) {
+        throw new Error('Jupiter API key required. Get a free key at portal.jup.ag and add it in Settings > Configuration > Jupiter API Key');
+    }
+
     const params = new URLSearchParams({
         inputMint,
         outputMint,
@@ -4202,11 +4209,16 @@ async function jupiterQuote(inputMint, outputMint, amountRaw, slippageBps = 100)
         slippageBps: String(slippageBps),
     });
 
+    const headers = {
+        'Accept': 'application/json',
+        'x-api-key': config.jupiterApiKey
+    };
+
     const res = await httpRequest({
         hostname: 'api.jup.ag',
         path: `/swap/v6/quote?${params.toString()}`,
         method: 'GET',
-        headers: { 'Accept': 'application/json' },
+        headers
     });
 
     if (res.status !== 200) {
@@ -4366,6 +4378,10 @@ function readCompactU16(buf, offset) {
 
 // Jupiter Ultra API — get order (quote + unsigned tx in one call, gasless)
 async function jupiterUltraOrder(inputMint, outputMint, amount, taker) {
+    if (!config.jupiterApiKey) {
+        throw new Error('Jupiter API key required. Get a free key at portal.jup.ag and add it in Settings > Configuration > Jupiter API Key');
+    }
+
     const params = new URLSearchParams({
         inputMint,
         outputMint,
@@ -4373,11 +4389,16 @@ async function jupiterUltraOrder(inputMint, outputMint, amount, taker) {
         taker,
     });
 
+    const headers = {
+        'Accept': 'application/json',
+        'x-api-key': config.jupiterApiKey
+    };
+
     const res = await httpRequest({
         hostname: 'api.jup.ag',
         path: `/ultra/v1/order?${params.toString()}`,
         method: 'GET',
-        headers: { 'Accept': 'application/json' },
+        headers
     });
 
     if (res.status !== 200) {
@@ -4388,11 +4409,21 @@ async function jupiterUltraOrder(inputMint, outputMint, amount, taker) {
 
 // Jupiter Ultra API — execute signed transaction (Jupiter broadcasts)
 async function jupiterUltraExecute(signedTransaction, requestId) {
+    if (!config.jupiterApiKey) {
+        throw new Error('Jupiter API key required. Get a free key at portal.jup.ag and add it in Settings > Configuration > Jupiter API Key');
+    }
+
+    const headers = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'x-api-key': config.jupiterApiKey
+    };
+
     const res = await httpRequest({
         hostname: 'api.jup.ag',
         path: '/ultra/v1/execute',
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        headers
     }, JSON.stringify({
         signedTransaction,
         requestId,
@@ -4406,12 +4437,21 @@ async function jupiterUltraExecute(signedTransaction, requestId) {
 
 // Jupiter Price API v3
 async function jupiterPrice(mintAddresses) {
+    if (!config.jupiterApiKey) {
+        throw new Error('Jupiter API key required. Get a free key at portal.jup.ag and add it in Settings > Configuration > Jupiter API Key');
+    }
+
     const ids = mintAddresses.join(',');
+    const headers = {
+        'Accept': 'application/json',
+        'x-api-key': config.jupiterApiKey
+    };
+
     const res = await httpRequest({
         hostname: 'api.jup.ag',
         path: `/price/v3?ids=${encodeURIComponent(ids)}`,
         method: 'GET',
-        headers: { 'Accept': 'application/json' },
+        headers
     });
 
     if (res.status !== 200) {

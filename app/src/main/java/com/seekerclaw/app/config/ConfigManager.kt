@@ -34,6 +34,7 @@ data class AppConfig(
     val model: String,
     val agentName: String,
     val braveApiKey: String = "",
+    val jupiterApiKey: String = "",
     val autoStartOnBoot: Boolean = true,
 ) {
     /** Returns the credential that should be used based on the current authType. */
@@ -57,6 +58,7 @@ object ConfigManager {
     private const val KEY_AUTH_TYPE = "auth_type"
     private const val KEY_SETUP_TOKEN_ENC = "setup_token_enc"
     private const val KEY_BRAVE_API_KEY_ENC = "brave_api_key_enc"
+    private const val KEY_JUPITER_API_KEY_ENC = "jupiter_api_key_enc"
     private const val KEY_WALLET_ADDRESS = "wallet_address"
     private const val KEY_WALLET_LABEL = "wallet_label"
 
@@ -99,6 +101,13 @@ object ConfigManager {
             editor.putString(KEY_BRAVE_API_KEY_ENC, Base64.encodeToString(encBrave, Base64.NO_WRAP))
         } else {
             editor.remove(KEY_BRAVE_API_KEY_ENC)
+        }
+
+        if (config.jupiterApiKey.isNotBlank()) {
+            val encJupiter = KeystoreHelper.encrypt(config.jupiterApiKey)
+            editor.putString(KEY_JUPITER_API_KEY_ENC, Base64.encodeToString(encJupiter, Base64.NO_WRAP))
+        } else {
+            editor.remove(KEY_JUPITER_API_KEY_ENC)
         }
 
         val persisted = editor.commit()
@@ -149,6 +158,15 @@ object ConfigManager {
             ""
         }
 
+        val jupiterApiKey = try {
+            val enc = p.getString(KEY_JUPITER_API_KEY_ENC, null)
+            if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to decrypt Jupiter API key", e)
+            LogCollector.append("[Config] Failed to decrypt Jupiter API key: ${e.javaClass.simpleName}", LogLevel.ERROR)
+            ""
+        }
+
         return AppConfig(
             anthropicApiKey = apiKey,
             setupToken = setupToken,
@@ -158,6 +176,7 @@ object ConfigManager {
             model = p.getString(KEY_MODEL, "claude-opus-4-6") ?: "claude-opus-4-6",
             agentName = p.getString(KEY_AGENT_NAME, "MyAgent") ?: "MyAgent",
             braveApiKey = braveApiKey,
+            jupiterApiKey = jupiterApiKey,
             autoStartOnBoot = p.getBoolean(KEY_AUTO_START, true),
         )
     }
@@ -187,6 +206,7 @@ object ConfigManager {
             "agentName" -> config.copy(agentName = value)
             "authType" -> config.copy(authType = value)
             "braveApiKey" -> config.copy(braveApiKey = value)
+            "jupiterApiKey" -> config.copy(jupiterApiKey = value)
             else -> return
         }
         saveConfig(context, updated)
@@ -204,6 +224,21 @@ object ConfigManager {
     }
 
     /**
+     * Escape string for safe JSON interpolation.
+     * Handles quotes, backslashes, newlines, and control characters.
+     */
+    private fun escapeJson(value: String): String {
+        return value
+            .replace("\\", "\\\\")    // Backslash must be first
+            .replace("\"", "\\\"")    // Quotes
+            .replace("\n", "\\n")     // Newline
+            .replace("\r", "\\r")     // Carriage return
+            .replace("\t", "\\t")     // Tab
+            .replace("\u2028", "\\\\u2028")  // Unicode line separator
+            .replace("\u2029", "\\\\u2029")  // Unicode paragraph separator
+    }
+
+    /**
      * Write ephemeral config.json to workspace for Node.js to read on startup.
      * Includes per-boot bridge auth token. File is deleted after Node.js reads it.
      */
@@ -214,20 +249,24 @@ object ConfigManager {
             return
         }
         val workspaceDir = File(context.filesDir, "workspace").apply { mkdirs() }
-        val credential = config.activeCredential
+        val credential = escapeJson(config.activeCredential)
         val braveField = if (config.braveApiKey.isNotBlank()) {
             """,
-            |  "braveApiKey": "${config.braveApiKey}""""
+            |  "braveApiKey": "${escapeJson(config.braveApiKey)}""""
+        } else ""
+        val jupiterField = if (config.jupiterApiKey.isNotBlank()) {
+            """,
+            |  "jupiterApiKey": "${escapeJson(config.jupiterApiKey)}""""
         } else ""
         val json = """
             |{
-            |  "botToken": "${config.telegramBotToken}",
-            |  "ownerId": "${config.telegramOwnerId}",
+            |  "botToken": "${escapeJson(config.telegramBotToken)}",
+            |  "ownerId": "${escapeJson(config.telegramOwnerId)}",
             |  "anthropicApiKey": "$credential",
-            |  "authType": "${config.authType}",
-            |  "model": "${config.model}",
-            |  "agentName": "${config.agentName}",
-            |  "bridgeToken": "$bridgeToken"$braveField
+            |  "authType": "${escapeJson(config.authType)}",
+            |  "model": "${escapeJson(config.model)}",
+            |  "agentName": "${escapeJson(config.agentName)}",
+            |  "bridgeToken": "${escapeJson(bridgeToken)}"$braveField$jupiterField
             |}
         """.trimMargin()
         File(workspaceDir, "config.json").writeText(json)
