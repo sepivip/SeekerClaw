@@ -2444,7 +2444,7 @@ const TOOLS = [
     },
     {
         name: 'jupiter_token_search',
-        description: 'Search for Solana tokens by name or symbol using Jupiter\'s comprehensive token database. Returns token symbol, name, mint address, decimals, and logo URI. Better than basic token lists for discovery.',
+        description: 'Search for Solana tokens by name or symbol using Jupiter\'s comprehensive token database. Returns token symbol, name, mint address, decimals, price, market cap, liquidity, and verification status. Better than basic token lists for discovery.',
         input_schema: {
             type: 'object',
             properties: {
@@ -3686,7 +3686,8 @@ async function executeTool(name, input) {
                         details: `Token "${input.inputToken}" is missing decimal metadata; cannot calculate input amount in base units.`
                     };
                 }
-                const inputAmountLamports = Math.floor(inputAmount * Math.pow(10, inputToken.decimals));
+                // Use Math.round for precision (avoid systematic rounding down)
+                const inputAmountLamports = Math.round(inputAmount * Math.pow(10, inputToken.decimals));
 
                 // 4. Compute expiryTime: use provided value, or default to 30 days from now
                 let expiryTime = input.expiryTime;
@@ -3758,17 +3759,37 @@ async function executeTool(name, input) {
                     return { error: e.message };
                 }
 
-                // 2. Build query params (align with schema: use `status` and `page`)
+                // 2. Validate input against schema
+                if (input.status) {
+                    const allowedStatuses = ['active', 'history'];
+                    if (!allowedStatuses.includes(input.status)) {
+                        return {
+                            error: 'Invalid status value',
+                            details: 'status must be either "active" or "history"'
+                        };
+                    }
+                }
+                if (input.page !== undefined && input.page !== null) {
+                    const pageNum = Number(input.page);
+                    if (!Number.isInteger(pageNum) || pageNum <= 0) {
+                        return {
+                            error: 'Invalid page value',
+                            details: 'page must be a positive integer (1, 2, 3, ...)'
+                        };
+                    }
+                }
+
+                // 3. Build query params (align with schema: use `status` and `page`)
                 const params = new URLSearchParams({ wallet: walletAddress });
                 if (input.status) {
                     // Jupiter API expects this as `orderStatus`
                     params.append('orderStatus', input.status);
                 }
                 if (input.page !== undefined && input.page !== null) {
-                    params.append('page', String(input.page));
+                    params.append('page', String(Number(input.page)));
                 }
 
-                // 3. Call Jupiter Trigger API
+                // 4. Call Jupiter Trigger API
                 const res = await httpRequest({
                     hostname: 'api.jup.ag',
                     path: `/trigger/v1/getTriggerOrders?${params.toString()}`,
@@ -3814,7 +3835,15 @@ async function executeTool(name, input) {
             }
 
             try {
-                // 1. Get wallet address
+                // 1. Validate required input
+                if (!input.orderId || String(input.orderId).trim() === '') {
+                    return {
+                        error: 'orderId is required',
+                        details: 'Please provide the orderId of the trigger order you want to cancel'
+                    };
+                }
+
+                // 2. Get wallet address
                 let walletAddress;
                 try {
                     walletAddress = getConnectedWalletAddress();
@@ -3822,7 +3851,7 @@ async function executeTool(name, input) {
                     return { error: e.message };
                 }
 
-                // 2. Call Jupiter Trigger API
+                // 3. Call Jupiter Trigger API
                 const reqBody = {
                     orderId: input.orderId,
                     walletAddress: walletAddress
@@ -3965,7 +3994,7 @@ async function executeTool(name, input) {
                     outputToken: `${outputToken.symbol} (${outputToken.address})`,
                     amountPerCycle: input.amountPerCycle,
                     cycleInterval: input.cycleInterval,
-                    totalCycles: input.totalCycles || 'Unlimited',
+                    totalCycles: totalCycles !== null ? totalCycles : 'Unlimited',
                     warnings: warnings.length > 0 ? warnings : undefined
                 };
             } catch (e) {
@@ -3990,16 +4019,36 @@ async function executeTool(name, input) {
                     return { error: e.message };
                 }
 
-                // 2. Build query params (align with schema: use `status` and `page`)
+                // 2. Validate input against schema
+                if (input.status !== undefined && input.status !== null) {
+                    const allowedStatuses = ['active', 'history'];
+                    if (!allowedStatuses.includes(input.status)) {
+                        return {
+                            error: 'Invalid status for jupiter_dca_list',
+                            details: 'status must be either "active" or "history"'
+                        };
+                    }
+                }
+                if (input.page !== undefined && input.page !== null) {
+                    const pageNum = Number(input.page);
+                    if (!Number.isInteger(pageNum) || pageNum <= 0) {
+                        return {
+                            error: 'Invalid page for jupiter_dca_list',
+                            details: 'page must be a positive integer'
+                        };
+                    }
+                }
+
+                // 3. Build query params (align with schema: use `status` and `page`)
                 const params = new URLSearchParams({ wallet: walletAddress });
                 if (input.status) {
                     params.append('orderStatus', input.status);
                 }
                 if (input.page !== undefined && input.page !== null) {
-                    params.append('page', String(input.page));
+                    params.append('page', String(Number(input.page)));
                 }
 
-                // 3. Call Jupiter Recurring API
+                // 4. Call Jupiter Recurring API
                 const res = await httpRequest({
                     hostname: 'api.jup.ag',
                     path: `/recurring/v1/getRecurringOrders?${params.toString()}`,
@@ -4046,7 +4095,15 @@ async function executeTool(name, input) {
             }
 
             try {
-                // 1. Get wallet address
+                // 1. Validate required input
+                if (!input.orderId || String(input.orderId).trim() === '') {
+                    return {
+                        error: 'orderId is required',
+                        details: 'Please provide the orderId of the DCA order you want to cancel'
+                    };
+                }
+
+                // 2. Get wallet address
                 let walletAddress;
                 try {
                     walletAddress = getConnectedWalletAddress();
@@ -4054,7 +4111,7 @@ async function executeTool(name, input) {
                     return { error: e.message };
                 }
 
-                // 2. Call Jupiter Recurring API
+                // 3. Call Jupiter Recurring API
                 const reqBody = {
                     orderId: input.orderId,
                     walletAddress: walletAddress
@@ -4940,8 +4997,25 @@ function getConnectedWalletAddress() {
     if (!fs.existsSync(walletConfigPath)) {
         throw new Error('No wallet connected. Connect a wallet in SeekerClaw Settings > Solana Wallet.');
     }
-    const walletConfig = JSON.parse(fs.readFileSync(walletConfigPath, 'utf8'));
-    return walletConfig.publicKey;
+
+    let walletConfig;
+    try {
+        const fileContent = fs.readFileSync(walletConfigPath, 'utf8');
+        walletConfig = JSON.parse(fileContent);
+    } catch (e) {
+        throw new Error('Malformed solana_wallet.json: invalid JSON. Please reconnect your wallet.');
+    }
+
+    if (!walletConfig || typeof walletConfig.publicKey !== 'string') {
+        throw new Error('Malformed solana_wallet.json: missing publicKey. Please reconnect your wallet.');
+    }
+
+    const publicKey = walletConfig.publicKey.trim();
+    if (!isValidSolanaAddress(publicKey)) {
+        throw new Error('Invalid Solana wallet address in solana_wallet.json. Please reconnect your wallet.');
+    }
+
+    return publicKey;
 }
 
 // Resolve token symbol or mint address → token object, or { ambiguous, candidates } if multiple matches
