@@ -3644,12 +3644,84 @@ async function executeTool(name, input) {
                 };
             }
 
-            // TODO: Implement trigger order creation
-            // 1. Resolve input/output tokens (use resolveToken)
-            // 2. Get connected wallet address
-            // 3. Call POST /trigger/v1/createOrder with Jupiter API
-            // 4. Return order details (orderId, triggerPrice, expiry)
-            return { error: 'Jupiter trigger orders: Implementation in progress (BAT-109)' };
+            try {
+                // 1. Resolve tokens
+                const inputToken = await resolveToken(input.inputToken);
+                const outputToken = await resolveToken(input.outputToken);
+
+                if (!inputToken || inputToken.ambiguous) {
+                    return {
+                        error: 'Could not resolve input token',
+                        details: inputToken?.ambiguous
+                            ? `Multiple tokens match "${input.inputToken}". Please use the full mint address.`
+                            : `Token "${input.inputToken}" not found on Jupiter's verified list.`
+                    };
+                }
+                if (!outputToken || outputToken.ambiguous) {
+                    return {
+                        error: 'Could not resolve output token',
+                        details: outputToken?.ambiguous
+                            ? `Multiple tokens match "${input.outputToken}". Please use the full mint address.`
+                            : `Token "${input.outputToken}" not found on Jupiter's verified list.`
+                    };
+                }
+
+                // 2. Get wallet address
+                const walletConfigPath = path.join(workDir, 'solana_wallet.json');
+                if (!fs.existsSync(walletConfigPath)) {
+                    return { error: 'No wallet connected. Connect a wallet in SeekerClaw Settings → Solana Wallet.' };
+                }
+                const walletConfig = JSON.parse(fs.readFileSync(walletConfigPath, 'utf8'));
+                const walletAddress = walletConfig.publicKey;
+
+                // 3. Convert input amount to proper units (multiply by decimals)
+                const inputAmountLamports = Math.floor(input.inputAmount * Math.pow(10, inputToken.decimals));
+
+                // 4. Call Jupiter Trigger API
+                const reqBody = JSON.stringify({
+                    inputMint: inputToken.address,
+                    outputMint: outputToken.address,
+                    inputAmount: inputAmountLamports.toString(),
+                    triggerPrice: input.triggerPrice.toString(),
+                    orderType: input.orderType || 'limit',
+                    expiryTime: input.expiryTime || null,
+                    walletAddress: walletAddress
+                });
+
+                const res = await httpRequest({
+                    hostname: 'api.jup.ag',
+                    path: '/trigger/v1/createOrder',
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-api-key': config.jupiterApiKey
+                    },
+                    body: reqBody
+                });
+
+                if (res.statusCode !== 200) {
+                    return { error: `Jupiter API error: ${res.statusCode}`, details: res.body };
+                }
+
+                const data = JSON.parse(res.body);
+                const warnings = [];
+                if (inputToken.warning) warnings.push(`⚠️ ${inputToken.symbol}: ${inputToken.warning}`);
+                if (outputToken.warning) warnings.push(`⚠️ ${outputToken.symbol}: ${outputToken.warning}`);
+
+                return {
+                    success: true,
+                    orderId: data.orderId,
+                    orderType: input.orderType || 'limit',
+                    inputToken: `${inputToken.symbol} (${inputToken.address})`,
+                    outputToken: `${outputToken.symbol} (${outputToken.address})`,
+                    inputAmount: input.inputAmount,
+                    triggerPrice: input.triggerPrice,
+                    expiryTime: input.expiryTime || 'No expiry',
+                    warnings: warnings.length > 0 ? warnings : undefined
+                };
+            } catch (e) {
+                return { error: e.message };
+            }
         }
 
         case 'jupiter_trigger_list': {
@@ -3660,11 +3732,54 @@ async function executeTool(name, input) {
                 };
             }
 
-            // TODO: Implement trigger order listing
-            // 1. Get connected wallet address
-            // 2. Call GET /trigger/v1/getTriggerOrders?wallet=...&orderStatus=...
-            // 3. Return formatted list of orders
-            return { error: 'Jupiter trigger list: Implementation in progress (BAT-109)' };
+            try {
+                // 1. Get wallet address
+                const walletConfigPath = path.join(workDir, 'solana_wallet.json');
+                if (!fs.existsSync(walletConfigPath)) {
+                    return { error: 'No wallet connected. Connect a wallet in SeekerClaw Settings → Solana Wallet.' };
+                }
+                const walletConfig = JSON.parse(fs.readFileSync(walletConfigPath, 'utf8'));
+                const walletAddress = walletConfig.publicKey;
+
+                // 2. Build query params
+                const params = new URLSearchParams({ wallet: walletAddress });
+                if (input.orderStatus) params.append('orderStatus', input.orderStatus);
+
+                // 3. Call Jupiter Trigger API
+                const res = await httpRequest({
+                    hostname: 'api.jup.ag',
+                    path: `/trigger/v1/getTriggerOrders?${params.toString()}`,
+                    method: 'GET',
+                    headers: {
+                        'x-api-key': config.jupiterApiKey
+                    }
+                });
+
+                if (res.statusCode !== 200) {
+                    return { error: `Jupiter API error: ${res.statusCode}`, details: res.body };
+                }
+
+                const data = JSON.parse(res.body);
+                const orders = data.orders || [];
+
+                return {
+                    success: true,
+                    count: orders.length,
+                    orders: orders.map(order => ({
+                        orderId: order.orderId,
+                        orderType: order.orderType,
+                        inputToken: order.inputMint,
+                        outputToken: order.outputMint,
+                        inputAmount: order.inputAmount,
+                        triggerPrice: order.triggerPrice,
+                        status: order.status,
+                        expiryTime: order.expiryTime || 'No expiry',
+                        createdAt: order.createdAt
+                    }))
+                };
+            } catch (e) {
+                return { error: e.message };
+            }
         }
 
         case 'jupiter_trigger_cancel': {
@@ -3675,11 +3790,46 @@ async function executeTool(name, input) {
                 };
             }
 
-            // TODO: Implement trigger order cancellation
-            // 1. Get connected wallet address
-            // 2. Call POST /trigger/v1/cancelOrder with orderId
-            // 3. Return confirmation
-            return { error: 'Jupiter trigger cancel: Implementation in progress (BAT-109)' };
+            try {
+                // 1. Get wallet address
+                const walletConfigPath = path.join(workDir, 'solana_wallet.json');
+                if (!fs.existsSync(walletConfigPath)) {
+                    return { error: 'No wallet connected. Connect a wallet in SeekerClaw Settings → Solana Wallet.' };
+                }
+                const walletConfig = JSON.parse(fs.readFileSync(walletConfigPath, 'utf8'));
+                const walletAddress = walletConfig.publicKey;
+
+                // 2. Call Jupiter Trigger API
+                const reqBody = JSON.stringify({
+                    orderId: input.orderId,
+                    walletAddress: walletAddress
+                });
+
+                const res = await httpRequest({
+                    hostname: 'api.jup.ag',
+                    path: '/trigger/v1/cancelOrder',
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-api-key': config.jupiterApiKey
+                    },
+                    body: reqBody
+                });
+
+                if (res.statusCode !== 200) {
+                    return { error: `Jupiter API error: ${res.statusCode}`, details: res.body };
+                }
+
+                const data = JSON.parse(res.body);
+                return {
+                    success: true,
+                    orderId: input.orderId,
+                    status: 'cancelled',
+                    message: data.message || 'Order cancelled successfully'
+                };
+            } catch (e) {
+                return { error: e.message };
+            }
         }
 
         case 'jupiter_dca_create': {
@@ -3690,13 +3840,83 @@ async function executeTool(name, input) {
                 };
             }
 
-            // TODO: Implement DCA order creation
-            // 1. Resolve input/output tokens
-            // 2. Get connected wallet address
-            // 3. Convert cycleInterval to API format
-            // 4. Call POST /recurring/v1/createOrder
-            // 5. Return DCA details (orderId, schedule, cycles)
-            return { error: 'Jupiter DCA orders: Implementation in progress (BAT-109)' };
+            try {
+                // 1. Resolve tokens
+                const inputToken = await resolveToken(input.inputToken);
+                const outputToken = await resolveToken(input.outputToken);
+
+                if (!inputToken || inputToken.ambiguous) {
+                    return {
+                        error: 'Could not resolve input token',
+                        details: inputToken?.ambiguous
+                            ? `Multiple tokens match "${input.inputToken}". Please use the full mint address.`
+                            : `Token "${input.inputToken}" not found on Jupiter's verified list.`
+                    };
+                }
+                if (!outputToken || outputToken.ambiguous) {
+                    return {
+                        error: 'Could not resolve output token',
+                        details: outputToken?.ambiguous
+                            ? `Multiple tokens match "${input.outputToken}". Please use the full mint address.`
+                            : `Token "${input.outputToken}" not found on Jupiter's verified list.`
+                    };
+                }
+
+                // 2. Get wallet address
+                const walletConfigPath = path.join(workDir, 'solana_wallet.json');
+                if (!fs.existsSync(walletConfigPath)) {
+                    return { error: 'No wallet connected. Connect a wallet in SeekerClaw Settings → Solana Wallet.' };
+                }
+                const walletConfig = JSON.parse(fs.readFileSync(walletConfigPath, 'utf8'));
+                const walletAddress = walletConfig.publicKey;
+
+                // 3. Convert input amount and cycle interval
+                const inputAmountLamports = Math.floor(input.inputAmount * Math.pow(10, inputToken.decimals));
+                const cycleIntervalSeconds = input.cycleInterval * 60; // Convert minutes to seconds
+
+                // 4. Call Jupiter Recurring API
+                const reqBody = JSON.stringify({
+                    inputMint: inputToken.address,
+                    outputMint: outputToken.address,
+                    inputAmount: inputAmountLamports.toString(),
+                    cycleInterval: cycleIntervalSeconds,
+                    totalCycles: input.totalCycles || null,
+                    walletAddress: walletAddress
+                });
+
+                const res = await httpRequest({
+                    hostname: 'api.jup.ag',
+                    path: '/recurring/v1/createOrder',
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-api-key': config.jupiterApiKey
+                    },
+                    body: reqBody
+                });
+
+                if (res.statusCode !== 200) {
+                    return { error: `Jupiter API error: ${res.statusCode}`, details: res.body };
+                }
+
+                const data = JSON.parse(res.body);
+                const warnings = [];
+                if (inputToken.warning) warnings.push(`⚠️ ${inputToken.symbol}: ${inputToken.warning}`);
+                if (outputToken.warning) warnings.push(`⚠️ ${outputToken.symbol}: ${outputToken.warning}`);
+
+                return {
+                    success: true,
+                    orderId: data.orderId,
+                    inputToken: `${inputToken.symbol} (${inputToken.address})`,
+                    outputToken: `${outputToken.symbol} (${outputToken.address})`,
+                    inputAmount: input.inputAmount,
+                    cycleInterval: `${input.cycleInterval} minutes`,
+                    totalCycles: input.totalCycles || 'Unlimited',
+                    warnings: warnings.length > 0 ? warnings : undefined
+                };
+            } catch (e) {
+                return { error: e.message };
+            }
         }
 
         case 'jupiter_dca_list': {
@@ -3707,11 +3927,56 @@ async function executeTool(name, input) {
                 };
             }
 
-            // TODO: Implement DCA order listing
-            // 1. Get connected wallet address
-            // 2. Call GET /recurring/v1/getRecurringOrders?wallet=...&orderStatus=...&recurringType=...
-            // 3. Return formatted list of DCA orders
-            return { error: 'Jupiter DCA list: Implementation in progress (BAT-109)' };
+            try {
+                // 1. Get wallet address
+                const walletConfigPath = path.join(workDir, 'solana_wallet.json');
+                if (!fs.existsSync(walletConfigPath)) {
+                    return { error: 'No wallet connected. Connect a wallet in SeekerClaw Settings → Solana Wallet.' };
+                }
+                const walletConfig = JSON.parse(fs.readFileSync(walletConfigPath, 'utf8'));
+                const walletAddress = walletConfig.publicKey;
+
+                // 2. Build query params
+                const params = new URLSearchParams({ wallet: walletAddress });
+                if (input.orderStatus) params.append('orderStatus', input.orderStatus);
+                if (input.recurringType) params.append('recurringType', input.recurringType);
+
+                // 3. Call Jupiter Recurring API
+                const res = await httpRequest({
+                    hostname: 'api.jup.ag',
+                    path: `/recurring/v1/getRecurringOrders?${params.toString()}`,
+                    method: 'GET',
+                    headers: {
+                        'x-api-key': config.jupiterApiKey
+                    }
+                });
+
+                if (res.statusCode !== 200) {
+                    return { error: `Jupiter API error: ${res.statusCode}`, details: res.body };
+                }
+
+                const data = JSON.parse(res.body);
+                const orders = data.orders || [];
+
+                return {
+                    success: true,
+                    count: orders.length,
+                    orders: orders.map(order => ({
+                        orderId: order.orderId,
+                        inputToken: order.inputMint,
+                        outputToken: order.outputMint,
+                        inputAmount: order.inputAmount,
+                        cycleInterval: `${order.cycleInterval / 60} minutes`,
+                        totalCycles: order.totalCycles || 'Unlimited',
+                        completedCycles: order.completedCycles || 0,
+                        status: order.status,
+                        nextExecutionTime: order.nextExecutionTime,
+                        createdAt: order.createdAt
+                    }))
+                };
+            } catch (e) {
+                return { error: e.message };
+            }
         }
 
         case 'jupiter_dca_cancel': {
@@ -3722,11 +3987,46 @@ async function executeTool(name, input) {
                 };
             }
 
-            // TODO: Implement DCA order cancellation
-            // 1. Get connected wallet address
-            // 2. Call POST /recurring/v1/cancelOrder with orderId
-            // 3. Return confirmation
-            return { error: 'Jupiter DCA cancel: Implementation in progress (BAT-109)' };
+            try {
+                // 1. Get wallet address
+                const walletConfigPath = path.join(workDir, 'solana_wallet.json');
+                if (!fs.existsSync(walletConfigPath)) {
+                    return { error: 'No wallet connected. Connect a wallet in SeekerClaw Settings → Solana Wallet.' };
+                }
+                const walletConfig = JSON.parse(fs.readFileSync(walletConfigPath, 'utf8'));
+                const walletAddress = walletConfig.publicKey;
+
+                // 2. Call Jupiter Recurring API
+                const reqBody = JSON.stringify({
+                    orderId: input.orderId,
+                    walletAddress: walletAddress
+                });
+
+                const res = await httpRequest({
+                    hostname: 'api.jup.ag',
+                    path: '/recurring/v1/cancelOrder',
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-api-key': config.jupiterApiKey
+                    },
+                    body: reqBody
+                });
+
+                if (res.statusCode !== 200) {
+                    return { error: `Jupiter API error: ${res.statusCode}`, details: res.body };
+                }
+
+                const data = JSON.parse(res.body);
+                return {
+                    success: true,
+                    orderId: input.orderId,
+                    status: 'cancelled',
+                    message: data.message || 'DCA order cancelled successfully'
+                };
+            } catch (e) {
+                return { error: e.message };
+            }
         }
 
         case 'jupiter_token_search': {
@@ -3737,11 +4037,45 @@ async function executeTool(name, input) {
                 };
             }
 
-            // TODO: Implement token search
-            // 1. Call GET /tokens/v2/search?query=...
-            // 2. Parse and format results (name, symbol, price, mcap, liquidity)
-            // 3. Return top matches
-            return { error: 'Jupiter token search: Implementation in progress (BAT-109)' };
+            try {
+                // Build query params
+                const params = new URLSearchParams({ query: input.query });
+                if (input.limit) params.append('limit', input.limit.toString());
+
+                // Call Jupiter Tokens API
+                const res = await httpRequest({
+                    hostname: 'api.jup.ag',
+                    path: `/tokens/v2/search?${params.toString()}`,
+                    method: 'GET',
+                    headers: {
+                        'x-api-key': config.jupiterApiKey
+                    }
+                });
+
+                if (res.statusCode !== 200) {
+                    return { error: `Jupiter API error: ${res.statusCode}`, details: res.body };
+                }
+
+                const data = JSON.parse(res.body);
+                const tokens = data.tokens || [];
+
+                return {
+                    success: true,
+                    count: tokens.length,
+                    tokens: tokens.map(token => ({
+                        symbol: token.symbol,
+                        name: token.name,
+                        address: token.address,
+                        decimals: token.decimals,
+                        price: token.price ? `$${token.price}` : 'N/A',
+                        marketCap: token.marketCap ? `$${(token.marketCap / 1e6).toFixed(2)}M` : 'N/A',
+                        liquidity: token.liquidity ? `$${(token.liquidity / 1e6).toFixed(2)}M` : 'N/A',
+                        verified: token.verified || false
+                    }))
+                };
+            } catch (e) {
+                return { error: e.message };
+            }
         }
 
         case 'jupiter_token_security': {
@@ -3752,12 +4086,55 @@ async function executeTool(name, input) {
                 };
             }
 
-            // TODO: Implement token security check (Shield)
-            // 1. Resolve token to mint address
-            // 2. Call GET /ultra/v1/shield?mints=...
-            // 3. Parse warnings (freeze authority, mint authority, low liquidity, etc.)
-            // 4. Return safety assessment
-            return { error: 'Jupiter token security: Implementation in progress (BAT-109)' };
+            try {
+                // Resolve token to get mint address
+                const token = await resolveToken(input.token);
+                if (!token || token.ambiguous) {
+                    return {
+                        error: 'Could not resolve token',
+                        details: token?.ambiguous
+                            ? `Multiple tokens match "${input.token}". Please use the full mint address.`
+                            : `Token "${input.token}" not found.`
+                    };
+                }
+
+                // Call Jupiter Shield API
+                const params = new URLSearchParams({ mints: token.address });
+                const res = await httpRequest({
+                    hostname: 'api.jup.ag',
+                    path: `/ultra/v1/shield?${params.toString()}`,
+                    method: 'GET',
+                    headers: {
+                        'x-api-key': config.jupiterApiKey
+                    }
+                });
+
+                if (res.statusCode !== 200) {
+                    return { error: `Jupiter API error: ${res.statusCode}`, details: res.body };
+                }
+
+                const data = JSON.parse(res.body);
+                const tokenData = data[token.address] || {};
+                const warnings = [];
+                if (tokenData.freezeAuthority) warnings.push('❄️ FREEZE RISK - Token has freeze authority enabled');
+                if (tokenData.mintAuthority) warnings.push('🏭 MINT RISK - Token has mint authority (can inflate supply)');
+                if (tokenData.hasLowLiquidity) warnings.push('💧 LOW LIQUIDITY - May be difficult to trade');
+
+                return {
+                    success: true,
+                    token: `${token.symbol} (${token.address})`,
+                    isSafe: warnings.length === 0,
+                    warnings: warnings.length > 0 ? warnings : ['✅ No security warnings detected'],
+                    details: {
+                        freezeAuthority: tokenData.freezeAuthority || false,
+                        mintAuthority: tokenData.mintAuthority || false,
+                        hasLowLiquidity: tokenData.hasLowLiquidity || false,
+                        verified: tokenData.verified || false
+                    }
+                };
+            } catch (e) {
+                return { error: e.message };
+            }
         }
 
         case 'jupiter_wallet_holdings': {
@@ -3768,12 +4145,54 @@ async function executeTool(name, input) {
                 };
             }
 
-            // TODO: Implement wallet holdings view
-            // 1. Get wallet address (from input or connected wallet)
-            // 2. Call GET /ultra/v1/holdings/{address}
-            // 3. Parse and format token list (symbol, amount, USD value)
-            // 4. Return holdings summary
-            return { error: 'Jupiter wallet holdings: Implementation in progress (BAT-109)' };
+            try {
+                // Get wallet address (from input or connected wallet)
+                let walletAddress = input.wallet;
+                if (!walletAddress) {
+                    const walletConfigPath = path.join(workDir, 'solana_wallet.json');
+                    if (!fs.existsSync(walletConfigPath)) {
+                        return { error: 'No wallet specified. Provide wallet address or connect a wallet in Settings.' };
+                    }
+                    const walletConfig = JSON.parse(fs.readFileSync(walletConfigPath, 'utf8'));
+                    walletAddress = walletConfig.publicKey;
+                }
+
+                // Call Jupiter Holdings API
+                const res = await httpRequest({
+                    hostname: 'api.jup.ag',
+                    path: `/ultra/v1/holdings/${walletAddress}`,
+                    method: 'GET',
+                    headers: {
+                        'x-api-key': config.jupiterApiKey
+                    }
+                });
+
+                if (res.statusCode !== 200) {
+                    return { error: `Jupiter API error: ${res.statusCode}`, details: res.body };
+                }
+
+                const data = JSON.parse(res.body);
+                const holdings = data.holdings || [];
+                const totalValue = holdings.reduce((sum, h) => sum + (h.valueUsd || 0), 0);
+
+                return {
+                    success: true,
+                    wallet: walletAddress,
+                    totalValueUsd: `$${totalValue.toFixed(2)}`,
+                    count: holdings.length,
+                    holdings: holdings.map(holding => ({
+                        symbol: holding.symbol,
+                        name: holding.name,
+                        address: holding.mint,
+                        balance: holding.balance,
+                        decimals: holding.decimals,
+                        valueUsd: `$${(holding.valueUsd || 0).toFixed(2)}`,
+                        price: holding.price ? `$${holding.price}` : 'N/A'
+                    }))
+                };
+            } catch (e) {
+                return { error: e.message };
+            }
         }
 
         case 'telegram_react': {
