@@ -145,17 +145,21 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
 
     val isRunning = status == ServiceStatus.RUNNING || status == ServiceStatus.STARTING
 
-    // Pulse animation for status dot when running
-    val infiniteTransition = rememberInfiniteTransition(label = "statusPulse")
-    val pulseAlpha by infiniteTransition.animateFloat(
-        initialValue = 0.4f,
-        targetValue = 1.0f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1000),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "pulseAlpha",
-    )
+    // Pulse animation for status dot — only runs when RUNNING
+    val pulseAlpha = if (status == ServiceStatus.RUNNING) {
+        val infiniteTransition = rememberInfiniteTransition(label = "statusPulse")
+        infiniteTransition.animateFloat(
+            initialValue = 0.4f,
+            targetValue = 1.0f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 1000),
+                repeatMode = RepeatMode.Reverse,
+            ),
+            label = "pulseAlpha",
+        ).value
+    } else {
+        1.0f
+    }
 
     val statusColor = when (status) {
         ServiceStatus.RUNNING -> SeekerClawColors.Accent
