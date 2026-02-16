@@ -2444,7 +2444,7 @@ const TOOLS = [
     },
     {
         name: 'jupiter_token_search',
-        description: 'Search for Solana tokens by name or symbol using Jupiter\'s comprehensive token database. Returns detailed info including price, market cap, liquidity, holder count, and security audit status. Better than basic token lists.',
+        description: 'Search for Solana tokens by name or symbol using Jupiter\'s comprehensive token database. Returns token symbol, name, mint address, decimals, and logo URI. Better than basic token lists for discovery.',
         input_schema: {
             type: 'object',
             properties: {
@@ -2456,7 +2456,7 @@ const TOOLS = [
     },
     {
         name: 'jupiter_token_security',
-        description: 'Check token safety using Jupiter Shield. Scans for red flags: freeze authority enabled, mint authority active, low liquidity, honeypots, or other scam indicators. ALWAYS check before swapping unknown tokens. Requires Jupiter API key.',
+        description: 'Check token safety using Jupiter Shield. Scans for red flags: freeze authority enabled, mint authority active, and low liquidity. ALWAYS check before swapping unknown tokens. Requires Jupiter API key.',
         input_schema: {
             type: 'object',
             properties: {
@@ -3305,11 +3305,10 @@ async function executeTool(name, input) {
         case 'solana_balance': {
             let address = input.address;
             if (!address) {
-                const walletConfigPath = path.join(workDir, 'solana_wallet.json');
-                if (fs.existsSync(walletConfigPath)) {
-                    try {
-                        address = JSON.parse(fs.readFileSync(walletConfigPath, 'utf8')).publicKey;
-                    } catch (_) {}
+                try {
+                    address = getConnectedWalletAddress();
+                } catch (_) {
+                    // No wallet connected, address will remain undefined
                 }
             }
             if (!address) return { error: 'No wallet address provided and no wallet connected.' };
@@ -3347,11 +3346,10 @@ async function executeTool(name, input) {
         case 'solana_history': {
             let address = input.address;
             if (!address) {
-                const walletConfigPath = path.join(workDir, 'solana_wallet.json');
-                if (fs.existsSync(walletConfigPath)) {
-                    try {
-                        address = JSON.parse(fs.readFileSync(walletConfigPath, 'utf8')).publicKey;
-                    } catch (_) {}
+                try {
+                    address = getConnectedWalletAddress();
+                } catch (_) {
+                    // No wallet connected, address will remain undefined
                 }
             }
             if (!address) return { error: 'No wallet address provided and no wallet connected.' };
@@ -3375,12 +3373,12 @@ async function executeTool(name, input) {
 
         case 'solana_send': {
             // Build tx in JS, wallet signs AND broadcasts via signAndSendTransactions
-            const walletConfigPath = path.join(workDir, 'solana_wallet.json');
-            if (!fs.existsSync(walletConfigPath)) {
-                return { error: 'No wallet connected. Connect a wallet in the SeekerClaw app Settings.' };
+            let from;
+            try {
+                from = getConnectedWalletAddress();
+            } catch (e) {
+                return { error: e.message };
             }
-            const walletConfig = JSON.parse(fs.readFileSync(walletConfigPath, 'utf8'));
-            const from = walletConfig.publicKey;
             const to = input.to;
             const amount = input.amount;
 
@@ -3537,12 +3535,12 @@ async function executeTool(name, input) {
 
         case 'solana_swap': {
             // Requires connected wallet
-            const walletConfigPath = path.join(workDir, 'solana_wallet.json');
-            if (!fs.existsSync(walletConfigPath)) {
-                return { error: 'No wallet connected. Connect a wallet in the SeekerClaw app Settings.' };
+            let userPublicKey;
+            try {
+                userPublicKey = getConnectedWalletAddress();
+            } catch (e) {
+                return { error: e.message };
             }
-            const walletConfig = JSON.parse(fs.readFileSync(walletConfigPath, 'utf8'));
-            const userPublicKey = walletConfig.publicKey;
 
             try {
                 const inputToken = await resolveToken(input.inputToken);
@@ -3667,12 +3665,12 @@ async function executeTool(name, input) {
                 }
 
                 // 2. Get wallet address
-                const walletConfigPath = path.join(workDir, 'solana_wallet.json');
-                if (!fs.existsSync(walletConfigPath)) {
-                    return { error: 'No wallet connected. Connect a wallet in SeekerClaw Settings → Solana Wallet.' };
+                let walletAddress;
+                try {
+                    walletAddress = getConnectedWalletAddress();
+                } catch (e) {
+                    return { error: e.message };
                 }
-                const walletConfig = JSON.parse(fs.readFileSync(walletConfigPath, 'utf8'));
-                const walletAddress = walletConfig.publicKey;
 
                 // 3. Validate and convert input amount
                 const inputAmount = Number(input.inputAmount);
@@ -3753,12 +3751,12 @@ async function executeTool(name, input) {
 
             try {
                 // 1. Get wallet address
-                const walletConfigPath = path.join(workDir, 'solana_wallet.json');
-                if (!fs.existsSync(walletConfigPath)) {
-                    return { error: 'No wallet connected. Connect a wallet in SeekerClaw Settings → Solana Wallet.' };
+                let walletAddress;
+                try {
+                    walletAddress = getConnectedWalletAddress();
+                } catch (e) {
+                    return { error: e.message };
                 }
-                const walletConfig = JSON.parse(fs.readFileSync(walletConfigPath, 'utf8'));
-                const walletAddress = walletConfig.publicKey;
 
                 // 2. Build query params (align with schema: use `status` and `page`)
                 const params = new URLSearchParams({ wallet: walletAddress });
@@ -3817,12 +3815,12 @@ async function executeTool(name, input) {
 
             try {
                 // 1. Get wallet address
-                const walletConfigPath = path.join(workDir, 'solana_wallet.json');
-                if (!fs.existsSync(walletConfigPath)) {
-                    return { error: 'No wallet connected. Connect a wallet in SeekerClaw Settings → Solana Wallet.' };
+                let walletAddress;
+                try {
+                    walletAddress = getConnectedWalletAddress();
+                } catch (e) {
+                    return { error: e.message };
                 }
-                const walletConfig = JSON.parse(fs.readFileSync(walletConfigPath, 'utf8'));
-                const walletAddress = walletConfig.publicKey;
 
                 // 2. Call Jupiter Trigger API
                 const reqBody = {
@@ -3887,12 +3885,12 @@ async function executeTool(name, input) {
                 }
 
                 // 2. Get wallet address
-                const walletConfigPath = path.join(workDir, 'solana_wallet.json');
-                if (!fs.existsSync(walletConfigPath)) {
-                    return { error: 'No wallet connected. Connect a wallet in SeekerClaw Settings → Solana Wallet.' };
+                let walletAddress;
+                try {
+                    walletAddress = getConnectedWalletAddress();
+                } catch (e) {
+                    return { error: e.message };
                 }
-                const walletConfig = JSON.parse(fs.readFileSync(walletConfigPath, 'utf8'));
-                const walletAddress = walletConfig.publicKey;
 
                 // 3. Validate and convert amount (align with schema: amountPerCycle and enum)
                 const amountPerCycleNum = Number(input.amountPerCycle);
@@ -3908,7 +3906,8 @@ async function executeTool(name, input) {
                         details: `Token "${input.inputToken}" is missing decimal metadata; cannot calculate input amount in base units.`
                     };
                 }
-                const inputAmountLamports = Math.floor(amountPerCycleNum * Math.pow(10, inputToken.decimals));
+                // Use Math.round for better precision (avoid systematic rounding down)
+                const inputAmountLamports = Math.round(amountPerCycleNum * Math.pow(10, inputToken.decimals));
 
                 // Map enum cycleInterval (hourly/daily/weekly) to seconds
                 const intervalMap = { hourly: 3600, daily: 86400, weekly: 604800 };
@@ -3917,13 +3916,26 @@ async function executeTool(name, input) {
                     return { error: `Invalid cycleInterval: "${input.cycleInterval}". Must be "hourly", "daily", or "weekly".` };
                 }
 
+                // Validate totalCycles if provided (must be finite positive integer)
+                let totalCycles = null;
+                if (input.totalCycles != null) {
+                    const tc = Number(input.totalCycles);
+                    if (!Number.isFinite(tc) || tc <= 0 || !Number.isInteger(tc)) {
+                        return {
+                            error: 'Invalid totalCycles',
+                            details: `totalCycles must be a positive integer; received "${input.totalCycles}".`
+                        };
+                    }
+                    totalCycles = tc;
+                }
+
                 // 4. Call Jupiter Recurring API
                 const reqBody = {
                     inputMint: inputToken.address,
                     outputMint: outputToken.address,
                     inputAmount: inputAmountLamports.toString(),
                     cycleInterval: cycleIntervalSeconds,
-                    totalCycles: input.totalCycles || null,
+                    totalCycles: totalCycles,
                     walletAddress: walletAddress
                 };
 
@@ -3971,12 +3983,12 @@ async function executeTool(name, input) {
 
             try {
                 // 1. Get wallet address
-                const walletConfigPath = path.join(workDir, 'solana_wallet.json');
-                if (!fs.existsSync(walletConfigPath)) {
-                    return { error: 'No wallet connected. Connect a wallet in SeekerClaw Settings → Solana Wallet.' };
+                let walletAddress;
+                try {
+                    walletAddress = getConnectedWalletAddress();
+                } catch (e) {
+                    return { error: e.message };
                 }
-                const walletConfig = JSON.parse(fs.readFileSync(walletConfigPath, 'utf8'));
-                const walletAddress = walletConfig.publicKey;
 
                 // 2. Build query params (align with schema: use `status` and `page`)
                 const params = new URLSearchParams({ wallet: walletAddress });
@@ -4035,12 +4047,12 @@ async function executeTool(name, input) {
 
             try {
                 // 1. Get wallet address
-                const walletConfigPath = path.join(workDir, 'solana_wallet.json');
-                if (!fs.existsSync(walletConfigPath)) {
-                    return { error: 'No wallet connected. Connect a wallet in SeekerClaw Settings → Solana Wallet.' };
+                let walletAddress;
+                try {
+                    walletAddress = getConnectedWalletAddress();
+                } catch (e) {
+                    return { error: e.message };
                 }
-                const walletConfig = JSON.parse(fs.readFileSync(walletConfigPath, 'utf8'));
-                const walletAddress = walletConfig.publicKey;
 
                 // 2. Call Jupiter Recurring API
                 const reqBody = {
@@ -4194,12 +4206,11 @@ async function executeTool(name, input) {
                 // Get wallet address (align with schema: use `address` not `wallet`)
                 let walletAddress = input.address;
                 if (!walletAddress) {
-                    const walletConfigPath = path.join(workDir, 'solana_wallet.json');
-                    if (!fs.existsSync(walletConfigPath)) {
+                    try {
+                        walletAddress = getConnectedWalletAddress();
+                    } catch (e) {
                         return { error: 'No wallet specified. Provide wallet address or connect a wallet in Settings.' };
                     }
-                    const walletConfig = JSON.parse(fs.readFileSync(walletConfigPath, 'utf8'));
-                    walletAddress = walletConfig.publicKey;
                 }
 
                 // Validate wallet address before using in URL path
@@ -4916,7 +4927,6 @@ async function fetchJupiterTokenList() {
     }
 }
 
-// Resolve token symbol or mint address → token object, or { ambiguous, candidates } if multiple matches
 // Validate Solana wallet address (base58 format, 32-44 chars)
 function isValidSolanaAddress(address) {
     if (!address || typeof address !== 'string') return false;
@@ -4924,6 +4934,17 @@ function isValidSolanaAddress(address) {
     return base58Regex.test(address.trim());
 }
 
+// Get connected wallet address from solana_wallet.json
+function getConnectedWalletAddress() {
+    const walletConfigPath = path.join(workDir, 'solana_wallet.json');
+    if (!fs.existsSync(walletConfigPath)) {
+        throw new Error('No wallet connected. Connect a wallet in SeekerClaw Settings > Solana Wallet.');
+    }
+    const walletConfig = JSON.parse(fs.readFileSync(walletConfigPath, 'utf8'));
+    return walletConfig.publicKey;
+}
+
+// Resolve token symbol or mint address → token object, or { ambiguous, candidates } if multiple matches
 async function resolveToken(input) {
     if (!input || typeof input !== 'string') return null;
     const trimmed = input.trim();
