@@ -1680,7 +1680,7 @@ private fun SettingRow(
             },
             colors = SwitchDefaults.colors(
                 checkedThumbColor = androidx.compose.ui.graphics.Color.White,
-                checkedTrackColor = androidx.compose.ui.graphics.Color(0xFF10B981),
+                checkedTrackColor = SeekerClawColors.ActionPrimary,
                 uncheckedThumbColor = androidx.compose.ui.graphics.Color.White,
                 uncheckedTrackColor = androidx.compose.ui.graphics.Color(0xFF374151),
                 uncheckedBorderColor = androidx.compose.ui.graphics.Color.Transparent,
@@ -1759,7 +1759,7 @@ private fun PermissionRow(
             },
             colors = SwitchDefaults.colors(
                 checkedThumbColor = androidx.compose.ui.graphics.Color.White,
-                checkedTrackColor = androidx.compose.ui.graphics.Color(0xFF10B981),
+                checkedTrackColor = SeekerClawColors.ActionPrimary,
                 uncheckedThumbColor = androidx.compose.ui.graphics.Color.White,
                 uncheckedTrackColor = androidx.compose.ui.graphics.Color(0xFF374151),
                 uncheckedBorderColor = androidx.compose.ui.graphics.Color.Transparent,
