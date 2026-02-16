@@ -14,6 +14,10 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -62,6 +66,9 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -361,17 +368,14 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
         Spacer(modifier = Modifier.height(28.dp))
 
         // Configuration
-        SectionLabel("Configuration")
-
-        Spacer(modifier = Modifier.height(10.dp))
-
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(SeekerClawColors.Surface, shape),
-        ) {
-            ConfigField(
-                label = "Auth Type",
+        CollapsibleSection("Configuration", initiallyExpanded = true) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(SeekerClawColors.Surface, shape),
+            ) {
+                ConfigField(
+                    label = "Auth Type",
                 value = authTypeLabel,
                 onClick = { showAuthTypePicker = true },
                 info = "How your agent authenticates with the AI provider. " +
@@ -472,23 +476,21 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                     "Get a free key at brave.com/search/api. " +
                     "Without this, DuckDuckGo is used (no key required).",
             )
+            }
         }
 
         Spacer(modifier = Modifier.height(28.dp))
 
         // Preferences
-        SectionLabel("Preferences")
-
-        Spacer(modifier = Modifier.height(10.dp))
-
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(SeekerClawColors.Surface, shape)
-                .padding(horizontal = 16.dp),
-        ) {
-            SettingRow(
-                label = "Auto-start on boot",
+        CollapsibleSection("Preferences", initiallyExpanded = true) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(SeekerClawColors.Surface, shape)
+                    .padding(horizontal = 16.dp),
+            ) {
+                SettingRow(
+                    label = "Auto-start on boot",
                 checked = autoStartOnBoot,
                 onCheckedChange = {
                     autoStartOnBoot = it
@@ -523,21 +525,31 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                     "Useful when using camera automation on a dedicated device. " +
                     "Higher battery usage and lower physical privacy/security.",
             )
+            }
         }
 
         Spacer(modifier = Modifier.height(28.dp))
 
         // Permissions
-        SectionLabel("Permissions")
-
-        Spacer(modifier = Modifier.height(10.dp))
-
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(SeekerClawColors.Surface, shape)
-                .padding(horizontal = 16.dp),
-        ) {
+        CollapsibleSection("Permissions", initiallyExpanded = false) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(SeekerClawColors.Surface, shape)
+                    .padding(horizontal = 16.dp),
+            ) {
+                val allPermissionsOff = !hasCameraPermission && !hasLocationPermission &&
+                    !hasContactsPermission && !hasSmsPermission && !hasCallPermission
+                if (allPermissionsOff) {
+                    Text(
+                        text = "Enable permissions to unlock device features (camera, GPS, SMS, etc.)",
+                        fontFamily = FontFamily.Default,
+                        fontSize = 12.sp,
+                        color = SeekerClawColors.TextSecondary,
+                        lineHeight = 18.sp,
+                        modifier = Modifier.padding(top = 12.dp, bottom = 4.dp),
+                    )
+                }
             PermissionRow(
                 label = "Camera",
                 granted = hasCameraPermission,
@@ -587,22 +599,20 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                     "It will always confirm the number with you before dialing. " +
                     "Useful for quick calls like \"call the pizza place\".",
             )
+            }
         }
 
         Spacer(modifier = Modifier.height(28.dp))
 
         // Solana Wallet
-        SectionLabel("Solana Wallet")
-
-        Spacer(modifier = Modifier.height(10.dp))
-
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(SeekerClawColors.Surface, shape)
-                .padding(16.dp),
-        ) {
-            if (walletAddress != null) {
+        CollapsibleSection("Solana Wallet", initiallyExpanded = false) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(SeekerClawColors.Surface, shape)
+                    .padding(16.dp),
+            ) {
+                if (walletAddress != null) {
                 // Connected state
                 InfoRow("Address", "${walletAddress!!.take(6)}\u2026${walletAddress!!.takeLast(4)}")
 
@@ -691,120 +701,127 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
+            }
         }
 
         Spacer(modifier = Modifier.height(28.dp))
 
         // Data backup
-        SectionLabel("Data")
+        CollapsibleSection("Data", initiallyExpanded = false) {
+            Column {
+                OutlinedButton(
+                    onClick = {
+                        Analytics.featureUsed("memory_exported")
+                        val timestamp = android.text.format.DateFormat.format("yyyyMMdd_HHmm", Date())
+                        exportLauncher.launch("seekerclaw_backup_$timestamp.zip")
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = shape,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, androidx.compose.ui.graphics.Color(0xFF374151)),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = SeekerClawColors.TextPrimary,
+                    ),
+                ) {
+                    Text(
+                        "Export Memory",
+                        fontFamily = FontFamily.Default,
+                        fontSize = 14.sp,
+                    )
+                }
 
-        Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(8.dp))
 
-        OutlinedButton(
-            onClick = {
-                Analytics.featureUsed("memory_exported")
-                val timestamp = android.text.format.DateFormat.format("yyyyMMdd_HHmm", Date())
-                exportLauncher.launch("seekerclaw_backup_$timestamp.zip")
-            },
-            modifier = Modifier.fillMaxWidth(),
-            shape = shape,
-            border = androidx.compose.foundation.BorderStroke(1.dp, androidx.compose.ui.graphics.Color(0xFF374151)),
-            colors = ButtonDefaults.outlinedButtonColors(
-                contentColor = SeekerClawColors.TextPrimary,
-            ),
-        ) {
-            Text(
-                "Export Memory",
-                fontFamily = FontFamily.Default,
-                fontSize = 14.sp,
-            )
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        OutlinedButton(
-            onClick = {
-                Analytics.featureUsed("memory_imported")
-                showImportDialog = true
-            },
-            modifier = Modifier.fillMaxWidth(),
-            shape = shape,
-            border = androidx.compose.foundation.BorderStroke(1.dp, androidx.compose.ui.graphics.Color(0xFF374151)),
-            colors = ButtonDefaults.outlinedButtonColors(
-                contentColor = SeekerClawColors.TextPrimary,
-            ),
-        ) {
-            Text(
-                "Import Memory",
-                fontFamily = FontFamily.Default,
-                fontSize = 14.sp,
-            )
+                OutlinedButton(
+                    onClick = {
+                        Analytics.featureUsed("memory_imported")
+                        showImportDialog = true
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = shape,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, androidx.compose.ui.graphics.Color(0xFF374151)),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = SeekerClawColors.TextPrimary,
+                    ),
+                ) {
+                    Text(
+                        "Import Memory",
+                        fontFamily = FontFamily.Default,
+                        fontSize = 14.sp,
+                    )
+                }
+            }
         }
 
         Spacer(modifier = Modifier.height(28.dp))
 
         // Run Setup Again
-        SectionLabel("Setup")
-
-        Spacer(modifier = Modifier.height(10.dp))
-
-        OutlinedButton(
-            onClick = { showRunSetupDialog = true },
-            modifier = Modifier.fillMaxWidth(),
-            shape = shape,
-            border = androidx.compose.foundation.BorderStroke(1.dp, androidx.compose.ui.graphics.Color(0xFF374151)),
-            colors = ButtonDefaults.outlinedButtonColors(
-                contentColor = SeekerClawColors.TextPrimary,
-            ),
-        ) {
-            Text(
-                "Run Setup Again",
-                fontFamily = FontFamily.Default,
-                fontSize = 14.sp,
-            )
+        CollapsibleSection("Setup", initiallyExpanded = false) {
+            OutlinedButton(
+                onClick = { showRunSetupDialog = true },
+                modifier = Modifier.fillMaxWidth(),
+                shape = shape,
+                border = androidx.compose.foundation.BorderStroke(1.dp, androidx.compose.ui.graphics.Color(0xFF374151)),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = SeekerClawColors.TextPrimary,
+                ),
+            ) {
+                Text(
+                    "Run Setup Again",
+                    fontFamily = FontFamily.Default,
+                    fontSize = 14.sp,
+                )
+            }
         }
 
         Spacer(modifier = Modifier.height(32.dp))
 
         // Danger zone
-        SectionLabel("Danger Zone")
+        CollapsibleSection("Danger Zone", initiallyExpanded = false) {
+            Column {
+                Button(
+                    onClick = { showResetDialog = true },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = shape,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = SeekerClawColors.ActionDanger,
+                        contentColor = SeekerClawColors.ActionDangerText,
+                    ),
+                ) {
+                    Text(
+                        "Reset Config",
+                        fontFamily = FontFamily.Default,
+                        fontWeight = FontWeight.Medium,
+                        fontSize = 14.sp,
+                    )
+                }
 
-        Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(8.dp))
 
-        Button(
-            onClick = { showResetDialog = true },
-            modifier = Modifier.fillMaxWidth(),
-            shape = shape,
-            colors = ButtonDefaults.buttonColors(
-                containerColor = SeekerClawColors.ActionDanger,
-                contentColor = SeekerClawColors.ActionDangerText,
-            ),
-        ) {
-            Text(
-                "Reset Config",
-                fontFamily = FontFamily.Default,
-                fontWeight = FontWeight.Medium,
-                fontSize = 14.sp,
-            )
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        Button(
-            onClick = { showClearMemoryDialog = true },
-            modifier = Modifier.fillMaxWidth(),
-            shape = shape,
-            colors = ButtonDefaults.buttonColors(
-                containerColor = SeekerClawColors.ActionDanger,
-                contentColor = SeekerClawColors.ActionDangerText,
-            ),
-        ) {
-            Text(
-                "Wipe Memory",
-                fontFamily = FontFamily.Default,
-                fontWeight = FontWeight.Medium,
-                fontSize = 14.sp,
-            )
+                Button(
+                    onClick = { showClearMemoryDialog = true },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = shape,
+                    border = BorderStroke(1.dp, SeekerClawColors.Error),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = androidx.compose.ui.graphics.Color(0xFF4A0000),
+                        contentColor = SeekerClawColors.ActionDangerText,
+                    ),
+                ) {
+                    Icon(
+                        Icons.Default.Warning,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                        tint = SeekerClawColors.ActionDangerText,
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        "Wipe Memory",
+                        fontFamily = FontFamily.Default,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp,
+                    )
+                }
+            }
         }
 
         Spacer(modifier = Modifier.height(32.dp))
@@ -1485,6 +1502,50 @@ private fun SectionLabel(title: String) {
         color = SeekerClawColors.TextSecondary,
         letterSpacing = 1.sp,
     )
+}
+
+@Composable
+private fun CollapsibleSection(
+    title: String,
+    initiallyExpanded: Boolean = true,
+    content: @Composable () -> Unit,
+) {
+    var expanded by remember { mutableStateOf(initiallyExpanded) }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { expanded = !expanded }
+            .padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = title,
+            fontFamily = FontFamily.Default,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Medium,
+            color = SeekerClawColors.TextSecondary,
+            letterSpacing = 1.sp,
+        )
+        Icon(
+            imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+            contentDescription = if (expanded) "Collapse $title" else "Expand $title",
+            tint = SeekerClawColors.TextDim,
+            modifier = Modifier.size(20.dp),
+        )
+    }
+
+    AnimatedVisibility(
+        visible = expanded,
+        enter = expandVertically(),
+        exit = shrinkVertically(),
+    ) {
+        Column {
+            Spacer(modifier = Modifier.height(10.dp))
+            content()
+        }
+    }
 }
 
 @Composable

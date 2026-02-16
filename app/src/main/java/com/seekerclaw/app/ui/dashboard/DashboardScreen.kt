@@ -21,11 +21,17 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -139,6 +145,22 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
 
     val isRunning = status == ServiceStatus.RUNNING || status == ServiceStatus.STARTING
 
+    // Pulse animation for status dot — only runs when RUNNING
+    val pulseAlpha = if (status == ServiceStatus.RUNNING) {
+        val infiniteTransition = rememberInfiniteTransition(label = "statusPulse")
+        infiniteTransition.animateFloat(
+            initialValue = 0.4f,
+            targetValue = 1.0f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 1000),
+                repeatMode = RepeatMode.Reverse,
+            ),
+            label = "pulseAlpha",
+        ).value
+    } else {
+        1.0f
+    }
+
     val statusColor = when (status) {
         ServiceStatus.RUNNING -> SeekerClawColors.Accent
         ServiceStatus.STARTING -> SeekerClawColors.Warning
@@ -225,6 +247,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
             modifier = Modifier
                 .fillMaxWidth()
                 .background(SeekerClawColors.Surface, shape)
+                .alpha(if (isRunning) 1f else 0.6f)
                 .clickable { if (configNeeded) onNavigateToSettings() else onNavigateToSystem() }
                 .padding(20.dp),
         ) {
@@ -238,7 +261,8 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
                         modifier = Modifier
                             .size(10.dp)
                             .clip(CircleShape)
-                            .background(statusColor),
+                            .background(statusColor)
+                            .alpha(if (isRunning) pulseAlpha else 1f),
                     )
                     Spacer(modifier = Modifier.width(12.dp))
                     Text(
@@ -371,6 +395,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
                 subtitle = telegramSubtitle,
                 dotColor = telegramDotColor,
                 shape = shape,
+                dotAlpha = if (isRunning) pulseAlpha else 1f,
             )
             UplinkCard(
                 icon = "//GW",
@@ -378,6 +403,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
                 subtitle = gatewaySubtitle,
                 dotColor = gatewayDotColor,
                 shape = shape,
+                dotAlpha = if (isRunning) pulseAlpha else 1f,
             )
             UplinkCard(
                 icon = "//AI",
@@ -385,6 +411,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
                 subtitle = aiSubtitle,
                 dotColor = aiDotColor,
                 shape = shape,
+                dotAlpha = if (isRunning) pulseAlpha else 1f,
             )
         }
 
@@ -487,6 +514,7 @@ private fun UplinkCard(
     subtitle: String,
     dotColor: Color,
     shape: RoundedCornerShape,
+    dotAlpha: Float = 1f,
 ) {
     Row(
         modifier = Modifier
@@ -524,7 +552,8 @@ private fun UplinkCard(
             modifier = Modifier
                 .size(10.dp)
                 .clip(CircleShape)
-                .background(dotColor),
+                .background(dotColor)
+                .alpha(dotAlpha),
         )
     }
 }

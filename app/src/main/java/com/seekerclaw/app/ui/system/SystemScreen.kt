@@ -33,6 +33,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -313,12 +315,14 @@ fun SystemScreen(onBack: () -> Unit) {
                 value = "$messagesToday",
                 unit = "messages",
                 modifier = Modifier.weight(1f),
+                accentColor = SeekerClawColors.Accent,
             )
             StatCard(
                 label = "All Time",
                 value = "$messageCount",
                 unit = "messages",
                 modifier = Modifier.weight(1f),
+                accentColor = SeekerClawColors.LogInfo,
             )
         }
 
@@ -333,12 +337,14 @@ fun SystemScreen(onBack: () -> Unit) {
                 value = formatTokens(tokensToday),
                 unit = "tokens",
                 modifier = Modifier.weight(1f),
+                accentColor = SeekerClawColors.Accent,
             )
             StatCard(
                 label = "All Time",
                 value = formatTokens(tokensTotal),
                 unit = "tokens",
                 modifier = Modifier.weight(1f),
+                accentColor = SeekerClawColors.LogInfo,
             )
         }
 
@@ -550,12 +556,25 @@ private fun StatCard(
     value: String,
     unit: String,
     modifier: Modifier = Modifier,
+    accentColor: Color? = null,
 ) {
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
 
     Column(
         modifier = modifier
             .background(SeekerClawColors.Surface, shape)
+            .then(
+                if (accentColor != null) {
+                    Modifier
+                        .clip(shape)
+                        .drawBehind {
+                            drawRect(
+                                color = accentColor,
+                                size = androidx.compose.ui.geometry.Size(4.dp.toPx(), size.height),
+                            )
+                        }
+                } else Modifier
+            )
             .padding(16.dp),
     ) {
         Text(
