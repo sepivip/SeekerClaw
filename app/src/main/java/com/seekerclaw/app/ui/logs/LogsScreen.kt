@@ -144,11 +144,19 @@ fun LogsScreen() {
                         tint = SeekerClawColors.TextDim,
                     )
                 }
-                IconButton(onClick = { showClearDialog = true }) {
+                TextButton(onClick = { showClearDialog = true }) {
                     Icon(
                         Icons.Default.Delete,
                         contentDescription = "Clear logs",
                         tint = SeekerClawColors.TextDim,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "Clear",
+                        fontFamily = FontFamily.Default,
+                        fontSize = 13.sp,
+                        color = SeekerClawColors.TextDim,
                     )
                 }
             }

@@ -62,6 +62,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.painterResource
@@ -483,7 +484,7 @@ private fun WelcomeStep(
             )
         }
 
-        Spacer(modifier = Modifier.height(28.dp))
+        Spacer(modifier = Modifier.height(48.dp))
 
         // QR scan button
         Button(
@@ -612,6 +613,7 @@ private fun ClaudeApiStep(
                         onClick = { onAuthTypeChange(type) },
                         modifier = Modifier.weight(1f).height(42.dp),
                         shape = shape,
+                        border = if (!isSelected) BorderStroke(1.dp, SeekerClawColors.CardBorder) else null,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = if (isSelected) SeekerClawColors.Primary.copy(alpha = 0.15f)
                                 else SeekerClawColors.Background,
@@ -978,57 +980,56 @@ private fun OptionsStep(
 
         Spacer(modifier = Modifier.height(28.dp))
 
-        TextButton(
-            onClick = onBack,
-            modifier = Modifier.align(Alignment.CenterHorizontally),
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(
-                text = "Back",
-                fontSize = 14.sp,
-                color = SeekerClawColors.TextDim,
-            )
-        }
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        Button(
-            onClick = onStartAgent,
-            enabled = !isStarting,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(56.dp),
-            shape = shape,
-            colors = ButtonDefaults.buttonColors(
-                containerColor = SeekerClawColors.ActionPrimary,
-                contentColor = Color.White,
-                disabledContainerColor = SeekerClawColors.ActionPrimary.copy(alpha = 0.6f),
-                disabledContentColor = Color.White.copy(alpha = 0.7f),
-            ),
-        ) {
-            if (isStarting) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(20.dp),
-                    color = Color.White,
-                    strokeWidth = 2.dp,
-                )
-                Spacer(modifier = Modifier.width(8.dp))
+            TextButton(onClick = onBack) {
                 Text(
-                    "Starting\u2026",
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
+                    text = "Back",
+                    fontSize = 14.sp,
+                    color = SeekerClawColors.TextDim,
                 )
-            } else {
-                Icon(
-                    Icons.Default.PlayArrow,
-                    contentDescription = null,
-                    modifier = Modifier.size(20.dp),
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    "Initialize Agent",
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                )
+            }
+
+            Button(
+                onClick = onStartAgent,
+                enabled = !isStarting,
+                modifier = Modifier.height(56.dp),
+                shape = shape,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = SeekerClawColors.ActionPrimary,
+                    contentColor = Color.White,
+                    disabledContainerColor = SeekerClawColors.ActionPrimary.copy(alpha = 0.6f),
+                    disabledContentColor = Color.White.copy(alpha = 0.7f),
+                ),
+            ) {
+                if (isStarting) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        color = Color.White,
+                        strokeWidth = 2.dp,
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        "Starting\u2026",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                } else {
+                    Icon(
+                        Icons.Default.PlayArrow,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp),
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        "Initialize Agent",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
             }
         }
     }
