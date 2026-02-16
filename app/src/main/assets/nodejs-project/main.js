@@ -4374,7 +4374,7 @@ async function jupiterUltraOrder(inputMint, outputMint, amount, taker) {
     });
 
     const res = await httpRequest({
-        hostname: 'lite-api.jup.ag',
+        hostname: 'api.jup.ag',
         path: `/ultra/v1/order?${params.toString()}`,
         method: 'GET',
         headers: { 'Accept': 'application/json' },
@@ -4389,7 +4389,7 @@ async function jupiterUltraOrder(inputMint, outputMint, amount, taker) {
 // Jupiter Ultra API — execute signed transaction (Jupiter broadcasts)
 async function jupiterUltraExecute(signedTransaction, requestId) {
     const res = await httpRequest({
-        hostname: 'lite-api.jup.ag',
+        hostname: 'api.jup.ag',
         path: '/ultra/v1/execute',
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
@@ -4404,12 +4404,12 @@ async function jupiterUltraExecute(signedTransaction, requestId) {
     return res.data;
 }
 
-// Jupiter Price API v2
+// Jupiter Price API v3
 async function jupiterPrice(mintAddresses) {
     const ids = mintAddresses.join(',');
     const res = await httpRequest({
         hostname: 'api.jup.ag',
-        path: `/price/v2?ids=${encodeURIComponent(ids)}`,
+        path: `/price/v3?ids=${encodeURIComponent(ids)}`,
         method: 'GET',
         headers: { 'Accept': 'application/json' },
     });
