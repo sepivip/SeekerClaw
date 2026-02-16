@@ -88,4 +88,41 @@ object SolanaWalletManager {
             Result.failure(e)
         }
     }
+
+    /**
+     * Sign a transaction via MWA WITHOUT broadcasting.
+     * Returns the full signed transaction bytes (for Jupiter Ultra flow
+     * where Jupiter handles broadcasting via /execute).
+     */
+    suspend fun signTransaction(
+        sender: ActivityResultSender,
+        unsignedTransaction: ByteArray,
+    ): Result<ByteArray> {
+        return try {
+            val result = walletAdapter.transact(sender) { authResult ->
+                signTransactions(arrayOf(unsignedTransaction)).signedPayloads.firstOrNull()
+            }
+            when (result) {
+                is TransactionResult.Success -> {
+                    val signed = result.payload
+                    if (signed != null) {
+                        Log.i(TAG, "Transaction signed (${signed.size} bytes)")
+                        Result.success(signed)
+                    } else {
+                        Result.failure(Exception("No signed transaction returned"))
+                    }
+                }
+                is TransactionResult.NoWalletFound -> {
+                    Result.failure(Exception("No MWA-compatible wallet found"))
+                }
+                is TransactionResult.Failure -> {
+                    Log.e(TAG, "MWA sign failed: ${result.message}")
+                    Result.failure(Exception(result.message))
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "MWA sign failed", e)
+            Result.failure(e)
+        }
+    }
 }

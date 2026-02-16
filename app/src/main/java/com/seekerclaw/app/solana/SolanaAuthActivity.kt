@@ -77,6 +77,26 @@ class SolanaAuthActivity : ComponentActivity() {
                         put("error", error ?: "")
                     })
                 }
+
+                "signOnly" -> {
+                    val txBytes = intent.getByteArrayExtra("transaction")
+                    if (txBytes == null) {
+                        writeResultFile(requestId, JSONObject().apply {
+                            put("error", "No transaction data provided")
+                        })
+                        finish()
+                        return@launch
+                    }
+
+                    val result = SolanaWalletManager.signTransaction(sender, txBytes)
+                    val signedBytes = result.getOrNull()
+                    val error = result.exceptionOrNull()?.message
+
+                    writeResultFile(requestId, JSONObject().apply {
+                        put("signedTransaction", if (signedBytes != null) Base64.encodeToString(signedBytes, Base64.NO_WRAP) else "")
+                        put("error", error ?: "")
+                    })
+                }
             }
             finish()
         }
