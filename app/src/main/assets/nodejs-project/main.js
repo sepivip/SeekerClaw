@@ -1564,28 +1564,38 @@ async function telegram(method, body = null) {
 }
 
 /**
- * Send a file to Telegram using multipart/form-data.
+ * Send a file to Telegram using multipart/form-data with streaming upload.
  * @param {string} method - Telegram API method (sendDocument, sendPhoto, etc.)
  * @param {Object} params - Non-file form fields (chat_id, caption, etc.)
  * @param {string} fieldName - Form field name for the file (document, photo, audio, etc.)
- * @param {Buffer} fileBuffer - File contents
+ * @param {string} filePath - Absolute path to file on disk
  * @param {string} fileName - Filename for Content-Disposition
+ * @param {number} fileSize - File size in bytes (from stat)
  * @returns {Promise<Object>} Telegram API response
  */
-async function telegramSendFile(method, params, fieldName, fileBuffer, fileName) {
-    const boundary = '----TgFile' + Math.random().toString(36).slice(2, 14);
-    const parts = [];
+async function telegramSendFile(method, params, fieldName, filePath, fileName, fileSize) {
+    const crypto = require('crypto');
+    const boundary = '----TgFile' + crypto.randomBytes(16).toString('hex');
+
+    // Sanitize header values: strip CR/LF and escape quotes
+    const sanitize = (s) => String(s).replace(/[\r\n]/g, '').replace(/"/g, "'");
+    const safeFileName = sanitize(fileName);
+
+    // Build non-file form parts
+    const headerParts = [];
     for (const [key, value] of Object.entries(params)) {
-        parts.push(Buffer.from(
-            `--${boundary}\r\nContent-Disposition: form-data; name="${key}"\r\n\r\n${value}\r\n`
+        headerParts.push(Buffer.from(
+            `--${boundary}\r\nContent-Disposition: form-data; name="${sanitize(key)}"\r\n\r\n${String(value).replace(/[\r\n]/g, ' ')}\r\n`
         ));
     }
-    parts.push(Buffer.from(
-        `--${boundary}\r\nContent-Disposition: form-data; name="${fieldName}"; filename="${fileName}"\r\nContent-Type: application/octet-stream\r\n\r\n`
-    ));
-    parts.push(fileBuffer);
-    parts.push(Buffer.from(`\r\n--${boundary}--\r\n`));
-    const body = Buffer.concat(parts);
+    const fileHeader = Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="${sanitize(fieldName)}"; filename="${safeFileName}"\r\nContent-Type: application/octet-stream\r\n\r\n`
+    );
+    const footer = Buffer.from(`\r\n--${boundary}--\r\n`);
+
+    // Compute total Content-Length for streaming (no full-file buffer needed)
+    const preambleSize = headerParts.reduce((sum, b) => sum + b.length, 0) + fileHeader.length;
+    const totalSize = preambleSize + fileSize + footer.length;
 
     return new Promise((resolve, reject) => {
         const req = https.request({
@@ -1594,7 +1604,7 @@ async function telegramSendFile(method, params, fieldName, fileBuffer, fileName)
             method: 'POST',
             headers: {
                 'Content-Type': `multipart/form-data; boundary=${boundary}`,
-                'Content-Length': body.length,
+                'Content-Length': totalSize,
             },
         }, (res) => {
             let data = '';
@@ -1607,8 +1617,17 @@ async function telegramSendFile(method, params, fieldName, fileBuffer, fileName)
         });
         req.on('error', reject);
         req.setTimeout(120000, () => { req.destroy(); reject(new Error('Upload timed out')); });
-        req.write(body);
-        req.end();
+
+        // Write form preamble
+        for (const part of headerParts) req.write(part);
+        req.write(fileHeader);
+
+        // Stream file content to avoid loading entire file into memory
+        const rs = fs.createReadStream(filePath);
+        rs.on('data', chunk => { if (!req.write(chunk)) rs.pause(); });
+        req.on('drain', () => rs.resume());
+        rs.on('end', () => { req.write(footer); req.end(); });
+        rs.on('error', err => { req.destroy(); reject(err); });
     });
 }
 
@@ -2384,7 +2403,7 @@ const TOOLS = [
     },
     {
         name: 'telegram_send_file',
-        description: 'Send a file from the workspace to the current Telegram chat. Auto-detects type from extension (photo, video, audio, voice, document). Use for sharing reports, images, exported files, camera captures, or any workspace file with the user. Telegram bot limit: 50MB, photos max 10MB (auto-downgraded to document if larger).',
+        description: 'Send a file from the workspace to the current Telegram chat. Auto-detects type from extension (photo, video, audio, voice, document). Use for sharing reports, images, exported files, camera captures, or any workspace file with the user. Telegram bot limit: 50MB. Photos up to 10MB are sent as photos; larger images are automatically sent as documents.',
         input_schema: {
             type: 'object',
             properties: {
@@ -3740,6 +3759,7 @@ async function executeTool(name, input) {
             let stat;
             try { stat = fs.statSync(filePath); } catch (e) { return { error: `Cannot stat file: ${e.message}` }; }
             if (stat.isDirectory()) return { error: 'Cannot send a directory. Specify a file path.' };
+            if (stat.size === 0) return { error: 'Cannot send empty file (0 bytes)' };
 
             const MAX_SEND_SIZE = 50 * 1024 * 1024; // 50MB Telegram bot limit
             const MAX_PHOTO_SIZE = 10 * 1024 * 1024; // 10MB for sendPhoto
@@ -3763,31 +3783,32 @@ async function executeTool(name, input) {
                 detected = TYPE_MAP[input.type] || detected;
             }
 
-            // Photos > 10MB must be sent as document
+            // Photos > 10MB must be sent as document (applies to both auto-detected and overridden)
             if (detected.method === 'sendPhoto' && stat.size > MAX_PHOTO_SIZE) {
-                log(`[TgSendFile] Photo ${fileName} is ${(stat.size / 1024 / 1024).toFixed(1)}MB — downgrading to document`);
+                const safLogName = fileName.replace(/[\r\n\0\u2028\u2029]/g, '_');
+                log(`[TgSendFile] Photo ${safLogName} is ${(stat.size / 1024 / 1024).toFixed(1)}MB — downgrading to document`);
                 detected = { method: 'sendDocument', field: 'document' };
             }
 
             try {
-                const fileBuffer = await fs.promises.readFile(filePath);
                 const params = { chat_id: String(input.chat_id) };
                 if (input.caption) params.caption = String(input.caption).slice(0, 1024);
 
-                log(`[TgSendFile] ${detected.method}: ${fileName} (${(stat.size / 1024).toFixed(1)}KB) → chat ${input.chat_id}`);
-                const result = await telegramSendFile(detected.method, params, detected.field, fileBuffer, fileName);
+                const safLogName = fileName.replace(/[\r\n\0\u2028\u2029]/g, '_');
+                log(`[TgSendFile] ${detected.method}: ${safLogName} (${(stat.size / 1024).toFixed(1)}KB) → chat ${input.chat_id}`);
+                const result = await telegramSendFile(detected.method, params, detected.field, filePath, fileName, stat.size);
 
-                if (result.ok) {
+                if (result && result.ok === true) {
                     log(`[TgSendFile] Sent successfully`);
                     return { success: true, method: detected.method, file: input.path, size: stat.size };
                 } else {
-                    const desc = result.description || 'Unknown error';
+                    const desc = (result && result.description) || 'Unknown error';
                     log(`[TgSendFile] Failed: ${desc}`);
                     return { error: `Telegram API error: ${desc}` };
                 }
             } catch (e) {
-                log(`[TgSendFile] Error: ${e.message}`);
-                return { error: e.message };
+                log(`[TgSendFile] Error: ${e && e.message ? e.message : String(e)}`);
+                return { error: e && e.message ? e.message : String(e) };
             }
         }
 
