@@ -147,7 +147,7 @@ const INJECTION_PATTERNS = [
     { pattern: /\bASSISTANT\s*:/i, label: 'fake-assistant-turn' },
     { pattern: /\bSYSTEM\s*:/i, label: 'fake-system-turn' },
     { pattern: /new\s+instructions?\s*:/i, label: 'fake-instructions' },
-    { pattern: /urgentl?y?\s+(send|transfer|execute|call|run)/i, label: 'urgency-exploit' },
+    { pattern: /urgent(ly)?\s+(send|transfer|execute|call|run)/i, label: 'urgency-exploit' },
 ];
 
 // Detect suspicious prompt injection patterns in external content
@@ -163,8 +163,9 @@ function detectSuspiciousPatterns(text) {
 // Sanitize content to prevent faking boundary markers (including Unicode fullwidth homoglyphs)
 function sanitizeBoundaryMarkers(text) {
     if (typeof text !== 'string') return text;
-    // Block literal marker attempts
+    // Block literal marker attempts (both opening and closing)
     text = text.replace(/<<<EXTERNAL/g, '< < <EXTERNAL');
+    text = text.replace(/<<<END_EXTERNAL/g, '< < <END_EXTERNAL');
     text = text.replace(/END_EXTERNAL>>>/g, 'END_EXTERNAL> > >');
     // Block fullwidth Unicode homoglyphs for < and >
     text = text.replace(/\uFF1C/g, '<').replace(/\uFF1E/g, '>');
@@ -200,9 +201,12 @@ function wrapSearchResults(result, provider) {
     if (typeof result.answer === 'string') {
         result.answer = wrapExternalContent(result.answer, src);
     }
-    // Wrap result descriptions/snippets
+    // Wrap result titles, descriptions, and snippets
     if (Array.isArray(result.results)) {
         for (const r of result.results) {
+            if (typeof r.title === 'string') {
+                r.title = wrapExternalContent(r.title, src);
+            }
             if (typeof r.description === 'string') {
                 r.description = wrapExternalContent(r.description, src);
             }
@@ -2708,8 +2712,9 @@ async function executeTool(name, input, chatId) {
                 if (result.results && result.results.length === 0 && result.message && provider === 'duckduckgo') {
                     throw new Error(result.message);
                 }
-                cacheSet(cacheKey, result);
-                return wrapSearchResults(result, provider);
+                const wrappedResult = wrapSearchResults(result, provider);
+                cacheSet(cacheKey, wrappedResult);
+                return wrappedResult;
             } catch (e) {
                 // Fallback chain: perplexity → brave → ddg → ddg-lite, brave → ddg → ddg-lite, ddg → ddg-lite
                 log(`[WebSearch] ${provider} failed (${e.message}), trying fallback`);
@@ -2738,10 +2743,11 @@ async function executeTool(name, input, chatId) {
                         const fbCacheKey = fb === 'brave'
                             ? `search:brave:${input.query}:${safeCount}:${safeFreshness}`
                             : `search:${fb}:${input.query}:${safeCount}`;
-                        cacheSet(fbCacheKey, fallback);
+                        const wrappedFallback = wrapSearchResults(fallback, fb);
+                        cacheSet(fbCacheKey, wrappedFallback);
                         // Also cache under original key so subsequent queries don't re-hit the failing provider
-                        cacheSet(cacheKey, fallback);
-                        return wrapSearchResults(fallback, fb);
+                        cacheSet(cacheKey, wrappedFallback);
+                        return wrappedFallback;
                     } catch (fbErr) {
                         log(`[WebSearch] ${fb} fallback also failed: ${fbErr.message}`);
                     }
@@ -2914,7 +2920,8 @@ async function executeTool(name, input, chatId) {
             // unless the user explicitly asked for it (defense against prompt injection
             // creating persistent backdoor skills via external content instructions).
             const relPath = path.relative(workDir, filePath);
-            if (relPath.startsWith('skills' + path.sep) || relPath.startsWith('skills/')) {
+            const relPathLower = relPath.toLowerCase();
+            if (relPathLower.startsWith('skills' + path.sep) || relPathLower.startsWith('skills/')) {
                 // Check for suspicious content in the skill being written
                 const suspicious = detectSuspiciousPatterns(input.content || '');
                 if (suspicious.length > 0) {
@@ -2963,6 +2970,16 @@ async function executeTool(name, input, chatId) {
                     break;
                 default:
                     return { error: `Unknown operation: ${input.operation}` };
+            }
+
+            // Skill file edit protection (same as write tool)
+            const editRelPath = path.relative(workDir, filePath).toLowerCase();
+            if (editRelPath.startsWith('skills' + path.sep) || editRelPath.startsWith('skills/')) {
+                const suspicious = detectSuspiciousPatterns(content);
+                if (suspicious.length > 0) {
+                    log(`[Security] BLOCKED skill edit with suspicious patterns: ${suspicious.join(', ')} → ${editRelPath}`);
+                    return { error: 'Skill file edit blocked: suspicious content detected (' + suspicious.join(', ') + '). If you intended to edit this skill, please ask the user to confirm.' };
+                }
             }
 
             fs.writeFileSync(filePath, content, 'utf8');
