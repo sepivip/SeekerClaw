@@ -2,6 +2,7 @@
 
 > Quick-reference for all `[i]` tooltip texts shown on the Settings screen.
 > Source of truth: `app/.../ui/settings/SettingsHelpTexts.kt` — update both files together.
+> **Note:** Text column contains summaries. For multi-line tooltips (e.g. MODEL), see the Kotlin constant for exact formatting.
 
 ---
 
