@@ -60,6 +60,8 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontFamily
@@ -582,45 +584,44 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                     .padding(16.dp),
             ) {
                 if (walletAddress != null) {
-                // Connected state — address with copy button
-                val address = walletAddress!!
-                val hapticCopy = LocalHapticFeedback.current
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = "Address",
-                        fontFamily = FontFamily.Default,
-                        fontSize = 13.sp,
-                        color = SeekerClawColors.TextDim,
-                    )
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Connected state — address with copy button
+                    val address = walletAddress!!
+                    val hapticCopy = LocalHapticFeedback.current
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         Text(
-                            text = "${address.take(6)}\u2026${address.takeLast(4)}",
+                            text = "Address",
                             fontFamily = FontFamily.Default,
                             fontSize = 13.sp,
-                            color = SeekerClawColors.TextSecondary,
+                            color = SeekerClawColors.TextDim,
                         )
-                        TextButton(
-                            onClick = {
-                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                clipboard.setPrimaryClip(ClipData.newPlainText("wallet address", address))
-                                hapticCopy.performHapticFeedback(HapticFeedbackType.LongPress)
-                                Toast.makeText(context, "Address copied", Toast.LENGTH_SHORT).show()
-                            },
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                            modifier = Modifier.height(32.dp),
-                        ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                text = "Copy",
-                                fontSize = 12.sp,
-                                color = SeekerClawColors.TextInteractive,
+                                text = "${address.take(6)}\u2026${address.takeLast(4)}",
+                                fontFamily = FontFamily.Default,
+                                fontSize = 13.sp,
+                                color = SeekerClawColors.TextSecondary,
                             )
+                            TextButton(
+                                onClick = {
+                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                    clipboard.setPrimaryClip(ClipData.newPlainText("wallet address", address))
+                                    hapticCopy.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    Toast.makeText(context, "Address copied", Toast.LENGTH_SHORT).show()
+                                },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                            ) {
+                                Text(
+                                    text = "Copy",
+                                    fontSize = 12.sp,
+                                    color = SeekerClawColors.TextInteractive,
+                                )
+                            }
                         }
                     }
-                }
 
                 val label = ConfigManager.getWalletLabel(context)
                 if (label.isNotBlank()) {
@@ -1597,7 +1598,12 @@ private fun ConfigField(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = if (isRequired) Modifier.semantics(mergeDescendants = true) {
+                    contentDescription = "$label, required"
+                } else Modifier,
+            ) {
                 Text(
                     text = label,
                     fontFamily = FontFamily.Default,
