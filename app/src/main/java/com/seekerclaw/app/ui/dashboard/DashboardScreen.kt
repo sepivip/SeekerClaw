@@ -20,7 +20,11 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -38,6 +42,7 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -90,6 +95,11 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
     val hasCredential = remember(config) { config?.activeCredential?.isNotBlank() == true }
     val validationError = remember(config) { ConfigManager.runtimeValidationError(config) }
     val latestError = logs.lastOrNull { it.level == LogLevel.ERROR }?.message
+
+    // Banner dismiss states
+    var networkBannerDismissed by remember { mutableStateOf(false) }
+    var errorBannerDismissedType by remember { mutableStateOf<String?>(null) }
+    val configReady = validationError == null
 
     // Fetch API stats from bridge (BAT-32)
     var apiRequests by remember { mutableStateOf(0) }
@@ -243,13 +253,14 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
 
         Spacer(modifier = Modifier.height(if (!isOnline) 16.dp else 24.dp))
 
-        // Network offline banner
-        if (!isOnline) {
+        // Network offline banner (dismissible, resets when connectivity cycles)
+        if (isOnline) networkBannerDismissed = false
+        if (!isOnline && !networkBannerDismissed) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(SeekerClawColors.Warning.copy(alpha = 0.15f), shape)
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                    .padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Box(
@@ -265,13 +276,27 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Medium,
                     color = SeekerClawColors.Warning,
+                    modifier = Modifier.weight(1f),
                 )
+                IconButton(
+                    onClick = { networkBannerDismissed = true },
+                    modifier = Modifier.size(32.dp),
+                ) {
+                    Icon(
+                        Icons.Default.Close,
+                        contentDescription = "Dismiss",
+                        tint = SeekerClawColors.Warning,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
             }
             Spacer(modifier = Modifier.height(16.dp))
         }
 
-        // API health error banner (BAT-134)
-        if (apiUnhealthy) {
+        // API health error banner (BAT-134) — dismissible, resets on new error type
+        if (!apiUnhealthy) errorBannerDismissedType = null
+        val errorDismissed = apiUnhealthy && errorBannerDismissedType == health.lastErrorType
+        if (apiUnhealthy && !errorDismissed) {
             val bannerColor = if (health.apiStatus == "error") SeekerClawColors.Error
                 else SeekerClawColors.Warning
             val bannerText = when (health.lastErrorType) {
@@ -289,7 +314,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(bannerColor.copy(alpha = 0.12f), shape)
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                    .padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Box(
@@ -304,7 +329,19 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
                     fontFamily = FontFamily.Default,
                     fontSize = 12.sp,
                     color = bannerColor,
+                    modifier = Modifier.weight(1f),
                 )
+                IconButton(
+                    onClick = { errorBannerDismissedType = health.lastErrorType },
+                    modifier = Modifier.size(32.dp),
+                ) {
+                    Icon(
+                        Icons.Default.Close,
+                        contentDescription = "Dismiss",
+                        tint = bannerColor,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
             }
             Spacer(modifier = Modifier.height(16.dp))
         }
@@ -530,7 +567,8 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
 
         Spacer(modifier = Modifier.height(28.dp))
 
-        // Action button
+        // Action button — disabled when config incomplete (unless already running)
+        val deployEnabled = isRunning || configReady
         Button(
             onClick = {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -538,23 +576,11 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
                     Analytics.serviceStopped(uptime / 60000)
                     OpenClawService.stop(context)
                 } else {
-                    val cfg = ConfigManager.loadConfig(context)
-                    val startError = when (ConfigManager.runtimeValidationError(cfg)) {
-                        "setup_not_complete" -> "Setup is not complete yet."
-                        "missing_bot_token" -> "Telegram Bot Token is missing."
-                        "missing_credential" ->
-                            if (cfg?.authType == "setup_token") "Setup Token is missing."
-                            else "API Key is missing."
-                        else -> null
-                    }
-                    if (startError != null) {
-                        Toast.makeText(context, "$startError Open Settings to fix.", Toast.LENGTH_LONG).show()
-                        return@Button
-                    }
                     Analytics.serviceStarted(1)
                     OpenClawService.start(context)
                 }
             },
+            enabled = deployEnabled,
             modifier = Modifier
                 .fillMaxWidth()
                 .height(52.dp),
@@ -562,6 +588,8 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
             colors = ButtonDefaults.buttonColors(
                 containerColor = if (isRunning) SeekerClawColors.Primary else SeekerClawColors.ActionPrimary,
                 contentColor = Color.White,
+                disabledContainerColor = SeekerClawColors.BorderSubtle,
+                disabledContentColor = SeekerClawColors.TextDim,
             ),
         ) {
             Text(
@@ -569,6 +597,17 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
                 fontFamily = FontFamily.Default,
                 fontWeight = FontWeight.Bold,
                 fontSize = 15.sp,
+            )
+        }
+        if (!deployEnabled) {
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = "Complete setup to deploy",
+                fontFamily = FontFamily.Default,
+                fontSize = 12.sp,
+                color = SeekerClawColors.TextDim,
+                modifier = Modifier.fillMaxWidth(),
+                textAlign = TextAlign.Center,
             )
         }
 
