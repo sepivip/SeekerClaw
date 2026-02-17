@@ -3189,7 +3189,7 @@ async function executeTool(name, input, chatId) {
                 instructions: skill.instructions || content,
                 tools: skill.tools,
                 emoji: skill.emoji,
-                dir: skill.dir,
+                dir: isDirectorySkill ? skill.dir : null,
                 files: files
             };
         }
@@ -6254,6 +6254,8 @@ function listFilesRecursive(dir, maxDepth = 3, currentDepth = 0) {
         const entries = fs.readdirSync(dir, { withFileTypes: true });
         for (const entry of entries) {
             const fullPath = path.join(dir, entry.name);
+            // Skip symlinks for security
+            if (entry.isSymbolicLink()) continue;
             if (entry.isFile()) {
                 results.push(fullPath);
             } else if (entry.isDirectory() && !entry.name.startsWith('.')) {
