@@ -1906,6 +1906,9 @@ async function sendMessage(chatId, text, replyTo = null) {
             // Check if Telegram actually accepted the message
             if (result && result.ok) {
                 sent = true;
+                if (result.result && result.result.message_id) {
+                    recordSentMessage(chatId, result.result.message_id, chunk);
+                }
             }
         } catch (e) {
             // Formatting error or network error - will retry as plain text
@@ -1914,11 +1917,14 @@ async function sendMessage(chatId, text, replyTo = null) {
         // Only retry as plain text if the HTML attempt failed
         if (!sent) {
             try {
-                await telegram('sendMessage', {
+                const result = await telegram('sendMessage', {
                     chat_id: chatId,
                     text: chunk,
                     reply_to_message_id: replyTo,
                 });
+                if (result && result.result && result.result.message_id) {
+                    recordSentMessage(chatId, result.result.message_id, chunk);
+                }
             } catch (e) {
                 log(`Failed to send message: ${e.message}`);
             }
@@ -2531,14 +2537,25 @@ const TOOLS = [
     },
     {
         name: 'telegram_delete',
-        description: 'Delete a message from a Telegram chat. The bot can always delete its own messages. In groups, the bot can delete user messages only if it has admin permissions. Messages older than 48 hours cannot be deleted by non-admin bots.',
+        description: 'Delete a message from a Telegram chat. The bot can always delete its own messages. In groups, the bot can delete user messages only if it has admin permissions. Messages older than 48 hours cannot be deleted by non-admin bots. Check the "Recent Sent Messages" section in the system prompt for your own recent message IDs — never guess a message_id.',
         input_schema: {
             type: 'object',
             properties: {
-                message_id: { type: 'number', description: 'The message_id to delete' },
+                message_id: { type: 'number', description: 'The message_id to delete. Use IDs from Recent Sent Messages in system prompt, or from a prior telegram_send call.' },
                 chat_id: { type: 'number', description: 'The chat_id where the message is located' }
             },
             required: ['message_id', 'chat_id']
+        }
+    },
+    {
+        name: 'telegram_send',
+        description: 'Send a Telegram message and get back the message_id. Use this instead of responding directly when you need the message_id — for example, to delete or edit it later in the same turn. The reply is sent to the current chat automatically. Returns { ok, message_id, chat_id }.',
+        input_schema: {
+            type: 'object',
+            properties: {
+                text: { type: 'string', description: 'Message text to send (HTML formatting supported)' }
+            },
+            required: ['text']
         }
     },
     {
@@ -4460,6 +4477,35 @@ async function executeTool(name, input) {
             }
         }
 
+        case 'telegram_send': {
+            const text = input.text;
+            if (!text) return { error: 'text is required' };
+            if (!chatId) return { error: 'No active chat' };
+            try {
+                // Try HTML first, fall back to plain text
+                let result = await telegram('sendMessage', {
+                    chat_id: chatId,
+                    text: toTelegramHtml(text),
+                    parse_mode: 'HTML',
+                });
+                if (!result || !result.ok) {
+                    result = await telegram('sendMessage', {
+                        chat_id: chatId,
+                        text,
+                    });
+                }
+                if (result && result.ok && result.result && result.result.message_id) {
+                    const messageId = result.result.message_id;
+                    recordSentMessage(chatId, messageId, text);
+                    log(`telegram_send: sent message ${messageId}`);
+                    return { ok: true, message_id: messageId, chat_id: chatId };
+                }
+                return { ok: false, warning: 'Message sent but message_id not returned' };
+            } catch (e) {
+                return { error: e.message };
+            }
+        }
+
         case 'shell_exec': {
             const { exec } = require('child_process');
             const cmd = (input.command || '').trim();
@@ -5926,6 +5972,21 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     if (lastMsg && REACTION_GUIDANCE !== 'off') {
         dynamicLines.push(`Current message_id: ${lastMsg.messageId}, chat_id: ${lastMsg.chatId} (use with telegram_react or telegram_send_file)`);
     }
+    // Inject last 3 sent message IDs so Claude can delete its own messages reliably
+    const sentCache = chatId ? sentMessageCache.get(String(chatId)) : null;
+    if (sentCache && sentCache.size > 0) {
+        const now = Date.now();
+        const recent = [...sentCache.entries()]
+            .filter(([, e]) => now - e.timestamp <= SENT_CACHE_TTL)
+            .sort((a, b) => b[1].timestamp - a[1].timestamp)
+            .slice(0, 3);
+        if (recent.length > 0) {
+            dynamicLines.push(`Recent Sent Messages (use message_id with telegram_delete, never guess):`);
+            for (const [msgId, entry] of recent) {
+                dynamicLines.push(`  message_id ${msgId}: "${entry.preview}"`);
+            }
+        }
+    }
 
     // Active skills for this specific request (varies per message)
     if (matchedSkills.length > 0) {
@@ -6661,6 +6722,34 @@ let pollErrors = 0;
 // Track the last incoming user message per chat so the dynamic system prompt can
 // provide the correct message_id/chat_id for the telegram_react tool.
 const lastIncomingMessages = new Map(); // chatId -> { messageId, chatId }
+
+// Ring buffer of messages sent by the bot (last 20 per chat, 24h TTL).
+// Mirrors OpenClaw's sent-message-cache pattern — used so Claude can delete its own messages.
+const sentMessageCache = new Map(); // chatId -> Map<messageId, { timestamp, preview }>
+const SENT_CACHE_MAX = 20;
+const SENT_CACHE_TTL = 24 * 60 * 60 * 1000; // 24h (Telegram forbids deleting >48h old messages)
+
+function recordSentMessage(chatId, messageId, text) {
+    const key = String(chatId);
+    if (!sentMessageCache.has(key)) {
+        sentMessageCache.set(key, new Map());
+    }
+    const cache = sentMessageCache.get(key);
+    // Evict expired entries
+    const now = Date.now();
+    for (const [id, entry] of cache) {
+        if (now - entry.timestamp > SENT_CACHE_TTL) cache.delete(id);
+    }
+    // Evict oldest if over cap
+    if (cache.size >= SENT_CACHE_MAX) {
+        const oldest = [...cache.entries()].sort((a, b) => a[1].timestamp - b[1].timestamp)[0];
+        if (oldest) cache.delete(oldest[0]);
+    }
+    cache.set(messageId, {
+        timestamp: now,
+        preview: String(text || '').slice(0, 60).replace(/\n/g, ' '),
+    });
+}
 
 // Per-chat message queue: prevents concurrent handleMessage() for the same chat
 const chatQueues = new Map(); // chatId -> Promise chain
