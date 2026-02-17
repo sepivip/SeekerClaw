@@ -698,7 +698,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                     },
                     modifier = Modifier.fillMaxWidth(),
                     shape = shape,
-                    border = androidx.compose.foundation.BorderStroke(1.dp, androidx.compose.ui.graphics.Color(0xFF374151)),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, SeekerClawColors.BorderSubtle),
                     colors = ButtonDefaults.outlinedButtonColors(
                         contentColor = SeekerClawColors.TextPrimary,
                     ),
@@ -719,7 +719,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                     },
                     modifier = Modifier.fillMaxWidth(),
                     shape = shape,
-                    border = androidx.compose.foundation.BorderStroke(1.dp, androidx.compose.ui.graphics.Color(0xFF374151)),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, SeekerClawColors.BorderSubtle),
                     colors = ButtonDefaults.outlinedButtonColors(
                         contentColor = SeekerClawColors.TextPrimary,
                     ),
@@ -741,7 +741,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                 onClick = { showRunSetupDialog = true },
                 modifier = Modifier.fillMaxWidth(),
                 shape = shape,
-                border = androidx.compose.foundation.BorderStroke(1.dp, androidx.compose.ui.graphics.Color(0xFF374151)),
+                border = androidx.compose.foundation.BorderStroke(1.dp, SeekerClawColors.BorderSubtle),
                 colors = ButtonDefaults.outlinedButtonColors(
                     contentColor = SeekerClawColors.TextPrimary,
                 ),
@@ -784,7 +784,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                     shape = shape,
                     border = BorderStroke(1.dp, SeekerClawColors.Error),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = androidx.compose.ui.graphics.Color(0xFF4A0000),
+                        containerColor = SeekerClawColors.ActionDanger,
                         contentColor = SeekerClawColors.ActionDangerText,
                     ),
                 ) {
@@ -1647,7 +1647,7 @@ private fun SettingRow(
                 checkedThumbColor = androidx.compose.ui.graphics.Color.White,
                 checkedTrackColor = SeekerClawColors.ActionPrimary,
                 uncheckedThumbColor = androidx.compose.ui.graphics.Color.White,
-                uncheckedTrackColor = androidx.compose.ui.graphics.Color(0xFF374151),
+                uncheckedTrackColor = SeekerClawColors.BorderSubtle,
                 uncheckedBorderColor = androidx.compose.ui.graphics.Color.Transparent,
             ),
         )
@@ -1726,7 +1726,7 @@ private fun PermissionRow(
                 checkedThumbColor = androidx.compose.ui.graphics.Color.White,
                 checkedTrackColor = SeekerClawColors.ActionPrimary,
                 uncheckedThumbColor = androidx.compose.ui.graphics.Color.White,
-                uncheckedTrackColor = androidx.compose.ui.graphics.Color(0xFF374151),
+                uncheckedTrackColor = SeekerClawColors.BorderSubtle,
                 uncheckedBorderColor = androidx.compose.ui.graphics.Color.Transparent,
             ),
         )

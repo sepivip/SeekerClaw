@@ -60,6 +60,9 @@ data class ThemeColors(
     val scanline: Color,
     val dotMatrix: Color,
 
+    // Borders (opaque variant for switch tracks, button borders)
+    val borderSubtle: Color,
+
     // Shape style
     val cornerRadius: Dp,
     val useDotMatrix: Boolean,
@@ -93,6 +96,8 @@ val DarkOpsThemeColors = ThemeColors(
     textSecondary = Color(0xFF9CA3AF), // Tailwind gray-400
     textDim = Color(0xFF9CA3AF),       // Tailwind gray-400 (WCAG AA ~5.5:1)
     textInteractive = Color(0xB3FFFFFF), // 70% white — Edit labels
+
+    borderSubtle = Color(0xFF374151), // Tailwind gray-700 — switch tracks, button borders
 
     scanline = Color(0x00000000),
     dotMatrix = Color(0x00000000),
@@ -132,6 +137,8 @@ object SeekerClawColors {
     val TextSecondary: Color get() = DarkOpsThemeColors.textSecondary
     val TextDim: Color get() = DarkOpsThemeColors.textDim
     val TextInteractive: Color get() = DarkOpsThemeColors.textInteractive
+
+    val BorderSubtle: Color get() = DarkOpsThemeColors.borderSubtle
 
     val Scanline: Color get() = DarkOpsThemeColors.scanline
     val DotMatrix: Color get() = DarkOpsThemeColors.dotMatrix

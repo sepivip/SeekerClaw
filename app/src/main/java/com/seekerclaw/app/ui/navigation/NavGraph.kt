@@ -103,7 +103,7 @@ fun SeekerClawNavHost() {
                 Column {
                     HorizontalDivider(
                         thickness = 1.dp,
-                        color = Color(0x80374151),
+                        color = SeekerClawColors.CardBorder,
                     )
                     NavigationBar(
                         containerColor = SeekerClawColors.Background,
