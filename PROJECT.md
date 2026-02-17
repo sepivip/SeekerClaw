@@ -42,7 +42,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 
 ### AI Agent Core
 - **Claude integration** — Sonnet 4.5 (default), Opus 4.6, Haiku 4.5 selectable. Prompt caching, retry with backoff, rate-limit throttling, user-friendly error messages. OAuth/setup token support for Claude Pro/Max users.
-- **Telegram bot** — HTML formatting (no markdown headers), native blockquotes, bidirectional reactions, file download with vision, file upload (telegram_send_file tool), long message chunking, quoted replies via `[[reply_to_current]]`, emoji rendering fixed, companion-tone message templates (TEMPLATES.md), context-aware `/start`
+- **Telegram bot** — HTML formatting (no markdown headers), native blockquotes, bidirectional reactions, file download with vision, file upload (telegram_send_file tool), long message chunking, quoted replies via `[[reply_to_current]]`, emoji rendering fixed, companion-tone message templates (TEMPLATES.md), context-aware `/start`, sent message ID tracking (ring buffer, 24h TTL) + `telegram_send` tool for same-turn delete flows
 - **SILENT_REPLY protocol** — Agent silently drops messages when it has nothing useful to say
 - **Ephemeral session awareness** — Agent knows context resets on restart
 - **PLATFORM.md auto-generation** — Device state (model, RAM, storage, battery, permissions, wallet) written on every service start
@@ -231,6 +231,7 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Date | Feature | PR |
 |------|---------|-----|
+| 2026-02-17 | Sent message ID tracking + telegram_send tool for reliable deletion | #90 (BAT-111) |
 | 2026-02-17 | Full Jupiter API integration — 9 tools (limit orders, DCA, token search/security/holdings) | #89 (BAT-109) |
 | 2026-02-17 | Unify Settings screen green colors | #88 (BAT-108) |
 | 2026-02-17 | Jupiter API key support in Settings (Wallet section) | #86 (BAT-107) |
