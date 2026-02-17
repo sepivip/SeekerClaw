@@ -279,7 +279,7 @@ function formatConfirmationMessage(toolName, input) {
             details = `\u{1F4CA} <b>Create Trigger Order</b>\n  Sell: ${esc(input.inputAmount)} ${esc(input.inputToken)}\n  For: ${esc(input.outputToken)}\n  Trigger price: ${esc(input.triggerPrice)}`;
             break;
         case 'jupiter_dca_create':
-            details = `\u{1F504} <b>Create DCA Order</b>\n  ${esc(input.amountPerCycle)} ${esc(input.inputToken)} \u{2192} ${esc(input.outputToken)}\n  Every: ${esc(input.cycleInterval)}\n  Cycles: ${input.totalCycles != null ? esc(String(input.totalCycles)) : 'Unlimited'}`;
+            details = `\u{1F504} <b>Create DCA Order</b>\n  ${esc(input.amountPerCycle)} ${esc(input.inputToken)} \u{2192} ${esc(input.outputToken)}\n  Every: ${esc(input.cycleInterval)}\n  Cycles: ${input.totalCycles != null ? esc(String(input.totalCycles)) : '30 (default)'}\n  Total deposit: ${esc(input.amountPerCycle * (input.totalCycles || 30))} ${esc(input.inputToken)}`;
             break;
         default:
             details = `<b>${esc(toolName)}</b>`;
@@ -3981,7 +3981,16 @@ async function executeTool(name, input, chatId) {
                     const makingLamports = parseInputAmountToLamports(input.inputAmount, inputToken.decimals);
                     const makingBig = BigInt(makingLamports);
                     // Convert triggerPrice to a 12-decimal-place integer via string parsing (no FP math)
-                    const priceStr = typeof input.triggerPrice === 'string' ? input.triggerPrice : input.triggerPrice.toFixed(12);
+                    let priceStr;
+                    if (typeof input.triggerPrice === 'string') {
+                        priceStr = input.triggerPrice;
+                    } else {
+                        const numStr = input.triggerPrice.toString();
+                        if (numStr.includes('e') || numStr.includes('E')) {
+                            return { error: 'Invalid trigger price', details: 'triggerPrice must not use exponential notation; pass a decimal string for high-precision values' };
+                        }
+                        priceStr = numStr;
+                    }
                     const priceScaled = BigInt(parseInputAmountToLamports(priceStr, 12));
                     const outputScale = BigInt(10) ** BigInt(outputToken.decimals);
                     const inputScale = BigInt(10) ** BigInt(inputToken.decimals);
@@ -4077,7 +4086,7 @@ async function executeTool(name, input, chatId) {
 
                 return {
                     success: true,
-                    orderId: data.order,
+                    orderId: execResult.order || execResult.orderId || data.order || null,
                     signature: execResult.signature,
                     inputToken: `${inputToken.symbol} (${inputToken.address})`,
                     outputToken: `${outputToken.symbol} (${outputToken.address})`,
@@ -4313,16 +4322,13 @@ async function executeTool(name, input, chatId) {
                 }
 
                 // numberOfOrders: required by API (no "unlimited" option)
-                let numberOfOrders = 1;
+                let numberOfOrders = 30; // Default when not specified
                 if (input.totalCycles != null) {
                     const tc = Number(input.totalCycles);
                     if (!Number.isFinite(tc) || tc <= 0 || !Number.isInteger(tc)) {
                         return { error: 'Invalid totalCycles', details: `Must be a positive integer; received "${input.totalCycles}".` };
                     }
                     numberOfOrders = tc;
-                } else {
-                    // Default: 30 cycles when not specified
-                    numberOfOrders = 30;
                 }
 
                 // 4. Compute total inAmount = amountPerCycle * numberOfOrders
