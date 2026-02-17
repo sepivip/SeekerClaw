@@ -7055,6 +7055,15 @@ async function claudeApiCall(body, chatId) {
 
     const startTime = Date.now();
     const MAX_RETRIES = 3; // 1 initial + up to 3 retries = 4 total attempts max
+
+    // Keep Telegram "typing..." indicator alive during API call (expires after 5s).
+    // Fire immediately (covers gap on 2nd+ API calls in tool-use loop), then every 4s.
+    let typingInterval = null;
+    if (chatId) {
+        sendTyping(chatId);
+        typingInterval = setInterval(() => sendTyping(chatId), 4000);
+    }
+
     try {
         // Setup tokens (OAuth) use Bearer auth; regular API keys use x-api-key
         const authHeaders = AUTH_TYPE === 'setup_token'
@@ -7171,6 +7180,7 @@ async function claudeApiCall(body, chatId) {
 
         return res;
     } finally {
+        if (typingInterval) clearInterval(typingInterval);
         apiCallInFlight = null;
         resolve();
     }
