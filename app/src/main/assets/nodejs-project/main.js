@@ -3975,17 +3975,17 @@ async function executeTool(name, input, chatId) {
                     return { error: 'Invalid trigger price', details: 'triggerPrice must be a positive finite number' };
                 }
                 // takingAmount = inputAmount (human) * triggerPrice, converted to output token raw units
-                // Use BigInt math to avoid floating-point precision issues and scientific notation
+                // Use parseInputAmountToLamports + BigInt to avoid all floating-point precision issues
                 let takingAmount;
                 try {
                     const makingLamports = parseInputAmountToLamports(input.inputAmount, inputToken.decimals);
                     const makingBig = BigInt(makingLamports);
-                    // Scale triggerPrice to integer: multiply by 10^outputDecimals, divide by 10^inputDecimals
-                    // takingAmount = makingAmount * triggerPrice * 10^outputDecimals / 10^inputDecimals
-                    const priceScaled = BigInt(Math.round(triggerPriceNum * (10 ** 12))); // 12 decimal precision
+                    // Convert triggerPrice to a 12-decimal-place integer via string parsing (no FP math)
+                    const priceStr = typeof input.triggerPrice === 'string' ? input.triggerPrice : input.triggerPrice.toFixed(12);
+                    const priceScaled = BigInt(parseInputAmountToLamports(priceStr, 12));
                     const outputScale = BigInt(10) ** BigInt(outputToken.decimals);
                     const inputScale = BigInt(10) ** BigInt(inputToken.decimals);
-                    const precisionScale = BigInt(10 ** 12);
+                    const precisionScale = BigInt(10) ** BigInt(12);
                     takingAmount = ((makingBig * priceScaled * outputScale) / (inputScale * precisionScale)).toString();
                     if (takingAmount === '0') return { error: 'Calculated takingAmount is zero — check triggerPrice and inputAmount' };
                 } catch (e) {
@@ -4042,9 +4042,9 @@ async function executeTool(name, input, chatId) {
                 if (!data.transaction) return { error: 'Jupiter did not return a transaction' };
                 if (!data.requestId) return { error: 'Jupiter did not return a requestId' };
 
-                // 7. Verify transaction (security — same as solana_swap)
+                // 7. Verify transaction (security — user is fee payer for trigger orders)
                 try {
-                    const verification = verifySwapTransaction(data.transaction, walletAddress, { skipPayerCheck: true });
+                    const verification = verifySwapTransaction(data.transaction, walletAddress);
                     if (!verification.valid) {
                         log(`[Jupiter Trigger] Tx verification FAILED: ${verification.error}`);
                         return { error: `Transaction rejected: ${verification.error}` };
@@ -4220,9 +4220,9 @@ async function executeTool(name, input, chatId) {
                 if (!data.transaction) return { error: 'Jupiter did not return a transaction' };
                 if (!data.requestId) return { error: 'Jupiter did not return a requestId' };
 
-                // 4. Verify transaction
+                // 4. Verify transaction (user is fee payer for trigger cancels)
                 try {
-                    const verification = verifySwapTransaction(data.transaction, walletAddress, { skipPayerCheck: true });
+                    const verification = verifySwapTransaction(data.transaction, walletAddress);
                     if (!verification.valid) return { error: `Transaction rejected: ${verification.error}` };
                 } catch (e) {
                     return { error: `Could not verify transaction: ${e.message}` };
@@ -4370,9 +4370,9 @@ async function executeTool(name, input, chatId) {
                 if (!data.transaction) return { error: 'Jupiter did not return a transaction' };
                 if (!data.requestId) return { error: 'Jupiter did not return a requestId' };
 
-                // 6. Verify transaction
+                // 6. Verify transaction (user is fee payer for DCA orders)
                 try {
-                    const verification = verifySwapTransaction(data.transaction, walletAddress, { skipPayerCheck: true });
+                    const verification = verifySwapTransaction(data.transaction, walletAddress);
                     if (!verification.valid) {
                         log(`[Jupiter DCA] Tx verification FAILED: ${verification.error}`);
                         return { error: `Transaction rejected: ${verification.error}` };
@@ -4560,9 +4560,9 @@ async function executeTool(name, input, chatId) {
                 if (!data.transaction) return { error: 'Jupiter did not return a transaction' };
                 if (!data.requestId) return { error: 'Jupiter did not return a requestId' };
 
-                // 4. Verify transaction
+                // 4. Verify transaction (user is fee payer for DCA cancels)
                 try {
-                    const verification = verifySwapTransaction(data.transaction, walletAddress, { skipPayerCheck: true });
+                    const verification = verifySwapTransaction(data.transaction, walletAddress);
                     if (!verification.valid) return { error: `Transaction rejected: ${verification.error}` };
                 } catch (e) {
                     return { error: `Could not verify transaction: ${e.message}` };
