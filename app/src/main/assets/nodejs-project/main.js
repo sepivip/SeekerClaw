@@ -7135,9 +7135,11 @@ async function poll() {
                         const msgChatId = update.message.chat.id;
                         const pending = pendingConfirmations.get(msgChatId);
                         const msgText = (update.message.text || '').trim();
-                        if (pending && msgText) {
-                            // Only consume text messages as confirmation replies
-                            // (photos, stickers, etc. are ignored and enqueued normally)
+                        const isPlainText = msgText && !update.message.photo && !update.message.video
+                            && !update.message.document && !update.message.sticker && !update.message.voice;
+                        if (pending && isPlainText) {
+                            // Only consume pure text messages as confirmation replies
+                            // (photos with captions, stickers, etc. are enqueued normally)
                             const confirmed = msgText.toUpperCase() === 'YES';
                             log(`[Confirm] User replied "${msgText}" for ${pending.toolName} → ${confirmed ? 'APPROVED' : 'REJECTED'}`);
                             pending.resolve(confirmed);
