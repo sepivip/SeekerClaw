@@ -49,7 +49,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import android.widget.Toast
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.config.modelDisplayName
 import com.seekerclaw.app.service.OpenClawService
@@ -98,7 +97,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
 
     // Banner dismiss states
     var networkBannerDismissed by remember { mutableStateOf(false) }
-    var errorBannerDismissedType by remember { mutableStateOf<String?>(null) }
+    var errorBannerDismissedKey by remember { mutableStateOf<String?>(null) }
     val configReady = validationError == null
 
     // Fetch API stats from bridge (BAT-32)
@@ -180,6 +179,10 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
     val apiUnhealthy = status == ServiceStatus.RUNNING &&
         health.apiStatus != "healthy" && health.apiStatus != "unknown"
 
+    // Reset dismiss states via side effects (not during composition)
+    LaunchedEffect(isOnline) { if (isOnline) networkBannerDismissed = false }
+    LaunchedEffect(apiUnhealthy) { if (!apiUnhealthy) errorBannerDismissedKey = null }
+
     val statusColor = when (status) {
         ServiceStatus.RUNNING -> when (health.apiStatus) {
             "degraded", "stale" -> SeekerClawColors.Warning
@@ -253,8 +256,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
 
         Spacer(modifier = Modifier.height(if (!isOnline) 16.dp else 24.dp))
 
-        // Network offline banner (dismissible, resets when connectivity cycles)
-        if (isOnline) networkBannerDismissed = false
+        // Network offline banner (dismissible, resets via LaunchedEffect when online)
         if (!isOnline && !networkBannerDismissed) {
             Row(
                 modifier = Modifier
@@ -280,11 +282,10 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
                 )
                 IconButton(
                     onClick = { networkBannerDismissed = true },
-                    modifier = Modifier.size(32.dp),
                 ) {
                     Icon(
                         Icons.Default.Close,
-                        contentDescription = "Dismiss",
+                        contentDescription = "Dismiss network alert",
                         tint = SeekerClawColors.Warning,
                         modifier = Modifier.size(16.dp),
                     )
@@ -293,9 +294,9 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
             Spacer(modifier = Modifier.height(16.dp))
         }
 
-        // API health error banner (BAT-134) — dismissible, resets on new error type
-        if (!apiUnhealthy) errorBannerDismissedType = null
-        val errorDismissed = apiUnhealthy && errorBannerDismissedType == health.lastErrorType
+        // API health error banner (BAT-134) — dismissible, resets via LaunchedEffect
+        val errorBannerKey = "${health.apiStatus}:${health.lastErrorType}"
+        val errorDismissed = apiUnhealthy && errorBannerDismissedKey == errorBannerKey
         if (apiUnhealthy && !errorDismissed) {
             val bannerColor = if (health.apiStatus == "error") SeekerClawColors.Error
                 else SeekerClawColors.Warning
@@ -332,12 +333,11 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
                     modifier = Modifier.weight(1f),
                 )
                 IconButton(
-                    onClick = { errorBannerDismissedType = health.lastErrorType },
-                    modifier = Modifier.size(32.dp),
+                    onClick = { errorBannerDismissedKey = errorBannerKey },
                 ) {
                     Icon(
                         Icons.Default.Close,
-                        contentDescription = "Dismiss",
+                        contentDescription = "Dismiss error alert",
                         tint = bannerColor,
                         modifier = Modifier.size(16.dp),
                     )
