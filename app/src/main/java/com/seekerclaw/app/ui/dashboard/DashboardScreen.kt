@@ -148,6 +148,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
     val isRunning = status == ServiceStatus.RUNNING || status == ServiceStatus.STARTING
 
     // Pulse animation for status dot — runs when RUNNING and not in error state
+    // Note: Compose's InfiniteTransition already respects ANIMATOR_DURATION_SCALE
     val shouldPulse = status == ServiceStatus.RUNNING &&
         health.apiStatus != "error" && health.apiStatus != "stale"
     val pulseAlpha = if (shouldPulse) {

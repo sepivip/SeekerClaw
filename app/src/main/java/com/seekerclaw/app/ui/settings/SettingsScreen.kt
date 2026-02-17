@@ -790,7 +790,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                 ) {
                     Icon(
                         Icons.Default.Warning,
-                        contentDescription = null,
+                        contentDescription = "Warning",
                         modifier = Modifier.size(16.dp),
                         tint = SeekerClawColors.ActionDangerText,
                     )

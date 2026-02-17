@@ -276,7 +276,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             ) {
                 Image(
                     painter = painterResource(R.drawable.ic_seekerclaw_logo_horizontal),
-                    contentDescription = null,
+                    contentDescription = "SeekerClaw logo",
                     modifier = Modifier.height(36.dp),
                 )
                 Text(
@@ -514,7 +514,7 @@ private fun WelcomeStep(
             } else {
                 Icon(
                     Icons.Default.QrCodeScanner,
-                    contentDescription = null,
+                    contentDescription = "QR code",
                     modifier = Modifier.size(20.dp),
                 )
                 Spacer(modifier = Modifier.width(8.dp))
@@ -564,7 +564,7 @@ private fun WelcomeStep(
         ) {
             Icon(
                 @Suppress("DEPRECATION") Icons.Default.HelpOutline,
-                contentDescription = null,
+                contentDescription = "Help",
                 tint = SeekerClawColors.TextDim,
                 modifier = Modifier.size(16.dp),
             )
@@ -611,7 +611,7 @@ private fun ClaudeApiStep(
                     val isSelected = authType == type
                     Button(
                         onClick = { onAuthTypeChange(type) },
-                        modifier = Modifier.weight(1f).height(42.dp),
+                        modifier = Modifier.weight(1f).height(48.dp),
                         shape = shape,
                         border = if (!isSelected) BorderStroke(1.dp, SeekerClawColors.CardBorder) else null,
                         colors = ButtonDefaults.buttonColors(
@@ -1020,7 +1020,7 @@ private fun OptionsStep(
                 } else {
                     Icon(
                         Icons.Default.PlayArrow,
-                        contentDescription = null,
+                        contentDescription = "Start",
                         modifier = Modifier.size(20.dp),
                     )
                     Spacer(modifier = Modifier.width(8.dp))
