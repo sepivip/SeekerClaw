@@ -4940,9 +4940,14 @@ async function executeTool(name, input, chatId) {
             // Sandboxed require: block dangerous modules and restrict fs access to sensitive files
             const BLOCKED_MODULES = new Set(['child_process', 'cluster', 'worker_threads', 'vm', 'v8', 'perf_hooks']);
             // Create a guarded fs proxy that blocks reads AND writes to sensitive files
-            const createGuardedFsProxy = (realModule, guardedMethods) => {
+            // promisesGuard: optional set of guarded methods for the .promises sub-property
+            const createGuardedFsProxy = (realModule, guardedMethods, promisesGuard) => {
                 return new Proxy(realModule, {
                     get(target, prop) {
+                        // Intercept fs.promises to return a guarded proxy too
+                        if (prop === 'promises' && promisesGuard && target[prop]) {
+                            return createGuardedFsProxy(target[prop], promisesGuard);
+                        }
                         const original = target[prop];
                         if (typeof original !== 'function') return original;
                         if (guardedMethods.has(prop)) {
@@ -4962,13 +4967,14 @@ async function executeTool(name, input, chatId) {
             const FS_GUARDED = new Set([
                 'readFileSync', 'readFile', 'createReadStream', 'openSync', 'open',
                 'writeFileSync', 'writeFile', 'appendFileSync', 'appendFile', 'createWriteStream',
+                'copyFileSync', 'copyFile', 'cpSync', 'cp',
             ]);
-            const FSP_GUARDED = new Set(['readFile', 'writeFile', 'appendFile', 'open']);
+            const FSP_GUARDED = new Set(['readFile', 'writeFile', 'appendFile', 'open', 'copyFile', 'cp']);
             const sandboxedRequire = (mod) => {
                 if (BLOCKED_MODULES.has(mod)) {
                     throw new Error(`Module "${mod}" is blocked in js_eval for security. Use shell_exec for command execution.`);
                 }
-                if (mod === 'fs') return createGuardedFsProxy(require('fs'), FS_GUARDED);
+                if (mod === 'fs') return createGuardedFsProxy(require('fs'), FS_GUARDED, FSP_GUARDED);
                 if (mod === 'fs/promises') return createGuardedFsProxy(require('fs/promises'), FSP_GUARDED);
                 return require(mod);
             };
@@ -5084,9 +5090,10 @@ async function executeTool(name, input, chatId) {
         }
 
         case 'delete': {
-            const PROTECTED_FILES = new Set([
-                'SOUL.md', 'MEMORY.md', 'IDENTITY.md', 'USER.md',
-                'HEARTBEAT.md', 'config.json', 'config.yaml', 'seekerclaw.db'
+            // Core identity files + secrets (uses shared SECRETS_BLOCKED for the latter)
+            const DELETE_PROTECTED = new Set([
+                'SOUL.md', 'MEMORY.md', 'IDENTITY.md', 'USER.md', 'HEARTBEAT.md',
+                ...SECRETS_BLOCKED,
             ]);
 
             if (!input.path) return { error: 'path is required' };
@@ -5096,7 +5103,7 @@ async function executeTool(name, input, chatId) {
             // Check against protected files (compare basename for top-level, full relative for nested)
             const relativePath = path.relative(workDir, filePath);
             const baseName = path.basename(filePath);
-            if (PROTECTED_FILES.has(relativePath) || PROTECTED_FILES.has(baseName)) {
+            if (DELETE_PROTECTED.has(relativePath) || DELETE_PROTECTED.has(baseName)) {
                 return { error: `Cannot delete protected file: ${baseName}` };
             }
 
