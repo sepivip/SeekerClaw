@@ -1,6 +1,6 @@
 # CLAUDE.md — SeekerClaw Project Guide
 
-> **Product spec:** See `MVP.md` | **Build instructions:** See `PROMPT.md` | **Background research:** See `RESEARCH.md` | **Source of truth:** See `PROJECT.md`
+> **Background research:** See `RESEARCH.md` | **Source of truth:** See `PROJECT.md`
 
 ## PROJECT.md — Source of Truth
 
@@ -95,8 +95,6 @@ seekerclaw/
 ├── build.gradle.kts                          # Root build file
 ├── settings.gradle.kts
 ├── CLAUDE.md
-├── PROMPT.md
-├── MVP.md
 └── RESEARCH.md
 ```
 
@@ -379,11 +377,8 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 
 ## Reference Documents
 
-- `PROMPT.md` — Full coding agent prompt with code snippets, implementation specs, and build priority
-- `MVP.md` — Complete MVP specification with features, testing plan, and success metrics
 - `RESEARCH.md` — Deep feasibility research on Node.js on Android, background services, Solana Mobile, competitive landscape
 - `OPENCLAW_TRACKING.md` — **Critical:** Version tracking, change detection, and update process
-- `PHASE3.md` — Phase 3 implementation plan for OpenClaw parity
 
 ---
 

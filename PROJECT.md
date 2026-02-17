@@ -203,14 +203,14 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Metric | Count |
 |--------|-------|
-| Total commits | ~147 |
-| PRs merged | 92+ |
+| Total commits | ~155 |
+| PRs merged | 94+ |
 | Tools | 54 (9 Jupiter tools added: limit orders, DCA, token search/security/holdings) |
 | Skills | 16 |
 | Android Bridge endpoints | 18+ |
 | Telegram commands | 7 |
-| Lines of JS (main.js) | ~7,200 |
-| Lines of Kotlin | ~9,700 |
+| Lines of JS (main.js) | ~7,900 |
+| Lines of Kotlin | ~10,600 |
 | SQL.js tables | 4 |
 | Themes | 1 (DarkOps only) |
 
@@ -236,6 +236,7 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Date | Feature | PR |
 |------|---------|-----|
+| 2026-02-17 | Extract settings info texts to centralized SettingsHelpTexts.kt constants | #97 (BAT-139) |
 | 2026-02-17 | Agent health dashboard — API error state detection, visual indicators (green/amber/red), error banners | #96 (BAT-134) |
 | 2026-02-17 | Fix 6 broken Jupiter tools — correct API fields, MWA signing, BigInt precision, query params | #95 (BAT-113) |
 | 2026-02-17 | Wallet & secrets hardening — ALT bypass fix, read blocklist, js_eval sandbox | #94 (BAT-115) |

@@ -220,7 +220,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
         // Header — two-tone logo
         Text(
             text = buildAnnotatedString {
-                withStyle(SpanStyle(color = Color.White, fontWeight = FontWeight.ExtraBold)) {
+                withStyle(SpanStyle(color = SeekerClawColors.TextPrimary, fontWeight = FontWeight.ExtraBold)) {
                     append("Seeker")
                 }
                 withStyle(SpanStyle(color = SeekerClawColors.Primary, fontWeight = FontWeight.ExtraBold)) {

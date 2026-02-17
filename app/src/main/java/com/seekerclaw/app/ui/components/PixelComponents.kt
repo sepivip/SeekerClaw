@@ -104,14 +104,14 @@ fun SetupStepIndicator(
                             text = "\u2713",
                             fontSize = 16.sp,
                             fontWeight = FontWeight.Bold,
-                            color = Color.White,
+                            color = SeekerClawColors.TextPrimary,
                         )
                     } else {
                         Text(
                             text = "${i + 1}",
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Bold,
-                            color = if (isCurrent) Color.White else SeekerClawColors.TextDim,
+                            color = if (isCurrent) SeekerClawColors.TextPrimary else SeekerClawColors.TextDim,
                         )
                     }
                 }

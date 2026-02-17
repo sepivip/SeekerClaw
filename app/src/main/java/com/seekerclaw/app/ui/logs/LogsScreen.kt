@@ -302,7 +302,7 @@ fun LogsScreen() {
                     checkedThumbColor = Color.White,
                     checkedTrackColor = SeekerClawColors.Primary,
                     uncheckedThumbColor = Color.White,
-                    uncheckedTrackColor = Color(0xFF374151),
+                    uncheckedTrackColor = SeekerClawColors.BorderSubtle,
                     uncheckedBorderColor = Color.Transparent,
                 ),
             )
@@ -413,7 +413,7 @@ private fun FilterChip(
         modifier = modifier,
         shape = shape,
         colors = ButtonDefaults.buttonColors(
-            containerColor = if (active) activeColor.copy(alpha = 0.2f) else Color(0xFF1A1A1A),
+            containerColor = if (active) activeColor.copy(alpha = 0.2f) else SeekerClawColors.Surface,
             contentColor = if (active) activeColor else SeekerClawColors.TextDim,
         ),
     ) {
