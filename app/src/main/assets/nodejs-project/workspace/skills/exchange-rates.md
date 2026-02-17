@@ -1,6 +1,7 @@
 ---
 name: exchange-rates
 description: "Get currency exchange rates and convert between currencies (free API)"
+version: "1.0.0"
 metadata:
   openclaw:
     emoji: "💱"

@@ -1,6 +1,7 @@
 ---
 name: device-status
 description: "Check battery level, storage space, and device status"
+version: "1.0.0"
 metadata:
   openclaw:
     emoji: "🔋"

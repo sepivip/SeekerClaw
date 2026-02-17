@@ -1,6 +1,7 @@
 ---
 name: movie-tv
 description: "Search movies and TV shows, get ratings, recommendations using TMDB (free API)"
+version: "1.0.0"
 metadata:
   openclaw:
     emoji: "🎬"

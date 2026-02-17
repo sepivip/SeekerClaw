@@ -1,6 +1,7 @@
 ---
 name: speak
 description: "Speak text out loud using device text-to-speech"
+version: "1.0.0"
 metadata:
   openclaw:
     emoji: "🔊"

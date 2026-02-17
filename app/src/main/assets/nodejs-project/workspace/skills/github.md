@@ -1,6 +1,7 @@
 ---
 name: github
 description: "Search repositories, view issues, check PRs, manage GitHub projects"
+version: "1.0.0"
 metadata:
   openclaw:
     emoji: "🐙"
