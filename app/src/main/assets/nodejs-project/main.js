@@ -2547,7 +2547,7 @@ const TOOLS = [
     },
     {
         name: 'solana_price',
-        description: 'Get the current USD price of one or more tokens. Use token symbols (SOL, USDC, BONK) or mint addresses.',
+        description: 'Get the current USD price of one or more tokens. Use token symbols (SOL, USDC, BONK) or mint addresses. Returns price, currency, and confidenceLevel (high/medium/low). Low confidence means unreliable pricing — warn the user and avoid using for swaps or DCA.',
         input_schema: {
             type: 'object',
             properties: {
@@ -2665,7 +2665,7 @@ const TOOLS = [
     },
     {
         name: 'jupiter_token_search',
-        description: 'Search for Solana tokens by name or symbol using Jupiter\'s comprehensive token database. Returns token symbol, name, mint address, decimals, price, market cap, liquidity, and verification status. Better than basic token lists for discovery.',
+        description: 'Search for Solana tokens by name or symbol using Jupiter\'s comprehensive token database. Returns token symbol, name, mint address, decimals, price, market cap, liquidity, verification status, organicScore (0-100, higher = more organic trading activity), and isSus (true if flagged suspicious by Jupiter audit). Warn the user about low organicScore or isSus tokens.',
         input_schema: {
             type: 'object',
             properties: {
@@ -2677,7 +2677,7 @@ const TOOLS = [
     },
     {
         name: 'jupiter_token_security',
-        description: 'Check token safety using Jupiter Shield. Scans for red flags: freeze authority enabled, mint authority active, and low liquidity. ALWAYS check before swapping unknown tokens. Requires Jupiter API key.',
+        description: 'Check token safety using Jupiter Shield + Tokens v2. Scans for red flags: freeze authority, mint authority, low liquidity, isSus (suspicious audit flag), and organicScore (trading activity legitimacy 0-100). ALWAYS check before swapping unknown tokens. Requires Jupiter API key.',
         input_schema: {
             type: 'object',
             properties: {
@@ -6441,11 +6441,11 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('For visual checks ("what do you see", "check my dog"), call android_camera_check.');
     lines.push('**Swap workflow:** Always use solana_quote first to show the user what they\'ll get, then solana_swap to execute. Never swap without confirming the quote with the user first.');
     lines.push('**Jupiter Advanced Features (requires API key):**');
-    lines.push('- **Limit Orders** (jupiter_trigger_create/list/cancel): Set buy/sell orders that execute when price hits target. Perfect for "buy SOL if it drops to $80" or "sell when it hits $100".');
-    lines.push('- **Stop-Loss** (jupiter_trigger_create with orderType=stop): Protect against losses. Auto-sells when price drops below threshold.');
-    lines.push('- **DCA Orders** (jupiter_dca_create/list/cancel): Dollar Cost Averaging — automatically buy tokens on a schedule (hourly/daily/weekly). Great for building positions over time.');
-    lines.push('- **Token Search** (jupiter_token_search): Find tokens by name/symbol with prices, market caps, and liquidity data. Better than basic token lists.');
-    lines.push('- **Security Check** (jupiter_token_security): Check token safety before swapping. Detects scams, rugs, honeypots, freeze authority, low liquidity. ALWAYS check unknown tokens.');
+    lines.push('- **Limit Orders** (jupiter_trigger_create/list/cancel): Set buy/sell orders that execute when price hits target. Perfect for "buy SOL if it drops to $80" or "sell when it hits $100". Token-2022 tokens NOT supported.');
+    lines.push('- **Stop-Loss** (jupiter_trigger_create with orderType=stop): Protect against losses. Auto-sells when price drops below threshold. Token-2022 tokens NOT supported.');
+    lines.push('- **DCA Orders** (jupiter_dca_create/list/cancel): Dollar Cost Averaging — automatically buy tokens on a schedule (hourly/daily/weekly). Great for building positions over time. Minimums: $100 total, $50 per order, at least 2 orders. Token-2022 tokens NOT supported.');
+    lines.push('- **Token Search** (jupiter_token_search): Find tokens by name/symbol with prices, market caps, liquidity, organicScore (trading legitimacy), and isSus (suspicious flag). Warn about low organicScore or isSus tokens.');
+    lines.push('- **Security Check** (jupiter_token_security): Check token safety via Jupiter Shield + Tokens v2. Detects freeze authority, mint authority, low liquidity, isSus, and organicScore. ALWAYS check unknown tokens.');
     lines.push('- **Holdings** (jupiter_wallet_holdings): View all tokens in a wallet with USD values and metadata.');
     lines.push('If user tries these features without API key: explain the feature, then guide them to get a free key at portal.jup.ag and add it in Settings > Configuration > Jupiter API Key.');
     lines.push('**Web search:** web_search works out of the box — DuckDuckGo is the zero-config default. If a Brave API key is configured, Brave is used automatically (better quality). DuckDuckGo and Brave return search results as {title, url, snippet}. Use provider=perplexity for complex questions — it returns a synthesized answer with citations.');
