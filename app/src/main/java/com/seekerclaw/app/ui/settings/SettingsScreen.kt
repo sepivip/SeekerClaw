@@ -2,6 +2,8 @@ package com.seekerclaw.app.ui.settings
 
 import android.Manifest
 import android.app.Activity
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -389,6 +391,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                         editValue = config?.anthropicApiKey ?: ""
                     },
                     info = SettingsHelpTexts.API_KEY,
+                    isRequired = config?.authType == "api_key",
                 )
                 ConfigField(
                     label = if (config?.authType == "setup_token") "Setup Token (active)" else "Setup Token",
@@ -399,6 +402,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                         editValue = config?.setupToken ?: ""
                     },
                     info = SettingsHelpTexts.SETUP_TOKEN,
+                    isRequired = config?.authType == "setup_token",
                 )
                 ConfigField(
                     label = "Bot Token",
@@ -409,6 +413,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                         editValue = config?.telegramBotToken ?: ""
                     },
                     info = SettingsHelpTexts.BOT_TOKEN,
+                    isRequired = true,
                 )
                 ConfigField(
                     label = "Owner ID",
@@ -576,8 +581,41 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                     .padding(16.dp),
             ) {
                 if (walletAddress != null) {
-                // Connected state
-                InfoRow("Address", "${walletAddress!!.take(6)}\u2026${walletAddress!!.takeLast(4)}")
+                // Connected state — address with copy button
+                val hapticCopy = LocalHapticFeedback.current
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "Address",
+                        fontFamily = FontFamily.Default,
+                        fontSize = 13.sp,
+                        color = SeekerClawColors.TextDim,
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = "${walletAddress!!.take(6)}\u2026${walletAddress!!.takeLast(4)}",
+                            fontFamily = FontFamily.Default,
+                            fontSize = 13.sp,
+                            color = SeekerClawColors.TextSecondary,
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Copy",
+                            fontFamily = FontFamily.Default,
+                            fontSize = 12.sp,
+                            color = SeekerClawColors.TextInteractive,
+                            modifier = Modifier.clickable {
+                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                clipboard.setPrimaryClip(ClipData.newPlainText("wallet address", walletAddress))
+                                hapticCopy.performHapticFeedback(HapticFeedbackType.LongPress)
+                                Toast.makeText(context, "Address copied", Toast.LENGTH_SHORT).show()
+                            },
+                        )
+                    }
+                }
 
                 val label = ConfigManager.getWalletLabel(context)
                 if (label.isNotBlank()) {
@@ -1539,6 +1577,7 @@ private fun ConfigField(
     onClick: (() -> Unit)? = null,
     showDivider: Boolean = true,
     info: String? = null,
+    isRequired: Boolean = false,
 ) {
     var showInfo by remember { mutableStateOf(false) }
 
@@ -1560,6 +1599,13 @@ private fun ConfigField(
                     fontSize = 12.sp,
                     color = SeekerClawColors.TextDim,
                 )
+                if (isRequired) {
+                    Text(
+                        text = " *",
+                        fontSize = 12.sp,
+                        color = SeekerClawColors.Error,
+                    )
+                }
                 if (info != null) {
                     IconButton(
                         onClick = { showInfo = true },
