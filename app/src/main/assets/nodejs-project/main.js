@@ -1482,9 +1482,22 @@ function findMatchingSkills(message) {
     const skills = loadSkills();
     const lowerMsg = message.toLowerCase();
 
-    return skills.filter(skill =>
-        skill.triggers.some(trigger => lowerMsg.includes(trigger))
-    );
+    const matched = [];
+    for (const skill of skills) {
+        if (matched.length >= 2) break;
+
+        const hasTrigger = skill.triggers.some(trigger => {
+            // Multi-word triggers: substring match is fine
+            if (trigger.includes(' ')) return lowerMsg.includes(trigger);
+            // Single-word triggers: require word boundary
+            const regex = new RegExp(`\\b${trigger.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+            return regex.test(message);
+        });
+
+        if (hasTrigger) matched.push(skill);
+    }
+
+    return matched;
 }
 
 function buildSkillsSection(skills) {
