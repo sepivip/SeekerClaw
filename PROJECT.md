@@ -124,6 +124,8 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 **Directory skills (OpenClaw format, seeded by ConfigManager.kt):** weather, research, briefing, reminders, notes, translate, calculator, summarize, timer, define, news, todo, bookmark, joke, quote, crypto-prices, movie-tv, github
 
 ### Security
+- **Prompt injection defense** — Content Trust Policy in system prompt, `<<<EXTERNAL_UNTRUSTED_CONTENT>>>` boundary markers on all web_fetch/web_search results, 10-pattern suspicious content detection, Unicode homoglyph sanitization, zero-width space normalization
+- **Skill file protection** — Writes/edits to `skills/` blocked when suspicious injection patterns detected in content
 - API key redaction in logs
 - Path traversal prevention (workspace sandboxing)
 - Shell command allowlist (no rm, kill, etc.)
@@ -198,8 +200,8 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Metric | Count |
 |--------|-------|
-| Total commits | ~105 |
-| PRs merged | 89+ |
+| Total commits | ~144 |
+| PRs merged | 90+ |
 | Tools | 54 (9 Jupiter tools added: limit orders, DCA, token search/security/holdings) |
 | Skills | 16 |
 | Android Bridge endpoints | 18+ |
@@ -231,6 +233,7 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Date | Feature | PR |
 |------|---------|-----|
+| 2026-02-17 | Prompt injection defense — content wrapping, trust policy, pattern detection, skill protection | #92 (BAT-112) |
 | 2026-02-17 | Contextual status messages for long-running tool calls (Layer 2 typing indicator) | #91 (BAT-110) |
 | 2026-02-17 | Sent message ID tracking + telegram_send tool for reliable deletion | #90 (BAT-111) |
 | 2026-02-17 | Full Jupiter API integration — 9 tools (limit orders, DCA, token search/security/holdings) | #89 (BAT-109) |
