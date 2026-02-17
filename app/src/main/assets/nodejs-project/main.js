@@ -257,7 +257,7 @@ const lastToolUseTime = new Map();      // toolName -> timestamp
 
 // Format a human-readable confirmation message for the user
 function formatConfirmationMessage(toolName, input) {
-    const esc = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').slice(0, 200);
     let details;
     switch (toolName) {
         case 'android_sms':
@@ -270,7 +270,7 @@ function formatConfirmationMessage(toolName, input) {
             details = `\u{1F4CA} <b>Create ${esc(input.orderType || 'limit')} Order</b>\n  Sell: ${esc(input.inputAmount)} ${esc(input.inputToken)}\n  For: ${esc(input.outputToken)}\n  Trigger price: ${esc(input.triggerPrice)}`;
             break;
         case 'jupiter_dca_create':
-            details = `\u{1F504} <b>Create DCA Order</b>\n  ${esc(input.amountPerCycle)} ${esc(input.inputToken)} \u{2192} ${esc(input.outputToken)}\n  Every: ${esc(input.cycleInterval)}\n  Cycles: ${input.totalCycles || 'Unlimited'}`;
+            details = `\u{1F504} <b>Create DCA Order</b>\n  ${esc(input.amountPerCycle)} ${esc(input.inputToken)} \u{2192} ${esc(input.outputToken)}\n  Every: ${esc(input.cycleInterval)}\n  Cycles: ${input.totalCycles != null ? esc(String(input.totalCycles)) : 'Unlimited'}`;
             break;
         default:
             details = `<b>${esc(toolName)}</b>`;
@@ -279,21 +279,16 @@ function formatConfirmationMessage(toolName, input) {
 }
 
 // Send confirmation message and wait for user reply (Promise-based)
-async function requestConfirmation(chatId, toolName, input) {
+function requestConfirmation(chatId, toolName, input) {
     const msg = formatConfirmationMessage(toolName, input);
-    await telegram('sendMessage', {
-        chat_id: chatId,
-        text: msg,
-        parse_mode: 'HTML',
-        disable_notification: false,
-    });
-    log(`[Confirm] Awaiting confirmation for ${toolName} in chat ${chatId}`);
     return new Promise((resolve) => {
         const timer = setTimeout(() => {
             pendingConfirmations.delete(chatId);
             log(`[Confirm] Timeout for ${toolName} in chat ${chatId}`);
             resolve(false);
         }, 60000);
+        // Register BEFORE sending to prevent race where fast reply arrives
+        // before pendingConfirmations is set (would be enqueued as normal message)
         pendingConfirmations.set(chatId, {
             resolve: (confirmed) => {
                 clearTimeout(timer);
@@ -301,6 +296,18 @@ async function requestConfirmation(chatId, toolName, input) {
             },
             timer,
             toolName,
+        });
+        log(`[Confirm] Awaiting confirmation for ${toolName} in chat ${chatId}`);
+        telegram('sendMessage', {
+            chat_id: chatId,
+            text: msg,
+            parse_mode: 'HTML',
+            disable_notification: false,
+        }).catch((err) => {
+            log(`[Confirm] Failed to send confirmation message: ${err.message}`);
+            pendingConfirmations.delete(chatId);
+            clearTimeout(timer);
+            resolve(false);
         });
     });
 }
