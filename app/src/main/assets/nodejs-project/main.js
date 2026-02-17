@@ -2553,7 +2553,7 @@ const TOOLS = [
         input_schema: {
             type: 'object',
             properties: {
-                text: { type: 'string', description: 'Message text to send (HTML formatting supported)' }
+                text: { type: 'string', description: 'Message text to send (Markdown formatting supported; converted to Telegram HTML). Max 4096 characters — for long responses use the default sendMessage().' }
             },
             required: ['text']
         }
