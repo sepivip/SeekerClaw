@@ -258,8 +258,9 @@ const lastToolUseTime = new Map();      // toolName -> timestamp
 // Format a human-readable confirmation message for the user
 function formatConfirmationMessage(toolName, input) {
     const esc = (s) => {
-        let v = String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        return v.length > 200 ? v.slice(0, 197) + '...' : v;
+        let v = String(s ?? '');
+        if (v.length > 200) v = v.slice(0, 197) + '...';
+        return v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     };
     let details;
     switch (toolName) {
@@ -312,9 +313,9 @@ function requestConfirmation(chatId, toolName, input) {
                 pendingConfirmations.delete(chatId);
                 clearTimeout(timer);
                 resolve(false);
-            } else if (result && result.result && result.result.message_id) {
-                recordSentMessage(chatId, result.result.message_id, msg);
             }
+            // Note: confirmation messages are NOT recorded in sentMessageCache — they are
+            // transient system UI, not user content that should appear in "Recent Sent Messages"
         }).catch((err) => {
             log(`[Confirm] Failed to send confirmation message: ${err.message}`);
             pendingConfirmations.delete(chatId);
@@ -7133,10 +7134,12 @@ async function poll() {
                         // Intercept confirmation replies before normal message handling
                         const msgChatId = update.message.chat.id;
                         const pending = pendingConfirmations.get(msgChatId);
-                        if (pending) {
-                            const replyText = (update.message.text || '').trim().toUpperCase();
-                            const confirmed = replyText === 'YES';
-                            log(`[Confirm] User replied "${replyText}" for ${pending.toolName} → ${confirmed ? 'APPROVED' : 'REJECTED'}`);
+                        const msgText = (update.message.text || '').trim();
+                        if (pending && msgText) {
+                            // Only consume text messages as confirmation replies
+                            // (photos, stickers, etc. are ignored and enqueued normally)
+                            const confirmed = msgText.toUpperCase() === 'YES';
+                            log(`[Confirm] User replied "${msgText}" for ${pending.toolName} → ${confirmed ? 'APPROVED' : 'REJECTED'}`);
                             pending.resolve(confirmed);
                             pendingConfirmations.delete(msgChatId);
                         } else {
