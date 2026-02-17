@@ -2571,7 +2571,7 @@ const TOOLS = [
     }
 ];
 
-async function executeTool(name, input) {
+async function executeTool(name, input, chatId) {
     log(`Executing tool: ${name}`);
 
     switch (name) {
@@ -4483,12 +4483,17 @@ async function executeTool(name, input) {
             if (!chatId) return { error: 'No active chat' };
             try {
                 // Try HTML first, fall back to plain text
-                let result = await telegram('sendMessage', {
-                    chat_id: chatId,
-                    text: toTelegramHtml(text),
-                    parse_mode: 'HTML',
-                });
-                if (!result || !result.ok) {
+                let result, htmlFailed = false;
+                try {
+                    result = await telegram('sendMessage', {
+                        chat_id: chatId,
+                        text: toTelegramHtml(text),
+                        parse_mode: 'HTML',
+                    });
+                } catch (e) {
+                    htmlFailed = true;
+                }
+                if (htmlFailed || !result || !result.ok) {
                     result = await telegram('sendMessage', {
                         chat_id: chatId,
                         text,
@@ -5975,9 +5980,9 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     // Inject last 3 sent message IDs so Claude can delete its own messages reliably
     const sentCache = chatId ? sentMessageCache.get(String(chatId)) : null;
     if (sentCache && sentCache.size > 0) {
-        const now = Date.now();
+        const nowMs = Date.now();
         const recent = [...sentCache.entries()]
-            .filter(([, e]) => now - e.timestamp <= SENT_CACHE_TTL)
+            .filter(([, e]) => nowMs - e.timestamp <= SENT_CACHE_TTL)
             .sort((a, b) => b[1].timestamp - a[1].timestamp)
             .slice(0, 3);
         if (recent.length > 0) {
@@ -6282,7 +6287,7 @@ async function chat(chatId, userMessage) {
         const toolResults = [];
         for (const toolUse of toolUses) {
             log(`Tool use: ${toolUse.name}`);
-            const result = await executeTool(toolUse.name, toolUse.input);
+            const result = await executeTool(toolUse.name, toolUse.input, chatId);
             toolResults.push({
                 type: 'tool_result',
                 tool_use_id: toolUse.id,
@@ -6740,10 +6745,17 @@ function recordSentMessage(chatId, messageId, text) {
     for (const [id, entry] of cache) {
         if (now - entry.timestamp > SENT_CACHE_TTL) cache.delete(id);
     }
-    // Evict oldest if over cap
+    // Evict oldest if over cap (O(n) linear scan — Map is always ≤ 20 entries)
     if (cache.size >= SENT_CACHE_MAX) {
-        const oldest = [...cache.entries()].sort((a, b) => a[1].timestamp - b[1].timestamp)[0];
-        if (oldest) cache.delete(oldest[0]);
+        let oldestId;
+        let oldestTimestamp = Infinity;
+        for (const [id, entry] of cache) {
+            if (entry.timestamp < oldestTimestamp) {
+                oldestTimestamp = entry.timestamp;
+                oldestId = id;
+            }
+        }
+        if (oldestId !== undefined) cache.delete(oldestId);
     }
     cache.set(messageId, {
         timestamp: now,
