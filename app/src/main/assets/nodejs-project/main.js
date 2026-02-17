@@ -2635,7 +2635,7 @@ const TOOLS = [
                 outputToken: { type: 'string', description: 'Token to buy — symbol (e.g., "SOL", "JUP") or mint address' },
                 amountPerCycle: { type: 'number', description: 'Amount of inputToken to spend per cycle (in human units)' },
                 cycleInterval: { type: 'string', enum: ['hourly', 'daily', 'weekly'], description: 'How often to execute the buy: "hourly", "daily", or "weekly"' },
-                totalCycles: { type: 'number', description: 'Total number of cycles to run (e.g., 30 for 30 days of daily buys). Optional, defaults to unlimited until cancelled.' }
+                totalCycles: { type: 'number', description: 'Total number of cycles to run (e.g., 30 for 30 days of daily buys). Optional, defaults to 30 cycles.' }
             },
             required: ['inputToken', 'outputToken', 'amountPerCycle', 'cycleInterval']
         }
@@ -3975,10 +3975,19 @@ async function executeTool(name, input, chatId) {
                     return { error: 'Invalid trigger price', details: 'triggerPrice must be a positive finite number' };
                 }
                 // takingAmount = inputAmount (human) * triggerPrice, converted to output token raw units
+                // Use BigInt math to avoid floating-point precision issues and scientific notation
                 let takingAmount;
                 try {
-                    const takingHuman = Number(input.inputAmount) * triggerPriceNum;
-                    takingAmount = parseInputAmountToLamports(takingHuman, outputToken.decimals);
+                    const makingLamports = parseInputAmountToLamports(input.inputAmount, inputToken.decimals);
+                    const makingBig = BigInt(makingLamports);
+                    // Scale triggerPrice to integer: multiply by 10^outputDecimals, divide by 10^inputDecimals
+                    // takingAmount = makingAmount * triggerPrice * 10^outputDecimals / 10^inputDecimals
+                    const priceScaled = BigInt(Math.round(triggerPriceNum * (10 ** 12))); // 12 decimal precision
+                    const outputScale = BigInt(10) ** BigInt(outputToken.decimals);
+                    const inputScale = BigInt(10) ** BigInt(inputToken.decimals);
+                    const precisionScale = BigInt(10 ** 12);
+                    takingAmount = ((makingBig * priceScaled * outputScale) / (inputScale * precisionScale)).toString();
+                    if (takingAmount === '0') return { error: 'Calculated takingAmount is zero — check triggerPrice and inputAmount' };
                 } catch (e) {
                     return { error: 'Invalid taking amount calculation', details: e.message };
                 }
@@ -4068,7 +4077,7 @@ async function executeTool(name, input, chatId) {
 
                 return {
                     success: true,
-                    order: data.order,
+                    orderId: data.order,
                     signature: execResult.signature,
                     inputToken: `${inputToken.symbol} (${inputToken.address})`,
                     outputToken: `${outputToken.symbol} (${outputToken.address})`,
@@ -4233,10 +4242,11 @@ async function executeTool(name, input, chatId) {
                 if (execResult.status === 'Failed') {
                     return { error: `Cancel failed: ${execResult.error || 'Transaction execution failed'}` };
                 }
+                if (!execResult.signature) return { error: 'Jupiter did not return a transaction signature' };
 
                 return {
                     success: true,
-                    order: input.orderId,
+                    orderId: input.orderId,
                     signature: execResult.signature,
                     status: 'cancelled',
                 };
@@ -4317,10 +4327,12 @@ async function executeTool(name, input, chatId) {
 
                 // 4. Compute total inAmount = amountPerCycle * numberOfOrders
                 // Jupiter API expects the TOTAL deposit, split across numberOfOrders
+                // Use BigInt math to avoid floating-point precision issues
                 let totalInAmount;
                 try {
-                    const totalHuman = Number(input.amountPerCycle) * numberOfOrders;
-                    totalInAmount = parseInputAmountToLamports(totalHuman, inputToken.decimals);
+                    const perCycleLamports = parseInputAmountToLamports(input.amountPerCycle, inputToken.decimals);
+                    const perCycleBig = BigInt(perCycleLamports);
+                    totalInAmount = (perCycleBig * BigInt(numberOfOrders)).toString();
                 } catch (e) {
                     return { error: 'Invalid amountPerCycle', details: e.message };
                 }
@@ -4393,7 +4405,7 @@ async function executeTool(name, input, chatId) {
 
                 return {
                     success: true,
-                    order: execResult.order || null,
+                    orderId: execResult.order || (execResult.orderId) || null,
                     signature: execResult.signature,
                     inputToken: `${inputToken.symbol} (${inputToken.address})`,
                     outputToken: `${outputToken.symbol} (${outputToken.address})`,
@@ -4570,10 +4582,11 @@ async function executeTool(name, input, chatId) {
                 if (execResult.status === 'Failed') {
                     return { error: `Cancel failed: ${execResult.error || 'Transaction execution failed'}` };
                 }
+                if (!execResult.signature) return { error: 'Jupiter did not return a transaction signature' };
 
                 return {
                     success: true,
-                    order: input.orderId,
+                    orderId: input.orderId,
                     signature: execResult.signature,
                     status: 'cancelled',
                 };
@@ -5888,6 +5901,10 @@ async function jupiterUltraExecute(signedTransaction, requestId) {
 
 // Jupiter Trigger API — execute signed transaction
 async function jupiterTriggerExecute(signedTransaction, requestId) {
+    if (!config.jupiterApiKey) {
+        throw new Error('Jupiter API key required. Get a free key at portal.jup.ag and add it in Settings > Configuration > Jupiter API Key');
+    }
+
     const res = await httpRequest({
         hostname: 'api.jup.ag',
         path: '/trigger/v1/execute',
@@ -5907,6 +5924,10 @@ async function jupiterTriggerExecute(signedTransaction, requestId) {
 
 // Jupiter Recurring API — execute signed transaction
 async function jupiterRecurringExecute(signedTransaction, requestId) {
+    if (!config.jupiterApiKey) {
+        throw new Error('Jupiter API key required. Get a free key at portal.jup.ag and add it in Settings > Configuration > Jupiter API Key');
+    }
+
     const res = await httpRequest({
         hostname: 'api.jup.ag',
         path: '/recurring/v1/execute',
