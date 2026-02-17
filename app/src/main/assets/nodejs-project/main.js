@@ -3002,8 +3002,14 @@ async function executeTool(name, input, chatId) {
         }
 
         case 'read': {
+            const READ_BLOCKED = new Set(['config.json', 'config.yaml', 'seekerclaw.db']);
             const filePath = safePath(input.path);
             if (!filePath) return { error: 'Access denied: path outside workspace' };
+            const readBasename = path.basename(filePath);
+            if (READ_BLOCKED.has(readBasename)) {
+                log(`[Security] BLOCKED read of sensitive file: ${readBasename}`);
+                return { error: `Reading ${readBasename} is blocked for security.` };
+            }
             if (!fs.existsSync(filePath)) {
                 return { error: `File not found: ${input.path}` };
             }
@@ -4918,11 +4924,55 @@ async function executeTool(name, input, chatId) {
                 group: () => {}, groupEnd: () => {}, groupCollapsed: () => {},
             };
 
-            // Sandboxed require: block child_process to prevent bypassing shell_exec allowlist
+            // Sandboxed require: block dangerous modules and restrict fs access to sensitive files
             const BLOCKED_MODULES = new Set(['child_process', 'cluster', 'worker_threads', 'vm', 'v8', 'perf_hooks']);
+            const FS_BLOCKED_FILES = new Set(['config.json', 'config.yaml', 'seekerclaw.db']);
+            const createRestrictedFs = () => {
+                const realFs = require('fs');
+                const guardedMethods = new Set(['readFileSync', 'readFile', 'createReadStream', 'openSync', 'open']);
+                return new Proxy(realFs, {
+                    get(target, prop) {
+                        const original = target[prop];
+                        if (typeof original !== 'function') return original;
+                        if (guardedMethods.has(prop)) {
+                            return function(...args) {
+                                const filePath = String(args[0]);
+                                const basename = path.basename(filePath);
+                                if (FS_BLOCKED_FILES.has(basename)) {
+                                    throw new Error(`Access to ${basename} is blocked for security.`);
+                                }
+                                return original.apply(target, args);
+                            };
+                        }
+                        return original.bind(target);
+                    }
+                });
+            };
             const sandboxedRequire = (mod) => {
                 if (BLOCKED_MODULES.has(mod)) {
                     throw new Error(`Module "${mod}" is blocked in js_eval for security. Use shell_exec for command execution.`);
+                }
+                if (mod === 'fs') return createRestrictedFs();
+                if (mod === 'fs/promises') {
+                    // Also restrict the promises API
+                    const realFsP = require('fs/promises');
+                    return new Proxy(realFsP, {
+                        get(target, prop) {
+                            const original = target[prop];
+                            if (typeof original !== 'function') return original;
+                            if (['readFile', 'open'].includes(prop)) {
+                                return function(...args) {
+                                    const filePath = String(args[0]);
+                                    const basename = path.basename(filePath);
+                                    if (FS_BLOCKED_FILES.has(basename)) {
+                                        throw new Error(`Access to ${basename} is blocked for security.`);
+                                    }
+                                    return original.apply(target, args);
+                                };
+                            }
+                            return original.bind(target);
+                        }
+                    });
                 }
                 return require(mod);
             };
@@ -4931,9 +4981,11 @@ async function executeTool(name, input, chatId) {
             try {
                 // AsyncFunction allows top-level await
                 const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
-                const fn = new AsyncFunction('console', 'require', '__dirname', '__filename', code);
+                // Shadow process/global/globalThis to prevent process.mainModule.require bypass
+                const safeProcess = { env: process.env, cwd: () => workDir, platform: process.platform, arch: process.arch };
+                const fn = new AsyncFunction('console', 'require', '__dirname', '__filename', 'process', 'global', 'globalThis', code);
 
-                const resultPromise = fn(mockConsole, sandboxedRequire, workDir, path.join(workDir, 'eval.js'));
+                const resultPromise = fn(mockConsole, sandboxedRequire, workDir, path.join(workDir, 'eval.js'), safeProcess, undefined, undefined);
                 const timeoutPromise = new Promise((_, rej) => {
                     timerId = setTimeout(() => rej(new Error(`Execution timed out after ${timeout}ms`)), timeout);
                 });
@@ -5624,11 +5676,18 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
     const untrustedPrograms = [];
     for (let i = 0; i < numInstructions.value; i++) {
         const programIdIdx = txBuf[offset]; offset++;
-        if (programIdIdx < accountKeys.length) {
-            const programId = accountKeys[programIdIdx];
-            if (!TRUSTED_PROGRAMS.has(programId)) {
-                untrustedPrograms.push(programId);
-            }
+        if (programIdIdx >= accountKeys.length) {
+            // Program referenced via Address Lookup Table — cannot verify identity.
+            // Reject for safety (Jupiter Ultra uses static keys anyway).
+            return {
+                valid: false,
+                error: `Instruction ${i} references program via Address Lookup Table (index ${programIdIdx}, ` +
+                       `only ${accountKeys.length} static keys). Cannot verify program identity. Transaction rejected for safety.`
+            };
+        }
+        const programId = accountKeys[programIdIdx];
+        if (!TRUSTED_PROGRAMS.has(programId)) {
+            untrustedPrograms.push(programId);
         }
         // Skip accounts
         const numAcctIdx = readCompactU16(txBuf, offset);
