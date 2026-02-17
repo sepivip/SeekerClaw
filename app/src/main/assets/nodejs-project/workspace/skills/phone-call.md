@@ -1,5 +1,6 @@
 ---
 name: phone-call
+version: "1.0.0"
 description: "Make phone calls to contacts or phone numbers"
 metadata:
   openclaw:

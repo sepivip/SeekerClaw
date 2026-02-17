@@ -1220,6 +1220,7 @@ function parseSkillFile(content, skillDir) {
         triggers: [],
         description: '',
         instructions: '',
+        version: '',
         tools: [],
         emoji: '',
         requires: { bins: [], env: [], config: [] },
@@ -1238,6 +1239,7 @@ function parseSkillFile(content, skillDir) {
             // Extract OpenClaw-style fields
             if (frontmatter.name) skill.name = frontmatter.name;
             if (frontmatter.description) skill.description = frontmatter.description;
+            if (frontmatter.version) skill.version = frontmatter.version;
             if (frontmatter.emoji) skill.emoji = frontmatter.emoji;
 
             // Handle metadata.openclaw.emoji
@@ -1317,6 +1319,20 @@ function parseSkillFile(content, skillDir) {
     return skill;
 }
 
+function validateSkillFormat(skill, filePath) {
+    const warnings = [];
+    if (!skill.name) warnings.push('missing "name"');
+    if (!skill.description) warnings.push('missing "description"');
+    if (!skill.version) warnings.push('missing "version" — add version field for auto-update support');
+    if (skill.triggers.length > 0 && skill.description) {
+        // Has legacy triggers — recommend removing them
+        warnings.push('has legacy "Trigger:" line — description-based matching preferred');
+    }
+    if (warnings.length > 0) {
+        log(`Skill format warning (${path.basename(filePath)}): ${warnings.join(', ')}`);
+    }
+}
+
 function loadSkills() {
     const skills = [];
 
@@ -1336,6 +1352,7 @@ function loadSkills() {
                         const content = fs.readFileSync(skillPath, 'utf8');
                         const skill = parseSkillFile(content, path.join(SKILLS_DIR, entry.name));
                         if (skill.name) {
+                            validateSkillFormat(skill, skillPath);
                             skill.filePath = skillPath;
                             skills.push(skill);
                             log(`Loaded skill: ${skill.name} (triggers: ${skill.triggers.join(', ')})`);
@@ -1351,6 +1368,7 @@ function loadSkills() {
                     const content = fs.readFileSync(filePath, 'utf8');
                     const skill = parseSkillFile(content, SKILLS_DIR);
                     if (skill.name) {
+                        validateSkillFormat(skill, filePath);
                         skill.filePath = filePath;
                         skills.push(skill);
                         log(`Loaded skill: ${skill.name} (triggers: ${skill.triggers.join(', ')})`);

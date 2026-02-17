@@ -1,5 +1,6 @@
 ---
 name: movie-tv
+version: "1.0.0"
 description: "Search movies and TV shows, get ratings, recommendations using TMDB (free API)"
 metadata:
   openclaw:

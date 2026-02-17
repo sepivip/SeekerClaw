@@ -1,5 +1,6 @@
 ---
 name: solana-dapp
+version: "1.0.0"
 description: "Discover, launch, and interact with Solana dApps on the Seeker device via the dApp Store and MWA"
 metadata:
   openclaw:

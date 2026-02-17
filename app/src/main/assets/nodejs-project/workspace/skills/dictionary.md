@@ -1,5 +1,6 @@
 ---
 name: dictionary
+version: "1.0.0"
 description: "Look up word definitions, pronunciation, and etymology using Free Dictionary API"
 metadata:
   openclaw:

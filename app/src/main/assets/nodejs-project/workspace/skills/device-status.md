@@ -1,5 +1,6 @@
 ---
 name: device-status
+version: "1.0.0"
 description: "Check battery level, storage space, and device status"
 metadata:
   openclaw:

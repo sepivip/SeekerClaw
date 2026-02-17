@@ -1,5 +1,6 @@
 ---
 name: github
+version: "1.0.0"
 description: "Search repositories, view issues, check PRs, manage GitHub projects"
 metadata:
   openclaw:
