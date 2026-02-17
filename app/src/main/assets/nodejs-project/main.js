@@ -3741,12 +3741,20 @@ async function executeTool(name, input, chatId) {
                         continue;
                     }
                     const pd = priceData.data?.[r.token.address];
-                    prices.push({
+                    const entry = {
                         token: r.token.symbol,
                         mint: r.token.address,
                         price: pd?.price ? parseFloat(pd.price) : null,
                         currency: 'USD',
-                    });
+                    };
+                    // Surface confidenceLevel from Jupiter Price v3 — low confidence means unreliable pricing
+                    if (pd?.confidenceLevel) {
+                        entry.confidenceLevel = pd.confidenceLevel;
+                        if (pd.confidenceLevel === 'low') {
+                            entry.warning = 'Low price confidence — pricing data may be unreliable. Do not use for safety-sensitive decisions.';
+                        }
+                    }
+                    prices.push(entry);
                 }
 
                 return { prices };
@@ -3832,35 +3840,50 @@ async function executeTool(name, input, chatId) {
 
                 if (inputToken.decimals === null) return { error: `Cannot determine decimals for input token ${input.inputToken}. Use a known symbol or verified mint.` };
 
+                // Pre-swap price confidence check — fail closed on low-confidence data
+                try {
+                    const priceData = await jupiterPrice([inputToken.address]);
+                    const pd = priceData.data?.[inputToken.address];
+                    if (pd?.confidenceLevel === 'low') {
+                        return {
+                            error: 'Price confidence too low for swap',
+                            details: `${inputToken.symbol} has low price confidence. This means pricing data is unreliable and the swap could result in significant losses. Try again later or check the token's liquidity.`,
+                        };
+                    }
+                } catch (priceErr) {
+                    log(`[Jupiter Ultra] Pre-swap price check skipped: ${priceErr.message}`);
+                    // Continue — Ultra order will have its own pricing
+                }
+
                 // Jupiter Ultra flow: gasless, RPC-less swaps
                 const amountRaw = Math.round(input.amount * Math.pow(10, inputToken.decimals));
 
                 // Step 1: Get Ultra order (quote + unsigned tx in one call)
-                log(`[Jupiter Ultra] Getting order: ${input.amount} ${inputToken.symbol} → ${outputToken.symbol}`);
-                const order = await jupiterUltraOrder(inputToken.address, outputToken.address, amountRaw, userPublicKey);
+                // Ultra signed payloads have ~2 min TTL — track timing for re-quote
+                const ULTRA_TTL_SAFE_MS = 90000; // Re-quote if >90s elapsed (30s buffer before 2-min TTL)
+                let order, orderTimestamp;
 
-                if (!order.transaction) {
-                    return { error: 'Jupiter Ultra did not return a transaction.' };
-                }
-                if (!order.requestId) {
-                    return { error: 'Jupiter Ultra did not return a requestId.' };
-                }
+                const fetchAndVerifyOrder = async () => {
+                    log(`[Jupiter Ultra] Getting order: ${input.amount} ${inputToken.symbol} → ${outputToken.symbol}`);
+                    const o = await jupiterUltraOrder(inputToken.address, outputToken.address, amountRaw, userPublicKey);
+                    if (!o.transaction) throw new Error('Jupiter Ultra did not return a transaction.');
+                    if (!o.requestId) throw new Error('Jupiter Ultra did not return a requestId.');
 
-                // Step 2: Verify transaction before sending to wallet
-                // skipPayerCheck: Ultra uses Jupiter's fee payer (gasless)
-                try {
-                    const verification = verifySwapTransaction(order.transaction, userPublicKey, { skipPayerCheck: true });
-                    if (!verification.valid) {
-                        log(`[Jupiter Ultra] Order tx verification FAILED: ${verification.error}`);
-                        return { error: `Swap transaction rejected: ${verification.error}` };
-                    }
+                    // Verify transaction before sending to wallet
+                    const verification = verifySwapTransaction(o.transaction, userPublicKey, { skipPayerCheck: true });
+                    if (!verification.valid) throw new Error(`Swap transaction rejected: ${verification.error}`);
                     log('[Jupiter Ultra] Order tx verified — programs OK');
-                } catch (verifyErr) {
-                    log(`[Jupiter Ultra] Order tx verification error: ${verifyErr.message}`);
-                    return { error: `Could not verify swap transaction: ${verifyErr.message}` };
+                    return o;
+                };
+
+                try {
+                    order = await fetchAndVerifyOrder();
+                    orderTimestamp = Date.now();
+                } catch (e) {
+                    return { error: e.message };
                 }
 
-                // Step 3: Send to wallet for sign-only (120s timeout for user approval)
+                // Step 2: Send to wallet for sign-only (120s timeout for user approval)
                 // Ultra flow: wallet signs but does NOT broadcast
                 log('[Jupiter Ultra] Sending to wallet for approval (sign-only)...');
                 const signResult = await androidBridgeCall('/solana/sign-only', {
@@ -3870,9 +3893,38 @@ async function executeTool(name, input, chatId) {
                 if (signResult.error) return { error: signResult.error };
                 if (!signResult.signedTransaction) return { error: 'No signed transaction returned from wallet.' };
 
+                // Step 3: Check TTL — if MWA approval took >90s, re-quote to avoid expired tx
+                const elapsed = Date.now() - orderTimestamp;
+                let finalSignedTx = signResult.signedTransaction;
+                let finalRequestId = order.requestId;
+
+                if (elapsed > ULTRA_TTL_SAFE_MS) {
+                    log(`[Jupiter Ultra] MWA approval took ${Math.round(elapsed / 1000)}s (>90s) — re-quoting to avoid TTL expiry...`);
+                    try {
+                        order = await fetchAndVerifyOrder();
+                        orderTimestamp = Date.now();
+
+                        // Need wallet to sign the new transaction
+                        log('[Jupiter Ultra] Re-signing with fresh order...');
+                        const reSignResult = await androidBridgeCall('/solana/sign-only', {
+                            transaction: order.transaction
+                        }, 60000); // Shorter timeout for re-sign
+
+                        if (reSignResult.error) return { error: `Re-quote sign failed: ${reSignResult.error}` };
+                        if (!reSignResult.signedTransaction) return { error: 'No signed transaction from re-quote.' };
+
+                        finalSignedTx = reSignResult.signedTransaction;
+                        finalRequestId = order.requestId;
+                        log('[Jupiter Ultra] Re-quote successful, executing fresh order');
+                    } catch (reQuoteErr) {
+                        log(`[Jupiter Ultra] Re-quote failed, attempting original: ${reQuoteErr.message}`);
+                        // Fall through to try original — it might still be within 2-min TTL
+                    }
+                }
+
                 // Step 4: Execute via Jupiter Ultra (Jupiter broadcasts the tx)
                 log('[Jupiter Ultra] Executing signed transaction...');
-                const execResult = await jupiterUltraExecute(signResult.signedTransaction, order.requestId);
+                const execResult = await jupiterUltraExecute(finalSignedTx, finalRequestId);
 
                 if (execResult.status === 'Failed') {
                     return { error: `Swap failed: ${execResult.error || 'Transaction execution failed'}` };
@@ -3951,6 +4003,32 @@ async function executeTool(name, input, chatId) {
                         error: 'Unverified output token with missing metadata',
                         details: `${outputToken.warning}\n\nThe token is missing decimal metadata, which is required for amount calculations. Only verified tokens on Jupiter's token list can be used.`
                     };
+                }
+
+                // Token-2022 check — Trigger orders do NOT support Token-2022 tokens
+                try {
+                    const mints = [inputToken.address, outputToken.address].join(',');
+                    const shieldParams = new URLSearchParams({ mints });
+                    const shieldRes = await jupiterRequest({
+                        hostname: 'api.jup.ag',
+                        path: `/ultra/v1/shield?${shieldParams.toString()}`,
+                        method: 'GET',
+                        headers: { 'x-api-key': config.jupiterApiKey }
+                    });
+                    if (shieldRes.status === 200) {
+                        const shieldData = typeof shieldRes.data === 'string' ? JSON.parse(shieldRes.data) : shieldRes.data;
+                        for (const [mint, info] of Object.entries(shieldData)) {
+                            if (info.tokenType === 'token-2022' || info.isToken2022) {
+                                const sym = mint === inputToken.address ? inputToken.symbol : outputToken.symbol;
+                                return {
+                                    error: 'Token-2022 not supported for limit orders',
+                                    details: `${sym} (${mint}) is a Token-2022 token. Jupiter Trigger orders do not support Token-2022 tokens. Use a regular swap instead.`
+                                };
+                            }
+                        }
+                    }
+                } catch (shieldErr) {
+                    log(`[Jupiter Trigger] Token-2022 check skipped: ${shieldErr.message}`);
                 }
 
                 // 2. Get wallet address
@@ -4033,6 +4111,7 @@ async function executeTool(name, input, chatId) {
                     wrapAndUnwrapSol: true,
                 };
 
+                // No retry for createOrder — non-idempotent POST could create duplicates
                 const res = await httpRequest({
                     hostname: 'api.jup.ag',
                     path: '/trigger/v1/createOrder',
@@ -4147,7 +4226,7 @@ async function executeTool(name, input, chatId) {
                 }
 
                 // 4. Call Jupiter Trigger API
-                const res = await httpRequest({
+                const res = await jupiterRequest({
                     hostname: 'api.jup.ag',
                     path: `/trigger/v1/getTriggerOrders?${params.toString()}`,
                     method: 'GET',
@@ -4205,7 +4284,7 @@ async function executeTool(name, input, chatId) {
                     return { error: e.message };
                 }
 
-                // 3. Call Jupiter Trigger API — cancelOrder
+                // 3. Call Jupiter Trigger API — cancelOrder (no retry — non-idempotent POST)
                 log(`[Jupiter Trigger] Cancelling order: ${input.orderId}`);
                 const res = await httpRequest({
                     hostname: 'api.jup.ag',
@@ -4306,6 +4385,32 @@ async function executeTool(name, input, chatId) {
                     };
                 }
 
+                // Token-2022 check — DCA/Recurring orders do NOT support Token-2022 tokens
+                try {
+                    const mints = [inputToken.address, outputToken.address].join(',');
+                    const shieldParams = new URLSearchParams({ mints });
+                    const shieldRes = await jupiterRequest({
+                        hostname: 'api.jup.ag',
+                        path: `/ultra/v1/shield?${shieldParams.toString()}`,
+                        method: 'GET',
+                        headers: { 'x-api-key': config.jupiterApiKey }
+                    });
+                    if (shieldRes.status === 200) {
+                        const shieldData = typeof shieldRes.data === 'string' ? JSON.parse(shieldRes.data) : shieldRes.data;
+                        for (const [mint, info] of Object.entries(shieldData)) {
+                            if (info.tokenType === 'token-2022' || info.isToken2022) {
+                                const sym = mint === inputToken.address ? inputToken.symbol : outputToken.symbol;
+                                return {
+                                    error: 'Token-2022 not supported for DCA orders',
+                                    details: `${sym} (${mint}) is a Token-2022 token. Jupiter Recurring/DCA orders do not support Token-2022 tokens. Use a regular swap instead.`
+                                };
+                            }
+                        }
+                    }
+                } catch (shieldErr) {
+                    log(`[Jupiter DCA] Token-2022 check skipped: ${shieldErr.message}`);
+                }
+
                 // 2. Get wallet address
                 let walletAddress;
                 try {
@@ -4322,6 +4427,7 @@ async function executeTool(name, input, chatId) {
                 }
 
                 // numberOfOrders: required by API (no "unlimited" option)
+                // Jupiter DCA minimums: ≥2 orders, ≥$50/order, ≥$100 total
                 let numberOfOrders = 30; // Default when not specified
                 if (input.totalCycles != null) {
                     const tc = Number(input.totalCycles);
@@ -4329,6 +4435,9 @@ async function executeTool(name, input, chatId) {
                         return { error: 'Invalid totalCycles', details: `Must be a positive integer; received "${input.totalCycles}".` };
                     }
                     numberOfOrders = tc;
+                }
+                if (numberOfOrders < 2) {
+                    return { error: 'DCA requires at least 2 orders', details: 'Jupiter Recurring API minimum is 2 orders. Increase totalCycles to 2 or more.' };
                 }
 
                 // 4. Compute total inAmount = amountPerCycle * numberOfOrders
@@ -4341,6 +4450,31 @@ async function executeTool(name, input, chatId) {
                     totalInAmount = (perCycleBig * BigInt(numberOfOrders)).toString();
                 } catch (e) {
                     return { error: 'Invalid amountPerCycle', details: e.message };
+                }
+
+                // Validate USD minimums ($50/order, $100 total) using Jupiter price
+                try {
+                    const priceData = await jupiterPrice([inputToken.address]);
+                    const pd = priceData.data?.[inputToken.address];
+                    if (pd?.price) {
+                        const usdPerOrder = Number(input.amountPerCycle) * parseFloat(pd.price);
+                        const usdTotal = usdPerOrder * numberOfOrders;
+                        if (usdPerOrder < 50) {
+                            return {
+                                error: 'DCA order too small',
+                                details: `Each order must be worth at least $50. Current value: ~$${usdPerOrder.toFixed(2)} per order. Increase amountPerCycle.`
+                            };
+                        }
+                        if (usdTotal < 100) {
+                            return {
+                                error: 'DCA total too small',
+                                details: `Total DCA value must be at least $100. Current total: ~$${usdTotal.toFixed(2)} (${numberOfOrders} orders × $${usdPerOrder.toFixed(2)}). Increase amountPerCycle or totalCycles.`
+                            };
+                        }
+                    }
+                } catch (priceErr) {
+                    log(`[Jupiter DCA] Price check skipped (non-fatal): ${priceErr.message}`);
+                    // Continue without USD validation — API will reject if truly below minimum
                 }
 
                 // 5. Call Jupiter Recurring API — createOrder
@@ -4358,6 +4492,7 @@ async function executeTool(name, input, chatId) {
                     },
                 };
 
+                // No retry for createOrder — non-idempotent POST could create duplicates
                 const res = await httpRequest({
                     hostname: 'api.jup.ag',
                     path: '/recurring/v1/createOrder',
@@ -4472,7 +4607,7 @@ async function executeTool(name, input, chatId) {
                 }
 
                 // 4. Call Jupiter Recurring API
-                const res = await httpRequest({
+                const res = await jupiterRequest({
                     hostname: 'api.jup.ag',
                     path: `/recurring/v1/getRecurringOrders?${params.toString()}`,
                     method: 'GET',
@@ -4542,7 +4677,7 @@ async function executeTool(name, input, chatId) {
                     return { error: e.message };
                 }
 
-                // 3. Call Jupiter Recurring API — cancelOrder
+                // 3. Call Jupiter Recurring API — cancelOrder (no retry — non-idempotent POST)
                 log(`[Jupiter DCA] Cancelling order: ${input.orderId}`);
                 const res = await httpRequest({
                     hostname: 'api.jup.ag',
@@ -4637,7 +4772,7 @@ async function executeTool(name, input, chatId) {
                 const params = new URLSearchParams({ query: rawQuery, limit: limit.toString() });
 
                 // Call Jupiter Tokens API
-                const res = await httpRequest({
+                const res = await jupiterRequest({
                     hostname: 'api.jup.ag',
                     path: `/tokens/v2/search?${params.toString()}`,
                     method: 'GET',
@@ -4656,16 +4791,23 @@ async function executeTool(name, input, chatId) {
                 return {
                     success: true,
                     count: tokens.length,
-                    tokens: tokens.map(token => ({
-                        symbol: token.symbol,
-                        name: token.name,
-                        address: token.address,
-                        decimals: token.decimals,
-                        price: (token.price !== null && token.price !== undefined) ? `$${token.price}` : 'N/A',
-                        marketCap: (token.marketCap !== null && token.marketCap !== undefined) ? `$${(token.marketCap / 1e6).toFixed(2)}M` : 'N/A',
-                        liquidity: (token.liquidity !== null && token.liquidity !== undefined) ? `$${(token.liquidity / 1e6).toFixed(2)}M` : 'N/A',
-                        verified: token.verified || false
-                    }))
+                    tokens: tokens.map(token => {
+                        const entry = {
+                            symbol: token.symbol,
+                            name: token.name,
+                            address: token.address,
+                            decimals: token.decimals,
+                            price: (token.price !== null && token.price !== undefined) ? `$${token.price}` : 'N/A',
+                            marketCap: (token.marketCap !== null && token.marketCap !== undefined) ? `$${(token.marketCap / 1e6).toFixed(2)}M` : 'N/A',
+                            liquidity: (token.liquidity !== null && token.liquidity !== undefined) ? `$${(token.liquidity / 1e6).toFixed(2)}M` : 'N/A',
+                            verified: token.verified || false,
+                        };
+                        // Surface organicScore and isSus from Tokens v2 API
+                        if (token.organicScore !== undefined) entry.organicScore = token.organicScore;
+                        if (token.audit?.isSus !== undefined) entry.isSus = token.audit.isSus;
+                        if (token.audit?.isSus) entry.warning = '⚠️ SUSPICIOUS — This token is flagged as suspicious by Jupiter audit.';
+                        return entry;
+                    })
                 };
             } catch (e) {
                 return { error: e.message };
@@ -4694,7 +4836,7 @@ async function executeTool(name, input, chatId) {
 
                 // Call Jupiter Shield API
                 const params = new URLSearchParams({ mints: token.address });
-                const res = await httpRequest({
+                const res = await jupiterRequest({
                     hostname: 'api.jup.ag',
                     path: `/ultra/v1/shield?${params.toString()}`,
                     method: 'GET',
@@ -4714,7 +4856,32 @@ async function executeTool(name, input, chatId) {
                 if (tokenData.mintAuthority) warnings.push('🏭 MINT RISK - Token has mint authority (can inflate supply)');
                 if (tokenData.hasLowLiquidity) warnings.push('💧 LOW LIQUIDITY - May be difficult to trade');
 
-                return {
+                // Fetch organicScore and isSus from Tokens v2 API
+                let organicScore = null;
+                let isSus = null;
+                try {
+                    const tokenParams = new URLSearchParams({ query: token.address, limit: '1' });
+                    const tokenRes = await jupiterRequest({
+                        hostname: 'api.jup.ag',
+                        path: `/tokens/v2/search?${tokenParams.toString()}`,
+                        method: 'GET',
+                        headers: { 'x-api-key': config.jupiterApiKey }
+                    });
+                    if (tokenRes.status === 200) {
+                        const tokenInfo = (typeof tokenRes.data === 'string' ? JSON.parse(tokenRes.data) : tokenRes.data);
+                        const match = tokenInfo.tokens?.[0];
+                        if (match) {
+                            organicScore = match.organicScore ?? null;
+                            isSus = match.audit?.isSus ?? null;
+                        }
+                    }
+                } catch (e) {
+                    log(`[Jupiter Security] Tokens v2 lookup skipped: ${e.message}`);
+                }
+
+                if (isSus) warnings.push('🚨 SUSPICIOUS — Token flagged as suspicious by Jupiter audit');
+
+                const result = {
                     success: true,
                     token: `${token.symbol} (${token.address})`,
                     isSafe: warnings.length === 0,
@@ -4723,9 +4890,12 @@ async function executeTool(name, input, chatId) {
                         freezeAuthority: tokenData.freezeAuthority || false,
                         mintAuthority: tokenData.mintAuthority || false,
                         hasLowLiquidity: tokenData.hasLowLiquidity || false,
-                        verified: tokenData.verified || false
+                        verified: tokenData.verified || false,
                     }
                 };
+                if (organicScore !== null) result.organicScore = organicScore;
+                if (isSus !== null) result.isSus = isSus;
+                return result;
             } catch (e) {
                 return { error: e.message };
             }
@@ -4759,7 +4929,7 @@ async function executeTool(name, input, chatId) {
                 }
 
                 // Call Jupiter Holdings API
-                const res = await httpRequest({
+                const res = await jupiterRequest({
                     hostname: 'api.jup.ag',
                     path: `/ultra/v1/holdings/${walletAddress}`,
                     method: 'GET',
@@ -5556,6 +5726,30 @@ const WELL_KNOWN_TOKENS = {
     'usdt': { address: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', decimals: 6, symbol: 'USDT', name: 'USDT' },
 };
 
+// Jupiter API request wrapper with 429 rate limit handling + exponential backoff
+// Per Jupiter docs: on HTTP 429, use exponential backoff with jitter, wait for 10s window refresh
+async function jupiterRequest(options, body = null, maxRetries = 3) {
+    const BASE_DELAY = 2000;  // 2s initial delay
+    const MAX_DELAY = 15000;  // 15s max delay (covers 10s window)
+    const JITTER_MAX = 1000;  // up to 1s random jitter
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        const res = await httpRequest(options, body);
+
+        if (res.status !== 429) return res;
+
+        // Rate limited — retry with exponential backoff + jitter
+        if (attempt < maxRetries) {
+            const delay = Math.min(BASE_DELAY * Math.pow(2, attempt) + Math.random() * JITTER_MAX, MAX_DELAY);
+            log(`[Jupiter] Rate limited (429), retrying in ${Math.round(delay)}ms (attempt ${attempt + 1}/${maxRetries})...`);
+            await new Promise(r => setTimeout(r, delay));
+        }
+    }
+
+    // All retries exhausted — return the 429 response so callers can handle it
+    return { status: 429, data: { error: 'Rate limited after retries', code: 'RATE_LIMITED', retryable: true } };
+}
+
 async function fetchJupiterTokenList() {
     const now = Date.now();
     if (jupiterTokenCache.tokens.length > 0 && (now - jupiterTokenCache.lastFetch) < jupiterTokenCache.CACHE_TTL) {
@@ -5563,12 +5757,15 @@ async function fetchJupiterTokenList() {
     }
 
     try {
-        log('[Jupiter] Fetching token list...');
-        const res = await httpRequest({
-            hostname: 'token.jup.ag',
-            path: '/strict',
+        log('[Jupiter] Fetching verified token list (tokens/v2)...');
+        const headers = { 'Accept': 'application/json' };
+        if (config.jupiterApiKey) headers['x-api-key'] = config.jupiterApiKey;
+
+        const res = await jupiterRequest({
+            hostname: 'api.jup.ag',
+            path: '/tokens/v2/tag?query=verified',
             method: 'GET',
-            headers: { 'Accept': 'application/json' },
+            headers,
         });
 
         if (res.status === 200 && Array.isArray(res.data)) {
@@ -5586,7 +5783,7 @@ async function fetchJupiterTokenList() {
             }
 
             jupiterTokenCache.lastFetch = now;
-            log(`[Jupiter] Loaded ${res.data.length} tokens`);
+            log(`[Jupiter] Loaded ${res.data.length} verified tokens`);
         } else {
             log(`[Jupiter] Token list fetch failed: ${res.status}`);
         }
@@ -5731,7 +5928,7 @@ async function jupiterQuote(inputMint, outputMint, amountRaw, slippageBps = 100)
         'x-api-key': config.jupiterApiKey
     };
 
-    const res = await httpRequest({
+    const res = await jupiterRequest({
         hostname: 'api.jup.ag',
         path: `/swap/v1/quote?${params.toString()}`,
         method: 'GET',
@@ -5918,7 +6115,7 @@ async function jupiterUltraOrder(inputMint, outputMint, amount, taker) {
         'x-api-key': config.jupiterApiKey
     };
 
-    const res = await httpRequest({
+    const res = await jupiterRequest({
         hostname: 'api.jup.ag',
         path: `/ultra/v1/order?${params.toString()}`,
         method: 'GET',
@@ -5943,6 +6140,7 @@ async function jupiterUltraExecute(signedTransaction, requestId) {
         'x-api-key': config.jupiterApiKey
     };
 
+    // Execute calls should NOT retry on 429 — the signed tx is time-sensitive
     const res = await httpRequest({
         hostname: 'api.jup.ag',
         path: '/ultra/v1/execute',
@@ -6017,7 +6215,7 @@ async function jupiterPrice(mintAddresses) {
         'x-api-key': config.jupiterApiKey
     };
 
-    const res = await httpRequest({
+    const res = await jupiterRequest({
         hostname: 'api.jup.ag',
         path: `/price/v3?ids=${encodeURIComponent(ids)}`,
         method: 'GET',
