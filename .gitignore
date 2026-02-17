@@ -76,4 +76,6 @@ openclaw-reference/
 .gemini/
 .opencode/
 .windsurf/
-skills/
+/skills/
+# Bundled agent skills must be tracked (extracted to device on first launch)
+!app/src/main/assets/nodejs-project/workspace/skills/
