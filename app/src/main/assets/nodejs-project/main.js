@@ -2415,7 +2415,7 @@ const TOOLS = [
     },
     {
         name: 'skill_read',
-        description: 'Read a skill\'s full instructions. Use this when a skill from <available_skills> applies to the user\'s request.',
+        description: 'Read a skill\'s full instructions, directory path, and list of supporting files. Use this when a skill from <available_skills> applies to the user\'s request. Returns: name, description, instructions, tools, emoji, dir (absolute path to the skill directory), and files (list of supporting file names relative to dir, excluding the main skill file). To read supporting files, use the read tool with workspace-relative paths like "skills/<skill-name>/" + filename.',
         input_schema: {
             type: 'object',
             properties: {
@@ -3292,12 +3292,29 @@ async function executeTool(name, input, chatId) {
 
             const content = fs.readFileSync(skillPath, 'utf8');
 
+            // List supporting files in the skill directory
+            // Only list files for directory-based skills (not flat .md files which share SKILLS_DIR)
+            let files = [];
+            const isDirectorySkill = skill.filePath && path.basename(skill.filePath) === 'SKILL.md';
+            if (isDirectorySkill && skill.dir && fs.existsSync(skill.dir)) {
+                try {
+                    const normalizedSkillPath = path.normalize(skillPath);
+                    files = listFilesRecursive(skill.dir)
+                        .filter(f => path.normalize(f) !== normalizedSkillPath)
+                        .map(f => path.relative(skill.dir, f));
+                } catch (e) {
+                    // Non-critical — just skip file listing
+                }
+            }
+
             return {
                 name: skill.name,
                 description: skill.description,
                 instructions: skill.instructions || content,
                 tools: skill.tools,
-                emoji: skill.emoji
+                emoji: skill.emoji,
+                dir: isDirectorySkill ? skill.dir : null,
+                files: files
             };
         }
 
@@ -6352,6 +6369,26 @@ async function jupiterPrice(mintAddresses) {
     return res.data;
 }
 
+
+// Helper to recursively list files in a directory (used by skill_read)
+function listFilesRecursive(dir, maxDepth = 3, currentDepth = 0) {
+    if (currentDepth >= maxDepth) return [];
+    const results = [];
+    try {
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        for (const entry of entries) {
+            const fullPath = path.join(dir, entry.name);
+            // Skip symlinks for security
+            if (entry.isSymbolicLink()) continue;
+            if (entry.isFile()) {
+                results.push(fullPath);
+            } else if (entry.isDirectory() && !entry.name.startsWith('.')) {
+                results.push(...listFilesRecursive(fullPath, maxDepth, currentDepth + 1));
+            }
+        }
+    } catch (e) { /* ignore permission errors */ }
+    return results;
+}
 
 // Helper to format bytes
 function formatBytes(bytes) {
