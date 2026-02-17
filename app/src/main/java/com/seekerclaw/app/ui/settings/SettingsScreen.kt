@@ -376,106 +376,84 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
             ) {
                 ConfigField(
                     label = "Auth Type",
-                value = authTypeLabel,
-                onClick = { showAuthTypePicker = true },
-                info = "How your agent authenticates with the AI provider. " +
-                    "\"API Key\" uses your personal Anthropic key. " +
-                    "\"Setup Token\" uses a shared team token from your admin. " +
-                    "Pick whichever one you were given.",
-            )
-            ConfigField(
-                label = if (config?.authType == "api_key") "API Key (active)" else "API Key",
-                value = maskedApiKey,
-                onClick = {
-                    editField = "anthropicApiKey"
-                    editLabel = "API Key"
-                    editValue = config?.anthropicApiKey ?: ""
-                },
-                info = "Your personal Anthropic API key. " +
-                    "Get one at console.anthropic.com under API Keys. " +
-                    "It starts with \"sk-ant-\". " +
-                    "This is used to send messages to the AI model. " +
-                    "Keep it secret — anyone with this key can use your account.",
-            )
-            ConfigField(
-                label = if (config?.authType == "setup_token") "Setup Token (active)" else "Setup Token",
-                value = maskedSetupToken,
-                onClick = {
-                    editField = "setupToken"
-                    editLabel = "Setup Token"
-                    editValue = config?.setupToken ?: ""
-                },
-                info = "A team token provided by your administrator or OpenClaw gateway. " +
-                    "Use this instead of an API Key if someone set up a shared gateway for you. " +
-                    "If you have your own API key, you probably don't need this.",
-            )
-            ConfigField(
-                label = "Bot Token",
-                value = maskedBotToken,
-                onClick = {
-                    editField = "telegramBotToken"
-                    editLabel = "Bot Token"
-                    editValue = config?.telegramBotToken ?: ""
-                },
-                info = "Your Telegram bot token. " +
-                    "To get one: open Telegram, message @BotFather, send /newbot, and follow the steps. " +
-                    "BotFather will give you a token like \"123456:ABC-DEF\". " +
-                    "This lets your agent send and receive messages through Telegram.",
-            )
-            ConfigField(
-                label = "Owner ID",
-                value = config?.telegramOwnerId?.ifBlank { "Auto-detect" } ?: "Auto-detect",
-                onClick = {
-                    editField = "telegramOwnerId"
-                    editLabel = "Owner ID"
-                    editValue = config?.telegramOwnerId ?: ""
-                },
-                info = "Your Telegram user ID (a number, not your username). " +
-                    "This tells the agent who is allowed to control it. " +
-                    "Leave blank to auto-detect — the first person to message the bot becomes the owner. " +
-                    "To find your ID: message @userinfobot on Telegram.",
-            )
-            ConfigField(
-                label = "Model",
-                value = availableModels.find { it.id == config?.model }
-                    ?.let { "${it.displayName} (${it.description})" }
-                    ?: config?.model?.ifBlank { "Not set" }
-                    ?: "Not set",
-                onClick = { showModelPicker = true },
-                info = "Which AI model powers your agent.\n\n" +
-                    "• Opus 4.6 — Most capable, best for complex tasks. Uses more credits.\n" +
-                    "• Sonnet 4.5 — Good balance of speed and smarts. Recommended for most users.\n" +
-                    "• Haiku 4.5 — Fastest and cheapest. Great for simple tasks and quick replies.",
-            )
-            ConfigField(
-                label = "Agent Name",
-                value = config?.agentName?.ifBlank { "SeekerClaw" } ?: "SeekerClaw",
-                onClick = {
-                    editField = "agentName"
-                    editLabel = "Agent Name"
-                    editValue = config?.agentName ?: ""
-                },
-                info = "A display name for your agent. " +
-                    "This appears on the dashboard and in the agent's system prompt. " +
-                    "Purely cosmetic — change it to whatever you like.",
-            )
-            ConfigField(
-                label = "Brave API Key",
-                value = config?.braveApiKey?.let { key ->
-                    if (key.isBlank()) "Not set — using DuckDuckGo"
-                    else if (key.length > 12) "${key.take(8)}${"*".repeat(8)}${key.takeLast(4)}"
-                    else "*".repeat(key.length)
-                } ?: "Not set — using DuckDuckGo",
-                onClick = {
-                    editField = "braveApiKey"
-                    editLabel = "Brave API Key"
-                    editValue = config?.braveApiKey ?: ""
-                },
-                info = "Optional. Lets your agent search the web using Brave Search (better quality). " +
-                    "Get a free key at brave.com/search/api. " +
-                    "Without this, DuckDuckGo is used (no key required).",
-                showDivider = false,
-            )
+                    value = authTypeLabel,
+                    onClick = { showAuthTypePicker = true },
+                    info = SettingsHelpTexts.AUTH_TYPE,
+                )
+                ConfigField(
+                    label = if (config?.authType == "api_key") "API Key (active)" else "API Key",
+                    value = maskedApiKey,
+                    onClick = {
+                        editField = "anthropicApiKey"
+                        editLabel = "API Key"
+                        editValue = config?.anthropicApiKey ?: ""
+                    },
+                    info = SettingsHelpTexts.API_KEY,
+                )
+                ConfigField(
+                    label = if (config?.authType == "setup_token") "Setup Token (active)" else "Setup Token",
+                    value = maskedSetupToken,
+                    onClick = {
+                        editField = "setupToken"
+                        editLabel = "Setup Token"
+                        editValue = config?.setupToken ?: ""
+                    },
+                    info = SettingsHelpTexts.SETUP_TOKEN,
+                )
+                ConfigField(
+                    label = "Bot Token",
+                    value = maskedBotToken,
+                    onClick = {
+                        editField = "telegramBotToken"
+                        editLabel = "Bot Token"
+                        editValue = config?.telegramBotToken ?: ""
+                    },
+                    info = SettingsHelpTexts.BOT_TOKEN,
+                )
+                ConfigField(
+                    label = "Owner ID",
+                    value = config?.telegramOwnerId?.ifBlank { "Auto-detect" } ?: "Auto-detect",
+                    onClick = {
+                        editField = "telegramOwnerId"
+                        editLabel = "Owner ID"
+                        editValue = config?.telegramOwnerId ?: ""
+                    },
+                    info = SettingsHelpTexts.OWNER_ID,
+                )
+                ConfigField(
+                    label = "Model",
+                    value = availableModels.find { it.id == config?.model }
+                        ?.let { "${it.displayName} (${it.description})" }
+                        ?: config?.model?.ifBlank { "Not set" }
+                        ?: "Not set",
+                    onClick = { showModelPicker = true },
+                    info = SettingsHelpTexts.MODEL,
+                )
+                ConfigField(
+                    label = "Agent Name",
+                    value = config?.agentName?.ifBlank { "SeekerClaw" } ?: "SeekerClaw",
+                    onClick = {
+                        editField = "agentName"
+                        editLabel = "Agent Name"
+                        editValue = config?.agentName ?: ""
+                    },
+                    info = SettingsHelpTexts.AGENT_NAME,
+                )
+                ConfigField(
+                    label = "Brave API Key",
+                    value = config?.braveApiKey?.let { key ->
+                        if (key.isBlank()) "Not set — using DuckDuckGo"
+                        else if (key.length > 12) "${key.take(8)}${"*".repeat(8)}${key.takeLast(4)}"
+                        else "*".repeat(key.length)
+                    } ?: "Not set — using DuckDuckGo",
+                    onClick = {
+                        editField = "braveApiKey"
+                        editLabel = "Brave API Key"
+                        editValue = config?.braveApiKey ?: ""
+                    },
+                    info = SettingsHelpTexts.BRAVE_API_KEY,
+                    showDivider = false,
+                )
             }
         }
 
@@ -491,40 +469,34 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
             ) {
                 SettingRow(
                     label = "Auto-start on boot",
-                checked = autoStartOnBoot,
-                onCheckedChange = {
-                    autoStartOnBoot = it
-                    ConfigManager.setAutoStartOnBoot(context, it)
-                },
-                info = "When enabled, the agent starts automatically every time your phone boots up. " +
-                    "You won't need to open the app and press Deploy manually. " +
-                    "Turn this on if you want your agent always available.",
-            )
-            SettingRow(
-                label = "Battery unrestricted",
-                checked = batteryOptimizationDisabled,
-                onCheckedChange = {
-                    val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                        data = Uri.parse("package:${context.packageName}")
-                    }
-                    context.startActivity(intent)
-                },
-                info = "Android may kill background apps to save battery. " +
-                    "Enabling this prevents the system from stopping your agent while it's running. " +
-                    "Highly recommended — without this, your agent may randomly go offline.",
-            )
-            SettingRow(
-                label = "Server mode (keep screen awake)",
-                checked = keepScreenOn,
-                onCheckedChange = {
-                    keepScreenOn = it
-                    ConfigManager.setKeepScreenOn(context, it)
-                    showRestartDialog = true
-                },
-                info = "Keeps the display awake while the agent runs. " +
-                    "Useful when using camera automation on a dedicated device. " +
-                    "Higher battery usage and lower physical privacy/security.",
-            )
+                    checked = autoStartOnBoot,
+                    onCheckedChange = {
+                        autoStartOnBoot = it
+                        ConfigManager.setAutoStartOnBoot(context, it)
+                    },
+                    info = SettingsHelpTexts.AUTO_START,
+                )
+                SettingRow(
+                    label = "Battery unrestricted",
+                    checked = batteryOptimizationDisabled,
+                    onCheckedChange = {
+                        val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                            data = Uri.parse("package:${context.packageName}")
+                        }
+                        context.startActivity(intent)
+                    },
+                    info = SettingsHelpTexts.BATTERY_UNRESTRICTED,
+                )
+                SettingRow(
+                    label = "Server mode (keep screen awake)",
+                    checked = keepScreenOn,
+                    onCheckedChange = {
+                        keepScreenOn = it
+                        ConfigManager.setKeepScreenOn(context, it)
+                        showRestartDialog = true
+                    },
+                    info = SettingsHelpTexts.SERVER_MODE,
+                )
             }
         }
 
@@ -550,55 +522,46 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                         modifier = Modifier.padding(top = 12.dp, bottom = 4.dp),
                     )
                 }
-            PermissionRow(
-                label = "Camera",
-                granted = hasCameraPermission,
-                onRequest = {
-                    requestPermissionOrOpenSettings(context, Manifest.permission.CAMERA, cameraLauncher)
-                },
-                info = "Lets the agent capture a photo for vision tasks like \"check my dog\". " +
-                    "Capture is on-demand when you ask. The app does not stream video continuously.",
-            )
-            PermissionRow(
-                label = "GPS Location",
-                granted = hasLocationPermission,
-                onRequest = {
-                    requestPermissionOrOpenSettings(context, Manifest.permission.ACCESS_FINE_LOCATION, locationLauncher)
-                },
-                info = "Lets the agent know your phone's location. " +
-                    "Useful for location-based tasks like weather, nearby places, or navigation. " +
-                    "The agent only checks location when you ask — it doesn't track you in the background.",
-            )
-            PermissionRow(
-                label = "Contacts",
-                granted = hasContactsPermission,
-                onRequest = {
-                    requestPermissionOrOpenSettings(context, Manifest.permission.READ_CONTACTS, contactsLauncher)
-                },
-                info = "Lets the agent read your contacts list. " +
-                    "This allows it to look up names and phone numbers when you ask, for example \"text Mom\" or \"call John\". " +
-                    "Your contacts are never sent to the cloud — only used on-device to resolve names.",
-            )
-            PermissionRow(
-                label = "SMS",
-                granted = hasSmsPermission,
-                onRequest = {
-                    requestPermissionOrOpenSettings(context, Manifest.permission.SEND_SMS, smsLauncher)
-                },
-                info = "Lets the agent send text messages on your behalf. " +
-                    "The agent will always tell you who it's texting and what it's sending before it acts. " +
-                    "Standard carrier SMS rates may apply.",
-            )
-            PermissionRow(
-                label = "Phone Calls",
-                granted = hasCallPermission,
-                onRequest = {
-                    requestPermissionOrOpenSettings(context, Manifest.permission.CALL_PHONE, callLauncher)
-                },
-                info = "Lets the agent make phone calls for you. " +
-                    "It will always confirm the number with you before dialing. " +
-                    "Useful for quick calls like \"call the pizza place\".",
-            )
+                PermissionRow(
+                    label = "Camera",
+                    granted = hasCameraPermission,
+                    onRequest = {
+                        requestPermissionOrOpenSettings(context, Manifest.permission.CAMERA, cameraLauncher)
+                    },
+                    info = SettingsHelpTexts.CAMERA,
+                )
+                PermissionRow(
+                    label = "GPS Location",
+                    granted = hasLocationPermission,
+                    onRequest = {
+                        requestPermissionOrOpenSettings(context, Manifest.permission.ACCESS_FINE_LOCATION, locationLauncher)
+                    },
+                    info = SettingsHelpTexts.GPS_LOCATION,
+                )
+                PermissionRow(
+                    label = "Contacts",
+                    granted = hasContactsPermission,
+                    onRequest = {
+                        requestPermissionOrOpenSettings(context, Manifest.permission.READ_CONTACTS, contactsLauncher)
+                    },
+                    info = SettingsHelpTexts.CONTACTS,
+                )
+                PermissionRow(
+                    label = "SMS",
+                    granted = hasSmsPermission,
+                    onRequest = {
+                        requestPermissionOrOpenSettings(context, Manifest.permission.SEND_SMS, smsLauncher)
+                    },
+                    info = SettingsHelpTexts.SMS,
+                )
+                PermissionRow(
+                    label = "Phone Calls",
+                    granted = hasCallPermission,
+                    onRequest = {
+                        requestPermissionOrOpenSettings(context, Manifest.permission.CALL_PHONE, callLauncher)
+                    },
+                    info = SettingsHelpTexts.PHONE_CALLS,
+                )
             }
         }
 
@@ -717,9 +680,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                     editValue = config?.jupiterApiKey ?: ""
                 },
                 showDivider = false,
-                info = "Optional. Required for Solana token swaps via Jupiter aggregator. " +
-                    "Get a free key at portal.jup.ag (free tier: 60 req/min). " +
-                    "Without this, swap and quote tools will not work.",
+                info = SettingsHelpTexts.JUPITER_API_KEY,
             )
             }
         }
