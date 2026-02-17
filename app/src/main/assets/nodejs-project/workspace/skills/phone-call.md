@@ -1,6 +1,7 @@
 ---
 name: phone-call
 description: "Make phone calls to contacts or phone numbers"
+version: "1.0.0"
 metadata:
   openclaw:
     emoji: "📞"
