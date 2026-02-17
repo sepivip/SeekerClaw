@@ -1371,9 +1371,18 @@ function findMatchingSkills(message) {
     const skills = loadSkills();
     const lowerMsg = message.toLowerCase();
 
-    return skills.filter(skill =>
-        skill.triggers.some(trigger => lowerMsg.includes(trigger))
+    const matched = skills.filter(skill =>
+        skill.triggers.some(trigger => {
+            // Multi-word triggers: substring match is fine
+            if (trigger.includes(' ')) return lowerMsg.includes(trigger);
+            // Single-word triggers: require word boundary
+            const regex = new RegExp(`\\b${trigger.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+            return regex.test(message);
+        })
     );
+
+    // Cap at 2 matched skills max to avoid token waste
+    return matched.slice(0, 2);
 }
 
 function buildSkillsSection(skills) {
