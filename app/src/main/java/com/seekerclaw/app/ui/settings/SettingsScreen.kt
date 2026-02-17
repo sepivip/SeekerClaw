@@ -374,86 +374,86 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                     .fillMaxWidth()
                     .background(SeekerClawColors.Surface, shape),
             ) {
-            ConfigField(
-                label = "Auth Type",
-                value = authTypeLabel,
-                onClick = { showAuthTypePicker = true },
-                info = SettingsHelpTexts.AUTH_TYPE,
-            )
-            ConfigField(
-                label = if (config?.authType == "api_key") "API Key (active)" else "API Key",
-                value = maskedApiKey,
-                onClick = {
-                    editField = "anthropicApiKey"
-                    editLabel = "API Key"
-                    editValue = config?.anthropicApiKey ?: ""
-                },
-                info = SettingsHelpTexts.API_KEY,
-            )
-            ConfigField(
-                label = if (config?.authType == "setup_token") "Setup Token (active)" else "Setup Token",
-                value = maskedSetupToken,
-                onClick = {
-                    editField = "setupToken"
-                    editLabel = "Setup Token"
-                    editValue = config?.setupToken ?: ""
-                },
-                info = SettingsHelpTexts.SETUP_TOKEN,
-            )
-            ConfigField(
-                label = "Bot Token",
-                value = maskedBotToken,
-                onClick = {
-                    editField = "telegramBotToken"
-                    editLabel = "Bot Token"
-                    editValue = config?.telegramBotToken ?: ""
-                },
-                info = SettingsHelpTexts.BOT_TOKEN,
-            )
-            ConfigField(
-                label = "Owner ID",
-                value = config?.telegramOwnerId?.ifBlank { "Auto-detect" } ?: "Auto-detect",
-                onClick = {
-                    editField = "telegramOwnerId"
-                    editLabel = "Owner ID"
-                    editValue = config?.telegramOwnerId ?: ""
-                },
-                info = SettingsHelpTexts.OWNER_ID,
-            )
-            ConfigField(
-                label = "Model",
-                value = availableModels.find { it.id == config?.model }
-                    ?.let { "${it.displayName} (${it.description})" }
-                    ?: config?.model?.ifBlank { "Not set" }
-                    ?: "Not set",
-                onClick = { showModelPicker = true },
-                info = SettingsHelpTexts.MODEL,
-            )
-            ConfigField(
-                label = "Agent Name",
-                value = config?.agentName?.ifBlank { "SeekerClaw" } ?: "SeekerClaw",
-                onClick = {
-                    editField = "agentName"
-                    editLabel = "Agent Name"
-                    editValue = config?.agentName ?: ""
-                },
-                info = SettingsHelpTexts.AGENT_NAME,
-            )
-            ConfigField(
-                label = "Brave API Key",
-                value = config?.braveApiKey?.let { key ->
-                    if (key.isBlank()) "Not set — using DuckDuckGo"
-                    else if (key.length > 12) "${key.take(8)}${"*".repeat(8)}${key.takeLast(4)}"
-                    else "*".repeat(key.length)
-                } ?: "Not set — using DuckDuckGo",
-                onClick = {
-                    editField = "braveApiKey"
-                    editLabel = "Brave API Key"
-                    editValue = config?.braveApiKey ?: ""
-                },
-                info = SettingsHelpTexts.BRAVE_API_KEY,
-                showDivider = false,
-            )
+                ConfigField(
+                    label = "Auth Type",
+                    value = authTypeLabel,
+                    onClick = { showAuthTypePicker = true },
+                    info = SettingsHelpTexts.AUTH_TYPE,
+                )
+                ConfigField(
+                    label = if (config?.authType == "api_key") "API Key (active)" else "API Key",
+                    value = maskedApiKey,
+                    onClick = {
+                        editField = "anthropicApiKey"
+                        editLabel = "API Key"
+                        editValue = config?.anthropicApiKey ?: ""
+                    },
+                    info = SettingsHelpTexts.API_KEY,
+                )
+                ConfigField(
+                    label = if (config?.authType == "setup_token") "Setup Token (active)" else "Setup Token",
+                    value = maskedSetupToken,
+                    onClick = {
+                        editField = "setupToken"
+                        editLabel = "Setup Token"
+                        editValue = config?.setupToken ?: ""
+                    },
+                    info = SettingsHelpTexts.SETUP_TOKEN,
+                )
+                ConfigField(
+                    label = "Bot Token",
+                    value = maskedBotToken,
+                    onClick = {
+                        editField = "telegramBotToken"
+                        editLabel = "Bot Token"
+                        editValue = config?.telegramBotToken ?: ""
+                    },
+                    info = SettingsHelpTexts.BOT_TOKEN,
+                )
+                ConfigField(
+                    label = "Owner ID",
+                    value = config?.telegramOwnerId?.ifBlank { "Auto-detect" } ?: "Auto-detect",
+                    onClick = {
+                        editField = "telegramOwnerId"
+                        editLabel = "Owner ID"
+                        editValue = config?.telegramOwnerId ?: ""
+                    },
+                    info = SettingsHelpTexts.OWNER_ID,
+                )
+                ConfigField(
+                    label = "Model",
+                    value = availableModels.find { it.id == config?.model }
+                        ?.let { "${it.displayName} (${it.description})" }
+                        ?: config?.model?.ifBlank { "Not set" }
+                        ?: "Not set",
+                    onClick = { showModelPicker = true },
+                    info = SettingsHelpTexts.MODEL,
+                )
+                ConfigField(
+                    label = "Agent Name",
+                    value = config?.agentName?.ifBlank { "SeekerClaw" } ?: "SeekerClaw",
+                    onClick = {
+                        editField = "agentName"
+                        editLabel = "Agent Name"
+                        editValue = config?.agentName ?: ""
+                    },
+                    info = SettingsHelpTexts.AGENT_NAME,
+                )
+                ConfigField(
+                    label = "Brave API Key",
+                    value = config?.braveApiKey?.let { key ->
+                        if (key.isBlank()) "Not set — using DuckDuckGo"
+                        else if (key.length > 12) "${key.take(8)}${"*".repeat(8)}${key.takeLast(4)}"
+                        else "*".repeat(key.length)
+                    } ?: "Not set — using DuckDuckGo",
+                    onClick = {
+                        editField = "braveApiKey"
+                        editLabel = "Brave API Key"
+                        editValue = config?.braveApiKey ?: ""
+                    },
+                    info = SettingsHelpTexts.BRAVE_API_KEY,
+                    showDivider = false,
+                )
             }
         }
 
@@ -476,27 +476,27 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                     },
                     info = SettingsHelpTexts.AUTO_START,
                 )
-            SettingRow(
-                label = "Battery unrestricted",
-                checked = batteryOptimizationDisabled,
-                onCheckedChange = {
-                    val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                        data = Uri.parse("package:${context.packageName}")
-                    }
-                    context.startActivity(intent)
-                },
-                info = SettingsHelpTexts.BATTERY_UNRESTRICTED,
-            )
-            SettingRow(
-                label = "Server mode (keep screen awake)",
-                checked = keepScreenOn,
-                onCheckedChange = {
-                    keepScreenOn = it
-                    ConfigManager.setKeepScreenOn(context, it)
-                    showRestartDialog = true
-                },
-                info = SettingsHelpTexts.SERVER_MODE,
-            )
+                SettingRow(
+                    label = "Battery unrestricted",
+                    checked = batteryOptimizationDisabled,
+                    onCheckedChange = {
+                        val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                            data = Uri.parse("package:${context.packageName}")
+                        }
+                        context.startActivity(intent)
+                    },
+                    info = SettingsHelpTexts.BATTERY_UNRESTRICTED,
+                )
+                SettingRow(
+                    label = "Server mode (keep screen awake)",
+                    checked = keepScreenOn,
+                    onCheckedChange = {
+                        keepScreenOn = it
+                        ConfigManager.setKeepScreenOn(context, it)
+                        showRestartDialog = true
+                    },
+                    info = SettingsHelpTexts.SERVER_MODE,
+                )
             }
         }
 
