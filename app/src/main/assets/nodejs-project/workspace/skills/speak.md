@@ -1,5 +1,6 @@
 ---
 name: speak
+version: "1.0.0"
 description: "Speak text out loud using device text-to-speech"
 version: "1.0.0"
 metadata:
