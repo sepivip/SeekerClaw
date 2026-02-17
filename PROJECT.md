@@ -8,7 +8,7 @@ SeekerClaw turns a Solana Seeker phone into a 24/7 personal AI agent you control
 
 ## Elevator Pitch
 
-SeekerClaw embeds a full Node.js runtime inside an Android app, running an OpenClaw-compatible AI gateway as a foreground service. Users interact with their agent through Telegram — the app itself is minimal (setup, status, logs, settings). The agent has 43 tools, 16 skills, ranked memory search, cron scheduling, Android device control, Solana wallet integration, and web intelligence — all running locally on the phone, 24/7.
+SeekerClaw embeds a full Node.js runtime inside an Android app, running an OpenClaw-compatible AI gateway as a foreground service. Users interact with their agent through Telegram — the app itself is minimal (setup, status, logs, settings). The agent has 54 tools, 16 skills, ranked memory search, cron scheduling, Android device control, Solana wallet integration, and web intelligence — all running locally on the phone, 24/7.
 
 ## What It Is
 
@@ -42,7 +42,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 
 ### AI Agent Core
 - **Claude integration** — Sonnet 4.5 (default), Opus 4.6, Haiku 4.5 selectable. Prompt caching, retry with backoff, rate-limit throttling, user-friendly error messages. OAuth/setup token support for Claude Pro/Max users.
-- **Telegram bot** — HTML formatting (no markdown headers), native blockquotes, bidirectional reactions, file download with vision, file upload (telegram_send_file tool), long message chunking, quoted replies via `[[reply_to_current]]`, emoji rendering fixed
+- **Telegram bot** — HTML formatting (no markdown headers), native blockquotes, bidirectional reactions, file download with vision, file upload (telegram_send_file tool), long message chunking, quoted replies via `[[reply_to_current]]`, emoji rendering fixed, companion-tone message templates (TEMPLATES.md), context-aware `/start`
 - **SILENT_REPLY protocol** — Agent silently drops messages when it has nothing useful to say
 - **Ephemeral session awareness** — Agent knows context resets on restart
 - **PLATFORM.md auto-generation** — Device state (model, RAM, storage, battery, permissions, wallet) written on every service start
@@ -79,7 +79,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 - **Camera** — Capture photos (front/back) + Claude vision analysis
 - **Apps** — List installed apps, launch by package name
 
-### Solana Wallet (7 tools)
+### Solana Wallet (16 tools)
 - **Balance check** — SOL + SPL token balances
 - **Transaction history** — Recent transactions for any address
 - **Connected wallet** — Get address from SeekerClaw app
@@ -87,6 +87,11 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 - **Token prices** — Real-time USD prices via Jupiter
 - **Swap quotes** — Jupiter Ultra API quotes with price impact
 - **Token swaps** — Gasless swaps via Jupiter Ultra API with MWA sign-only flow, v0 transaction validation
+- **Limit orders** — Create/list/cancel limit orders and stop-loss orders (Jupiter Trigger API)
+- **DCA orders** — Create/list/cancel dollar-cost averaging positions (Jupiter DCA API)
+- **Token search** — Search tokens by symbol or name, get mint addresses
+- **Token security** — Check token security/legitimacy before trading
+- **Wallet holdings** — Full portfolio view with USD values via Jupiter
 
 ### Execution
 - **Shell exec** — 22 sandboxed Unix commands (cat, ls, curl, grep, find, etc.), workspace-restricted
@@ -169,7 +174,7 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 │   - Dashboard                  - Node.js Runtime   │
 │   - Setup                        - OpenClaw Gateway │
 │   - Logs                         - AI Agent         │
-│   - Settings                     - 34 Tools         │
+│   - Settings                     - 54 Tools         │
 │                                  - SQL.js DB        │
 │  Boot Receiver ──> Auto-start                      │
 │  Watchdog ──> 30s health check                     │
@@ -193,14 +198,14 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Metric | Count |
 |--------|-------|
-| Total commits | ~90 |
-| PRs merged | 81+ |
-| Tools | 44 (telegram_send_file added) |
+| Total commits | ~105 |
+| PRs merged | 89+ |
+| Tools | 54 (9 Jupiter tools added: limit orders, DCA, token search/security/holdings) |
 | Skills | 16 |
-| Android Bridge endpoints | 18+ (MWA sign-only added) |
+| Android Bridge endpoints | 18+ |
 | Telegram commands | 7 |
-| Lines of JS (main.js) | ~6,100 |
-| Lines of Kotlin | ~9,600 |
+| Lines of JS (main.js) | ~7,200 |
+| Lines of Kotlin | ~9,700 |
 | SQL.js tables | 4 |
 | Themes | 1 (DarkOps only) |
 
@@ -226,6 +231,12 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Date | Feature | PR |
 |------|---------|-----|
+| 2026-02-17 | Full Jupiter API integration — 9 tools (limit orders, DCA, token search/security/holdings) | #89 (BAT-109) |
+| 2026-02-17 | Unify Settings screen green colors | #88 (BAT-108) |
+| 2026-02-17 | Jupiter API key support in Settings (Wallet section) | #86 (BAT-107) |
+| 2026-02-17 | Fix Jupiter quote API endpoints | #84-85 (BAT-106) |
+| 2026-02-17 | Companion-tone message templates + TEMPLATES.md | #83 (BAT-105) |
+| 2026-02-17 | Context-aware /start message + centralized TEMPLATES.md | #82 (BAT-104) |
 | 2026-02-16 | Animations, collapsible sections & layout fixes | #81 (BAT-92) |
 | 2026-02-16 | Semantic action colors (green positive, red danger) | #80 (BAT-92) |
 | 2026-02-16 | telegram_send_file tool | #79 (BAT-68) |
