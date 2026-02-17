@@ -236,6 +236,7 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Date | Feature | PR |
 |------|---------|-----|
+| 2026-02-17 | Agent health dashboard — API error state detection, visual indicators (green/amber/red), error banners | #96 (BAT-134) |
 | 2026-02-17 | Fix 6 broken Jupiter tools — correct API fields, MWA signing, BigInt precision, query params | #95 (BAT-113) |
 | 2026-02-17 | Wallet & secrets hardening — ALT bypass fix, read blocklist, js_eval sandbox | #94 (BAT-115) |
 | 2026-02-17 | Tool confirmation gates — YES/NO for SMS, call, Jupiter orders + rate limiting | #93 (BAT-114) |
