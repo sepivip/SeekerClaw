@@ -2930,8 +2930,8 @@ async function executeTool(name, input, chatId) {
             if (!filePath) return { error: 'Access denied: path outside workspace' };
 
             // Skill file write protection: writes to skills/ directory are blocked
-            // unless the user explicitly asked for it (defense against prompt injection
-            // creating persistent backdoor skills via external content instructions).
+            // when suspicious injection patterns are detected in the content (defense
+            // against prompt injection creating persistent backdoor skills).
             const relPath = path.relative(workDir, filePath);
             const relPathLower = relPath.toLowerCase();
             if (relPathLower.startsWith('skills' + path.sep) || relPathLower.startsWith('skills/')) {
