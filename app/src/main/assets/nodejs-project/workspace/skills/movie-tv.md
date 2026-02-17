@@ -31,7 +31,7 @@ memory_search({ query: "TMDB_API_KEY" })
 
 If not found, user can get a free key at: https://www.themoviedb.org/settings/api
 
-Default demo key (limited): `demo` - may work for testing
+Note: A valid TMDB API key is required — there is no demo key. Get a free key at the link above.
 
 ## API Endpoints
 
