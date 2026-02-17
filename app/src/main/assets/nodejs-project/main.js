@@ -257,7 +257,10 @@ const lastToolUseTime = new Map();      // toolName -> timestamp
 
 // Format a human-readable confirmation message for the user
 function formatConfirmationMessage(toolName, input) {
-    const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').slice(0, 200);
+    const esc = (s) => {
+        let v = String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        return v.length > 200 ? v.slice(0, 197) + '...' : v;
+    };
     let details;
     switch (toolName) {
         case 'android_sms':
@@ -303,6 +306,15 @@ function requestConfirmation(chatId, toolName, input) {
             text: msg,
             parse_mode: 'HTML',
             disable_notification: false,
+        }).then((result) => {
+            if (result && result.ok === false) {
+                log(`[Confirm] Telegram rejected confirmation message: ${JSON.stringify(result).slice(0, 200)}`);
+                pendingConfirmations.delete(chatId);
+                clearTimeout(timer);
+                resolve(false);
+            } else if (result && result.result && result.result.message_id) {
+                recordSentMessage(chatId, result.result.message_id, msg);
+            }
         }).catch((err) => {
             log(`[Confirm] Failed to send confirmation message: ${err.message}`);
             pendingConfirmations.delete(chatId);
