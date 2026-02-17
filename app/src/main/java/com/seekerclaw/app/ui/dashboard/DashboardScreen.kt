@@ -147,9 +147,15 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
 
     val isRunning = status == ServiceStatus.RUNNING || status == ServiceStatus.STARTING
 
+    // Respect system animation scale setting (accessibility)
+    val animatorScale = android.provider.Settings.Global.getFloat(
+        context.contentResolver, android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1.0f
+    )
+
     // Pulse animation for status dot — runs when RUNNING and not in error state
     val shouldPulse = status == ServiceStatus.RUNNING &&
-        health.apiStatus != "error" && health.apiStatus != "stale"
+        health.apiStatus != "error" && health.apiStatus != "stale" &&
+        animatorScale > 0f
     val pulseAlpha = if (shouldPulse) {
         val infiniteTransition = rememberInfiniteTransition(label = "statusPulse")
         infiniteTransition.animateFloat(

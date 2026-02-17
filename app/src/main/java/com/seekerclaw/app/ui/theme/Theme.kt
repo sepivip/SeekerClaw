@@ -94,7 +94,7 @@ val DarkOpsThemeColors = ThemeColors(
 
     textPrimary = Color(0xF0FFFFFF),   // White ~94%
     textSecondary = Color(0xFF9CA3AF), // Tailwind gray-400
-    textDim = Color(0xFF9CA3AF),       // Tailwind gray-400 (WCAG AA ~5.5:1)
+    textDim = Color(0xFF9CA3AF),       // Tailwind gray-400 (~4.2:1 contrast vs background)
     textInteractive = Color(0xB3FFFFFF), // 70% white — Edit labels
 
     borderSubtle = Color(0xFF374151), // Tailwind gray-700 — switch tracks, button borders

@@ -109,7 +109,7 @@ fun LogsScreen() {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
                     Icons.Default.Terminal,
-                    contentDescription = null,
+                    contentDescription = "",
                     tint = SeekerClawColors.Primary,
                     modifier = Modifier.size(24.dp),
                 )
