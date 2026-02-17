@@ -1319,16 +1319,18 @@ function parseSkillFile(content, skillDir) {
     return skill;
 }
 
+const _skillWarningsLogged = new Set();
 function validateSkillFormat(skill, filePath) {
+    if (_skillWarningsLogged.has(filePath)) return;
     const warnings = [];
     if (!skill.name) warnings.push('missing "name"');
     if (!skill.description) warnings.push('missing "description"');
     if (!skill.version) warnings.push('missing "version" — add version field for auto-update support');
     if (skill.triggers.length > 0 && skill.description) {
-        // Has legacy triggers — recommend removing them
         warnings.push('has legacy "Trigger:" line — description-based matching preferred');
     }
     if (warnings.length > 0) {
+        _skillWarningsLogged.add(filePath);
         log(`Skill format warning (${path.basename(filePath)}): ${warnings.join(', ')}`);
     }
 }
@@ -1351,8 +1353,8 @@ function loadSkills() {
                     try {
                         const content = fs.readFileSync(skillPath, 'utf8');
                         const skill = parseSkillFile(content, path.join(SKILLS_DIR, entry.name));
+                        validateSkillFormat(skill, skillPath);
                         if (skill.name) {
-                            validateSkillFormat(skill, skillPath);
                             skill.filePath = skillPath;
                             skills.push(skill);
                             log(`Loaded skill: ${skill.name} (triggers: ${skill.triggers.join(', ')})`);
@@ -1367,8 +1369,8 @@ function loadSkills() {
                 try {
                     const content = fs.readFileSync(filePath, 'utf8');
                     const skill = parseSkillFile(content, SKILLS_DIR);
+                    validateSkillFormat(skill, filePath);
                     if (skill.name) {
-                        validateSkillFormat(skill, filePath);
                         skill.filePath = filePath;
                         skills.push(skill);
                         log(`Loaded skill: ${skill.name} (triggers: ${skill.triggers.join(', ')})`);
