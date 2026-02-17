@@ -24,6 +24,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -582,6 +583,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
             ) {
                 if (walletAddress != null) {
                 // Connected state — address with copy button
+                val address = walletAddress!!
                 val hapticCopy = LocalHapticFeedback.current
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -596,24 +598,27 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                     )
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = "${walletAddress!!.take(6)}\u2026${walletAddress!!.takeLast(4)}",
+                            text = "${address.take(6)}\u2026${address.takeLast(4)}",
                             fontFamily = FontFamily.Default,
                             fontSize = 13.sp,
                             color = SeekerClawColors.TextSecondary,
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "Copy",
-                            fontFamily = FontFamily.Default,
-                            fontSize = 12.sp,
-                            color = SeekerClawColors.TextInteractive,
-                            modifier = Modifier.clickable {
+                        TextButton(
+                            onClick = {
                                 val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                clipboard.setPrimaryClip(ClipData.newPlainText("wallet address", walletAddress))
+                                clipboard.setPrimaryClip(ClipData.newPlainText("wallet address", address))
                                 hapticCopy.performHapticFeedback(HapticFeedbackType.LongPress)
                                 Toast.makeText(context, "Address copied", Toast.LENGTH_SHORT).show()
                             },
-                        )
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                            modifier = Modifier.height(32.dp),
+                        ) {
+                            Text(
+                                text = "Copy",
+                                fontSize = 12.sp,
+                                color = SeekerClawColors.TextInteractive,
+                            )
+                        }
                     }
                 }
 
