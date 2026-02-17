@@ -1936,6 +1936,24 @@ async function sendTyping(chatId) {
     await telegram('sendChatAction', { chat_id: chatId, action: 'typing' }).catch(() => {});
 }
 
+async function sendStatusMessage(chatId, text) {
+    try {
+        const result = await telegram('sendMessage', {
+            chat_id: chatId,
+            text,
+            disable_notification: true,
+        });
+        return result?.result?.message_id ?? null;
+    } catch (e) {
+        return null;
+    }
+}
+
+async function deleteStatusMessage(chatId, msgId) {
+    if (!msgId) return;
+    await telegram('deleteMessage', { chat_id: chatId, message_id: msgId }).catch(() => {});
+}
+
 // ============================================================================
 // TOOLS
 // ============================================================================
@@ -6291,9 +6309,18 @@ async function chat(chatId, userMessage) {
 
         // Execute each tool and collect results
         const toolResults = [];
+        let statusMsgId = null;
         for (const toolUse of toolUses) {
             log(`Tool use: ${toolUse.name}`);
-            const result = await executeTool(toolUse.name, toolUse.input, chatId);
+            const statusText = TOOL_STATUS_MAP[toolUse.name];
+            if (statusText) statusMsgId = await sendStatusMessage(chatId, statusText);
+            let result;
+            try {
+                result = await executeTool(toolUse.name, toolUse.input, chatId);
+            } finally {
+                await deleteStatusMessage(chatId, statusMsgId);
+                statusMsgId = null;
+            }
             toolResults.push({
                 type: 'tool_result',
                 tool_use_id: toolUse.id,
@@ -6739,6 +6766,26 @@ const lastIncomingMessages = new Map(); // chatId -> { messageId, chatId }
 const sentMessageCache = new Map(); // chatId -> Map<messageId, { timestamp, preview }>
 const SENT_CACHE_MAX = 20;
 const SENT_CACHE_TTL = 24 * 60 * 60 * 1000; // 24h (Telegram forbids deleting >48h old messages)
+
+const TOOL_STATUS_MAP = {
+    web_search:             '🔍 Searching...',
+    web_fetch:              '🌐 Fetching...',
+    shell_exec:             '⚙️ Running...',
+    js_eval:                '⚙️ Running...',
+    solana_balance:         '💰 Checking wallet...',
+    solana_send:            '🚀 Sending...',
+    solana_swap:            '🔄 Executing swap...',
+    solana_quote:           '💱 Getting quote...',
+    solana_history:         '📋 Checking history...',
+    solana_price:           '📈 Checking prices...',
+    jupiter_dca_create:     '🔄 Setting up DCA...',
+    jupiter_dca_cancel:     '🔄 Cancelling DCA...',
+    jupiter_trigger_create: '⚡ Setting up order...',
+    jupiter_trigger_cancel: '⚡ Cancelling order...',
+    memory_search:          '🧠 Remembering...',
+    android_camera_capture: '📷 Capturing...',
+    android_location:       '📍 Getting location...',
+};
 
 function recordSentMessage(chatId, messageId, text) {
     const key = String(chatId);
