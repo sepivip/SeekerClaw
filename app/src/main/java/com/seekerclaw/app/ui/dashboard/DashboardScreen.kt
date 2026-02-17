@@ -52,6 +52,7 @@ import com.seekerclaw.app.ui.theme.SeekerClawColors
 import com.seekerclaw.app.util.Analytics
 import com.seekerclaw.app.util.LogCollector
 import com.seekerclaw.app.util.LogLevel
+import com.seekerclaw.app.util.AgentHealth
 import com.seekerclaw.app.util.ServiceState
 import com.seekerclaw.app.util.ServiceStatus
 import android.content.Context
@@ -79,6 +80,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
     val messageCount by ServiceState.messageCount.collectAsState()
     val messagesToday by ServiceState.messagesToday.collectAsState()
     val lastActivityTime by ServiceState.lastActivityTime.collectAsState()
+    val health by ServiceState.agentHealth.collectAsState()
     val logs by LogCollector.logs.collectAsState()
 
     val cfgVersion by ConfigManager.configVersion
@@ -145,8 +147,10 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
 
     val isRunning = status == ServiceStatus.RUNNING || status == ServiceStatus.STARTING
 
-    // Pulse animation for status dot — only runs when RUNNING
-    val pulseAlpha = if (status == ServiceStatus.RUNNING) {
+    // Pulse animation for status dot — runs when RUNNING and not in error state
+    val shouldPulse = status == ServiceStatus.RUNNING &&
+        health.apiStatus !in listOf("error", "stale")
+    val pulseAlpha = if (shouldPulse) {
         val infiniteTransition = rememberInfiniteTransition(label = "statusPulse")
         infiniteTransition.animateFloat(
             initialValue = 0.4f,
@@ -161,15 +165,39 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
         1.0f
     }
 
+    // Health-aware status color and text (BAT-134)
+    val apiUnhealthy = status == ServiceStatus.RUNNING &&
+        health.apiStatus !in listOf("healthy", "unknown")
+
     val statusColor = when (status) {
-        ServiceStatus.RUNNING -> SeekerClawColors.Accent
+        ServiceStatus.RUNNING -> when (health.apiStatus) {
+            "degraded", "stale" -> SeekerClawColors.Warning
+            "error" -> SeekerClawColors.Error
+            else -> SeekerClawColors.Accent
+        }
         ServiceStatus.STARTING -> SeekerClawColors.Warning
         ServiceStatus.STOPPED -> SeekerClawColors.TextDim
         ServiceStatus.ERROR -> SeekerClawColors.Error
     }
 
     val statusText = when (status) {
-        ServiceStatus.RUNNING -> "Online"
+        ServiceStatus.RUNNING -> when (health.apiStatus) {
+            "degraded" -> when (health.lastErrorType) {
+                "rate_limit" -> "Rate Limited"
+                "overloaded" -> "API Overloaded"
+                "cloudflare" -> "API Unreachable"
+                else -> "API Unstable"
+            }
+            "error" -> when (health.lastErrorType) {
+                "auth" -> "Auth Error"
+                "billing" -> "Billing Issue"
+                "quota" -> "Quota Exceeded"
+                "network" -> "Network Error"
+                else -> "API Error"
+            }
+            "stale" -> "Agent Unresponsive"
+            else -> "Online"
+        }
         ServiceStatus.STARTING -> "Starting\u2026"
         ServiceStatus.STOPPED -> "Offline"
         ServiceStatus.ERROR -> {
@@ -206,7 +234,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
         Spacer(modifier = Modifier.height(2.dp))
 
         Text(
-            text = "Your AI Agent",
+            text = "AgentOS",
             fontFamily = FontFamily.Default,
             fontSize = 14.sp,
             color = SeekerClawColors.TextDim,
@@ -236,6 +264,45 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Medium,
                     color = SeekerClawColors.Warning,
+                )
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+
+        // API health error banner (BAT-134)
+        if (apiUnhealthy) {
+            val bannerColor = if (health.apiStatus == "error") SeekerClawColors.Error
+                else SeekerClawColors.Warning
+            val bannerText = when (health.lastErrorType) {
+                "auth" -> "API key rejected (${health.lastErrorStatus ?: 403}) \u2014 check Settings"
+                "billing" -> "API billing issue \u2014 check console.anthropic.com"
+                "quota" -> "API quota exceeded \u2014 try again later or upgrade plan"
+                "rate_limit" -> "Rate limited \u2014 retrying automatically"
+                "server", "overloaded" -> "Claude API temporarily unavailable \u2014 retrying"
+                "cloudflare" -> "Claude API unreachable \u2014 retrying"
+                "network" -> "Cannot reach Claude API \u2014 check internet connection"
+                else -> if (health.apiStatus == "stale") "Agent may have stopped responding \u2014 try restarting"
+                    else "API error \u2014 check Console for details"
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(bannerColor.copy(alpha = 0.12f), shape)
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(bannerColor),
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Text(
+                    text = bannerText,
+                    fontFamily = FontFamily.Default,
+                    fontSize = 12.sp,
+                    color = bannerColor,
                 )
             }
             Spacer(modifier = Modifier.height(16.dp))
@@ -348,7 +415,12 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             val gatewaySubtitle = when (status) {
-                ServiceStatus.RUNNING -> "OpenClaw engine"
+                ServiceStatus.RUNNING -> when (health.apiStatus) {
+                    "degraded" -> "Engine retrying"
+                    "error" -> "Engine error"
+                    "stale" -> "Engine unresponsive"
+                    else -> "OpenClaw engine"
+                }
                 ServiceStatus.STARTING -> "Starting..."
                 ServiceStatus.STOPPED -> "Offline"
                 ServiceStatus.ERROR -> {
@@ -357,7 +429,11 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
                 }
             }
             val gatewayDotColor = when (status) {
-                ServiceStatus.RUNNING -> SeekerClawColors.Accent
+                ServiceStatus.RUNNING -> when (health.apiStatus) {
+                    "degraded", "stale" -> SeekerClawColors.Warning
+                    "error" -> SeekerClawColors.Error
+                    else -> SeekerClawColors.Accent
+                }
                 ServiceStatus.STARTING -> SeekerClawColors.Warning
                 ServiceStatus.STOPPED -> SeekerClawColors.TextDim
                 ServiceStatus.ERROR -> SeekerClawColors.Error
@@ -377,13 +453,27 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
             }
 
             val aiSubtitle = if (!hasCredential) "Credential missing" else when (status) {
-                ServiceStatus.RUNNING -> modelDisplayName(config?.model)
+                ServiceStatus.RUNNING -> when (health.apiStatus) {
+                    "degraded" -> "${modelDisplayName(config?.model)} (retrying)"
+                    "error" -> when (health.lastErrorType) {
+                        "auth" -> "Auth expired"
+                        "billing" -> "Billing issue"
+                        "quota" -> "Quota exceeded"
+                        else -> "API error"
+                    }
+                    "stale" -> "Unresponsive"
+                    else -> modelDisplayName(config?.model)
+                }
                 ServiceStatus.STARTING -> "Loading model..."
                 ServiceStatus.ERROR -> "Model error"
                 ServiceStatus.STOPPED -> "Offline"
             }
             val aiDotColor = if (!hasCredential) SeekerClawColors.Error else when (status) {
-                ServiceStatus.RUNNING -> SeekerClawColors.Accent
+                ServiceStatus.RUNNING -> when (health.apiStatus) {
+                    "degraded", "stale" -> SeekerClawColors.Warning
+                    "error" -> SeekerClawColors.Error
+                    else -> SeekerClawColors.Accent
+                }
                 ServiceStatus.STARTING -> SeekerClawColors.Warning
                 ServiceStatus.ERROR -> SeekerClawColors.Error
                 ServiceStatus.STOPPED -> SeekerClawColors.TextDim

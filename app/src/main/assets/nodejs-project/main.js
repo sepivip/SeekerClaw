@@ -5359,6 +5359,47 @@ function writeClaudeUsageState(data) {
 }
 
 // ============================================================================
+// AGENT HEALTH STATE (BAT-134)
+// Tracks API health for dashboard visual indicators.
+// Written to file only on state CHANGE + 60s heartbeat for staleness detection.
+// ============================================================================
+
+const AGENT_HEALTH_FILE = path.join(workDir, 'agent_health_state');
+
+const agentHealth = {
+    apiStatus: 'unknown',       // 'unknown' | 'healthy' | 'degraded' | 'error'
+    lastError: null,            // { type, status, message }
+    consecutiveFailures: 0,
+    lastSuccessAt: null,        // ISO timestamp
+    lastFailureAt: null,        // ISO timestamp
+    updatedAt: null,            // ISO timestamp (for staleness detection)
+};
+
+function writeAgentHealthFile() {
+    try {
+        agentHealth.updatedAt = localTimestamp();
+        const tmpPath = AGENT_HEALTH_FILE + '.tmp';
+        fs.writeFileSync(tmpPath, JSON.stringify(agentHealth));
+        fs.renameSync(tmpPath, AGENT_HEALTH_FILE);
+    } catch (_) {}
+}
+
+function updateAgentHealth(newStatus, errorInfo) {
+    const changed = agentHealth.apiStatus !== newStatus;
+    agentHealth.apiStatus = newStatus;
+    if (errorInfo) {
+        agentHealth.lastError = errorInfo;
+        agentHealth.lastFailureAt = localTimestamp();
+        agentHealth.consecutiveFailures++;
+    }
+    if (newStatus === 'healthy') {
+        agentHealth.lastSuccessAt = localTimestamp();
+        agentHealth.consecutiveFailures = 0;
+    }
+    if (changed) writeAgentHealthFile();
+}
+
+// ============================================================================
 // SOLANA RPC
 // ============================================================================
 
@@ -6639,6 +6680,7 @@ async function claudeApiCall(body, chatId) {
                         );
                     } catch (_) {}
                 }
+                updateAgentHealth('error', { type: 'network', status: -1, message: networkErr.message });
                 throw networkErr;
             }
 
@@ -6653,6 +6695,7 @@ async function claudeApiCall(body, chatId) {
                     const backoffMs = Math.min(baseMs * Math.pow(2, retries), 30000);
                     const waitMs = retryAfterMs > 0 ? retryAfterMs : backoffMs;
                     log(`[Retry] Claude API ${res.status} (${errClass.type}), retry ${retries + 1}/${MAX_RETRIES}, waiting ${waitMs}ms`);
+                    updateAgentHealth('degraded', { type: errClass.type, status: res.status, message: errClass.userMessage });
                     retries++;
                     await new Promise(r => setTimeout(r, waitMs));
                     continue;
@@ -6682,9 +6725,13 @@ async function claudeApiCall(body, chatId) {
             }
         }
 
-        // Report usage metrics + cache status
+        // Report usage metrics + cache status + health state
         if (res.status === 200) {
             reportUsage(res.data?.usage);
+            updateAgentHealth('healthy', null);
+        } else {
+            const errClass = classifyApiError(res.status, res.data);
+            updateAgentHealth('error', { type: errClass.type, status: res.status, message: errClass.userMessage });
         }
 
         // Capture rate limit headers and update module-level tracking
@@ -7832,6 +7879,9 @@ telegram('getMe')
             indexMemoryFiles();
             writeDbSummaryFile();
             setInterval(() => { if (dbSummaryDirty) writeDbSummaryFile(); }, 30000);
+
+            // Agent health heartbeat: write every 60s for staleness detection (BAT-134)
+            setInterval(() => writeAgentHealthFile(), 60000);
 
             // Flush old updates to avoid re-processing messages after restart
             try {

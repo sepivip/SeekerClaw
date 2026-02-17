@@ -18,6 +18,16 @@ private const val TAG = "ServiceState"
 
 enum class ServiceStatus { STOPPED, STARTING, RUNNING, ERROR }
 
+/** Agent API health state read from Node.js health file (BAT-134). */
+data class AgentHealth(
+    val apiStatus: String = "unknown",      // unknown, healthy, degraded, error, stale
+    val lastErrorType: String? = null,      // auth, billing, rate_limit, server, network, etc.
+    val lastErrorStatus: Int? = null,       // HTTP status code (-1 for network)
+    val lastErrorMessage: String? = null,
+    val consecutiveFailures: Int = 0,
+    val isStale: Boolean = false,
+)
+
 sealed class ClaudeUsageData {
     abstract val updatedAt: Long
     abstract val error: String?
@@ -67,6 +77,9 @@ object ServiceState {
 
     private val _claudeUsage = MutableStateFlow<ClaudeUsageData?>(null)
     val claudeUsage: StateFlow<ClaudeUsageData?> = _claudeUsage
+
+    private val _agentHealth = MutableStateFlow(AgentHealth())
+    val agentHealth: StateFlow<AgentHealth> = _agentHealth
 
     // Per-boot bridge auth token — persisted to file for cross-process access.
     // Set by OpenClawService (:node process), read by UI (main process) via polling.
@@ -183,6 +196,7 @@ object ServiceState {
                 readFromFile()
                 readBridgeToken()
                 readClaudeUsageFile()
+                readAgentHealthFile()
                 delay(1000)
             }
         }
@@ -261,6 +275,38 @@ object ServiceState {
                     if (_tokensTotal.value != fileTokensTotal) _tokensTotal.value = fileTokensTotal
                 }
             }
+        } catch (_: Exception) {}
+    }
+
+    private fun readAgentHealthFile() {
+        val parent = stateFile?.parentFile ?: return
+        val file = File(parent, "workspace/agent_health_state")
+        try {
+            if (!file.exists()) return
+            val json = JSONObject(file.readText())
+            val apiStatus = json.optString("apiStatus", "unknown")
+            val updatedAt = json.optString("updatedAt", "")
+
+            // Staleness check: if file > 120s old, agent may have crashed
+            val stale = if (updatedAt.isNotEmpty()) {
+                try {
+                    val fileTime = java.time.Instant.parse(updatedAt).toEpochMilli()
+                    System.currentTimeMillis() - fileTime > 120_000
+                } catch (_: Exception) { true }
+            } else true
+
+            val lastErr = if (json.has("lastError") && !json.isNull("lastError"))
+                json.getJSONObject("lastError") else null
+
+            val health = AgentHealth(
+                apiStatus = if (stale) "stale" else apiStatus,
+                lastErrorType = lastErr?.optString("type"),
+                lastErrorStatus = lastErr?.optInt("status"),
+                lastErrorMessage = lastErr?.optString("message"),
+                consecutiveFailures = json.optInt("consecutiveFailures", 0),
+                isStale = stale,
+            )
+            if (_agentHealth.value != health) _agentHealth.value = health
         } catch (_: Exception) {}
     }
 
