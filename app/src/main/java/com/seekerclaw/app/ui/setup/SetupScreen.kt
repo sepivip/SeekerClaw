@@ -563,7 +563,7 @@ private fun WelcomeStep(
             onClick = { uriHandler.openUri("https://seekerclaw.xyz/quick-setup.html") },
         ) {
             Icon(
-                Icons.Default.HelpOutline,
+                @Suppress("DEPRECATION") Icons.Default.HelpOutline,
                 contentDescription = null,
                 tint = SeekerClawColors.TextDim,
                 modifier = Modifier.size(16.dp),
