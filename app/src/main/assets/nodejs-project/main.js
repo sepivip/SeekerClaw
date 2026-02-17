@@ -260,6 +260,27 @@ const TOOL_RATE_LIMITS = {
 const pendingConfirmations = new Map(); // chatId -> { resolve, timer }
 const lastToolUseTime = new Map();      // toolName -> timestamp
 
+// Ephemeral status messages shown in Telegram while slow tools execute (BAT-150)
+const TOOL_STATUS_MAP = {
+    web_search:             '🔍 Searching...',
+    web_fetch:              '🌐 Fetching...',
+    shell_exec:             '⚙️ Running...',
+    js_eval:                '⚙️ Running...',
+    solana_balance:         '💰 Checking wallet...',
+    solana_send:            '💸 Sending...',
+    solana_swap:            '🔄 Executing swap...',
+    solana_quote:           '💱 Getting quote...',
+    solana_history:         '📜 Checking history...',
+    solana_price:           '📈 Checking prices...',
+    jupiter_dca_create:     '🔄 Setting up DCA...',
+    jupiter_dca_cancel:     '🔄 Cancelling DCA...',
+    jupiter_trigger_create: '⏰ Setting up order...',
+    jupiter_trigger_cancel: '⏰ Cancelling order...',
+    memory_search:          '🧠 Remembering...',
+    android_camera_capture: '📷 Capturing...',
+    android_location:       '📍 Getting location...',
+};
+
 // Format a human-readable confirmation message for the user
 function formatConfirmationMessage(toolName, input) {
     const esc = (s) => {
@@ -7712,26 +7733,6 @@ const lastIncomingMessages = new Map(); // chatId -> { messageId, chatId }
 const sentMessageCache = new Map(); // chatId -> Map<messageId, { timestamp, preview }>
 const SENT_CACHE_MAX = 20;
 const SENT_CACHE_TTL = 24 * 60 * 60 * 1000; // 24h (Telegram forbids deleting >48h old messages)
-
-const TOOL_STATUS_MAP = {
-    web_search:             '🔍 Searching...',
-    web_fetch:              '🌐 Fetching...',
-    shell_exec:             '⚙️ Running...',
-    js_eval:                '⚙️ Running...',
-    solana_balance:         '💰 Checking wallet...',
-    solana_send:            '🚀 Sending...',
-    solana_swap:            '🔄 Executing swap...',
-    solana_quote:           '💱 Getting quote...',
-    solana_history:         '📋 Checking history...',
-    solana_price:           '📈 Checking prices...',
-    jupiter_dca_create:     '🔄 Setting up DCA...',
-    jupiter_dca_cancel:     '🔄 Cancelling DCA...',
-    jupiter_trigger_create: '⚡ Setting up order...',
-    jupiter_trigger_cancel: '⚡ Cancelling order...',
-    memory_search:          '🧠 Remembering...',
-    android_camera_capture: '📷 Capturing...',
-    android_location:       '📍 Getting location...',
-};
 
 function recordSentMessage(chatId, messageId, text) {
     const key = String(chatId);
