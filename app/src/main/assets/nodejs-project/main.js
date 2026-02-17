@@ -4111,7 +4111,8 @@ async function executeTool(name, input, chatId) {
                     wrapAndUnwrapSol: true,
                 };
 
-                const res = await jupiterRequest({
+                // No retry for createOrder — non-idempotent POST could create duplicates
+                const res = await httpRequest({
                     hostname: 'api.jup.ag',
                     path: '/trigger/v1/createOrder',
                     method: 'POST',
@@ -4283,9 +4284,9 @@ async function executeTool(name, input, chatId) {
                     return { error: e.message };
                 }
 
-                // 3. Call Jupiter Trigger API — cancelOrder
+                // 3. Call Jupiter Trigger API — cancelOrder (no retry — non-idempotent POST)
                 log(`[Jupiter Trigger] Cancelling order: ${input.orderId}`);
-                const res = await jupiterRequest({
+                const res = await httpRequest({
                     hostname: 'api.jup.ag',
                     path: '/trigger/v1/cancelOrder',
                     method: 'POST',
@@ -4491,7 +4492,8 @@ async function executeTool(name, input, chatId) {
                     },
                 };
 
-                const res = await jupiterRequest({
+                // No retry for createOrder — non-idempotent POST could create duplicates
+                const res = await httpRequest({
                     hostname: 'api.jup.ag',
                     path: '/recurring/v1/createOrder',
                     method: 'POST',
@@ -4675,9 +4677,9 @@ async function executeTool(name, input, chatId) {
                     return { error: e.message };
                 }
 
-                // 3. Call Jupiter Recurring API — cancelOrder
+                // 3. Call Jupiter Recurring API — cancelOrder (no retry — non-idempotent POST)
                 log(`[Jupiter DCA] Cancelling order: ${input.orderId}`);
-                const res = await jupiterRequest({
+                const res = await httpRequest({
                     hostname: 'api.jup.ag',
                     path: '/recurring/v1/cancelOrder',
                     method: 'POST',
