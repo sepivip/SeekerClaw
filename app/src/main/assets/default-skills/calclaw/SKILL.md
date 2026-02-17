@@ -160,7 +160,7 @@ Example response after photo:
 ✅ Logged: Chicken, rice & broccoli (520 cal, 45g protein)
 
 📊 Today: 1,250 / 2,000 cal | 98 / 160g protein
-▓▓▓▓▓▓▓░░░░░ 63% cal | ▓▓▓▓▓▓▓░░░░░ 61% protein
+▓▓▓▓▓▓▓▓░░░░ 63% cal | ▓▓▓▓▓▓▓░░░░░ 61% protein
 🍽️ 750 cal remaining | 62g protein to go
 ```
 
@@ -273,18 +273,20 @@ Use these as calibration anchors. Adjust for portion size.
 
 ## Cron Integration
 
-Suggest reminders during setup. Create with:
+Suggest reminders during setup. Supported time formats: `"every N days"`, `"every N hours"`, `"in N minutes"`, `"at Xam/pm"`, `"tomorrow at Xam"`.
 
 ```javascript
-// Morning check-in
-cron_create({ name: "CalClaw breakfast", message: "🍳 Good morning! What did you have for breakfast?", time: "every day at 8am" })
+// Daily check-in (every 24 hours — create at morning time so it fires mornings)
+cron_create({ name: "CalClaw breakfast", message: "🍳 Good morning! What did you have for breakfast?", time: "every 1 day" })
 
-// Evening reminder
-cron_create({ name: "CalClaw dinner", message: "🌙 Don't forget to log dinner before bed!", time: "every day at 9pm" })
+// Daily evening reminder (every 24 hours — create at evening time so it fires evenings)
+cron_create({ name: "CalClaw dinner", message: "🌙 Don't forget to log dinner before bed!", time: "every 1 day" })
 
-// Weekly summary (auto-generate and send)
-cron_create({ name: "CalClaw weekly", message: "📊 Time for your weekly CalClaw summary! Say 'week' to see it.", time: "every Sunday at 8pm" })
+// Weekly summary (every 7 days)
+cron_create({ name: "CalClaw weekly", message: "📊 Time for your weekly CalClaw summary! Say 'week' to see it.", time: "every 7 days" })
 ```
+
+Note: Recurring crons fire at the interval from creation time. Create morning reminders in the morning and evening reminders in the evening so they fire at the right time of day.
 
 ## Personality
 
