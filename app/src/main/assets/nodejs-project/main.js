@@ -276,7 +276,7 @@ function formatConfirmationMessage(toolName, input) {
             details = `\u{1F4DE} <b>Make Phone Call</b>\n  To: <code>${esc(input.phone)}</code>`;
             break;
         case 'jupiter_trigger_create':
-            details = `\u{1F4CA} <b>Create ${esc(input.orderType || 'limit')} Order</b>\n  Sell: ${esc(input.inputAmount)} ${esc(input.inputToken)}\n  For: ${esc(input.outputToken)}\n  Trigger price: ${esc(input.triggerPrice)}`;
+            details = `\u{1F4CA} <b>Create Trigger Order</b>\n  Sell: ${esc(input.inputAmount)} ${esc(input.inputToken)}\n  For: ${esc(input.outputToken)}\n  Trigger price: ${esc(input.triggerPrice)}`;
             break;
         case 'jupiter_dca_create':
             details = `\u{1F504} <b>Create DCA Order</b>\n  ${esc(input.amountPerCycle)} ${esc(input.inputToken)} \u{2192} ${esc(input.outputToken)}\n  Every: ${esc(input.cycleInterval)}\n  Cycles: ${input.totalCycles != null ? esc(String(input.totalCycles)) : 'Unlimited'}`;
@@ -2589,7 +2589,7 @@ const TOOLS = [
     },
     {
         name: 'jupiter_trigger_create',
-        description: 'Create a limit order or stop-loss order on Jupiter. Requires Jupiter API key (get free at portal.jup.ag). Order executes automatically when price condition is met. Use for: buy at lower price (limit buy), sell at higher price (limit sell), or stop-loss protection.',
+        description: 'Create a trigger (limit) order on Jupiter. Requires Jupiter API key (get free at portal.jup.ag). Order executes automatically when price condition is met. Use for: buy at lower price (limit buy) or sell at higher price (limit sell).',
         input_schema: {
             type: 'object',
             properties: {
@@ -2597,7 +2597,6 @@ const TOOLS = [
                 outputToken: { type: 'string', description: 'Token to buy — symbol (e.g., "USDC") or mint address' },
                 inputAmount: { type: 'number', description: 'Amount of inputToken to sell (in human units)' },
                 triggerPrice: { type: 'number', description: 'Price at which order triggers (outputToken per inputToken, e.g., 90 means 1 SOL = 90 USDC)' },
-                orderType: { type: 'string', enum: ['limit', 'stop'], description: 'Order type: "limit" (execute when price is favorable) or "stop" (stop-loss, execute when price hits threshold). Optional, defaults to "limit".' },
                 expiryTime: { type: 'number', description: 'Order expiration timestamp (Unix seconds). Optional, defaults to 30 days from now.' }
             },
             required: ['inputToken', 'outputToken', 'inputAmount', 'triggerPrice']
@@ -3962,69 +3961,58 @@ async function executeTool(name, input, chatId) {
                     return { error: e.message };
                 }
 
-                // 3. Validate and convert input amount (using BigInt for precision safety)
-                let inputAmountLamports;
+                // 3. Validate and convert input amount (makingAmount in raw units)
+                let makingAmount;
                 try {
-                    inputAmountLamports = parseInputAmountToLamports(input.inputAmount, inputToken.decimals);
+                    makingAmount = parseInputAmountToLamports(input.inputAmount, inputToken.decimals);
                 } catch (e) {
-                    return {
-                        error: 'Invalid input amount',
-                        details: e.message
-                    };
+                    return { error: 'Invalid input amount', details: e.message };
                 }
 
-                // 4. Validate triggerPrice (must be positive finite number)
+                // 4. Validate triggerPrice and compute takingAmount (raw output units)
                 const triggerPriceNum = Number(input.triggerPrice);
                 if (!Number.isFinite(triggerPriceNum) || triggerPriceNum <= 0) {
-                    return {
-                        error: 'Invalid trigger price',
-                        details: 'triggerPrice must be a positive finite number'
-                    };
+                    return { error: 'Invalid trigger price', details: 'triggerPrice must be a positive finite number' };
+                }
+                // takingAmount = inputAmount (human) * triggerPrice, converted to output token raw units
+                let takingAmount;
+                try {
+                    const takingHuman = Number(input.inputAmount) * triggerPriceNum;
+                    takingAmount = parseInputAmountToLamports(takingHuman, outputToken.decimals);
+                } catch (e) {
+                    return { error: 'Invalid taking amount calculation', details: e.message };
                 }
 
-                // 5. Validate orderType (must be 'limit' or 'stop')
-                const orderType = input.orderType || 'limit';
-                const allowedOrderTypes = ['limit', 'stop'];
-                if (!allowedOrderTypes.includes(orderType)) {
-                    return {
-                        error: 'Invalid orderType',
-                        details: "orderType must be one of: 'limit', 'stop'"
-                    };
-                }
-
-                // 6. Compute expiryTime: use provided value, or default to 30 days from now
+                // 5. Compute expiryTime: use provided value, or default to 30 days from now
                 let expiryTime;
                 if (input.expiryTime == null) {
-                    const THIRTY_DAYS_IN_MS = 30 * 24 * 60 * 60 * 1000;
-                    expiryTime = Math.floor((Date.now() + THIRTY_DAYS_IN_MS) / 1000);
+                    expiryTime = Math.floor((Date.now() + 30 * 24 * 60 * 60 * 1000) / 1000);
                 } else {
                     const expiryTimeNum = Number(input.expiryTime);
                     const nowInSeconds = Math.floor(Date.now() / 1000);
                     if (!Number.isFinite(expiryTimeNum) || expiryTimeNum <= 0) {
-                        return {
-                            error: 'Invalid expiryTime',
-                            details: 'expiryTime must be a positive finite Unix timestamp in seconds'
-                        };
+                        return { error: 'Invalid expiryTime', details: 'Must be a positive Unix timestamp in seconds' };
                     }
                     if (expiryTimeNum <= nowInSeconds) {
-                        return {
-                            error: 'Invalid expiryTime',
-                            details: 'expiryTime must be a Unix timestamp in the future'
-                        };
+                        return { error: 'Invalid expiryTime', details: 'Must be in the future' };
                     }
-                    // Normalize to integer Unix timestamp in seconds
                     expiryTime = Math.floor(expiryTimeNum);
                 }
 
-                // 7. Call Jupiter Trigger API
+                // 6. Call Jupiter Trigger API — createOrder
+                log(`[Jupiter Trigger] Creating order: ${input.inputAmount} ${inputToken.symbol} → ${outputToken.symbol} at ${input.triggerPrice}`);
                 const reqBody = {
                     inputMint: inputToken.address,
                     outputMint: outputToken.address,
-                    inputAmount: inputAmountLamports, // Already a string from parseInputAmountToLamports
-                    triggerPrice: triggerPriceNum.toString(),
-                    orderType: orderType,
-                    expiryTime: expiryTime,
-                    walletAddress: walletAddress
+                    maker: walletAddress,
+                    payer: walletAddress,
+                    params: {
+                        makingAmount: makingAmount,
+                        takingAmount: takingAmount,
+                        expiredAt: String(expiryTime),
+                    },
+                    computeUnitPrice: 'auto',
+                    wrapAndUnwrapSol: true,
                 };
 
                 const res = await httpRequest({
@@ -4042,14 +4030,46 @@ async function executeTool(name, input, chatId) {
                 }
 
                 const data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
+                if (!data.transaction) return { error: 'Jupiter did not return a transaction' };
+                if (!data.requestId) return { error: 'Jupiter did not return a requestId' };
+
+                // 7. Verify transaction (security — same as solana_swap)
+                try {
+                    const verification = verifySwapTransaction(data.transaction, walletAddress, { skipPayerCheck: true });
+                    if (!verification.valid) {
+                        log(`[Jupiter Trigger] Tx verification FAILED: ${verification.error}`);
+                        return { error: `Transaction rejected: ${verification.error}` };
+                    }
+                    log('[Jupiter Trigger] Tx verified — programs OK');
+                } catch (verifyErr) {
+                    log(`[Jupiter Trigger] Tx verification error: ${verifyErr.message}`);
+                    return { error: `Could not verify transaction: ${verifyErr.message}` };
+                }
+
+                // 8. Sign via MWA (120s timeout for user approval)
+                log('[Jupiter Trigger] Sending to wallet for approval (sign-only)...');
+                const signResult = await androidBridgeCall('/solana/sign-only', {
+                    transaction: data.transaction
+                }, 120000);
+                if (signResult.error) return { error: signResult.error };
+                if (!signResult.signedTransaction) return { error: 'No signed transaction returned from wallet' };
+
+                // 9. Execute (Jupiter broadcasts)
+                log('[Jupiter Trigger] Executing signed transaction...');
+                const execResult = await jupiterTriggerExecute(signResult.signedTransaction, data.requestId);
+                if (execResult.status === 'Failed') {
+                    return { error: `Order failed: ${execResult.error || 'Transaction execution failed'}` };
+                }
+                if (!execResult.signature) return { error: 'Jupiter execute returned no signature' };
+
                 const warnings = [];
                 if (inputToken.warning) warnings.push(`⚠️ ${inputToken.symbol}: ${inputToken.warning}`);
                 if (outputToken.warning) warnings.push(`⚠️ ${outputToken.symbol}: ${outputToken.warning}`);
 
                 return {
                     success: true,
-                    orderId: data.orderId,
-                    orderType: orderType,
+                    order: data.order,
+                    signature: execResult.signature,
                     inputToken: `${inputToken.symbol} (${inputToken.address})`,
                     outputToken: `${outputToken.symbol} (${outputToken.address})`,
                     inputAmount: input.inputAmount,
@@ -4099,10 +4119,9 @@ async function executeTool(name, input, chatId) {
                     }
                 }
 
-                // 3. Build query params (align with schema: use `status` and `page`)
-                const params = new URLSearchParams({ wallet: walletAddress });
+                // 3. Build query params
+                const params = new URLSearchParams({ user: walletAddress });
                 if (input.status) {
-                    // Jupiter API expects this as `orderStatus`
                     params.append('orderStatus', input.status);
                 }
                 if (input.page !== undefined && input.page !== null) {
@@ -4157,10 +4176,7 @@ async function executeTool(name, input, chatId) {
             try {
                 // 1. Validate required input
                 if (!input.orderId || String(input.orderId).trim() === '') {
-                    return {
-                        error: 'orderId is required',
-                        details: 'Please provide the orderId of the trigger order you want to cancel'
-                    };
+                    return { error: 'orderId is required' };
                 }
 
                 // 2. Get wallet address
@@ -4171,12 +4187,8 @@ async function executeTool(name, input, chatId) {
                     return { error: e.message };
                 }
 
-                // 3. Call Jupiter Trigger API
-                const reqBody = {
-                    orderId: input.orderId,
-                    walletAddress: walletAddress
-                };
-
+                // 3. Call Jupiter Trigger API — cancelOrder
+                log(`[Jupiter Trigger] Cancelling order: ${input.orderId}`);
                 const res = await httpRequest({
                     hostname: 'api.jup.ag',
                     path: '/trigger/v1/cancelOrder',
@@ -4185,18 +4197,48 @@ async function executeTool(name, input, chatId) {
                         'Content-Type': 'application/json',
                         'x-api-key': config.jupiterApiKey
                     }
-                }, reqBody);
+                }, {
+                    maker: walletAddress,
+                    order: input.orderId,
+                    computeUnitPrice: 'auto',
+                });
 
                 if (res.status !== 200) {
                     return { error: `Jupiter API error: ${res.status}`, details: res.data };
                 }
 
                 const data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
+                if (!data.transaction) return { error: 'Jupiter did not return a transaction' };
+                if (!data.requestId) return { error: 'Jupiter did not return a requestId' };
+
+                // 4. Verify transaction
+                try {
+                    const verification = verifySwapTransaction(data.transaction, walletAddress, { skipPayerCheck: true });
+                    if (!verification.valid) return { error: `Transaction rejected: ${verification.error}` };
+                } catch (e) {
+                    return { error: `Could not verify transaction: ${e.message}` };
+                }
+
+                // 5. Sign via MWA
+                log('[Jupiter Trigger] Sending cancel tx to wallet for approval...');
+                const signResult = await androidBridgeCall('/solana/sign-only', {
+                    transaction: data.transaction
+                }, 120000);
+                if (signResult.error) return { error: signResult.error };
+                if (!signResult.signedTransaction) return { error: 'No signed transaction returned from wallet' };
+
+                // 6. Execute
+                log('[Jupiter Trigger] Executing cancel transaction...');
+                const execResult = await jupiterTriggerExecute(signResult.signedTransaction, data.requestId);
+                if (execResult.status === 'Failed') {
+                    return { error: `Cancel failed: ${execResult.error || 'Transaction execution failed'}` };
+                }
+
                 return {
                     success: true,
-                    orderId: input.orderId,
+                    order: input.orderId,
+                    signature: execResult.signature,
                     status: 'cancelled',
-                    message: data.message || 'Order cancelled successfully'
                 };
             } catch (e) {
                 return { error: e.message };
@@ -4253,45 +4295,49 @@ async function executeTool(name, input, chatId) {
                     return { error: e.message };
                 }
 
-                // 3. Validate and convert amount (using BigInt for precision safety)
-                let inputAmountLamports;
-                try {
-                    inputAmountLamports = parseInputAmountToLamports(input.amountPerCycle, inputToken.decimals);
-                } catch (e) {
-                    return {
-                        error: 'Invalid amountPerCycle',
-                        details: e.message
-                    };
-                }
-
-                // Map enum cycleInterval (hourly/daily/weekly) to seconds
+                // 3. Map cycleInterval and validate totalCycles
                 const intervalMap = { hourly: 3600, daily: 86400, weekly: 604800 };
                 const cycleIntervalSeconds = intervalMap[input.cycleInterval];
                 if (!cycleIntervalSeconds) {
                     return { error: `Invalid cycleInterval: "${input.cycleInterval}". Must be "hourly", "daily", or "weekly".` };
                 }
 
-                // Validate totalCycles if provided (must be finite positive integer)
-                let totalCycles = null;
+                // numberOfOrders: required by API (no "unlimited" option)
+                let numberOfOrders = 1;
                 if (input.totalCycles != null) {
                     const tc = Number(input.totalCycles);
                     if (!Number.isFinite(tc) || tc <= 0 || !Number.isInteger(tc)) {
-                        return {
-                            error: 'Invalid totalCycles',
-                            details: `totalCycles must be a positive integer; received "${input.totalCycles}".`
-                        };
+                        return { error: 'Invalid totalCycles', details: `Must be a positive integer; received "${input.totalCycles}".` };
                     }
-                    totalCycles = tc;
+                    numberOfOrders = tc;
+                } else {
+                    // Default: 30 cycles when not specified
+                    numberOfOrders = 30;
                 }
 
-                // 4. Call Jupiter Recurring API
+                // 4. Compute total inAmount = amountPerCycle * numberOfOrders
+                // Jupiter API expects the TOTAL deposit, split across numberOfOrders
+                let totalInAmount;
+                try {
+                    const totalHuman = Number(input.amountPerCycle) * numberOfOrders;
+                    totalInAmount = parseInputAmountToLamports(totalHuman, inputToken.decimals);
+                } catch (e) {
+                    return { error: 'Invalid amountPerCycle', details: e.message };
+                }
+
+                // 5. Call Jupiter Recurring API — createOrder
+                log(`[Jupiter DCA] Creating: ${input.amountPerCycle} ${inputToken.symbol} → ${outputToken.symbol}, ${input.cycleInterval} x${numberOfOrders}`);
                 const reqBody = {
+                    user: walletAddress,
                     inputMint: inputToken.address,
                     outputMint: outputToken.address,
-                    inputAmount: inputAmountLamports, // Already a string from parseInputAmountToLamports
-                    cycleInterval: cycleIntervalSeconds,
-                    totalCycles: totalCycles,
-                    walletAddress: walletAddress
+                    params: {
+                        time: {
+                            inAmount: totalInAmount,
+                            numberOfOrders: numberOfOrders,
+                            interval: cycleIntervalSeconds,
+                        }
+                    },
                 };
 
                 const res = await httpRequest({
@@ -4309,18 +4355,51 @@ async function executeTool(name, input, chatId) {
                 }
 
                 const data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
+                if (!data.transaction) return { error: 'Jupiter did not return a transaction' };
+                if (!data.requestId) return { error: 'Jupiter did not return a requestId' };
+
+                // 6. Verify transaction
+                try {
+                    const verification = verifySwapTransaction(data.transaction, walletAddress, { skipPayerCheck: true });
+                    if (!verification.valid) {
+                        log(`[Jupiter DCA] Tx verification FAILED: ${verification.error}`);
+                        return { error: `Transaction rejected: ${verification.error}` };
+                    }
+                    log('[Jupiter DCA] Tx verified — programs OK');
+                } catch (verifyErr) {
+                    log(`[Jupiter DCA] Tx verification error: ${verifyErr.message}`);
+                    return { error: `Could not verify transaction: ${verifyErr.message}` };
+                }
+
+                // 7. Sign via MWA
+                log('[Jupiter DCA] Sending to wallet for approval (sign-only)...');
+                const signResult = await androidBridgeCall('/solana/sign-only', {
+                    transaction: data.transaction
+                }, 120000);
+                if (signResult.error) return { error: signResult.error };
+                if (!signResult.signedTransaction) return { error: 'No signed transaction returned from wallet' };
+
+                // 8. Execute (Jupiter broadcasts)
+                log('[Jupiter DCA] Executing signed transaction...');
+                const execResult = await jupiterRecurringExecute(signResult.signedTransaction, data.requestId);
+                if (execResult.status === 'Failed') {
+                    return { error: `DCA order failed: ${execResult.error || 'Transaction execution failed'}` };
+                }
+                if (!execResult.signature) return { error: 'Jupiter execute returned no signature' };
+
                 const warnings = [];
                 if (inputToken.warning) warnings.push(`⚠️ ${inputToken.symbol}: ${inputToken.warning}`);
                 if (outputToken.warning) warnings.push(`⚠️ ${outputToken.symbol}: ${outputToken.warning}`);
 
                 return {
                     success: true,
-                    orderId: data.orderId,
+                    order: execResult.order || null,
+                    signature: execResult.signature,
                     inputToken: `${inputToken.symbol} (${inputToken.address})`,
                     outputToken: `${outputToken.symbol} (${outputToken.address})`,
                     amountPerCycle: input.amountPerCycle,
                     cycleInterval: input.cycleInterval,
-                    totalCycles: totalCycles !== null ? totalCycles : 'Unlimited',
+                    totalCycles: numberOfOrders,
                     warnings: warnings.length > 0 ? warnings : undefined
                 };
             } catch (e) {
@@ -4365,8 +4444,8 @@ async function executeTool(name, input, chatId) {
                     }
                 }
 
-                // 3. Build query params (align with schema: use `status` and `page`)
-                const params = new URLSearchParams({ wallet: walletAddress });
+                // 3. Build query params
+                const params = new URLSearchParams({ user: walletAddress, recurringType: 'time' });
                 if (input.status) {
                     params.append('orderStatus', input.status);
                 }
@@ -4434,10 +4513,7 @@ async function executeTool(name, input, chatId) {
             try {
                 // 1. Validate required input
                 if (!input.orderId || String(input.orderId).trim() === '') {
-                    return {
-                        error: 'orderId is required',
-                        details: 'Please provide the orderId of the DCA order you want to cancel'
-                    };
+                    return { error: 'orderId is required' };
                 }
 
                 // 2. Get wallet address
@@ -4448,12 +4524,8 @@ async function executeTool(name, input, chatId) {
                     return { error: e.message };
                 }
 
-                // 3. Call Jupiter Recurring API
-                const reqBody = {
-                    orderId: input.orderId,
-                    walletAddress: walletAddress
-                };
-
+                // 3. Call Jupiter Recurring API — cancelOrder
+                log(`[Jupiter DCA] Cancelling order: ${input.orderId}`);
                 const res = await httpRequest({
                     hostname: 'api.jup.ag',
                     path: '/recurring/v1/cancelOrder',
@@ -4462,18 +4534,48 @@ async function executeTool(name, input, chatId) {
                         'Content-Type': 'application/json',
                         'x-api-key': config.jupiterApiKey
                     }
-                }, reqBody);
+                }, {
+                    user: walletAddress,
+                    order: input.orderId,
+                    recurringType: 'time',
+                });
 
                 if (res.status !== 200) {
                     return { error: `Jupiter API error: ${res.status}`, details: res.data };
                 }
 
                 const data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
+                if (!data.transaction) return { error: 'Jupiter did not return a transaction' };
+                if (!data.requestId) return { error: 'Jupiter did not return a requestId' };
+
+                // 4. Verify transaction
+                try {
+                    const verification = verifySwapTransaction(data.transaction, walletAddress, { skipPayerCheck: true });
+                    if (!verification.valid) return { error: `Transaction rejected: ${verification.error}` };
+                } catch (e) {
+                    return { error: `Could not verify transaction: ${e.message}` };
+                }
+
+                // 5. Sign via MWA
+                log('[Jupiter DCA] Sending cancel tx to wallet for approval...');
+                const signResult = await androidBridgeCall('/solana/sign-only', {
+                    transaction: data.transaction
+                }, 120000);
+                if (signResult.error) return { error: signResult.error };
+                if (!signResult.signedTransaction) return { error: 'No signed transaction returned from wallet' };
+
+                // 6. Execute
+                log('[Jupiter DCA] Executing cancel transaction...');
+                const execResult = await jupiterRecurringExecute(signResult.signedTransaction, data.requestId);
+                if (execResult.status === 'Failed') {
+                    return { error: `Cancel failed: ${execResult.error || 'Transaction execution failed'}` };
+                }
+
                 return {
                     success: true,
-                    orderId: input.orderId,
+                    order: input.orderId,
+                    signature: execResult.signature,
                     status: 'cancelled',
-                    message: data.message || 'DCA order cancelled successfully'
                 };
             } catch (e) {
                 return { error: e.message };
@@ -5780,6 +5882,44 @@ async function jupiterUltraExecute(signedTransaction, requestId) {
 
     if (res.status !== 200) {
         throw new Error(`Jupiter Ultra execute failed: ${res.status} - ${JSON.stringify(res.data)}`);
+    }
+    return res.data;
+}
+
+// Jupiter Trigger API — execute signed transaction
+async function jupiterTriggerExecute(signedTransaction, requestId) {
+    const res = await httpRequest({
+        hostname: 'api.jup.ag',
+        path: '/trigger/v1/execute',
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'x-api-key': config.jupiterApiKey
+        }
+    }, JSON.stringify({ signedTransaction, requestId }));
+
+    if (res.status !== 200) {
+        throw new Error(`Jupiter Trigger execute failed: ${res.status} - ${JSON.stringify(res.data)}`);
+    }
+    return res.data;
+}
+
+// Jupiter Recurring API — execute signed transaction
+async function jupiterRecurringExecute(signedTransaction, requestId) {
+    const res = await httpRequest({
+        hostname: 'api.jup.ag',
+        path: '/recurring/v1/execute',
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'x-api-key': config.jupiterApiKey
+        }
+    }, JSON.stringify({ signedTransaction, requestId }));
+
+    if (res.status !== 200) {
+        throw new Error(`Jupiter Recurring execute failed: ${res.status} - ${JSON.stringify(res.data)}`);
     }
     return res.data;
 }
