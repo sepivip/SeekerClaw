@@ -61,6 +61,26 @@ skills/
   my-skill.md         # Single file skill
 ```
 
+## OpenClaw Compatibility
+
+For compatibility with OpenClaw skills, the parser also supports the nested `metadata.openclaw` format:
+
+```yaml
+---
+name: my-skill
+description: "What it does"
+version: "1.0.0"
+metadata:
+  openclaw:
+    emoji: "🔧"
+    requires:
+      bins: []
+      env: []
+---
+```
+
+Both top-level fields (`emoji`, `requires`, `allowed-tools`) and nested `metadata.openclaw.*` fields are supported. Top-level fields take precedence. The `requires` values accept both YAML arrays and comma-separated strings.
+
 ## Legacy Format (deprecated)
 
 The following format is still supported but deprecated:
