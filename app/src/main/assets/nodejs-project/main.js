@@ -1158,18 +1158,41 @@ const cronService = {
 /**
  * Skill definition loaded from SKILL.md
  *
- * SKILL.md format:
+ * Supported formats:
+ *
+ * 1. OpenClaw JSON-in-YAML frontmatter:
+ * ```
+ * ---
+ * name: skill-name
+ * description: "What it does"
+ * metadata: { "openclaw": { "emoji": "🔧", "requires": { "bins": ["curl"] } } }
+ * allowed-tools: ["shell_exec"]
+ * ---
+ * (body is instructions)
+ * ```
+ *
+ * 2. SeekerClaw YAML block frontmatter:
+ * ```
+ * ---
+ * name: skill-name
+ * description: "What it does"
+ * metadata:
+ *   openclaw:
+ *     emoji: "🔧"
+ *     requires:
+ *       bins: ["curl"]
+ * ---
+ * (body is instructions)
+ * ```
+ *
+ * 3. Legacy markdown (no frontmatter):
  * ```
  * # Skill Name
- *
- * Trigger: keyword1, keyword2, keyword3
- *
+ * Trigger: keyword1, keyword2
  * ## Description
  * What this skill does
- *
  * ## Instructions
  * How to handle requests matching this skill
- *
  * ## Tools
  * - tool_name: description
  * ```
@@ -1188,11 +1211,13 @@ function tryJsonParse(text) {
     return null;
 }
 
-// Normalize a value to an array (handles arrays, comma-separated strings, and nullish)
+// Normalize a value to an array (handles arrays, comma-separated strings, and other types)
 function toArray(val) {
     if (Array.isArray(val)) return val;
-    if (typeof val === 'string' && val) return val.split(',').map(s => s.trim());
-    return [];
+    if (val == null) return [];
+    if (typeof val === 'string') return val ? val.split(',').map(s => s.trim()) : [];
+    // Convert other primitives (number, boolean) to single-element array
+    return [String(val)];
 }
 
 // Recursively parse YAML lines using indentation to detect nesting
@@ -1298,15 +1323,18 @@ function parseSkillFile(content, skillDir) {
         tools: [],
         emoji: '',
         requires: { bins: [], env: [], config: [] },
+        allowedTools: [],
         dir: skillDir
     };
 
     let body = content;
+    let hasFrontmatter = false;
 
     // Check for YAML frontmatter (OpenClaw format)
     if (content.startsWith('---')) {
         const endIndex = content.indexOf('---', 3);
         if (endIndex > 0) {
+            hasFrontmatter = true;
             const yamlContent = content.slice(3, endIndex).trim();
             const frontmatter = parseYamlFrontmatter(yamlContent);
 
@@ -1391,9 +1419,9 @@ function parseSkillFile(content, skillDir) {
         }
     }
 
-    // If frontmatter provided description but body had no ## Instructions section,
+    // If frontmatter was successfully parsed but body had no ## Instructions section,
     // treat the entire body as instructions (OpenClaw-style: body IS the instructions)
-    if (content.startsWith('---') && !skill.instructions && body.trim()) {
+    if (hasFrontmatter && !skill.instructions && body.trim()) {
         skill.instructions = body.trim();
     }
 
