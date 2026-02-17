@@ -1175,43 +1175,118 @@ const cronService = {
  * ```
  */
 
-// Simple YAML frontmatter parser (no external dependencies)
+// Indentation-aware YAML frontmatter parser (no external dependencies)
+// Handles: simple key:value, JSON-in-YAML (OpenClaw), and YAML block nesting
 function parseYamlFrontmatter(content) {
-    const frontmatter = {};
-    const lines = content.split('\n');
+    return parseYamlLines(content.split('\n'), -1);
+}
 
-    for (const line of lines) {
+// Try JSON.parse, with fallback that strips trailing commas (OpenClaw uses them)
+function tryJsonParse(text) {
+    try { return JSON.parse(text); } catch (e) { /* fall through */ }
+    try { return JSON.parse(text.replace(/,\s*([\]}])/g, '$1')); } catch (e) { /* fall through */ }
+    return null;
+}
+
+// Normalize a value to an array (handles arrays, comma-separated strings, and nullish)
+function toArray(val) {
+    if (Array.isArray(val)) return val;
+    if (typeof val === 'string' && val) return val.split(',').map(s => s.trim());
+    return [];
+}
+
+// Recursively parse YAML lines using indentation to detect nesting
+function parseYamlLines(lines, parentIndent) {
+    const result = {};
+    let i = 0;
+
+    while (i < lines.length) {
+        const line = lines[i];
         const trimmed = line.trim();
-        if (!trimmed || trimmed.startsWith('#')) continue;
 
-        // Handle simple key: value pairs
-        const colonIndex = line.indexOf(':');
-        if (colonIndex > 0) {
-            const key = line.slice(0, colonIndex).trim();
-            let value = line.slice(colonIndex + 1).trim();
+        // Skip empty lines and comments
+        if (!trimmed || trimmed.startsWith('#')) { i++; continue; }
 
-            // Remove quotes if present
-            if ((value.startsWith('"') && value.endsWith('"')) ||
-                (value.startsWith("'") && value.endsWith("'"))) {
-                value = value.slice(1, -1);
-            }
+        // Stop if we've returned to or past the parent indent level
+        const lineIndent = line.search(/\S/);
+        if (lineIndent <= parentIndent) break;
 
-            // Handle nested keys (simple one-level)
-            if (key.includes('.')) {
-                const parts = key.split('.');
-                let obj = frontmatter;
-                for (let i = 0; i < parts.length - 1; i++) {
-                    if (!obj[parts[i]]) obj[parts[i]] = {};
-                    obj = obj[parts[i]];
-                }
-                obj[parts[parts.length - 1]] = value;
-            } else {
-                frontmatter[key] = value;
-            }
+        // Find key: value (first colon only)
+        const colonIdx = trimmed.indexOf(':');
+        if (colonIdx <= 0) { i++; continue; }
+
+        const key = trimmed.slice(0, colonIdx).trim().replace(/^["']|["']$/g, '');
+        let value = trimmed.slice(colonIdx + 1).trim();
+
+        // Strip surrounding quotes from value
+        if ((value.startsWith('"') && value.endsWith('"')) ||
+            (value.startsWith("'") && value.endsWith("'"))) {
+            value = value.slice(1, -1);
         }
+
+        // Case 1: JSON value on the same line (e.g., metadata: {"openclaw":...})
+        if (value && (value.startsWith('{') || value.startsWith('['))) {
+            const parsed = tryJsonParse(value);
+            result[key] = parsed !== null ? parsed : value;
+            i++;
+            continue;
+        }
+
+        // Case 2: Non-empty scalar value
+        if (value) {
+            result[key] = value;
+            i++;
+            continue;
+        }
+
+        // Case 3: Empty value — collect indented child lines
+        let j = i + 1;
+        const childLines = [];
+        while (j < lines.length) {
+            const nextLine = lines[j];
+            const nextTrimmed = nextLine.trim();
+            if (!nextTrimmed) { childLines.push(nextLine); j++; continue; }
+            const nextIndent = nextLine.search(/\S/);
+            if (nextIndent <= lineIndent) break;
+            childLines.push(nextLine);
+            j++;
+        }
+
+        if (childLines.length > 0) {
+            // Try multi-line JSON first (OpenClaw format: metadata:\n  { "openclaw": ... })
+            const jsonText = childLines.map(l => l.trim()).filter(Boolean).join(' ');
+            if (jsonText.startsWith('{') || jsonText.startsWith('[')) {
+                const parsed = tryJsonParse(jsonText);
+                if (parsed !== null) {
+                    result[key] = parsed;
+                    i = j;
+                    continue;
+                }
+            }
+            // Check for YAML list items (- value)
+            const nonEmpty = childLines.map(l => l.trim()).filter(Boolean);
+            if (nonEmpty.length > 0 && nonEmpty.every(l => l.startsWith('- '))) {
+                result[key] = nonEmpty.map(l => {
+                    let v = l.slice(2).trim();
+                    if ((v.startsWith('"') && v.endsWith('"')) ||
+                        (v.startsWith("'") && v.endsWith("'"))) {
+                        v = v.slice(1, -1);
+                    }
+                    return v;
+                });
+                i = j;
+                continue;
+            }
+            // Fall back to recursive YAML block parsing
+            result[key] = parseYamlLines(childLines, lineIndent);
+        } else {
+            result[key] = '';
+        }
+
+        i = j;
     }
 
-    return frontmatter;
+    return result;
 }
 
 function parseSkillFile(content, skillDir) {
@@ -1245,12 +1320,17 @@ function parseSkillFile(content, skillDir) {
                 skill.emoji = frontmatter.metadata.openclaw.emoji;
             }
 
-            // Handle requires (bins, env, config)
-            if (frontmatter.requires?.bins) {
-                skill.requires.bins = frontmatter.requires.bins.split(',').map(s => s.trim());
+            // Handle requires — merge from metadata.openclaw.requires or direct requires
+            const reqSource = frontmatter.metadata?.openclaw?.requires || frontmatter.requires;
+            if (reqSource) {
+                skill.requires.bins = toArray(reqSource.bins);
+                skill.requires.env = toArray(reqSource.env);
+                skill.requires.config = toArray(reqSource.config);
             }
-            if (frontmatter.requires?.env) {
-                skill.requires.env = frontmatter.requires.env.split(',').map(s => s.trim());
+
+            // Handle allowed-tools (OpenClaw format)
+            if (frontmatter['allowed-tools']) {
+                skill.allowedTools = toArray(frontmatter['allowed-tools']);
             }
 
             // Body is everything after frontmatter
@@ -1311,8 +1391,11 @@ function parseSkillFile(content, skillDir) {
         }
     }
 
-    // If no triggers but has description, use semantic matching (skill will be listed for AI to pick)
-    // This enables OpenClaw-style semantic triggering
+    // If frontmatter provided description but body had no ## Instructions section,
+    // treat the entire body as instructions (OpenClaw-style: body IS the instructions)
+    if (content.startsWith('---') && !skill.instructions && body.trim()) {
+        skill.instructions = body.trim();
+    }
 
     return skill;
 }
