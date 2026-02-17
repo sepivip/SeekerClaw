@@ -232,6 +232,11 @@ function wrapSearchResults(result, provider) {
 }
 
 // ============================================================================
+// SENSITIVE FILE BLOCKLIST (shared by read tool, js_eval, delete tool)
+// ============================================================================
+const SECRETS_BLOCKED = new Set(['config.json', 'config.yaml', 'seekerclaw.db']);
+
+// ============================================================================
 // TOOL CONFIRMATION GATES
 // ============================================================================
 
@@ -3004,9 +3009,23 @@ async function executeTool(name, input, chatId) {
         case 'read': {
             const filePath = safePath(input.path);
             if (!filePath) return { error: 'Access denied: path outside workspace' };
+            // Check basename first, then resolve symlinks to catch aliased access
+            const readBasename = path.basename(filePath);
+            if (SECRETS_BLOCKED.has(readBasename)) {
+                log(`[Security] BLOCKED read of sensitive file: ${readBasename}`);
+                return { error: `Reading ${readBasename} is blocked for security.` };
+            }
             if (!fs.existsSync(filePath)) {
                 return { error: `File not found: ${input.path}` };
             }
+            // Resolve symlinks and re-check basename (prevents symlink bypass)
+            try {
+                const realBasename = path.basename(fs.realpathSync(filePath));
+                if (SECRETS_BLOCKED.has(realBasename)) {
+                    log(`[Security] BLOCKED read via symlink to sensitive file: ${realBasename}`);
+                    return { error: `Reading ${realBasename} is blocked for security.` };
+                }
+            } catch { /* realpathSync may fail on broken links — proceed to normal error */ }
             const stat = fs.statSync(filePath);
             if (stat.isDirectory()) {
                 return { error: 'Path is a directory, use ls tool instead' };
@@ -4918,12 +4937,45 @@ async function executeTool(name, input, chatId) {
                 group: () => {}, groupEnd: () => {}, groupCollapsed: () => {},
             };
 
-            // Sandboxed require: block child_process to prevent bypassing shell_exec allowlist
+            // Sandboxed require: block dangerous modules and restrict fs access to sensitive files
             const BLOCKED_MODULES = new Set(['child_process', 'cluster', 'worker_threads', 'vm', 'v8', 'perf_hooks']);
+            // Create a guarded fs proxy that blocks reads AND writes to sensitive files
+            // promisesGuard: optional set of guarded methods for the .promises sub-property
+            const createGuardedFsProxy = (realModule, guardedMethods, promisesGuard) => {
+                return new Proxy(realModule, {
+                    get(target, prop) {
+                        // Intercept fs.promises to return a guarded proxy too
+                        if (prop === 'promises' && promisesGuard && target[prop]) {
+                            return createGuardedFsProxy(target[prop], promisesGuard);
+                        }
+                        const original = target[prop];
+                        if (typeof original !== 'function') return original;
+                        if (guardedMethods.has(prop)) {
+                            return function(...args) {
+                                const filePath = String(args[0]);
+                                const basename = path.basename(filePath);
+                                if (SECRETS_BLOCKED.has(basename)) {
+                                    throw new Error(`Access to ${basename} is blocked for security.`);
+                                }
+                                return original.apply(target, args);
+                            };
+                        }
+                        return original.bind(target);
+                    }
+                });
+            };
+            const FS_GUARDED = new Set([
+                'readFileSync', 'readFile', 'createReadStream', 'openSync', 'open',
+                'writeFileSync', 'writeFile', 'appendFileSync', 'appendFile', 'createWriteStream',
+                'copyFileSync', 'copyFile', 'cpSync', 'cp',
+            ]);
+            const FSP_GUARDED = new Set(['readFile', 'writeFile', 'appendFile', 'open', 'copyFile', 'cp']);
             const sandboxedRequire = (mod) => {
                 if (BLOCKED_MODULES.has(mod)) {
                     throw new Error(`Module "${mod}" is blocked in js_eval for security. Use shell_exec for command execution.`);
                 }
+                if (mod === 'fs') return createGuardedFsProxy(require('fs'), FS_GUARDED, FSP_GUARDED);
+                if (mod === 'fs/promises') return createGuardedFsProxy(require('fs/promises'), FSP_GUARDED);
                 return require(mod);
             };
 
@@ -4931,9 +4983,12 @@ async function executeTool(name, input, chatId) {
             try {
                 // AsyncFunction allows top-level await
                 const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
-                const fn = new AsyncFunction('console', 'require', '__dirname', '__filename', code);
+                // Shadow process/global/globalThis to prevent process.mainModule.require bypass
+                // Provide safe process subset — env is empty to prevent leaking sensitive variables
+                const safeProcess = { env: {}, cwd: () => workDir, platform: process.platform, arch: process.arch, version: process.version };
+                const fn = new AsyncFunction('console', 'require', '__dirname', '__filename', 'process', 'global', 'globalThis', code);
 
-                const resultPromise = fn(mockConsole, sandboxedRequire, workDir, path.join(workDir, 'eval.js'));
+                const resultPromise = fn(mockConsole, sandboxedRequire, workDir, path.join(workDir, 'eval.js'), safeProcess, undefined, undefined);
                 const timeoutPromise = new Promise((_, rej) => {
                     timerId = setTimeout(() => rej(new Error(`Execution timed out after ${timeout}ms`)), timeout);
                 });
@@ -5035,9 +5090,10 @@ async function executeTool(name, input, chatId) {
         }
 
         case 'delete': {
-            const PROTECTED_FILES = new Set([
-                'SOUL.md', 'MEMORY.md', 'IDENTITY.md', 'USER.md',
-                'HEARTBEAT.md', 'config.json', 'config.yaml', 'seekerclaw.db'
+            // Core identity files + secrets (uses shared SECRETS_BLOCKED for the latter)
+            const DELETE_PROTECTED = new Set([
+                'SOUL.md', 'MEMORY.md', 'IDENTITY.md', 'USER.md', 'HEARTBEAT.md',
+                ...SECRETS_BLOCKED,
             ]);
 
             if (!input.path) return { error: 'path is required' };
@@ -5047,7 +5103,7 @@ async function executeTool(name, input, chatId) {
             // Check against protected files (compare basename for top-level, full relative for nested)
             const relativePath = path.relative(workDir, filePath);
             const baseName = path.basename(filePath);
-            if (PROTECTED_FILES.has(relativePath) || PROTECTED_FILES.has(baseName)) {
+            if (DELETE_PROTECTED.has(relativePath) || DELETE_PROTECTED.has(baseName)) {
                 return { error: `Cannot delete protected file: ${baseName}` };
             }
 
@@ -5624,11 +5680,18 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
     const untrustedPrograms = [];
     for (let i = 0; i < numInstructions.value; i++) {
         const programIdIdx = txBuf[offset]; offset++;
-        if (programIdIdx < accountKeys.length) {
-            const programId = accountKeys[programIdIdx];
-            if (!TRUSTED_PROGRAMS.has(programId)) {
-                untrustedPrograms.push(programId);
-            }
+        if (programIdIdx >= accountKeys.length) {
+            // Program referenced via Address Lookup Table — cannot verify identity.
+            // Reject for safety (Jupiter Ultra uses static keys anyway).
+            return {
+                valid: false,
+                error: `Instruction ${i} references program via Address Lookup Table (index ${programIdIdx}, ` +
+                       `only ${accountKeys.length} static keys). Cannot verify program identity. Transaction rejected for safety.`
+            };
+        }
+        const programId = accountKeys[programIdIdx];
+        if (!TRUSTED_PROGRAMS.has(programId)) {
+            untrustedPrograms.push(programId);
         }
         // Skip accounts
         const numAcctIdx = readCompactU16(txBuf, offset);
