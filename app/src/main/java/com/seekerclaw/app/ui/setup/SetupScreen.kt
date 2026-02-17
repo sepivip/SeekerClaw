@@ -1173,7 +1173,7 @@ private fun RequirementRow(
     Row(verticalAlignment = Alignment.CenterVertically) {
         Icon(
             imageVector = icon,
-            contentDescription = "",
+            contentDescription = null,
             tint = SeekerClawColors.Primary,
             modifier = Modifier.size(22.dp),
         )
