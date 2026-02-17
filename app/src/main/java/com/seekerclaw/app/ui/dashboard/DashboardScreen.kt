@@ -149,7 +149,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
 
     // Pulse animation for status dot — runs when RUNNING and not in error state
     val shouldPulse = status == ServiceStatus.RUNNING &&
-        health.apiStatus !in listOf("error", "stale")
+        health.apiStatus != "error" && health.apiStatus != "stale"
     val pulseAlpha = if (shouldPulse) {
         val infiniteTransition = rememberInfiniteTransition(label = "statusPulse")
         infiniteTransition.animateFloat(
@@ -167,7 +167,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
 
     // Health-aware status color and text (BAT-134)
     val apiUnhealthy = status == ServiceStatus.RUNNING &&
-        health.apiStatus !in listOf("healthy", "unknown")
+        health.apiStatus != "healthy" && health.apiStatus != "unknown"
 
     val statusColor = when (status) {
         ServiceStatus.RUNNING -> when (health.apiStatus) {
@@ -274,7 +274,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
             val bannerColor = if (health.apiStatus == "error") SeekerClawColors.Error
                 else SeekerClawColors.Warning
             val bannerText = when (health.lastErrorType) {
-                "auth" -> "API key rejected (${health.lastErrorStatus ?: 403}) \u2014 check Settings"
+                "auth" -> "API key rejected${health.lastErrorStatus?.let { " ($it)" } ?: ""} \u2014 check Settings"
                 "billing" -> "API billing issue \u2014 check console.anthropic.com"
                 "quota" -> "API quota exceeded \u2014 try again later or upgrade plan"
                 "rate_limit" -> "Rate limited \u2014 retrying automatically"

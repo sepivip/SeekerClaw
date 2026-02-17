@@ -5375,17 +5375,30 @@ const agentHealth = {
     updatedAt: null,            // ISO timestamp (for staleness detection)
 };
 
+let lastHealthWriteErrAt = 0;
+
 function writeAgentHealthFile() {
     try {
         agentHealth.updatedAt = localTimestamp();
         const tmpPath = AGENT_HEALTH_FILE + '.tmp';
         fs.writeFileSync(tmpPath, JSON.stringify(agentHealth));
         fs.renameSync(tmpPath, AGENT_HEALTH_FILE);
-    } catch (_) {}
+    } catch (err) {
+        // Throttled error logging (once per 60s)
+        const now = Date.now();
+        if (now - lastHealthWriteErrAt >= 60000) {
+            lastHealthWriteErrAt = now;
+            log(`[Health] Failed to write agent health file: ${err.message}`);
+        }
+    }
 }
 
 function updateAgentHealth(newStatus, errorInfo) {
-    const changed = agentHealth.apiStatus !== newStatus;
+    const statusChanged = agentHealth.apiStatus !== newStatus;
+    const errorChanged = errorInfo && (
+        agentHealth.lastError?.type !== errorInfo.type ||
+        agentHealth.lastError?.status !== errorInfo.status
+    );
     agentHealth.apiStatus = newStatus;
     if (errorInfo) {
         agentHealth.lastError = errorInfo;
@@ -5396,7 +5409,7 @@ function updateAgentHealth(newStatus, errorInfo) {
         agentHealth.lastSuccessAt = localTimestamp();
         agentHealth.consecutiveFailures = 0;
     }
-    if (changed) writeAgentHealthFile();
+    if (statusChanged || errorChanged) writeAgentHealthFile();
 }
 
 // ============================================================================
