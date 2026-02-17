@@ -127,12 +127,14 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 - **Prompt injection defense** — Content Trust Policy in system prompt, `<<<EXTERNAL_UNTRUSTED_CONTENT>>>` boundary markers on all web_fetch/web_search results, 10-pattern suspicious content detection, Unicode homoglyph sanitization, zero-width space normalization
 - **Skill file protection** — Writes/edits to `skills/` blocked when suspicious injection patterns detected in content
 - **Tool confirmation gates** — `android_sms`, `android_call`, `jupiter_trigger_create`, `jupiter_dca_create` require explicit user YES via Telegram before execution. 60s timeout auto-cancels. Rate limited (SMS/call 1 per 60s, Jupiter 1 per 30s)
+- **Secrets blocklist** — `config.json`, `config.yaml`, `seekerclaw.db` blocked from `read` tool (with symlink resolution) and `js_eval` fs access (proxied `fs`/`fs.promises` modules)
+- **ALT-safe swap verification** — `verifySwapTransaction()` rejects instructions referencing programs via Address Lookup Tables (prevents drainer bypass)
+- **js_eval sandbox** — blocked modules (child_process, vm, etc.), restricted fs (read/write/copy guards on sensitive files), shadowed `process`/`global`/`globalThis`
 - API key redaction in logs
 - Path traversal prevention (workspace sandboxing)
 - Shell command allowlist (no rm, kill, etc.)
-- js_eval blocks child_process and vm modules
 - Bridge token authentication
-- Swap transaction verification (checks payer and programs)
+- Swap transaction verification (checks payer, programs, signers)
 
 ### App (Android)
 - **Single theme** — DarkOps (dark navy + crimson red + green status), 12dp corners
@@ -201,8 +203,8 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Metric | Count |
 |--------|-------|
-| Total commits | ~145 |
-| PRs merged | 91+ |
+| Total commits | ~147 |
+| PRs merged | 92+ |
 | Tools | 54 (9 Jupiter tools added: limit orders, DCA, token search/security/holdings) |
 | Skills | 16 |
 | Android Bridge endpoints | 18+ |
@@ -234,6 +236,7 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Date | Feature | PR |
 |------|---------|-----|
+| 2026-02-17 | Wallet & secrets hardening — ALT bypass fix, read blocklist, js_eval sandbox | #94 (BAT-115) |
 | 2026-02-17 | Tool confirmation gates — YES/NO for SMS, call, Jupiter orders + rate limiting | #93 (BAT-114) |
 | 2026-02-17 | Prompt injection defense — content wrapping, trust policy, pattern detection, skill protection | #92 (BAT-112) |
 | 2026-02-17 | Contextual status messages for long-running tool calls (Layer 2 typing indicator) | #91 (BAT-110) |
