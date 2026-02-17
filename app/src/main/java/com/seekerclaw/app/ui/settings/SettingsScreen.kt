@@ -374,8 +374,8 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                     .fillMaxWidth()
                     .background(SeekerClawColors.Surface, shape),
             ) {
-                ConfigField(
-                    label = "Auth Type",
+            ConfigField(
+                label = "Auth Type",
                 value = authTypeLabel,
                 onClick = { showAuthTypePicker = true },
                 info = SettingsHelpTexts.AUTH_TYPE,
@@ -469,13 +469,13 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
             ) {
                 SettingRow(
                     label = "Auto-start on boot",
-                checked = autoStartOnBoot,
-                onCheckedChange = {
-                    autoStartOnBoot = it
-                    ConfigManager.setAutoStartOnBoot(context, it)
-                },
-                info = SettingsHelpTexts.AUTO_START,
-            )
+                    checked = autoStartOnBoot,
+                    onCheckedChange = {
+                        autoStartOnBoot = it
+                        ConfigManager.setAutoStartOnBoot(context, it)
+                    },
+                    info = SettingsHelpTexts.AUTO_START,
+                )
             SettingRow(
                 label = "Battery unrestricted",
                 checked = batteryOptimizationDisabled,
@@ -522,46 +522,46 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                         modifier = Modifier.padding(top = 12.dp, bottom = 4.dp),
                     )
                 }
-            PermissionRow(
-                label = "Camera",
-                granted = hasCameraPermission,
-                onRequest = {
-                    requestPermissionOrOpenSettings(context, Manifest.permission.CAMERA, cameraLauncher)
-                },
-                info = SettingsHelpTexts.CAMERA,
-            )
-            PermissionRow(
-                label = "GPS Location",
-                granted = hasLocationPermission,
-                onRequest = {
-                    requestPermissionOrOpenSettings(context, Manifest.permission.ACCESS_FINE_LOCATION, locationLauncher)
-                },
-                info = SettingsHelpTexts.GPS_LOCATION,
-            )
-            PermissionRow(
-                label = "Contacts",
-                granted = hasContactsPermission,
-                onRequest = {
-                    requestPermissionOrOpenSettings(context, Manifest.permission.READ_CONTACTS, contactsLauncher)
-                },
-                info = SettingsHelpTexts.CONTACTS,
-            )
-            PermissionRow(
-                label = "SMS",
-                granted = hasSmsPermission,
-                onRequest = {
-                    requestPermissionOrOpenSettings(context, Manifest.permission.SEND_SMS, smsLauncher)
-                },
-                info = SettingsHelpTexts.SMS,
-            )
-            PermissionRow(
-                label = "Phone Calls",
-                granted = hasCallPermission,
-                onRequest = {
-                    requestPermissionOrOpenSettings(context, Manifest.permission.CALL_PHONE, callLauncher)
-                },
-                info = SettingsHelpTexts.PHONE_CALLS,
-            )
+                PermissionRow(
+                    label = "Camera",
+                    granted = hasCameraPermission,
+                    onRequest = {
+                        requestPermissionOrOpenSettings(context, Manifest.permission.CAMERA, cameraLauncher)
+                    },
+                    info = SettingsHelpTexts.CAMERA,
+                )
+                PermissionRow(
+                    label = "GPS Location",
+                    granted = hasLocationPermission,
+                    onRequest = {
+                        requestPermissionOrOpenSettings(context, Manifest.permission.ACCESS_FINE_LOCATION, locationLauncher)
+                    },
+                    info = SettingsHelpTexts.GPS_LOCATION,
+                )
+                PermissionRow(
+                    label = "Contacts",
+                    granted = hasContactsPermission,
+                    onRequest = {
+                        requestPermissionOrOpenSettings(context, Manifest.permission.READ_CONTACTS, contactsLauncher)
+                    },
+                    info = SettingsHelpTexts.CONTACTS,
+                )
+                PermissionRow(
+                    label = "SMS",
+                    granted = hasSmsPermission,
+                    onRequest = {
+                        requestPermissionOrOpenSettings(context, Manifest.permission.SEND_SMS, smsLauncher)
+                    },
+                    info = SettingsHelpTexts.SMS,
+                )
+                PermissionRow(
+                    label = "Phone Calls",
+                    granted = hasCallPermission,
+                    onRequest = {
+                        requestPermissionOrOpenSettings(context, Manifest.permission.CALL_PHONE, callLauncher)
+                    },
+                    info = SettingsHelpTexts.PHONE_CALLS,
+                )
             }
         }
 

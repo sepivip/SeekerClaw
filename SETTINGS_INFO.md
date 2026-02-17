@@ -14,7 +14,7 @@
 | 3 | Setup Token | `SETUP_TOKEN` | ✅ Good | A team token provided by your administrator or OpenClaw gateway. Use this instead of an API Key if someone set up a shared gateway for you. If you have your own API key, you probably don't need this. |
 | 4 | Bot Token | `BOT_TOKEN` | ✅ Good | Your Telegram bot token. To get one: open Telegram, message @BotFather, send /newbot, and follow the steps. BotFather will give you a token like "123456:ABC-DEF". This lets your agent send and receive messages through Telegram. |
 | 5 | Owner ID | `OWNER_ID` | ✅ Good | Your Telegram user ID (a number, not your username). This tells the agent who is allowed to control it. Leave blank to auto-detect — the first person to message the bot becomes the owner. To find your ID: message @userinfobot on Telegram. |
-| 6 | Model | `MODEL` | ✅ Good | Which AI model powers your agent. Opus 4.6 — Most capable. Sonnet 4.5 — Good balance. Haiku 4.5 — Fastest and cheapest. |
+| 6 | Model | `MODEL` | ✅ Good | Which AI model powers your agent. Opus 4.6 — Most capable. Sonnet 4.5 — Good balance. Haiku 4.5 — Fastest and cheapest. (Summary — see in-app tooltip for full details.) |
 | 7 | Agent Name | `AGENT_NAME` | ✅ Good | A display name for your agent. This appears on the dashboard and in the agent's system prompt. Purely cosmetic — change it to whatever you like. |
 | 8 | Brave API Key | `BRAVE_API_KEY` | ✅ Good | Optional. Lets your agent search the web using Brave Search (better quality). Get a free key at brave.com/search/api. Without this, DuckDuckGo is used (no key required). |
 
