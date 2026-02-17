@@ -769,6 +769,8 @@ object ConfigManager {
      *   b. If hash != manifest hash: user modified, preserve, log warning
      * - If versions equal: skip
      */
+    // Note: `version` param must match the version in the YAML frontmatter of `content`.
+    // The param drives manifest comparison; the frontmatter version is parsed at runtime by main.js.
     private fun seedSkill(
         skillsDir: File,
         manifest: MutableMap<String, SkillManifestEntry>,
@@ -793,11 +795,11 @@ object ConfigManager {
         if (manifestEntry == null) {
             // File exists but no manifest entry (pre-versioning install).
             // Record current file hash in manifest at version "0.0.0" so next
-            // update can detect user modifications. Do NOT overwrite.
+            // update can detect user modifications. Do NOT overwrite on this run.
             val installedHash = computeHash(skillFile.readText())
             manifest[name] = SkillManifestEntry(version = "0.0.0", hash = installedHash)
             Log.d(TAG, "Skill $name has no manifest entry, recording installed hash at 0.0.0")
-            // Now fall through to the version comparison below
+            return
         }
 
         val currentEntry = manifest[name]!!
