@@ -260,7 +260,7 @@ function formatConfirmationMessage(toolName, input) {
     const esc = (s) => {
         let v = String(s ?? '');
         if (v.length > 200) v = v.slice(0, 197) + '...';
-        return v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        return v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     };
     let details;
     switch (toolName) {
