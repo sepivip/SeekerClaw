@@ -1922,7 +1922,7 @@ async function sendMessage(chatId, text, replyTo = null) {
                     text: chunk,
                     reply_to_message_id: replyTo,
                 });
-                if (result && result.result && result.result.message_id) {
+                if (result && result.ok && result.result && result.result.message_id) {
                     recordSentMessage(chatId, result.result.message_id, chunk);
                 }
             } catch (e) {
@@ -4480,14 +4480,16 @@ async function executeTool(name, input, chatId) {
         case 'telegram_send': {
             const text = input.text;
             if (!text) return { error: 'text is required' };
+            if (text.length > 4096) return { error: 'text exceeds Telegram 4096 character limit' };
             if (!chatId) return { error: 'No active chat' };
             try {
+                const cleaned = cleanResponse(text);
                 // Try HTML first, fall back to plain text
                 let result, htmlFailed = false;
                 try {
                     result = await telegram('sendMessage', {
                         chat_id: chatId,
-                        text: toTelegramHtml(text),
+                        text: toTelegramHtml(cleaned),
                         parse_mode: 'HTML',
                     });
                 } catch (e) {
@@ -4496,16 +4498,20 @@ async function executeTool(name, input, chatId) {
                 if (htmlFailed || !result || !result.ok) {
                     result = await telegram('sendMessage', {
                         chat_id: chatId,
-                        text,
+                        text: cleaned,
                     });
                 }
                 if (result && result.ok && result.result && result.result.message_id) {
                     const messageId = result.result.message_id;
-                    recordSentMessage(chatId, messageId, text);
+                    recordSentMessage(chatId, messageId, cleaned);
                     log(`telegram_send: sent message ${messageId}`);
                     return { ok: true, message_id: messageId, chat_id: chatId };
                 }
-                return { ok: false, warning: 'Message sent but message_id not returned' };
+                if (result) {
+                    if (result.ok) return { ok: false, warning: 'Message sent but message_id not returned' };
+                    return { ok: false, warning: result.description || 'Send failed' };
+                }
+                return { ok: false, warning: 'No response from Telegram API' };
             } catch (e) {
                 return { error: e.message };
             }
@@ -5988,7 +5994,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
         if (recent.length > 0) {
             dynamicLines.push(`Recent Sent Messages (use message_id with telegram_delete, never guess):`);
             for (const [msgId, entry] of recent) {
-                dynamicLines.push(`  message_id ${msgId}: "${entry.preview}"`);
+                dynamicLines.push(`  message_id ${msgId}: ${JSON.stringify(entry.preview)}`);
             }
         }
     }
