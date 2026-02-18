@@ -970,16 +970,31 @@ object ConfigManager {
 
     private const val TAG = "ConfigManager"
 
-    // Files to exclude from export (regenerated or transient)
-    private val EXPORT_EXCLUDE = setOf(
-        "config.yaml", "config.json", "node_debug.log", "skills-manifest.json"
+    /** Max total uncompressed size to extract from a backup ZIP (50 MB). */
+    private const val IMPORT_MAX_BYTES = 50L * 1024 * 1024
+
+    /**
+     * Allowlist of files and directory prefixes that are included in export/import.
+     * Everything else in workspace/ is excluded (DB, state files, media, logs, etc.).
+     */
+    private val EXPORT_ALLOW_FILES = setOf(
+        "SOUL.md", "MEMORY.md", "IDENTITY.md", "USER.md",
+        "HEARTBEAT.md", "BOOTSTRAP.md",
     )
+    private val EXPORT_ALLOW_DIR_PREFIXES = listOf(
+        "memory/", "skills/", "cron/jobs.json",
+    )
+
+    /** Returns true if the relative path is on the export/import allowlist. */
+    private fun isAllowedPath(relativePath: String): Boolean {
+        if (relativePath in EXPORT_ALLOW_FILES) return true
+        return EXPORT_ALLOW_DIR_PREFIXES.any { relativePath.startsWith(it) }
+    }
 
     /**
      * Export workspace memory to a ZIP file at the given URI.
-     * Includes: SOUL.md, MEMORY.md, IDENTITY.md, USER.md, HEARTBEAT.md,
-     *           memory dir, skills dir, BOOTSTRAP.md
-     * Excludes: config.yaml, config.json, node_debug.log
+     * Only includes allowlisted files: personality (.md files), memory/, skills/, cron/jobs.json.
+     * Excludes: DB, media, state files, config, logs, wallet, and all other transient data.
      */
     fun exportMemory(context: Context, uri: Uri): Boolean {
         val workspaceDir = File(context.filesDir, "workspace")
@@ -991,7 +1006,7 @@ object ConfigManager {
         return try {
             context.contentResolver.openOutputStream(uri)?.use { outputStream ->
                 ZipOutputStream(outputStream).use { zip ->
-                    addDirectoryToZip(zip, workspaceDir, workspaceDir)
+                    addAllowedFilesToZip(zip, workspaceDir, workspaceDir)
                 }
             }
             Log.i(TAG, "Memory exported successfully")
@@ -1002,17 +1017,21 @@ object ConfigManager {
         }
     }
 
-    private fun addDirectoryToZip(zip: ZipOutputStream, dir: File, baseDir: File) {
+    private fun addAllowedFilesToZip(zip: ZipOutputStream, dir: File, baseDir: File) {
         val files = dir.listFiles() ?: return
         for (file in files) {
             val relativePath = file.relativeTo(baseDir).path.replace("\\", "/")
 
-            // Skip excluded files
-            if (file.name in EXPORT_EXCLUDE) continue
-
             if (file.isDirectory) {
-                addDirectoryToZip(zip, file, baseDir)
-            } else {
+                // Only recurse into directories that could contain allowed paths
+                val dirPrefix = "$relativePath/"
+                val hasAllowedChildren = EXPORT_ALLOW_DIR_PREFIXES.any {
+                    it.startsWith(dirPrefix) || dirPrefix.startsWith(it)
+                }
+                if (hasAllowedChildren) {
+                    addAllowedFilesToZip(zip, file, baseDir)
+                }
+            } else if (isAllowedPath(relativePath)) {
                 zip.putNextEntry(ZipEntry(relativePath))
                 file.inputStream().use { it.copyTo(zip) }
                 zip.closeEntry()
@@ -1022,21 +1041,61 @@ object ConfigManager {
 
     /**
      * Import workspace memory from a ZIP file at the given URI.
-     * Extracts into workspace directory, overwriting existing files.
-     * Does NOT overwrite config.yaml/config.json (those are regenerated).
+     * Auto-creates a safety backup before importing.
+     * Only extracts allowlisted paths; enforces 50 MB total size cap.
      */
     fun importMemory(context: Context, uri: Uri): Boolean {
         val workspaceDir = File(context.filesDir, "workspace").apply { mkdirs() }
 
+        // Auto-backup current state before overwriting
+        try {
+            val backupDir = File(context.filesDir, "backup").apply { mkdirs() }
+            val backupFile = File(backupDir, "pre_import_backup.zip")
+            backupFile.outputStream().use { outputStream ->
+                ZipOutputStream(outputStream).use { zip ->
+                    addAllowedFilesToZip(zip, workspaceDir, workspaceDir)
+                }
+            }
+            Log.i(TAG, "Pre-import backup created: ${backupFile.absolutePath}")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to create pre-import backup: ${e.message}")
+            // Continue with import — backup failure shouldn't block restore
+        }
+
         return try {
+            var totalExtracted = 0L
+            var hasValidMarker = false
+
+            context.contentResolver.openInputStream(uri)?.use { inputStream ->
+                // First pass: validate the ZIP contains at least one expected file
+                ZipInputStream(inputStream).use { zip ->
+                    var entry = zip.nextEntry
+                    while (entry != null) {
+                        val name = entry.name
+                        if (name == "SOUL.md" || name == "MEMORY.md") {
+                            hasValidMarker = true
+                            break
+                        }
+                        zip.closeEntry()
+                        entry = zip.nextEntry
+                    }
+                }
+            }
+
+            if (!hasValidMarker) {
+                Log.e(TAG, "ZIP does not contain SOUL.md or MEMORY.md — not a valid backup")
+                return false
+            }
+
+            // Second pass: extract allowlisted files
             context.contentResolver.openInputStream(uri)?.use { inputStream ->
                 ZipInputStream(inputStream).use { zip ->
                     var entry = zip.nextEntry
                     while (entry != null) {
                         val entryName = entry.name
 
-                        // Skip config files (regenerated from encrypted store)
-                        if (entryName in EXPORT_EXCLUDE) {
+                        // Only extract allowlisted paths
+                        if (!isAllowedPath(entryName)) {
                             zip.closeEntry()
                             entry = zip.nextEntry
                             continue
@@ -1055,8 +1114,23 @@ object ConfigManager {
                         if (entry.isDirectory) {
                             destFile.mkdirs()
                         } else {
+                            // Enforce total size cap
                             destFile.parentFile?.mkdirs()
-                            destFile.outputStream().use { zip.copyTo(it) }
+                            destFile.outputStream().use { out ->
+                                val buffer = ByteArray(8192)
+                                var bytesRead: Int
+                                while (zip.read(buffer).also { bytesRead = it } != -1) {
+                                    totalExtracted += bytesRead
+                                    if (totalExtracted > IMPORT_MAX_BYTES) {
+                                        out.close()
+                                        destFile.delete()
+                                        throw IllegalStateException(
+                                            "Backup exceeds ${IMPORT_MAX_BYTES / 1024 / 1024}MB limit"
+                                        )
+                                    }
+                                    out.write(buffer, 0, bytesRead)
+                                }
+                            }
                         }
 
                         zip.closeEntry()
@@ -1064,10 +1138,10 @@ object ConfigManager {
                     }
                 }
             }
-            Log.i(TAG, "Memory imported successfully")
+            Log.i(TAG, "Memory imported successfully (${totalExtracted / 1024}KB extracted)")
             true
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to import memory", e)
+            Log.e(TAG, "Failed to import memory: ${e.message}", e)
             false
         }
     }

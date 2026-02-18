@@ -237,8 +237,9 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
             val success = ConfigManager.importMemory(context, uri)
             Toast.makeText(
                 context,
-                if (success) "Memory imported. Restart agent to apply." else "Import failed",
-                Toast.LENGTH_SHORT
+                if (success) "Memory imported. Restart agent to apply."
+                else "Import failed. File must be a SeekerClaw backup ZIP.",
+                Toast.LENGTH_LONG
             ).show()
         }
     }
@@ -1371,7 +1372,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
             },
             text = {
                 Text(
-                    "This will overwrite current memory files with the backup. Export first if you want to keep current data.",
+                    "This will overwrite personality, memory, and skills with the backup. A safety backup is created automatically before importing.",
                     fontFamily = FontFamily.Default,
                     fontSize = 13.sp,
                     color = SeekerClawColors.TextSecondary,
@@ -1381,7 +1382,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
             confirmButton = {
                 TextButton(onClick = {
                     showImportDialog = false
-                    importLauncher.launch(arrayOf("application/zip"))
+                    importLauncher.launch(arrayOf("application/zip", "application/octet-stream"))
                 }) {
                     Text(
                         "Select File",
