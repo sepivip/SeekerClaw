@@ -95,8 +95,19 @@ function sanitizeBoundaryMarkers(text) {
 
 // Sanitize source label for boundary markers (prevent marker injection via crafted URLs)
 function sanitizeBoundarySource(source) {
-    if (typeof source !== 'string') return String(source || '');
-    return source.replace(/["<>]/g, '');
+    if (typeof source !== 'string') source = String(source || '');
+    // Remove characters that could interfere with boundary syntax
+    let sanitized = source.replace(/["<>]/g, '');
+    // Replace control characters (including newlines, tabs) with spaces
+    sanitized = sanitized.replace(/[\x00-\x1F\x7F]+/g, ' ');
+    // Collapse all whitespace to single spaces and trim
+    sanitized = sanitized.replace(/\s+/g, ' ').trim();
+    // Cap length to prevent log/boundary flooding
+    const MAX_SOURCE_LENGTH = 200;
+    if (sanitized.length > MAX_SOURCE_LENGTH) {
+        sanitized = sanitized.slice(0, MAX_SOURCE_LENGTH) + '...';
+    }
+    return sanitized;
 }
 
 // Wrap untrusted external content with security boundary markers
