@@ -1,0 +1,748 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=412, initial-scale=1.0">
+<title>SeekerClaw — Dashboard</title>
+<style>
+/* ============================================================
+   LOCAL FONTS — @font-face (works on file:// protocol)
+   ============================================================ */
+@font-face {
+  font-family: 'Rethink Sans';
+  src: url('fonts/rethink_sans_regular.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Rethink Sans';
+  src: url('fonts/rethink_sans_medium.ttf') format('truetype');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Rethink Sans';
+  src: url('fonts/rethink_sans_bold.ttf') format('truetype');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Rethink Sans';
+  src: url('fonts/rethink_sans_extrabold.ttf') format('truetype');
+  font-weight: 800;
+  font-style: normal;
+  font-display: swap;
+}
+/* ============================================================
+   DARKOPS THEME — exact port from Theme.kt
+   ============================================================ */
+:root {
+  /* Backgrounds */
+  --bg: #0A0A0F;
+  --surface: #16161F;
+  --surface-highlight: #1E1E2E;
+  --card-border: rgba(55, 65, 81, 0.25);
+
+  /* Primary (crimson red) */
+  --primary: #E41F28;
+  --primary-dim: #B81820;
+  --primary-glow: rgba(228, 31, 40, 0.2);
+
+  /* Status colors */
+  --accent: #4ADE80;       /* green — online/running */
+  --warning: #FBBF24;      /* yellow */
+  --error: #F87171;        /* red */
+
+  /* Actions */
+  --action-primary: #00C805;  /* green deploy button */
+  --action-danger: #8B0000;
+  --action-danger-text: #FF6B6B;
+
+  /* Log */
+  --log-info: #60A5FA;
+
+  /* Text */
+  --text-primary: rgba(255, 255, 255, 0.94);
+  --text-secondary: #9CA3AF;
+  --text-dim: #9CA3AF;
+  --text-interactive: rgba(255, 255, 255, 0.7);
+
+  /* Borders */
+  --border-subtle: #374151;
+
+  /* Shape */
+  --radius: 12px;
+
+  /* Sizing — mobile viewport */
+  --max-width: 412px;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  background: #050508;
+  font-family: 'Rethink Sans', sans-serif;
+  color: var(--text-primary);
+  display: flex;
+  justify-content: center;
+  min-height: 100vh;
+}
+
+.phone-frame {
+  width: var(--max-width);
+  min-height: 100vh;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+/* ============================================================
+   MAIN CONTENT — scrollable area above bottom nav
+   ============================================================ */
+.content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+  padding-bottom: 80px;
+}
+
+/* ============================================================
+   HEADER — two-tone logo
+   ============================================================ */
+.header-title {
+  font-size: 28px;
+  font-weight: 800;
+  line-height: 1.1;
+}
+.header-title .white { color: var(--text-primary); }
+.header-title .red { color: var(--primary); }
+
+.header-subtitle {
+  font-size: 14px;
+  color: var(--text-dim);
+  margin-top: 2px;
+}
+
+/* ============================================================
+   BANNERS — dismissible alerts
+   ============================================================ */
+.banner {
+  display: flex;
+  align-items: center;
+  border-radius: var(--radius);
+  padding: 12px 8px 12px 16px;
+  margin-top: 16px;
+  gap: 10px;
+}
+.banner.warning { background: rgba(251, 191, 36, 0.15); }
+.banner.error { background: rgba(248, 113, 113, 0.12); }
+.banner.hidden { display: none; }
+
+.banner .dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.banner.warning .dot { background: var(--warning); }
+.banner.warning .banner-text { color: var(--warning); font-size: 13px; font-weight: 500; }
+.banner.error .dot { background: var(--error); }
+.banner.error .banner-text { color: var(--error); font-size: 12px; }
+
+.banner .banner-text { flex: 1; }
+
+.banner .dismiss {
+  background: none; border: none; cursor: pointer;
+  color: inherit; padding: 8px; line-height: 1;
+  font-size: 16px; opacity: 0.8;
+}
+.banner .dismiss:hover { opacity: 1; }
+
+/* ============================================================
+   STATUS CARD
+   ============================================================ */
+.status-card {
+  background: var(--surface);
+  border-radius: var(--radius);
+  padding: 20px;
+  margin-top: 24px;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+.status-card.dimmed { opacity: 0.6; }
+
+.status-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.status-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.status-dot {
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.status-dot.green { background: var(--accent); }
+.status-dot.yellow { background: var(--warning); }
+.status-dot.red { background: var(--error); }
+.status-dot.dim { background: var(--text-dim); }
+
+.status-dot.pulse {
+  animation: pulse 1s ease-in-out infinite alternate;
+}
+@keyframes pulse {
+  0% { opacity: 0.4; }
+  100% { opacity: 1; }
+}
+
+.status-text {
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.status-nav {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.status-divider {
+  height: 1px;
+  background: rgba(156, 163, 175, 0.2);
+  margin: 20px 0;
+}
+
+.uptime-label {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-dim);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+.uptime-value {
+  font-family: 'Roboto Mono', monospace;
+  font-size: 32px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-top: 4px;
+}
+
+.stats-row {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 20px;
+}
+
+.stat-mini {
+  text-align: center;
+}
+.stat-mini .value {
+  font-family: 'Roboto Mono', monospace;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.stat-mini .label {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-dim);
+  letter-spacing: 1px;
+  margin-top: 2px;
+}
+
+/* ============================================================
+   UPLINKS SECTION
+   ============================================================ */
+.section-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-dim);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  margin-top: 28px;
+}
+
+.uplinks {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.uplink-card {
+  display: flex;
+  align-items: center;
+  background: var(--surface);
+  border-radius: var(--radius);
+  padding: 16px;
+}
+
+.uplink-icon {
+  font-family: 'Roboto Mono', monospace;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--primary);
+  width: 44px;
+  flex-shrink: 0;
+}
+
+.uplink-info {
+  flex: 1;
+}
+.uplink-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+.uplink-subtitle {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.uplink-dot {
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.uplink-dot.pulse {
+  animation: pulse 1s ease-in-out infinite alternate;
+}
+
+/* ============================================================
+   API STATS ROW
+   ============================================================ */
+.api-stats {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: var(--surface);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  margin-top: 16px;
+}
+
+.api-stat .value {
+  font-family: 'Roboto Mono', monospace;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.api-stat .label {
+  font-size: 9px;
+  font-weight: 500;
+  color: var(--text-dim);
+  letter-spacing: 1px;
+}
+
+/* ============================================================
+   DEPLOY BUTTON
+   ============================================================ */
+.deploy-btn {
+  width: 100%;
+  height: 52px;
+  border: none;
+  border-radius: var(--radius);
+  font-size: 15px;
+  font-weight: 700;
+  color: white;
+  cursor: pointer;
+  margin-top: 28px;
+  transition: background 0.15s, transform 0.1s;
+}
+.deploy-btn:active { transform: scale(0.98); }
+
+.deploy-btn.deploy { background: var(--action-primary); }
+.deploy-btn.stop { background: var(--primary); }
+.deploy-btn.disabled {
+  background: var(--border-subtle);
+  color: var(--text-dim);
+  cursor: not-allowed;
+}
+
+.deploy-hint {
+  font-size: 12px;
+  color: var(--text-dim);
+  text-align: center;
+  margin-top: 6px;
+}
+
+/* ============================================================
+   BOTTOM NAVIGATION
+   ============================================================ */
+.bottom-nav {
+  position: fixed;
+  bottom: 0;
+  width: var(--max-width);
+  display: flex;
+  justify-content: space-around;
+  align-items: center;
+  height: 64px;
+  background: var(--surface);
+  border-top: 1px solid var(--card-border);
+}
+
+.nav-tab {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 16px;
+  cursor: pointer;
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 500;
+  transition: color 0.15s;
+}
+.nav-tab.active { color: var(--primary); }
+.nav-tab:hover { color: var(--text-primary); }
+
+.nav-tab svg {
+  width: 22px; height: 22px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* ============================================================
+   STATE TOGGLE CONTROLS (top-right)
+   ============================================================ */
+.state-controls {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  gap: 6px;
+  z-index: 100;
+}
+.state-btn {
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+  background: var(--surface);
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  letter-spacing: 0.5px;
+}
+.state-btn.active {
+  background: var(--primary);
+  color: white;
+  border-color: var(--primary);
+}
+</style>
+</head>
+<body>
+
+<!-- State toggle (for design preview — switch between Running/Stopped/Error) -->
+<div class="state-controls">
+  <button class="state-btn active" onclick="setState('running')">Running</button>
+  <button class="state-btn" onclick="setState('stopped')">Stopped</button>
+  <button class="state-btn" onclick="setState('starting')">Starting</button>
+  <button class="state-btn" onclick="setState('error')">Error</button>
+</div>
+
+<div class="phone-frame">
+  <div class="content">
+
+    <!-- Header -->
+    <div class="header-title">
+      <span class="white">Seeker</span><span class="red">C/aw</span>
+    </div>
+    <div class="header-subtitle">AgentOS</div>
+
+    <!-- Network banner (hidden by default) -->
+    <div class="banner warning hidden" id="networkBanner">
+      <div class="dot"></div>
+      <span class="banner-text">No internet connection</span>
+      <button class="dismiss" onclick="dismissBanner('networkBanner')">&times;</button>
+    </div>
+
+    <!-- Error banner (hidden by default) -->
+    <div class="banner error hidden" id="errorBanner">
+      <div class="dot"></div>
+      <span class="banner-text" id="errorBannerText">API key rejected — check Settings</span>
+      <button class="dismiss" onclick="dismissBanner('errorBanner')">&times;</button>
+    </div>
+
+    <!-- Status Card -->
+    <div class="status-card" id="statusCard">
+      <div class="status-header">
+        <div class="status-left">
+          <div class="status-dot green pulse" id="statusDot"></div>
+          <span class="status-text" id="statusText">Online</span>
+        </div>
+        <span class="status-nav" id="statusNav">System &gt;</span>
+      </div>
+
+      <div class="status-divider"></div>
+
+      <div class="uptime-label">Uptime</div>
+      <div class="uptime-value" id="uptimeValue">02h 47m 13s</div>
+
+      <div class="stats-row">
+        <div class="stat-mini">
+          <div class="value" id="todayCount">12</div>
+          <div class="label">TODAY</div>
+        </div>
+        <div class="stat-mini">
+          <div class="value" id="totalCount">847</div>
+          <div class="label">TOTAL</div>
+        </div>
+        <div class="stat-mini">
+          <div class="value" id="lastActivity">14:32</div>
+          <div class="label">LAST</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Uplinks -->
+    <div class="section-label">Uplinks</div>
+    <div class="uplinks">
+      <div class="uplink-card">
+        <span class="uplink-icon">//TG</span>
+        <div class="uplink-info">
+          <div class="uplink-name">Telegram</div>
+          <div class="uplink-subtitle" id="tgSubtitle">Message relay</div>
+        </div>
+        <div class="uplink-dot pulse" id="tgDot" style="background: var(--accent);"></div>
+      </div>
+      <div class="uplink-card">
+        <span class="uplink-icon">//GW</span>
+        <div class="uplink-info">
+          <div class="uplink-name">Gateway</div>
+          <div class="uplink-subtitle" id="gwSubtitle">OpenClaw engine</div>
+        </div>
+        <div class="uplink-dot pulse" id="gwDot" style="background: var(--accent);"></div>
+      </div>
+      <div class="uplink-card">
+        <span class="uplink-icon">//AI</span>
+        <div class="uplink-info">
+          <div class="uplink-name">AI Model</div>
+          <div class="uplink-subtitle" id="aiSubtitle">Sonnet 4.6</div>
+        </div>
+        <div class="uplink-dot pulse" id="aiDot" style="background: var(--accent);"></div>
+      </div>
+    </div>
+
+    <!-- API Stats -->
+    <div class="api-stats" id="apiStats">
+      <div class="api-stat">
+        <div class="value">24 req</div>
+        <div class="label">API</div>
+      </div>
+      <div class="api-stat">
+        <div class="value">1,240ms</div>
+        <div class="label">LATENCY</div>
+      </div>
+      <div class="api-stat">
+        <div class="value">$0.47</div>
+        <div class="label">COST</div>
+      </div>
+    </div>
+
+    <!-- Deploy Button -->
+    <button class="deploy-btn stop" id="deployBtn" onclick="toggleDeploy()">Stop Agent</button>
+    <div class="deploy-hint hidden" id="deployHint">Complete setup to deploy</div>
+
+  </div>
+
+  <!-- Bottom Navigation -->
+  <nav class="bottom-nav">
+    <button class="nav-tab active">
+      <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+      Dashboard
+    </button>
+    <button class="nav-tab">
+      <svg viewBox="0 0 24 24"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+      Console
+    </button>
+    <button class="nav-tab">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      Settings
+    </button>
+  </nav>
+</div>
+
+<script>
+// ============================================================
+// STATE MANAGEMENT — simulates ServiceState from Kotlin
+// ============================================================
+let currentState = 'running';
+let uptimeSeconds = 10033; // 2h 47m 13s
+let uptimeInterval = null;
+
+function setState(state) {
+  currentState = state;
+
+  // Update toggle buttons
+  document.querySelectorAll('.state-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.textContent.toLowerCase() === state);
+  });
+
+  const dot = document.getElementById('statusDot');
+  const text = document.getElementById('statusText');
+  const card = document.getElementById('statusCard');
+  const nav = document.getElementById('statusNav');
+  const btn = document.getElementById('deployBtn');
+  const hint = document.getElementById('deployHint');
+  const apiRow = document.getElementById('apiStats');
+
+  // Uplink elements
+  const tgDot = document.getElementById('tgDot');
+  const gwDot = document.getElementById('gwDot');
+  const aiDot = document.getElementById('aiDot');
+  const tgSub = document.getElementById('tgSubtitle');
+  const gwSub = document.getElementById('gwSubtitle');
+  const aiSub = document.getElementById('aiSubtitle');
+
+  // Reset
+  card.classList.remove('dimmed');
+  hint.classList.add('hidden');
+  apiRow.classList.remove('hidden');
+
+  const allDots = [dot, tgDot, gwDot, aiDot];
+
+  switch (state) {
+    case 'running':
+      dot.className = 'status-dot green pulse';
+      text.textContent = 'Online';
+      nav.textContent = 'System >';
+      btn.className = 'deploy-btn stop';
+      btn.textContent = 'Stop Agent';
+      setUplinkColors('var(--accent)', true);
+      tgSub.textContent = 'Message relay';
+      gwSub.textContent = 'OpenClaw engine';
+      aiSub.textContent = 'Sonnet 4.6';
+      startUptime();
+      break;
+
+    case 'stopped':
+      dot.className = 'status-dot dim';
+      text.textContent = 'Offline';
+      nav.textContent = 'System >';
+      card.classList.add('dimmed');
+      btn.className = 'deploy-btn deploy';
+      btn.textContent = 'Deploy Agent';
+      apiRow.classList.add('hidden');
+      setUplinkColors('var(--text-dim)', false);
+      tgSub.textContent = 'Offline';
+      gwSub.textContent = 'Offline';
+      aiSub.textContent = 'Offline';
+      stopUptime();
+      document.getElementById('uptimeValue').textContent = '00h 00m 00s';
+      break;
+
+    case 'starting':
+      dot.className = 'status-dot yellow';
+      text.textContent = 'Starting\u2026';
+      nav.textContent = 'System >';
+      btn.className = 'deploy-btn stop';
+      btn.textContent = 'Stop Agent';
+      apiRow.classList.add('hidden');
+      setUplinkColors('var(--warning)', false);
+      tgSub.textContent = 'Connecting...';
+      gwSub.textContent = 'Starting...';
+      aiSub.textContent = 'Loading model...';
+      stopUptime();
+      break;
+
+    case 'error':
+      dot.className = 'status-dot red';
+      text.textContent = 'Config Needed';
+      nav.textContent = 'Settings >';
+      card.classList.add('dimmed');
+      btn.className = 'deploy-btn disabled';
+      btn.textContent = 'Deploy Agent';
+      btn.disabled = true;
+      hint.classList.remove('hidden');
+      apiRow.classList.add('hidden');
+      setUplinkColors('var(--error)', false);
+      tgSub.textContent = 'Bot token missing';
+      gwSub.textContent = 'Blocked: missing config';
+      aiSub.textContent = 'Credential missing';
+      stopUptime();
+      document.getElementById('uptimeValue').textContent = '00h 00m 00s';
+      break;
+  }
+}
+
+function setUplinkColors(color, pulse) {
+  ['tgDot', 'gwDot', 'aiDot'].forEach(id => {
+    const el = document.getElementById(id);
+    el.style.background = color;
+    el.classList.toggle('pulse', pulse);
+  });
+}
+
+function toggleDeploy() {
+  if (currentState === 'running') {
+    setState('stopped');
+  } else if (currentState === 'stopped') {
+    setState('starting');
+    setTimeout(() => setState('running'), 2000);
+  }
+}
+
+function dismissBanner(id) {
+  document.getElementById(id).classList.add('hidden');
+}
+
+// ============================================================
+// UPTIME COUNTER — live ticking
+// ============================================================
+function formatUptime(totalSeconds) {
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  let str = '';
+  if (days > 0) str += days + 'd ';
+  str += String(hours).padStart(2, '0') + 'h ';
+  str += String(minutes).padStart(2, '0') + 'm ';
+  str += String(seconds).padStart(2, '0') + 's';
+  return str;
+}
+
+function startUptime() {
+  stopUptime();
+  document.getElementById('uptimeValue').textContent = formatUptime(uptimeSeconds);
+  uptimeInterval = setInterval(() => {
+    uptimeSeconds++;
+    document.getElementById('uptimeValue').textContent = formatUptime(uptimeSeconds);
+  }, 1000);
+}
+
+function stopUptime() {
+  if (uptimeInterval) {
+    clearInterval(uptimeInterval);
+    uptimeInterval = null;
+  }
+}
+
+// Nav tab switching
+document.querySelectorAll('.nav-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+  });
+});
+
+// Initialize
+startUptime();
+</script>
+</body>
+</html>
