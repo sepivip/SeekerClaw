@@ -19,10 +19,11 @@ try {
     if (fs.existsSync(debugLog)) {
         const stat = fs.statSync(debugLog);
         if (stat.size > LOG_MAX_BYTES) {
-            const content = fs.readFileSync(debugLog, 'utf8');
-            // Keep last ~1MB
-            const keepFrom = content.length - (1024 * 1024);
-            const trimmed = content.slice(keepFrom);
+            // Read as Buffer to work with byte offsets (not character length)
+            const buffer = fs.readFileSync(debugLog);
+            const KEEP_BYTES = 1024 * 1024; // 1 MB
+            const startOffset = Math.max(0, buffer.length - KEEP_BYTES);
+            const trimmed = buffer.subarray(startOffset).toString('utf8');
             // Find first complete line
             const firstNewline = trimmed.indexOf('\n');
             const clean = firstNewline >= 0 ? trimmed.slice(firstNewline + 1) : trimmed;
