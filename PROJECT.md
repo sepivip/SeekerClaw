@@ -42,6 +42,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 
 ### AI Agent Core
 - **Claude integration** — Opus 4.6 (default), Sonnet 4.6, Sonnet 4.5, Haiku 4.5 selectable. Prompt caching, retry with backoff, rate-limit throttling, user-friendly error messages. OAuth/setup token support for Claude Pro/Max users.
+- **MCP support** — Remote MCP (Model Context Protocol) servers via Streamable HTTP. Users add server URLs in Settings; agent discovers and uses tools at startup. Description sanitization, SHA-256 rug-pull detection, untrusted content wrapping, per-server + global rate limiting.
 - **Telegram bot** — HTML formatting (no markdown headers), native blockquotes, bidirectional reactions, file download with vision, file upload (telegram_send_file tool), long message chunking, quoted replies via `[[reply_to_current]]`, emoji rendering fixed, companion-tone message templates (TEMPLATES.md), context-aware `/start`, sent message ID tracking (ring buffer, 24h TTL) + `telegram_send` tool for same-turn delete flows, contextual status messages for long-running tools (🔍 Searching..., ⚙️ Running..., etc.)
 - **SILENT_REPLY protocol** — Agent silently drops messages when it has nothing useful to say
 - **Ephemeral session awareness** — Agent knows context resets on restart
@@ -143,7 +144,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 - **Setup wizard** — QR scan or manual API key entry, OAuth/setup token support, haptic feedback
 - **Dashboard** — Status with pulse animation (running) + dimming (stopped), uptime, message stats, active uplinks, mini terminal, API health monitoring (green/amber/red), dismissible error/network banners, deploy button disabled state when config incomplete
 - **Logs viewer** — Color-coded, auto-scrolling monospace, stable keys for performance
-- **Settings** — Collapsible sections with animation, edit config with masked fields, required field indicators (*), model dropdown, auto-start, battery optimization, export/import, wallet copy button, visual escalation for danger zone, semantic action colors (green positive, red danger), accessibility content descriptions on all icons
+- **Settings** — Collapsible sections with animation, edit config with masked fields, required field indicators (*), model dropdown, auto-start, battery optimization, export/import, wallet copy button, MCP server management (add/edit/remove/toggle), visual escalation for danger zone, semantic action colors (green positive, red danger), accessibility content descriptions on all icons
 - **System screen** — API usage stats, memory index status, colored accent borders on stat cards
 - **Foreground service** — START_STICKY with wake lock, boot receiver, watchdog (30s health check)
 
@@ -238,6 +239,8 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Date | Feature | PR |
 |------|---------|-----|
+| 2026-02-18 | Remote MCP server support — Streamable HTTP client, Settings UI, security hardening (BAT-168) | #115 |
+| 2026-02-18 | Add Sonnet 4.6 model + refresh settings info texts | direct |
 | 2026-02-18 | Keep typing indicator alive during Claude API calls | #114 |
 | 2026-02-18 | Align tool status messages with spec (BAT-150) | #113 |
 | 2026-02-18 | Remove AD_ID permission merged from dependencies (BAT-166) | #112 |
