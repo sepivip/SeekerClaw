@@ -2282,7 +2282,7 @@ function toTelegramHtml(text) {
     return html;
 }
 
-async function sendMessage(chatId, text, replyTo = null) {
+async function sendMessage(chatId, text, replyTo = null, buttons = null) {
     // Clean AI artifacts before sending to user
     text = cleanResponse(text);
     if (!text) return; // Nothing left after cleaning
@@ -2295,17 +2295,23 @@ async function sendMessage(chatId, text, replyTo = null) {
         remaining = remaining.slice(4000);
     }
 
-    for (const chunk of chunks) {
+    for (let i = 0; i < chunks.length; i++) {
+        const chunk = chunks[i];
+        const isLastChunk = i === chunks.length - 1;
+        // Only attach buttons to the last chunk (they belong at the bottom)
+        const replyMarkup = (isLastChunk && buttons) ? { inline_keyboard: buttons } : undefined;
         let sent = false;
 
         // Try with HTML first (supports native blockquotes)
         try {
-            const result = await telegram('sendMessage', {
+            const payload = {
                 chat_id: chatId,
                 text: toTelegramHtml(chunk),
                 reply_to_message_id: replyTo,
                 parse_mode: 'HTML',
-            });
+            };
+            if (replyMarkup) payload.reply_markup = replyMarkup;
+            const result = await telegram('sendMessage', payload);
             // Check if Telegram actually accepted the message
             if (result && result.ok) {
                 sent = true;
@@ -2320,11 +2326,13 @@ async function sendMessage(chatId, text, replyTo = null) {
         // Only retry as plain text if the HTML attempt failed
         if (!sent) {
             try {
-                const result = await telegram('sendMessage', {
+                const payload = {
                     chat_id: chatId,
                     text: chunk,
                     reply_to_message_id: replyTo,
-                });
+                };
+                if (replyMarkup) payload.reply_markup = replyMarkup;
+                const result = await telegram('sendMessage', payload);
                 if (result && result.ok && result.result && result.result.message_id) {
                     recordSentMessage(chatId, result.result.message_id, chunk);
                 }
@@ -2969,11 +2977,26 @@ const TOOLS = [
     },
     {
         name: 'telegram_send',
-        description: 'Send a Telegram message and get back the message_id. Use this instead of responding directly when you need the message_id — for example, to delete or edit it later in the same turn. The reply is sent to the current chat automatically. Returns { ok, message_id, chat_id }.',
+        description: 'Send a Telegram message and get back the message_id. Use this instead of responding directly when you need the message_id — for example, to delete or edit it later in the same turn. Supports optional inline keyboard buttons — when the user taps a button, the callback data is injected back into the conversation as a message. Returns { ok, message_id, chat_id }.',
         input_schema: {
             type: 'object',
             properties: {
-                text: { type: 'string', description: 'Message text to send (Markdown formatting supported; converted to Telegram HTML). Max 4096 characters — for long responses use the default sendMessage().' }
+                text: { type: 'string', description: 'Message text to send (Markdown formatting supported; converted to Telegram HTML). Max 4096 characters — for long responses use the default sendMessage().' },
+                buttons: {
+                    type: 'array',
+                    description: 'Optional inline keyboard rows. Each row is an array of button objects with "text" (display label) and "callback_data" (value sent back when tapped, max 64 bytes). Example: [[{"text": "✅ Yes", "callback_data": "yes"}, {"text": "❌ No", "callback_data": "no"}]]',
+                    items: {
+                        type: 'array',
+                        items: {
+                            type: 'object',
+                            properties: {
+                                text: { type: 'string' },
+                                callback_data: { type: 'string' }
+                            },
+                            required: ['text', 'callback_data']
+                        }
+                    }
+                }
             },
             required: ['text']
         }
@@ -5260,22 +5283,27 @@ async function executeTool(name, input, chatId) {
             if (!chatId) return { error: 'No active chat' };
             try {
                 const cleaned = cleanResponse(text);
+                const replyMarkup = input.buttons ? { inline_keyboard: input.buttons } : undefined;
                 // Try HTML first, fall back to plain text
                 let result, htmlFailed = false;
                 try {
-                    result = await telegram('sendMessage', {
+                    const payload = {
                         chat_id: chatId,
                         text: toTelegramHtml(cleaned),
                         parse_mode: 'HTML',
-                    });
+                    };
+                    if (replyMarkup) payload.reply_markup = replyMarkup;
+                    result = await telegram('sendMessage', payload);
                 } catch (e) {
                     htmlFailed = true;
                 }
                 if (htmlFailed || !result || !result.ok) {
-                    result = await telegram('sendMessage', {
+                    const payload = {
                         chat_id: chatId,
                         text: cleaned,
-                    });
+                    };
+                    if (replyMarkup) payload.reply_markup = replyMarkup;
+                    result = await telegram('sendMessage', payload);
                 }
                 if (result && result.ok && result.result && result.result.message_id) {
                     const messageId = result.result.message_id;
@@ -6701,6 +6729,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('**File attachments (inbound):** When the user sends photos, documents, or other files via Telegram, they are automatically downloaded to media/inbound/ in your workspace. Images are shown to you directly (vision). For other files, you are told the path — use the read tool to access them. Supported: photos, documents (PDF, etc.), video, audio, voice notes.');
     lines.push('**File sending (outbound):** Use telegram_send_file to send any workspace file to the user\'s Telegram chat. Auto-detects type from extension (photo, video, audio, document). Use for sharing reports, camera captures, exported CSVs, generated images, or any file the user needs. Max 50MB, photos max 10MB.');
     lines.push('**File deletion:** Use the delete tool to clean up temporary files, old media downloads, or files you no longer need. Protected system files (SOUL.md, MEMORY.md, IDENTITY.md, USER.md, HEARTBEAT.md, config.json, seekerclaw.db) cannot be deleted. Directories cannot be deleted — remove files individually.');
+    lines.push('**Inline keyboard buttons:** telegram_send supports an optional `buttons` parameter — an array of button rows. Each button has `text` (label) and `callback_data` (value returned on tap). When the user taps a button, you receive it as a message like `[Tapped button: "yes"]`. Use for confirmations, choices, quick actions. Example: `[[{"text": "✅ Yes", "callback_data": "yes"}, {"text": "❌ No", "callback_data": "no"}]]`');
     lines.push('');
 
     // Tool Call Style - OpenClaw style
@@ -7867,7 +7896,7 @@ async function poll() {
                 offset: offset,
                 timeout: 30,
                 allowed_updates: REACTION_NOTIFICATIONS !== 'off'
-                    ? ['message', 'message_reaction'] : ['message']
+                    ? ['message', 'message_reaction', 'callback_query'] : ['message', 'callback_query']
             });
 
             // Handle Telegram rate limiting (429)
@@ -7897,6 +7926,28 @@ async function poll() {
                             pendingConfirmations.delete(msgChatId);
                         } else {
                             enqueueMessage(update.message);
+                        }
+                    }
+                    if (update.callback_query) {
+                        const cb = update.callback_query;
+                        // Answer immediately to dismiss the loading spinner on the button
+                        telegram('answerCallbackQuery', { callback_query_id: cb.id }).catch(() => {});
+                        // Security: only process callbacks from owner
+                        const cbSenderId = String(cb.from?.id);
+                        if (OWNER_ID && cbSenderId !== OWNER_ID) {
+                            log(`[Callback] Ignoring callback from ${cbSenderId} (not owner)`);
+                        } else {
+                            const buttonData = cb.data || '';
+                            const originalText = (cb.message?.text || '').slice(0, 200);
+                            log(`[Callback] Button tapped: "${buttonData}" on message: "${originalText.slice(0, 60)}"`);
+                            // Inject as a synthetic user message so the agent sees the button tap
+                            const syntheticMsg = {
+                                chat: cb.message?.chat || { id: cb.from.id },
+                                from: cb.from,
+                                text: `[Tapped button: "${buttonData}"] (on message: "${originalText}")`,
+                                message_id: cb.message?.message_id,
+                            };
+                            enqueueMessage(syntheticMsg);
                         }
                     }
                     if (update.message_reaction && REACTION_NOTIFICATIONS !== 'off') {
