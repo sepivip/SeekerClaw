@@ -1,11 +1,21 @@
 ---
 name: reminders
-description: "Set reminders that will notify you at the specified time"
+description: "Set reminders that will notify you at the specified time. Use when: user says 'remind me to X at Y', wants to schedule a notification, or manage existing reminders. Don't use when: user wants a countdown timer (use timer skill) or wants to save a note without a time trigger (use notes skill)."
 version: "1.0.0"
 emoji: "⏰"
 ---
 
 # Reminders
+
+## Use when
+- "remind me to X in 30 minutes", "remind me at 5pm"
+- List or cancel existing reminders
+- Time-specific notifications
+
+## Don't use when
+- Simple countdown timer (use timer)
+- Save a note without time trigger (use notes)
+- Recurring scheduled automation (use cron tools directly)
 
 ## Instructions
 Use the reminder tools to manage reminders:

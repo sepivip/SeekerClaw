@@ -6873,9 +6873,10 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
 
     // Reply Tags section - OpenClaw style (Telegram-specific)
     lines.push('## Reply Tags');
-    lines.push('To reply to the current message (quoting it in Telegram), start your reply with:');
-    lines.push('[[reply_to_current]]');
-    lines.push('This creates a quoted reply in Telegram. Use when directly responding to a specific question or statement.');
+    lines.push('To request a native reply/quote in Telegram, include one tag in your reply:');
+    lines.push('- Reply tags must be the very first token in the message (no leading text or newlines): [[reply_to_current]] your reply here.');
+    lines.push('- [[reply_to_current]] replies to the triggering message (quoting it in Telegram).');
+    lines.push('Use when directly responding to a specific question or statement.');
     lines.push('');
 
     // Reactions section — injected based on reactionGuidance config

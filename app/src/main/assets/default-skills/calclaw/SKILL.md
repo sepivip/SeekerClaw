@@ -1,6 +1,6 @@
 ---
 name: calclaw
-description: "Track calories, protein, and macros from food photos or text. Log meals, view daily/weekly nutrition dashboards, set calorie goals, track weight, and get AI-powered portion estimates. Use when user mentions food, meals, calories, protein, macros, diet, nutrition, weight tracking, or sends food photos."
+description: "Track calories, protein, and macros from food photos or text. Log meals, view daily/weekly nutrition dashboards, set calorie goals, track weight, and get AI-powered portion estimates. Use when user mentions food, meals, calories, protein, macros, diet, nutrition, weight tracking, or sends food photos. Don't use when: user asks about restaurant recommendations, cooking recipes, or food delivery."
 version: "1.0.0"
 emoji: "🍽️"
 ---
@@ -8,6 +8,16 @@ emoji: "🍽️"
 # CalClaw — AI Nutrition Tracker
 
 Log meals via food photos or text, track daily calories and macros, view dashboards, and hit nutrition goals. All data stored locally in `nutrition/`.
+
+## Use when
+- Food photos, "log my meal", calories, protein, macros
+- Diet, nutrition, weight tracking
+- "what did I eat today", dashboard
+
+## Don't use when
+- Restaurant recommendations
+- Cooking recipes
+- Food delivery, grocery shopping lists
 
 ## Data Storage
 

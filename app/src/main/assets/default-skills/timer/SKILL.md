@@ -1,11 +1,20 @@
 ---
 name: timer
-description: "Set countdown timers for cooking, workouts, or any timed activity"
+description: "Set countdown timers for cooking, workouts, or any timed activity. Use when: user wants a countdown timer, 'set a timer for X minutes'. Don't use when: user wants a reminder at a specific clock time (use reminders skill) or wants to schedule recurring tasks."
 version: "1.0.0"
 emoji: "⏱️"
 ---
 
 # Timer
+
+## Use when
+- "set a timer for 5 minutes", "timer for pasta"
+- Countdown for cooking/workouts/breaks
+- "start a countdown"
+
+## Don't use when
+- Reminder at a specific clock time like "at 3pm" (use reminders)
+- Schedule recurring tasks (use cron tools)
 
 ## Instructions
 When the user wants a timer:

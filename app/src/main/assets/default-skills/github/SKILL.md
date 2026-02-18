@@ -1,6 +1,6 @@
 ---
 name: github
-description: "Search repositories, view issues, check PRs on GitHub"
+description: "Search repositories, view issues, check PRs on GitHub. Use when: user asks about GitHub repos, issues, PRs, or wants to search GitHub. Don't use when: user wants general web search (use research skill) or asks about git concepts without GitHub context."
 version: "1.0.0"
 metadata:
   openclaw:
@@ -14,12 +14,15 @@ metadata:
 
 Interact with GitHub using the REST API.
 
-## When to Use
-
-User asks about:
+## Use when
 - Repositories ("Find Kotlin repos", "My repos")
 - Issues ("Open issues on X")
 - Pull requests
+
+## Don't use when
+- General web search (use research)
+- Git concepts without GitHub context
+- Non-GitHub code hosting
 
 ## Authentication
 

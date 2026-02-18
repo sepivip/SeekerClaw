@@ -1,10 +1,19 @@
 ---
 name: briefing
-description: "Provide a personalized daily briefing with news, weather, and reminders"
+description: "Provide a personalized daily briefing with news, weather, and reminders. Use when: user asks for a briefing, morning update, daily summary, or 'what's new today'. Don't use when: user asks about a single specific topic like just weather or just news (use those skills instead)."
 version: "1.0.0"
 ---
 
 # Daily Briefing
+
+## Use when
+- "give me a briefing", "morning update", "what's new today"
+- Combined summary of news + weather + reminders
+
+## Don't use when
+- Only asks about weather (use weather)
+- Only asks about news (use news)
+- Asks about a specific topic (use research)
 
 ## Instructions
 When asked for a briefing:

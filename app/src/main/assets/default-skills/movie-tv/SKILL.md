@@ -1,6 +1,6 @@
 ---
 name: movie-tv
-description: "Search movies and TV shows, get ratings, recommendations using TMDB"
+description: "Search movies and TV shows, get ratings, recommendations using TMDB. Use when: user asks about movies, TV shows, ratings, 'what should I watch', trending shows. Don't use when: user asks about YouTube videos, music, or live TV schedules."
 version: "1.0.0"
 metadata:
   openclaw:
@@ -14,13 +14,16 @@ metadata:
 
 Search for movies and TV shows using The Movie Database (TMDB) API.
 
-## When to Use
-
-User asks about:
+## Use when
 - Movie info ("Tell me about Dune")
 - TV shows ("What's Severance about?")
 - Recommendations ("Movies like Inception")
 - What's trending
+
+## Don't use when
+- YouTube videos or online content
+- Music/podcasts/audiobooks
+- Live TV schedules or streaming availability
 
 ## API Key
 

@@ -1,6 +1,6 @@
 ---
 name: crypto-prices
-description: "Get real-time cryptocurrency prices and market data from CoinGecko (free, no API key)"
+description: "Get real-time cryptocurrency prices and market data from CoinGecko (free, no API key). Use when: user asks about crypto prices, token values, market data, 'what's BTC at?'. Don't use when: user wants to swap/trade tokens (use wallet tools), or wants crypto news (use news skill)."
 version: "1.0.0"
 metadata:
   openclaw:
@@ -14,12 +14,15 @@ metadata:
 
 Get cryptocurrency prices using the free CoinGecko API.
 
-## When to Use
-
-User asks about:
+## Use when
 - Crypto prices ("What's Bitcoin at?", "SOL price")
 - Market data ("Is ETH up or down?")
 - Multiple coins ("Price of BTC, ETH, and SOL")
+
+## Don't use when
+- Swap or trade tokens (use wallet/Jupiter tools)
+- Crypto news or analysis (use news or research)
+- Wallet balances (use wallet tools)
 
 ## API Endpoints
 
