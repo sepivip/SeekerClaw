@@ -86,12 +86,21 @@ object LogCollector {
         val file = logFile ?: return
         try {
             if (!file.exists()) return
-            val entries = file.readLines()
+            val fileLength = file.length()
+            // Only read the tail of the file to avoid OOM on large logs
+            // ~200 bytes per log line × MAX_LINES = ~60KB is plenty
+            val tailBytes = minOf(fileLength, MAX_LINES * 200L)
+            val raf = java.io.RandomAccessFile(file, "r")
+            raf.seek(fileLength - tailBytes)
+            val bytes = ByteArray(tailBytes.toInt())
+            raf.readFully(bytes)
+            raf.close()
+            val lines = String(bytes).lines()
                 .filter { it.isNotBlank() }
-                .mapNotNull { parseLine(it) }
-                .takeLast(MAX_LINES)
+                .drop(1) // first line may be partial (we seeked mid-line)
+            val entries = lines.mapNotNull { parseLine(it) }.takeLast(MAX_LINES)
             _logs.value = entries
-            lastReadPosition = file.length()
+            lastReadPosition = fileLength
         } catch (_: Exception) {}
     }
 
