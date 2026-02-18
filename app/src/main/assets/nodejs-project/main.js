@@ -5281,6 +5281,17 @@ async function executeTool(name, input, chatId) {
             if (!text) return { error: 'text is required' };
             if (text.length > 4096) return { error: 'text exceeds Telegram 4096 character limit' };
             if (!chatId) return { error: 'No active chat' };
+            // Validate buttons structure if provided
+            if (input.buttons) {
+                if (!Array.isArray(input.buttons)) return { error: 'buttons must be an array of rows' };
+                for (const row of input.buttons) {
+                    if (!Array.isArray(row)) return { error: 'Each button row must be an array' };
+                    for (const btn of row) {
+                        if (!btn.text || !btn.callback_data) return { error: 'Each button must have "text" and "callback_data"' };
+                        if (Buffer.byteLength(btn.callback_data, 'utf8') > 64) return { error: `callback_data "${btn.callback_data.slice(0, 20)}..." exceeds Telegram 64-byte limit` };
+                    }
+                }
+            }
             try {
                 const cleaned = cleanResponse(text);
                 const replyMarkup = input.buttons ? { inline_keyboard: input.buttons } : undefined;
@@ -7931,21 +7942,23 @@ async function poll() {
                     if (update.callback_query) {
                         const cb = update.callback_query;
                         // Answer immediately to dismiss the loading spinner on the button
-                        telegram('answerCallbackQuery', { callback_query_id: cb.id }).catch(() => {});
-                        // Security: only process callbacks from owner
+                        telegram('answerCallbackQuery', { callback_query_id: cb.id }).catch(e => {
+                            log(`[Callback] answerCallbackQuery failed: ${e.message}`);
+                        });
+                        // Security: only process callbacks from owner (block if no owner set yet)
                         const cbSenderId = String(cb.from?.id);
-                        if (OWNER_ID && cbSenderId !== OWNER_ID) {
+                        if (!OWNER_ID || cbSenderId !== OWNER_ID) {
                             log(`[Callback] Ignoring callback from ${cbSenderId} (not owner)`);
                         } else {
-                            const buttonData = cb.data || '';
-                            const originalText = (cb.message?.text || '').slice(0, 200);
+                            // Sanitize callback data and original text (strip control chars, quotes)
+                            const buttonData = (cb.data || '').replace(/[\r\n\t"\\]/g, ' ').trim();
+                            const originalText = (cb.message?.text || '').replace(/[\r\n]/g, ' ').slice(0, 200).trim();
                             log(`[Callback] Button tapped: "${buttonData}" on message: "${originalText.slice(0, 60)}"`);
                             // Inject as a synthetic user message so the agent sees the button tap
                             const syntheticMsg = {
                                 chat: cb.message?.chat || { id: cb.from.id },
                                 from: cb.from,
                                 text: `[Tapped button: "${buttonData}"] (on message: "${originalText}")`,
-                                message_id: cb.message?.message_id,
                             };
                             enqueueMessage(syntheticMsg);
                         }
