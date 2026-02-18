@@ -44,6 +44,12 @@ const {
 // all subsequent log lines go through redaction.
 setRedactFn(redactSecrets);
 
+// ============================================================================
+// BRIDGE (extracted to bridge.js — BAT-195)
+// ============================================================================
+
+const { androidBridgeCall } = require('./bridge');
+
 // ── MCP (Model Context Protocol) — Remote tool servers (BAT-168) ───
 const { MCPManager } = require('./mcp-client');
 const mcpManager = new MCPManager(log, wrapExternalContent);
@@ -5416,52 +5422,7 @@ async function executeTool(name, input, chatId) {
     }
 }
 
-// Helper for Android Bridge HTTP calls
-// timeoutMs: default 10s for quick calls, use longer for interactive flows (wallet approval)
-async function androidBridgeCall(endpoint, data = {}, timeoutMs = 10000) {
-    const http = require('http');
-
-    return new Promise((resolve) => {
-        const postData = JSON.stringify(data);
-
-        const req = http.request({
-            hostname: '127.0.0.1',
-            port: 8765,
-            path: endpoint,
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Content-Length': Buffer.byteLength(postData),
-                'X-Bridge-Token': BRIDGE_TOKEN
-            },
-            timeout: timeoutMs
-        }, (res) => {
-            res.setEncoding('utf8');
-            let body = '';
-            res.on('data', chunk => body += chunk);
-            res.on('end', () => {
-                try {
-                    resolve(JSON.parse(body));
-                } catch (e) {
-                    resolve({ error: 'Invalid response from Android Bridge' });
-                }
-            });
-        });
-
-        req.on('error', (e) => {
-            log(`Android Bridge error: ${e.message}`);
-            resolve({ error: `Android Bridge unavailable: ${e.message}` });
-        });
-
-        req.on('timeout', () => {
-            req.destroy();
-            resolve({ error: 'Android Bridge timeout' });
-        });
-
-        req.write(postData);
-        req.end();
-    });
-}
+// androidBridgeCall() extracted to bridge.js — BAT-195
 
 async function visionAnalyzeImage(imageBase64, prompt, maxTokens = 400) {
     const safePrompt = (prompt || '').trim() || 'Describe what is happening in this image.';
