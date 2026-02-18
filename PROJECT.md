@@ -30,7 +30,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 | UI Framework | Jetpack Compose (Material 3) | — |
 | Min SDK | 34 (Android 14) | — |
 | Node.js Runtime | nodejs-mobile (community fork) | Node 18 LTS |
-| AI Provider | Anthropic Claude API | Opus 4.6 default, Sonnet 4.6, Haiku 4.5 |
+| AI Provider | Anthropic Claude API | Opus 4.6 default, Sonnet 4.6, Sonnet 4.5, Haiku 4.5 |
 | Messaging | Telegram Bot API (grammy) | — |
 | Database | SQL.js (WASM SQLite) | 1.12.0 |
 | OpenClaw Parity | OpenClaw gateway (ported) | 2026.2.14 |
@@ -144,7 +144,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 - **Setup wizard** — QR scan or manual API key entry, OAuth/setup token support, haptic feedback
 - **Dashboard** — Status with pulse animation (running) + dimming (stopped), uptime, message stats, active uplinks, mini terminal, API health monitoring (green/amber/red), dismissible error/network banners, deploy button disabled state when config incomplete
 - **Logs viewer** — Color-coded, auto-scrolling monospace, stable keys for performance
-- **Settings** — Collapsible sections with animation, edit config with masked fields, required field indicators (*), model dropdown, auto-start, battery optimization, export/import, wallet copy button, MCP server management (add/edit/remove/toggle), visual escalation for danger zone, semantic action colors (green positive, red danger), accessibility content descriptions on all icons
+- **Settings** — Collapsible sections with animation, edit config with masked fields, required field indicators (*), model dropdown, auto-start, battery optimization, export/import (allowlist-based, size-capped, auto-backup before import), wallet copy button, MCP server management (add/edit/remove/toggle), visual escalation for danger zone, semantic action colors (green positive, red danger), accessibility content descriptions on all icons
 - **System screen** — API usage stats, memory index status, colored accent borders on stat cards
 - **Foreground service** — START_STICKY with wake lock, boot receiver, watchdog (30s health check)
 
@@ -206,14 +206,14 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Metric | Count |
 |--------|-------|
-| Total commits | 177 |
-| PRs merged | 114 |
+| Total commits | 240 |
+| PRs merged | 116 |
 | Tools | 54 (9 Jupiter, 13 Android bridge, web search/fetch, memory, cron, etc.) |
 | Skills | 34 (19 bundled + 13 workspace + 2 user-created) |
 | Android Bridge endpoints | 18+ |
 | Telegram commands | 7 |
-| Lines of JS (main.js) | ~8,330 |
-| Lines of Kotlin | ~10,000 |
+| Lines of JS (main.js) | ~8,380 |
+| Lines of Kotlin | ~10,560 |
 | SQL.js tables | 4 |
 | Themes | 1 (DarkOps only) |
 
@@ -222,23 +222,31 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 - **GitHub:** https://github.com/sepivip/SeekerClaw
 - **Website:** https://seekerclaw.xyz/
 
-## Website Mismatch Log
+## Website Sync
 
-> Cross-reference with `SeekerClaw_Web/js/config.js`. Update when fixing mismatches.
+> **`WEBSITE.md`** is the staging area for website content updates.
+> It contains curated, accurate content with editorial review comments.
+> Good-morning skill keeps it in sync with PROJECT.md.
+>
+> **Workflow:** PROJECT.md (source of truth) → WEBSITE.md (curated staging) → `config.js` + `index.html` (live website)
 
-| Website Claim | Reality | Action Needed |
-|--------------|---------|---------------|
-| "NFT tracking" (JSON-LD, llms.txt) | Not implemented | Remove from website |
-| "DeFi automation" (OG meta, JSON-LD) | Swap tools exist, no automated DeFi | Tone down claim |
-| "Get on dApp Store" button | Link is `href="#"`, not submitted | Fix link or mark "Coming Soon" |
-| "OpenClaw v2026.2.12 parity" (roadmap) | Tracking v2026.2.14 | Update website version |
-| "150,000+ Seeker Devices" | Market estimate, not users | Fine as-is (addressable market) |
+### Pending Deployment (WEBSITE.md → config.js)
+
+| WEBSITE.md Content | config.js Status | Action |
+|-------------------|-----------------|--------|
+| Stats: 54+ tools, 116+ PRs | Shows 43+ tools, 78+ commits | Update config.js stats[] |
+| Roadmap: 10 shipped items | Shows 10 items (outdated list) | Update roadmap.columns[0] |
+| Feature cards: updated descriptions | Stale descriptions | Update features.items[] + index.html |
+| "NFT tracking" in JSON-LD | Not implemented | Remove from index.html |
+| "DeFi automation" in OG meta | Swap tools only, no automation | Tone down in index.html |
+| dApp Store button href="#" | Not submitted yet | Fix link or mark "Coming Soon" |
 | "Open-source" (privacy page) | Repo is public | Verify license |
 
 ## Changelog
 
 | Date | Feature | PR |
 |------|---------|-----|
+| 2026-02-18 | Harden memory export/import — allowlist, size cap, auto-backup, path traversal prevention (BAT-188) | #116 |
 | 2026-02-18 | Remote MCP server support — Streamable HTTP client, Settings UI, security hardening (BAT-168) | #115 |
 | 2026-02-18 | Add Sonnet 4.6 model + refresh settings info texts | direct |
 | 2026-02-18 | Keep typing indicator alive during Claude API calls | #114 |

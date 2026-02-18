@@ -1,8 +1,8 @@
 # OpenClaw Version Tracking
 
 > **Purpose:** Track OpenClaw releases and identify changes to port to SeekerClaw.
-> **Current OpenClaw Version:** 2026.2.14 (main e927fd1, 2026-02-15)
-> **Last Sync Review:** 2026-02-15
+> **Current OpenClaw Version:** 2026.2.18-dev (main f9e67f3, 2026-02-18)
+> **Last Sync Review:** 2026-02-19
 > **Parity Plan:** See `PARITY_PLAN.md`
 
 ---
@@ -82,7 +82,33 @@ These files in OpenClaw directly affect SeekerClaw behavior. Changes here requir
 
 ## Version History & Changes
 
-### 2026.2.14 (Current - e927fd1)
+### 2026.2.18-dev (Current - f9e67f3)
+- **Release Date:** 2026-02-18
+- **SeekerClaw Sync Status:** Ported (BAT-189, PR #117)
+- **1,563 new commits since last sync (e927fd1)**
+- **Key Changes Ported:**
+  - [x] System prompt: reply tags must be first token in message (no leading text/newlines)
+  - [x] Skills: adopt "Use when / Don't use when" routing blocks across all 19 bundled skills
+- **Skipped (not applicable):**
+  - Cron: 48h daily job skip fix (#17852) — our per-job compute doesn't have this bug
+  - Cron: spin loop on same-second completion (#17821) — we don't support cron expressions
+  - Cron: stagger controls, webhook delivery, sessionKey routing — server-only features
+  - Cron: run telemetry (model/token usage per run) — nice-to-have, defer
+  - Sub-agent orchestration, sandbox paths, inline button styles — no sub-agents/sandbox
+  - Memory: temporal decay for search scores — requires embedding search (Node 22+)
+  - Memory: sync progress tracking — embedding-specific
+  - Skills: path compaction with ~ — desktop-only pattern
+  - Skills: nested root detection, limits (maxCandidates etc.) — not needed at 34 skills
+  - Telegram: only version bumps, zero functional changes
+  - Massive test/formatting refactoring (oxfmt, type fixes) — test-only
+- **Notable upstream:**
+  - Skills now use "Use when / Don't use when" routing blocks for better semantic matching
+  - Temporal decay for memory search (30-day half-life, exponential) — future port candidate
+  - Skills limits: max 300 candidates/root, 150 in prompt, 256KB file, 30K chars
+  - Cron run telemetry with model/provider/usage tracking
+  - New version tags: v2026.2.15, v2026.2.16, v2026.2.17
+
+### 2026.2.14 (e927fd1)
 - **Release Date:** 2026-02-15
 - **SeekerClaw Sync Status:** Key changes ported
 - **Key Changes Ported:**
