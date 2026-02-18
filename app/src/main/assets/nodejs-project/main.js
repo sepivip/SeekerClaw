@@ -84,8 +84,18 @@ if (config.braveApiKey) config.braveApiKey = normalizeSecret(config.braveApiKey)
 if (config.perplexityApiKey) config.perplexityApiKey = normalizeSecret(config.perplexityApiKey);
 if (config.jupiterApiKey) config.jupiterApiKey = normalizeSecret(config.jupiterApiKey);
 
-// MCP server configs (remote tool servers)
-const MCP_SERVERS = config.mcpServers || [];
+// MCP server configs (remote tool servers) — normalize strings and auth tokens
+const MCP_SERVERS = (config.mcpServers || []).map((server) => {
+    if (!server || typeof server !== 'object') return server;
+    const normalized = { ...server };
+    if (typeof normalized.url === 'string') normalized.url = normalized.url.trim();
+    if (typeof normalized.id === 'string') normalized.id = normalized.id.trim();
+    if (typeof normalized.name === 'string') normalized.name = normalized.name.trim();
+    if (typeof normalized.authToken === 'string') {
+        normalized.authToken = normalizeSecret(normalized.authToken);
+    }
+    return normalized;
+});
 
 if (!BOT_TOKEN || !ANTHROPIC_KEY) {
     log('ERROR: Missing required config (botToken, anthropicApiKey)');

@@ -1719,13 +1719,21 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                         val trimUrl = mcpUrl.trim()
                         if (trimName.isNotBlank() && trimUrl.isNotBlank()) {
                             val serverId = editingMcpServer?.id
-                                ?: trimName.lowercase().replace(Regex("[^a-z0-9]"), "-")
-                            val server = McpServerConfig(
-                                id = serverId,
-                                name = trimName,
-                                url = trimUrl,
-                                authToken = mcpToken.trim(),
-                            )
+                                ?: java.util.UUID.randomUUID().toString().take(8)
+                            val server = if (editingMcpServer != null) {
+                                editingMcpServer!!.copy(
+                                    name = trimName,
+                                    url = trimUrl,
+                                    authToken = mcpToken.trim(),
+                                )
+                            } else {
+                                McpServerConfig(
+                                    id = serverId,
+                                    name = trimName,
+                                    url = trimUrl,
+                                    authToken = mcpToken.trim(),
+                                )
+                            }
                             mcpServers = if (editingMcpServer != null) {
                                 mcpServers.map { if (it.id == serverId) server else it }
                             } else {

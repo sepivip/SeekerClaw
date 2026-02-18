@@ -17,6 +17,7 @@ const DESCRIPTION_MAX_LENGTH = 2000;
 const TOOL_NAME_MAX_LENGTH = 64;
 const CONNECT_TIMEOUT_MS = 15000;
 const CALL_TIMEOUT_MS = 30000;
+const MAX_RESPONSE_BYTES = 5 * 1024 * 1024; // 5 MB hard cap on response body
 
 // ── Security ───────────────────────────────────────────────────────
 
@@ -25,7 +26,7 @@ function sanitizeMcpDescription(desc) {
     if (typeof desc !== 'string') return '';
     let s = desc;
     // Unicode Tag block (U+E0000–U+E007F) — invisible to humans, readable by LLMs
-    s = s.replace(/[\uE0000-\uE007F]/gu, '');
+    s = s.replace(/[\u{E0000}-\u{E007F}]/gu, '');
     // Directional overrides (U+202A–U+202E, U+2066–U+2069)
     s = s.replace(/[\u202A-\u202E\u2066-\u2069]/g, '');
     // Zero-width characters
@@ -39,13 +40,24 @@ function sanitizeMcpDescription(desc) {
     return s.trim();
 }
 
-/** SHA-256 hash of tool definition for rug-pull detection. */
+/** Recursively sort object keys for canonical JSON serialization. */
+function canonicalize(obj) {
+    if (obj === null || typeof obj !== 'object') return obj;
+    if (Array.isArray(obj)) return obj.map(canonicalize);
+    const sorted = {};
+    for (const key of Object.keys(obj).sort()) {
+        sorted[key] = canonicalize(obj[key]);
+    }
+    return sorted;
+}
+
+/** SHA-256 hash of tool definition for rug-pull detection (canonical key order). */
 function hashToolDef(tool) {
-    const data = JSON.stringify({
+    const data = JSON.stringify(canonicalize({
         name: tool.name,
         description: tool.description || '',
         inputSchema: tool.inputSchema || {},
-    });
+    }));
     return crypto.createHash('sha256').update(data).digest('hex');
 }
 
@@ -73,7 +85,7 @@ class RateLimiter {
 /** Parse SSE text into events. Returns array of { type, data, id }. */
 function parseSSEEvents(text) {
     const events = [];
-    const lines = text.split('\n');
+    const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
     let current = { type: 'message', data: '' };
 
     for (const line of lines) {
@@ -118,7 +130,16 @@ function httpRequest(url, options, body, timeoutMs) {
 
         const req = mod.request(reqOptions, (res) => {
             let data = '';
-            res.on('data', chunk => { data += chunk; });
+            let byteLen = 0;
+            res.on('data', chunk => {
+                byteLen += Buffer.byteLength(chunk);
+                if (byteLen > MAX_RESPONSE_BYTES) {
+                    req.destroy();
+                    reject(new Error(`Response exceeded ${MAX_RESPONSE_BYTES} bytes limit`));
+                    return;
+                }
+                data += chunk;
+            });
             res.on('end', () => {
                 resolve({
                     status: res.statusCode,
@@ -403,9 +424,15 @@ class MCPManager {
 
             try {
                 const client = new MCPClient(cfg, this.log);
+                const effectiveId = client.id;
+                if (!effectiveId || (typeof effectiveId === 'string' && effectiveId.trim().length === 0)) {
+                    this.log(`[MCP] Skipping server with missing id: ${cfg.name || '<unnamed>'}`);
+                    results.push({ id: null, name: cfg.name, tools: 0, status: 'failed', error: 'Missing server id' });
+                    continue;
+                }
                 const info = await client.connect();
-                this.servers.set(cfg.id, client);
-                results.push({ id: cfg.id, name: cfg.name, tools: info.toolCount, status: 'connected' });
+                this.servers.set(effectiveId, client);
+                results.push({ id: effectiveId, name: cfg.name, tools: info.toolCount, status: 'connected' });
             } catch (e) {
                 this.log(`[MCP] Failed to connect to ${cfg.name}: ${e.message}`);
                 results.push({ id: cfg.id, name: cfg.name, tools: 0, status: 'failed', error: e.message });
