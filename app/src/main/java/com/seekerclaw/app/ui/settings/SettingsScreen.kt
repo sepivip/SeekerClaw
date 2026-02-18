@@ -65,6 +65,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -1643,9 +1644,9 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
 
     // ==================== MCP Server Add/Edit Dialog ====================
     if (showMcpDialog) {
-        var mcpName by remember { mutableStateOf(editingMcpServer?.name ?: "") }
-        var mcpUrl by remember { mutableStateOf(editingMcpServer?.url ?: "") }
-        var mcpToken by remember { mutableStateOf(editingMcpServer?.authToken ?: "") }
+        var mcpName by remember(editingMcpServer) { mutableStateOf(editingMcpServer?.name ?: "") }
+        var mcpUrl by remember(editingMcpServer) { mutableStateOf(editingMcpServer?.url ?: "") }
+        var mcpToken by remember(editingMcpServer) { mutableStateOf(editingMcpServer?.authToken ?: "") }
 
         AlertDialog(
             onDismissRequest = { showMcpDialog = false },
@@ -1698,6 +1699,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                         value = mcpToken,
                         onValueChange = { mcpToken = it },
                         label = { Text("Auth Token (optional)", fontFamily = FontFamily.Default) },
+                        visualTransformation = PasswordVisualTransformation(),
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                         colors = OutlinedTextFieldDefaults.colors(
