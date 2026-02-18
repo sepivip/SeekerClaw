@@ -165,6 +165,8 @@ function httpRequest(url, options, body, timeoutMs) {
 class MCPClient {
     constructor(serverConfig, logFn) {
         this.id = serverConfig.id || serverConfig.name;
+        // Sanitized ID used in tool name prefixes and as map key
+        this.safeId = (this.id || '').replace(/[^a-zA-Z0-9_-]/g, '_');
         this.name = serverConfig.name;
         this.url = serverConfig.url;
         this.authToken = serverConfig.authToken || '';
@@ -175,6 +177,15 @@ class MCPClient {
         this.toolHashes = new Map(); // originalName → SHA-256 hash
         this.connected = false;
         this.requestId = 0;
+
+        // Security: refuse to send auth tokens over plain HTTP (credential disclosure)
+        const urlProto = new URL(this.url).protocol;
+        if (this.authToken && urlProto !== 'https:') {
+            const isLocalhost = new URL(this.url).hostname === 'localhost' || new URL(this.url).hostname === '127.0.0.1';
+            if (!isLocalhost) {
+                throw new Error(`Refusing to send auth token over plain HTTP to ${this.url}. Use HTTPS or localhost.`);
+            }
+        }
     }
 
     _nextId() {
@@ -300,15 +311,15 @@ class MCPClient {
 
         const rawTools = result.result?.tools || [];
         this.tools = [];
-        const newHashes = new Map();
+        // Preserve previous hashes so blocked tools stay blocked across refreshes
+        const newHashes = new Map(this.toolHashes);
 
         for (const tool of rawTools) {
             const sanitizedDesc = sanitizeMcpDescription(tool.description || '');
 
-            // Build prefixed name: mcp__<server>__<tool>
-            const safeName = this.id.replace(/[^a-zA-Z0-9_-]/g, '_');
+            // Build prefixed name: mcp__<safeId>__<safeTool>
             const safeToolName = tool.name.replace(/[^a-zA-Z0-9_-]/g, '_');
-            const prefixedName = `mcp__${safeName}__${safeToolName}`;
+            const prefixedName = `mcp__${this.safeId}__${safeToolName}`;
 
             if (prefixedName.length > TOOL_NAME_MAX_LENGTH) {
                 this.log(`[MCP] Tool name too long (${prefixedName.length}): ${prefixedName} — skipping`);
@@ -321,6 +332,7 @@ class MCPClient {
 
             if (prevHash && prevHash !== hash) {
                 this.log(`[MCP] WARNING: Tool definition changed for ${tool.name} on ${this.name} — blocking (rug pull protection)`);
+                // Keep the old hash so the block persists across future refreshes
                 continue;
             }
 
@@ -329,7 +341,7 @@ class MCPClient {
             this.tools.push({
                 name: prefixedName,
                 originalName: tool.name,
-                serverId: this.id,
+                serverId: this.safeId,
                 description: sanitizedDesc,
                 input_schema: tool.inputSchema || { type: 'object', properties: {} },
             });
@@ -402,7 +414,8 @@ class MCPClient {
 
 class MCPManager {
     constructor(logFn, wrapExternalContentFn) {
-        this.servers = new Map(); // id → MCPClient
+        this.servers = new Map(); // safeId → MCPClient
+        this.toolMap = new Map(); // prefixedName → { client, originalName }
         this.log = logFn || console.log;
         this.wrapExternalContent = wrapExternalContentFn;
         this.globalRateLimit = new RateLimiter(GLOBAL_RATE_LIMIT);
@@ -424,15 +437,18 @@ class MCPManager {
 
             try {
                 const client = new MCPClient(cfg, this.log);
-                const effectiveId = client.id;
-                if (!effectiveId || (typeof effectiveId === 'string' && effectiveId.trim().length === 0)) {
+                if (!client.safeId) {
                     this.log(`[MCP] Skipping server with missing id: ${cfg.name || '<unnamed>'}`);
                     results.push({ id: null, name: cfg.name, tools: 0, status: 'failed', error: 'Missing server id' });
                     continue;
                 }
                 const info = await client.connect();
-                this.servers.set(effectiveId, client);
-                results.push({ id: effectiveId, name: cfg.name, tools: info.toolCount, status: 'connected' });
+                this.servers.set(client.safeId, client);
+                // Build tool routing map: prefixedName → { client, originalName }
+                for (const tool of client.tools) {
+                    this.toolMap.set(tool.name, { client, originalName: tool.originalName });
+                }
+                results.push({ id: client.safeId, name: cfg.name, tools: info.toolCount, status: 'connected' });
             } catch (e) {
                 this.log(`[MCP] Failed to connect to ${cfg.name}: ${e.message}`);
                 results.push({ id: cfg.id, name: cfg.name, tools: 0, status: 'failed', error: e.message });
@@ -459,20 +475,15 @@ class MCPManager {
         return tools;
     }
 
-    /** Route a prefixed tool call to the correct server. Wraps result as untrusted. */
+    /** Route a prefixed tool call to the correct server. Uses toolMap for exact routing. */
     async executeTool(prefixedName, args) {
-        const parts = prefixedName.split('__');
-        if (parts.length < 3 || parts[0] !== 'mcp') {
-            return { error: `Invalid MCP tool name: ${prefixedName}` };
+        // Look up via toolMap for correct original name resolution
+        const entry = this.toolMap.get(prefixedName);
+        if (!entry) {
+            return { error: `MCP tool "${prefixedName}" not found or server not connected` };
         }
 
-        const serverId = parts[1];
-        const originalName = parts.slice(2).join('__');
-
-        const client = this.servers.get(serverId);
-        if (!client) {
-            return { error: `MCP server "${serverId}" not found or not connected` };
-        }
+        const { client, originalName } = entry;
 
         if (!this.globalRateLimit.canProceed()) {
             return { error: 'Global MCP rate limit exceeded (50/min)' };
@@ -497,6 +508,10 @@ class MCPManager {
                 this.log(`[MCP] Session expired for ${client.name}, reconnecting...`);
                 try {
                     await client.connect();
+                    // Rebuild toolMap entries for this client after reconnect
+                    for (const tool of client.tools) {
+                        this.toolMap.set(tool.name, { client, originalName: tool.originalName });
+                    }
                     const result = await client.callTool(originalName, args);
                     if (result.content && this.wrapExternalContent) {
                         result.content = this.wrapExternalContent(
@@ -519,6 +534,7 @@ class MCPManager {
             client.disconnect();
         }
         this.servers.clear();
+        this.toolMap.clear();
         this.log('[MCP] All servers disconnected');
     }
 

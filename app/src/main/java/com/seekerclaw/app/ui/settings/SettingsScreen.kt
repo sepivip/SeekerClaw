@@ -1719,7 +1719,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                         val trimUrl = mcpUrl.trim()
                         if (trimName.isNotBlank() && trimUrl.isNotBlank()) {
                             val serverId = editingMcpServer?.id
-                                ?: java.util.UUID.randomUUID().toString().take(8)
+                                ?: java.util.UUID.randomUUID().toString()
                             val server = if (editingMcpServer != null) {
                                 editingMcpServer!!.copy(
                                     name = trimName,
