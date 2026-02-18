@@ -60,7 +60,7 @@ function localDateStr(date) {
 // LOGGING
 // ============================================================================
 
-// redactSecrets is defined in security.js — injected after load via setRedactFn()
+// redactSecrets is defined in main.js (SECURITY HELPERS) — injected after load via setRedactFn()
 let _redactFn = null;
 
 function setRedactFn(fn) {
@@ -105,7 +105,7 @@ const ANTHROPIC_KEY = normalizeSecret(config.anthropicApiKey);
 const AUTH_TYPE = config.authType || 'api_key';
 const MODEL = config.model || 'claude-opus-4-6';
 const AGENT_NAME = config.agentName || 'SeekerClaw';
-let BRIDGE_TOKEN = config.bridgeToken || '';
+let BRIDGE_TOKEN = normalizeSecret(config.bridgeToken || '');
 const USER_AGENT = 'SeekerClaw/1.0 (Android; +https://seekerclaw.com)';
 
 // Reaction config with validation
