@@ -2365,6 +2365,29 @@ async function deleteStatusMessage(chatId, msgId) {
     await telegram('deleteMessage', { chat_id: chatId, message_id: msgId }).catch(() => {});
 }
 
+// Deferred status: delays sending by 500ms so fast tools never flash a status.
+// If shown, keeps it visible for at least 1.5s so users can read it.
+function deferStatus(chatId, statusText) {
+    if (!statusText) return { cleanup: async () => {} };
+    let msgId = null, sentAt = 0, pending = null;
+    const timer = setTimeout(() => {
+        pending = sendStatusMessage(chatId, statusText).then(id => {
+            msgId = id; sentAt = Date.now(); pending = null;
+        });
+    }, 500);
+    return {
+        cleanup: async () => {
+            clearTimeout(timer);
+            if (pending) await pending;
+            if (msgId) {
+                const elapsed = Date.now() - sentAt;
+                if (elapsed < 1500) await new Promise(r => setTimeout(r, 1500 - elapsed));
+                await deleteStatusMessage(chatId, msgId);
+            }
+        }
+    };
+}
+
 // ============================================================================
 // TOOLS
 // ============================================================================
@@ -3925,6 +3948,8 @@ async function executeTool(name, input, chatId) {
             const txBase64 = unsignedTx.toString('base64');
 
             // Step 3: Send to wallet — wallet signs AND broadcasts (signAndSendTransactions)
+            // Pre-authorize to ensure wallet is warm (cold-start protection)
+            await ensureWalletAuthorized();
             // 120s timeout: user needs time to open wallet app and approve
             const result = await androidBridgeCall('/solana/sign', { transaction: txBase64 }, 120000);
             if (result.error) return { error: result.error };
@@ -4130,6 +4155,8 @@ async function executeTool(name, input, chatId) {
                 }
 
                 // Step 2: Send to wallet for sign-only (120s timeout for user approval)
+                // Pre-authorize to ensure wallet is warm (cold-start protection)
+                await ensureWalletAuthorized();
                 // Ultra flow: wallet signs but does NOT broadcast
                 log('[Jupiter Ultra] Sending to wallet for approval (sign-only)...');
                 const signResult = await androidBridgeCall('/solana/sign-only', {
@@ -4390,6 +4417,7 @@ async function executeTool(name, input, chatId) {
                 }
 
                 // 8. Sign via MWA (120s timeout for user approval)
+                await ensureWalletAuthorized();
                 log('[Jupiter Trigger] Sending to wallet for approval (sign-only)...');
                 const signResult = await androidBridgeCall('/solana/sign-only', {
                     transaction: data.transaction
@@ -4563,6 +4591,7 @@ async function executeTool(name, input, chatId) {
                 }
 
                 // 5. Sign via MWA
+                await ensureWalletAuthorized();
                 log('[Jupiter Trigger] Sending cancel tx to wallet for approval...');
                 const signResult = await androidBridgeCall('/solana/sign-only', {
                     transaction: data.transaction
@@ -4776,6 +4805,7 @@ async function executeTool(name, input, chatId) {
                 }
 
                 // 7. Sign via MWA
+                await ensureWalletAuthorized();
                 log('[Jupiter DCA] Sending to wallet for approval (sign-only)...');
                 const signResult = await androidBridgeCall('/solana/sign-only', {
                     transaction: data.transaction
@@ -4961,6 +4991,7 @@ async function executeTool(name, input, chatId) {
                 }
 
                 // 5. Sign via MWA
+                await ensureWalletAuthorized();
                 log('[Jupiter DCA] Sending cancel tx to wallet for approval...');
                 const signResult = await androidBridgeCall('/solana/sign-only', {
                     transaction: data.transaction
@@ -6002,6 +6033,137 @@ const WELL_KNOWN_TOKENS = {
     'usdt': { address: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', decimals: 6, symbol: 'USDT', name: 'USDT' },
 };
 
+// Known program names for swap transaction verification.
+// Maps program ID → human-readable label. Used for:
+//   1. TRUSTED_PROGRAMS whitelist (derived from map keys)
+//   2. Labeling unknown programs in error messages
+// Initialized with hardcoded fallback, updated dynamically from Jupiter API on startup.
+const KNOWN_PROGRAM_NAMES = new Map([
+    // === System Programs ===
+    ['11111111111111111111111111111111',           'System Program'],
+    ['TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',  'Token Program'],
+    ['TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb',  'Token-2022'],
+    ['ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL',  'Associated Token'],
+    ['ComputeBudget111111111111111111111111111111', 'Compute Budget'],
+    // === Jupiter Programs ===
+    ['JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4',  'Jupiter v6'],
+    ['JUP4Fb2cqiRUcaTHdrPC8h2gNsA2ETXiPDD33WcGuJB',  'Jupiter v4'],
+    ['JUP3jqKShLQUCEDeLBpihUwbcTiY7Gg3V1GAbRhhr82',  'Jupiter v3'],
+    ['jup6SoC2JQ3FWcz6aKdR6FMWbN4mk2VmC3S7sREqLhw',  'Jupiter Limit Order'],
+    ['jupoNjAxXgZ4rjzxzPMP4oxduvQsQtZzyknqvzYNrNu',  'Jupiter DCA'],
+    ['jup3YeL8QhtSx1e253b2FDvsMNC87fDrgQZivbrndc9',  'Jupiter Lend Earn'],
+    // === Third-Party Aggregators (Jupiter meta-aggregation) ===
+    ['DF1ow4tspfHX9JwWJsAb9epbkA8hmpSEAtxXy1V27QBH', 'DFlow Aggregator v4'],
+    // === DEXes / AMMs (from Jupiter program-id-to-label, Feb 2026) ===
+    ['whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc',  'Orca Whirlpool'],
+    ['9W959DqEETiGZocYWCQPaJ6sBmUzgfxXfqGeTEdp3aQP', 'Orca V2'],
+    ['DjVE6JNiYqPL2QXyCUUh8rNjHrbz9hXHNYt99MQ59qw1', 'Orca V1'],
+    ['675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8', 'Raydium AMM'],
+    ['CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK', 'Raydium CLMM'],
+    ['CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C', 'Raydium CP'],
+    ['LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj', 'Raydium Launchlab'],
+    ['SSwpkEEcbUqx4vtoEByFjSkhKdCT862DNVb52nZg1UZ',  'Saber Swap'],
+    ['DecZY86MU5Gj7kppfUCEmd4LbXXuyZH1yHaP2NTqdiZB', 'Saber Decimals'],
+    ['MERLuDFBMmsHnsBPZw2sDQZHvXFMwp8EdjudcU2HKky',  'Mercurial'],
+    ['srmqPvymJeFKQ4zGQed1GFppgkRHL9kaELCbyksJtPX',  'Serum / OpenBook V1'],
+    ['opnb2LAfJYbRMAHHvqjCwQxanZn7ReEHp1k81EohpZb',  'OpenBook V2'],
+    ['PhoeNiXZ8ByJGLkxNfZRnkUfjvmuYqLR89jjFHGqdXY',  'Phoenix'],
+    ['LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo',  'Meteora DLMM'],
+    ['Eo7WjKq67rjJQSZxS6z3YkapzY3eMj6Xy8X5EQVn5UaB', 'Meteora Pools'],
+    ['cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG',  'Meteora DAMM v2'],
+    ['2wT8Yq49kHgDzXuPxZSaeLaH1qbmGXtEyPy64bL7aD3c', 'Lifinity Swap V2'],
+    ['AMM55ShdkoGRB5jVYPjWziwk8m5MpwyDgsMWHaMSQWH6', 'Aldrin'],
+    ['CURVGoZn8zycx6FXwwevgBTB2gVvdbGTEpvMJDbgs2t4', 'Aldrin V2'],
+    ['CLMM9tUoggJu2wagPkkqs9eFG4BWhVBZWkP1qv3Sp7tR', 'Crema'],
+    ['H8W3ctz92svYg6mkn1UtGfu2aQr2fnUFHM1RhScEtQDt', 'Cropper'],
+    ['HyaB3W9q6XdA5xwpU4XnSZV94htfmbmqJXZcEbRaJutt', 'Invariant'],
+    ['Dooar9JkhdZ7J3LHN3A7YCuoGRUggXhQaG4kijfLGU2j', 'StepN'],
+    ['stkitrT1Uoy18Dk1fTrgPw8W6MVzoCfYoAFT4MLsmhq',  'Sanctum'],
+    ['5ocnV1qiCgaQR8Jb8xWnVbApfaygJ8tNoZfgPwsgx9kx', 'Sanctum Infinity'],
+    ['SSwapUtytfBdBn1b9NUGG6foMVPtcWgpRU32HToDUZr',  'Saros'],
+    ['1qbkdrr3z4ryLA7pZykqxvxWPoeifcVKo6ZG9CfkvVE',  'Saros DLMM'],
+    ['obriQD1zbpyLz95G5n7nJe6a4DPjpFwa5XYPoNm113y',  'Obric V2'],
+    ['FLUXubRmkEi2q6K3Y9kBPg9248ggaZVsoSFhtJHSrm1X', 'FluxBeam'],
+    ['PSwapMdSai8tjrEXcxFeQth87xC4rRsa4VA5mhGhXkP',  'Penguin'],
+    ['BSwp6bEBihVLdqJRKGgzjcGLHkcTuzmSo1TQkHepzH8p', 'Bonkswap'],
+    ['Gswppe6ERWKpUTXvRPfXdzHhiCyJvLadVvXGfdpBqcE1', 'Guacswap'],
+    ['treaf4wWBBty3fHdyBpo35Mz84M8k3heKXmjmi9vFt5',  'Helium Network'],
+    ['SwaPpA9LAaLfeLi3a68M4DjnLqgtticKg6CnyNwgAC8',  'Token Swap (SPL)'],
+    ['HpNfyc2Saw7RKkQd8nEL4khUcuPhQ7WwY1B2qjx8jxFq', 'PancakeSwap'],
+    ['GAMMA7meSFWaBXF25oSUgmGRwaW6sCMFLmBNiMSdbHVT', 'GooseFX GAMMA'],
+    ['swapNyd8XiQwJ6ianp9snpu4brUqFxadzvHebnAXjJZ',  'Stabble Stable Swap'],
+    ['swapFpHZwjELNnjvThjajtiVmkz3yPQEHjLtka2fwHW',  'Stabble Weighted Swap'],
+    ['6dMXqGZ3ga2dikrYS9ovDXgHGh5RUsb2RTUj6hrQXhk6', 'Stabble CLMM'],
+    ['MNFSTqtC93rEfYHB6hF82sKdZpUDFWkViLByLd1k1Ms',  'Manifest'],
+    ['WooFif76YGRNjk1pA8wCsN67aQsD9f9iLsz4NcJ1AVb',  'Woofi'],
+    ['fUSioN9YKKSa3CUC2YUc4tPkHJ5Y6XW1yz8y6F7qWz9', 'DefiTuna'],
+    ['srAMMzfVHVAtgSJc8iH6CfKzuWuUTzLHVCE81QU1rgi',  'Gavel'],
+    ['pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA',  'Pump.fun AMM'],
+    ['6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P',  'Pump.fun'],
+    ['dbcij3LWUppWqq96dh6gJWwBifmcGfLSB5D4DuSMaqN',  'Dynamic Bonding Curve'],
+    ['PERPHjGBqRHArX4DySjwM6UJHiR3sWAatqfdBS2qQJu',  'Perps'],
+    ['SoLFiHG9TfgtdUXUjWAxi3LtvYuFyDLVhBWxdMZxyCe',  'SolFi'],
+    ['SV2EYYJyRz2YhfXwXnhNAevDEui5Q6yrfyo13WtupPF',  'SolFi V2'],
+    ['BiSoNHVpsVZW2F7rx2eQ59yQwKxzU5NvBcmKshCSUypi', 'BisonFi'],
+    ['5U3EU2ubXtK84QcRjWVmYt9RaDyA8gKxdUrPFXmZyaki', 'Virtuals'],
+    ['ZERor4xhbUycZ6gb9ntrhqscUcZmAbQDjEAtCf4hbZY',  'ZeroFi'],
+    ['HEAVENoP2qxoeuF8Dj2oT1GHEnu49U5mJYkdeC8BAX2o', 'Heaven'],
+    ['CarrotwivhMpDnm27EHmRLeQ683Z1PufuqEmBZvD282s', 'Carrot'],
+    ['boop8hVGQGqehUK2iVEMEnMrL5RbjywRzHKBmBE7ry4',  'Boop.fun'],
+    ['QuaNtZsgYRe5Z9Bk4LZ4cTD9tbkVoyCNf1R2BN9bBDv', 'Quantum'],
+    ['goonuddtQRrWqqn5nFyczVKaie28f3kDkHWkHtURSLE',  'GoonFi V2'],
+    ['goonERTdGsjnkZqWuVjs73BZ3Pb9qoCUdBUL17BnS5j',  'GoonFi'],
+    ['HBVw6bZtcCaezhcBrmfyXBSBRWCdv72271xQ4GPvms2z', 'Obsidian'],
+    ['MoonCVVNZFSYkqNXP6bxHLPL6QQJiMagDL3qcqUQTrG',  'Moonit'],
+    ['save8RQVPMWNTzU18t3GBvBkN9hT7jsGjiCQ28FpD9H',  'Perena Star'],
+    ['NUMERUNsFCP3kuNmWZuXtm1AaQCPj9uw6Guv2Ekoi5P', 'Perena'],
+    ['DEXYosS6oEGvk8uCDayvwEZz4qEyDJRf9nFgYCaqPMTm', '1DEX'],
+    ['ojh19ojaKduoJZuaJADhcVGp4xt1TcdAvZmpVsCorch',  'Scorch'],
+    ['9H6tua7jkLhdm3w8BvgpTn5LZNU7g4ZynDmCiNN3q6Rp', 'HumidiFi'],
+    ['2rU1oCHtQ7WJUvy15tKtFvxdYNNSc3id7AzUcjeFSddo', 'VaultLiquidUnstake'],
+    ['DSwpgjMvXhtGn6BsbqmacdBZyfLj6jSWf3HJpdJtmg6N', 'DexLab'],
+    ['TessVdML9pBGgG9yGks7o4HewRaXVAMuoVj4x83GLQH',  'TesseraV'],
+    ['REALQqNEomY6cQGZJUGwywTBD2UmDT32rZcNnfxQ5N2',  'Byreal'],
+    ['AQU1FRd7papthgdrwPTTq5JacJh8YtwEXaBfKU3bTz45', 'Aquifer'],
+    ['FUTARELBfJfQ8RDGhg1wdhddq1odMAJUePHFuBYfUxKq', 'MetaDAO'],
+    ['FW6zUqn4iKRaeopwwhwsquTY6ABWLLgjxtrC3VPnaWBf', 'WhaleStreet'],
+    ['StaKE6XNKVVhG8Qu9hDJBqCW3eRe7MDGLz17nJZetLT',  'XOrca'],
+    ['endoLNCKTqDn8gSVnN2hDdpgACUPWHZTwoYnnMybpAT',  'Solayer'],
+    ['ALPHAQmeA7bjrVuccPsYPiCvsi428SNwte66Srvs4pHA', 'AlphaQ'],
+]);
+
+// Derive trusted programs set from the map (single source of truth)
+let TRUSTED_PROGRAMS = new Set(KNOWN_PROGRAM_NAMES.keys());
+
+// Fetch latest program labels from Jupiter API on startup, merge into KNOWN_PROGRAM_NAMES.
+// Falls back to the hardcoded list above if the fetch fails.
+async function refreshJupiterProgramLabels() {
+    try {
+        const res = await httpRequest({
+            hostname: 'public.jupiterapi.com',
+            path: '/program-id-to-label',
+            method: 'GET',
+            headers: { 'Accept': 'application/json' },
+        });
+        if (res.status !== 200 || !res.data || typeof res.data !== 'object') {
+            log(`[Jupiter] Program label fetch failed: HTTP ${res.status}`);
+            return;
+        }
+        let added = 0;
+        for (const [programId, label] of Object.entries(res.data)) {
+            if (!KNOWN_PROGRAM_NAMES.has(programId)) {
+                KNOWN_PROGRAM_NAMES.set(programId, String(label));
+                added++;
+            }
+        }
+        // Rebuild TRUSTED_PROGRAMS from updated map
+        TRUSTED_PROGRAMS = new Set(KNOWN_PROGRAM_NAMES.keys());
+        log(`[Jupiter] Program labels refreshed: ${KNOWN_PROGRAM_NAMES.size} total (${added} new from API)`);
+    } catch (err) {
+        log(`[Jupiter] Program label fetch error (using hardcoded fallback): ${err.message}`);
+    }
+}
+
 // Jupiter API request wrapper with 429 rate limit handling + exponential backoff
 // Per Jupiter docs: on HTTP 429, use exponential backoff with jitter, wait for 10s window refresh
 async function jupiterRequest(options, body = null, maxRetries = 3) {
@@ -6115,6 +6277,26 @@ function parseInputAmountToLamports(amount, decimals) {
         throw new Error('Input amount must be greater than 0.');
     }
     return lamports.toString(); // Return as string for JSON serialization
+}
+
+// Wallet pre-authorization — ensures wallet app is warm before signing.
+// On Seeker (and some MWA wallets), signTransactions() may fail with misleading
+// errors when the wallet is cold (not recently unlocked). Pre-authorizing wakes
+// the wallet and prompts for PIN if needed.
+let lastWalletAuthTime = 0;
+const WALLET_AUTH_CACHE_MS = 5 * 60 * 1000; // 5 minutes
+
+async function ensureWalletAuthorized() {
+    if (Date.now() - lastWalletAuthTime < WALLET_AUTH_CACHE_MS) {
+        return; // wallet is warm
+    }
+    log('[Wallet] Pre-authorizing wallet (cold start protection)...');
+    const result = await androidBridgeCall('/solana/authorize', {}, 60000);
+    if (result.error) {
+        throw new Error(`Wallet authorization failed: ${result.error}`);
+    }
+    lastWalletAuthTime = Date.now();
+    log('[Wallet] Wallet authorized and ready');
 }
 
 // Get connected wallet address from solana_wallet.json
@@ -6234,28 +6416,7 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
     const { skipPayerCheck = false } = options;
     const txBuf = Buffer.from(txBase64, 'base64');
 
-    // Known safe programs (Jupiter, System, Token, Compute Budget, etc.)
-    const TRUSTED_PROGRAMS = new Set([
-        '11111111111111111111111111111111',           // System Program
-        'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',  // Token Program
-        'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb',  // Token-2022
-        'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL',  // Associated Token
-        'ComputeBudget111111111111111111111111111111', // Compute Budget
-        'JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4',  // Jupiter v6
-        'JUP4Fb2cqiRUcaTHdrPC8h2gNsA2ETXiPDD33WcGuJB',  // Jupiter v4
-        'JUP3jqKShLQUCEDeLBpihUwbcTiY7Gg3V1GAbRhhr82',  // Jupiter v3
-        'jup6SoC2JQ3FWcz6aKdR6FMWbN4mk2VmC3S7sREqLhw',  // Jupiter limit order
-        'jupoNjAxXgZ4rjzxzPMP4oxduvQsQtZzyknqvzYNrNu',  // Jupiter DCA
-        'whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc',  // Orca Whirlpool
-        '675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8', // Raydium AMM
-        'CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK', // Raydium CLMM
-        'SSwpkEEcbUqx4vtoEByFjSkhKdCT862DNVb52nZg1UZ',  // Saber Swap
-        'MERLuDFBMmsHnsBPZw2sDQZHvXFMwp8EdjudcU2HKky',  // Mercurial
-        'srmqPvymJeFKQ4zGQed1GFppgkRHL9kaELCbyksJtPX',  // Serum
-        'PhoeNiXZ8ByJGLkxNfZRnkUfjvmuYqLR89jjFHGqdXY',  // Phoenix
-        'LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo',  // Meteora LB
-        'Eo7WjKq67rjJQSZxS6z3YkapzY3eMj6Xy8X5EQVn5UaB', // Meteora pools
-    ]);
+    // TRUSTED_PROGRAMS is module-level (KNOWN_PROGRAM_NAMES-derived, refreshed from Jupiter API)
 
     // Full serialized transaction: [sig_count] [signatures...] [message]
     // Skip signature section to reach the message
@@ -6361,7 +6522,15 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
 
     if (untrustedPrograms.length > 0) {
         const unique = [...new Set(untrustedPrograms)];
-        return { valid: false, error: `Transaction contains unknown program(s): ${unique.join(', ')}. Refusing to sign.` };
+        const labeled = unique.map(id => {
+            const name = KNOWN_PROGRAM_NAMES.get(id);
+            return name ? `${id} (${name})` : id;
+        });
+        return {
+            valid: false,
+            error: `Transaction contains unwhitelisted program(s): ${labeled.join(', ')}. ` +
+                   `This may be a new Jupiter routing program not yet in the trusted list.`
+        };
     }
 
     return { valid: true };
@@ -7384,7 +7553,6 @@ async function chat(chatId, userMessage) {
 
         // Execute each tool and collect results
         const toolResults = [];
-        let statusMsgId = null;
         for (const toolUse of toolUses) {
             log(`Tool use: ${toolUse.name}`);
             let result;
@@ -7402,14 +7570,12 @@ async function chat(chatId, userMessage) {
                     // Ask user for confirmation
                     const confirmed = await requestConfirmation(chatId, toolUse.name, toolUse.input);
                     if (confirmed) {
-                        const statusText = TOOL_STATUS_MAP[toolUse.name];
-                        if (statusText) statusMsgId = await sendStatusMessage(chatId, statusText);
+                        const status = deferStatus(chatId, TOOL_STATUS_MAP[toolUse.name]);
                         try {
                             result = await executeTool(toolUse.name, toolUse.input, chatId);
                             lastToolUseTime.set(toolUse.name, Date.now());
                         } finally {
-                            await deleteStatusMessage(chatId, statusMsgId);
-                            statusMsgId = null;
+                            await status.cleanup();
                         }
                     } else {
                         result = { error: 'Action canceled: user did not confirm (replied NO or timed out after 60s).' };
@@ -7418,13 +7584,11 @@ async function chat(chatId, userMessage) {
                 }
             } else {
                 // Normal tool execution (no confirmation needed)
-                const statusText = TOOL_STATUS_MAP[toolUse.name];
-                if (statusText) statusMsgId = await sendStatusMessage(chatId, statusText);
+                const status = deferStatus(chatId, TOOL_STATUS_MAP[toolUse.name]);
                 try {
                     result = await executeTool(toolUse.name, toolUse.input, chatId);
                 } finally {
-                    await deleteStatusMessage(chatId, statusMsgId);
-                    statusMsgId = null;
+                    await status.cleanup();
                 }
             }
 
@@ -8030,6 +8194,9 @@ async function poll() {
 
 // Start the cron service (loads persisted jobs, arms timers)
 cronService.start();
+
+// Refresh Jupiter program labels in background (non-blocking)
+refreshJupiterProgramLabels();
 
 // ============================================================================
 // CLAUDE USAGE POLLING (setup_token users)

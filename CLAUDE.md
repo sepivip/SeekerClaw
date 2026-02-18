@@ -40,7 +40,7 @@
 
 | Version | Current | Location |
 |---------|---------|----------|
-| **App** | `1.2.0` (code 3) | `app/build.gradle.kts` → `versionName` / `versionCode` |
+| **App** | `1.3.0` (code 4) | `app/build.gradle.kts` → `versionName` / `versionCode` |
 | **OpenClaw** | `2026.2.14` | `app/build.gradle.kts` → `OPENCLAW_VERSION` buildConfigField |
 | **Node.js** | `18 LTS` | `app/build.gradle.kts` → `NODEJS_VERSION` buildConfigField |
 
@@ -400,7 +400,7 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 
 ### Current Versions
 - **OpenClaw Reference:** 2026.2.14 (commit e927fd1)
-- **Last Sync Review:** 2026-02-15
+- **Last Sync Review:** 2026-02-19
 
 ### Quick Update Check
 ```bash
