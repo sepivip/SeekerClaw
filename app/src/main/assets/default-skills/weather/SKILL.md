@@ -1,10 +1,20 @@
 ---
 name: weather
-description: "Get current weather information and forecasts for any location"
+description: "Get current weather information and forecasts for any location. Use when: user asks about weather, temperature, forecast, 'will it rain', 'is it cold outside'. Don't use when: user wants a full daily briefing (use briefing skill) or historical weather data."
 version: "1.0.0"
 ---
 
 # Weather
+
+## Use when
+- "what's the weather?", "will it rain today?"
+- Temperature/forecast queries
+- Travel weather planning
+
+## Don't use when
+- Combined daily briefing (use briefing)
+- Historical weather or climate trends (use research)
+- Severe weather alerts (advise checking official sources)
 
 ## Instructions
 When the user asks about weather:

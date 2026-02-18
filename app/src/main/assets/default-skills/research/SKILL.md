@@ -1,10 +1,20 @@
 ---
 name: research
-description: "Deep research on topics using web search and page fetching"
+description: "Deep research on topics using web search and page fetching. Use when: user asks to research, investigate, or needs comprehensive multi-source info on a topic. Don't use when: user wants a quick definition (use define skill), current news headlines (use news skill), or to summarize a single URL (use summarize skill)."
 version: "1.0.0"
 ---
 
 # Web Research
+
+## Use when
+- "research X", "look into X", "tell me everything about X"
+- Needs multiple sources, comprehensive well-sourced information
+
+## Don't use when
+- Quick word definition (use define)
+- Current news headlines (use news)
+- Summarize a single URL (use summarize)
+- Simple factual answer
 
 ## Instructions
 When researching a topic:

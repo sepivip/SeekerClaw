@@ -1,11 +1,20 @@
 ---
 name: joke
-description: "Tell jokes and make the user laugh"
+description: "Tell jokes and make the user laugh. Use when: user asks for a joke, wants humor, says 'make me laugh', or mood is light. Don't use when: user is asking a serious question, or wants comedy recommendations (use movie-tv skill)."
 version: "1.0.0"
 emoji: "😄"
 ---
 
 # Joke
+
+## Use when
+- "tell me a joke", "make me laugh", "something funny"
+- Dad jokes, tech jokes, puns
+
+## Don't use when
+- Serious question that happens to sound funny
+- Comedy show/movie recs (use movie-tv)
+- User is venting or upset
 
 ## Instructions
 When the user wants humor:

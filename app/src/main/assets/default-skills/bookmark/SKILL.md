@@ -1,11 +1,21 @@
 ---
 name: bookmark
-description: "Save and organize links for later reading"
+description: "Save and organize links for later reading. Use when: user wants to save a URL, manage bookmarks, find a saved link. Don't use when: user just wants to read/fetch a URL (use web_fetch) or research a topic (use research skill)."
 version: "1.0.0"
 emoji: "🔖"
 ---
 
 # Bookmark
+
+## Use when
+- Save this link, bookmark this
+- Find a previously saved link
+- Organize or tag saved URLs
+
+## Don't use when
+- Just read a webpage (use web_fetch)
+- Research a topic (use research)
+- Summarize a URL (use summarize)
 
 ## Instructions
 Link management using workspace/bookmarks.json file.

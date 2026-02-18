@@ -1,11 +1,21 @@
 ---
 name: news
-description: "Get latest news headlines and current events"
+description: "Get latest news headlines and current events. Use when: user asks about news, current events, 'what's happening', headlines for a topic. Don't use when: user wants a full daily briefing (use briefing skill) or deep research on a topic (use research skill)."
 version: "1.0.0"
 emoji: "📰"
 ---
 
 # News
+
+## Use when
+- "what's the news?", "latest headlines", "what's happening"
+- Topic-specific ("tech news", "crypto news")
+- Location-specific ("news in Tokyo")
+
+## Don't use when
+- Combined daily briefing with weather + reminders (use briefing)
+- Deep analysis of a topic (use research)
+- Historical events (use research)
 
 ## Instructions
 When the user asks about news:
