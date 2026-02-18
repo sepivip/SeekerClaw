@@ -45,6 +45,7 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
+import com.seekerclaw.app.ui.theme.RethinkSans
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
@@ -241,7 +242,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
                     append("C/aw")
                 }
             },
-            fontFamily = FontFamily.Default,
+            fontFamily = RethinkSans,
             fontSize = 28.sp,
         )
 
@@ -249,7 +250,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
 
         Text(
             text = "AgentOS",
-            fontFamily = FontFamily.Default,
+            fontFamily = RethinkSans,
             fontSize = 14.sp,
             color = SeekerClawColors.TextDim,
         )
@@ -274,7 +275,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
                 Spacer(modifier = Modifier.width(10.dp))
                 Text(
                     text = "No internet connection",
-                    fontFamily = FontFamily.Default,
+                    fontFamily = RethinkSans,
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Medium,
                     color = SeekerClawColors.Warning,
@@ -327,7 +328,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
                 Spacer(modifier = Modifier.width(10.dp))
                 Text(
                     text = bannerText,
-                    fontFamily = FontFamily.Default,
+                    fontFamily = RethinkSans,
                     fontSize = 12.sp,
                     color = bannerColor,
                     modifier = Modifier.weight(1f),
@@ -372,7 +373,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
                     Spacer(modifier = Modifier.width(12.dp))
                     Text(
                         text = statusText,
-                        fontFamily = FontFamily.Default,
+                        fontFamily = RethinkSans,
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Medium,
                         color = SeekerClawColors.TextPrimary,
@@ -380,7 +381,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
                 }
                 Text(
                     text = if (configNeeded) "Settings >" else "System >",
-                    fontFamily = FontFamily.Default,
+                    fontFamily = RethinkSans,
                     fontSize = 12.sp,
                     color = SeekerClawColors.TextDim,
                 )
@@ -390,7 +391,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
                 Spacer(modifier = Modifier.height(10.dp))
                 Text(
                     text = latestError,
-                    fontFamily = FontFamily.Default,
+                    fontFamily = RethinkSans,
                     fontSize = 12.sp,
                     color = SeekerClawColors.Error,
                 )
@@ -407,7 +408,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
 
             Text(
                 text = "Uptime",
-                fontFamily = FontFamily.Default,
+                fontFamily = RethinkSans,
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Medium,
                 color = SeekerClawColors.TextDim,
@@ -439,7 +440,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
         // Uplinks
         Text(
             text = "Uplinks",
-            fontFamily = FontFamily.Default,
+            fontFamily = RethinkSans,
             fontSize = 11.sp,
             fontWeight = FontWeight.Medium,
             color = SeekerClawColors.TextDim,
@@ -594,7 +595,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
         ) {
             Text(
                 text = if (isRunning) "Stop Agent" else "Deploy Agent",
-                fontFamily = FontFamily.Default,
+                fontFamily = RethinkSans,
                 fontWeight = FontWeight.Bold,
                 fontSize = 15.sp,
             )
@@ -603,7 +604,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
             Spacer(modifier = Modifier.height(6.dp))
             Text(
                 text = "Complete setup to deploy",
-                fontFamily = FontFamily.Default,
+                fontFamily = RethinkSans,
                 fontSize = 12.sp,
                 color = SeekerClawColors.TextDim,
                 modifier = Modifier.fillMaxWidth(),
@@ -628,7 +629,7 @@ private fun StatMini(label: String, value: String, small: Boolean = false) {
         if (!small) Spacer(modifier = Modifier.height(2.dp))
         Text(
             text = label,
-            fontFamily = FontFamily.Default,
+            fontFamily = RethinkSans,
             fontSize = if (small) 9.sp else 10.sp,
             fontWeight = FontWeight.Medium,
             color = SeekerClawColors.TextDim,
@@ -665,14 +666,14 @@ private fun UplinkCard(
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = name,
-                fontFamily = FontFamily.Default,
+                fontFamily = RethinkSans,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Medium,
                 color = SeekerClawColors.TextPrimary,
             )
             Text(
                 text = subtitle,
-                fontFamily = FontFamily.Default,
+                fontFamily = RethinkSans,
                 fontSize = 12.sp,
                 color = SeekerClawColors.TextDim,
             )

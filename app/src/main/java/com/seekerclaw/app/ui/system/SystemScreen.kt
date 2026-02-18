@@ -37,6 +37,7 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
+import com.seekerclaw.app.ui.theme.RethinkSans
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -116,7 +117,7 @@ fun SystemScreen(onBack: () -> Unit) {
             }
             Text(
                 text = "System",
-                fontFamily = FontFamily.Default,
+                fontFamily = RethinkSans,
                 fontSize = 22.sp,
                 fontWeight = FontWeight.Bold,
                 color = SeekerClawColors.TextPrimary,

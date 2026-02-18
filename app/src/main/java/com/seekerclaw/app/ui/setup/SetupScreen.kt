@@ -69,6 +69,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontFamily
+import com.seekerclaw.app.ui.theme.RethinkSans
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.Dp
@@ -390,7 +391,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             title = {
                 Text(
                     "Enable Notifications",
-                    fontFamily = FontFamily.Default,
+                    fontFamily = RethinkSans,
                     fontWeight = FontWeight.Bold,
                     color = SeekerClawColors.TextPrimary,
                 )
@@ -400,7 +401,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                     "SeekerClaw runs your AI agent in the background. " +
                         "Notifications let you know when the agent starts, stops, " +
                         "or needs attention \u2014 even when the app isn\u2019t open.",
-                    fontFamily = FontFamily.Default,
+                    fontFamily = RethinkSans,
                     fontSize = 13.sp,
                     color = SeekerClawColors.TextSecondary,
                     lineHeight = 20.sp,
@@ -412,7 +413,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                 }) {
                     Text(
                         "Enable",
-                        fontFamily = FontFamily.Default,
+                        fontFamily = RethinkSans,
                         fontWeight = FontWeight.Bold,
                         color = SeekerClawColors.Primary,
                     )
@@ -422,7 +423,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                 TextButton(onClick = { showNotificationDialog = false }) {
                     Text(
                         "Not Now",
-                        fontFamily = FontFamily.Default,
+                        fontFamily = RethinkSans,
                         color = SeekerClawColors.TextDim,
                     )
                 }
@@ -1073,7 +1074,7 @@ private fun SetupSuccessStep(
 
         Text(
             text = "You're all set!",
-            fontFamily = FontFamily.Default,
+            fontFamily = RethinkSans,
             fontWeight = FontWeight.Bold,
             fontSize = 22.sp,
             color = SeekerClawColors.TextPrimary,
@@ -1083,7 +1084,7 @@ private fun SetupSuccessStep(
 
         Text(
             text = "$agentName is starting up. Opening dashboard\u2026",
-            fontFamily = FontFamily.Default,
+            fontFamily = RethinkSans,
             fontSize = 14.sp,
             color = SeekerClawColors.TextDim,
         )
@@ -1094,7 +1095,7 @@ private fun SetupSuccessStep(
         TextButton(onClick = onContinue) {
             Text(
                 text = "Go to Dashboard",
-                fontFamily = FontFamily.Default,
+                fontFamily = RethinkSans,
                 fontWeight = FontWeight.Medium,
                 fontSize = 14.sp,
                 color = SeekerClawColors.Primary,

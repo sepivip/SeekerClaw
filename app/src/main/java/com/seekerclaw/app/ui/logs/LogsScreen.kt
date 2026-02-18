@@ -45,6 +45,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
+import com.seekerclaw.app.ui.theme.RethinkSans
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -116,7 +117,7 @@ fun LogsScreen() {
                 Spacer(modifier = Modifier.width(10.dp))
                 Text(
                     text = "Console",
-                    fontFamily = FontFamily.Default,
+                    fontFamily = RethinkSans,
                     fontSize = 20.sp,
                     fontWeight = FontWeight.Bold,
                     color = SeekerClawColors.TextPrimary,
@@ -155,7 +156,7 @@ fun LogsScreen() {
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
                         text = "Clear",
-                        fontFamily = FontFamily.Default,
+                        fontFamily = RethinkSans,
                         fontSize = 13.sp,
                         color = SeekerClawColors.TextDim,
                     )
@@ -165,7 +166,7 @@ fun LogsScreen() {
 
         Text(
             text = "System logs and diagnostics",
-            fontFamily = FontFamily.Default,
+            fontFamily = RethinkSans,
             fontSize = 13.sp,
             color = SeekerClawColors.TextDim,
         )
@@ -288,7 +289,7 @@ fun LogsScreen() {
         ) {
             Text(
                 text = "Auto-scroll",
-                fontFamily = FontFamily.Default,
+                fontFamily = RethinkSans,
                 fontSize = 14.sp,
                 color = SeekerClawColors.TextSecondary,
             )
@@ -357,7 +358,7 @@ fun LogsScreen() {
             title = {
                 Text(
                     "Clear Logs",
-                    fontFamily = FontFamily.Default,
+                    fontFamily = RethinkSans,
                     fontWeight = FontWeight.Bold,
                     color = SeekerClawColors.TextPrimary,
                 )
@@ -365,7 +366,7 @@ fun LogsScreen() {
             text = {
                 Text(
                     "This will delete all log entries. This cannot be undone.",
-                    fontFamily = FontFamily.Default,
+                    fontFamily = RethinkSans,
                     fontSize = 13.sp,
                     color = SeekerClawColors.TextSecondary,
                     lineHeight = 20.sp,
@@ -378,7 +379,7 @@ fun LogsScreen() {
                 }) {
                     Text(
                         "Clear",
-                        fontFamily = FontFamily.Default,
+                        fontFamily = RethinkSans,
                         fontWeight = FontWeight.Bold,
                         color = SeekerClawColors.Error,
                     )
@@ -388,7 +389,7 @@ fun LogsScreen() {
                 TextButton(onClick = { showClearDialog = false }) {
                     Text(
                         "Cancel",
-                        fontFamily = FontFamily.Default,
+                        fontFamily = RethinkSans,
                         color = SeekerClawColors.TextDim,
                     )
                 }
@@ -417,6 +418,6 @@ private fun FilterChip(
             contentColor = if (active) activeColor else SeekerClawColors.TextDim,
         ),
     ) {
-        Text(label, fontFamily = FontFamily.Default, fontSize = 12.sp)
+        Text(label, fontFamily = RethinkSans, fontSize = 12.sp)
     }
 }

@@ -65,6 +65,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontFamily
+import com.seekerclaw.app.ui.theme.RethinkSans
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -310,7 +311,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
     ) {
         Text(
             text = "Settings",
-            fontFamily = FontFamily.Default,
+            fontFamily = RethinkSans,
             fontSize = 24.sp,
             fontWeight = FontWeight.Bold,
             color = SeekerClawColors.TextPrimary,
@@ -331,7 +332,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
         ) {
             Text(
                 text = "Generate a config QR at seekerclaw.xyz and scan it to set up your agent in seconds.",
-                fontFamily = FontFamily.Default,
+                fontFamily = RethinkSans,
                 fontSize = 13.sp,
                 color = SeekerClawColors.TextDim,
             )
@@ -360,11 +361,11 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                         color = androidx.compose.ui.graphics.Color.White,
                     )
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Importing Config\u2026", fontFamily = FontFamily.Default, fontSize = 14.sp)
+                    Text("Importing Config\u2026", fontFamily = RethinkSans, fontSize = 14.sp)
                 } else {
                     Text(
                         "Scan Config QR",
-                        fontFamily = FontFamily.Default,
+                        fontFamily = RethinkSans,
                         fontWeight = FontWeight.Bold,
                         fontSize = 14.sp,
                     )
@@ -375,7 +376,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
                     text = configImportError ?: "",
-                    fontFamily = FontFamily.Default,
+                    fontFamily = RethinkSans,
                     fontSize = 12.sp,
                     color = SeekerClawColors.Error,
                 )
@@ -535,7 +536,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                 if (allPermissionsOff) {
                     Text(
                         text = "Enable permissions to unlock device features (camera, GPS, SMS, etc.)",
-                        fontFamily = FontFamily.Default,
+                        fontFamily = RethinkSans,
                         fontSize = 12.sp,
                         color = SeekerClawColors.TextSecondary,
                         lineHeight = 18.sp,
@@ -606,14 +607,14 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                     ) {
                         Text(
                             text = "Address",
-                            fontFamily = FontFamily.Default,
+                            fontFamily = RethinkSans,
                             fontSize = 13.sp,
                             color = SeekerClawColors.TextDim,
                         )
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
                                 text = "${address.take(6)}\u2026${address.takeLast(4)}",
-                                fontFamily = FontFamily.Default,
+                                fontFamily = RethinkSans,
                                 fontSize = 13.sp,
                                 color = SeekerClawColors.TextSecondary,
                             )
@@ -655,14 +656,14 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                         contentColor = SeekerClawColors.Error,
                     ),
                 ) {
-                    Text("Disconnect Wallet", fontFamily = FontFamily.Default, fontSize = 14.sp)
+                    Text("Disconnect Wallet", fontFamily = RethinkSans, fontSize = 14.sp)
                 }
             } else {
                 // Not connected — show Connect button
                 if (walletError != null) {
                     Text(
                         text = walletError!!,
-                        fontFamily = FontFamily.Default,
+                        fontFamily = RethinkSans,
                         fontSize = 12.sp,
                         color = SeekerClawColors.Error,
                         modifier = Modifier
@@ -705,16 +706,16 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                             strokeWidth = 2.dp,
                         )
                         Spacer(modifier = Modifier.padding(start = 8.dp))
-                        Text("Connecting\u2026", fontFamily = FontFamily.Default, fontSize = 14.sp)
+                        Text("Connecting\u2026", fontFamily = RethinkSans, fontSize = 14.sp)
                     } else {
-                        Text("Connect Wallet", fontFamily = FontFamily.Default, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                        Text("Connect Wallet", fontFamily = RethinkSans, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                     }
                 }
 
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
                     text = "Opens Phantom, Solflare, or Seeker Vault",
-                    fontFamily = FontFamily.Default,
+                    fontFamily = RethinkSans,
                     fontSize = 11.sp,
                     color = SeekerClawColors.TextDim,
                     modifier = Modifier.fillMaxWidth(),
@@ -753,7 +754,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
             ) {
                 Text(
                     text = SettingsHelpTexts.MCP_SERVERS,
-                    fontFamily = FontFamily.Default,
+                    fontFamily = RethinkSans,
                     fontSize = 13.sp,
                     color = SeekerClawColors.TextDim,
                 )
@@ -763,7 +764,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                 if (mcpServers.isEmpty()) {
                     Text(
                         text = "No servers configured",
-                        fontFamily = FontFamily.Default,
+                        fontFamily = RethinkSans,
                         fontSize = 13.sp,
                         color = SeekerClawColors.TextDim,
                         fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
@@ -780,7 +781,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
                                     text = server.name,
-                                    fontFamily = FontFamily.Default,
+                                    fontFamily = RethinkSans,
                                     fontSize = 14.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = SeekerClawColors.TextPrimary,
@@ -851,7 +852,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                         contentColor = androidx.compose.ui.graphics.Color.White,
                     ),
                 ) {
-                    Text("Add MCP Server", fontFamily = FontFamily.Default, fontSize = 14.sp)
+                    Text("Add MCP Server", fontFamily = RethinkSans, fontSize = 14.sp)
                 }
             }
         }
@@ -876,7 +877,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                 ) {
                     Text(
                         "Export Memory",
-                        fontFamily = FontFamily.Default,
+                        fontFamily = RethinkSans,
                         fontSize = 14.sp,
                     )
                 }
@@ -897,7 +898,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                 ) {
                     Text(
                         "Import Memory",
-                        fontFamily = FontFamily.Default,
+                        fontFamily = RethinkSans,
                         fontSize = 14.sp,
                     )
                 }
@@ -919,7 +920,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
             ) {
                 Text(
                     "Run Setup Again",
-                    fontFamily = FontFamily.Default,
+                    fontFamily = RethinkSans,
                     fontSize = 14.sp,
                 )
             }
@@ -941,7 +942,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                 ) {
                     Text(
                         "Reset Config",
-                        fontFamily = FontFamily.Default,
+                        fontFamily = RethinkSans,
                         fontWeight = FontWeight.Medium,
                         fontSize = 14.sp,
                     )
@@ -968,7 +969,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         "Wipe Memory",
-                        fontFamily = FontFamily.Default,
+                        fontFamily = RethinkSans,
                         fontWeight = FontWeight.Bold,
                         fontSize = 14.sp,
                     )
@@ -1005,7 +1006,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
             title = {
                 Text(
                     "Edit $editLabel",
-                    fontFamily = FontFamily.Default,
+                    fontFamily = RethinkSans,
                     fontWeight = FontWeight.Bold,
                     color = SeekerClawColors.TextPrimary,
                 )
@@ -1015,7 +1016,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                     if (editField == "anthropicApiKey" || editField == "setupToken" || editField == "telegramBotToken" || editField == "braveApiKey" || editField == "jupiterApiKey") {
                         Text(
                             "Changing this requires an agent restart.",
-                            fontFamily = FontFamily.Default,
+                            fontFamily = RethinkSans,
                             fontSize = 12.sp,
                             color = SeekerClawColors.Warning,
                             modifier = Modifier.padding(bottom = 12.dp),
@@ -1024,7 +1025,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                     OutlinedTextField(
                         value = editValue,
                         onValueChange = { editValue = it },
-                        label = { Text(editLabel, fontFamily = FontFamily.Default, fontSize = 12.sp) },
+                        label = { Text(editLabel, fontFamily = RethinkSans, fontSize = 12.sp) },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = editField != "anthropicApiKey" && editField != "setupToken",
                         textStyle = androidx.compose.ui.text.TextStyle(
@@ -1075,7 +1076,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                 ) {
                     Text(
                         "Save",
-                        fontFamily = FontFamily.Default,
+                        fontFamily = RethinkSans,
                         fontWeight = FontWeight.Bold,
                         color = SeekerClawColors.ActionPrimary,
                     )
@@ -1085,7 +1086,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                 TextButton(onClick = { editField = null }) {
                     Text(
                         "Cancel",
-                        fontFamily = FontFamily.Default,
+                        fontFamily = RethinkSans,
                         color = SeekerClawColors.TextDim,
                     )
                 }
@@ -1104,7 +1105,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
             title = {
                 Text(
                     "Select Model",
-                    fontFamily = FontFamily.Default,
+                    fontFamily = RethinkSans,
                     fontWeight = FontWeight.Bold,
                     color = SeekerClawColors.TextPrimary,
                 )
@@ -1130,7 +1131,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                             Column(modifier = Modifier.padding(start = 8.dp)) {
                                 Text(
                                     text = "${model.displayName} (${model.description})",
-                                    fontFamily = FontFamily.Default,
+                                    fontFamily = RethinkSans,
                                     fontSize = 14.sp,
                                     color = SeekerClawColors.TextPrimary,
                                 )
@@ -1155,7 +1156,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                 ) {
                     Text(
                         "Save",
-                        fontFamily = FontFamily.Default,
+                        fontFamily = RethinkSans,
                         fontWeight = FontWeight.Bold,
                         color = SeekerClawColors.ActionPrimary,
                     )
@@ -1165,7 +1166,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                 TextButton(onClick = { showModelPicker = false }) {
                     Text(
                         "Cancel",
-                        fontFamily = FontFamily.Default,
+                        fontFamily = RethinkSans,
                         color = SeekerClawColors.TextDim,
                     )
                 }
@@ -1188,7 +1189,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
             title = {
                 Text(
                     "Auth Type",
-                    fontFamily = FontFamily.Default,
+                    fontFamily = RethinkSans,
                     fontWeight = FontWeight.Bold,
                     color = SeekerClawColors.TextPrimary,
                 )
@@ -1213,7 +1214,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                             )
                             Text(
                                 text = label,
-                                fontFamily = FontFamily.Default,
+                                fontFamily = RethinkSans,
                                 fontSize = 14.sp,
                                 color = SeekerClawColors.TextPrimary,
                                 modifier = Modifier.padding(start = 8.dp),
@@ -1223,7 +1224,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
                         text = "Both credentials are stored. Switching just changes which one is used.",
-                        fontFamily = FontFamily.Default,
+                        fontFamily = RethinkSans,
                         fontSize = 12.sp,
                         color = SeekerClawColors.TextDim,
                     )
@@ -1239,7 +1240,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                 ) {
                     Text(
                         "Save",
-                        fontFamily = FontFamily.Default,
+                        fontFamily = RethinkSans,
                         fontWeight = FontWeight.Bold,
                         color = SeekerClawColors.ActionPrimary,
                     )
@@ -1249,7 +1250,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                 TextButton(onClick = { showAuthTypePicker = false }) {
                     Text(
                         "Cancel",
-                        fontFamily = FontFamily.Default,
+                        fontFamily = RethinkSans,
                         color = SeekerClawColors.TextDim,
                     )
                 }
@@ -1266,7 +1267,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
             title = {
                 Text(
                     "Config Updated",
-                    fontFamily = FontFamily.Default,
+                    fontFamily = RethinkSans,
                     fontWeight = FontWeight.Bold,
                     color = SeekerClawColors.TextPrimary,
                 )
@@ -1274,7 +1275,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
             text = {
                 Text(
                     "Restart the agent to apply changes?",
-                    fontFamily = FontFamily.Default,
+                    fontFamily = RethinkSans,
                     fontSize = 14.sp,
                     color = SeekerClawColors.TextSecondary,
                 )
@@ -1287,7 +1288,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                 }) {
                     Text(
                         "Restart Now",
-                        fontFamily = FontFamily.Default,
+                        fontFamily = RethinkSans,
                         fontWeight = FontWeight.Bold,
                         color = SeekerClawColors.Primary,
                     )
@@ -1297,7 +1298,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                 TextButton(onClick = { showRestartDialog = false }) {
                     Text(
                         "Later",
-                        fontFamily = FontFamily.Default,
+                        fontFamily = RethinkSans,
                         color = SeekerClawColors.TextDim,
                     )
                 }
@@ -1314,7 +1315,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
             title = {
                 Text(
                     "Reset Config",
-                    fontFamily = FontFamily.Default,
+                    fontFamily = RethinkSans,
                     fontWeight = FontWeight.Bold,
                     color = SeekerClawColors.Error,
                 )
@@ -1322,7 +1323,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
             text = {
                 Text(
                     "This will stop the agent, clear all config, and return to setup. This cannot be undone.",
-                    fontFamily = FontFamily.Default,
+                    fontFamily = RethinkSans,
                     fontSize = 13.sp,
                     color = SeekerClawColors.TextSecondary,
                     lineHeight = 20.sp,
@@ -1338,7 +1339,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                 }) {
                     Text(
                         "Confirm",
-                        fontFamily = FontFamily.Default,
+                        fontFamily = RethinkSans,
                         fontWeight = FontWeight.Bold,
                         color = SeekerClawColors.Error,
                     )
@@ -1348,7 +1349,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                 TextButton(onClick = { showResetDialog = false }) {
                     Text(
                         "Cancel",
-                        fontFamily = FontFamily.Default,
+                        fontFamily = RethinkSans,
                         color = SeekerClawColors.TextDim,
                     )
                 }
@@ -1365,7 +1366,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
             title = {
                 Text(
                     "Import Memory",
-                    fontFamily = FontFamily.Default,
+                    fontFamily = RethinkSans,
                     fontWeight = FontWeight.Bold,
                     color = SeekerClawColors.Warning,
                 )
@@ -1373,7 +1374,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
             text = {
                 Text(
                     "This will overwrite personality, memory, and skills with the backup. A safety backup is created automatically before importing.",
-                    fontFamily = FontFamily.Default,
+                    fontFamily = RethinkSans,
                     fontSize = 13.sp,
                     color = SeekerClawColors.TextSecondary,
                     lineHeight = 20.sp,
@@ -1386,7 +1387,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                 }) {
                     Text(
                         "Select File",
-                        fontFamily = FontFamily.Default,
+                        fontFamily = RethinkSans,
                         fontWeight = FontWeight.Bold,
                         color = SeekerClawColors.Warning,
                     )
@@ -1396,7 +1397,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                 TextButton(onClick = { showImportDialog = false }) {
                     Text(
                         "Cancel",
-                        fontFamily = FontFamily.Default,
+                        fontFamily = RethinkSans,
                         color = SeekerClawColors.TextDim,
                     )
                 }
@@ -1423,7 +1424,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
             title = {
                 Text(
                     "Apply Imported Config",
-                    fontFamily = FontFamily.Default,
+                    fontFamily = RethinkSans,
                     fontWeight = FontWeight.Bold,
                     color = SeekerClawColors.Warning,
                 )
@@ -1441,7 +1442,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                         "Auto-start on boot: $autoStartSummary\n" +
                         "Server mode: $keepScreenSummary\n\n" +
                         "Apply this configuration to your device?",
-                    fontFamily = FontFamily.Default,
+                    fontFamily = RethinkSans,
                     fontSize = 13.sp,
                     color = SeekerClawColors.TextSecondary,
                     lineHeight = 20.sp,
@@ -1487,7 +1488,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                 }) {
                     Text(
                         "Apply",
-                        fontFamily = FontFamily.Default,
+                        fontFamily = RethinkSans,
                         fontWeight = FontWeight.Bold,
                         color = SeekerClawColors.Warning,
                     )
@@ -1500,7 +1501,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                 }) {
                     Text(
                         "Cancel",
-                        fontFamily = FontFamily.Default,
+                        fontFamily = RethinkSans,
                         color = SeekerClawColors.TextDim,
                     )
                 }
@@ -1517,7 +1518,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
             title = {
                 Text(
                     "Run Setup Again",
-                    fontFamily = FontFamily.Default,
+                    fontFamily = RethinkSans,
                     fontWeight = FontWeight.Bold,
                     color = SeekerClawColors.TextPrimary,
                 )
@@ -1525,7 +1526,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
             text = {
                 Text(
                     "This will restart the setup flow. Your current config will be overwritten when you complete setup.",
-                    fontFamily = FontFamily.Default,
+                    fontFamily = RethinkSans,
                     fontSize = 13.sp,
                     color = SeekerClawColors.TextSecondary,
                     lineHeight = 20.sp,
@@ -1540,7 +1541,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                 }) {
                     Text(
                         "Continue",
-                        fontFamily = FontFamily.Default,
+                        fontFamily = RethinkSans,
                         fontWeight = FontWeight.Bold,
                         color = SeekerClawColors.Primary,
                     )
@@ -1550,7 +1551,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                 TextButton(onClick = { showRunSetupDialog = false }) {
                     Text(
                         "Cancel",
-                        fontFamily = FontFamily.Default,
+                        fontFamily = RethinkSans,
                         color = SeekerClawColors.TextDim,
                     )
                 }
@@ -1573,7 +1574,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
             title = {
                 Text(
                     "Wipe Memory",
-                    fontFamily = FontFamily.Default,
+                    fontFamily = RethinkSans,
                     fontWeight = FontWeight.Bold,
                     color = SeekerClawColors.Error,
                 )
@@ -1582,7 +1583,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(
                         "This will delete all memory files. The agent will lose all accumulated knowledge. This cannot be undone.",
-                        fontFamily = FontFamily.Default,
+                        fontFamily = RethinkSans,
                         fontSize = 13.sp,
                         color = SeekerClawColors.TextSecondary,
                         lineHeight = 20.sp,
@@ -1593,7 +1594,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                         label = {
                             Text(
                                 "Type WIPE to confirm",
-                                fontFamily = FontFamily.Default,
+                                fontFamily = RethinkSans,
                                 fontSize = 13.sp,
                             )
                         },
@@ -1623,7 +1624,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                 ) {
                     Text(
                         "Confirm",
-                        fontFamily = FontFamily.Default,
+                        fontFamily = RethinkSans,
                         fontWeight = FontWeight.Bold,
                         color = if (wipeConfirmed) SeekerClawColors.Error else SeekerClawColors.TextDim,
                     )
@@ -1636,7 +1637,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                 }) {
                     Text(
                         "Cancel",
-                        fontFamily = FontFamily.Default,
+                        fontFamily = RethinkSans,
                         color = SeekerClawColors.TextDim,
                     )
                 }
@@ -1657,7 +1658,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
             title = {
                 Text(
                     if (editingMcpServer != null) "Edit MCP Server" else "Add MCP Server",
-                    fontFamily = FontFamily.Default,
+                    fontFamily = RethinkSans,
                     fontWeight = FontWeight.Bold,
                     color = SeekerClawColors.TextPrimary,
                 )
@@ -1667,7 +1668,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                     OutlinedTextField(
                         value = mcpName,
                         onValueChange = { mcpName = it },
-                        label = { Text("Name", fontFamily = FontFamily.Default) },
+                        label = { Text("Name", fontFamily = RethinkSans) },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                         colors = OutlinedTextFieldDefaults.colors(
@@ -1684,7 +1685,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                     OutlinedTextField(
                         value = mcpUrl,
                         onValueChange = { mcpUrl = it },
-                        label = { Text("Server URL", fontFamily = FontFamily.Default) },
+                        label = { Text("Server URL", fontFamily = RethinkSans) },
                         placeholder = { Text("https://mcp.example.com/mcp", color = SeekerClawColors.TextDim) },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
@@ -1702,7 +1703,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                     OutlinedTextField(
                         value = mcpToken,
                         onValueChange = { mcpToken = it },
-                        label = { Text("Auth Token (optional)", fontFamily = FontFamily.Default) },
+                        label = { Text("Auth Token (optional)", fontFamily = RethinkSans) },
                         visualTransformation = PasswordVisualTransformation(),
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
@@ -1774,7 +1775,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                 ) {
                     Text(
                         "Save",
-                        fontFamily = FontFamily.Default,
+                        fontFamily = RethinkSans,
                         fontWeight = FontWeight.Bold,
                         color = if (mcpName.isNotBlank() && mcpUrl.isNotBlank()) SeekerClawColors.Accent else SeekerClawColors.TextDim,
                     )
@@ -1782,7 +1783,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
             },
             dismissButton = {
                 TextButton(onClick = { showMcpDialog = false }) {
-                    Text("Cancel", fontFamily = FontFamily.Default, color = SeekerClawColors.TextDim)
+                    Text("Cancel", fontFamily = RethinkSans, color = SeekerClawColors.TextDim)
                 }
             },
             containerColor = SeekerClawColors.Surface,
@@ -1797,7 +1798,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
             title = {
                 Text(
                     "Remove Server",
-                    fontFamily = FontFamily.Default,
+                    fontFamily = RethinkSans,
                     fontWeight = FontWeight.Bold,
                     color = SeekerClawColors.TextPrimary,
                 )
@@ -1805,7 +1806,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
             text = {
                 Text(
                     "Remove \"${deletingMcpServer?.name}\"? Its tools will no longer be available to your agent.",
-                    fontFamily = FontFamily.Default,
+                    fontFamily = RethinkSans,
                     fontSize = 14.sp,
                     color = SeekerClawColors.TextSecondary,
                 )
@@ -1820,7 +1821,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                 }) {
                     Text(
                         "Remove",
-                        fontFamily = FontFamily.Default,
+                        fontFamily = RethinkSans,
                         fontWeight = FontWeight.Bold,
                         color = SeekerClawColors.Error,
                     )
@@ -1828,7 +1829,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
             },
             dismissButton = {
                 TextButton(onClick = { showDeleteMcpDialog = false }) {
-                    Text("Cancel", fontFamily = FontFamily.Default, color = SeekerClawColors.TextDim)
+                    Text("Cancel", fontFamily = RethinkSans, color = SeekerClawColors.TextDim)
                 }
             },
             containerColor = SeekerClawColors.Surface,
@@ -1841,7 +1842,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
 private fun SectionLabel(title: String) {
     Text(
         text = title,
-        fontFamily = FontFamily.Default,
+        fontFamily = RethinkSans,
         fontSize = 11.sp,
         fontWeight = FontWeight.Medium,
         color = SeekerClawColors.TextSecondary,
@@ -1867,7 +1868,7 @@ private fun CollapsibleSection(
     ) {
         Text(
             text = title,
-            fontFamily = FontFamily.Default,
+            fontFamily = RethinkSans,
             fontSize = 11.sp,
             fontWeight = FontWeight.Medium,
             color = SeekerClawColors.TextSecondary,
@@ -1923,7 +1924,7 @@ private fun ConfigField(
             ) {
                 Text(
                     text = label,
-                    fontFamily = FontFamily.Default,
+                    fontFamily = RethinkSans,
                     fontSize = 12.sp,
                     color = SeekerClawColors.TextDim,
                 )
@@ -1950,7 +1951,7 @@ private fun ConfigField(
             if (onClick != null) {
                 Text(
                     text = "Edit",
-                    fontFamily = FontFamily.Default,
+                    fontFamily = RethinkSans,
                     fontSize = 12.sp,
                     color = SeekerClawColors.TextInteractive,
                 )
@@ -1959,7 +1960,7 @@ private fun ConfigField(
         Spacer(modifier = Modifier.height(2.dp))
         Text(
             text = value,
-            fontFamily = FontFamily.Default,
+            fontFamily = RethinkSans,
             fontSize = 14.sp,
             color = SeekerClawColors.TextPrimary,
         )
@@ -1996,7 +1997,7 @@ private fun SettingRow(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 text = label,
-                fontFamily = FontFamily.Default,
+                fontFamily = RethinkSans,
                 fontSize = 14.sp,
                 color = SeekerClawColors.TextPrimary,
             )
@@ -2040,13 +2041,13 @@ private fun InfoRow(label: String, value: String) {
     ) {
         Text(
             text = label,
-            fontFamily = FontFamily.Default,
+            fontFamily = RethinkSans,
             fontSize = 13.sp,
             color = SeekerClawColors.TextDim,
         )
         Text(
             text = value,
-            fontFamily = FontFamily.Default,
+            fontFamily = RethinkSans,
             fontSize = 13.sp,
             color = SeekerClawColors.TextSecondary,
         )
@@ -2073,7 +2074,7 @@ private fun PermissionRow(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 text = label,
-                fontFamily = FontFamily.Default,
+                fontFamily = RethinkSans,
                 fontSize = 14.sp,
                 color = SeekerClawColors.TextPrimary,
             )
@@ -2148,7 +2149,7 @@ private fun InfoDialog(title: String, message: String, onDismiss: () -> Unit) {
         title = {
             Text(
                 text = title,
-                fontFamily = FontFamily.Default,
+                fontFamily = RethinkSans,
                 fontWeight = FontWeight.Bold,
                 fontSize = 16.sp,
                 color = SeekerClawColors.TextPrimary,
@@ -2157,7 +2158,7 @@ private fun InfoDialog(title: String, message: String, onDismiss: () -> Unit) {
         text = {
             Text(
                 text = message,
-                fontFamily = FontFamily.Default,
+                fontFamily = RethinkSans,
                 fontSize = 13.sp,
                 color = SeekerClawColors.TextSecondary,
                 lineHeight = 20.sp,
@@ -2167,7 +2168,7 @@ private fun InfoDialog(title: String, message: String, onDismiss: () -> Unit) {
             TextButton(onClick = onDismiss) {
                 Text(
                     "Got it",
-                    fontFamily = FontFamily.Default,
+                    fontFamily = RethinkSans,
                     fontWeight = FontWeight.Bold,
                     color = SeekerClawColors.Primary,
                 )

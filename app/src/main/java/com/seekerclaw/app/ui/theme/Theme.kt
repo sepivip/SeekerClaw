@@ -6,8 +6,10 @@ import androidx.compose.material3.Typography
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import com.seekerclaw.app.R
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -149,6 +151,16 @@ object SeekerClawColors {
 }
 
 // ============================================================================
+// TYPOGRAPHY — Rethink Sans (custom font)
+// ============================================================================
+val RethinkSans = FontFamily(
+    Font(R.font.rethink_sans_regular, FontWeight.Normal),
+    Font(R.font.rethink_sans_medium, FontWeight.Medium),
+    Font(R.font.rethink_sans_bold, FontWeight.Bold),
+    Font(R.font.rethink_sans_extrabold, FontWeight.ExtraBold),
+)
+
+// ============================================================================
 // MATERIAL THEME INTEGRATION
 // ============================================================================
 private val DarkColorScheme = darkColorScheme(
@@ -168,28 +180,28 @@ private val DarkColorScheme = darkColorScheme(
 
 private val AppTypography = Typography(
     bodyLarge = TextStyle(
-        fontFamily = FontFamily.Default,
+        fontFamily = RethinkSans,
         fontWeight = FontWeight.Normal,
         fontSize = 15.sp,
         lineHeight = 22.sp,
         color = DarkOpsThemeColors.textPrimary,
     ),
     bodyMedium = TextStyle(
-        fontFamily = FontFamily.Default,
+        fontFamily = RethinkSans,
         fontWeight = FontWeight.Normal,
         fontSize = 13.sp,
         lineHeight = 18.sp,
         color = DarkOpsThemeColors.textSecondary,
     ),
     titleLarge = TextStyle(
-        fontFamily = FontFamily.Default,
+        fontFamily = RethinkSans,
         fontWeight = FontWeight.Bold,
         fontSize = 22.sp,
         lineHeight = 28.sp,
         letterSpacing = 0.sp,
     ),
     labelLarge = TextStyle(
-        fontFamily = FontFamily.Default,
+        fontFamily = RethinkSans,
         fontWeight = FontWeight.Medium,
         fontSize = 13.sp,
         lineHeight = 18.sp,

@@ -20,6 +20,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
+import com.seekerclaw.app.ui.theme.RethinkSans
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -133,7 +134,7 @@ fun SeekerClawNavHost() {
                                 label = {
                                     Text(
                                         text = item.label,
-                                        fontFamily = FontFamily.Default,
+                                        fontFamily = RethinkSans,
                                         fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
                                         fontSize = 11.sp,
                                     )
