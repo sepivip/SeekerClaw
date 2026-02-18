@@ -6823,9 +6823,9 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
 
     // Diagnostics — agent knows about its debug log for self-diagnosis
     lines.push('## Diagnostics');
-    lines.push('Your debug log is at: node_debug.log (in your workspace root)');
+    lines.push(`Your debug log is at: ${workDir}/node_debug.log`);
     lines.push('It records timestamped entries for: startup, API calls, tool executions (with errors), message flow, Telegram polling, and cron job runs.');
-    lines.push('Check the log when: tools fail unexpectedly, responses seem wrong, network errors occur, or the user asks "what happened?" or "what went wrong?"');
+    lines.push('Check the log when: tools fail unexpectedly, responses go silent, network errors occur, or the user asks "what happened?" or "what went wrong?"');
     lines.push('Reading tips:');
     lines.push('- Recent entries: shell_exec with "tail -n 50 node_debug.log"');
     lines.push('- Search for errors: shell_exec with "grep -i error node_debug.log" or "grep -i fail node_debug.log"');
