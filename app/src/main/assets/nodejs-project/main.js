@@ -3985,11 +3985,12 @@ async function executeTool(name, input, chatId) {
                         prices.push({ token: r.input, error: r.error });
                         continue;
                     }
-                    const pd = priceData.data?.[r.token.address];
+                    // Price v3 returns flat {mint: {usdPrice, ...}} — no 'data' wrapper
+                    const pd = priceData[r.token.address];
                     const entry = {
                         token: r.token.symbol,
                         mint: r.token.address,
-                        price: pd?.price ? parseFloat(pd.price) : null,
+                        price: pd?.usdPrice != null ? parseFloat(pd.usdPrice) : null,
                         currency: 'USD',
                     };
                     // Surface confidenceLevel from Jupiter Price v3 — low confidence means unreliable pricing
@@ -4088,7 +4089,7 @@ async function executeTool(name, input, chatId) {
                 // Pre-swap price confidence check — fail closed on low-confidence data
                 try {
                     const priceData = await jupiterPrice([inputToken.address]);
-                    const pd = priceData.data?.[inputToken.address];
+                    const pd = priceData[inputToken.address];
                     if (pd?.confidenceLevel === 'low') {
                         return {
                             error: 'Price confidence too low for swap',
@@ -4461,11 +4462,11 @@ async function executeTool(name, input, chatId) {
                     }
                 }
 
-                // 3. Build query params
-                const params = new URLSearchParams({ user: walletAddress });
-                if (input.status) {
-                    params.append('orderStatus', input.status);
-                }
+                // 3. Build query params — orderStatus is required by Jupiter API
+                const params = new URLSearchParams({
+                    user: walletAddress,
+                    orderStatus: input.status || 'active',  // Default to 'active', Jupiter requires this
+                });
                 if (input.page !== undefined && input.page !== null) {
                     params.append('page', String(Number(input.page)));
                 }
@@ -4700,9 +4701,9 @@ async function executeTool(name, input, chatId) {
                 // Validate USD minimums ($50/order, $100 total) using Jupiter price
                 try {
                     const priceData = await jupiterPrice([inputToken.address]);
-                    const pd = priceData.data?.[inputToken.address];
-                    if (pd?.price) {
-                        const usdPerOrder = Number(input.amountPerCycle) * parseFloat(pd.price);
+                    const pd = priceData[inputToken.address];
+                    if (pd?.usdPrice) {
+                        const usdPerOrder = Number(input.amountPerCycle) * parseFloat(pd.usdPrice);
                         const usdTotal = usdPerOrder * numberOfOrders;
                         if (usdPerOrder < 50) {
                             return {
@@ -4723,6 +4724,11 @@ async function executeTool(name, input, chatId) {
                 }
 
                 // 5. Call Jupiter Recurring API — createOrder
+                const inAmountNum = Number(totalInAmount);
+                if (!Number.isSafeInteger(inAmountNum)) {
+                    return { error: 'Amount too large', details: `Total amount (${totalInAmount} lamports) exceeds safe integer precision. Reduce amountPerCycle or totalCycles.` };
+                }
+
                 log(`[Jupiter DCA] Creating: ${input.amountPerCycle} ${inputToken.symbol} → ${outputToken.symbol}, ${input.cycleInterval} x${numberOfOrders}`);
                 const reqBody = {
                     user: walletAddress,
@@ -4730,7 +4736,7 @@ async function executeTool(name, input, chatId) {
                     outputMint: outputToken.address,
                     params: {
                         time: {
-                            inAmount: totalInAmount,
+                            inAmount: inAmountNum,  // Jupiter API requires number, not string
                             numberOfOrders: numberOfOrders,
                             interval: cycleIntervalSeconds,
                         }
@@ -5031,21 +5037,26 @@ async function executeTool(name, input, chatId) {
                 }
 
                 const data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
-                const tokens = data.tokens || [];
+                // Jupiter Tokens v2 returns flat array, not {tokens: [...]}
+                const tokens = Array.isArray(data) ? data : (data.tokens || []);
 
                 return {
                     success: true,
                     count: tokens.length,
                     tokens: tokens.map(token => {
+                        // Normalize v2 field names: id→address, usdPrice→price, mcap→marketCap, isVerified→verified
+                        const mint = token.id || token.address;
+                        const usdPrice = token.usdPrice ?? token.price ?? null;
+                        const mCap = token.mcap ?? token.marketCap ?? null;
                         const entry = {
                             symbol: token.symbol,
                             name: token.name,
-                            address: token.address,
+                            address: mint,
                             decimals: token.decimals,
-                            price: (token.price !== null && token.price !== undefined) ? `$${token.price}` : 'N/A',
-                            marketCap: (token.marketCap !== null && token.marketCap !== undefined) ? `$${(token.marketCap / 1e6).toFixed(2)}M` : 'N/A',
+                            price: (usdPrice !== null && usdPrice !== undefined) ? `$${usdPrice}` : 'N/A',
+                            marketCap: (mCap !== null && mCap !== undefined) ? `$${(mCap / 1e6).toFixed(2)}M` : 'N/A',
                             liquidity: (token.liquidity !== null && token.liquidity !== undefined) ? `$${(token.liquidity / 1e6).toFixed(2)}M` : 'N/A',
-                            verified: token.verified || false,
+                            verified: token.isVerified ?? token.verified ?? false,
                         };
                         // Surface organicScore and isSus from Tokens v2 API
                         if (token.organicScore !== undefined) entry.organicScore = token.organicScore;
@@ -6034,11 +6045,19 @@ async function fetchJupiterTokenList() {
         });
 
         if (res.status === 200 && Array.isArray(res.data)) {
-            jupiterTokenCache.tokens = res.data;
+            // Jupiter Tokens v2 uses 'id' for mint address — normalize to 'address' for our code
+            const normalized = res.data.map(t => ({
+                ...t,
+                address: t.id || t.address,  // v2 uses 'id', fallback to 'address'
+                verified: t.isVerified ?? t.verified ?? false,
+                price: t.usdPrice ?? t.price ?? null,
+                marketCap: t.mcap ?? t.marketCap ?? null,
+            }));
+            jupiterTokenCache.tokens = normalized;
             jupiterTokenCache.bySymbol.clear();
             jupiterTokenCache.byMint.clear();
 
-            for (const token of res.data) {
+            for (const token of normalized) {
                 jupiterTokenCache.byMint.set(token.address, token);
                 const sym = token.symbol.toLowerCase();
                 if (!jupiterTokenCache.bySymbol.has(sym)) {
@@ -6048,7 +6067,7 @@ async function fetchJupiterTokenList() {
             }
 
             jupiterTokenCache.lastFetch = now;
-            log(`[Jupiter] Loaded ${res.data.length} verified tokens`);
+            log(`[Jupiter] Loaded ${normalized.length} verified tokens`);
         } else {
             log(`[Jupiter] Token list fetch failed: ${res.status}`);
         }
@@ -7427,29 +7446,56 @@ async function chat(chatId, userMessage) {
     // can summarize the tool results for the user (e.g. after solana_send)
     if (!textContent && toolUseCount > 0) {
         log('No text in final tool response, requesting summary...');
-        // The tool results are already in messages — just call again without tools
+
+        // Add explicit summary prompt — without this, the model may return no text
+        // because the last message is tool_results and it may not realize it needs to respond
+        const summaryMessages = [...messages, {
+            role: 'user',
+            content: '[System: All tool operations are complete. Briefly summarize what was done and the results for the user. You MUST respond with text — do not use tools or return empty.]'
+        }];
+
         const summaryRes = await claudeApiCall(JSON.stringify({
             model: MODEL,
             max_tokens: 4096,
             system: systemBlocks,
-            messages: messages
+            messages: summaryMessages
         }), chatId);
 
         if (summaryRes.status === 200 && summaryRes.data.content) {
             response = summaryRes.data;
             textContent = response.content.find(c => c.type === 'text');
+            // Guard: if summary returned SILENT_REPLY token, treat as no text
+            // (model may use it because system prompt teaches SILENT_REPLY — but after tools, silence is wrong)
+            if (textContent && textContent.text.trim() === 'SILENT_REPLY') {
+                log('Summary returned SILENT_REPLY token — falling through to fallback');
+                textContent = null;
+            }
+        }
+
+        // If summary call STILL produced no text, build a basic summary from tool results
+        // so the user is never left without a response after tool execution
+        if (!textContent) {
+            log('Summary call also produced no text — building fallback summary');
+            const toolNames = [];
+            for (const msg of messages) {
+                if (msg.role === 'assistant' && Array.isArray(msg.content)) {
+                    for (const block of msg.content) {
+                        if (block.type === 'tool_use' && !toolNames.includes(block.name)) {
+                            toolNames.push(block.name);
+                        }
+                    }
+                }
+            }
+            const fallback = `Done — used ${toolUseCount} tool${toolUseCount !== 1 ? 's' : ''} (${toolNames.join(', ') || 'various'}).`;
+            addToConversation(chatId, 'assistant', fallback);
+            return fallback;
         }
     }
 
-    // If no text after all retries, don't send a confusing "(No response)" to the user.
-    // Return SILENT_REPLY so handleMessage() silently drops it.
-    // Store a placeholder in conversation history so context isn't broken.
+    // If no text and NO tools were used, return SILENT_REPLY (genuine silent response)
     if (!textContent) {
-        const placeholder = toolUseCount > 0
-            ? '[Completed tool operations without a text response]'
-            : '[No response generated]';
-        addToConversation(chatId, 'assistant', placeholder);
-        log(`No text content in response (tools used: ${toolUseCount}), returning SILENT_REPLY`);
+        addToConversation(chatId, 'assistant', '[No response generated]');
+        log('No text content in response (no tools used), returning SILENT_REPLY');
         return 'SILENT_REPLY';
     }
     const assistantMessage = textContent.text;
