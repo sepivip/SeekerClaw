@@ -101,6 +101,8 @@ function parseSSEEvents(text) {
             current.data += (current.data ? '\n' : '') + fieldData;
         } else if (line.startsWith('id:')) {
             current.id = line.slice(3).trim();
+        } else if (line.startsWith(':')) {
+            // SSE comment — ignore per spec
         }
     }
     // Flush last event if stream didn't end with blank line
@@ -184,8 +186,8 @@ class MCPClient {
         // Security: refuse to send auth tokens over plain HTTP (credential disclosure)
         const urlObj = new URL(this.url);
         if (this.authToken && urlObj.protocol !== 'https:') {
-            const h = urlObj.hostname;
-            const isLocalhost = h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === '[::1]';
+            const h = urlObj.hostname; // URL() strips brackets from IPv6
+            const isLocalhost = h === 'localhost' || h === '127.0.0.1' || h === '::1';
             if (!isLocalhost) {
                 throw new Error(`Refusing to send auth token over plain HTTP to ${this.url}. Use HTTPS or localhost.`);
             }

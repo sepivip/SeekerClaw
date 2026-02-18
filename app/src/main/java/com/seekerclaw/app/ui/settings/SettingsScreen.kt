@@ -804,8 +804,11 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                                         showRestartDialog = true
                                     },
                                     colors = SwitchDefaults.colors(
-                                        checkedTrackColor = SeekerClawColors.StatusGreen,
-                                        uncheckedTrackColor = SeekerClawColors.SurfaceVariant,
+                                        checkedThumbColor = androidx.compose.ui.graphics.Color.White,
+                                        checkedTrackColor = SeekerClawColors.ActionPrimary,
+                                        uncheckedThumbColor = androidx.compose.ui.graphics.Color.White,
+                                        uncheckedTrackColor = SeekerClawColors.BorderSubtle,
+                                        uncheckedBorderColor = androidx.compose.ui.graphics.Color.Transparent,
                                     ),
                                 )
                                 IconButton(onClick = {
@@ -1681,7 +1684,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                         value = mcpUrl,
                         onValueChange = { mcpUrl = it },
                         label = { Text("Server URL", fontFamily = FontFamily.Default) },
-                        placeholder = { Text("https://mcp.example.com/sse", color = SeekerClawColors.TextDim) },
+                        placeholder = { Text("https://mcp.example.com/mcp", color = SeekerClawColors.TextDim) },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                         colors = OutlinedTextFieldDefaults.colors(
