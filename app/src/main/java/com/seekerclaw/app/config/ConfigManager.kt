@@ -985,11 +985,13 @@ object ConfigManager {
         "memory/", "skills/",
     )
 
-    /** Returns true if the normalized relative path is on the export/import allowlist. */
+    /** Returns true if the relative path is on the export/import allowlist. */
     private fun isAllowedPath(relativePath: String): Boolean {
-        // Normalize to prevent traversal tricks like "memory/../config.json"
-        val normalized = File(relativePath).normalize().path.replace("\\", "/")
-        if (normalized != relativePath) return false  // reject paths with ../ components
+        // Split into segments and reject any ".." or "." to prevent traversal tricks
+        val segments = relativePath.replace("\\", "/").split("/").filter { it.isNotEmpty() }
+        if (segments.isEmpty()) return false
+        if (segments.any { it == "." || it == ".." }) return false
+        val normalized = segments.joinToString("/")
         if (normalized in EXPORT_ALLOW_FILES) return true
         return EXPORT_ALLOW_DIR_PREFIXES.any { normalized.startsWith(it) }
     }
@@ -1149,7 +1151,9 @@ object ConfigManager {
             Log.e(TAG, "Failed to import memory: ${e.message}", e)
             // Rollback: delete all files extracted during this failed import
             for (file in extractedFiles) {
-                try { file.delete() } catch (_: Exception) {}
+                try { file.delete() } catch (ex: Exception) {
+                    Log.w(TAG, "Rollback: failed to delete ${file.path}: ${ex.message}")
+                }
             }
             false
         }
