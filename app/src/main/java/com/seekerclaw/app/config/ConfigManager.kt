@@ -974,21 +974,21 @@ object ConfigManager {
     private const val IMPORT_MAX_BYTES = 50L * 1024 * 1024
 
     /**
-     * Allowlist of files and directory prefixes that are included in export/import.
+     * Allowlist of files and path prefixes that are included in export/import.
      * Everything else in workspace/ is excluded (DB, state files, media, logs, etc.).
      */
     private val EXPORT_ALLOW_FILES = setOf(
         "SOUL.md", "MEMORY.md", "IDENTITY.md", "USER.md",
         "HEARTBEAT.md", "BOOTSTRAP.md",
     )
-    private val EXPORT_ALLOW_DIR_PREFIXES = listOf(
+    private val EXPORT_ALLOW_PREFIXES = listOf(
         "memory/", "skills/", "cron/jobs.json",
     )
 
     /** Returns true if the relative path is on the export/import allowlist. */
     private fun isAllowedPath(relativePath: String): Boolean {
         if (relativePath in EXPORT_ALLOW_FILES) return true
-        return EXPORT_ALLOW_DIR_PREFIXES.any { relativePath.startsWith(it) }
+        return EXPORT_ALLOW_PREFIXES.any { relativePath.startsWith(it) }
     }
 
     /**
@@ -1025,7 +1025,7 @@ object ConfigManager {
             if (file.isDirectory) {
                 // Only recurse into directories that could contain allowed paths
                 val dirPrefix = "$relativePath/"
-                val hasAllowedChildren = EXPORT_ALLOW_DIR_PREFIXES.any {
+                val hasAllowedChildren = EXPORT_ALLOW_PREFIXES.any {
                     it.startsWith(dirPrefix) || dirPrefix.startsWith(it)
                 }
                 if (hasAllowedChildren) {
@@ -1047,7 +1047,7 @@ object ConfigManager {
     fun importMemory(context: Context, uri: Uri): Boolean {
         val workspaceDir = File(context.filesDir, "workspace").apply { mkdirs() }
 
-        // Auto-backup current state before overwriting
+        // Auto-backup current state before overwriting (keeps last backup only)
         try {
             val backupDir = File(context.filesDir, "backup").apply { mkdirs() }
             val backupFile = File(backupDir, "pre_import_backup.zip")
@@ -1061,6 +1061,8 @@ object ConfigManager {
             Log.w(TAG, "Failed to create pre-import backup: ${e.message}")
             // Continue with import — backup failure shouldn't block restore
         }
+
+        val extractedFiles = mutableListOf<File>()
 
         return try {
             var totalExtracted = 0L
@@ -1122,7 +1124,6 @@ object ConfigManager {
                                 while (zip.read(buffer).also { bytesRead = it } != -1) {
                                     totalExtracted += bytesRead
                                     if (totalExtracted > IMPORT_MAX_BYTES) {
-                                        out.close()
                                         destFile.delete()
                                         throw IllegalStateException(
                                             "Backup exceeds ${IMPORT_MAX_BYTES / 1024 / 1024}MB limit"
@@ -1131,6 +1132,7 @@ object ConfigManager {
                                     out.write(buffer, 0, bytesRead)
                                 }
                             }
+                            extractedFiles.add(destFile)
                         }
 
                         zip.closeEntry()
@@ -1142,6 +1144,10 @@ object ConfigManager {
             true
         } catch (e: Exception) {
             Log.e(TAG, "Failed to import memory: ${e.message}", e)
+            // Rollback: delete all files extracted during this failed import
+            for (file in extractedFiles) {
+                try { file.delete() } catch (_: Exception) {}
+            }
             false
         }
     }
