@@ -71,6 +71,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Warning
@@ -81,6 +83,7 @@ import androidx.compose.material3.IconButton
 import com.seekerclaw.app.config.ConfigClaimImport
 import com.seekerclaw.app.config.ConfigClaimImporter
 import com.seekerclaw.app.config.ConfigManager
+import com.seekerclaw.app.config.McpServerConfig
 import com.seekerclaw.app.config.availableModels
 import com.seekerclaw.app.qr.QrScannerActivity
 import com.seekerclaw.app.service.OpenClawService
@@ -166,6 +169,13 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
     var editValue by remember { mutableStateOf("") }
     var showModelPicker by remember { mutableStateOf(false) }
     var showAuthTypePicker by remember { mutableStateOf(false) }
+
+    // MCP server state
+    var mcpServers by remember { mutableStateOf(ConfigManager.loadMcpServers(context)) }
+    var showMcpDialog by remember { mutableStateOf(false) }
+    var editingMcpServer by remember { mutableStateOf<McpServerConfig?>(null) }
+    var showDeleteMcpDialog by remember { mutableStateOf(false) }
+    var deletingMcpServer by remember { mutableStateOf<McpServerConfig?>(null) }
 
     // Wallet connect state
     var walletAddress by remember { mutableStateOf(ConfigManager.getWalletAddress(context)) }
@@ -726,6 +736,118 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                 showDivider = false,
                 info = SettingsHelpTexts.JUPITER_API_KEY,
             )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(28.dp))
+
+        // MCP Servers (BAT-168)
+        CollapsibleSection("MCP Servers", initiallyExpanded = false) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(SeekerClawColors.Surface, shape)
+                    .padding(16.dp),
+            ) {
+                Text(
+                    text = "Connect remote MCP servers to give your agent extra tools.",
+                    fontFamily = FontFamily.Default,
+                    fontSize = 13.sp,
+                    color = SeekerClawColors.TextDim,
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                if (mcpServers.isEmpty()) {
+                    Text(
+                        text = "No servers configured",
+                        fontFamily = FontFamily.Default,
+                        fontSize = 13.sp,
+                        color = SeekerClawColors.TextDim,
+                        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                    )
+                } else {
+                    for (server in mcpServers) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 6.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = server.name,
+                                    fontFamily = FontFamily.Default,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = SeekerClawColors.TextPrimary,
+                                )
+                                Text(
+                                    text = server.url,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 11.sp,
+                                    color = SeekerClawColors.TextDim,
+                                    maxLines = 1,
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                )
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Switch(
+                                    checked = server.enabled,
+                                    onCheckedChange = { enabled ->
+                                        mcpServers = mcpServers.map {
+                                            if (it.id == server.id) it.copy(enabled = enabled) else it
+                                        }
+                                        ConfigManager.saveMcpServers(context, mcpServers)
+                                        showRestartDialog = true
+                                    },
+                                    colors = SwitchDefaults.colors(
+                                        checkedTrackColor = SeekerClawColors.StatusGreen,
+                                        uncheckedTrackColor = SeekerClawColors.SurfaceVariant,
+                                    ),
+                                )
+                                IconButton(onClick = {
+                                    editingMcpServer = server
+                                    showMcpDialog = true
+                                }) {
+                                    Icon(
+                                        imageVector = Icons.Default.Edit,
+                                        contentDescription = "Edit server",
+                                        tint = SeekerClawColors.TextDim,
+                                    )
+                                }
+                                IconButton(onClick = {
+                                    deletingMcpServer = server
+                                    showDeleteMcpDialog = true
+                                }) {
+                                    Icon(
+                                        imageVector = Icons.Default.Delete,
+                                        contentDescription = "Remove server",
+                                        tint = SeekerClawColors.Error,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Button(
+                    onClick = {
+                        editingMcpServer = null
+                        showMcpDialog = true
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = shape,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = SeekerClawColors.ActionPrimary,
+                        contentColor = androidx.compose.ui.graphics.Color.White,
+                    ),
+                ) {
+                    Text("Add MCP Server", fontFamily = FontFamily.Default, fontSize = 14.sp)
+                }
             }
         }
 
@@ -1512,6 +1634,167 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                         fontFamily = FontFamily.Default,
                         color = SeekerClawColors.TextDim,
                     )
+                }
+            },
+            containerColor = SeekerClawColors.Surface,
+            shape = shape,
+        )
+    }
+
+    // ==================== MCP Server Add/Edit Dialog ====================
+    if (showMcpDialog) {
+        var mcpName by remember { mutableStateOf(editingMcpServer?.name ?: "") }
+        var mcpUrl by remember { mutableStateOf(editingMcpServer?.url ?: "") }
+        var mcpToken by remember { mutableStateOf(editingMcpServer?.authToken ?: "") }
+
+        AlertDialog(
+            onDismissRequest = { showMcpDialog = false },
+            title = {
+                Text(
+                    if (editingMcpServer != null) "Edit MCP Server" else "Add MCP Server",
+                    fontFamily = FontFamily.Default,
+                    fontWeight = FontWeight.Bold,
+                    color = SeekerClawColors.TextPrimary,
+                )
+            },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = mcpName,
+                        onValueChange = { mcpName = it },
+                        label = { Text("Name", fontFamily = FontFamily.Default) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = SeekerClawColors.Accent,
+                            unfocusedBorderColor = SeekerClawColors.BorderSubtle,
+                            focusedTextColor = SeekerClawColors.TextPrimary,
+                            unfocusedTextColor = SeekerClawColors.TextPrimary,
+                            cursorColor = SeekerClawColors.Accent,
+                            focusedLabelColor = SeekerClawColors.Accent,
+                            unfocusedLabelColor = SeekerClawColors.TextDim,
+                        ),
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = mcpUrl,
+                        onValueChange = { mcpUrl = it },
+                        label = { Text("Server URL", fontFamily = FontFamily.Default) },
+                        placeholder = { Text("https://mcp.example.com/sse", color = SeekerClawColors.TextDim) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = SeekerClawColors.Accent,
+                            unfocusedBorderColor = SeekerClawColors.BorderSubtle,
+                            focusedTextColor = SeekerClawColors.TextPrimary,
+                            unfocusedTextColor = SeekerClawColors.TextPrimary,
+                            cursorColor = SeekerClawColors.Accent,
+                            focusedLabelColor = SeekerClawColors.Accent,
+                            unfocusedLabelColor = SeekerClawColors.TextDim,
+                        ),
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = mcpToken,
+                        onValueChange = { mcpToken = it },
+                        label = { Text("Auth Token (optional)", fontFamily = FontFamily.Default) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = SeekerClawColors.Accent,
+                            unfocusedBorderColor = SeekerClawColors.BorderSubtle,
+                            focusedTextColor = SeekerClawColors.TextPrimary,
+                            unfocusedTextColor = SeekerClawColors.TextPrimary,
+                            cursorColor = SeekerClawColors.Accent,
+                            focusedLabelColor = SeekerClawColors.Accent,
+                            unfocusedLabelColor = SeekerClawColors.TextDim,
+                        ),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val trimName = mcpName.trim()
+                        val trimUrl = mcpUrl.trim()
+                        if (trimName.isNotBlank() && trimUrl.isNotBlank()) {
+                            val serverId = editingMcpServer?.id
+                                ?: trimName.lowercase().replace(Regex("[^a-z0-9]"), "-")
+                            val server = McpServerConfig(
+                                id = serverId,
+                                name = trimName,
+                                url = trimUrl,
+                                authToken = mcpToken.trim(),
+                            )
+                            mcpServers = if (editingMcpServer != null) {
+                                mcpServers.map { if (it.id == serverId) server else it }
+                            } else {
+                                mcpServers + server
+                            }
+                            ConfigManager.saveMcpServers(context, mcpServers)
+                            showMcpDialog = false
+                            showRestartDialog = true
+                        }
+                    },
+                    enabled = mcpName.isNotBlank() && mcpUrl.isNotBlank(),
+                ) {
+                    Text(
+                        "Save",
+                        fontFamily = FontFamily.Default,
+                        fontWeight = FontWeight.Bold,
+                        color = if (mcpName.isNotBlank() && mcpUrl.isNotBlank()) SeekerClawColors.Accent else SeekerClawColors.TextDim,
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showMcpDialog = false }) {
+                    Text("Cancel", fontFamily = FontFamily.Default, color = SeekerClawColors.TextDim)
+                }
+            },
+            containerColor = SeekerClawColors.Surface,
+            shape = shape,
+        )
+    }
+
+    // ==================== MCP Server Delete Dialog ====================
+    if (showDeleteMcpDialog && deletingMcpServer != null) {
+        AlertDialog(
+            onDismissRequest = { showDeleteMcpDialog = false },
+            title = {
+                Text(
+                    "Remove Server",
+                    fontFamily = FontFamily.Default,
+                    fontWeight = FontWeight.Bold,
+                    color = SeekerClawColors.TextPrimary,
+                )
+            },
+            text = {
+                Text(
+                    "Remove \"${deletingMcpServer?.name}\"? Its tools will no longer be available to your agent.",
+                    fontFamily = FontFamily.Default,
+                    fontSize = 14.sp,
+                    color = SeekerClawColors.TextSecondary,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    mcpServers = mcpServers.filter { it.id != deletingMcpServer?.id }
+                    ConfigManager.saveMcpServers(context, mcpServers)
+                    showDeleteMcpDialog = false
+                    deletingMcpServer = null
+                    showRestartDialog = true
+                }) {
+                    Text(
+                        "Remove",
+                        fontFamily = FontFamily.Default,
+                        fontWeight = FontWeight.Bold,
+                        color = SeekerClawColors.Error,
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteMcpDialog = false }) {
+                    Text("Cancel", fontFamily = FontFamily.Default, color = SeekerClawColors.TextDim)
                 }
             },
             containerColor = SeekerClawColors.Surface,

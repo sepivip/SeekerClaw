@@ -17,6 +17,7 @@ import androidx.core.content.ContextCompat
 import com.seekerclaw.app.BuildConfig
 import com.seekerclaw.app.util.LogCollector
 import com.seekerclaw.app.util.LogLevel
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.security.MessageDigest
@@ -44,6 +45,15 @@ data class AppConfig(
         get() = if (authType == "setup_token") setupToken else anthropicApiKey
 }
 
+data class McpServerConfig(
+    val id: String,
+    val name: String,
+    val url: String,
+    val authToken: String = "",
+    val enabled: Boolean = true,
+    val rateLimit: Int = 10,
+)
+
 object ConfigManager {
     /** Incremented on every saveConfig(); observe in `remember(configVersion)`. */
     val configVersion = mutableIntStateOf(0)
@@ -63,6 +73,7 @@ object ConfigManager {
     private const val KEY_JUPITER_API_KEY_ENC = "jupiter_api_key_enc"
     private const val KEY_WALLET_ADDRESS = "wallet_address"
     private const val KEY_WALLET_LABEL = "wallet_label"
+    private const val KEY_MCP_SERVERS_ENC = "mcp_servers_enc"
 
     private fun prefs(context: Context): SharedPreferences =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -220,7 +231,7 @@ object ConfigManager {
     }
 
     fun clearConfig(context: Context) {
-        prefs(context).edit().clear().apply()
+        prefs(context).edit().clear().apply() // Clears all prefs including MCP servers
         KeystoreHelper.deleteKey()
         configVersion.intValue++
     }
@@ -260,6 +271,22 @@ object ConfigManager {
             """,
             |  "jupiterApiKey": "${escapeJson(config.jupiterApiKey)}""""
         } else ""
+        val mcpServers = loadMcpServers(context)
+        val mcpField = if (mcpServers.isNotEmpty()) {
+            val arr = JSONArray()
+            for (s in mcpServers) {
+                arr.put(JSONObject().apply {
+                    put("id", s.id)
+                    put("name", s.name)
+                    put("url", s.url)
+                    put("authToken", s.authToken)
+                    put("enabled", s.enabled)
+                    put("rateLimit", s.rateLimit)
+                })
+            }
+            """,
+            |  "mcpServers": ${arr}"""
+        } else ""
         val json = """
             |{
             |  "botToken": "${escapeJson(config.telegramBotToken)}",
@@ -268,7 +295,7 @@ object ConfigManager {
             |  "authType": "${escapeJson(config.authType)}",
             |  "model": "${escapeJson(config.model)}",
             |  "agentName": "${escapeJson(config.agentName)}",
-            |  "bridgeToken": "${escapeJson(bridgeToken)}"$braveField$jupiterField
+            |  "bridgeToken": "${escapeJson(bridgeToken)}"$braveField$jupiterField$mcpField
             |}
         """.trimMargin()
         File(workspaceDir, "config.json").writeText(json)
@@ -311,6 +338,51 @@ object ConfigManager {
                 } else null
             }
             else -> null
+        }
+    }
+
+    // ==================== MCP Servers ====================
+
+    fun saveMcpServers(context: Context, servers: List<McpServerConfig>) {
+        val json = JSONArray().apply {
+            for (s in servers) {
+                put(JSONObject().apply {
+                    put("id", s.id)
+                    put("name", s.name)
+                    put("url", s.url)
+                    put("authToken", s.authToken)
+                    put("enabled", s.enabled)
+                    put("rateLimit", s.rateLimit)
+                })
+            }
+        }.toString()
+        val enc = KeystoreHelper.encrypt(json)
+        prefs(context).edit()
+            .putString(KEY_MCP_SERVERS_ENC, Base64.encodeToString(enc, Base64.NO_WRAP))
+            .apply()
+        configVersion.intValue++
+    }
+
+    fun loadMcpServers(context: Context): List<McpServerConfig> {
+        return try {
+            val enc = prefs(context).getString(KEY_MCP_SERVERS_ENC, null) ?: return emptyList()
+            val json = KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP))
+            val arr = JSONArray(json)
+            (0 until arr.length()).map { i ->
+                val obj = arr.getJSONObject(i)
+                McpServerConfig(
+                    id = obj.getString("id"),
+                    name = obj.getString("name"),
+                    url = obj.getString("url"),
+                    authToken = obj.optString("authToken", ""),
+                    enabled = obj.optBoolean("enabled", true),
+                    rateLimit = obj.optInt("rateLimit", 10),
+                )
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to load MCP servers", e)
+            LogCollector.append("[Config] Failed to load MCP servers: ${e.javaClass.simpleName}", LogLevel.ERROR)
+            emptyList()
         }
     }
 

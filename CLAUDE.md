@@ -177,6 +177,17 @@ Defined in `app/src/main/java/com/seekerclaw/app/config/Models.kt`.
 
 Model list can be updated via app update or future remote config.
 
+## MCP Servers (Remote Tools)
+
+Users can add remote MCP (Model Context Protocol) servers in Settings > MCP Servers.
+Each server provides additional tools via Streamable HTTP transport (JSON-RPC 2.0).
+
+- Config: `McpServerConfig` in `ConfigManager.kt` (id, name, url, authToken, enabled, rateLimit)
+- Client: `app/src/main/assets/nodejs-project/mcp-client.js` (MCPClient + MCPManager)
+- Integration: `main.js` merges MCP tools into TOOLS array, routes `mcp__<server>__<tool>` calls
+- Security: descriptions sanitized, SHA-256 rug-pull detection, results wrapped as untrusted content
+- Rate limiting: 10/min per server (configurable), 50/min global ceiling
+
 ## QR Config Payload
 
 Base64-encoded JSON:

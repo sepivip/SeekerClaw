@@ -100,6 +100,14 @@ object SettingsHelpTexts {
         "It will always confirm the number with you before dialing. " +
         "Useful for quick calls like \"call the pizza place\"."
 
+    // ── MCP Servers ─────────────────────────────────────────────────
+
+    const val MCP_SERVERS =
+        "MCP (Model Context Protocol) servers give your agent extra tools from external services. " +
+        "Add a server URL, optionally an auth token, and your agent discovers its tools on startup. " +
+        "Remote only — your phone just makes HTTP calls. " +
+        "Restart the agent after adding or changing servers."
+
     // ── Solana Wallet ──────────────────────────────────────────────
 
     const val JUPITER_API_KEY =

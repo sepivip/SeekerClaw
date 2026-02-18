@@ -43,6 +43,12 @@
 |---|---------|----------|--------|------|
 | 17 | Jupiter API Key | `JUPITER_API_KEY` | ✅ Good | Optional. Required for Solana token swaps via Jupiter aggregator. Get a free key at portal.jup.ag (free tier: 60 req/min). Without this, swap and quote tools will not work. |
 
+## MCP Servers
+
+| # | Setting | Constant | Status | Text |
+|---|---------|----------|--------|------|
+| 18 | MCP Servers | `MCP_SERVERS` | ✅ Good | MCP servers give your agent extra tools from external services. Add a server URL, optionally an auth token, and your agent discovers its tools on startup. Remote only — your phone just makes HTTP calls. Restart after changes. |
+
 ---
 
 ## Status Legend
