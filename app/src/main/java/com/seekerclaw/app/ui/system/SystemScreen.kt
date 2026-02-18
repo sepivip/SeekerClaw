@@ -617,6 +617,7 @@ private fun formatUptime(millis: Long): String {
 private fun formatModelName(model: String): String {
     return when {
         model.contains("opus") -> "Opus 4.6"
+        model.contains("sonnet-4-6") -> "Sonnet 4.6"
         model.contains("sonnet") -> "Sonnet 4.5"
         model.contains("haiku") -> "Haiku 4.5"
         else -> model.substringAfterLast("-").replaceFirstChar { it.uppercase() }

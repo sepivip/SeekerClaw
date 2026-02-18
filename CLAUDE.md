@@ -169,7 +169,8 @@ REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, POST_NOTIFICATIONS
 
 Available models for the dropdown (using API aliases — auto-resolve to latest snapshot):
 - `claude-opus-4-6` — smartest, most expensive (Opus 4.6)
-- `claude-sonnet-4-5` — default, balanced (Sonnet 4.5)
+- `claude-sonnet-4-6` — balanced, recommended (Sonnet 4.6)
+- `claude-sonnet-4-5` — previous gen, still solid (Sonnet 4.5)
 - `claude-haiku-4-5` — fast, cheapest (Haiku 4.5)
 
 Defined in `app/src/main/java/com/seekerclaw/app/config/Models.kt`.

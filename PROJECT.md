@@ -8,7 +8,7 @@ SeekerClaw turns a Solana Seeker phone into a 24/7 personal AI agent you control
 
 ## Elevator Pitch
 
-SeekerClaw embeds a full Node.js runtime inside an Android app, running an OpenClaw-compatible AI gateway as a foreground service. Users interact with their agent through Telegram — the app itself is minimal (setup, status, logs, settings). The agent has 54 tools, 16 skills, ranked memory search, cron scheduling, Android device control, Solana wallet integration, and web intelligence — all running locally on the phone, 24/7.
+SeekerClaw embeds a full Node.js runtime inside an Android app, running an OpenClaw-compatible AI gateway as a foreground service. Users interact with their agent through Telegram — the app itself is minimal (setup, status, logs, settings). The agent has 54 tools, 34 skills (19 bundled + 13 workspace + 2 user-created), ranked memory search, cron scheduling, Android device control, Solana wallet integration, and web intelligence — all running locally on the phone, 24/7.
 
 ## What It Is
 
@@ -30,7 +30,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 | UI Framework | Jetpack Compose (Material 3) | — |
 | Min SDK | 34 (Android 14) | — |
 | Node.js Runtime | nodejs-mobile (community fork) | Node 18 LTS |
-| AI Provider | Anthropic Claude API | Sonnet 4.5 default |
+| AI Provider | Anthropic Claude API | Opus 4.6 default, Sonnet 4.6, Haiku 4.5 |
 | Messaging | Telegram Bot API (grammy) | — |
 | Database | SQL.js (WASM SQLite) | 1.12.0 |
 | OpenClaw Parity | OpenClaw gateway (ported) | 2026.2.14 |
@@ -41,7 +41,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 ## Features — Shipped
 
 ### AI Agent Core
-- **Claude integration** — Sonnet 4.5 (default), Opus 4.6, Haiku 4.5 selectable. Prompt caching, retry with backoff, rate-limit throttling, user-friendly error messages. OAuth/setup token support for Claude Pro/Max users.
+- **Claude integration** — Opus 4.6 (default), Sonnet 4.6, Sonnet 4.5, Haiku 4.5 selectable. Prompt caching, retry with backoff, rate-limit throttling, user-friendly error messages. OAuth/setup token support for Claude Pro/Max users.
 - **Telegram bot** — HTML formatting (no markdown headers), native blockquotes, bidirectional reactions, file download with vision, file upload (telegram_send_file tool), long message chunking, quoted replies via `[[reply_to_current]]`, emoji rendering fixed, companion-tone message templates (TEMPLATES.md), context-aware `/start`, sent message ID tracking (ring buffer, 24h TTL) + `telegram_send` tool for same-turn delete flows, contextual status messages for long-running tools (🔍 Searching..., ⚙️ Running..., etc.)
 - **SILENT_REPLY protocol** — Agent silently drops messages when it has nothing useful to say
 - **Ephemeral session awareness** — Agent knows context resets on restart
@@ -119,14 +119,16 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 | `/memory` | Show long-term memory |
 | `/skills` | List installed skills |
 
-### Skills (16 flat + 18 directory-based, seeded on first launch)
-**Flat skills (agent-created format):** crypto-prices, movie-tv, github, recipe, exchange-rates, dictionary, sms, phone-call, device-status, location, speak, openclaw-sync, solana-wallet, solana-mobile, solana-mobile-dev, solana-dapp
-**Directory skills (OpenClaw format, seeded by ConfigManager.kt):** weather, research, briefing, reminders, notes, translate, calculator, summarize, timer, define, news, todo, bookmark, joke, quote, crypto-prices, movie-tv, github
+### Skills (19 bundled + 13 workspace, version-aware seeding)
+**Bundled skills (OpenClaw format, seeded by ConfigManager.kt with SHA-256 integrity + version tracking):** bookmark, briefing, calclaw (AI calorie tracker), calculator, crypto-prices, define, github, joke, movie-tv, news, notes, quote, reminders, research, summarize, timer, todo, translate, weather
+**Workspace skills (agent-usable examples):** crypto-prices, device-status, dictionary, exchange-rates, github, location, movie-tv, phone-call, recipe, sms, solana-dapp, solana-wallet, speak
+**Skill format:** YAML frontmatter (name, description, version, emoji, requires) — see `SKILL-FORMAT.md`
 
 ### Security
 - **Prompt injection defense** — Content Trust Policy in system prompt, `<<<EXTERNAL_UNTRUSTED_CONTENT>>>` boundary markers on all web_fetch/web_search results, 10-pattern suspicious content detection, Unicode homoglyph sanitization, zero-width space normalization
 - **Skill file protection** — Writes/edits to `skills/` blocked when suspicious injection patterns detected in content
 - **Tool confirmation gates** — `android_sms`, `android_call`, `jupiter_trigger_create`, `jupiter_dca_create` require explicit user YES via Telegram before execution. 60s timeout auto-cancels. Rate limited (SMS/call 1 per 60s, Jupiter 1 per 30s)
+- **Jupiter API hardening** — 7 fixes from official skill audit (BAT-151-157): no retry for non-idempotent POSTs, amount validation, slippage bounds, error message sanitization
 - **Secrets blocklist** — `config.json`, `config.yaml`, `seekerclaw.db` blocked from `read` tool (with symlink resolution) and `js_eval` fs access (proxied `fs`/`fs.promises` modules)
 - **ALT-safe swap verification** — `verifySwapTransaction()` rejects instructions referencing programs via Address Lookup Tables (prevents drainer bypass)
 - **js_eval sandbox** — blocked modules (child_process, vm, etc.), restricted fs (read/write/copy guards on sensitive files), shadowed `process`/`global`/`globalThis`
@@ -139,9 +141,9 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 ### App (Android)
 - **Single theme** — DarkOps (dark navy + crimson red + green status), 12dp corners
 - **Setup wizard** — QR scan or manual API key entry, OAuth/setup token support, haptic feedback
-- **Dashboard** — Status with pulse animation (running) + dimming (stopped), uptime, message stats, active uplinks, mini terminal
+- **Dashboard** — Status with pulse animation (running) + dimming (stopped), uptime, message stats, active uplinks, mini terminal, API health monitoring (green/amber/red), dismissible error/network banners, deploy button disabled state when config incomplete
 - **Logs viewer** — Color-coded, auto-scrolling monospace, stable keys for performance
-- **Settings** — Collapsible sections with animation, edit config with masked fields, model dropdown, auto-start, battery optimization, export/import, visual escalation for danger zone, semantic action colors (green positive, red danger)
+- **Settings** — Collapsible sections with animation, edit config with masked fields, required field indicators (*), model dropdown, auto-start, battery optimization, export/import, wallet copy button, visual escalation for danger zone, semantic action colors (green positive, red danger), accessibility content descriptions on all icons
 - **System screen** — API usage stats, memory index status, colored accent borders on stat cards
 - **Foreground service** — START_STICKY with wake lock, boot receiver, watchdog (30s health check)
 
@@ -203,14 +205,14 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Metric | Count |
 |--------|-------|
-| Total commits | ~155 |
-| PRs merged | 94+ |
-| Tools | 54 (9 Jupiter tools added: limit orders, DCA, token search/security/holdings) |
-| Skills | 16 |
+| Total commits | 177 |
+| PRs merged | 114 |
+| Tools | 54 (9 Jupiter, 13 Android bridge, web search/fetch, memory, cron, etc.) |
+| Skills | 34 (19 bundled + 13 workspace + 2 user-created) |
 | Android Bridge endpoints | 18+ |
 | Telegram commands | 7 |
-| Lines of JS (main.js) | ~7,900 |
-| Lines of Kotlin | ~10,600 |
+| Lines of JS (main.js) | ~8,330 |
+| Lines of Kotlin | ~10,000 |
 | SQL.js tables | 4 |
 | Themes | 1 (DarkOps only) |
 
@@ -236,6 +238,23 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Date | Feature | PR |
 |------|---------|-----|
+| 2026-02-18 | Keep typing indicator alive during Claude API calls | #114 |
+| 2026-02-18 | Align tool status messages with spec (BAT-150) | #113 |
+| 2026-02-18 | Remove AD_ID permission merged from dependencies (BAT-166) | #112 |
+| 2026-02-18 | Add CalClaw AI calorie tracking skill (BAT-167) | #111 |
+| 2026-02-18 | Unify skill seeding from asset files (BAT-165) | #110 |
+| 2026-02-18 | Version-aware skill seeding with manifest tracking (BAT-162) | #109 |
+| 2026-02-18 | Standardize skill format spec with version field (BAT-164) | #108 |
+| 2026-02-18 | skill_read returns dir and files for bundled resources (BAT-163) | #107 |
+| 2026-02-18 | Fix word boundary matching for skill triggers (BAT-161) | #106 |
+| 2026-02-18 | Rewrite YAML frontmatter parser for full OpenClaw compatibility (BAT-160) | #105 |
+| 2026-02-18 | Update agent self-awareness for Jupiter hardening changes | #104 |
+| 2026-02-18 | Jupiter API hardening — 7 fixes from official skill audit (BAT-151-157) | #103 |
+| 2026-02-18 | Git-track 13 bundled agent skills (BAT-159) | #102 |
+| 2026-02-18 | Dismissible banners + deploy button disabled state (BAT-138) | #101 |
+| 2026-02-18 | Required field indicators + wallet copy button (BAT-137) | #100 |
+| 2026-02-18 | Accessibility — content descriptions, touch targets, animation scale (BAT-136) | #99 |
+| 2026-02-18 | Replace hardcoded colors with theme tokens (BAT-135) | #98 |
 | 2026-02-17 | Extract settings info texts to centralized SettingsHelpTexts.kt constants | #97 (BAT-139) |
 | 2026-02-17 | Agent health dashboard — API error state detection, visual indicators (green/amber/red), error banners | #96 (BAT-134) |
 | 2026-02-17 | Fix 6 broken Jupiter tools — correct API fields, MWA signing, BigInt precision, query params | #95 (BAT-113) |

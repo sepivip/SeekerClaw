@@ -10,50 +10,52 @@ object SettingsHelpTexts {
     // ── Configuration ──────────────────────────────────────────────
 
     const val AUTH_TYPE =
-        "How your agent authenticates with the AI provider. " +
-        "\"API Key\" uses your personal Anthropic key. " +
-        "\"Setup Token\" uses a shared team token from your admin. " +
-        "Pick whichever one you were given."
+        "How your agent talks to the AI. " +
+        "API Key = your own Anthropic key (you're the boss). " +
+        "Setup Token = quick temporary access via Claude Code. " +
+        "Pick whichever works for you."
 
     const val API_KEY =
-        "Your personal Anthropic API key. " +
-        "Get one at console.anthropic.com under API Keys. " +
-        "It starts with \"sk-ant-\". " +
-        "This is used to send messages to the AI model. " +
-        "Keep it secret — anyone with this key can use your account."
+        "Your Anthropic API key — the magic password that makes your agent smart. " +
+        "Grab one at console.anthropic.com \u2192 API Keys \u2192 Create Key. " +
+        "Starts with \"sk-ant-\". Guard it like a seed phrase \uD83D\uDD10"
 
     const val SETUP_TOKEN =
-        "A team token provided by your administrator or OpenClaw gateway. " +
-        "Use this instead of an API Key if someone set up a shared gateway for you. " +
-        "If you have your own API key, you probably don't need this."
+        "A temporary token for quick setup. " +
+        "Run \"claude setup-token\" on any machine with Claude Code installed — " +
+        "it'll give you a token to paste here. " +
+        "Great if you don't want to deal with API keys. " +
+        "Temporary = it expires, so grab a fresh one if it stops working."
 
     const val BOT_TOKEN =
-        "Your Telegram bot token. " +
-        "To get one: open Telegram, message @BotFather, send /newbot, and follow the steps. " +
-        "BotFather will give you a token like \"123456:ABC-DEF\". " +
-        "This lets your agent send and receive messages through Telegram."
+        "Your Telegram bot's soul. " +
+        "Get one: open Telegram \u2192 @BotFather \u2192 /newbot \u2192 follow the steps. " +
+        "You'll get something like \"123456:ABC-DEF\". " +
+        "This is how your agent lives on Telegram."
 
     const val OWNER_ID =
-        "Your Telegram user ID (a number, not your username). " +
-        "This tells the agent who is allowed to control it. " +
-        "Leave blank to auto-detect — the first person to message the bot becomes the owner. " +
-        "To find your ID: message @userinfobot on Telegram."
+        "Your Telegram user ID (a number, not your @username). " +
+        "This is who the agent obeys. " +
+        "Leave blank = first person to message becomes owner. " +
+        "Find yours: message @userinfobot on Telegram."
 
     const val MODEL =
-        "Which AI model powers your agent.\n\n" +
-        "• Opus 4.6 — Most capable, best for complex tasks. Uses more credits.\n" +
-        "• Sonnet 4.5 — Good balance of speed and smarts. Recommended for most users.\n" +
-        "• Haiku 4.5 — Fastest and cheapest. Great for simple tasks and quick replies."
+        "Your agent's brain.\n\n" +
+        "\u2022 Opus 4.6 — big brain, big bill.\n" +
+        "\u2022 Sonnet 4.6 — sweet spot.\n" +
+        "\u2022 Sonnet 4.5 — last gen, still solid.\n" +
+        "\u2022 Haiku 4.5 — fast & cheap.\n\n" +
+        "Pick your fighter \uD83E\uDDE0"
 
     const val AGENT_NAME =
-        "A display name for your agent. " +
-        "This appears on the dashboard and in the agent's system prompt. " +
-        "Purely cosmetic — change it to whatever you like."
+        "What should we call your agent? " +
+        "Shows on the dashboard and in its personality. " +
+        "Totally cosmetic — go wild."
 
     const val BRAVE_API_KEY =
-        "Optional. Lets your agent search the web using Brave Search (better quality). " +
-        "Get a free key at brave.com/search/api. " +
-        "Without this, DuckDuckGo is used (no key required)."
+        "Optional. Gives your agent Brave Search (better results). " +
+        "Free key at brave.com/search/api. " +
+        "Without it, DuckDuckGo handles search — still works, just less fancy."
 
     // ── Preferences ────────────────────────────────────────────────
 
