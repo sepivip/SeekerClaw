@@ -238,7 +238,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
             Toast.makeText(
                 context,
                 if (success) "Memory imported. Restart agent to apply."
-                else "Import failed. File must be a SeekerClaw backup ZIP.",
+                else "Import failed. Ensure the file is a valid SeekerClaw backup.",
                 Toast.LENGTH_LONG
             ).show()
         }

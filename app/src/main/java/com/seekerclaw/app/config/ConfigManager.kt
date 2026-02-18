@@ -974,21 +974,24 @@ object ConfigManager {
     private const val IMPORT_MAX_BYTES = 50L * 1024 * 1024
 
     /**
-     * Allowlist of files and path prefixes that are included in export/import.
+     * Allowlist of exact files and directory prefixes for export/import.
      * Everything else in workspace/ is excluded (DB, state files, media, logs, etc.).
      */
     private val EXPORT_ALLOW_FILES = setOf(
         "SOUL.md", "MEMORY.md", "IDENTITY.md", "USER.md",
-        "HEARTBEAT.md", "BOOTSTRAP.md",
+        "HEARTBEAT.md", "BOOTSTRAP.md", "cron/jobs.json",
     )
-    private val EXPORT_ALLOW_PREFIXES = listOf(
-        "memory/", "skills/", "cron/jobs.json",
+    private val EXPORT_ALLOW_DIR_PREFIXES = listOf(
+        "memory/", "skills/",
     )
 
-    /** Returns true if the relative path is on the export/import allowlist. */
+    /** Returns true if the normalized relative path is on the export/import allowlist. */
     private fun isAllowedPath(relativePath: String): Boolean {
-        if (relativePath in EXPORT_ALLOW_FILES) return true
-        return EXPORT_ALLOW_PREFIXES.any { relativePath.startsWith(it) }
+        // Normalize to prevent traversal tricks like "memory/../config.json"
+        val normalized = File(relativePath).normalize().path.replace("\\", "/")
+        if (normalized != relativePath) return false  // reject paths with ../ components
+        if (normalized in EXPORT_ALLOW_FILES) return true
+        return EXPORT_ALLOW_DIR_PREFIXES.any { normalized.startsWith(it) }
     }
 
     /**
@@ -1025,9 +1028,9 @@ object ConfigManager {
             if (file.isDirectory) {
                 // Only recurse into directories that could contain allowed paths
                 val dirPrefix = "$relativePath/"
-                val hasAllowedChildren = EXPORT_ALLOW_PREFIXES.any {
+                val hasAllowedChildren = EXPORT_ALLOW_DIR_PREFIXES.any {
                     it.startsWith(dirPrefix) || dirPrefix.startsWith(it)
-                }
+                } || EXPORT_ALLOW_FILES.any { it.startsWith(dirPrefix) }
                 if (hasAllowedChildren) {
                     addAllowedFilesToZip(zip, file, baseDir)
                 }
