@@ -8317,18 +8317,6 @@ telegram('getMe')
             await initDatabase();
             indexMemoryFiles();
 
-            // Initialize MCP servers (non-fatal)
-            if (MCP_SERVERS.length > 0) {
-                try {
-                    const mcpResults = await mcpManager.initializeAll(MCP_SERVERS);
-                    const ok = mcpResults.filter(r => r.status === 'connected');
-                    const fail = mcpResults.filter(r => r.status === 'failed');
-                    if (ok.length > 0) log(`[MCP] ${ok.length} server(s) connected, ${ok.reduce((s, r) => s + r.tools, 0)} tools available`);
-                    if (fail.length > 0) log(`[MCP] ${fail.length} server(s) failed to connect`);
-                } catch (e) {
-                    log(`[MCP] Initialization error: ${e.message}`);
-                }
-            }
             writeDbSummaryFile();
             setInterval(() => { if (dbSummaryDirty) writeDbSummaryFile(); }, 30000);
 
@@ -8347,6 +8335,18 @@ telegram('getMe')
             }
             poll();
             startClaudeUsagePolling();
+
+            // Initialize MCP servers in background (non-blocking, won't delay Telegram)
+            if (MCP_SERVERS.length > 0) {
+                mcpManager.initializeAll(MCP_SERVERS).then((mcpResults) => {
+                    const ok = mcpResults.filter(r => r.status === 'connected');
+                    const fail = mcpResults.filter(r => r.status === 'failed');
+                    if (ok.length > 0) log(`[MCP] ${ok.length} server(s) connected, ${ok.reduce((s, r) => s + r.tools, 0)} tools available`);
+                    if (fail.length > 0) log(`[MCP] ${fail.length} server(s) failed to connect`);
+                }).catch((e) => {
+                    log(`[MCP] Initialization error: ${e.message}`);
+                });
+            }
 
             // Idle session summary timer (BAT-57) — check every 60s per-chatId
             setInterval(() => {

@@ -751,7 +751,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                     .padding(16.dp),
             ) {
                 Text(
-                    text = "Connect remote MCP servers to give your agent extra tools.",
+                    text = SettingsHelpTexts.MCP_SERVERS,
                     fontFamily = FontFamily.Default,
                     fontSize = 13.sp,
                     color = SeekerClawColors.TextDim,

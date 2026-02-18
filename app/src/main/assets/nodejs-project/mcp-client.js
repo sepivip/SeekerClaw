@@ -319,6 +319,7 @@ class MCPClient {
         this.tools = [];
         // Preserve previous hashes so blocked tools stay blocked across refreshes
         const newHashes = new Map(this.toolHashes);
+        const seenPrefixes = new Set(); // detect sanitized name collisions
 
         for (const tool of rawTools) {
             // Validate tool metadata from untrusted remote server
@@ -337,6 +338,13 @@ class MCPClient {
                 this.log(`[MCP] Tool name too long (${prefixedName.length}): ${prefixedName} — skipping`);
                 continue;
             }
+
+            // Detect sanitized name collisions (e.g. "foo bar" vs "foo_bar")
+            if (seenPrefixes.has(prefixedName)) {
+                this.log(`[MCP] Duplicate sanitized tool name "${prefixedName}" on ${this.name} — skipping`);
+                continue;
+            }
+            seenPrefixes.add(prefixedName);
 
             // Rug-pull detection: hash comparison
             const hash = hashToolDef({ name: tool.name, description: sanitizedDesc, inputSchema: tool.inputSchema });
@@ -519,6 +527,10 @@ class MCPManager {
             if (e.message.includes('Session expired') || e.message.includes('404')) {
                 this.log(`[MCP] Session expired for ${client.name}, reconnecting...`);
                 try {
+                    // Clear stale toolMap entries for this client before reconnect
+                    for (const [key, val] of this.toolMap) {
+                        if (val.client === client) this.toolMap.delete(key);
+                    }
                     await client.connect();
                     // Rebuild toolMap entries for this client after reconnect
                     for (const tool of client.tools) {
