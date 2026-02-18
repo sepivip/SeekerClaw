@@ -95,7 +95,10 @@ function parseSSEEvents(text) {
         } else if (line.startsWith('event:')) {
             current.type = line.slice(6).trim();
         } else if (line.startsWith('data:')) {
-            current.data += (current.data ? '\n' : '') + line.slice(5).trim();
+            // SSE spec: strip only the single space after "data:", not all whitespace
+            const rawData = line.slice(5);
+            const fieldData = rawData.startsWith(' ') ? rawData.slice(1) : rawData;
+            current.data += (current.data ? '\n' : '') + fieldData;
         } else if (line.startsWith('id:')) {
             current.id = line.slice(3).trim();
         }

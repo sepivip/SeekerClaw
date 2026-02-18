@@ -1719,6 +1719,15 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                     onClick = {
                         val trimName = mcpName.trim()
                         val trimUrl = mcpUrl.trim()
+                        // Validate URL format before saving
+                        val isValidUrl = try {
+                            val uri = Uri.parse(trimUrl)
+                            uri.scheme in listOf("https", "http") && !uri.host.isNullOrBlank()
+                        } catch (_: Exception) { false }
+                        if (!isValidUrl) {
+                            Toast.makeText(context, "Invalid URL. Must start with https:// or http://", Toast.LENGTH_SHORT).show()
+                            return@TextButton
+                        }
                         if (trimName.isNotBlank() && trimUrl.isNotBlank()) {
                             val serverId = editingMcpServer?.id
                                 ?: java.util.UUID.randomUUID().toString()
