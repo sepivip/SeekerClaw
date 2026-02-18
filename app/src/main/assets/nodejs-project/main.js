@@ -13,6 +13,26 @@ const workDir = process.argv[2] || __dirname;
 const debugLog = path.join(workDir, 'node_debug.log');
 let BRIDGE_TOKEN = ''; // declared early to avoid TDZ in redactSecrets; assigned after config load
 
+// Log rotation — prevent debug log from growing unbounded on mobile
+const LOG_MAX_BYTES = 5 * 1024 * 1024; // 5 MB
+try {
+    if (fs.existsSync(debugLog)) {
+        const stat = fs.statSync(debugLog);
+        if (stat.size > LOG_MAX_BYTES) {
+            const content = fs.readFileSync(debugLog, 'utf8');
+            // Keep last ~1MB
+            const keepFrom = content.length - (1024 * 1024);
+            const trimmed = content.slice(keepFrom);
+            // Find first complete line
+            const firstNewline = trimmed.indexOf('\n');
+            const clean = firstNewline >= 0 ? trimmed.slice(firstNewline + 1) : trimmed;
+            // Archive old log, write trimmed version
+            try { fs.renameSync(debugLog, debugLog + '.old'); } catch (_) {}
+            fs.writeFileSync(debugLog, `[${new Date().toISOString()}] --- Log rotated (was ${(stat.size / 1024 / 1024).toFixed(1)} MB, kept last ~1 MB) ---\n` + clean);
+        }
+    }
+} catch (_) {} // Non-fatal — don't prevent startup
+
 // Local timestamp with timezone offset (BAT-23)
 function localTimestamp(date) {
     const d = date || new Date();
@@ -6779,7 +6799,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     if (!platformLoaded) {
         lines.push('## Workspace');
         lines.push(`Your working directory is: ${workDir}`);
-        lines.push('Workspace layout: media/inbound/ (Telegram files), skills/ (SKILL.md files), memory/ (daily logs)');
+        lines.push('Workspace layout: media/inbound/ (Telegram files), skills/ (SKILL.md files), memory/ (daily logs), node_debug.log (debug log), cron/ (scheduled jobs)');
         lines.push('');
     }
 
@@ -6798,6 +6818,19 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('- **memory_stats** reports memory file counts and sizes.');
     lines.push('All memory files (MEMORY.md + daily notes) are automatically indexed into searchable chunks on startup and when files change.');
     lines.push('Your API requests are logged with token counts and latency — use session_status to see your own usage stats.');
+    lines.push('');
+
+    // Diagnostics — agent knows about its debug log for self-diagnosis
+    lines.push('## Diagnostics');
+    lines.push('Your debug log is at: node_debug.log (in your workspace root)');
+    lines.push('It records timestamped entries for: startup, API calls, tool executions (with errors), message flow, Telegram polling, and cron job runs.');
+    lines.push('Check the log when: tools fail unexpectedly, responses seem wrong, network errors occur, or the user asks "what happened?" or "what went wrong?"');
+    lines.push('Reading tips:');
+    lines.push('- Recent entries: shell_exec with "tail -n 50 node_debug.log"');
+    lines.push('- Search for errors: shell_exec with "grep -i error node_debug.log" or "grep -i fail node_debug.log"');
+    lines.push('- Search specific tool: shell_exec with "grep Jupiter node_debug.log" or "grep DCA node_debug.log"');
+    lines.push('- Full log: read tool with path "node_debug.log" (may be large — prefer tail/grep for efficiency)');
+    lines.push('The log is auto-rotated at 5 MB (old entries archived to node_debug.log.old).');
     lines.push('');
 
     // Project Context - OpenClaw injects SOUL.md and memory here
