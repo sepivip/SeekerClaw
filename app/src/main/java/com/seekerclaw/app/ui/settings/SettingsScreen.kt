@@ -1733,7 +1733,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                         if (trimToken.isNotBlank()) {
                             val uri = Uri.parse(trimUrl)
                             val isHttps = uri.scheme == "https"
-                            val isLocalhost = uri.host in listOf("localhost", "127.0.0.1")
+                            val isLocalhost = uri.host in listOf("localhost", "127.0.0.1", "::1", "[::1]")
                             if (!isHttps && !isLocalhost) {
                                 Toast.makeText(context, "Auth token requires HTTPS (or localhost)", Toast.LENGTH_SHORT).show()
                                 return@TextButton

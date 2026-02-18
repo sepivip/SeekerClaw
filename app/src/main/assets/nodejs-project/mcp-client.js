@@ -182,9 +182,10 @@ class MCPClient {
         this.requestId = 0;
 
         // Security: refuse to send auth tokens over plain HTTP (credential disclosure)
-        const urlProto = new URL(this.url).protocol;
-        if (this.authToken && urlProto !== 'https:') {
-            const isLocalhost = new URL(this.url).hostname === 'localhost' || new URL(this.url).hostname === '127.0.0.1';
+        const urlObj = new URL(this.url);
+        if (this.authToken && urlObj.protocol !== 'https:') {
+            const h = urlObj.hostname;
+            const isLocalhost = h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === '[::1]';
             if (!isLocalhost) {
                 throw new Error(`Refusing to send auth token over plain HTTP to ${this.url}. Use HTTPS or localhost.`);
             }
@@ -257,7 +258,11 @@ class MCPClient {
             throw new Error('No matching response in SSE stream');
         }
 
-        return JSON.parse(res.body);
+        try {
+            return JSON.parse(res.body);
+        } catch (err) {
+            throw new Error(`Invalid JSON from MCP server: ${res.body.slice(0, 200)}`);
+        }
     }
 
     /** Send a JSON-RPC notification (no id, no response expected). */
@@ -460,6 +465,12 @@ class MCPManager {
                 if (!client.safeId) {
                     this.log(`[MCP] Skipping server with missing id: ${cfg.name || '<unnamed>'}`);
                     results.push({ id: null, name: cfg.name, tools: 0, status: 'failed', error: 'Missing server id' });
+                    continue;
+                }
+                // Detect duplicate safeId (e.g. "server-1" vs "server_1" both sanitize to "server_1")
+                if (this.servers.has(client.safeId)) {
+                    this.log(`[MCP] Duplicate server id "${client.safeId}" from ${cfg.name} — skipping`);
+                    results.push({ id: client.safeId, name: cfg.name, tools: 0, status: 'failed', error: 'Duplicate server id' });
                     continue;
                 }
                 const info = await client.connect();
