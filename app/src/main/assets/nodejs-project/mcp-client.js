@@ -268,11 +268,14 @@ class MCPClient {
             ...(params ? { params } : {}),
         });
 
-        await httpRequest(this.url, {
+        const res = await httpRequest(this.url, {
             method: 'POST',
             headers: this._headers(true),
         }, body, CONNECT_TIMEOUT_MS);
-        // Expects 202 Accepted — no body to parse
+        // Validate response — surface handshake failures early
+        if (res.status >= 400) {
+            throw new Error(`Notification ${method} rejected: HTTP ${res.status}`);
+        }
     }
 
     /** Three-step handshake: initialize → receive result → send initialized notification. */
@@ -318,6 +321,12 @@ class MCPClient {
         const newHashes = new Map(this.toolHashes);
 
         for (const tool of rawTools) {
+            // Validate tool metadata from untrusted remote server
+            if (!tool || typeof tool.name !== 'string' || !tool.name) {
+                this.log(`[MCP] Skipping tool with invalid/missing name on ${this.name}`);
+                continue;
+            }
+
             const sanitizedDesc = sanitizeMcpDescription(tool.description || '');
 
             // Build prefixed name: mcp__<safeId>__<safeTool>

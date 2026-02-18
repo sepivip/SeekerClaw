@@ -1728,6 +1728,17 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                             Toast.makeText(context, "Invalid URL. Must start with https:// or http://", Toast.LENGTH_SHORT).show()
                             return@TextButton
                         }
+                        // Warn if auth token + plain HTTP (non-localhost)
+                        val trimToken = mcpToken.trim()
+                        if (trimToken.isNotBlank()) {
+                            val uri = Uri.parse(trimUrl)
+                            val isHttps = uri.scheme == "https"
+                            val isLocalhost = uri.host in listOf("localhost", "127.0.0.1")
+                            if (!isHttps && !isLocalhost) {
+                                Toast.makeText(context, "Auth token requires HTTPS (or localhost)", Toast.LENGTH_SHORT).show()
+                                return@TextButton
+                            }
+                        }
                         if (trimName.isNotBlank() && trimUrl.isNotBlank()) {
                             val serverId = editingMcpServer?.id
                                 ?: java.util.UUID.randomUUID().toString()
