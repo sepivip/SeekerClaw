@@ -1223,8 +1223,8 @@ async function executeTool(name, input, chatId) {
         case 'skill_install': {
             const { url, content: rawInput, force = false } = input;
 
-            if (!url && !rawInput) {
-                return { error: 'Provide either url or content' };
+            if ((!url && !rawInput) || (url && rawInput)) {
+                return { error: 'Provide exactly one of url or content (not both)' };
             }
 
             let rawContent;
@@ -1263,6 +1263,9 @@ async function executeTool(name, input, chatId) {
                     }
                 }
             } else {
+                if (rawInput.length > MAX_SKILL_SIZE) {
+                    return { error: `Skill content too large (${(rawInput.length / 1024).toFixed(0)}KB, max 1MB)` };
+                }
                 rawContent = rawInput;
             }
 
@@ -1288,10 +1291,10 @@ async function executeTool(name, input, chatId) {
                     const existing = parseSkillFile(existingContent, skillDir);
 
                     if (existing.version && skill.version) {
-                        if (existing.version === skill.version) {
+                        const cmp = compareVersions(skill.version, existing.version);
+                        if (cmp === 0) {
                             return { result: `Skill "${skill.name}" v${skill.version} already installed (same version — skipped)` };
                         }
-                        const cmp = compareVersions(skill.version, existing.version);
                         if (cmp < 0 && !force) {
                             return { result: `Skill "${skill.name}" v${existing.version} already installed. Incoming version (${skill.version}) is older — skipped. Use force:true to downgrade.` };
                         }

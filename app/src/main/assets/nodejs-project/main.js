@@ -412,7 +412,9 @@ async function handleMessage(msg) {
                         userContent = text ? `${text}\n\n${fileNote}` : fileNote;
                     } else {
                         // Auto-detect .md skill files: if it has YAML frontmatter, try to install directly
-                        const isMdFile = safeFileName.endsWith('.md') || media.mime_type === 'text/markdown';
+                        // Use original filename (before 120-char truncation) so long names like
+                        // "my-very-long-skill-name.md" aren't missed when truncated to "...skill-name.m"
+                        const isMdFile = (media.file_name || '').toLowerCase().endsWith('.md') || media.mime_type === 'text/markdown';
                         let skillAutoInstalled = false;
                         if (isMdFile) {
                             try {
