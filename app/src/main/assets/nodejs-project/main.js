@@ -848,7 +848,9 @@ const HEARTBEAT_PROMPT =
     'Do not infer or repeat old tasks from prior chats. ' +
     'If nothing needs attention, reply HEARTBEAT_OK.';
 let isHeartbeatInFlight = false;
-let lastHeartbeatAt = 0;
+// Initialize to Date.now() so the first probe waits the full configured interval
+// rather than firing immediately on service start.
+let lastHeartbeatAt = Date.now();
 
 async function runHeartbeat() {
     const ownerIdStr = getOwnerId();
@@ -857,32 +859,40 @@ async function runHeartbeat() {
     const ownerChatId = parseInt(ownerIdStr, 10);
     if (isNaN(ownerChatId)) return;
 
-    // Skip if a user message is actively being processed for owner's chat
-    if (chatQueues.has(ownerChatId)) {
-        log('[Heartbeat] Skipping — user message in flight', 'DEBUG');
-        return;
-    }
+    // Prevent double-queuing if a heartbeat is already queued or running.
     if (isHeartbeatInFlight) {
-        log('[Heartbeat] Skipping — previous heartbeat still running', 'DEBUG');
+        log('[Heartbeat] Skipping — heartbeat already queued or running', 'DEBUG');
         return;
     }
 
     isHeartbeatInFlight = true;
-    log('[Heartbeat] Running probe...', 'DEBUG');
-    try {
-        const response = await chat(ownerChatId, HEARTBEAT_PROMPT);
-        const trimmed = response.trim();
-        if (trimmed === 'HEARTBEAT_OK' || trimmed.startsWith('HEARTBEAT_OK')) {
-            log('[Heartbeat] Agent returned HEARTBEAT_OK — all clear', 'DEBUG');
-        } else if (trimmed !== 'SILENT_REPLY') {
-            log('[Heartbeat] Agent has alert: ' + trimmed.slice(0, 80), 'INFO');
-            await sendMessage(ownerChatId, trimmed);
+    log('[Heartbeat] Queueing probe...', 'DEBUG');
+
+    // Queue through chatQueues to serialize with user messages.
+    // This prevents concurrent conversation access if a user message
+    // arrives while the probe is in flight (and vice versa).
+    // Note: heartbeat probes add to conversation history by design —
+    // the agent uses that context to avoid repeating prior actions.
+    const prev = chatQueues.get(ownerChatId) || Promise.resolve();
+    const task = prev.then(async () => {
+        log('[Heartbeat] Running probe...', 'DEBUG');
+        try {
+            const response = await chat(ownerChatId, HEARTBEAT_PROMPT);
+            const trimmed = response.trim();
+            if (trimmed === 'HEARTBEAT_OK' || trimmed.startsWith('HEARTBEAT_OK')) {
+                log('[Heartbeat] Agent returned HEARTBEAT_OK — all clear', 'DEBUG');
+            } else if (trimmed !== 'SILENT_REPLY') {
+                log('[Heartbeat] Agent has alert: ' + trimmed.slice(0, 80), 'INFO');
+                await sendMessage(ownerChatId, trimmed);
+            }
+        } catch (e) {
+            log(`[Heartbeat] Error: ${e.message}`, 'WARN');
+        } finally {
+            isHeartbeatInFlight = false;
+            if (chatQueues.get(ownerChatId) === task) chatQueues.delete(ownerChatId);
         }
-    } catch (e) {
-        log(`[Heartbeat] Error: ${e.message}`, 'WARN');
-    } finally {
-        isHeartbeatInFlight = false;
-    }
+    });
+    chatQueues.set(ownerChatId, task);
 }
 
 // Poll every 1 minute; fire when configured interval has elapsed.
