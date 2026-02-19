@@ -289,7 +289,7 @@ async function downloadTelegramFile(fileId, fileName) {
         throw err;
     }
 
-    log(`File saved: ${localName} (${totalBytes} bytes)`);
+    log(`File saved: ${localName} (${totalBytes} bytes)`, 'DEBUG');
     return { localPath, localName, size: totalBytes };
 }
 
@@ -433,7 +433,7 @@ async function sendMessage(chatId, text, replyTo = null, buttons = null) {
                     recordSentMessage(chatId, result.result.message_id, chunk);
                 }
             } catch (e) {
-                log(`Failed to send message: ${e.message}`);
+                log(`Failed to send message: ${e.message}`, 'ERROR');
             }
         }
     }

@@ -43,7 +43,7 @@ let _deps = {
 function setChatDeps(deps) {
     for (const key of Object.keys(deps)) {
         if (key in _deps) _deps[key] = deps[key];
-        else log(`[claude] setChatDeps: unknown key "${key}"`);
+        else log(`[claude] setChatDeps: unknown key "${key}"`, 'WARN');
     }
 }
 
@@ -104,7 +104,7 @@ function writeClaudeUsageState(data) {
     try {
         fs.writeFileSync(CLAUDE_USAGE_FILE, JSON.stringify(data));
     } catch (e) {
-        log(`Failed to write claude usage state: ${e.message}`);
+        log(`Failed to write claude usage state: ${e.message}`, 'WARN');
     }
 }
 
@@ -138,7 +138,7 @@ function writeAgentHealthFile() {
         const now = Date.now();
         if (now - lastHealthWriteErrAt >= 60000) {
             lastHealthWriteErrAt = now;
-            log(`[Health] Failed to write agent health file: ${err.message}`);
+            log(`[Health] Failed to write agent health file: ${err.message}`, 'ERROR');
         }
     }
 }
@@ -248,7 +248,7 @@ async function generateSessionSummary(chatId) {
 
     const res = await claudeApiCall(body, chatId);
     if (res.status !== 200) {
-        log(`[SessionSummary] API error: ${res.status}`);
+        log(`[SessionSummary] API error: ${res.status}`, 'ERROR');
         return null;
     }
 
@@ -294,7 +294,7 @@ async function saveSessionSummary(chatId, trigger, { force = false, skipIndex = 
         const meta = `> Trigger: ${trigger} | Exchanges: ${track.messageCount} | Model: ${MODEL}\n\n`;
         fs.writeFileSync(finalPath, header + meta + summary + '\n', 'utf8');
 
-        log(`[SessionSummary] Saved: ${path.basename(finalPath)} (trigger: ${trigger})`);
+        log(`[SessionSummary] Saved: ${path.basename(finalPath)} (trigger: ${trigger})`, 'DEBUG');
 
         // Re-index memory files so new summary is immediately searchable
         if (!skipIndex) indexMemoryFiles();
@@ -303,7 +303,7 @@ async function saveSessionSummary(chatId, trigger, { force = false, skipIndex = 
         track.messageCount = 0;
     } catch (err) {
         // Keep lastSummaryTime set — prevents rapid retry spam on persistent errors
-        log(`[SessionSummary] Error: ${err.message}`);
+        log(`[SessionSummary] Error: ${err.message}`, 'ERROR');
     }
 }
 
@@ -722,10 +722,10 @@ function reportUsage(usage) {
         cache_read_input_tokens: usage.cache_read_input_tokens || 0,
     }).catch(() => {});
     if (usage.cache_read_input_tokens) {
-        log(`[Cache] hit: ${usage.cache_read_input_tokens} tokens read from cache`);
+        log(`[Cache] hit: ${usage.cache_read_input_tokens} tokens read from cache`, 'DEBUG');
     }
     if (usage.cache_creation_input_tokens) {
-        log(`[Cache] miss: ${usage.cache_creation_input_tokens} tokens written to cache`);
+        log(`[Cache] miss: ${usage.cache_creation_input_tokens} tokens written to cache`, 'DEBUG');
     }
 }
 
@@ -791,7 +791,7 @@ async function claudeApiCall(body, chatId) {
         const waitMs = resetTime > now
             ? Math.min(resetTime - now, 15000)
             : Math.min(15000, Math.max(3000, 60000 - (now % 60000)));
-        log(`[RateLimit] Only ${lastRateLimitTokensRemaining} tokens remaining, waiting ${waitMs}ms`);
+        log(`[RateLimit] Only ${lastRateLimitTokensRemaining} tokens remaining, waiting ${waitMs}ms`, 'WARN');
         await new Promise(r => setTimeout(r, waitMs));
     }
 
@@ -842,7 +842,7 @@ async function claudeApiCall(body, chatId) {
                              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                             [localTimestamp(), String(chatId || ''), 0, 0, 0, 0, -1, retries, durationMs]
                         );
-                    } catch (e) { log(`[Claude] Failed to log network error to DB: ${e.message}`); }
+                    } catch (e) { log(`[Claude] Failed to log network error to DB: ${e.message}`, 'WARN'); }
                 }
                 updateAgentHealth('error', { type: 'network', status: -1, message: networkErr.message });
                 throw networkErr;
@@ -858,7 +858,7 @@ async function claudeApiCall(body, chatId) {
                     const baseMs = errClass.type === 'cloudflare' ? 5000 : 2000;
                     const backoffMs = Math.min(baseMs * Math.pow(2, retries), 30000);
                     const waitMs = retryAfterMs > 0 ? retryAfterMs : backoffMs;
-                    log(`[Retry] Claude API ${res.status} (${errClass.type}), retry ${retries + 1}/${MAX_RETRIES}, waiting ${waitMs}ms`);
+                    log(`[Retry] Claude API ${res.status} (${errClass.type}), retry ${retries + 1}/${MAX_RETRIES}, waiting ${waitMs}ms`, 'WARN');
                     updateAgentHealth('degraded', { type: errClass.type, status: res.status, message: errClass.userMessage });
                     retries++;
                     await new Promise(r => setTimeout(r, waitMs));
@@ -885,7 +885,7 @@ async function claudeApiCall(body, chatId) {
                 );
                 markDbSummaryDirty();
             } catch (dbErr) {
-                log(`[DB] Log error: ${dbErr.message}`);
+                log(`[DB] Log error: ${dbErr.message}`, 'WARN');
             }
         }
 
@@ -945,7 +945,7 @@ async function chat(chatId, userMessage) {
         : (userMessage.find(b => b.type === 'text')?.text || '');
     const matchedSkills = findMatchingSkills(textForSkills);
     if (matchedSkills.length > 0) {
-        log(`Matched skills: ${matchedSkills.map(s => s.name).join(', ')}`);
+        log(`Matched skills: ${matchedSkills.map(s => s.name).join(', ')}`, 'DEBUG');
     }
 
     const { stable: stablePrompt, dynamic: dynamicPrompt } = buildSystemBlocks(matchedSkills, chatId);
@@ -977,7 +977,7 @@ async function chat(chatId, userMessage) {
         const res = await claudeApiCall(body, chatId);
 
         if (res.status !== 200) {
-            log(`Claude API error: ${res.status} - ${JSON.stringify(res.data)}`);
+            log(`Claude API error: ${res.status} - ${JSON.stringify(res.data)}`, 'ERROR');
             const errClass = classifyApiError(res.status, res.data);
             throw new Error(errClass.userMessage || `API error: ${res.status}`);
         }
@@ -1001,7 +1001,7 @@ async function chat(chatId, userMessage) {
         // Execute each tool and collect results
         const toolResults = [];
         for (const toolUse of toolUses) {
-            log(`Tool use: ${toolUse.name}`);
+            log(`Tool use: ${toolUse.name}`, 'DEBUG');
             let result;
 
             // Confirmation gate: high-impact tools require explicit user YES
@@ -1012,7 +1012,7 @@ async function chat(chatId, userMessage) {
                 if (rateLimit && lastUse && (Date.now() - lastUse) < rateLimit) {
                     const waitSec = Math.ceil((rateLimit - (Date.now() - lastUse)) / 1000);
                     result = { error: `Rate limited: ${toolUse.name} can only be used once per ${rateLimit / 1000}s. Try again in ${waitSec}s.` };
-                    log(`[RateLimit] ${toolUse.name} blocked — ${waitSec}s remaining`);
+                    log(`[RateLimit] ${toolUse.name} blocked — ${waitSec}s remaining`, 'WARN');
                 } else {
                     // Ask user for confirmation
                     const confirmed = await _deps.requestConfirmation(chatId, toolUse.name, toolUse.input);
@@ -1026,7 +1026,7 @@ async function chat(chatId, userMessage) {
                         }
                     } else {
                         result = { error: 'Action canceled: user did not confirm (replied NO or timed out after 60s).' };
-                        log(`[Confirm] ${toolUse.name} rejected by user`);
+                        log(`[Confirm] ${toolUse.name} rejected by user`, 'INFO');
                     }
                 }
             } else {
@@ -1056,7 +1056,7 @@ async function chat(chatId, userMessage) {
     // If no text in final response but we ran tools, make one more call so Claude
     // can summarize the tool results for the user (e.g. after solana_send)
     if (!textContent && toolUseCount > 0) {
-        log('No text in final tool response, requesting summary...');
+        log('No text in final tool response, requesting summary...', 'DEBUG');
 
         // Add explicit summary prompt — without this, the model may return no text
         // because the last message is tool_results and it may not realize it needs to respond
@@ -1078,7 +1078,7 @@ async function chat(chatId, userMessage) {
             // Guard: if summary returned SILENT_REPLY token, treat as no text
             // (model may use it because system prompt teaches SILENT_REPLY — but after tools, silence is wrong)
             if (textContent && textContent.text.trim() === 'SILENT_REPLY') {
-                log('Summary returned SILENT_REPLY token — falling through to fallback');
+                log('Summary returned SILENT_REPLY token — falling through to fallback', 'DEBUG');
                 textContent = null;
             }
         }
@@ -1086,7 +1086,7 @@ async function chat(chatId, userMessage) {
         // If summary call STILL produced no text, build a basic summary from tool results
         // so the user is never left without a response after tool execution
         if (!textContent) {
-            log('Summary call also produced no text — building fallback summary');
+            log('Summary call also produced no text — building fallback summary', 'DEBUG');
             const toolNames = [];
             for (const msg of messages) {
                 if (msg.role === 'assistant' && Array.isArray(msg.content)) {
@@ -1106,7 +1106,7 @@ async function chat(chatId, userMessage) {
     // If no text and NO tools were used, return SILENT_REPLY (genuine silent response)
     if (!textContent) {
         addToConversation(chatId, 'assistant', '[No response generated]');
-        log('No text content in response (no tools used), returning SILENT_REPLY');
+        log('No text content in response (no tools used), returning SILENT_REPLY', 'DEBUG');
         return 'SILENT_REPLY';
     }
     const assistantMessage = textContent.text;
@@ -1121,7 +1121,7 @@ async function chat(chatId, userMessage) {
         trk.messageCount++;
         const sinceLastSummary = Date.now() - (trk.lastSummaryTime || trk.firstMessageTime || Date.now());
         if (trk.messageCount >= CHECKPOINT_MESSAGES || sinceLastSummary > CHECKPOINT_INTERVAL_MS) {
-            saveSessionSummary(chatId, 'checkpoint').catch(e => log(`[SessionSummary] ${e.message}`));
+            saveSessionSummary(chatId, 'checkpoint').catch(e => log(`[SessionSummary] ${e.message}`, 'DEBUG'));
         }
     }
 

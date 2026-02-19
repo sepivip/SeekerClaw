@@ -20,8 +20,8 @@ const {
 // config.js in sync for future modules that import it.
 let OWNER_ID = getOwnerId();
 
-process.on('uncaughtException', (err) => log('UNCAUGHT: ' + (err.stack || err)));
-process.on('unhandledRejection', (reason) => log('UNHANDLED: ' + reason));
+process.on('uncaughtException', (err) => log('UNCAUGHT: ' + (err.stack || err), 'ERROR'));
+process.on('unhandledRejection', (reason) => log('UNHANDLED: ' + reason, 'ERROR'));
 
 // ============================================================================
 // SECURITY (extracted to security.js — BAT-194)
@@ -317,7 +317,7 @@ async function handleMessage(msg) {
     if (!OWNER_ID) {
         OWNER_ID = senderId;
         setOwnerId(senderId); // sync to config.js for cross-module access
-        log(`Owner claimed by ${senderId} (auto-detect)`);
+        log(`Owner claimed by ${senderId} (auto-detect)`, 'INFO');
 
         // Persist to Android encrypted storage via bridge
         androidBridgeCall('/config/save-owner', { ownerId: senderId }).catch(() => {});
@@ -327,11 +327,11 @@ async function handleMessage(msg) {
 
     // Only respond to owner
     if (senderId !== OWNER_ID) {
-        log(`Ignoring message from ${senderId} (not owner)`);
+        log(`Ignoring message from ${senderId} (not owner)`, 'WARN');
         return;
     }
 
-    log(`Message: ${rawText ? rawText.slice(0, 100) + (rawText.length > 100 ? '...' : '') : '(no text)'}${media ? ` [${media.type}]` : ''}${msg.reply_to_message ? ' [reply]' : ''}`);
+    log(`Message: ${rawText ? rawText.slice(0, 100) + (rawText.length > 100 ? '...' : '') : '(no text)'}${media ? ` [${media.type}]` : ''}${msg.reply_to_message ? ' [reply]' : ''}`, 'DEBUG');
 
     try {
         // Check for commands (use rawText so /commands work even in replies)
@@ -357,7 +357,7 @@ async function handleMessage(msg) {
             const safeMimeType = (media.mime_type || 'application/octet-stream').replace(/[\r\n\0\u2028\u2029\[\]]/g, '_').slice(0, 60);
             try {
                 if (!media.file_size) {
-                    log(`Media file_size unknown (0) — size will be enforced during download`);
+                    log(`Media file_size unknown (0) — size will be enforced during download`, 'DEBUG');
                 }
                 if (media.file_size && media.file_size > MAX_FILE_SIZE) {
                     const sizeMb = (media.file_size / 1024 / 1024).toFixed(1);
@@ -377,7 +377,7 @@ async function handleMessage(msg) {
                         saved = await downloadTelegramFile(media.file_id, media.file_name);
                     } catch (firstErr) {
                         if (TRANSIENT_ERRORS.test(firstErr.message)) {
-                            log(`Media download failed (transient: ${firstErr.message}), retrying in 2s...`);
+                            log(`Media download failed (transient: ${firstErr.message}), retrying in 2s...`, 'WARN');
                             await new Promise(r => setTimeout(r, 2000));
                             saved = await downloadTelegramFile(media.file_id, media.file_name);
                         } else {
@@ -415,10 +415,10 @@ async function handleMessage(msg) {
                         const fileNote = `[File received: ${safeFileName} (${saved.size} bytes, ${safeMimeType}) — saved to ${relativePath}. Use the read tool to access it.]`;
                         userContent = text ? `${text}\n\n${fileNote}` : fileNote;
                     }
-                    log(`Media processed: ${media.type} → ${relativePath}`);
+                    log(`Media processed: ${media.type} → ${relativePath}`, 'DEBUG');
                 }
             } catch (e) {
-                log(`Media download failed: ${e.message}`);
+                log(`Media download failed: ${e.message}`, 'ERROR');
                 const reason = e.message || 'unknown error';
                 const errorNote = `[File attachment could not be downloaded: ${reason}]`;
                 userContent = text ? `${text}\n\n${errorNote}` : errorNote;
@@ -430,13 +430,13 @@ async function handleMessage(msg) {
         // Handle special tokens (OpenClaw-style)
         // SILENT_REPLY - discard the message
         if (response.trim() === 'SILENT_REPLY') {
-            log('Agent returned SILENT_REPLY, not sending to Telegram');
+            log('Agent returned SILENT_REPLY, not sending to Telegram', 'DEBUG');
             return;
         }
 
         // HEARTBEAT_OK - discard heartbeat acks (handled by watchdog)
         if (response.trim() === 'HEARTBEAT_OK' || response.trim().startsWith('HEARTBEAT_OK')) {
-            log('Agent returned HEARTBEAT_OK');
+            log('Agent returned HEARTBEAT_OK', 'DEBUG');
             return;
         }
 
@@ -453,7 +453,7 @@ async function handleMessage(msg) {
         androidBridgeCall('/stats/message').catch(() => {});
 
     } catch (error) {
-        log(`Error: ${error.message}`);
+        log(`Error: ${error.message}`, 'ERROR');
         await sendMessage(chatId, `Error: ${error.message}`, msg.message_id);
     }
 }
@@ -494,14 +494,14 @@ function handleReactionUpdate(reaction) {
     if (added.length > 0) parts.push(`added ${added.join('')}`);
     if (removed.length > 0) parts.push(`removed ${removed.join('')}`);
     const eventText = `Telegram reaction ${parts.join(', ')} by ${userName} on message ${msgId}`;
-    log(`Reaction: ${eventText}`);
+    log(`Reaction: ${eventText}`, 'DEBUG');
 
     // Queue through chatQueues to avoid race conditions with concurrent message handling.
     // Use numeric chatId as key (same as enqueueMessage) so reactions serialize with messages.
     const prev = chatQueues.get(chatId) || Promise.resolve();
     const task = prev.then(() => {
         addToConversation(chatId, 'user', `[system event] ${eventText}`);
-    }).catch(e => log(`Reaction queue error: ${e.message}`));
+    }).catch(e => log(`Reaction queue error: ${e.message}`, 'ERROR'));
     chatQueues.set(chatId, task);
     task.then(() => { if (chatQueues.get(chatId) === task) chatQueues.delete(chatId); });
 }
@@ -527,7 +527,7 @@ function enqueueMessage(msg) {
     const chatId = msg.chat.id;
     const prev = chatQueues.get(chatId) || Promise.resolve();
     const next = prev.then(() => handleMessage(msg)).catch(e =>
-        log(`Message handler error: ${e.message}`)
+        log(`Message handler error: ${e.message}`, 'ERROR')
     );
     chatQueues.set(chatId, next);
     // Cleanup finished queues to prevent memory leak
@@ -549,7 +549,7 @@ async function poll() {
             // Handle Telegram rate limiting (429)
             if (result && result.ok === false && result.parameters?.retry_after) {
                 const retryAfter = result.parameters.retry_after;
-                log(`Telegram rate limited — waiting ${retryAfter}s`);
+                log(`Telegram rate limited — waiting ${retryAfter}s`, 'WARN');
                 await new Promise(r => setTimeout(r, retryAfter * 1000));
                 continue;
             }
@@ -568,7 +568,7 @@ async function poll() {
                             // Only consume pure text messages as confirmation replies
                             // (photos with captions, stickers, etc. are enqueued normally)
                             const confirmed = msgText.toUpperCase() === 'YES';
-                            log(`[Confirm] User replied "${msgText}" for ${pending.toolName} → ${confirmed ? 'APPROVED' : 'REJECTED'}`);
+                            log(`[Confirm] User replied "${msgText}" for ${pending.toolName} → ${confirmed ? 'APPROVED' : 'REJECTED'}`, 'INFO');
                             pending.resolve(confirmed);
                             pendingConfirmations.delete(msgChatId);
                         } else {
@@ -579,17 +579,17 @@ async function poll() {
                         const cb = update.callback_query;
                         // Answer immediately to dismiss the loading spinner on the button
                         telegram('answerCallbackQuery', { callback_query_id: cb.id }).catch(e => {
-                            log(`[Callback] answerCallbackQuery failed: ${e.message}`);
+                            log(`[Callback] answerCallbackQuery failed: ${e.message}`, 'WARN');
                         });
                         // Security: only process callbacks from owner (block if no owner set yet)
                         const cbSenderId = String(cb.from?.id);
                         if (!OWNER_ID || cbSenderId !== OWNER_ID) {
-                            log(`[Callback] Ignoring callback from ${cbSenderId} (not owner)`);
+                            log(`[Callback] Ignoring callback from ${cbSenderId} (not owner)`, 'WARN');
                         } else {
                             // Sanitize callback data and original text (strip control chars, quotes)
                             const buttonData = (cb.data || '').replace(/[\r\n\t"\\]/g, ' ').trim();
                             const originalText = (cb.message?.text || '').replace(/[\r\n]/g, ' ').slice(0, 200).trim();
-                            log(`[Callback] Button tapped: "${buttonData}" on message: "${originalText.slice(0, 60)}"`);
+                            log(`[Callback] Button tapped: "${buttonData}" on message: "${originalText.slice(0, 60)}"`, 'DEBUG');
                             // Inject as a synthetic user message so the agent sees the button tap
                             const syntheticMsg = {
                                 chat: cb.message?.chat || { id: cb.from.id },
@@ -607,7 +607,7 @@ async function poll() {
             pollErrors = 0;
         } catch (error) {
             pollErrors++;
-            log(`Poll error (${pollErrors}): ${error.message}`);
+            log(`Poll error (${pollErrors}): ${error.message}`, 'ERROR');
             const delay = Math.min(1000 * Math.pow(2, pollErrors - 1), 30000);
             await new Promise(r => setTimeout(r, delay));
         }
@@ -630,7 +630,7 @@ refreshJupiterProgramLabels();
 
 function startClaudeUsagePolling() {
     if (AUTH_TYPE !== 'setup_token') return;
-    log('Starting Claude usage polling (60s interval)');
+    log('Starting Claude usage polling (60s interval)', 'DEBUG');
     pollClaudeUsage();
     setInterval(pollClaudeUsage, 60000);
 }
@@ -661,7 +661,7 @@ async function pollClaudeUsage() {
                 updated_at: localTimestamp(),
             });
         } else {
-            log(`Claude usage poll: HTTP ${res.status}`);
+            log(`Claude usage poll: HTTP ${res.status}`, 'DEBUG');
             writeClaudeUsageState({
                 type: 'oauth',
                 error: `HTTP ${res.status}`,
@@ -669,7 +669,7 @@ async function pollClaudeUsage() {
             });
         }
     } catch (e) {
-        log(`Claude usage poll error: ${e.message}`);
+        log(`Claude usage poll error: ${e.message}`, 'ERROR');
     }
 }
 
@@ -681,11 +681,16 @@ async function pollClaudeUsage() {
 // STARTUP
 // ============================================================================
 
-log('Connecting to Telegram...');
+log('Connecting to Telegram...', 'INFO');
 telegram('getMe')
     .then(async result => {
         if (result.ok) {
-            log(`Bot connected: @${result.result.username}`);
+            log(`Bot connected: @${result.result.username}`, 'DEBUG');
+
+            // Condensed startup banner (Phase 4 — single INFO line replaces 10+ verbose startup lines)
+            const _skillCount = loadSkills().length;
+            const _cronCount = cronService.store?.jobs?.length || 0;
+            log(`${AGENT_NAME} | ${MODEL} | @${result.result.username} | ${_skillCount} skills | ${MCP_SERVERS.length} MCP | ${_cronCount} cron`, 'INFO');
 
             // Initialize SQL.js database before polling (non-fatal if WASM fails)
             await initDatabase();
@@ -718,10 +723,10 @@ telegram('getMe')
                 const flush = await telegram('getUpdates', { offset: -1, timeout: 0 });
                 if (flush.ok && flush.result.length > 0) {
                     offset = flush.result[flush.result.length - 1].update_id + 1;
-                    log(`Flushed ${flush.result.length} old update(s), offset now ${offset}`);
+                    log(`Flushed ${flush.result.length} old update(s), offset now ${offset}`, 'DEBUG');
                 }
             } catch (e) {
-                log(`Warning: Could not flush old updates: ${e.message}`);
+                log(`Warning: Could not flush old updates: ${e.message}`, 'WARN');
             }
             poll();
             startClaudeUsagePolling();
@@ -731,10 +736,10 @@ telegram('getMe')
                 mcpManager.initializeAll(MCP_SERVERS).then((mcpResults) => {
                     const ok = mcpResults.filter(r => r.status === 'connected');
                     const fail = mcpResults.filter(r => r.status === 'failed');
-                    if (ok.length > 0) log(`[MCP] ${ok.length} server(s) connected, ${ok.reduce((s, r) => s + r.tools, 0)} tools available`);
-                    if (fail.length > 0) log(`[MCP] ${fail.length} server(s) failed to connect`);
+                    if (ok.length > 0) log(`[MCP] ${ok.length} server(s) connected, ${ok.reduce((s, r) => s + r.tools, 0)} tools available`, 'INFO');
+                    if (fail.length > 0) log(`[MCP] ${fail.length} server(s) failed to connect`, 'WARN');
                 }).catch((e) => {
-                    log(`[MCP] Initialization error: ${e.message}`);
+                    log(`[MCP] Initialization error: ${e.message}`, 'ERROR');
                 });
             }
 
@@ -746,22 +751,22 @@ telegram('getMe')
                         track.lastMessageTime = 0; // Reset FIRST to prevent re-trigger on next tick
                         const conv = conversations.get(chatId);
                         if (conv && conv.length >= MIN_MESSAGES_FOR_SUMMARY) {
-                            saveSessionSummary(chatId, 'idle').catch(e => log(`[SessionSummary] ${e.message}`));
+                            saveSessionSummary(chatId, 'idle').catch(e => log(`[SessionSummary] ${e.message}`, 'DEBUG'));
                         }
                     }
                 });
             }, 60000);
         } else {
-            log(`ERROR: ${JSON.stringify(result)}`);
+            log(`ERROR: ${JSON.stringify(result)}`, 'ERROR');
             process.exit(1);
         }
     })
     .catch(err => {
-        log(`ERROR: ${err.message}`);
+        log(`ERROR: ${err.message}`, 'ERROR');
         process.exit(1);
     });
 
 // Heartbeat log
 setInterval(() => {
-    log(`Heartbeat - uptime: ${Math.floor(process.uptime())}s, memory: ${Math.round(process.memoryUsage().rss / 1024 / 1024)}MB`);
+    log(`Heartbeat - uptime: ${Math.floor(process.uptime())}s, memory: ${Math.round(process.memoryUsage().rss / 1024 / 1024)}MB`, 'DEBUG');
 }, 5 * 60 * 1000);

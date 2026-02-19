@@ -97,9 +97,9 @@ function loadSoul() {
     // Seed default SOUL.md to workspace (only on first launch)
     try {
         fs.writeFileSync(SOUL_PATH, DEFAULT_SOUL, 'utf8');
-        log('Seeded default SOUL.md to workspace');
+        log('Seeded default SOUL.md to workspace', 'INFO');
     } catch (e) {
-        log(`Warning: Could not seed SOUL.md: ${e.message}`);
+        log(`Warning: Could not seed SOUL.md: ${e.message}`, 'WARN');
     }
     return DEFAULT_SOUL;
 }
@@ -138,7 +138,7 @@ function loadMemory() {
 
 function saveMemory(content) {
     fs.writeFileSync(MEMORY_PATH, content, 'utf8');
-    log('Memory updated');
+    log('Memory updated', 'DEBUG');
 }
 
 function getDailyMemoryPath() {
@@ -159,7 +159,7 @@ function appendDailyMemory(content) {
     const timestamp = new Date().toLocaleTimeString();
     const entry = `\n## ${timestamp}\n${content}\n`;
     fs.appendFileSync(dailyPath, entry, 'utf8');
-    log('Daily memory updated');
+    log('Daily memory updated', 'DEBUG');
 }
 
 // ============================================================================
@@ -231,7 +231,7 @@ function searchMemory(query, topK = 5) {
                 return results.slice(0, topK);
             }
         } catch (err) {
-            log(`[Memory] Search error, falling back to file scan: ${err.message}`);
+            log(`[Memory] Search error, falling back to file scan: ${err.message}`, 'WARN');
         }
     }
 

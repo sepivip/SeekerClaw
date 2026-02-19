@@ -16,7 +16,7 @@ let _sendMessage = null;
 
 function setSendMessage(fn) {
     if (fn != null && typeof fn !== 'function') {
-        log(`[Cron] WARNING: setSendMessage called with ${typeof fn}, expected function`);
+        log(`[Cron] WARNING: setSendMessage called with ${typeof fn}, expected function`, 'WARN');
         return;
     }
     _sendMessage = fn || null;
@@ -57,7 +57,7 @@ function loadCronStore() {
             const store = JSON.parse(fs.readFileSync(CRON_STORE_PATH, 'utf8'));
             // Validate shape — corrupt/empty file should not crash
             if (!store || !Array.isArray(store.jobs)) {
-                log(`[Cron] WARNING: jobs.json has invalid shape, resetting to empty store`);
+                log(`[Cron] WARNING: jobs.json has invalid shape, resetting to empty store`, 'WARN');
                 return { version: 1, jobs: [] };
             }
             // Migrate old jobs: add delivery object if missing
@@ -77,7 +77,7 @@ function loadCronStore() {
             return store;
         }
     } catch (e) {
-        log(`Error loading cron store: ${e.message}`);
+        log(`Error loading cron store: ${e.message}`, 'ERROR');
     }
     return { version: 1, jobs: [] };
 }
@@ -96,11 +96,11 @@ function saveCronStore(store) {
             if (fs.existsSync(CRON_STORE_PATH)) {
                 fs.copyFileSync(CRON_STORE_PATH, CRON_STORE_PATH + '.bak');
             }
-        } catch (e) { log(`[Cron] Backup before save failed: ${e.message}`); }
+        } catch (e) { log(`[Cron] Backup before save failed: ${e.message}`, 'WARN'); }
 
         fs.renameSync(tmpPath, CRON_STORE_PATH);
     } catch (e) {
-        log(`Error saving cron store: ${e.message}`);
+        log(`Error saving cron store: ${e.message}`, 'ERROR');
     }
 }
 
@@ -125,9 +125,9 @@ function appendCronRunLog(jobId, entry) {
                 const kept = lines.slice(-200); // Keep last 200 entries
                 fs.writeFileSync(logPath, kept.join('\n') + '\n', 'utf8');
             }
-        } catch (e) { log(`[Cron] Run log prune failed: ${e.message}`); }
+        } catch (e) { log(`[Cron] Run log prune failed: ${e.message}`, 'WARN'); }
     } catch (e) {
-        log(`Error writing run log: ${e.message}`);
+        log(`Error writing run log: ${e.message}`, 'ERROR');
     }
 }
 
@@ -279,7 +279,7 @@ const cronService = {
         this._recomputeNextRuns();
         this._armTimer();
         this._started = true;
-        log(`[Cron] Service started with ${this.store.jobs.length} jobs`);
+        log(`[Cron] Service started with ${this.store.jobs.length} jobs`, 'DEBUG');
     },
 
     // Stop the cron service
@@ -327,7 +327,7 @@ const cronService = {
         saveCronStore(this.store);
         this._armTimer();
 
-        log(`[Cron] Created job ${job.id}: "${job.name}" → next: ${job.state.nextRunAtMs ? localTimestamp(new Date(job.state.nextRunAtMs)) : 'never'}`);
+        log(`[Cron] Created job ${job.id}: "${job.name}" → next: ${job.state.nextRunAtMs ? localTimestamp(new Date(job.state.nextRunAtMs)) : 'never'}`, 'INFO');
         return job;
     },
 
@@ -363,7 +363,7 @@ const cronService = {
         const removed = this.store.jobs.splice(idx, 1)[0];
         saveCronStore(this.store);
         this._armTimer();
-        log(`[Cron] Removed job ${id}: "${removed.name}"`);
+        log(`[Cron] Removed job ${id}: "${removed.name}"`, 'INFO');
         return true;
     },
 
@@ -405,7 +405,7 @@ const cronService = {
             // Fix 4 (BAT-21): On restart, clear ALL runningAtMs markers.
             // Nothing can actually be running after a process restart.
             if (job.state.runningAtMs) {
-                log(`[Cron] Clearing interrupted job marker: ${job.id}`);
+                log(`[Cron] Clearing interrupted job marker: ${job.id}`, 'DEBUG');
                 job.state.runningAtMs = undefined;
             }
 
@@ -428,7 +428,7 @@ const cronService = {
             // Fix 1 (BAT-21): One-shot 'at' jobs whose time has passed but
             // never ran — mark as skipped so they don't re-fire on next restart.
             if (job.schedule.kind === 'at' && !nextRun && !job.state.lastStatus) {
-                log(`[Cron] Skipping missed one-shot job: ${job.id} "${job.name}"`);
+                log(`[Cron] Skipping missed one-shot job: ${job.id} "${job.name}"`, 'DEBUG');
                 job.enabled = false;
                 job.state.lastStatus = 'skipped';
                 job.state.nextRunAtMs = undefined;
@@ -473,7 +473,7 @@ const cronService = {
             await this._runDueJobs();
             saveCronStore(this.store);
         } catch (e) {
-            log(`[Cron] Timer error: ${e.message}`);
+            log(`[Cron] Timer error: ${e.message}`, 'ERROR');
         } finally {
             this.running = false;
             this._armTimer();
@@ -495,7 +495,7 @@ const cronService = {
     },
 
     async _executeJob(job, nowMs) {
-        log(`[Cron] Executing job ${job.id}: "${job.name}"`);
+        log(`[Cron] Executing job ${job.id}: "${job.name}"`, 'DEBUG');
         job.state.runningAtMs = nowMs;
         // Fix 2 (BAT-21): Clear nextRunAtMs before execution to prevent
         // the job from being picked up as due again during async execution.
@@ -513,15 +513,15 @@ const cronService = {
                 if (_sendMessage) {
                     await _sendMessage(ownerId, message);
                 } else {
-                    log(`[Cron] WARNING: sendMessage not injected, cannot deliver reminder for job ${job.id}`);
+                    log(`[Cron] WARNING: sendMessage not injected, cannot deliver reminder for job ${job.id}`, 'ERROR');
                     throw new Error('sendMessage not available');
                 }
-                log(`[Cron] Delivered reminder: ${job.id}`);
+                log(`[Cron] Delivered reminder: ${job.id}`, 'DEBUG');
             }
         } catch (e) {
             status = 'error';
             error = e.message;
-            log(`[Cron] Job error ${job.id}: ${e.message}`);
+            log(`[Cron] Job error ${job.id}: ${e.message}`, 'ERROR');
         }
 
         const durationMs = Date.now() - startTime;
@@ -568,7 +568,7 @@ const cronService = {
                 const backoffIdx = Math.min(job.state.consecutiveErrors - 1, this.ERROR_BACKOFF_MS.length - 1);
                 const backoffNext = nowMs + this.ERROR_BACKOFF_MS[backoffIdx];
                 job.state.nextRunAtMs = Math.max(normalNext, backoffNext);
-                log(`[Cron] Job ${job.id} error #${job.state.consecutiveErrors}, backing off until ${localTimestamp(new Date(job.state.nextRunAtMs))}`);
+                log(`[Cron] Job ${job.id} error #${job.state.consecutiveErrors}, backing off until ${localTimestamp(new Date(job.state.nextRunAtMs))}`, 'WARN');
             } else {
                 job.state.nextRunAtMs = normalNext;
             }

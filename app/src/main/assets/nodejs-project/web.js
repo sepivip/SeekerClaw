@@ -221,7 +221,7 @@ async function searchDDG(query, count = 5) {
     if (results.length === 0) {
         // Distinguish parse failure from genuine empty results
         if (html.length > 500) {
-            log(`[DDG] HTML received (${html.length} chars) but no results parsed — markup may have changed`);
+            log(`[DDG] HTML received (${html.length} chars) but no results parsed — markup may have changed`, 'WARN');
             return { provider: 'duckduckgo', results: [], message: 'Results could not be parsed — DuckDuckGo markup may have changed' };
         }
         return { provider: 'duckduckgo', results: [], message: 'No results found' };
@@ -270,7 +270,7 @@ async function searchDDGLite(query, count = 5) {
 
     if (results.length === 0) {
         if (html.length > 500) {
-            log(`[DDG Lite] HTML received (${html.length} chars) but no results parsed — markup may have changed`);
+            log(`[DDG Lite] HTML received (${html.length} chars) but no results parsed — markup may have changed`, 'WARN');
             return { provider: 'duckduckgo-lite', results: [], message: 'Results could not be parsed — DuckDuckGo Lite markup may have changed' };
         }
         return { provider: 'duckduckgo-lite', results: [], message: 'No results found' };
