@@ -411,9 +411,35 @@ async function handleMessage(msg) {
                         const fileNote = `[Image received: ${safeFileName} (${saved.size} bytes, ${visionReason}) — saved to ${relativePath}. Use the read tool to access it.]`;
                         userContent = text ? `${text}\n\n${fileNote}` : fileNote;
                     } else {
-                        // Non-image file: tell the agent where it's saved
-                        const fileNote = `[File received: ${safeFileName} (${saved.size} bytes, ${safeMimeType}) — saved to ${relativePath}. Use the read tool to access it.]`;
-                        userContent = text ? `${text}\n\n${fileNote}` : fileNote;
+                        // Auto-detect .md skill files: if it has YAML frontmatter, try to install directly
+                        const isMdFile = safeFileName.endsWith('.md') || media.mime_type === 'text/markdown';
+                        let skillAutoInstalled = false;
+                        if (isMdFile) {
+                            try {
+                                const mdContent = fs.readFileSync(saved.localPath, 'utf8');
+                                if (mdContent.startsWith('---')) {
+                                    const installResult = await executeTool('skill_install', { content: mdContent }, chatId);
+                                    if (installResult && installResult.result) {
+                                        log(`Skill auto-installed from attachment: ${installResult.result}`, 'INFO');
+                                        await sendMessage(chatId, installResult.result, msg.message_id);
+                                        if (!text) {
+                                            return; // No caption — nothing more to do
+                                        }
+                                        // Caption present — forward to Claude via normal chat flow
+                                        userContent = `[Skill just installed. User's message accompanying the file: ${text}]`;
+                                        skillAutoInstalled = true;
+                                    }
+                                    // Install failed (not a valid skill) — fall through to normal file note
+                                }
+                            } catch (e) {
+                                log(`Skill auto-detect error: ${e.message}`, 'WARN');
+                            }
+                        }
+                        if (!skillAutoInstalled) {
+                            // Non-image file: tell the agent where it's saved
+                            const fileNote = `[File received: ${safeFileName} (${saved.size} bytes, ${safeMimeType}) — saved to ${relativePath}. Use the read tool to access it.]`;
+                            userContent = text ? `${text}\n\n${fileNote}` : fileNote;
+                        }
                     }
                     log(`Media processed: ${media.type} → ${relativePath}`, 'DEBUG');
                 }

@@ -438,4 +438,5 @@ function buildSkillsSection(skills) {
 module.exports = {
     loadSkills,
     findMatchingSkills,
+    parseSkillFile,
 };
