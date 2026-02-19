@@ -15,11 +15,6 @@ import java.io.File
 import java.util.Calendar
 
 private const val TAG = "ServiceState"
-// Minimum ms between health transition logs.
-// Absorbs the startup polling race where a briefly-overlapping old pollingJob coroutine
-// (cancelled cooperatively but not yet stopped) reads prevStale before the first write
-// commits, causing duplicate stale→healthy bursts at startup.
-private const val HEALTH_TRANSITION_LOG_DEBOUNCE_MS = 3_000L
 
 enum class ServiceStatus { STOPPED, STARTING, RUNNING, ERROR }
 
@@ -86,10 +81,13 @@ object ServiceState {
     private val _agentHealth = MutableStateFlow(AgentHealth())
     val agentHealth: StateFlow<AgentHealth> = _agentHealth
 
-    // Last staleness state that was actually logged — null = no transition logged yet.
-    // Used with lastTransitionLogAt to deduplicate burst logs from overlapping pollingJobs.
+    // Private lock for health transition logging.
+    // Prevents the TOCTOU where overlapping pollingJob coroutines (caused by cooperative
+    // cancellation in startPolling) both capture prevStale before the first write commits.
+    // lastLoggedStale tracks the last-logged direction so duplicate same-direction logs
+    // are suppressed even if two coroutines race to the synchronized block.
+    private val healthTransitionLock = Any()
     @Volatile private var lastLoggedStale: Boolean? = null
-    @Volatile private var lastTransitionLogAt: Long = 0L
 
     // Per-boot bridge auth token — persisted to file for cross-process access.
     // Set by OpenClawService (:node process), read by UI (main process) via polling.
@@ -316,30 +314,23 @@ object ServiceState {
                 consecutiveFailures = json.optInt("consecutiveFailures", 0),
                 isStale = stale,
             )
-            // Synchronized block: prevStale capture, transition log emission, and StateFlow
-            // update are all atomic. Prevents the TOCTOU where overlapping pollingJob
-            // coroutines both read prevStale before the first write commits, causing
-            // duplicate [Health] log bursts at startup.
-            // The 3s debounce (HEALTH_TRANSITION_LOG_DEBOUNCE_MS) is an additional guard
-            // for any sub-millisecond races at the sync-block entry boundary.
-            synchronized(this) {
+            // Determine log entry inside a private lock (state mutation only, no I/O).
+            // Lock hold time is kept short; LogCollector.append() is called after release.
+            var logEntry: Pair<String, LogLevel>? = null
+            synchronized(healthTransitionLock) {
                 if (_agentHealth.value != health) {
                     val prevStale = _agentHealth.value.isStale
-                    val now = System.currentTimeMillis()
-                    if (!prevStale && stale && lastLoggedStale != true &&
-                        now - lastTransitionLogAt >= HEALTH_TRANSITION_LOG_DEBOUNCE_MS) {
-                        LogCollector.append("[Health] Agent health file became stale — Node.js may have lost network", LogLevel.WARN)
+                    if (!prevStale && stale && lastLoggedStale != true) {
+                        logEntry = Pair("[Health] Agent health file became stale — Node.js may have lost network", LogLevel.WARN)
                         lastLoggedStale = true
-                        lastTransitionLogAt = now
-                    } else if (prevStale && !stale && lastLoggedStale != false &&
-                        now - lastTransitionLogAt >= HEALTH_TRANSITION_LOG_DEBOUNCE_MS) {
-                        LogCollector.append("[Health] Agent health recovered", LogLevel.INFO)
+                    } else if (prevStale && !stale && lastLoggedStale != false) {
+                        logEntry = Pair("[Health] Agent health recovered", LogLevel.INFO)
                         lastLoggedStale = false
-                        lastTransitionLogAt = now
                     }
                     _agentHealth.value = health
                 }
             }
+            logEntry?.let { (msg, level) -> LogCollector.append(msg, level) }
         } catch (_: Exception) {}
     }
 
