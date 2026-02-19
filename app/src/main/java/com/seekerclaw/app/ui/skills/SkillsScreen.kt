@@ -117,7 +117,8 @@ private fun SkillsListContent(
         ) {
             item {
                 Text(
-                    text = "Skills (${skills.size})",
+                    text = if (searchQuery.isEmpty()) "Skills (${skills.size})"
+                       else "Skills (${filtered.size} of ${skills.size})",
                     fontFamily = RethinkSans,
                     fontSize = 22.sp,
                     fontWeight = FontWeight.Bold,
@@ -263,7 +264,7 @@ private fun SkillCard(
         modifier = Modifier
             .fillMaxWidth()
             .background(SeekerClawColors.Surface, shape)
-            .clickable(onClick = onClick)
+            .clickable(onClickLabel = "View ${skill.name}", onClick = onClick)
             .padding(16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

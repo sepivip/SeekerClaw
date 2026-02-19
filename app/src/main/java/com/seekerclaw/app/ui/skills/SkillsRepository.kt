@@ -42,7 +42,7 @@ object SkillsRepository {
         val fm = parseFrontmatter(content)
         val name = (fm["name"] as? String)?.trim()?.takeIf { it.isNotEmpty() }
             ?: extractHeading(content)
-            ?: return null
+            ?: run { Log.w(TAG, "Skipping skill '$filePath': no name found"); return null }
         val description = (fm["description"] as? String)?.trim() ?: ""
         val version = (fm["version"] as? String)?.trim() ?: ""
         val emoji = (fm["emoji"] as? String)?.trim()?.takeIf { it.isNotEmpty() }
