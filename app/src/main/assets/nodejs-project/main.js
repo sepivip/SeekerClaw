@@ -155,9 +155,8 @@ const {
 
 const {
     getDb, setShutdownDeps,
-    initDatabase, saveDatabase, indexMemoryFiles,
-    gracefulShutdown,
-    getDbSummary, writeDbSummaryFile, markDbSummaryDirty,
+    initDatabase, indexMemoryFiles,
+    markDbSummaryDirty,
     startDbSummaryInterval, startStatsServer,
 } = require('./database');
 
@@ -5973,9 +5972,9 @@ async function pollClaudeUsage() {
     }
 }
 
-// initDatabase(), saveDatabase(), indexMemoryFiles(), gracefulShutdown(),
-// getDbSummary(), writeDbSummaryFile(), markDbSummaryDirty(), startStatsServer()
-// are now imported from database.js (BAT-202)
+// Database functions (initDatabase, saveDatabase, indexMemoryFiles, gracefulShutdown,
+// getDbSummary, writeDbSummaryFile, markDbSummaryDirty, startStatsServer, etc.)
+// are now in database.js (BAT-202)
 
 // ============================================================================
 // STARTUP
