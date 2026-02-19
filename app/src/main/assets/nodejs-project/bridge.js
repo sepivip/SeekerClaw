@@ -41,7 +41,7 @@ async function androidBridgeCall(endpoint, data = {}, timeoutMs = 10000) {
         });
 
         req.on('error', (e) => {
-            log(`Android Bridge error: ${e.message}`);
+            log(`Android Bridge error: ${e.message}`, 'ERROR');
             resolve({ error: `Android Bridge unavailable: ${e.message}` });
         });
 

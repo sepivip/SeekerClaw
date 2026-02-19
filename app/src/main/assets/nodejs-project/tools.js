@@ -99,7 +99,7 @@ function requestConfirmation(chatId, toolName, input) {
     return new Promise((resolve) => {
         const timer = setTimeout(() => {
             pendingConfirmations.delete(chatId);
-            log(`[Confirm] Timeout for ${toolName} in chat ${chatId}`);
+            log(`[Confirm] Timeout for ${toolName} in chat ${chatId}`, 'INFO');
             resolve(false);
         }, 60000);
         // Register BEFORE sending to prevent race where fast reply arrives
@@ -112,7 +112,7 @@ function requestConfirmation(chatId, toolName, input) {
             timer,
             toolName,
         });
-        log(`[Confirm] Awaiting confirmation for ${toolName} in chat ${chatId}`);
+        log(`[Confirm] Awaiting confirmation for ${toolName} in chat ${chatId}`, 'DEBUG');
         telegram('sendMessage', {
             chat_id: chatId,
             text: msg,
@@ -120,7 +120,7 @@ function requestConfirmation(chatId, toolName, input) {
             disable_notification: false,
         }).then((result) => {
             if (result && result.ok === false) {
-                log(`[Confirm] Telegram rejected confirmation message: ${JSON.stringify(result).slice(0, 200)}`);
+                log(`[Confirm] Telegram rejected confirmation message: ${JSON.stringify(result).slice(0, 200)}`, 'WARN');
                 pendingConfirmations.delete(chatId);
                 clearTimeout(timer);
                 resolve(false);
@@ -128,7 +128,7 @@ function requestConfirmation(chatId, toolName, input) {
             // Note: confirmation messages are NOT recorded in sentMessageCache — they are
             // transient system UI, not user content that should appear in "Recent Sent Messages"
         }).catch((err) => {
-            log(`[Confirm] Failed to send confirmation message: ${err.message}`);
+            log(`[Confirm] Failed to send confirmation message: ${err.message}`, 'ERROR');
             pendingConfirmations.delete(chatId);
             clearTimeout(timer);
             resolve(false);
@@ -786,7 +786,7 @@ const TOOLS = [
 ];
 
 async function executeTool(name, input, chatId) {
-    log(`Executing tool: ${name}`);
+    log(`Executing tool: ${name}`, 'DEBUG');
 
     switch (name) {
         case 'web_search': {
@@ -807,7 +807,7 @@ async function executeTool(name, input, chatId) {
                     ? `search:brave:${input.query}:${safeCount}:${safeFreshness}`
                     : `search:duckduckgo:${input.query}:${safeCount}`;
             const cached = cacheGet(cacheKey);
-            if (cached) { log('[WebSearch] Cache hit'); return cached; }
+            if (cached) { log('[WebSearch] Cache hit', 'DEBUG'); return cached; }
 
             try {
                 let result;
@@ -827,7 +827,7 @@ async function executeTool(name, input, chatId) {
                 return wrappedResult;
             } catch (e) {
                 // Fallback chain: perplexity → brave → ddg → ddg-lite, brave → ddg → ddg-lite, ddg → ddg-lite
-                log(`[WebSearch] ${provider} failed (${e.message}), trying fallback`);
+                log(`[WebSearch] ${provider} failed (${e.message}), trying fallback`, 'WARN');
                 const fallbacks = [];
                 if (provider === 'perplexity') {
                     if (config.braveApiKey) fallbacks.push('brave');
@@ -841,7 +841,7 @@ async function executeTool(name, input, chatId) {
                 }
                 for (const fb of fallbacks) {
                     try {
-                        log(`[WebSearch] Falling back to ${fb}`);
+                        log(`[WebSearch] Falling back to ${fb}`, 'DEBUG');
                         let fallback;
                         if (fb === 'brave') fallback = await searchBrave(input.query, safeCount, safeFreshness);
                         else if (fb === 'duckduckgo-lite') fallback = await searchDDGLite(input.query, safeCount);
@@ -859,7 +859,7 @@ async function executeTool(name, input, chatId) {
                         cacheSet(cacheKey, wrappedFallback);
                         return wrappedFallback;
                     } catch (fbErr) {
-                        log(`[WebSearch] ${fb} fallback also failed: ${fbErr.message}`);
+                        log(`[WebSearch] ${fb} fallback also failed: ${fbErr.message}`, 'ERROR');
                     }
                 }
                 const displayName = { brave: 'Brave', duckduckgo: 'DuckDuckGo', 'duckduckgo-lite': 'DuckDuckGo Lite', perplexity: 'Perplexity' }[provider] || provider;
@@ -893,7 +893,7 @@ async function executeTool(name, input, chatId) {
             const fetchCacheKey = `fetch:${input.url}:${rawMode ? 'raw' : 'md'}`;
             if (useCache) {
                 const fetchCached = cacheGet(fetchCacheKey);
-                if (fetchCached) { log('[WebFetch] Cache hit'); return fetchCached; }
+                if (fetchCached) { log('[WebFetch] Cache hit', 'DEBUG'); return fetchCached; }
             }
 
             try {
@@ -1010,7 +1010,7 @@ async function executeTool(name, input, chatId) {
             // Check basename first, then resolve symlinks to catch aliased access
             const readBasename = path.basename(filePath);
             if (SECRETS_BLOCKED.has(readBasename)) {
-                log(`[Security] BLOCKED read of sensitive file: ${readBasename}`);
+                log(`[Security] BLOCKED read of sensitive file: ${readBasename}`, 'WARN');
                 return { error: `Reading ${readBasename} is blocked for security.` };
             }
             if (!fs.existsSync(filePath)) {
@@ -1020,7 +1020,7 @@ async function executeTool(name, input, chatId) {
             try {
                 const realBasename = path.basename(fs.realpathSync(filePath));
                 if (SECRETS_BLOCKED.has(realBasename)) {
-                    log(`[Security] BLOCKED read via symlink to sensitive file: ${realBasename}`);
+                    log(`[Security] BLOCKED read via symlink to sensitive file: ${realBasename}`, 'WARN');
                     return { error: `Reading ${realBasename} is blocked for security.` };
                 }
             } catch { /* realpathSync may fail on broken links — proceed to normal error */ }
@@ -1049,10 +1049,10 @@ async function executeTool(name, input, chatId) {
                 // Check for suspicious content in the skill being written
                 const suspicious = detectSuspiciousPatterns(input.content || '');
                 if (suspicious.length > 0) {
-                    log(`[Security] BLOCKED skill write with suspicious patterns: ${suspicious.join(', ')} → ${relPath}`);
+                    log(`[Security] BLOCKED skill write with suspicious patterns: ${suspicious.join(', ')} → ${relPath}`, 'WARN');
                     return { error: 'Skill file write blocked: suspicious content detected (' + suspicious.join(', ') + '). Remove the flagged content and retry.' };
                 }
-                log(`[Security] Skill write to ${relPath} — allowed (no suspicious patterns)`);
+                log(`[Security] Skill write to ${relPath} — allowed (no suspicious patterns)`, 'DEBUG');
             }
 
             // Create parent directories if needed
@@ -1101,7 +1101,7 @@ async function executeTool(name, input, chatId) {
             if (editRelPath.startsWith('skills' + path.sep) || editRelPath.startsWith('skills/')) {
                 const suspicious = detectSuspiciousPatterns(content);
                 if (suspicious.length > 0) {
-                    log(`[Security] BLOCKED skill edit with suspicious patterns: ${suspicious.join(', ')} → ${editRelPath}`);
+                    log(`[Security] BLOCKED skill edit with suspicious patterns: ${suspicious.join(', ')} → ${editRelPath}`, 'WARN');
                     return { error: 'Skill file edit blocked: suspicious content detected (' + suspicious.join(', ') + '). Remove the flagged content and retry.' };
                 }
             }
@@ -1630,7 +1630,7 @@ async function executeTool(name, input, chatId) {
                                 decimals: info.tokenAmount.decimals,
                             });
                         }
-                    } catch (e) { log(`[Tools] Failed to parse token account: ${e.message}`); }
+                    } catch (e) { log(`[Tools] Failed to parse token account: ${e.message}`, 'DEBUG'); }
                 }
             }
 
@@ -1870,7 +1870,7 @@ async function executeTool(name, input, chatId) {
                         };
                     }
                 } catch (priceErr) {
-                    log(`[Jupiter Ultra] Pre-swap price check skipped: ${priceErr.message}`);
+                    log(`[Jupiter Ultra] Pre-swap price check skipped: ${priceErr.message}`, 'DEBUG');
                     // Continue — Ultra order will have its own pricing
                 }
 
@@ -1883,7 +1883,7 @@ async function executeTool(name, input, chatId) {
                 let order, orderTimestamp;
 
                 const fetchAndVerifyOrder = async () => {
-                    log(`[Jupiter Ultra] Getting order: ${input.amount} ${inputToken.symbol} → ${outputToken.symbol}`);
+                    log(`[Jupiter Ultra] Getting order: ${input.amount} ${inputToken.symbol} → ${outputToken.symbol}`, 'INFO');
                     const o = await jupiterUltraOrder(inputToken.address, outputToken.address, amountRaw, userPublicKey);
                     if (!o.transaction) throw new Error('Jupiter Ultra did not return a transaction.');
                     if (!o.requestId) throw new Error('Jupiter Ultra did not return a requestId.');
@@ -1891,7 +1891,7 @@ async function executeTool(name, input, chatId) {
                     // Verify transaction before sending to wallet
                     const verification = verifySwapTransaction(o.transaction, userPublicKey, { skipPayerCheck: true });
                     if (!verification.valid) throw new Error(`Swap transaction rejected: ${verification.error}`);
-                    log('[Jupiter Ultra] Order tx verified — programs OK');
+                    log('[Jupiter Ultra] Order tx verified — programs OK', 'DEBUG');
                     return o;
                 };
 
@@ -1906,7 +1906,7 @@ async function executeTool(name, input, chatId) {
                 // Pre-authorize to ensure wallet is warm (cold-start protection)
                 await ensureWalletAuthorized();
                 // Ultra flow: wallet signs but does NOT broadcast
-                log('[Jupiter Ultra] Sending to wallet for approval (sign-only)...');
+                log('[Jupiter Ultra] Sending to wallet for approval (sign-only)...', 'INFO');
                 const signResult = await androidBridgeCall('/solana/sign-only', {
                     transaction: order.transaction
                 }, 120000);
@@ -1920,13 +1920,13 @@ async function executeTool(name, input, chatId) {
                 let finalRequestId = order.requestId;
 
                 if (elapsed > ULTRA_TTL_SAFE_MS) {
-                    log(`[Jupiter Ultra] MWA approval took ${Math.round(elapsed / 1000)}s (>90s) — re-quoting to avoid TTL expiry...`);
+                    log(`[Jupiter Ultra] MWA approval took ${Math.round(elapsed / 1000)}s (>90s) — re-quoting to avoid TTL expiry...`, 'WARN');
                     try {
                         order = await fetchAndVerifyOrder();
                         orderTimestamp = Date.now();
 
                         // Need wallet to sign the new transaction
-                        log('[Jupiter Ultra] Re-signing with fresh order...');
+                        log('[Jupiter Ultra] Re-signing with fresh order...', 'INFO');
                         const reSignResult = await androidBridgeCall('/solana/sign-only', {
                             transaction: order.transaction
                         }, 60000); // Shorter timeout for re-sign
@@ -1936,15 +1936,15 @@ async function executeTool(name, input, chatId) {
 
                         finalSignedTx = reSignResult.signedTransaction;
                         finalRequestId = order.requestId;
-                        log('[Jupiter Ultra] Re-quote successful, executing fresh order');
+                        log('[Jupiter Ultra] Re-quote successful, executing fresh order', 'DEBUG');
                     } catch (reQuoteErr) {
-                        log(`[Jupiter Ultra] Re-quote failed, attempting original: ${reQuoteErr.message}`);
+                        log(`[Jupiter Ultra] Re-quote failed, attempting original: ${reQuoteErr.message}`, 'WARN');
                         // Fall through to try original — it might still be within 2-min TTL
                     }
                 }
 
                 // Step 4: Execute via Jupiter Ultra (Jupiter broadcasts the tx)
-                log('[Jupiter Ultra] Executing signed transaction...');
+                log('[Jupiter Ultra] Executing signed transaction...', 'INFO');
                 const execResult = await jupiterUltraExecute(finalSignedTx, finalRequestId);
 
                 if (execResult.status === 'Failed') {
@@ -2049,7 +2049,7 @@ async function executeTool(name, input, chatId) {
                         }
                     }
                 } catch (shieldErr) {
-                    log(`[Jupiter Trigger] Token-2022 check skipped: ${shieldErr.message}`);
+                    log(`[Jupiter Trigger] Token-2022 check skipped: ${shieldErr.message}`, 'DEBUG');
                 }
 
                 // 2. Get wallet address
@@ -2117,7 +2117,7 @@ async function executeTool(name, input, chatId) {
                 }
 
                 // 6. Call Jupiter Trigger API — createOrder
-                log(`[Jupiter Trigger] Creating order: ${input.inputAmount} ${inputToken.symbol} → ${outputToken.symbol} at ${input.triggerPrice}`);
+                log(`[Jupiter Trigger] Creating order: ${input.inputAmount} ${inputToken.symbol} → ${outputToken.symbol} at ${input.triggerPrice}`, 'INFO');
                 const reqBody = {
                     inputMint: inputToken.address,
                     outputMint: outputToken.address,
@@ -2155,18 +2155,18 @@ async function executeTool(name, input, chatId) {
                 try {
                     const verification = verifySwapTransaction(data.transaction, walletAddress);
                     if (!verification.valid) {
-                        log(`[Jupiter Trigger] Tx verification FAILED: ${verification.error}`);
+                        log(`[Jupiter Trigger] Tx verification FAILED: ${verification.error}`, 'ERROR');
                         return { error: `Transaction rejected: ${verification.error}` };
                     }
-                    log('[Jupiter Trigger] Tx verified — programs OK');
+                    log('[Jupiter Trigger] Tx verified — programs OK', 'DEBUG');
                 } catch (verifyErr) {
-                    log(`[Jupiter Trigger] Tx verification error: ${verifyErr.message}`);
+                    log(`[Jupiter Trigger] Tx verification error: ${verifyErr.message}`, 'WARN');
                     return { error: `Could not verify transaction: ${verifyErr.message}` };
                 }
 
                 // 8. Sign via MWA (120s timeout for user approval)
                 await ensureWalletAuthorized();
-                log('[Jupiter Trigger] Sending to wallet for approval (sign-only)...');
+                log('[Jupiter Trigger] Sending to wallet for approval (sign-only)...', 'INFO');
                 const signResult = await androidBridgeCall('/solana/sign-only', {
                     transaction: data.transaction
                 }, 120000);
@@ -2174,7 +2174,7 @@ async function executeTool(name, input, chatId) {
                 if (!signResult.signedTransaction) return { error: 'No signed transaction returned from wallet' };
 
                 // 9. Execute (Jupiter broadcasts)
-                log('[Jupiter Trigger] Executing signed transaction...');
+                log('[Jupiter Trigger] Executing signed transaction...', 'INFO');
                 const execResult = await jupiterTriggerExecute(signResult.signedTransaction, data.requestId);
                 if (execResult.status === 'Failed') {
                     return { error: `Order failed: ${execResult.error || 'Transaction execution failed'}` };
@@ -2307,7 +2307,7 @@ async function executeTool(name, input, chatId) {
                 }
 
                 // 3. Call Jupiter Trigger API — cancelOrder (no retry — non-idempotent POST)
-                log(`[Jupiter Trigger] Cancelling order: ${input.orderId}`);
+                log(`[Jupiter Trigger] Cancelling order: ${input.orderId}`, 'INFO');
                 const res = await httpRequest({
                     hostname: 'api.jup.ag',
                     path: '/trigger/v1/cancelOrder',
@@ -2340,7 +2340,7 @@ async function executeTool(name, input, chatId) {
 
                 // 5. Sign via MWA
                 await ensureWalletAuthorized();
-                log('[Jupiter Trigger] Sending cancel tx to wallet for approval...');
+                log('[Jupiter Trigger] Sending cancel tx to wallet for approval...', 'INFO');
                 const signResult = await androidBridgeCall('/solana/sign-only', {
                     transaction: data.transaction
                 }, 120000);
@@ -2348,7 +2348,7 @@ async function executeTool(name, input, chatId) {
                 if (!signResult.signedTransaction) return { error: 'No signed transaction returned from wallet' };
 
                 // 6. Execute
-                log('[Jupiter Trigger] Executing cancel transaction...');
+                log('[Jupiter Trigger] Executing cancel transaction...', 'INFO');
                 const execResult = await jupiterTriggerExecute(signResult.signedTransaction, data.requestId);
                 if (execResult.status === 'Failed') {
                     return { error: `Cancel failed: ${execResult.error || 'Transaction execution failed'}` };
@@ -2431,7 +2431,7 @@ async function executeTool(name, input, chatId) {
                         }
                     }
                 } catch (shieldErr) {
-                    log(`[Jupiter DCA] Token-2022 check skipped: ${shieldErr.message}`);
+                    log(`[Jupiter DCA] Token-2022 check skipped: ${shieldErr.message}`, 'DEBUG');
                 }
 
                 // 2. Get wallet address
@@ -2496,7 +2496,7 @@ async function executeTool(name, input, chatId) {
                         }
                     }
                 } catch (priceErr) {
-                    log(`[Jupiter DCA] Price check skipped (non-fatal): ${priceErr.message}`);
+                    log(`[Jupiter DCA] Price check skipped (non-fatal): ${priceErr.message}`, 'DEBUG');
                     // Continue without USD validation — API will reject if truly below minimum
                 }
 
@@ -2506,7 +2506,7 @@ async function executeTool(name, input, chatId) {
                     return { error: 'Amount too large', details: `Total amount (${totalInAmount} lamports) exceeds safe integer precision. Reduce amountPerCycle or totalCycles.` };
                 }
 
-                log(`[Jupiter DCA] Creating: ${input.amountPerCycle} ${inputToken.symbol} → ${outputToken.symbol}, ${input.cycleInterval} x${numberOfOrders}`);
+                log(`[Jupiter DCA] Creating: ${input.amountPerCycle} ${inputToken.symbol} → ${outputToken.symbol}, ${input.cycleInterval} x${numberOfOrders}`, 'INFO');
                 const reqBody = {
                     user: walletAddress,
                     inputMint: inputToken.address,
@@ -2543,18 +2543,18 @@ async function executeTool(name, input, chatId) {
                 try {
                     const verification = verifySwapTransaction(data.transaction, walletAddress);
                     if (!verification.valid) {
-                        log(`[Jupiter DCA] Tx verification FAILED: ${verification.error}`);
+                        log(`[Jupiter DCA] Tx verification FAILED: ${verification.error}`, 'ERROR');
                         return { error: `Transaction rejected: ${verification.error}` };
                     }
-                    log('[Jupiter DCA] Tx verified — programs OK');
+                    log('[Jupiter DCA] Tx verified — programs OK', 'DEBUG');
                 } catch (verifyErr) {
-                    log(`[Jupiter DCA] Tx verification error: ${verifyErr.message}`);
+                    log(`[Jupiter DCA] Tx verification error: ${verifyErr.message}`, 'WARN');
                     return { error: `Could not verify transaction: ${verifyErr.message}` };
                 }
 
                 // 7. Sign via MWA
                 await ensureWalletAuthorized();
-                log('[Jupiter DCA] Sending to wallet for approval (sign-only)...');
+                log('[Jupiter DCA] Sending to wallet for approval (sign-only)...', 'INFO');
                 const signResult = await androidBridgeCall('/solana/sign-only', {
                     transaction: data.transaction
                 }, 120000);
@@ -2562,7 +2562,7 @@ async function executeTool(name, input, chatId) {
                 if (!signResult.signedTransaction) return { error: 'No signed transaction returned from wallet' };
 
                 // 8. Execute (Jupiter broadcasts)
-                log('[Jupiter DCA] Executing signed transaction...');
+                log('[Jupiter DCA] Executing signed transaction...', 'INFO');
                 const execResult = await jupiterRecurringExecute(signResult.signedTransaction, data.requestId);
                 if (execResult.status === 'Failed') {
                     return { error: `DCA order failed: ${execResult.error || 'Transaction execution failed'}` };
@@ -2707,7 +2707,7 @@ async function executeTool(name, input, chatId) {
                 }
 
                 // 3. Call Jupiter Recurring API — cancelOrder (no retry — non-idempotent POST)
-                log(`[Jupiter DCA] Cancelling order: ${input.orderId}`);
+                log(`[Jupiter DCA] Cancelling order: ${input.orderId}`, 'INFO');
                 const res = await httpRequest({
                     hostname: 'api.jup.ag',
                     path: '/recurring/v1/cancelOrder',
@@ -2740,7 +2740,7 @@ async function executeTool(name, input, chatId) {
 
                 // 5. Sign via MWA
                 await ensureWalletAuthorized();
-                log('[Jupiter DCA] Sending cancel tx to wallet for approval...');
+                log('[Jupiter DCA] Sending cancel tx to wallet for approval...', 'INFO');
                 const signResult = await androidBridgeCall('/solana/sign-only', {
                     transaction: data.transaction
                 }, 120000);
@@ -2748,7 +2748,7 @@ async function executeTool(name, input, chatId) {
                 if (!signResult.signedTransaction) return { error: 'No signed transaction returned from wallet' };
 
                 // 6. Execute
-                log('[Jupiter DCA] Executing cancel transaction...');
+                log('[Jupiter DCA] Executing cancel transaction...', 'INFO');
                 const execResult = await jupiterRecurringExecute(signResult.signedTransaction, data.requestId);
                 if (execResult.status === 'Failed') {
                     return { error: `Cancel failed: ${execResult.error || 'Transaction execution failed'}` };
@@ -2911,7 +2911,7 @@ async function executeTool(name, input, chatId) {
                         }
                     }
                 } catch (e) {
-                    log(`[Jupiter Security] Tokens v2 lookup skipped: ${e.message}`);
+                    log(`[Jupiter Security] Tokens v2 lookup skipped: ${e.message}`, 'DEBUG');
                 }
 
                 if (isSus) warnings.push('🚨 SUSPICIOUS — Token flagged as suspicious by Jupiter audit');
@@ -3019,7 +3019,7 @@ async function executeTool(name, input, chatId) {
                 });
                 if (result.ok) {
                     const logAction = remove ? `removed${emoji ? ': ' + emoji : ' (all)'}` : 'set: ' + emoji;
-                    log(`Reaction ${logAction} on msg ${msgId} in chat ${chatId}`);
+                    log(`Reaction ${logAction} on msg ${msgId} in chat ${chatId}`, 'DEBUG');
                     return { ok: true, action: remove ? 'removed' : 'reacted', emoji, message_id: msgId, chat_id: chatId };
                 } else {
                     // Check for invalid reaction emoji in Telegram error response
@@ -3045,7 +3045,7 @@ async function executeTool(name, input, chatId) {
                     message_id: msgId,
                 });
                 if (result.ok) {
-                    log(`Deleted message ${msgId} in chat ${chatId}`);
+                    log(`Deleted message ${msgId} in chat ${chatId}`, 'DEBUG');
                     return { ok: true, action: 'deleted', message_id: msgId, chat_id: chatId };
                 } else {
                     const desc = result.description || '';
@@ -3109,7 +3109,7 @@ async function executeTool(name, input, chatId) {
                 if (result && result.ok && result.result && result.result.message_id) {
                     const messageId = result.result.message_id;
                     recordSentMessage(chatId, messageId, cleaned);
-                    log(`telegram_send: sent message ${messageId}`);
+                    log(`telegram_send: sent message ${messageId}`, 'DEBUG');
                     return { ok: true, message_id: messageId, chat_id: chatId };
                 }
                 if (result) {
@@ -3210,7 +3210,7 @@ async function executeTool(name, input, chatId) {
                 }, (err, stdout, stderr) => {
                     if (err) {
                         if (err.killed && err.signal) {
-                            log(`shell_exec TIMEOUT: ${cmd.slice(0, 80)}`);
+                            log(`shell_exec TIMEOUT: ${cmd.slice(0, 80)}`, 'WARN');
                             resolve({
                                 success: false,
                                 command: cmd,
@@ -3219,7 +3219,7 @@ async function executeTool(name, input, chatId) {
                                 exit_code: err.code || 1
                             });
                         } else {
-                            log(`shell_exec FAIL (exit ${err.code || '?'}): ${cmd.slice(0, 80)}`);
+                            log(`shell_exec FAIL (exit ${err.code || '?'}): ${cmd.slice(0, 80)}`, 'WARN');
                             resolve({
                                 success: false,
                                 command: cmd,
@@ -3229,7 +3229,7 @@ async function executeTool(name, input, chatId) {
                             });
                         }
                     } else {
-                        log(`shell_exec OK: ${cmd.slice(0, 80)}`);
+                        log(`shell_exec OK: ${cmd.slice(0, 80)}`, 'DEBUG');
                         resolve({
                             success: true,
                             command: cmd,
@@ -3349,7 +3349,7 @@ async function executeTool(name, input, chatId) {
                     resultStr = String(result).slice(0, 50000);
                 }
 
-                log(`js_eval OK (${code.length} chars)`);
+                log(`js_eval OK (${code.length} chars)`, 'DEBUG');
                 return {
                     success: true,
                     result: resultStr,
@@ -3358,7 +3358,7 @@ async function executeTool(name, input, chatId) {
             } catch (err) {
                 clearTimeout(timerId);
                 const output = logs.join('\n');
-                log(`js_eval FAIL: ${err.message.slice(0, 100)}`);
+                log(`js_eval FAIL: ${err.message.slice(0, 100)}`, 'WARN');
                 return {
                     success: false,
                     error: err.message.slice(0, 5000),
@@ -3405,7 +3405,7 @@ async function executeTool(name, input, chatId) {
             // Photos > 10MB must be sent as document (applies to both auto-detected and overridden)
             if (detected.method === 'sendPhoto' && stat.size > MAX_PHOTO_SIZE) {
                 const safLogName = fileName.replace(/[\r\n\0\u2028\u2029]/g, '_');
-                log(`[TgSendFile] Photo ${safLogName} is ${(stat.size / 1024 / 1024).toFixed(1)}MB — downgrading to document`);
+                log(`[TgSendFile] Photo ${safLogName} is ${(stat.size / 1024 / 1024).toFixed(1)}MB — downgrading to document`, 'DEBUG');
                 detected = { method: 'sendDocument', field: 'document' };
             }
 
@@ -3414,19 +3414,19 @@ async function executeTool(name, input, chatId) {
                 if (input.caption) params.caption = String(input.caption).slice(0, 1024);
 
                 const safLogName = fileName.replace(/[\r\n\0\u2028\u2029]/g, '_');
-                log(`[TgSendFile] ${detected.method}: ${safLogName} (${(stat.size / 1024).toFixed(1)}KB) → chat ${input.chat_id}`);
+                log(`[TgSendFile] ${detected.method}: ${safLogName} (${(stat.size / 1024).toFixed(1)}KB) → chat ${input.chat_id}`, 'DEBUG');
                 const result = await telegramSendFile(detected.method, params, detected.field, filePath, fileName, stat.size);
 
                 if (result && result.ok === true) {
-                    log(`[TgSendFile] Sent successfully`);
+                    log(`[TgSendFile] Sent successfully`, 'DEBUG');
                     return { success: true, method: detected.method, file: input.path, size: stat.size };
                 } else {
                     const desc = (result && result.description) || 'Unknown error';
-                    log(`[TgSendFile] Failed: ${desc}`);
+                    log(`[TgSendFile] Failed: ${desc}`, 'WARN');
                     return { error: `Telegram API error: ${desc}` };
                 }
             } catch (e) {
-                log(`[TgSendFile] Error: ${e && e.message ? e.message : String(e)}`);
+                log(`[TgSendFile] Error: ${e && e.message ? e.message : String(e)}`, 'ERROR');
                 return { error: e && e.message ? e.message : String(e) };
             }
         }
@@ -3462,10 +3462,10 @@ async function executeTool(name, input, chatId) {
                 fs.unlinkSync(filePath);
                 // Sanitize path for logging (strip control chars)
                 const safLogPath = String(input.path).replace(/[\r\n\0\u2028\u2029]/g, '_');
-                log(`File deleted: ${safLogPath}`);
+                log(`File deleted: ${safLogPath}`, 'DEBUG');
                 return { success: true, path: input.path, deleted: true };
             } catch (err) {
-                log(`Error deleting file: ${err && err.message ? err.message : String(err)}`);
+                log(`Error deleting file: ${err && err.message ? err.message : String(err)}`, 'ERROR');
                 return { error: `Failed to delete file: ${err && err.message ? err.message : String(err)}` };
             }
         }

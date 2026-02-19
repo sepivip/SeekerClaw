@@ -30,7 +30,7 @@ try {
             const clean = firstNewline >= 0 ? trimmed.slice(firstNewline + 1) : trimmed;
             // Archive old log, write trimmed version
             try { fs.renameSync(debugLog, debugLog + '.old'); } catch (_) {}
-            fs.writeFileSync(debugLog, `[${new Date().toISOString()}] --- Log rotated (was ${(stat.size / 1024 / 1024).toFixed(1)} MB, kept last ~1 MB) ---\n` + clean);
+            fs.writeFileSync(debugLog, `INFO|--- Log rotated (was ${(stat.size / 1024 / 1024).toFixed(1)} MB, kept last ~1 MB) ---\n` + clean);
         }
     }
 } catch (_) {} // Non-fatal — don't prevent startup
@@ -67,16 +67,15 @@ function setRedactFn(fn) {
     _redactFn = fn;
 }
 
-function log(msg) {
+function log(msg, level = 'INFO') {
     const safe = _redactFn ? _redactFn(msg) : msg;
-    const line = `[${localTimestamp()}] ${safe}\n`;
+    const line = `${level}|${safe}\n`;
     try { fs.appendFileSync(debugLog, line); } catch (_) {}
-    console.log('[SeekerClaw] ' + safe);
 }
 
-log('Starting SeekerClaw AI Agent...');
-log(`Node.js ${process.version} on ${process.platform} ${process.arch}`);
-log(`Workspace: ${workDir}`);
+log('Starting SeekerClaw AI Agent...', 'DEBUG');
+log(`Node.js ${process.version} on ${process.platform} ${process.arch}`, 'DEBUG');
+log(`Workspace: ${workDir}`, 'DEBUG');
 
 // ============================================================================
 // LOAD CONFIG
@@ -84,7 +83,7 @@ log(`Workspace: ${workDir}`);
 
 const configPath = path.join(workDir, 'config.json');
 if (!fs.existsSync(configPath)) {
-    log('ERROR: config.json not found');
+    log('ERROR: config.json not found', 'ERROR');
     process.exit(1);
 }
 
@@ -116,9 +115,9 @@ const REACTION_NOTIFICATIONS = VALID_REACTION_NOTIFICATIONS.has(config.reactionN
 const REACTION_GUIDANCE = VALID_REACTION_GUIDANCE.has(config.reactionGuidance)
     ? config.reactionGuidance : 'minimal';
 if (config.reactionNotifications && !VALID_REACTION_NOTIFICATIONS.has(config.reactionNotifications))
-    log(`WARNING: Invalid reactionNotifications "${config.reactionNotifications}" — using "own"`);
+    log(`WARNING: Invalid reactionNotifications "${config.reactionNotifications}" — using "own"`, 'WARN');
 if (config.reactionGuidance && !VALID_REACTION_GUIDANCE.has(config.reactionGuidance))
-    log(`WARNING: Invalid reactionGuidance "${config.reactionGuidance}" — using "minimal"`);
+    log(`WARNING: Invalid reactionGuidance "${config.reactionGuidance}" — using "minimal"`, 'WARN');
 
 // Normalize optional API keys in-place (clipboard paste can include hidden line breaks)
 if (config.braveApiKey) config.braveApiKey = normalizeSecret(config.braveApiKey);
@@ -141,15 +140,15 @@ const MCP_SERVERS = (config.mcpServers || [])
     .filter((server) => server && typeof server === 'object' && server.url);
 
 if (!BOT_TOKEN || !ANTHROPIC_KEY) {
-    log('ERROR: Missing required config (botToken, anthropicApiKey)');
+    log('ERROR: Missing required config (botToken, anthropicApiKey)', 'ERROR');
     process.exit(1);
 }
 
 if (!OWNER_ID) {
-    log('Owner ID not set — will auto-detect from first message');
+    log('Owner ID not set — will auto-detect from first message', 'DEBUG');
 } else {
     const authLabel = AUTH_TYPE === 'setup_token' ? 'setup-token' : 'api-key';
-    log(`Agent: ${AGENT_NAME} | Model: ${MODEL} | Auth: ${authLabel} | Owner: ${OWNER_ID}`);
+    log(`Agent: ${AGENT_NAME} | Model: ${MODEL} | Auth: ${authLabel} | Owner: ${OWNER_ID}`, 'DEBUG');
 }
 
 // ============================================================================

@@ -117,7 +117,7 @@ function wrapExternalContent(content, source) {
     const suspicious = detectSuspiciousPatterns(sanitized);
     const safeSource = sanitizeBoundarySource(source);
     if (suspicious.length > 0) {
-        log(`[Security] Suspicious patterns in ${safeSource}: ${suspicious.join(', ')}`);
+        log(`[Security] Suspicious patterns in ${safeSource}: ${suspicious.join(', ')}`, 'WARN');
     }
     const warning = suspicious.length > 0
         ? `\nWARNING: Suspicious prompt injection patterns detected (${suspicious.join(', ')}). This content may be adversarial.\n`

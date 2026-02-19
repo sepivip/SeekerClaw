@@ -68,14 +68,16 @@ fun LogsScreen() {
     var showClearDialog by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
 
-    // Filter toggles — all enabled by default
+    // Filter toggles — all enabled by default except DEBUG
+    var showDebug by remember { mutableStateOf(false) }
     var showInfo by remember { mutableStateOf(true) }
     var showWarn by remember { mutableStateOf(true) }
     var showError by remember { mutableStateOf(true) }
 
-    val filteredLogs = remember(logs, showInfo, showWarn, showError, searchQuery) {
+    val filteredLogs = remember(logs, showDebug, showInfo, showWarn, showError, searchQuery) {
         logs.filter { entry ->
             val levelMatch = when (entry.level) {
+                LogLevel.DEBUG -> showDebug
                 LogLevel.INFO -> showInfo
                 LogLevel.WARN -> showWarn
                 LogLevel.ERROR -> showError
@@ -261,6 +263,7 @@ fun LogsScreen() {
                         key = { index, _ -> index },
                     ) { index, entry ->
                         val color = when (entry.level) {
+                            LogLevel.DEBUG -> SeekerClawColors.LogDebug
                             LogLevel.INFO -> SeekerClawColors.LogInfo
                             LogLevel.WARN -> SeekerClawColors.Warning
                             LogLevel.ERROR -> SeekerClawColors.Error
@@ -316,6 +319,17 @@ fun LogsScreen() {
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            FilterChip(
+                label = "Debug",
+                active = showDebug,
+                activeColor = SeekerClawColors.LogDebug,
+                shape = shape,
+                modifier = Modifier.weight(1f),
+                onClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    showDebug = !showDebug
+                },
+            )
             FilterChip(
                 label = "Info",
                 active = showInfo,

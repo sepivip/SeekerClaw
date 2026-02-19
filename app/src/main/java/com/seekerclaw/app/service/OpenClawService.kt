@@ -176,10 +176,24 @@ class OpenClawService : Service() {
                         lastPos = debugLogFile.length()
                         val lines = String(newBytes).lines().filter { it.isNotBlank() }
                         for (line in lines) {
-                            val level = if (line.contains("UNCAUGHT") || line.contains("ERROR")) LogLevel.ERROR
-                                else if (line.contains("WARN")) LogLevel.WARN
-                                else LogLevel.INFO
-                            LogCollector.append("[Node] $line", level)
+                            val pipeIdx = line.indexOf('|')
+                            val (level, message) = if (pipeIdx > 0) {
+                                val lvl = line.substring(0, pipeIdx)
+                                val msg = line.substring(pipeIdx + 1)
+                                val parsed = when (lvl) {
+                                    "ERROR" -> LogLevel.ERROR
+                                    "WARN" -> LogLevel.WARN
+                                    "DEBUG" -> LogLevel.DEBUG
+                                    "INFO" -> LogLevel.INFO
+                                    else -> null
+                                }
+                                if (parsed != null) parsed to msg
+                                else LogLevel.INFO to line  // unknown prefix — treat whole line as INFO
+                            } else {
+                                // Fallback for unparsed lines (old format, raw output)
+                                LogLevel.INFO to line
+                            }
+                            LogCollector.append("[Node] $message", level)
                         }
                     }
                 } catch (_: Exception) {}

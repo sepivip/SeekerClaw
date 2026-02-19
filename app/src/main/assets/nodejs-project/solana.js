@@ -267,7 +267,7 @@ async function refreshJupiterProgramLabels() {
             headers: { 'Accept': 'application/json' },
         });
         if (res.status !== 200 || !res.data || typeof res.data !== 'object') {
-            log(`[Jupiter] Program label fetch failed: HTTP ${res.status}`);
+            log(`[Jupiter] Program label fetch failed: HTTP ${res.status}`, 'WARN');
             return;
         }
         let added = 0;
@@ -279,9 +279,9 @@ async function refreshJupiterProgramLabels() {
         }
         // Rebuild TRUSTED_PROGRAMS from updated map
         TRUSTED_PROGRAMS = new Set(KNOWN_PROGRAM_NAMES.keys());
-        log(`[Jupiter] Program labels refreshed: ${KNOWN_PROGRAM_NAMES.size} total (${added} new from API)`);
+        log(`[Jupiter] Program labels refreshed: ${KNOWN_PROGRAM_NAMES.size} total (${added} new from API)`, 'INFO');
     } catch (err) {
-        log(`[Jupiter] Program label fetch error (using hardcoded fallback): ${err.message}`);
+        log(`[Jupiter] Program label fetch error (using hardcoded fallback): ${err.message}`, 'WARN');
     }
 }
 
@@ -300,7 +300,7 @@ async function jupiterRequest(options, body = null, maxRetries = 3) {
         // Rate limited — retry with exponential backoff + jitter
         if (attempt < maxRetries) {
             const delay = Math.min(BASE_DELAY * Math.pow(2, attempt) + Math.random() * JITTER_MAX, MAX_DELAY);
-            log(`[Jupiter] Rate limited (429), retrying in ${Math.round(delay)}ms (attempt ${attempt + 1}/${maxRetries})...`);
+            log(`[Jupiter] Rate limited (429), retrying in ${Math.round(delay)}ms (attempt ${attempt + 1}/${maxRetries})...`, 'WARN');
             await new Promise(r => setTimeout(r, delay));
         }
     }
@@ -316,7 +316,7 @@ async function fetchJupiterTokenList() {
     }
 
     try {
-        log('[Jupiter] Fetching verified token list (tokens/v2)...');
+        log('[Jupiter] Fetching verified token list (tokens/v2)...', 'DEBUG');
         const headers = { 'Accept': 'application/json' };
         if (config.jupiterApiKey) headers['x-api-key'] = config.jupiterApiKey;
 
@@ -350,12 +350,12 @@ async function fetchJupiterTokenList() {
             }
 
             jupiterTokenCache.lastFetch = now;
-            log(`[Jupiter] Loaded ${normalized.length} verified tokens`);
+            log(`[Jupiter] Loaded ${normalized.length} verified tokens`, 'INFO');
         } else {
-            log(`[Jupiter] Token list fetch failed: ${res.status}`);
+            log(`[Jupiter] Token list fetch failed: ${res.status}`, 'WARN');
         }
     } catch (e) {
-        log(`[Jupiter] Token list error: ${e.message}`);
+        log(`[Jupiter] Token list error: ${e.message}`, 'ERROR');
     }
 }
 
@@ -411,13 +411,13 @@ async function ensureWalletAuthorized() {
     if (Date.now() - lastWalletAuthTime < WALLET_AUTH_CACHE_MS) {
         return; // wallet is warm
     }
-    log('[Wallet] Pre-authorizing wallet (cold start protection)...');
+    log('[Wallet] Pre-authorizing wallet (cold start protection)...', 'DEBUG');
     const result = await androidBridgeCall('/solana/authorize', {}, 60000);
     if (result.error) {
         throw new Error(`Wallet authorization failed: ${result.error}`);
     }
     lastWalletAuthTime = Date.now();
-    log('[Wallet] Wallet authorized and ready');
+    log('[Wallet] Wallet authorized and ready', 'INFO');
 }
 
 // Get connected wallet address from solana_wallet.json

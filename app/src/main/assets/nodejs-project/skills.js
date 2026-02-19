@@ -310,16 +310,21 @@ function validateSkillFormat(skill, filePath) {
     }
     if (warnings.length > 0) {
         _skillWarningsLogged.add(filePath);
-        log(`Skill format warning (${path.basename(filePath)}): ${warnings.join(', ')}`);
+        log(`Skill format warning (${path.basename(filePath)}): ${warnings.join(', ')}`, 'WARN');
     }
 }
 
+let _firstLoadLogged = false;
+
 function loadSkills() {
     const skills = [];
+    const isFirstLoad = !_firstLoadLogged;
 
     if (!fs.existsSync(SKILLS_DIR)) {
         return skills;
     }
+
+    let dirCount = 0, fileCount = 0;
 
     try {
         const entries = fs.readdirSync(SKILLS_DIR, { withFileTypes: true });
@@ -336,10 +341,11 @@ function loadSkills() {
                         if (skill.name) {
                             skill.filePath = skillPath;
                             skills.push(skill);
-                            log(`Loaded skill: ${skill.name} (triggers: ${skill.triggers.join(', ')})`);
+                            dirCount++;
+                            if (isFirstLoad) log(`Loaded skill: ${skill.name} (triggers: ${skill.triggers.join(', ')})`, 'DEBUG');
                         }
                     } catch (e) {
-                        log(`Error loading skill ${entry.name}: ${e.message}`);
+                        log(`Error loading skill ${entry.name}: ${e.message}`, 'ERROR');
                     }
                 }
             } else if (entry.isFile() && entry.name.endsWith('.md')) {
@@ -352,15 +358,21 @@ function loadSkills() {
                     if (skill.name) {
                         skill.filePath = filePath;
                         skills.push(skill);
-                        log(`Loaded skill: ${skill.name} (triggers: ${skill.triggers.join(', ')})`);
+                        fileCount++;
+                        if (isFirstLoad) log(`Loaded skill: ${skill.name} (triggers: ${skill.triggers.join(', ')})`, 'DEBUG');
                     }
                 } catch (e) {
-                    log(`Error loading skill ${entry.name}: ${e.message}`);
+                    log(`Error loading skill ${entry.name}: ${e.message}`, 'ERROR');
                 }
             }
         }
     } catch (e) {
-        log(`Error reading skills directory: ${e.message}`);
+        log(`Error reading skills directory: ${e.message}`, 'ERROR');
+    }
+
+    if (isFirstLoad && skills.length > 0) {
+        log(`[Skills] ${skills.length} skills loaded (${dirCount} dir, ${fileCount} flat)`, 'INFO');
+        _firstLoadLogged = true;
     }
 
     return skills;

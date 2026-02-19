@@ -17,7 +17,7 @@ data class LogEntry(
     val level: LogLevel = LogLevel.INFO,
 )
 
-enum class LogLevel { INFO, WARN, ERROR }
+enum class LogLevel { DEBUG, INFO, WARN, ERROR }
 
 object LogCollector {
     private const val MAX_LINES = 300

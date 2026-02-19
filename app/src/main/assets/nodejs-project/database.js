@@ -40,7 +40,7 @@ let _shutdownDeps = {
  */
 function setShutdownDeps(deps) {
     if (!deps || typeof deps !== 'object') {
-        log('[DB] WARNING: setShutdownDeps called with invalid argument');
+        log('[DB] WARNING: setShutdownDeps called with invalid argument', 'WARN');
         return;
     }
     if (deps.conversations) _shutdownDeps.conversations = deps.conversations;
@@ -65,17 +65,17 @@ async function initDatabase() {
             try {
                 const buffer = fs.readFileSync(DB_PATH);
                 db = new SQL.Database(buffer);
-                log('[DB] Loaded existing database');
+                log('[DB] Loaded existing database', 'INFO');
             } catch (loadErr) {
-                log(`[DB] Corrupted database, backing up and recreating: ${loadErr.message}`);
+                log(`[DB] Corrupted database, backing up and recreating: ${loadErr.message}`, 'WARN');
                 const backupPath = DB_PATH + '.corrupt.' + Date.now();
                 try { fs.renameSync(DB_PATH, backupPath); } catch (_) {}
                 db = new SQL.Database();
-                log('[DB] Created fresh database after corruption recovery');
+                log('[DB] Created fresh database after corruption recovery', 'INFO');
             }
         } else {
             db = new SQL.Database();
-            log('[DB] Created new database');
+            log('[DB] Created new database', 'INFO');
         }
 
         // Create tables
@@ -122,13 +122,13 @@ async function initDatabase() {
         // Persist immediately so the file exists on disk right away
         saveDatabase();
 
-        log('[DB] SQL.js database initialized');
+        log('[DB] SQL.js database initialized', 'INFO');
 
         // Start periodic saves only after successful init
         setInterval(saveDatabase, 60000);
 
     } catch (err) {
-        log(`[DB] Failed to initialize SQL.js (non-fatal): ${err.message}`);
+        log(`[DB] Failed to initialize SQL.js (non-fatal): ${err.message}`, 'ERROR');
         db = null;
     }
 }
@@ -143,7 +143,7 @@ function saveDatabase() {
         fs.writeFileSync(tmpPath, buffer);
         fs.renameSync(tmpPath, DB_PATH);
     } catch (err) {
-        log(`[DB] Save error: ${err.message}`);
+        log(`[DB] Save error: ${err.message}`, 'ERROR');
     }
 }
 
@@ -223,9 +223,9 @@ function indexMemoryFiles() {
             [localTimestamp()]);
 
         if (indexed > 0) saveDatabase();
-        log(`[Memory] Indexed ${indexed} files, skipped ${skipped} unchanged`);
+        log(`[Memory] Indexed ${indexed} files, skipped ${skipped} unchanged`, 'DEBUG');
     } catch (err) {
-        log(`[Memory] Indexing error (non-fatal): ${err.message}`);
+        log(`[Memory] Indexing error (non-fatal): ${err.message}`, 'WARN');
     }
 }
 
@@ -288,7 +288,7 @@ function chunkMarkdown(content) {
 
 // Registered outside initDatabase so shutdown hooks work even if DB init fails
 async function gracefulShutdown(signal) {
-    log(`[Shutdown] ${signal} received, saving session summary...`);
+    log(`[Shutdown] ${signal} received, saving session summary...`, 'INFO');
     try {
         const { conversations, saveSessionSummary, MIN_MESSAGES_FOR_SUMMARY } = _shutdownDeps;
         if (conversations && saveSessionSummary) {
@@ -305,7 +305,7 @@ async function gracefulShutdown(signal) {
             }
         }
     } catch (err) {
-        log(`[Shutdown] Summary failed: ${err.message}`);
+        log(`[Shutdown] Summary failed: ${err.message}`, 'ERROR');
     }
     saveDatabase();
     process.exit(0);
@@ -399,7 +399,7 @@ function writeDbSummaryFile() {
         const tmpPath = targetPath + '.tmp';
         fs.writeFileSync(tmpPath, JSON.stringify(summary));
         fs.renameSync(tmpPath, targetPath);
-    } catch (e) { log(`[DB] Summary file write failed: ${e.message}`); }
+    } catch (e) { log(`[DB] Summary file write failed: ${e.message}`, 'WARN'); }
 }
 function markDbSummaryDirty() { dbSummaryDirty = true; }
 
@@ -427,11 +427,11 @@ function startStatsServer() {
     });
 
     statsServer.on('error', (err) => {
-        log(`[Stats] Internal stats server error (${err.code || 'UNKNOWN'}): ${err.message}`);
+        log(`[Stats] Internal stats server error (${err.code || 'UNKNOWN'}): ${err.message}`, 'ERROR');
     });
 
     statsServer.listen(STATS_PORT, '127.0.0.1', () => {
-        log(`[Stats] Internal stats server listening on port ${STATS_PORT}`);
+        log(`[Stats] Internal stats server listening on port ${STATS_PORT}`, 'INFO');
     });
 }
 

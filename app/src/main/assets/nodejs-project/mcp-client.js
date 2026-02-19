@@ -287,7 +287,7 @@ class MCPClient {
 
     /** Three-step handshake: initialize → receive result → send initialized notification. */
     async connect() {
-        this.log(`[MCP] Connecting to ${this.name} at ${this.url}`);
+        this.log(`[MCP] Connecting to ${this.name} at ${this.url}`, 'DEBUG');
 
         // Step 1: Initialize
         const initResult = await this._sendRequest('initialize', {
@@ -301,7 +301,7 @@ class MCPClient {
         }
 
         const serverInfo = initResult.result?.serverInfo || {};
-        this.log(`[MCP] Connected to ${serverInfo.name || this.name} v${serverInfo.version || '?'}`);
+        this.log(`[MCP] Connected to ${serverInfo.name || this.name} v${serverInfo.version || '?'}`, 'INFO');
 
         // Step 2: Send initialized notification
         await this._sendNotification('notifications/initialized');
@@ -331,7 +331,7 @@ class MCPClient {
         for (const tool of rawTools) {
             // Validate tool metadata from untrusted remote server
             if (!tool || typeof tool.name !== 'string' || !tool.name) {
-                this.log(`[MCP] Skipping tool with invalid/missing name on ${this.name}`);
+                this.log(`[MCP] Skipping tool with invalid/missing name on ${this.name}`, 'WARN');
                 continue;
             }
 
@@ -342,13 +342,13 @@ class MCPClient {
             const prefixedName = `mcp__${this.safeId}__${safeToolName}`;
 
             if (prefixedName.length > TOOL_NAME_MAX_LENGTH) {
-                this.log(`[MCP] Tool name too long (${prefixedName.length}): ${prefixedName} — skipping`);
+                this.log(`[MCP] Tool name too long (${prefixedName.length}): ${prefixedName} — skipping`, 'WARN');
                 continue;
             }
 
             // Detect sanitized name collisions (e.g. "foo bar" vs "foo_bar")
             if (seenPrefixes.has(prefixedName)) {
-                this.log(`[MCP] Duplicate sanitized tool name "${prefixedName}" on ${this.name} — skipping`);
+                this.log(`[MCP] Duplicate sanitized tool name "${prefixedName}" on ${this.name} — skipping`, 'WARN');
                 continue;
             }
             seenPrefixes.add(prefixedName);
@@ -358,7 +358,7 @@ class MCPClient {
             const prevHash = this.toolHashes.get(tool.name);
 
             if (prevHash && prevHash !== hash) {
-                this.log(`[MCP] WARNING: Tool definition changed for ${tool.name} on ${this.name} — blocking (rug pull protection)`);
+                this.log(`[MCP] WARNING: Tool definition changed for ${tool.name} on ${this.name} — blocking (rug pull protection)`, 'ERROR');
                 // Keep the old hash so the block persists across future refreshes
                 continue;
             }
@@ -375,7 +375,7 @@ class MCPClient {
         }
 
         this.toolHashes = newHashes;
-        this.log(`[MCP] ${this.name}: ${this.tools.length} tools discovered`);
+        this.log(`[MCP] ${this.name}: ${this.tools.length} tools discovered`, 'DEBUG');
     }
 
     /** Execute a tool on this server. Returns { content, server, tool } or { error }. */
@@ -433,7 +433,7 @@ class MCPClient {
         this.connected = false;
         this.sessionId = null;
         this.tools = [];
-        this.log(`[MCP] Disconnected from ${this.name}`);
+        this.log(`[MCP] Disconnected from ${this.name}`, 'INFO');
     }
 }
 
@@ -451,27 +451,27 @@ class MCPManager {
     /** Connect to all enabled servers. Non-fatal: logs errors and continues. */
     async initializeAll(configs) {
         if (!configs || configs.length === 0) {
-            this.log('[MCP] No MCP servers configured');
+            this.log('[MCP] No MCP servers configured', 'INFO');
             return [];
         }
 
         const results = [];
         for (const cfg of configs) {
             if (cfg.enabled === false) {
-                this.log(`[MCP] Skipping disabled server: ${cfg.name}`);
+                this.log(`[MCP] Skipping disabled server: ${cfg.name}`, 'DEBUG');
                 continue;
             }
 
             try {
                 const client = new MCPClient(cfg, this.log);
                 if (!client.safeId) {
-                    this.log(`[MCP] Skipping server with missing id: ${cfg.name || '<unnamed>'}`);
+                    this.log(`[MCP] Skipping server with missing id: ${cfg.name || '<unnamed>'}`, 'WARN');
                     results.push({ id: null, name: cfg.name, tools: 0, status: 'failed', error: 'Missing server id' });
                     continue;
                 }
                 // Detect duplicate safeId (e.g. "server-1" vs "server_1" both sanitize to "server_1")
                 if (this.servers.has(client.safeId)) {
-                    this.log(`[MCP] Duplicate server id "${client.safeId}" from ${cfg.name} — skipping`);
+                    this.log(`[MCP] Duplicate server id "${client.safeId}" from ${cfg.name} — skipping`, 'WARN');
                     results.push({ id: client.safeId, name: cfg.name, tools: 0, status: 'failed', error: 'Duplicate server id' });
                     continue;
                 }
@@ -483,13 +483,13 @@ class MCPManager {
                 }
                 results.push({ id: client.safeId, name: cfg.name, tools: info.toolCount, status: 'connected' });
             } catch (e) {
-                this.log(`[MCP] Failed to connect to ${cfg.name}: ${e.message}`);
+                this.log(`[MCP] Failed to connect to ${cfg.name}: ${e.message}`, 'ERROR');
                 results.push({ id: cfg.id, name: cfg.name, tools: 0, status: 'failed', error: e.message });
             }
         }
 
         const total = this.getAllTools().length;
-        this.log(`[MCP] Initialization complete: ${this.servers.size} servers, ${total} tools`);
+        this.log(`[MCP] Initialization complete: ${this.servers.size} servers, ${total} tools`, 'INFO');
         return results;
     }
 
@@ -538,7 +538,7 @@ class MCPManager {
         } catch (e) {
             // Session expired → try reconnect once
             if (e.message.includes('Session expired') || e.message.includes('404')) {
-                this.log(`[MCP] Session expired for ${client.name}, reconnecting...`);
+                this.log(`[MCP] Session expired for ${client.name}, reconnecting...`, 'WARN');
                 try {
                     // Clear stale toolMap entries for this client before reconnect
                     for (const [key, val] of this.toolMap) {
@@ -572,7 +572,7 @@ class MCPManager {
         }
         this.servers.clear();
         this.toolMap.clear();
-        this.log('[MCP] All servers disconnected');
+        this.log('[MCP] All servers disconnected', 'INFO');
     }
 
     /** Get status of all servers (for system prompt / diagnostics). */

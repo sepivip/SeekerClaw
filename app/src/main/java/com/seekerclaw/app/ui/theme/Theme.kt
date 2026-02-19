@@ -49,8 +49,9 @@ data class ThemeColors(
     val actionDanger: Color,       // Dark red bg — destructive actions (Reset, Wipe)
     val actionDangerText: Color,   // Lighter red — danger button text
 
-    // Log info (blue for info-level logs)
+    // Log levels
     val logInfo: Color,
+    val logDebug: Color,
 
     // Text
     val textPrimary: Color,
@@ -93,6 +94,7 @@ val DarkOpsThemeColors = ThemeColors(
     actionDangerText = Color(0xFFFF6B6B), // Lighter red text for danger buttons
 
     logInfo = Color(0xFF60A5FA),       // Tailwind blue-400
+    logDebug = Color(0xFF6B7280),      // Tailwind gray-500
 
     textPrimary = Color(0xF0FFFFFF),   // White ~94%
     textSecondary = Color(0xFF9CA3AF), // Tailwind gray-400
@@ -134,6 +136,7 @@ object SeekerClawColors {
     val ActionDangerText: Color get() = DarkOpsThemeColors.actionDangerText
 
     val LogInfo: Color get() = DarkOpsThemeColors.logInfo
+    val LogDebug: Color get() = DarkOpsThemeColors.logDebug
 
     val TextPrimary: Color get() = DarkOpsThemeColors.textPrimary
     val TextSecondary: Color get() = DarkOpsThemeColors.textSecondary
