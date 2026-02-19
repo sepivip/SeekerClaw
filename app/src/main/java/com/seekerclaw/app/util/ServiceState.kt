@@ -15,6 +15,11 @@ import java.io.File
 import java.util.Calendar
 
 private const val TAG = "ServiceState"
+// Minimum ms between health transition logs.
+// Absorbs the startup polling race where a briefly-overlapping old pollingJob coroutine
+// (cancelled cooperatively but not yet stopped) reads prevStale before the first write
+// commits, causing duplicate stale→healthy bursts at startup.
+private const val HEALTH_TRANSITION_LOG_DEBOUNCE_MS = 3_000L
 
 enum class ServiceStatus { STOPPED, STARTING, RUNNING, ERROR }
 
@@ -80,6 +85,11 @@ object ServiceState {
 
     private val _agentHealth = MutableStateFlow(AgentHealth())
     val agentHealth: StateFlow<AgentHealth> = _agentHealth
+
+    // Last staleness state that was actually logged — null = no transition logged yet.
+    // Used with lastTransitionLogAt to deduplicate burst logs from overlapping pollingJobs.
+    @Volatile private var lastLoggedStale: Boolean? = null
+    @Volatile private var lastTransitionLogAt: Long = 0L
 
     // Per-boot bridge auth token — persisted to file for cross-process access.
     // Set by OpenClawService (:node process), read by UI (main process) via polling.
@@ -308,10 +318,21 @@ object ServiceState {
             )
             if (_agentHealth.value != health) {
                 val prevStale = _agentHealth.value.isStale
-                if (!prevStale && stale) {
-                    LogCollector.append("[Health] Agent health file became stale — Node.js may have lost network", LogLevel.WARN)
-                } else if (prevStale && !stale) {
-                    LogCollector.append("[Health] Agent health recovered", LogLevel.INFO)
+                // Synchronized + debounce: prevents duplicate logs when overlapping
+                // pollingJob coroutines both read prevStale before the first write commits.
+                synchronized(this) {
+                    val now = System.currentTimeMillis()
+                    if (!prevStale && stale && lastLoggedStale != true &&
+                        now - lastTransitionLogAt >= HEALTH_TRANSITION_LOG_DEBOUNCE_MS) {
+                        LogCollector.append("[Health] Agent health file became stale — Node.js may have lost network", LogLevel.WARN)
+                        lastLoggedStale = true
+                        lastTransitionLogAt = now
+                    } else if (prevStale && !stale && lastLoggedStale != false &&
+                        now - lastTransitionLogAt >= HEALTH_TRANSITION_LOG_DEBOUNCE_MS) {
+                        LogCollector.append("[Health] Agent health recovered", LogLevel.INFO)
+                        lastLoggedStale = false
+                        lastTransitionLogAt = now
+                    }
                 }
                 _agentHealth.value = health
             }
