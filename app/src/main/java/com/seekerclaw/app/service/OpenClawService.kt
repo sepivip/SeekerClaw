@@ -297,14 +297,15 @@ class OpenClawService : Service() {
             .build()
     }
 
-    // Dismissible, audible notification for actionable setup errors (not tied to service lifetime).
+    // Dismissible notification for actionable setup errors (not tied to service lifetime).
+    // Uses ERROR_CHANNEL_ID (IMPORTANCE_HIGH) so the alert is visually prominent.
     private fun createSetupNotification(text: String): Notification {
         val pendingIntent = PendingIntent.getActivity(
             this, 0,
             Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        return NotificationCompat.Builder(this, SeekerClawApplication.CHANNEL_ID)
+        return NotificationCompat.Builder(this, SeekerClawApplication.ERROR_CHANNEL_ID)
             .setContentTitle("SeekerClaw")
             .setContentText(text)
             .setSmallIcon(R.drawable.ic_notification)

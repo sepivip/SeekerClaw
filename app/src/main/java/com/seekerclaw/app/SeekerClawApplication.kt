@@ -28,7 +28,10 @@ class SeekerClawApplication : Application() {
     }
 
     private fun createNotificationChannel() {
-        val channel = NotificationChannel(
+        val manager = getSystemService(NotificationManager::class.java)
+
+        // Silent low-priority channel for the always-on foreground service notification.
+        val serviceChannel = NotificationChannel(
             CHANNEL_ID,
             "SeekerClaw Service",
             NotificationManager.IMPORTANCE_LOW
@@ -36,11 +39,23 @@ class SeekerClawApplication : Application() {
             description = "Keeps the AI agent running in the background"
             setShowBadge(false)
         }
-        val manager = getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(channel)
+        manager.createNotificationChannel(serviceChannel)
+
+        // High-importance channel for actionable errors (e.g., setup required).
+        // Uses default sound so the user is clearly alerted to an issue.
+        val errorChannel = NotificationChannel(
+            ERROR_CHANNEL_ID,
+            "SeekerClaw Alerts",
+            NotificationManager.IMPORTANCE_HIGH
+        ).apply {
+            description = "Important alerts that require user action"
+            setShowBadge(true)
+        }
+        manager.createNotificationChannel(errorChannel)
     }
 
     companion object {
         const val CHANNEL_ID = "seekerclaw_service"
+        const val ERROR_CHANNEL_ID = "seekerclaw_errors"
     }
 }
