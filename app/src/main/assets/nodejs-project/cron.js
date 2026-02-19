@@ -15,7 +15,11 @@ const { workDir, log, localTimestamp, getOwnerId } = require('./config');
 let _sendMessage = null;
 
 function setSendMessage(fn) {
-    _sendMessage = fn;
+    if (fn != null && typeof fn !== 'function') {
+        log(`[Cron] WARNING: setSendMessage called with ${typeof fn}, expected function`);
+        return;
+    }
+    _sendMessage = fn || null;
 }
 
 // ============================================================================
@@ -32,13 +36,15 @@ const MAX_TIMEOUT_MS = 2147483647; // 2^31 - 1 (setTimeout max)
 
 function formatDuration(ms) {
     if (ms < 0) return 'overdue';
-    const minutes = Math.floor(ms / 60000);
+    const seconds = Math.floor(ms / 1000);
+    const minutes = Math.floor(seconds / 60);
     const hours = Math.floor(minutes / 60);
     const days = Math.floor(hours / 24);
 
     if (days > 0) return `${days}d ${hours % 24}h`;
     if (hours > 0) return `${hours}h ${minutes % 60}m`;
-    return `${minutes}m`;
+    if (minutes > 0) return `${minutes}m`;
+    return `${seconds}s`;
 }
 
 // ============================================================================
@@ -49,6 +55,11 @@ function loadCronStore() {
     try {
         if (fs.existsSync(CRON_STORE_PATH)) {
             const store = JSON.parse(fs.readFileSync(CRON_STORE_PATH, 'utf8'));
+            // Validate shape — corrupt/empty file should not crash
+            if (!store || !Array.isArray(store.jobs)) {
+                log(`[Cron] WARNING: jobs.json has invalid shape, resetting to empty store`);
+                return { version: 1, jobs: [] };
+            }
             // Migrate old jobs: add delivery object if missing
             let mutated = false;
             for (const job of store.jobs) {
@@ -258,7 +269,8 @@ function parseTimeExpression(timeStr) {
 const cronService = {
     store: null,
     timer: null,
-    running: false,
+    running: false,  // true while _runDueJobs is executing
+    _started: false, // true after start(), false after stop()
 
     // Initialize and start the cron service
     start() {
@@ -266,6 +278,7 @@ const cronService = {
         // Recompute next runs and clear zombies
         this._recomputeNextRuns();
         this._armTimer();
+        this._started = true;
         log(`[Cron] Service started with ${this.store.jobs.length} jobs`);
     },
 
@@ -276,6 +289,7 @@ const cronService = {
             this.timer = null;
         }
         this.running = false;
+        this._started = false;
     },
 
     // Error backoff schedule (exponential): 30s, 1min, 5min, 15min, 60min
@@ -372,7 +386,7 @@ const cronService = {
             .sort((a, b) => a.state.nextRunAtMs - b.state.nextRunAtMs)[0];
 
         return {
-            running: true,
+            running: this._started,
             totalJobs: this.store.jobs.length,
             enabledJobs: enabledJobs.length,
             nextWakeAtMs: nextJob?.state.nextRunAtMs || null,
