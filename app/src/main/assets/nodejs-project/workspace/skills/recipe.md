@@ -2,7 +2,6 @@
 name: recipe
 version: "1.0.0"
 description: "Search recipes, get ingredients and cooking instructions from TheMealDB (free, no API key)"
-version: "1.0.0"
 metadata:
   openclaw:
     emoji: "🍳"

@@ -2,7 +2,6 @@
 name: location
 version: "1.0.0"
 description: "Get current GPS location and find nearby places"
-version: "1.0.0"
 metadata:
   openclaw:
     emoji: "📍"

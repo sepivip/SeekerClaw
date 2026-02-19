@@ -2,7 +2,6 @@
 name: solana-wallet
 version: "1.0.0"
 description: "Check Solana wallet balance, transaction history, and send SOL with wallet approval"
-version: "1.0.0"
 metadata:
   openclaw:
     emoji: "🪙"
