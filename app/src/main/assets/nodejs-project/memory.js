@@ -269,6 +269,34 @@ function searchMemory(query, topK = 5) {
 // HEARTBEAT
 // ============================================================================
 
+const DEFAULT_HEARTBEAT_MD = `# HEARTBEAT.md
+
+Read this during each heartbeat check. Follow strictly.
+
+## Default Checks
+- Am I connected and responding? Any recent errors in logs?
+- Any pending cron jobs or reminders due?
+- How long since the user last messaged? If >8h and daytime, check in.
+
+## Quiet Hours
+- Between 23:00-08:00, reply HEARTBEAT_OK unless something is urgent.
+
+## Custom Checks
+(Add your own! Tell your agent: "Add X to your heartbeat checks")
+
+If nothing needs attention, reply HEARTBEAT_OK.
+`;
+
+function seedHeartbeatMd() {
+    if (fs.existsSync(HEARTBEAT_PATH)) return; // never overwrite existing user content
+    try {
+        fs.writeFileSync(HEARTBEAT_PATH, DEFAULT_HEARTBEAT_MD, 'utf8');
+        log('Seeded default HEARTBEAT.md to workspace', 'INFO');
+    } catch (e) {
+        log(`Warning: Could not seed HEARTBEAT.md: ${e.message}`, 'WARN');
+    }
+}
+
 function updateHeartbeat() {
     const now = new Date();
     const uptime = Math.floor(process.uptime());
@@ -279,7 +307,11 @@ Uptime: ${Math.floor(uptime / 3600)}h ${Math.floor((uptime % 3600) / 60)}m ${upt
 Memory: ${Math.round(process.memoryUsage().rss / 1024 / 1024)} MB
 Status: Running
 `;
-    fs.writeFileSync(HEARTBEAT_PATH, content, 'utf8');
+    try {
+        fs.writeFileSync(HEARTBEAT_PATH, content, 'utf8');
+    } catch (e) {
+        log(`[Heartbeat] Failed to write HEARTBEAT.md: ${e.message}`, 'WARN');
+    }
 }
 
 // Update heartbeat every 5 minutes
@@ -301,4 +333,5 @@ module.exports = {
     loadDailyMemory,
     appendDailyMemory,
     searchMemory,
+    seedHeartbeatMd,
 };

@@ -39,6 +39,7 @@ data class AppConfig(
     val braveApiKey: String = "",
     val jupiterApiKey: String = "",
     val autoStartOnBoot: Boolean = true,
+    val heartbeatIntervalMinutes: Int = 30,
 ) {
     /** Returns the credential that should be used based on the current authType. */
     val activeCredential: String
@@ -74,6 +75,7 @@ object ConfigManager {
     private const val KEY_WALLET_ADDRESS = "wallet_address"
     private const val KEY_WALLET_LABEL = "wallet_label"
     private const val KEY_MCP_SERVERS_ENC = "mcp_servers_enc"
+    private const val KEY_HEARTBEAT_INTERVAL = "heartbeat_interval"
 
     private fun prefs(context: Context): SharedPreferences =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -99,6 +101,7 @@ object ConfigManager {
             .putString(KEY_AGENT_NAME, config.agentName)
             .putString(KEY_AUTH_TYPE, config.authType)
             .putBoolean(KEY_AUTO_START, config.autoStartOnBoot)
+            .putInt(KEY_HEARTBEAT_INTERVAL, config.heartbeatIntervalMinutes)
             .putBoolean(KEY_SETUP_COMPLETE, true)
 
         // Store setup token separately so switching auth type preserves both
@@ -191,6 +194,7 @@ object ConfigManager {
             braveApiKey = braveApiKey,
             jupiterApiKey = jupiterApiKey,
             autoStartOnBoot = p.getBoolean(KEY_AUTO_START, true),
+            heartbeatIntervalMinutes = p.getInt(KEY_HEARTBEAT_INTERVAL, 30),
         )
     }
 
@@ -220,9 +224,13 @@ object ConfigManager {
             "authType" -> config.copy(authType = value)
             "braveApiKey" -> config.copy(braveApiKey = value)
             "jupiterApiKey" -> config.copy(jupiterApiKey = value)
+            "heartbeatIntervalMinutes" -> config.copy(
+                heartbeatIntervalMinutes = value.toIntOrNull()?.coerceIn(5, 120) ?: 30
+            )
             else -> return
         }
         saveConfig(context, updated)
+        writeAgentSettingsJson(context)
     }
 
     fun saveOwnerId(context: Context, ownerId: String) {
@@ -295,10 +303,26 @@ object ConfigManager {
             |  "authType": "${escapeJson(config.authType)}",
             |  "model": "${escapeJson(config.model)}",
             |  "agentName": "${escapeJson(config.agentName)}",
+            |  "heartbeatIntervalMinutes": ${config.heartbeatIntervalMinutes},
             |  "bridgeToken": "${escapeJson(bridgeToken)}"$braveField$jupiterField$mcpField
             |}
         """.trimMargin()
         File(workspaceDir, "config.json").writeText(json)
+    }
+
+    fun writeAgentSettingsJson(context: Context) {
+        val config = loadConfig(context)
+        if (config == null) {
+            LogCollector.append("[Config] writeAgentSettingsJson: loadConfig returned null; skipping write", LogLevel.WARN)
+            return
+        }
+        val workspaceDir = File(context.filesDir, "workspace").apply { mkdirs() }
+        val json = """{"heartbeatIntervalMinutes":${config.heartbeatIntervalMinutes}}"""
+        try {
+            File(workspaceDir, "agent_settings.json").writeText(json)
+        } catch (e: Exception) {
+            LogCollector.append("[Config] Failed to write agent_settings.json: ${e.message}", LogLevel.WARN)
+        }
     }
 
     fun runtimeValidationError(config: AppConfig?): String? {

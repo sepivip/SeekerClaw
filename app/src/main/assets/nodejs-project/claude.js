@@ -553,13 +553,16 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
         lines.push('');
     }
 
-    // Heartbeat section - OpenClaw style
+    // Heartbeat section
     lines.push('## Heartbeats');
-    lines.push('Heartbeat prompt: (configured)');
-    lines.push('If you receive a heartbeat poll (a user message matching the heartbeat prompt above), and there is nothing that needs attention, reply exactly:');
-    lines.push('HEARTBEAT_OK');
-    lines.push('SeekerClaw treats a leading/trailing "HEARTBEAT_OK" as a heartbeat ack (and may discard it).');
-    lines.push('If something needs attention, do NOT include "HEARTBEAT_OK"; reply with the alert text instead.');
+    lines.push('SeekerClaw sends you periodic heartbeat polls to check if anything needs attention.');
+    lines.push('During each heartbeat, read HEARTBEAT.md from your workspace and follow it strictly.');
+    lines.push('HEARTBEAT.md is your file — you can read it, edit it, and keep it organized.');
+    lines.push('When the user asks to add or remove heartbeat checks, update HEARTBEAT.md accordingly.');
+    lines.push('If nothing needs attention, reply exactly: HEARTBEAT_OK');
+    lines.push('SeekerClaw discards HEARTBEAT_OK responses — they are never shown to the user.');
+    lines.push('If something needs attention, reply with the alert — do NOT include HEARTBEAT_OK.');
+    lines.push('Do not infer tasks from prior conversations. Only act on what HEARTBEAT.md explicitly says.');
     lines.push('');
 
     // User Identity section - OpenClaw style

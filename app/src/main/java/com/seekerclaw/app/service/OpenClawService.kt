@@ -93,6 +93,7 @@ class OpenClawService : Service() {
         // Note: loadConfig() uses SharedPreferences which may be stale in :node process,
         // but writeConfigJson reads the XML file fresh on first access per process.
         ConfigManager.writeConfigJson(this, bridgeToken)
+        ConfigManager.writeAgentSettingsJson(this) // non-ephemeral settings for live Node.js reads
 
         // Validate by checking the written file — more reliable than cross-process SharedPreferences
         val workDir = File(filesDir, "workspace").apply { mkdirs() }
