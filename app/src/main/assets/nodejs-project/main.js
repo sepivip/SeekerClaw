@@ -628,11 +628,15 @@ refreshJupiterProgramLabels();
 // CLAUDE USAGE POLLING (setup_token users)
 // ============================================================================
 
+let _usagePollTimer = null;
+let _usagePollFailCount = 0;
+const USAGE_POLL_MAX_FAILURES = 3;
+
 function startClaudeUsagePolling() {
     if (AUTH_TYPE !== 'setup_token') return;
     log('Starting Claude usage polling (60s interval)', 'DEBUG');
     pollClaudeUsage();
-    setInterval(pollClaudeUsage, 60000);
+    _usagePollTimer = setInterval(pollClaudeUsage, 60000);
 }
 
 async function pollClaudeUsage() {
@@ -648,6 +652,7 @@ async function pollClaudeUsage() {
         });
 
         if (res.status === 200 && res.data) {
+            _usagePollFailCount = 0;
             writeClaudeUsageState({
                 type: 'oauth',
                 five_hour: {
@@ -661,7 +666,14 @@ async function pollClaudeUsage() {
                 updated_at: localTimestamp(),
             });
         } else {
-            log(`Claude usage poll: HTTP ${res.status}`, 'DEBUG');
+            _usagePollFailCount++;
+            if (_usagePollFailCount >= USAGE_POLL_MAX_FAILURES && _usagePollTimer) {
+                clearInterval(_usagePollTimer);
+                _usagePollTimer = null;
+                log(`[Usage] Disabled — API returned ${res.status} (no admin key)`, 'WARN');
+            } else {
+                log(`Claude usage poll: HTTP ${res.status}`, 'DEBUG');
+            }
             writeClaudeUsageState({
                 type: 'oauth',
                 error: `HTTP ${res.status}`,
