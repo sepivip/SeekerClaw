@@ -329,19 +329,25 @@ function getDbSummary() {
                     COALESCE(SUM(output_tokens), 0) as outp,
                     COALESCE(AVG(duration_ms), 0) as avg_ms,
                     COALESCE(SUM(cache_read_tokens), 0) as cache_read,
+                    COALESCE(SUM(cache_creation_tokens), 0) as cache_write,
                     SUM(CASE WHEN status != 200 THEN 1 ELSE 0 END) as errors
              FROM api_request_log WHERE timestamp LIKE ?`, [today + '%']
         );
         if (rows.length > 0 && rows[0].values.length > 0) {
-            const [cnt, inp, outp, avgMs, cacheRead, errors] = rows[0].values[0];
+            const [cnt, inp, outp, avgMs, cacheRead, cacheWrite, errors] = rows[0].values[0];
             if ((cnt || 0) > 0) {
+                // Denominator = total tokens billed (non-cached + cache_read + cache_write).
+                // Using only inp (non-cached) as denominator caused ratios > 1 when cache
+                // reads dominated, producing UI values like 878%.
+                const totalInp = (inp || 0) + (cacheRead || 0) + (cacheWrite || 0);
+                const cacheHitRate = totalInp > 0 ? Math.min(1, (cacheRead || 0) / totalInp) : 0;
                 summary.today = {
                     requests: cnt,
                     input_tokens: inp || 0,
                     output_tokens: outp || 0,
                     avg_latency_ms: Math.round(avgMs || 0),
                     errors: errors || 0,
-                    cache_hit_rate: (inp || 0) > 0 ? +((cacheRead || 0) / inp).toFixed(2) : 0
+                    cache_hit_rate: +cacheHitRate.toFixed(4),
                 };
             }
         }
