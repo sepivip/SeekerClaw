@@ -52,6 +52,10 @@ object SettingsHelpTexts {
         "Shows on the dashboard and in its personality. " +
         "Totally cosmetic — go wild."
 
+    const val HEARTBEAT_INTERVAL =
+        "How often your agent proactively checks HEARTBEAT.md for tasks. " +
+        "5–120 minutes. Restart required after changing."
+
     const val BRAVE_API_KEY =
         "Optional. Gives your agent Brave Search (better results). " +
         "Free key at brave.com/search/api."

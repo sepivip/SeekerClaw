@@ -306,7 +306,15 @@ object ServiceState {
                 consecutiveFailures = json.optInt("consecutiveFailures", 0),
                 isStale = stale,
             )
-            if (_agentHealth.value != health) _agentHealth.value = health
+            if (_agentHealth.value != health) {
+                val prevStale = _agentHealth.value.isStale
+                if (!prevStale && stale) {
+                    LogCollector.append("[Health] Agent health file became stale — Node.js may have lost network", LogLevel.WARN)
+                } else if (prevStale && !stale) {
+                    LogCollector.append("[Health] Agent health recovered", LogLevel.INFO)
+                }
+                _agentHealth.value = health
+            }
         } catch (_: Exception) {}
     }
 

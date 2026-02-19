@@ -13,6 +13,7 @@ const {
     MEMORY_DIR,
     localTimestamp, log, setRedactFn,
     getOwnerId, setOwnerId,
+    workDir, config,
 } = require('./config');
 
 // OWNER_ID is mutable (auto-detect from first message). Keep a local let
@@ -54,7 +55,7 @@ const mcpManager = new MCPManager(log, wrapExternalContent);
 
 const {
     loadSoul, loadBootstrap, loadIdentity,
-    loadMemory,
+    loadMemory, seedHeartbeatMd,
 } = require('./memory');
 
 // ============================================================================
@@ -748,6 +749,7 @@ telegram('getMe')
             // Initialize SQL.js database before polling (non-fatal if WASM fails)
             await initDatabase();
             indexMemoryFiles();
+            seedHeartbeatMd();
 
             // Wire shutdown deps now that conversations + saveSessionSummary exist
             setShutdownDeps({ conversations, saveSessionSummary, MIN_MESSAGES_FOR_SUMMARY });
@@ -819,7 +821,76 @@ telegram('getMe')
         process.exit(1);
     });
 
-// Heartbeat log
+// Heartbeat log (uptime/memory debug — keep as-is)
 setInterval(() => {
     log(`Heartbeat - uptime: ${Math.floor(process.uptime())}s, memory: ${Math.round(process.memoryUsage().rss / 1024 / 1024)}MB`, 'DEBUG');
 }, 5 * 60 * 1000);
+
+// ── Heartbeat Agent Timer ───────────────────────────────────────────────────
+// On each tick, reads heartbeatIntervalMinutes from agent_settings.json (written
+// by Android on every Settings save) so interval changes take effect without restart.
+const path = require('path');
+
+function getHeartbeatIntervalMs() {
+    try {
+        const settingsPath = path.join(workDir, 'agent_settings.json');
+        if (fs.existsSync(settingsPath)) {
+            const s = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+            const min = parseInt(s.heartbeatIntervalMinutes, 10);
+            if (min >= 5 && min <= 120) return min * 60 * 1000;
+        }
+    } catch (_) {}
+    return (config.heartbeatIntervalMinutes || 30) * 60 * 1000;
+}
+
+const HEARTBEAT_PROMPT =
+    'Read HEARTBEAT.md if it exists. Follow it strictly. ' +
+    'Do not infer or repeat old tasks from prior chats. ' +
+    'If nothing needs attention, reply HEARTBEAT_OK.';
+let isHeartbeatInFlight = false;
+let lastHeartbeatAt = 0;
+
+async function runHeartbeat() {
+    const ownerIdStr = getOwnerId();
+    if (!ownerIdStr) return; // agent not set up yet
+
+    const ownerChatId = parseInt(ownerIdStr, 10);
+    if (isNaN(ownerChatId)) return;
+
+    // Skip if a user message is actively being processed for owner's chat
+    if (chatQueues.has(ownerChatId)) {
+        log('[Heartbeat] Skipping — user message in flight', 'DEBUG');
+        return;
+    }
+    if (isHeartbeatInFlight) {
+        log('[Heartbeat] Skipping — previous heartbeat still running', 'DEBUG');
+        return;
+    }
+
+    isHeartbeatInFlight = true;
+    log('[Heartbeat] Running probe...', 'DEBUG');
+    try {
+        const response = await chat(ownerChatId, HEARTBEAT_PROMPT);
+        const trimmed = response.trim();
+        if (trimmed === 'HEARTBEAT_OK' || trimmed.startsWith('HEARTBEAT_OK')) {
+            log('[Heartbeat] Agent returned HEARTBEAT_OK — all clear', 'DEBUG');
+        } else if (trimmed !== 'SILENT_REPLY') {
+            log('[Heartbeat] Agent has alert: ' + trimmed.slice(0, 80), 'INFO');
+            await sendMessage(ownerChatId, trimmed);
+        }
+    } catch (e) {
+        log(`[Heartbeat] Error: ${e.message}`, 'WARN');
+    } finally {
+        isHeartbeatInFlight = false;
+    }
+}
+
+// Poll every 1 minute; fire when configured interval has elapsed.
+// This allows interval changes in Settings to take effect on the next check cycle.
+setInterval(async () => {
+    const intervalMs = getHeartbeatIntervalMs();
+    if (Date.now() - lastHeartbeatAt >= intervalMs) {
+        lastHeartbeatAt = Date.now();
+        await runHeartbeat();
+    }
+}, 60 * 1000);

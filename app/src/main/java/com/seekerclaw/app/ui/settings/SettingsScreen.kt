@@ -461,6 +461,16 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                     info = SettingsHelpTexts.AGENT_NAME,
                 )
                 ConfigField(
+                    label = "Heartbeat Interval",
+                    value = "Every ${config?.heartbeatIntervalMinutes ?: 30} minutes",
+                    onClick = {
+                        editField = "heartbeatIntervalMinutes"
+                        editLabel = "Heartbeat Interval (minutes, 5–120)"
+                        editValue = (config?.heartbeatIntervalMinutes ?: 30).toString()
+                    },
+                    info = SettingsHelpTexts.HEARTBEAT_INTERVAL,
+                )
+                ConfigField(
                     label = "Brave API Key",
                     value = config?.braveApiKey?.let { key ->
                         if (key.isBlank()) "Not set (optional)"
