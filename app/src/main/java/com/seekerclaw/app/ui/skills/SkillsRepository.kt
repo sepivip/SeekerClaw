@@ -56,6 +56,7 @@ object SkillsRepository {
             is String -> t.split(',').map { it.trim().lowercase() }.filter { it.isNotEmpty() }
             else -> extractBodyTriggers(content)
         }
+        val warnings = validateSkillFormat(description, version, triggers, content)
         return SkillInfo(
             name = name,
             description = description,
@@ -64,6 +65,7 @@ object SkillsRepository {
             triggers = triggers,
             filePath = filePath,
             dirName = dirName,
+            warnings = warnings,
         )
     }
 
@@ -164,5 +166,21 @@ object SkillsRepository {
             ?: return emptyList()
         return line.substring(line.indexOf(':') + 1)
             .split(',').map { it.trim().lowercase() }.filter { it.isNotEmpty() }
+    }
+
+    private fun validateSkillFormat(
+        description: String,
+        version: String,
+        triggers: List<String>,
+        content: String,
+    ): List<String> {
+        val warnings = mutableListOf<String>()
+        if (description.isEmpty()) warnings += "missing \"description\""
+        if (version.isEmpty()) warnings += "missing \"version\""
+        val hasLegacyTrigger = content.lines().any { it.trim().lowercase().startsWith("trigger:") }
+        if (triggers.isNotEmpty() && hasLegacyTrigger) {
+            warnings += "has legacy \"Trigger:\" line — use triggers: in frontmatter"
+        }
+        return warnings
     }
 }

@@ -278,6 +278,14 @@ private fun SkillCard(
                     color = SeekerClawColors.TextPrimary,
                     modifier = Modifier.weight(1f),
                 )
+                if (skill.warnings.isNotEmpty()) {
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        text = "⚠",
+                        fontSize = 14.sp,
+                        color = SeekerClawColors.Warning,
+                    )
+                }
                 if (skill.version.isNotEmpty()) {
                     Spacer(Modifier.width(8.dp))
                     Text(

@@ -8,4 +8,5 @@ data class SkillInfo(
     val triggers: List<String>,
     val filePath: String,
     val dirName: String,
+    val warnings: List<String> = emptyList(),
 )
