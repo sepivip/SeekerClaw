@@ -1,8 +1,11 @@
 package com.seekerclaw.app.ui.skills
 
+import android.util.Log
 import java.io.File
 
 object SkillsRepository {
+
+    private const val TAG = "SkillsRepository"
 
     fun loadSkills(workspaceDir: File): List<SkillInfo> {
         val skillsDir = File(workspaceDir, "skills")
@@ -17,6 +20,7 @@ object SkillsRepository {
                         val skillFile = File(entry, "SKILL.md")
                         if (skillFile.exists()) {
                             runCatching { skillFile.readText() }
+                                .onFailure { e -> Log.w(TAG, "Failed to read ${skillFile.path}: ${e.message}") }
                                 .getOrNull()
                                 ?.let { parseSkillFile(it, entry.name, skillFile.absolutePath) }
                                 ?.let { result.add(it) }
@@ -24,6 +28,7 @@ object SkillsRepository {
                     }
                     entry.isFile && entry.name.endsWith(".md") -> {
                         runCatching { entry.readText() }
+                            .onFailure { e -> Log.w(TAG, "Failed to read ${entry.path}: ${e.message}") }
                             .getOrNull()
                             ?.let { parseSkillFile(it, entry.nameWithoutExtension, entry.absolutePath) }
                             ?.let { result.add(it) }
@@ -40,7 +45,8 @@ object SkillsRepository {
             ?: return null
         val description = (fm["description"] as? String)?.trim() ?: ""
         val version = (fm["version"] as? String)?.trim() ?: ""
-        val emoji = (fm["emoji"] as? String)?.trim() ?: ""
+        val emoji = (fm["emoji"] as? String)?.trim()?.takeIf { it.isNotEmpty() }
+            ?: extractFrontmatterLine(content, "emoji")
         @Suppress("UNCHECKED_CAST")
         val triggers: List<String> = when (val t = fm["triggers"]) {
             is List<*> -> (t as? List<String>)
@@ -127,6 +133,18 @@ object SkillsRepository {
             i++
         }
         return result
+    }
+
+    /** Scan the raw frontmatter block for any line containing `key:`, regardless of nesting depth. */
+    private fun extractFrontmatterLine(content: String, key: String): String {
+        if (!content.startsWith("---")) return ""
+        val endIdx = content.indexOf("---", 3)
+        if (endIdx < 0) return ""
+        return content.substring(3, endIdx).lines()
+            .firstOrNull { it.trim().startsWith("$key:") }
+            ?.substringAfter(':')?.trim()
+            ?.removeSurrounding("\"")?.removeSurrounding("'")
+            ?: ""
     }
 
     private fun extractHeading(content: String): String? {

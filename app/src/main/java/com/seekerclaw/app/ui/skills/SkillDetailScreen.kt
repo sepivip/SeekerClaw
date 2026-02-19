@@ -57,7 +57,7 @@ fun SkillDetailScreen(
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Medium,
                 color = SeekerClawColors.Primary,
-                modifier = Modifier.clickable(onClick = onBack),
+                modifier = Modifier.clickable(onClickLabel = "Back to skills list", onClick = onBack),
             )
         }
 
@@ -87,7 +87,7 @@ fun SkillDetailScreen(
                     if (skill.version.isNotEmpty()) {
                         Spacer(Modifier.height(2.dp))
                         Text(
-                            text = "v${skill.version.removePrefix("v")}",
+                            text = "v${skill.version.removePrefix("v").removePrefix("V")}",
                             fontFamily = FontFamily.Monospace,
                             fontSize = 12.sp,
                             color = SeekerClawColors.TextDim,

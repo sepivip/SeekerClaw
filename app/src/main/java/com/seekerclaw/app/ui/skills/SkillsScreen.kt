@@ -42,7 +42,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.seekerclaw.app.ui.theme.RethinkSans
 import com.seekerclaw.app.ui.theme.SeekerClawColors
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -52,10 +54,11 @@ fun SkillsScreen() {
     val workspaceDir = remember { File(context.filesDir, "workspace") }
     var selectedSkill by remember { mutableStateOf<SkillInfo?>(null) }
 
-    if (selectedSkill != null) {
+    val skill = selectedSkill
+    if (skill != null) {
         BackHandler { selectedSkill = null }
         SkillDetailScreen(
-            skill = selectedSkill!!,
+            skill = skill,
             onBack = { selectedSkill = null },
         )
     } else {
@@ -78,8 +81,9 @@ private fun SkillsListContent(
     val scope = rememberCoroutineScope()
     val shape = remember { RoundedCornerShape(SeekerClawColors.CornerRadius) }
 
-    fun loadSkills() {
-        skills = SkillsRepository.loadSkills(workspaceDir)
+    suspend fun loadSkills() {
+        val loaded = withContext(Dispatchers.IO) { SkillsRepository.loadSkills(workspaceDir) }
+        skills = loaded
     }
 
     LaunchedEffect(Unit) { loadSkills() }
@@ -196,7 +200,7 @@ private fun SearchField(
                 fontFamily = FontFamily.Monospace,
                 fontSize = 14.sp,
                 color = SeekerClawColors.TextDim,
-                modifier = Modifier.clickable { onQueryChange("") },
+                modifier = Modifier.clickable(onClickLabel = "Clear search") { onQueryChange("") },
             )
         }
     }
@@ -292,7 +296,7 @@ private fun SkillCard(
                 if (skill.version.isNotEmpty()) {
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        text = "v${skill.version.removePrefix("v")}",
+                        text = "v${skill.version.removePrefix("v").removePrefix("V")}",
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp,
                         color = SeekerClawColors.TextDim,
@@ -302,7 +306,7 @@ private fun SkillCard(
             if (skill.description.isNotEmpty()) {
                 Spacer(Modifier.height(3.dp))
                 Text(
-                    text = skill.description.lines().first(),
+                    text = skill.description.lines().firstOrNull { it.isNotBlank() } ?: "",
                     fontFamily = RethinkSans,
                     fontSize = 13.sp,
                     color = SeekerClawColors.TextDim,
