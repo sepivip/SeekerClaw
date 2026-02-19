@@ -60,8 +60,15 @@ class OpenClawService : Service() {
                 LogLevel.ERROR,
             )
             ServiceState.updateStatus(ServiceStatus.ERROR)
+            // Remove the foreground notification and post a separate persistent setup reminder.
+            // Using a distinct SETUP_NOTIFICATION_ID ensures it is not bound to service lifetime
+            // and survives the stopSelf() call below.
+            stopForeground(STOP_FOREGROUND_REMOVE)
             getSystemService(android.app.NotificationManager::class.java)
-                ?.notify(NOTIFICATION_ID, createNotification("Setup required — open SeekerClaw to finish setup"))
+                ?.notify(
+                    SETUP_NOTIFICATION_ID,
+                    createNotification("Setup required — open SeekerClaw to finish setup"),
+                )
             stopSelf()
             return START_NOT_STICKY
         }
@@ -249,7 +256,10 @@ class OpenClawService : Service() {
             if (it.isHeld) it.release()
         }
         ServiceState.clearBridgeToken()
-        ServiceState.updateStatus(ServiceStatus.STOPPED)
+        // Preserve ERROR status (e.g., owner not configured) — only reset to STOPPED on clean exits.
+        if (ServiceState.status.value != ServiceStatus.ERROR) {
+            ServiceState.updateStatus(ServiceStatus.STOPPED)
+        }
         ServiceState.updateUptime(0)
 
         // Clean shutdown should clear crash-loop counters. Unexpected deaths won't hit this path.
@@ -285,6 +295,7 @@ class OpenClawService : Service() {
 
     companion object {
         private const val NOTIFICATION_ID = 1
+        private const val SETUP_NOTIFICATION_ID = 2 // separate ID — persists after service stops
         private val restartHandler = Handler(Looper.getMainLooper())
 
         fun start(context: Context) {
