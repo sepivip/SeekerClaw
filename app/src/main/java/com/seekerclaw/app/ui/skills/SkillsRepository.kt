@@ -177,8 +177,12 @@ object SkillsRepository {
         val warnings = mutableListOf<String>()
         if (description.isEmpty()) warnings += "missing \"description\""
         if (version.isEmpty()) warnings += "missing \"version\""
-        val hasLegacyTrigger = content.lines().any { it.trim().lowercase().startsWith("trigger:") }
-        if (triggers.isNotEmpty() && hasLegacyTrigger) {
+        val body = if (content.startsWith("---")) {
+            val end = content.indexOf("---", 3)
+            if (end > 0) content.substring(end + 3) else content
+        } else content
+        val hasLegacyTrigger = body.lines().any { it.trim().lowercase().startsWith("trigger:") }
+        if (hasLegacyTrigger) {
             warnings += "has legacy \"Trigger:\" line — use triggers: in frontmatter"
         }
         return warnings
