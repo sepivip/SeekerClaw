@@ -108,6 +108,11 @@ let BRIDGE_TOKEN = normalizeSecret(config.bridgeToken || '');
 const USER_AGENT = 'SeekerClaw/1.0 (Android; +https://seekerclaw.com)';
 
 // Reaction config with validation
+// FIX-2 (BAT-219): Security note — 'own' (default) restricts reaction events to the owner only.
+// Setting this to 'all' surfaces emoji reactions from ANY Telegram user to the agent as
+// informational events. This does not bypass the owner gate (no tool calls are triggered),
+// but non-owner activity becomes visible to the agent. Keep 'own' unless you specifically
+// need to observe public reactions on the bot's messages.
 const VALID_REACTION_NOTIFICATIONS = new Set(['off', 'own', 'all']);
 const VALID_REACTION_GUIDANCE = new Set(['off', 'minimal', 'full']);
 const REACTION_NOTIFICATIONS = VALID_REACTION_NOTIFICATIONS.has(config.reactionNotifications)
@@ -145,7 +150,10 @@ if (!BOT_TOKEN || !ANTHROPIC_KEY) {
 }
 
 if (!OWNER_ID) {
-    log('Owner ID not set — will auto-detect from first message', 'DEBUG');
+    // FIX-3 (BAT-219): Upgraded DEBUG → WARN. An unconfigured owner ID means the first
+    // inbound Telegram message will silently claim ownership. OpenClawService should have
+    // blocked startup before reaching this point, but log clearly if it is ever bypassed.
+    log('WARNING: Owner ID not set — first inbound message will claim ownership. Complete setup via the Android app.', 'WARN');
 } else {
     const authLabel = AUTH_TYPE === 'setup_token' ? 'setup-token' : 'api-key';
     log(`Agent: ${AGENT_NAME} | Model: ${MODEL} | Auth: ${authLabel} | Owner: ${OWNER_ID}`, 'DEBUG');
