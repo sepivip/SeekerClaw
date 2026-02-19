@@ -666,11 +666,12 @@ async function pollClaudeUsage() {
                 updated_at: localTimestamp(),
             });
         } else {
-            _usagePollFailCount++;
-            if (_usagePollFailCount >= USAGE_POLL_MAX_FAILURES && _usagePollTimer) {
+            const isAuthError = res.status === 401 || res.status === 403;
+            if (isAuthError) _usagePollFailCount++;
+            if (isAuthError && _usagePollFailCount >= USAGE_POLL_MAX_FAILURES && _usagePollTimer) {
                 clearInterval(_usagePollTimer);
                 _usagePollTimer = null;
-                log(`[Usage] Disabled — API returned ${res.status} (no admin key)`, 'WARN');
+                log(`[Usage] Disabled — API returned ${res.status} (authentication/permission error)`, 'WARN');
             } else {
                 log(`Claude usage poll: HTTP ${res.status}`, 'DEBUG');
             }
