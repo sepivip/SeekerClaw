@@ -423,13 +423,9 @@ async function handleMessage(msg) {
                                     const installResult = await executeTool('skill_install', { content: mdContent }, chatId);
                                     if (installResult && installResult.result) {
                                         log(`Skill auto-installed from attachment: ${installResult.result}`, 'INFO');
-                                        await sendMessage(chatId, installResult.result, msg.message_id);
-                                        if (!text) {
-                                            return; // No caption — nothing more to do
-                                        }
-                                        // Caption present — forward to Claude via normal chat flow
-                                        userContent = `[Skill just installed. User's message accompanying the file: ${text}]`;
+                                        // Set flag BEFORE sendMessage so a Telegram error can't cause a fall-through to chat()
                                         skillAutoInstalled = true;
+                                        await sendMessage(chatId, installResult.result, msg.message_id);
                                     } else if (installResult && installResult.error) {
                                         // Validation failed — tell user why (e.g. missing name, injection blocked)
                                         await sendMessage(chatId, `Skill install failed: ${installResult.error}`, msg.message_id);
@@ -438,10 +434,22 @@ async function handleMessage(msg) {
                                     // Non-skill or failed — fall through to normal file note
                                 }
                             } catch (e) {
-                                log(`Skill auto-detect error: ${e.message}`, 'WARN');
+                                if (skillAutoInstalled) {
+                                    // Install succeeded but confirmation send failed — still don't forward to chat()
+                                    log(`Skill install confirmation send failed: ${e.message}`, 'WARN');
+                                } else {
+                                    log(`Skill auto-detect error: ${e.message}`, 'WARN');
+                                }
                             }
                         }
-                        if (!skillAutoInstalled) {
+                        // Routing is OUTSIDE the try so it always runs, even if sendMessage threw above
+                        if (skillAutoInstalled) {
+                            if (!text) {
+                                return; // No caption — nothing more to do
+                            }
+                            // Caption present — forward to Claude via normal chat flow
+                            userContent = `[Skill just installed. User's message accompanying the file: ${text}]`;
+                        } else {
                             // Non-image file: tell the agent where it's saved
                             const fileNote = `[File received: ${safeFileName} (${saved.size} bytes, ${safeMimeType}) — saved to ${relativePath}. Use the read tool to access it.]`;
                             userContent = text ? `${text}\n\n${fileNote}` : fileNote;

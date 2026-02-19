@@ -207,6 +207,11 @@ function parseSkillFile(content, skillDir) {
             if (frontmatter.name) skill.name = frontmatter.name;
             if (frontmatter.description) skill.description = frontmatter.description;
             if (frontmatter.version) skill.version = frontmatter.version;
+            if (frontmatter.triggers) {
+                skill.triggers = toArray(frontmatter.triggers)
+                    .map(t => String(t).trim().toLowerCase())
+                    .filter(Boolean);
+            }
             if (frontmatter.emoji) skill.emoji = frontmatter.emoji;
 
             // Handle metadata.openclaw.emoji
