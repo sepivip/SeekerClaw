@@ -324,7 +324,9 @@ function validateSkillFormat(skill, filePath) {
     }
     if (warnings.length > 0) {
         _skillWarningsLogged.add(filePath);
-        log(`Skill format warning (${path.basename(filePath)}): ${warnings.join(', ')}`, 'WARN');
+        const relPath = path.relative(path.dirname(SKILLS_DIR), filePath).replace(/\\/g, '/');
+        const nameTag = skill.name ? ` (name: ${skill.name})` : '';
+        log(`[Skills] Warning: ${relPath}${nameTag}: ${warnings.join('; ')}`, 'WARN');
     }
 }
 

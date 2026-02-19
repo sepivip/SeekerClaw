@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -427,11 +428,12 @@ private fun FilterChip(
         onClick = onClick,
         modifier = modifier,
         shape = shape,
+        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
         colors = ButtonDefaults.buttonColors(
             containerColor = if (active) activeColor.copy(alpha = 0.2f) else SeekerClawColors.Surface,
             contentColor = if (active) activeColor else SeekerClawColors.TextDim,
         ),
     ) {
-        Text(label, fontFamily = RethinkSans, fontSize = 12.sp)
+        Text(text = label, fontFamily = RethinkSans, fontSize = 12.sp, maxLines = 1, softWrap = false)
     }
 }

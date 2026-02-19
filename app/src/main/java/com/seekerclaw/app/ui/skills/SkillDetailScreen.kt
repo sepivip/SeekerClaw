@@ -141,6 +141,31 @@ fun SkillDetailScreen(
                 }
             }
 
+            // Diagnostics
+            if (skill.warnings.isNotEmpty()) {
+                InfoSection(label = "DIAGNOSTICS", shape = shape) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        skill.warnings.forEach { warning ->
+                            Row(verticalAlignment = Alignment.Top) {
+                                Text(
+                                    text = "⚠",
+                                    fontSize = 13.sp,
+                                    color = SeekerClawColors.Warning,
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    text = warning,
+                                    fontFamily = RethinkSans,
+                                    fontSize = 13.sp,
+                                    color = SeekerClawColors.Warning,
+                                    lineHeight = 18.sp,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
             // File path
             InfoSection(label = "FILE", shape = shape) {
                 Text(
