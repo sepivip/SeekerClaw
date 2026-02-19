@@ -2,7 +2,6 @@
 name: sms
 version: "1.0.0"
 description: "Send SMS text messages to contacts or phone numbers"
-version: "1.0.0"
 metadata:
   openclaw:
     emoji: "💬"

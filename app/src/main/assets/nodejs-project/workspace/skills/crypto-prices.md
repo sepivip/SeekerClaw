@@ -2,7 +2,6 @@
 name: crypto-prices
 version: "1.0.0"
 description: "Get real-time cryptocurrency prices and market data from CoinGecko (free, no API key)"
-version: "1.0.0"
 metadata:
   openclaw:
     emoji: "💰"
