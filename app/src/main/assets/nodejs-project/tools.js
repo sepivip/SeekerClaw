@@ -54,6 +54,8 @@ const {
 
 const { visionAnalyzeImage, conversations } = require('./claude');
 
+const { loadSkills } = require('./skills');
+
 // ── Injected dependencies (set from main.js at startup) ───────────────────
 // mcpManager singleton lives in main.js; injected to route mcp__* tools.
 
