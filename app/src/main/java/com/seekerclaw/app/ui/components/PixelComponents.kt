@@ -86,7 +86,7 @@ fun SetupStepIndicator(
                         .size(circleSize)
                         .background(
                             color = when {
-                                isCompleted -> SeekerClawColors.Accent
+                                isCompleted -> SeekerClawColors.ActionPrimary
                                 isCurrent -> SeekerClawColors.Primary
                                 else -> SeekerClawColors.Surface
                             },

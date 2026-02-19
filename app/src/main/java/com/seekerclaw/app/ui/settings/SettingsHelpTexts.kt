@@ -54,8 +54,7 @@ object SettingsHelpTexts {
 
     const val BRAVE_API_KEY =
         "Optional. Gives your agent Brave Search (better results). " +
-        "Free key at brave.com/search/api. " +
-        "Without it, DuckDuckGo handles search — still works, just less fancy."
+        "Free key at brave.com/search/api."
 
     // ── Preferences ────────────────────────────────────────────────
 
