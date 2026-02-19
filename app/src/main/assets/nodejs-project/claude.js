@@ -929,6 +929,87 @@ async function claudeApiCall(body, chatId) {
 }
 
 // ============================================================================
+// CONVERSATION SANITIZATION
+// ============================================================================
+
+// Fix orphaned tool_use/tool_result blocks that cause Claude API 400 errors.
+// This can happen when a tool execution throws or times out — the assistant's
+// tool_use message is already in history but the matching tool_result never arrives.
+function sanitizeConversation(messages) {
+    let stripped = 0;
+
+    // Pass 1: fix assistant messages with tool_use blocks missing matching tool_results
+    for (let i = messages.length - 1; i >= 0; i--) {
+        const msg = messages[i];
+        if (msg.role !== 'assistant' || !Array.isArray(msg.content)) continue;
+
+        const toolUseIds = new Set();
+        for (const b of msg.content) {
+            if (b.type === 'tool_use') toolUseIds.add(b.id);
+        }
+        if (toolUseIds.size === 0) continue;
+
+        // Collect matched IDs from the next message
+        const next = messages[i + 1];
+        const matchedIds = new Set();
+        if (next && next.role === 'user' && Array.isArray(next.content)) {
+            for (const b of next.content) {
+                if (b.type === 'tool_result' && toolUseIds.has(b.tool_use_id)) {
+                    matchedIds.add(b.tool_use_id);
+                }
+            }
+        }
+        if (matchedIds.size === toolUseIds.size) continue; // all matched
+
+        // Strip orphaned tool_use blocks
+        const orphanedIds = new Set([...toolUseIds].filter(id => !matchedIds.has(id)));
+        msg.content = msg.content.filter(b => !(b.type === 'tool_use' && orphanedIds.has(b.id)));
+        stripped += orphanedIds.size;
+
+        if (msg.content.length === 0) {
+            messages.splice(i, 1);
+        }
+    }
+
+    // Pass 2: fix user messages with tool_result blocks missing matching tool_use
+    for (let i = messages.length - 1; i >= 0; i--) {
+        const msg = messages[i];
+        if (msg.role !== 'user' || !Array.isArray(msg.content)) continue;
+
+        const resultIds = [];
+        for (const b of msg.content) {
+            if (b.type === 'tool_result') resultIds.push(b.tool_use_id);
+        }
+        if (resultIds.length === 0) continue;
+
+        // Collect tool_use IDs from the previous message
+        const prev = messages[i - 1];
+        const prevIds = new Set();
+        if (prev && prev.role === 'assistant' && Array.isArray(prev.content)) {
+            for (const b of prev.content) {
+                if (b.type === 'tool_use') prevIds.add(b.id);
+            }
+        }
+
+        const orphaned = resultIds.filter(id => !prevIds.has(id));
+        if (orphaned.length === 0) continue;
+
+        const orphanedSet = new Set(orphaned);
+        msg.content = msg.content.filter(b => !(b.type === 'tool_result' && orphanedSet.has(b.tool_use_id)));
+        stripped += orphaned.length;
+
+        if (msg.content.length === 0) {
+            messages.splice(i, 1);
+        }
+    }
+
+    if (stripped > 0) {
+        log(`[Sanitize] Stripped ${stripped} orphaned tool_use/tool_result block(s) from conversation`, 'WARN');
+    }
+    return stripped;
+}
+
+// ============================================================================
 // CHAT
 // ============================================================================
 
@@ -959,6 +1040,10 @@ async function chat(chatId, userMessage) {
     addToConversation(chatId, 'user', userMessage);
 
     const messages = getConversation(chatId);
+
+    // Fix any orphaned tool_use/tool_result blocks from previous failed calls
+    // (prevents 400 errors from Claude API due to mismatched pairs)
+    sanitizeConversation(messages);
 
     // Call Claude API with tool use loop
     let response;
