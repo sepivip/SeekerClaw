@@ -501,6 +501,7 @@ module.exports = {
     cleanResponse,
     toTelegramHtml,
     sentMessageCache,
+    SENT_CACHE_TTL,
     recordSentMessage,
     sendMessage,
     sendTyping,
