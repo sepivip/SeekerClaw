@@ -81,6 +81,14 @@ object ServiceState {
     private val _agentHealth = MutableStateFlow(AgentHealth())
     val agentHealth: StateFlow<AgentHealth> = _agentHealth
 
+    // Private lock for health transition logging.
+    // Prevents the TOCTOU where overlapping pollingJob coroutines (caused by cooperative
+    // cancellation in startPolling) both capture prevStale before the first write commits.
+    // lastLoggedStale tracks the last-logged direction so duplicate same-direction logs
+    // are suppressed even if two coroutines race to the synchronized block.
+    private val healthTransitionLock = Any()
+    @Volatile private var lastLoggedStale: Boolean? = null
+
     // Per-boot bridge auth token — persisted to file for cross-process access.
     // Set by OpenClawService (:node process), read by UI (main process) via polling.
     @Volatile
@@ -306,15 +314,23 @@ object ServiceState {
                 consecutiveFailures = json.optInt("consecutiveFailures", 0),
                 isStale = stale,
             )
-            if (_agentHealth.value != health) {
-                val prevStale = _agentHealth.value.isStale
-                if (!prevStale && stale) {
-                    LogCollector.append("[Health] Agent health file became stale — Node.js may have lost network", LogLevel.WARN)
-                } else if (prevStale && !stale) {
-                    LogCollector.append("[Health] Agent health recovered", LogLevel.INFO)
+            // Determine log entry inside a private lock (state mutation only, no I/O).
+            // Lock hold time is kept short; LogCollector.append() is called after release.
+            var logEntry: Pair<String, LogLevel>? = null
+            synchronized(healthTransitionLock) {
+                if (_agentHealth.value != health) {
+                    val prevStale = _agentHealth.value.isStale
+                    if (!prevStale && stale && lastLoggedStale != true) {
+                        logEntry = Pair("[Health] Agent health file became stale — Node.js may have lost network", LogLevel.WARN)
+                        lastLoggedStale = true
+                    } else if (prevStale && !stale && lastLoggedStale != false) {
+                        logEntry = Pair("[Health] Agent health recovered", LogLevel.INFO)
+                        lastLoggedStale = false
+                    }
+                    _agentHealth.value = health
                 }
-                _agentHealth.value = health
             }
+            logEntry?.let { (msg, level) -> LogCollector.append(msg, level) }
         } catch (_: Exception) {}
     }
 
