@@ -20,15 +20,12 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.PullToRefreshBox
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -43,11 +40,9 @@ import androidx.compose.ui.unit.sp
 import com.seekerclaw.app.ui.theme.RethinkSans
 import com.seekerclaw.app.ui.theme.SeekerClawColors
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SkillsScreen() {
     val context = LocalContext.current
@@ -69,16 +64,13 @@ fun SkillsScreen() {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SkillsListContent(
     workspaceDir: File,
     onSkillClick: (SkillInfo) -> Unit,
 ) {
     var skills by remember { mutableStateOf<List<SkillInfo>>(emptyList()) }
-    var isRefreshing by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
-    val scope = rememberCoroutineScope()
     val shape = remember { RoundedCornerShape(SeekerClawColors.CornerRadius) }
 
     suspend fun loadSkills() {
@@ -97,15 +89,7 @@ private fun SkillsListContent(
         }
     }
 
-    PullToRefreshBox(
-        isRefreshing = isRefreshing,
-        onRefresh = {
-            scope.launch {
-                isRefreshing = true
-                loadSkills()
-                isRefreshing = false
-            }
-        },
+    Box(
         modifier = Modifier
             .fillMaxSize()
             .background(SeekerClawColors.Background),
@@ -118,7 +102,7 @@ private fun SkillsListContent(
             item {
                 Text(
                     text = if (searchQuery.isEmpty()) "Skills (${skills.size})"
-                       else "Skills (${filtered.size} of ${skills.size})",
+                           else "Skills (${filtered.size} of ${skills.size})",
                     fontFamily = RethinkSans,
                     fontSize = 22.sp,
                     fontWeight = FontWeight.Bold,
