@@ -3,81 +3,54 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=412, initial-scale=1.0">
-<title>SeekerClaw — Dashboard</title>
+<title>SeekerClaw — AgentOS</title>
 <style>
 /* ============================================================
-   LOCAL FONTS — @font-face (works on file:// protocol)
+   LOCAL FONTS
    ============================================================ */
 @font-face {
   font-family: 'Rethink Sans';
   src: url('fonts/rethink_sans_regular.ttf') format('truetype');
-  font-weight: 400;
-  font-style: normal;
-  font-display: swap;
+  font-weight: 400; font-style: normal; font-display: swap;
 }
 @font-face {
   font-family: 'Rethink Sans';
   src: url('fonts/rethink_sans_medium.ttf') format('truetype');
-  font-weight: 500;
-  font-style: normal;
-  font-display: swap;
+  font-weight: 500; font-style: normal; font-display: swap;
 }
 @font-face {
   font-family: 'Rethink Sans';
   src: url('fonts/rethink_sans_bold.ttf') format('truetype');
-  font-weight: 700;
-  font-style: normal;
-  font-display: swap;
+  font-weight: 700; font-style: normal; font-display: swap;
 }
 @font-face {
   font-family: 'Rethink Sans';
   src: url('fonts/rethink_sans_extrabold.ttf') format('truetype');
-  font-weight: 800;
-  font-style: normal;
-  font-display: swap;
+  font-weight: 800; font-style: normal; font-display: swap;
 }
+
 /* ============================================================
-   DARKOPS THEME — exact port from Theme.kt
+   DARKOPS THEME
    ============================================================ */
 :root {
-  /* Backgrounds */
   --bg: #0A0A0F;
   --surface: #16161F;
-  --surface-highlight: #1E1E2E;
+  --surface-hi: #1E1E2E;
   --card-border: rgba(55, 65, 81, 0.25);
-
-  /* Primary (crimson red) */
   --primary: #E41F28;
-  --primary-dim: #B81820;
   --primary-glow: rgba(228, 31, 40, 0.2);
-
-  /* Status colors */
-  --accent: #4ADE80;       /* green — online/running */
-  --warning: #FBBF24;      /* yellow */
-  --error: #F87171;        /* red */
-
-  /* Actions */
-  --action-primary: #00C805;  /* green deploy button */
-  --action-danger: #8B0000;
+  --accent: #4ADE80;
+  --warning: #FBBF24;
+  --error: #F87171;
+  --action-green: #00C805;
   --action-danger-text: #FF6B6B;
-
-  /* Log */
   --log-info: #60A5FA;
-
-  /* Text */
   --text-primary: rgba(255, 255, 255, 0.94);
-  --text-secondary: #9CA3AF;
   --text-dim: #9CA3AF;
-  --text-interactive: rgba(255, 255, 255, 0.7);
-
-  /* Borders */
   --border-subtle: #374151;
-
-  /* Shape */
   --radius: 12px;
-
-  /* Sizing — mobile viewport */
   --max-width: 412px;
+  --mono: 'Roboto Mono', 'Courier New', monospace;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -101,34 +74,55 @@ body {
 }
 
 /* ============================================================
-   MAIN CONTENT — scrollable area above bottom nav
+   SCREENS
    ============================================================ */
-.content {
+.screen {
+  display: none;
   flex: 1;
   overflow-y: auto;
   padding: 20px;
-  padding-bottom: 80px;
+  padding-bottom: 84px;
 }
+.screen.active { display: block; }
 
 /* ============================================================
-   HEADER — two-tone logo
+   SHARED HEADER
    ============================================================ */
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
 .header-title {
   font-size: 28px;
   font-weight: 800;
   line-height: 1.1;
 }
-.header-title .white { color: var(--text-primary); }
-.header-title .red { color: var(--primary); }
-
-.header-subtitle {
-  font-size: 14px;
+.header-title.sm { font-size: 22px; }
+.header-title .w { color: var(--text-primary); }
+.header-title .r { color: var(--primary); }
+.header-sub {
+  font-size: 13px;
   color: var(--text-dim);
-  margin-top: 2px;
+  margin-top: 3px;
 }
+.badge {
+  margin-top: 6px;
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  border: 1px solid;
+}
+.badge.online  { color: var(--accent);   border-color: rgba(74,222,128,.3);  background: rgba(74,222,128,.1); }
+.badge.offline { color: var(--text-dim); border-color: rgba(156,163,175,.2); background: rgba(156,163,175,.07); }
+.badge.warn    { color: var(--warning);  border-color: rgba(251,191,36,.3);  background: rgba(251,191,36,.1); }
+.badge.err     { color: var(--error);    border-color: rgba(248,113,113,.3); background: rgba(248,113,113,.08); }
+.badge.live    { color: var(--accent);   border-color: rgba(74,222,128,.3);  background: rgba(74,222,128,.1); }
 
 /* ============================================================
-   BANNERS — dismissible alerts
+   BANNERS
    ============================================================ */
 .banner {
   display: flex;
@@ -138,26 +132,18 @@ body {
   margin-top: 16px;
   gap: 10px;
 }
-.banner.warning { background: rgba(251, 191, 36, 0.15); }
-.banner.error { background: rgba(248, 113, 113, 0.12); }
-.banner.hidden { display: none; }
-
-.banner .dot {
-  width: 8px; height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
+.banner.warning { background: rgba(251,191,36,.15); }
+.banner.error   { background: rgba(248,113,113,.12); }
+.banner.hidden  { display: none; }
+.banner .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 .banner.warning .dot { background: var(--warning); }
 .banner.warning .banner-text { color: var(--warning); font-size: 13px; font-weight: 500; }
 .banner.error .dot { background: var(--error); }
 .banner.error .banner-text { color: var(--error); font-size: 12px; }
-
 .banner .banner-text { flex: 1; }
-
 .banner .dismiss {
   background: none; border: none; cursor: pointer;
-  color: inherit; padding: 8px; line-height: 1;
-  font-size: 16px; opacity: 0.8;
+  color: inherit; padding: 8px; font-size: 16px; opacity: .8;
 }
 .banner .dismiss:hover { opacity: 1; }
 
@@ -169,579 +155,866 @@ body {
   border-radius: var(--radius);
   padding: 20px;
   margin-top: 24px;
-  cursor: pointer;
   transition: opacity 0.2s;
 }
 .status-card.dimmed { opacity: 0.6; }
-
-.status-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.status-left {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.status-dot {
-  width: 10px; height: 10px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-.status-dot.green { background: var(--accent); }
+.status-header { display: flex; justify-content: space-between; align-items: center; }
+.status-left { display: flex; align-items: center; gap: 12px; }
+.status-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.status-dot.green  { background: var(--accent); }
 .status-dot.yellow { background: var(--warning); }
-.status-dot.red { background: var(--error); }
-.status-dot.dim { background: var(--text-dim); }
-
-.status-dot.pulse {
-  animation: pulse 1s ease-in-out infinite alternate;
-}
-@keyframes pulse {
-  0% { opacity: 0.4; }
-  100% { opacity: 1; }
-}
-
-.status-text {
-  font-size: 16px;
-  font-weight: 500;
-}
-
-.status-nav {
-  font-size: 12px;
-  color: var(--text-dim);
-}
-
-.status-divider {
-  height: 1px;
-  background: rgba(156, 163, 175, 0.2);
-  margin: 20px 0;
-}
-
+.status-dot.red    { background: var(--error); }
+.status-dot.dim    { background: var(--text-dim); }
+.status-dot.pulse  { animation: blink 1s ease-in-out infinite alternate; }
+@keyframes blink { 0% { opacity: .35; } 100% { opacity: 1; } }
+.status-text { font-size: 16px; font-weight: 500; }
+.status-nav  { font-size: 12px; color: var(--text-dim); }
+.divider { height: 1px; background: rgba(156,163,175,.18); margin: 20px 0; }
 .uptime-label {
-  font-size: 10px;
-  font-weight: 500;
-  color: var(--text-dim);
-  letter-spacing: 1px;
-  text-transform: uppercase;
+  font-size: 10px; font-weight: 500; color: var(--text-dim);
+  letter-spacing: 1px; text-transform: uppercase;
 }
-
 .uptime-value {
-  font-family: 'Roboto Mono', monospace;
-  font-size: 32px;
-  font-weight: 700;
-  color: var(--text-primary);
-  margin-top: 4px;
+  font-family: var(--mono); font-size: 32px; font-weight: 700;
+  color: var(--text-primary); margin-top: 4px;
 }
-
-.stats-row {
-  display: flex;
-  justify-content: space-between;
-  margin-top: 20px;
+.stats-row { display: flex; justify-content: space-between; margin-top: 20px; }
+.stat-mini { text-align: center; }
+.stat-mini .val {
+  font-family: var(--mono); font-size: 20px; font-weight: 700; color: var(--text-primary);
 }
-
-.stat-mini {
-  text-align: center;
-}
-.stat-mini .value {
-  font-family: 'Roboto Mono', monospace;
-  font-size: 20px;
-  font-weight: 700;
-  color: var(--text-primary);
-}
-.stat-mini .label {
-  font-size: 10px;
-  font-weight: 500;
-  color: var(--text-dim);
-  letter-spacing: 1px;
-  margin-top: 2px;
+.stat-mini .lbl {
+  font-size: 10px; font-weight: 500; color: var(--text-dim);
+  letter-spacing: 1px; margin-top: 2px;
 }
 
 /* ============================================================
-   UPLINKS SECTION
+   SECTION LABEL
    ============================================================ */
-.section-label {
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--text-dim);
-  letter-spacing: 1px;
-  text-transform: uppercase;
-  margin-top: 28px;
-}
-
-.uplinks {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 10px;
-}
-
-.uplink-card {
-  display: flex;
-  align-items: center;
-  background: var(--surface);
-  border-radius: var(--radius);
-  padding: 16px;
-}
-
-.uplink-icon {
-  font-family: 'Roboto Mono', monospace;
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--primary);
-  width: 44px;
-  flex-shrink: 0;
-}
-
-.uplink-info {
-  flex: 1;
-}
-.uplink-name {
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--text-primary);
-}
-.uplink-subtitle {
-  font-size: 12px;
-  color: var(--text-dim);
-}
-
-.uplink-dot {
-  width: 10px; height: 10px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-.uplink-dot.pulse {
-  animation: pulse 1s ease-in-out infinite alternate;
+.section-lbl {
+  font-size: 11px; font-weight: 500; color: var(--text-dim);
+  letter-spacing: 1px; text-transform: uppercase; margin-top: 28px;
 }
 
 /* ============================================================
-   API STATS ROW
+   UPLINKS
+   ============================================================ */
+.uplinks { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.uplink-card {
+  display: flex; align-items: center;
+  background: var(--surface); border-radius: var(--radius); padding: 16px;
+}
+.uplink-icon {
+  font-family: var(--mono); font-size: 13px; font-weight: 700;
+  color: var(--primary); width: 44px; flex-shrink: 0;
+}
+.uplink-info { flex: 1; }
+.uplink-name { font-size: 14px; font-weight: 500; color: var(--text-primary); }
+.uplink-sub  { font-size: 12px; color: var(--text-dim); }
+.uplink-dot  { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.uplink-dot.pulse { animation: blink 1s ease-in-out infinite alternate; }
+
+/* ============================================================
+   API STATS
    ============================================================ */
 .api-stats {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  background: var(--surface);
-  border-radius: var(--radius);
-  padding: 14px 16px;
-  margin-top: 16px;
+  display: flex; justify-content: space-between; align-items: center;
+  background: var(--surface); border-radius: var(--radius);
+  padding: 14px 16px; margin-top: 16px;
 }
-
-.api-stat .value {
-  font-family: 'Roboto Mono', monospace;
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--text-primary);
-}
-.api-stat .label {
-  font-size: 9px;
-  font-weight: 500;
-  color: var(--text-dim);
-  letter-spacing: 1px;
-}
+.api-stat .val { font-family: var(--mono); font-size: 13px; font-weight: 700; color: var(--text-primary); }
+.api-stat .lbl { font-size: 9px; font-weight: 500; color: var(--text-dim); letter-spacing: 1px; }
 
 /* ============================================================
    DEPLOY BUTTON
    ============================================================ */
 .deploy-btn {
-  width: 100%;
-  height: 52px;
-  border: none;
-  border-radius: var(--radius);
-  font-size: 15px;
-  font-weight: 700;
-  color: white;
-  cursor: pointer;
-  margin-top: 28px;
-  transition: background 0.15s, transform 0.1s;
+  width: 100%; height: 52px; border: none; border-radius: var(--radius);
+  font-size: 15px; font-weight: 700; font-family: 'Rethink Sans', sans-serif;
+  color: white; cursor: pointer; margin-top: 28px;
+  transition: background .15s, transform .1s;
 }
-.deploy-btn:active { transform: scale(0.98); }
-
-.deploy-btn.deploy { background: var(--action-primary); }
+.deploy-btn:active { transform: scale(.98); }
+.deploy-btn.go   { background: var(--action-green); }
 .deploy-btn.stop { background: var(--primary); }
-.deploy-btn.disabled {
-  background: var(--border-subtle);
-  color: var(--text-dim);
-  cursor: not-allowed;
-}
-
-.deploy-hint {
-  font-size: 12px;
-  color: var(--text-dim);
-  text-align: center;
-  margin-top: 6px;
-}
+.deploy-btn.off  { background: var(--border-subtle); color: var(--text-dim); cursor: not-allowed; }
+.deploy-hint { font-size: 12px; color: var(--text-dim); text-align: center; margin-top: 6px; }
 
 /* ============================================================
-   BOTTOM NAVIGATION
+   CONSOLE SCREEN
+   ============================================================ */
+.console-toolbar {
+  display: flex; align-items: center; gap: 8px; margin-top: 20px;
+}
+.chip {
+  padding: 5px 12px; border-radius: 20px; border: 1px solid var(--border-subtle);
+  background: none; color: var(--text-dim); font-size: 11px; font-weight: 600;
+  cursor: pointer; letter-spacing: .3px; transition: all .15s;
+  font-family: 'Rethink Sans', sans-serif;
+}
+.chip.c-all   { background: var(--surface-hi); border-color: rgba(255,255,255,.15); color: var(--text-primary); }
+.chip.c-info  { background: rgba(96,165,250,.12); border-color: rgba(96,165,250,.4); color: var(--log-info); }
+.chip.c-warn  { background: rgba(251,191,36,.12); border-color: rgba(251,191,36,.4); color: var(--warning); }
+.chip.c-error { background: rgba(248,113,113,.12); border-color: rgba(248,113,113,.4); color: var(--error); }
+.chip-spacer  { flex: 1; }
+.clear-btn {
+  padding: 5px 12px; border-radius: 20px; border: 1px solid var(--border-subtle);
+  background: none; color: var(--text-dim); font-size: 11px; font-weight: 600;
+  cursor: pointer; font-family: 'Rethink Sans', sans-serif; transition: all .15s;
+}
+.clear-btn:hover { color: var(--error); border-color: rgba(248,113,113,.4); }
+
+.log-box {
+  background: var(--surface); border-radius: var(--radius);
+  padding: 12px 14px; margin-top: 12px; min-height: 400px;
+}
+.log-entry {
+  display: flex; gap: 8px;
+  padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,.04);
+  font-family: var(--mono); font-size: 11.5px; line-height: 1.55;
+}
+.log-entry:last-child { border-bottom: none; }
+.log-ts  { color: var(--text-dim); flex-shrink: 0; font-size: 10.5px; padding-top: 2px; }
+.log-lvl {
+  flex-shrink: 0; font-weight: 700; font-size: 10px; letter-spacing: .5px;
+  padding: 2px 6px; border-radius: 4px; height: 18px; margin-top: 2px;
+}
+.log-lvl.info  { background: rgba(96,165,250,.15);  color: var(--log-info); }
+.log-lvl.warn  { background: rgba(251,191,36,.15);  color: var(--warning); }
+.log-lvl.error { background: rgba(248,113,113,.15); color: var(--error); }
+.log-lvl.ok    { background: rgba(74,222,128,.15);  color: var(--accent); }
+.log-msg       { flex: 1; word-break: break-word; }
+.log-msg.info  { color: var(--text-primary); }
+.log-msg.warn  { color: var(--warning); }
+.log-msg.error { color: var(--error); }
+.log-msg.ok    { color: var(--accent); }
+.log-empty { text-align: center; padding: 60px 20px; color: var(--text-dim); font-size: 13px; }
+.log-empty .mono { font-family: var(--mono); font-size: 22px; opacity: .2; margin-bottom: 8px; }
+
+/* ============================================================
+   SETTINGS SCREEN
+   ============================================================ */
+.settings-group { margin-top: 24px; }
+.group-lbl {
+  font-size: 11px; font-weight: 500; color: var(--text-dim);
+  letter-spacing: 1px; text-transform: uppercase; margin-bottom: 10px;
+}
+.settings-card { background: var(--surface); border-radius: var(--radius); overflow: hidden; }
+.s-row {
+  display: flex; align-items: center; padding: 15px 16px;
+  border-bottom: 1px solid rgba(255,255,255,.05); gap: 12px;
+}
+.s-row:last-child { border-bottom: none; }
+.s-row.tap { cursor: pointer; }
+.s-row.tap:hover { background: rgba(255,255,255,.03); }
+.s-label-group { flex: 1; }
+.s-label { font-size: 14px; font-weight: 500; color: var(--text-primary); }
+.s-sub   { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
+.s-val   { font-size: 13px; color: var(--text-dim); text-align: right; }
+.s-val.masked { font-family: var(--mono); letter-spacing: 2px; font-size: 12px; }
+.s-chevron { color: var(--border-subtle); font-size: 18px; flex-shrink: 0; line-height: 1; }
+
+/* Toggle */
+.toggle { position: relative; width: 44px; height: 24px; flex-shrink: 0; }
+.toggle input { opacity: 0; width: 0; height: 0; }
+.track {
+  position: absolute; inset: 0; background: var(--border-subtle);
+  border-radius: 12px; cursor: pointer; transition: background .2s;
+}
+.track:before {
+  content: ''; position: absolute; width: 18px; height: 18px;
+  left: 3px; top: 3px; background: white; border-radius: 50%;
+  transition: transform .2s;
+}
+.toggle input:checked + .track { background: var(--accent); }
+.toggle input:checked + .track:before { transform: translateX(20px); }
+
+/* Select */
+.s-select {
+  background: none; border: none; color: var(--text-dim);
+  font-size: 13px; font-family: 'Rethink Sans', sans-serif;
+  cursor: pointer; -webkit-appearance: none;
+  padding-right: 18px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%239CA3AF' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 0 center;
+}
+
+/* Danger */
+.danger-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.danger-btn {
+  width: 100%; padding: 14px 16px; border-radius: var(--radius);
+  border: 1px solid rgba(139,0,0,.4); background: rgba(139,0,0,.1);
+  color: var(--action-danger-text); font-size: 14px; font-weight: 600;
+  cursor: pointer; font-family: 'Rethink Sans', sans-serif;
+  transition: all .15s; text-align: left;
+  display: flex; align-items: center; gap: 12px;
+}
+.danger-btn:hover { background: rgba(139,0,0,.2); border-color: rgba(139,0,0,.6); }
+.danger-icon { font-size: 16px; flex-shrink: 0; }
+.danger-desc { flex: 1; }
+.danger-sub { display: block; font-size: 11px; font-weight: 400; opacity: .65; margin-top: 2px; }
+
+/* About */
+.about-card {
+  background: var(--surface); border-radius: var(--radius);
+  padding: 20px; display: flex; align-items: center; gap: 16px;
+}
+.about-logo { font-size: 24px; font-weight: 800; }
+.about-logo .w { color: var(--text-primary); }
+.about-logo .r { color: var(--primary); }
+.about-info { flex: 1; }
+.about-name { font-size: 14px; font-weight: 600; }
+.about-meta { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
+.about-ver  { font-family: var(--mono); font-size: 11px; color: var(--text-dim); text-align: right; line-height: 1.7; }
+
+/* ============================================================
+   EDIT MODAL
+   ============================================================ */
+.overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,.72);
+  z-index: 200; display: flex; align-items: flex-end; justify-content: center;
+}
+.overlay.hidden { display: none; }
+.sheet {
+  width: var(--max-width); background: var(--surface-hi);
+  border-radius: 20px 20px 0 0; padding: 24px 20px 36px;
+}
+.sheet-title { font-size: 16px; font-weight: 700; margin-bottom: 4px; }
+.sheet-sub   { font-size: 12px; color: var(--text-dim); margin-bottom: 20px; }
+.sheet-input {
+  width: 100%; background: var(--surface); border: 1px solid var(--border-subtle);
+  border-radius: 10px; padding: 14px 16px; color: var(--text-primary);
+  font-size: 14px; font-family: var(--mono); outline: none;
+}
+.sheet-input:focus { border-color: var(--accent); }
+.sheet-actions { display: flex; gap: 10px; margin-top: 16px; }
+.sheet-btn {
+  flex: 1; height: 46px; border-radius: 10px; border: none;
+  font-size: 14px; font-weight: 600; cursor: pointer;
+  font-family: 'Rethink Sans', sans-serif;
+}
+.sheet-btn.cancel { background: rgba(255,255,255,.07); color: var(--text-dim); }
+.sheet-btn.save   { background: var(--accent); color: #0A0A0F; }
+
+/* ============================================================
+   BOTTOM NAV
    ============================================================ */
 .bottom-nav {
-  position: fixed;
-  bottom: 0;
-  width: var(--max-width);
-  display: flex;
-  justify-content: space-around;
-  align-items: center;
-  height: 64px;
-  background: var(--surface);
-  border-top: 1px solid var(--card-border);
+  position: fixed; bottom: 0; width: var(--max-width);
+  display: flex; justify-content: space-around; align-items: center;
+  height: 64px; background: var(--surface); border-top: 1px solid var(--card-border);
 }
-
 .nav-tab {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  padding: 8px 16px;
-  cursor: pointer;
-  border: none;
-  background: none;
-  color: var(--text-dim);
-  font-size: 11px;
-  font-weight: 500;
-  transition: color 0.15s;
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  padding: 8px 16px; cursor: pointer; border: none; background: none;
+  color: var(--text-dim); font-size: 11px; font-weight: 500;
+  transition: color .15s; font-family: 'Rethink Sans', sans-serif;
 }
 .nav-tab.active { color: var(--primary); }
-.nav-tab:hover { color: var(--text-primary); }
-
+.nav-tab:hover:not(.active) { color: var(--text-primary); }
 .nav-tab svg {
-  width: 22px; height: 22px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+  width: 22px; height: 22px; stroke: currentColor; fill: none;
+  stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
 }
 
 /* ============================================================
-   STATE TOGGLE CONTROLS (top-right)
+   STATE CONTROLS (design preview)
    ============================================================ */
 .state-controls {
-  position: fixed;
-  top: 12px;
-  right: 12px;
-  display: flex;
-  gap: 6px;
-  z-index: 100;
+  position: fixed; top: 12px; right: 12px; display: flex; gap: 6px; z-index: 100;
 }
 .state-btn {
-  padding: 4px 10px;
-  border-radius: 6px;
-  border: 1px solid var(--border-subtle);
-  background: var(--surface);
-  color: var(--text-dim);
-  font-size: 10px;
-  font-weight: 600;
-  cursor: pointer;
-  letter-spacing: 0.5px;
+  padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border-subtle);
+  background: var(--surface); color: var(--text-dim);
+  font-size: 10px; font-weight: 600; cursor: pointer;
+  letter-spacing: .5px; font-family: 'Rethink Sans', sans-serif;
 }
-.state-btn.active {
-  background: var(--primary);
-  color: white;
-  border-color: var(--primary);
-}
+.state-btn.active { background: var(--primary); color: white; border-color: var(--primary); }
 </style>
 </head>
 <body>
 
-<!-- State toggle (for design preview — switch between Running/Stopped/Error) -->
+<!-- Design-preview state toggles -->
 <div class="state-controls">
-  <button class="state-btn active" onclick="setState('running')">Running</button>
-  <button class="state-btn" onclick="setState('stopped')">Stopped</button>
-  <button class="state-btn" onclick="setState('starting')">Starting</button>
-  <button class="state-btn" onclick="setState('error')">Error</button>
+  <button class="state-btn active"   onclick="setState('running')">Running</button>
+  <button class="state-btn"          onclick="setState('stopped')">Stopped</button>
+  <button class="state-btn"          onclick="setState('starting')">Starting</button>
+  <button class="state-btn"          onclick="setState('error')">Error</button>
 </div>
 
 <div class="phone-frame">
-  <div class="content">
 
-    <!-- Header -->
-    <div class="header-title">
-      <span class="white">Seeker</span><span class="red">C/aw</span>
+  <!-- ========================================================
+       DASHBOARD SCREEN
+       ======================================================== -->
+  <div class="screen active" id="screen-dashboard">
+
+    <div class="header">
+      <div>
+        <div class="header-title"><span class="w">Seeker</span><span class="r">C/aw</span></div>
+        <div class="header-sub">AgentOS</div>
+      </div>
+      <div class="badge online" id="hdrBadge">● ONLINE</div>
     </div>
-    <div class="header-subtitle">AgentOS</div>
 
-    <!-- Network banner (hidden by default) -->
-    <div class="banner warning hidden" id="networkBanner">
+    <div class="banner warning hidden" id="netBanner">
       <div class="dot"></div>
       <span class="banner-text">No internet connection</span>
-      <button class="dismiss" onclick="dismissBanner('networkBanner')">&times;</button>
+      <button class="dismiss" onclick="this.closest('.banner').classList.add('hidden')">&times;</button>
     </div>
-
-    <!-- Error banner (hidden by default) -->
-    <div class="banner error hidden" id="errorBanner">
+    <div class="banner error hidden" id="errBanner">
       <div class="dot"></div>
-      <span class="banner-text" id="errorBannerText">API key rejected — check Settings</span>
-      <button class="dismiss" onclick="dismissBanner('errorBanner')">&times;</button>
+      <span class="banner-text" id="errBannerText">API key rejected — check Settings</span>
+      <button class="dismiss" onclick="this.closest('.banner').classList.add('hidden')">&times;</button>
     </div>
 
-    <!-- Status Card -->
     <div class="status-card" id="statusCard">
       <div class="status-header">
         <div class="status-left">
-          <div class="status-dot green pulse" id="statusDot"></div>
-          <span class="status-text" id="statusText">Online</span>
+          <div class="status-dot green pulse" id="sDot"></div>
+          <span class="status-text" id="sTxt">Online</span>
         </div>
-        <span class="status-nav" id="statusNav">System &gt;</span>
+        <span class="status-nav" id="sNav">System ›</span>
       </div>
-
-      <div class="status-divider"></div>
-
+      <div class="divider"></div>
       <div class="uptime-label">Uptime</div>
-      <div class="uptime-value" id="uptimeValue">02h 47m 13s</div>
-
+      <div class="uptime-value" id="uptimeVal">02h 47m 13s</div>
       <div class="stats-row">
-        <div class="stat-mini">
-          <div class="value" id="todayCount">12</div>
-          <div class="label">TODAY</div>
-        </div>
-        <div class="stat-mini">
-          <div class="value" id="totalCount">847</div>
-          <div class="label">TOTAL</div>
-        </div>
-        <div class="stat-mini">
-          <div class="value" id="lastActivity">14:32</div>
-          <div class="label">LAST</div>
-        </div>
+        <div class="stat-mini"><div class="val" id="cToday">12</div><div class="lbl">TODAY</div></div>
+        <div class="stat-mini"><div class="val" id="cTotal">847</div><div class="lbl">TOTAL</div></div>
+        <div class="stat-mini"><div class="val" id="cLast">14:32</div><div class="lbl">LAST</div></div>
       </div>
     </div>
 
-    <!-- Uplinks -->
-    <div class="section-label">Uplinks</div>
+    <div class="section-lbl">Uplinks</div>
     <div class="uplinks">
       <div class="uplink-card">
         <span class="uplink-icon">//TG</span>
         <div class="uplink-info">
           <div class="uplink-name">Telegram</div>
-          <div class="uplink-subtitle" id="tgSubtitle">Message relay</div>
+          <div class="uplink-sub" id="tgSub">Message relay</div>
         </div>
-        <div class="uplink-dot pulse" id="tgDot" style="background: var(--accent);"></div>
+        <div class="uplink-dot pulse" id="tgDot" style="background:var(--accent)"></div>
       </div>
       <div class="uplink-card">
         <span class="uplink-icon">//GW</span>
         <div class="uplink-info">
           <div class="uplink-name">Gateway</div>
-          <div class="uplink-subtitle" id="gwSubtitle">OpenClaw engine</div>
+          <div class="uplink-sub" id="gwSub">OpenClaw engine</div>
         </div>
-        <div class="uplink-dot pulse" id="gwDot" style="background: var(--accent);"></div>
+        <div class="uplink-dot pulse" id="gwDot" style="background:var(--accent)"></div>
       </div>
       <div class="uplink-card">
         <span class="uplink-icon">//AI</span>
         <div class="uplink-info">
           <div class="uplink-name">AI Model</div>
-          <div class="uplink-subtitle" id="aiSubtitle">Sonnet 4.6</div>
+          <div class="uplink-sub" id="aiSub">Sonnet 4.6</div>
         </div>
-        <div class="uplink-dot pulse" id="aiDot" style="background: var(--accent);"></div>
+        <div class="uplink-dot pulse" id="aiDot" style="background:var(--accent)"></div>
       </div>
     </div>
 
-    <!-- API Stats -->
-    <div class="api-stats" id="apiStats">
-      <div class="api-stat">
-        <div class="value">24 req</div>
-        <div class="label">API</div>
-      </div>
-      <div class="api-stat">
-        <div class="value">1,240ms</div>
-        <div class="label">LATENCY</div>
-      </div>
-      <div class="api-stat">
-        <div class="value">$0.47</div>
-        <div class="label">COST</div>
-      </div>
+    <div class="api-stats" id="apiRow">
+      <div class="api-stat"><div class="val">24 req</div><div class="lbl">API</div></div>
+      <div class="api-stat"><div class="val">1,240ms</div><div class="lbl">LATENCY</div></div>
+      <div class="api-stat"><div class="val">$0.47</div><div class="lbl">COST</div></div>
     </div>
 
-    <!-- Deploy Button -->
     <button class="deploy-btn stop" id="deployBtn" onclick="toggleDeploy()">Stop Agent</button>
     <div class="deploy-hint hidden" id="deployHint">Complete setup to deploy</div>
-
   </div>
 
-  <!-- Bottom Navigation -->
+  <!-- ========================================================
+       CONSOLE SCREEN
+       ======================================================== -->
+  <div class="screen" id="screen-console">
+
+    <div class="header">
+      <div>
+        <div class="header-title sm"><span class="w">Agent</span><span class="r">Console</span></div>
+        <div class="header-sub">Live process output</div>
+      </div>
+      <div class="badge live" id="conBadge">● LIVE</div>
+    </div>
+
+    <div class="console-toolbar">
+      <button class="chip c-all"   id="f-all"   onclick="setFilter('all')">ALL</button>
+      <button class="chip"         id="f-info"  onclick="setFilter('info')">INFO</button>
+      <button class="chip"         id="f-warn"  onclick="setFilter('warn')">WARN</button>
+      <button class="chip"         id="f-error" onclick="setFilter('error')">ERROR</button>
+      <div class="chip-spacer"></div>
+      <button class="clear-btn" onclick="clearLogs()">Clear</button>
+    </div>
+
+    <div class="log-box" id="logBox"></div>
+  </div>
+
+  <!-- ========================================================
+       SETTINGS SCREEN
+       ======================================================== -->
+  <div class="screen" id="screen-settings">
+
+    <div class="header">
+      <div>
+        <div class="header-title sm"><span class="w">Agent</span><span class="r">Config</span></div>
+        <div class="header-sub">Configuration &amp; controls</div>
+      </div>
+    </div>
+
+    <!-- Credentials -->
+    <div class="settings-group">
+      <div class="group-lbl">Credentials</div>
+      <div class="settings-card">
+        <div class="s-row tap" onclick="openEdit('Anthropic API Key','sk-ant-api03-…','api_key','password')">
+          <div class="s-label-group">
+            <div class="s-label">API Key</div>
+            <div class="s-sub">Anthropic Claude access</div>
+          </div>
+          <div class="s-val masked">••••••••••••</div>
+          <div class="s-chevron">›</div>
+        </div>
+        <div class="s-row tap" onclick="openEdit('Telegram Bot Token','123456789:ABCdef…','tg_token','password')">
+          <div class="s-label-group">
+            <div class="s-label">Bot Token</div>
+            <div class="s-sub">Telegram integration</div>
+          </div>
+          <div class="s-val masked">••••••••••••</div>
+          <div class="s-chevron">›</div>
+        </div>
+        <div class="s-row tap" onclick="openEdit('Telegram Owner ID','Your Telegram user ID','owner_id','text')">
+          <div class="s-label-group">
+            <div class="s-label">Owner ID</div>
+            <div class="s-sub">Who can talk to the agent</div>
+          </div>
+          <div class="s-val">987654321</div>
+          <div class="s-chevron">›</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Agent -->
+    <div class="settings-group">
+      <div class="group-lbl">Agent</div>
+      <div class="settings-card">
+        <div class="s-row tap" onclick="openEdit('Agent Name','e.g. Rex, Aria, Max…','agent_name','text')">
+          <div class="s-label-group"><div class="s-label">Name</div></div>
+          <div class="s-val">MyAgent</div>
+          <div class="s-chevron">›</div>
+        </div>
+        <div class="s-row">
+          <div class="s-label-group">
+            <div class="s-label">Model</div>
+            <div class="s-sub">AI backbone</div>
+          </div>
+          <select class="s-select" id="modelSel">
+            <option value="claude-sonnet-4-6" selected>Sonnet 4.6</option>
+            <option value="claude-opus-4-6">Opus 4.6</option>
+            <option value="claude-sonnet-4-5">Sonnet 4.5</option>
+            <option value="claude-haiku-4-5">Haiku 4.5</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <!-- Behavior -->
+    <div class="settings-group">
+      <div class="group-lbl">Behavior</div>
+      <div class="settings-card">
+        <div class="s-row">
+          <div class="s-label-group">
+            <div class="s-label">Auto-start on boot</div>
+            <div class="s-sub">Launch when phone turns on</div>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" checked onchange="logToggle('autostart',this.checked)">
+            <span class="track"></span>
+          </label>
+        </div>
+        <div class="s-row">
+          <div class="s-label-group">
+            <div class="s-label">Battery optimization</div>
+            <div class="s-sub">Excluded — recommended for 24/7</div>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" checked onchange="logToggle('battery_opt',this.checked)">
+            <span class="track"></span>
+          </label>
+        </div>
+        <div class="s-row">
+          <div class="s-label-group">
+            <div class="s-label">Watchdog</div>
+            <div class="s-sub">Auto-restart on crash</div>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" checked onchange="logToggle('watchdog',this.checked)">
+            <span class="track"></span>
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <!-- Memory -->
+    <div class="settings-group">
+      <div class="group-lbl">Memory &amp; Storage</div>
+      <div class="settings-card">
+        <div class="s-row tap" onclick="notImpl('Export Memory')">
+          <div class="s-label-group">
+            <div class="s-label">Export Memory</div>
+            <div class="s-sub">Save SOUL.md, MEMORY.md, skills</div>
+          </div>
+          <div class="s-chevron">›</div>
+        </div>
+        <div class="s-row tap" onclick="notImpl('Import Memory')">
+          <div class="s-label-group">
+            <div class="s-label">Import Memory</div>
+            <div class="s-sub">Restore from backup</div>
+          </div>
+          <div class="s-chevron">›</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Danger Zone -->
+    <div class="settings-group">
+      <div class="group-lbl">Danger Zone</div>
+      <div class="danger-list">
+        <button class="danger-btn" onclick="doDanger('Reset Config','Clear API key &amp; tokens? Memory is preserved.')">
+          <span class="danger-icon">⚙</span>
+          <div class="danger-desc">Reset Config <span class="danger-sub">Clears credentials. Memory preserved.</span></div>
+        </button>
+        <button class="danger-btn" onclick="doDanger('Wipe Memory','Delete SOUL.md, MEMORY.md and all daily files? PERMANENT.')">
+          <span class="danger-icon">🧠</span>
+          <div class="danger-desc">Wipe Memory <span class="danger-sub">Deletes all personality &amp; memory files.</span></div>
+        </button>
+        <button class="danger-btn" onclick="doDanger('Factory Reset','Destroy everything — config, memory, logs? CANNOT be undone.')">
+          <span class="danger-icon">☢</span>
+          <div class="danger-desc">Factory Reset <span class="danger-sub">Destroys everything. Cannot be undone.</span></div>
+        </button>
+      </div>
+    </div>
+
+    <!-- About -->
+    <div class="settings-group">
+      <div class="group-lbl">About</div>
+      <div class="about-card">
+        <div class="about-logo"><span class="w">S</span><span class="r">C</span></div>
+        <div class="about-info">
+          <div class="about-name">SeekerClaw</div>
+          <div class="about-meta">AgentOS · OpenClaw powered</div>
+        </div>
+        <div class="about-ver">App 1.3.0<br>OC 2026.2.14<br>Node 18 LTS</div>
+      </div>
+    </div>
+
+    <div style="height:16px"></div>
+  </div>
+
+  <!-- ========================================================
+       BOTTOM NAV
+       ======================================================== -->
   <nav class="bottom-nav">
-    <button class="nav-tab active">
+    <button class="nav-tab active" onclick="switchTab('dashboard',this)">
       <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
       Dashboard
     </button>
-    <button class="nav-tab">
+    <button class="nav-tab" onclick="switchTab('console',this)">
       <svg viewBox="0 0 24 24"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
       Console
     </button>
-    <button class="nav-tab">
+    <button class="nav-tab" onclick="switchTab('settings',this)">
       <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
       Settings
     </button>
   </nav>
 </div>
 
+<!-- Edit Sheet Modal -->
+<div class="overlay hidden" id="editOverlay" onclick="if(event.target===this)closeEdit()">
+  <div class="sheet">
+    <div class="sheet-title" id="sheetTitle">Edit Field</div>
+    <div class="sheet-sub">Enter new value — saved to encrypted storage</div>
+    <input class="sheet-input" id="sheetInput" placeholder="">
+    <div class="sheet-actions">
+      <button class="sheet-btn cancel" onclick="closeEdit()">Cancel</button>
+      <button class="sheet-btn save"   onclick="saveEdit()">Save</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // ============================================================
-// STATE MANAGEMENT — simulates ServiceState from Kotlin
+// NAV
 // ============================================================
-let currentState = 'running';
-let uptimeSeconds = 10033; // 2h 47m 13s
-let uptimeInterval = null;
+function switchTab(name, el) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById('screen-' + name).classList.add('active');
+  document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+  el.classList.add('active');
+}
 
-function setState(state) {
-  currentState = state;
+// ============================================================
+// SERVICE STATE
+// ============================================================
+let state = 'running';
+let uptimeSec = 10033;
+let uptimeTimer = null;
 
-  // Update toggle buttons
-  document.querySelectorAll('.state-btn').forEach(btn => {
-    btn.classList.toggle('active', btn.textContent.toLowerCase() === state);
-  });
+function setState(s) {
+  state = s;
 
-  const dot = document.getElementById('statusDot');
-  const text = document.getElementById('statusText');
-  const card = document.getElementById('statusCard');
-  const nav = document.getElementById('statusNav');
-  const btn = document.getElementById('deployBtn');
-  const hint = document.getElementById('deployHint');
-  const apiRow = document.getElementById('apiStats');
+  // update preview buttons
+  document.querySelectorAll('.state-btn').forEach(b =>
+    b.classList.toggle('active', b.textContent.toLowerCase() === s));
 
-  // Uplink elements
-  const tgDot = document.getElementById('tgDot');
-  const gwDot = document.getElementById('gwDot');
-  const aiDot = document.getElementById('aiDot');
-  const tgSub = document.getElementById('tgSubtitle');
-  const gwSub = document.getElementById('gwSubtitle');
-  const aiSub = document.getElementById('aiSubtitle');
+  const dot     = document.getElementById('sDot');
+  const txt     = document.getElementById('sTxt');
+  const card    = document.getElementById('statusCard');
+  const nav     = document.getElementById('sNav');
+  const btn     = document.getElementById('deployBtn');
+  const hint    = document.getElementById('deployHint');
+  const apiRow  = document.getElementById('apiRow');
+  const hBadge  = document.getElementById('hdrBadge');
+  const cBadge  = document.getElementById('conBadge');
 
-  // Reset
   card.classList.remove('dimmed');
   hint.classList.add('hidden');
   apiRow.classList.remove('hidden');
+  btn.disabled = false;
 
-  const allDots = [dot, tgDot, gwDot, aiDot];
+  // reset badge styles
+  hBadge.style.cssText = '';
+  cBadge.style.cssText = '';
 
-  switch (state) {
+  switch (s) {
     case 'running':
       dot.className = 'status-dot green pulse';
-      text.textContent = 'Online';
-      nav.textContent = 'System >';
-      btn.className = 'deploy-btn stop';
-      btn.textContent = 'Stop Agent';
-      setUplinkColors('var(--accent)', true);
-      tgSub.textContent = 'Message relay';
-      gwSub.textContent = 'OpenClaw engine';
-      aiSub.textContent = 'Sonnet 4.6';
+      txt.textContent = 'Online';
+      nav.textContent = 'System ›';
+      btn.className = 'deploy-btn stop'; btn.textContent = 'Stop Agent';
+      hBadge.textContent = '● ONLINE'; hBadge.className = 'badge online';
+      cBadge.textContent = '● LIVE';   cBadge.className = 'badge live';
+      setUplinks('var(--accent)', true, 'Message relay', 'OpenClaw engine', 'Sonnet 4.6');
       startUptime();
+      addLog('ok', 'Agent running — all uplinks nominal');
       break;
 
     case 'stopped':
       dot.className = 'status-dot dim';
-      text.textContent = 'Offline';
-      nav.textContent = 'System >';
+      txt.textContent = 'Offline';
+      nav.textContent = 'System ›';
       card.classList.add('dimmed');
-      btn.className = 'deploy-btn deploy';
-      btn.textContent = 'Deploy Agent';
+      btn.className = 'deploy-btn go'; btn.textContent = 'Deploy Agent';
       apiRow.classList.add('hidden');
-      setUplinkColors('var(--text-dim)', false);
-      tgSub.textContent = 'Offline';
-      gwSub.textContent = 'Offline';
-      aiSub.textContent = 'Offline';
+      hBadge.textContent = '○ OFFLINE'; hBadge.className = 'badge offline';
+      cBadge.textContent = '○ IDLE';    cBadge.className = 'badge offline';
+      setUplinks('var(--text-dim)', false, 'Offline', 'Offline', 'Offline');
       stopUptime();
-      document.getElementById('uptimeValue').textContent = '00h 00m 00s';
+      document.getElementById('uptimeVal').textContent = '00h 00m 00s';
+      addLog('warn', 'Agent stopped by user');
       break;
 
     case 'starting':
       dot.className = 'status-dot yellow';
-      text.textContent = 'Starting\u2026';
-      nav.textContent = 'System >';
-      btn.className = 'deploy-btn stop';
-      btn.textContent = 'Stop Agent';
+      txt.textContent = 'Starting…';
+      nav.textContent = 'System ›';
+      btn.className = 'deploy-btn stop'; btn.textContent = 'Stop Agent';
       apiRow.classList.add('hidden');
-      setUplinkColors('var(--warning)', false);
-      tgSub.textContent = 'Connecting...';
-      gwSub.textContent = 'Starting...';
-      aiSub.textContent = 'Loading model...';
+      hBadge.textContent = '◌ STARTING'; hBadge.className = 'badge warn';
+      cBadge.textContent = '◌ STARTING'; cBadge.className = 'badge warn';
+      setUplinks('var(--warning)', false, 'Connecting…', 'Starting…', 'Loading model…');
       stopUptime();
+      addLog('info', 'Node.js runtime initializing…');
+      addLog('info', 'Loading OpenClaw gateway bundle…');
+      setTimeout(() => { if (state === 'starting') addLog('info', 'Connecting to Telegram…'); }, 700);
       break;
 
     case 'error':
       dot.className = 'status-dot red';
-      text.textContent = 'Config Needed';
-      nav.textContent = 'Settings >';
+      txt.textContent = 'Config Needed';
+      nav.textContent = 'Settings ›';
       card.classList.add('dimmed');
-      btn.className = 'deploy-btn disabled';
-      btn.textContent = 'Deploy Agent';
-      btn.disabled = true;
+      btn.className = 'deploy-btn off'; btn.textContent = 'Deploy Agent'; btn.disabled = true;
       hint.classList.remove('hidden');
       apiRow.classList.add('hidden');
-      setUplinkColors('var(--error)', false);
-      tgSub.textContent = 'Bot token missing';
-      gwSub.textContent = 'Blocked: missing config';
-      aiSub.textContent = 'Credential missing';
+      hBadge.textContent = '✕ ERROR'; hBadge.className = 'badge err';
+      cBadge.textContent = '✕ ERROR'; cBadge.className = 'badge err';
+      setUplinks('var(--error)', false, 'Bot token missing', 'Blocked: missing config', 'Credential missing');
       stopUptime();
-      document.getElementById('uptimeValue').textContent = '00h 00m 00s';
+      document.getElementById('uptimeVal').textContent = '00h 00m 00s';
+      addLog('error', 'FATAL: Anthropic API key not found in config');
+      addLog('error', 'Gateway startup aborted — fix credentials in Settings');
       break;
   }
 }
 
-function setUplinkColors(color, pulse) {
-  ['tgDot', 'gwDot', 'aiDot'].forEach(id => {
+function setUplinks(color, pulse, tg, gw, ai) {
+  ['tgDot','gwDot','aiDot'].forEach(id => {
     const el = document.getElementById(id);
     el.style.background = color;
     el.classList.toggle('pulse', pulse);
   });
+  document.getElementById('tgSub').textContent = tg;
+  document.getElementById('gwSub').textContent = gw;
+  document.getElementById('aiSub').textContent = ai;
 }
 
 function toggleDeploy() {
-  if (currentState === 'running') {
-    setState('stopped');
-  } else if (currentState === 'stopped') {
+  if (state === 'running') { setState('stopped'); }
+  else if (state === 'stopped') {
     setState('starting');
-    setTimeout(() => setState('running'), 2000);
+    setTimeout(() => { if (state === 'starting') setState('running'); }, 2200);
   }
 }
 
-function dismissBanner(id) {
-  document.getElementById(id).classList.add('hidden');
-}
-
 // ============================================================
-// UPTIME COUNTER — live ticking
+// UPTIME
 // ============================================================
-function formatUptime(totalSeconds) {
-  const days = Math.floor(totalSeconds / 86400);
-  const hours = Math.floor((totalSeconds % 86400) / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  let str = '';
-  if (days > 0) str += days + 'd ';
-  str += String(hours).padStart(2, '0') + 'h ';
-  str += String(minutes).padStart(2, '0') + 'm ';
-  str += String(seconds).padStart(2, '0') + 's';
-  return str;
+function fmt(s) {
+  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600),
+        m = Math.floor((s % 3600) / 60), sec = s % 60;
+  return (d > 0 ? d + 'd ' : '') +
+    String(h).padStart(2,'0') + 'h ' +
+    String(m).padStart(2,'0') + 'm ' +
+    String(sec).padStart(2,'0') + 's';
 }
-
 function startUptime() {
   stopUptime();
-  document.getElementById('uptimeValue').textContent = formatUptime(uptimeSeconds);
-  uptimeInterval = setInterval(() => {
-    uptimeSeconds++;
-    document.getElementById('uptimeValue').textContent = formatUptime(uptimeSeconds);
+  document.getElementById('uptimeVal').textContent = fmt(uptimeSec);
+  uptimeTimer = setInterval(() => {
+    uptimeSec++;
+    document.getElementById('uptimeVal').textContent = fmt(uptimeSec);
   }, 1000);
 }
+function stopUptime() { if (uptimeTimer) { clearInterval(uptimeTimer); uptimeTimer = null; } }
 
-function stopUptime() {
-  if (uptimeInterval) {
-    clearInterval(uptimeInterval);
-    uptimeInterval = null;
-  }
+// ============================================================
+// CONSOLE / LOGS
+// ============================================================
+const SEED = [
+  { l:'ok',    m:'OpenClaw gateway v2026.2.14 started' },
+  { l:'info',  m:'SQL.js database initialized (seekerclaw.db)' },
+  { l:'info',  m:'Loading workspace skills…' },
+  { l:'ok',    m:'Loaded 3 skills from workspace/skills/' },
+  { l:'info',  m:'Cron service started — 0 scheduled jobs' },
+  { l:'info',  m:'Connecting to Telegram polling…' },
+  { l:'ok',    m:'Telegram bot @SeekerClaw_bot online' },
+  { l:'info',  m:'[MSG] User: hey, what can you do?' },
+  { l:'info',  m:'[TOOL] memory_search — querying MEMORY.md' },
+  { l:'info',  m:'[MSG] Agent: I can help with tasks, reminders, research…' },
+  { l:'warn',  m:'API latency elevated: 2,100ms (threshold 2s)' },
+  { l:'info',  m:'[MSG] User: set a reminder for 9am tomorrow' },
+  { l:'info',  m:'[TOOL] cron_create — schedule: 2026-02-20T09:00' },
+  { l:'ok',    m:'Cron job created: job_3f2a1' },
+  { l:'info',  m:'HEARTBEAT_OK — writing HEARTBEAT.md' },
+  { l:'info',  m:'[MSG] Agent: Done! I\'ll remind you at 9am tomorrow.' },
+];
+const LIVE = [
+  { l:'info', m:'HEARTBEAT_OK — writing HEARTBEAT.md' },
+  { l:'info', m:'[MSG] User: what\'s the weather?' },
+  { l:'info', m:'[TOOL] web_fetch — https://wttr.in/?format=3' },
+  { l:'ok',   m:'[TOOL] web_fetch — OK 200 (382ms)' },
+  { l:'info', m:'[MSG] Agent: Sunny, 18°C. Nice day!' },
+  { l:'info', m:'Memory compaction — writing daily memory file' },
+  { l:'warn', m:'Rate limit headroom: 82% remaining' },
+  { l:'info', m:'[MSG] User: remind me to call Alice at 3pm' },
+  { l:'info', m:'[TOOL] cron_create — schedule: today 15:00' },
+  { l:'ok',   m:'Cron job created: job_9c4b2' },
+];
+
+let logs = [];
+let activeFilter = 'all';
+let liveIdx = 0;
+
+function ts() {
+  const d = new Date();
+  return String(d.getHours()).padStart(2,'0') + ':' +
+         String(d.getMinutes()).padStart(2,'0') + ':' +
+         String(d.getSeconds()).padStart(2,'0');
 }
+function addLog(level, msg) {
+  logs.push({ level, msg, ts: ts() });
+  if (logs.length > 500) logs.shift();
+  renderLogs();
+}
+function renderLogs() {
+  const box = document.getElementById('logBox');
+  const filtered = activeFilter === 'all' ? logs : logs.filter(e => e.level === activeFilter);
+  if (!filtered.length) {
+    box.innerHTML = `<div class="log-empty"><div class="mono">&gt;_</div>No ${activeFilter === 'all' ? '' : activeFilter + ' '}entries yet</div>`;
+    return;
+  }
+  box.innerHTML = filtered.map(e =>
+    `<div class="log-entry">` +
+    `<span class="log-ts">${e.ts}</span>` +
+    `<span class="log-lvl ${e.level}">${e.level.toUpperCase()}</span>` +
+    `<span class="log-msg ${e.level}">${e.msg.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</span>` +
+    `</div>`
+  ).join('');
+  box.scrollTop = box.scrollHeight;
+}
+function setFilter(f) {
+  activeFilter = f;
+  document.querySelectorAll('.chip').forEach(c => {
+    const id = c.id.replace('f-','');
+    c.className = 'chip' + (id === f ? ' c-' + f : '');
+  });
+  renderLogs();
+}
+function clearLogs() { logs = []; renderLogs(); }
 
-// Nav tab switching
-document.querySelectorAll('.nav-tab').forEach(tab => {
-  tab.addEventListener('click', () => {
-    document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
-    tab.classList.add('active');
+// Seed historical logs
+const now = Date.now();
+SEED.forEach((e, i) => {
+  const d = new Date(now - (SEED.length - i) * 18000);
+  logs.push({
+    level: e.l, msg: e.m,
+    ts: String(d.getHours()).padStart(2,'0') + ':' +
+        String(d.getMinutes()).padStart(2,'0') + ':' +
+        String(d.getSeconds()).padStart(2,'0'),
   });
 });
+renderLogs();
 
-// Initialize
+// Live trickle
+setInterval(() => {
+  if (state === 'running') {
+    const e = LIVE[liveIdx++ % LIVE.length];
+    addLog(e.l, e.m);
+  }
+}, 4800);
+
+// ============================================================
+// SETTINGS — EDIT MODAL
+// ============================================================
+let editField = null;
+function openEdit(title, placeholder, field, type) {
+  editField = field;
+  document.getElementById('sheetTitle').textContent = title;
+  const inp = document.getElementById('sheetInput');
+  inp.type = type; inp.placeholder = placeholder; inp.value = '';
+  document.getElementById('editOverlay').classList.remove('hidden');
+  setTimeout(() => inp.focus(), 60);
+}
+function closeEdit() { document.getElementById('editOverlay').classList.add('hidden'); editField = null; }
+function saveEdit() {
+  const val = document.getElementById('sheetInput').value.trim();
+  if (val) addLog('info', 'Config updated: ' + editField);
+  closeEdit();
+}
+
+function logToggle(name, val) {
+  addLog('info', 'Setting: ' + name + ' → ' + (val ? 'enabled' : 'disabled'));
+}
+function doDanger(label, msg) {
+  if (confirm(msg)) addLog('warn', 'User action: ' + label);
+}
+function notImpl(label) {
+  addLog('info', label + ' — not implemented in prototype');
+}
+
+// ============================================================
+// INIT
+// ============================================================
 startUptime();
 </script>
 </body>

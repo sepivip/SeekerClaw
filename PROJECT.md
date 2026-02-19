@@ -48,6 +48,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 - **Ephemeral session awareness** — Agent knows context resets on restart
 - **PLATFORM.md auto-generation** — Device state (model, RAM, storage, battery, permissions, wallet) written on every service start
 - **Debug log self-diagnosis** — Agent knows about `node_debug.log` for troubleshooting tool failures, errors, and silent responses. Log rotation at 5MB with `.old` archive
+- **Structured log levels** — DEBUG/INFO/WARN/ERROR pipeline with per-level routing; UI log viewer color-coded by level; LogCollector filters noise from debug output
 - **Skill routing** — Routing blocks prevent conflicting skills from firing together; reply tag first-token rule for reliable `[[reply_to_current]]` detection
 
 ### Memory System
@@ -208,14 +209,14 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Metric | Count |
 |--------|-------|
-| Total commits | 197 |
-| PRs merged | 123 |
+| Total commits | 208 |
+| PRs merged | 135 |
 | Tools | 55 (9 Jupiter, 13 Android bridge, web search/fetch, memory, cron, etc.) + MCP dynamic |
 | Skills | 34 (19 bundled + 13 workspace + 2 user-created) |
 | Android Bridge endpoints | 18+ |
 | Telegram commands | 7 |
-| Lines of JS | ~9,700 (main.js 6,924 + 7 extracted modules + mcp-client.js) |
-| Lines of Kotlin | ~10,590 |
+| Lines of JS | ~10,200 (main.js 789 + 12 extracted modules + mcp-client.js) |
+| Lines of Kotlin | ~10,600 |
 | SQL.js tables | 4 |
 | Themes | 1 (DarkOps only) |
 
@@ -248,6 +249,15 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Date | Feature | PR |
 |------|---------|-----|
+| 2026-02-19 | Fix: setup token session expiry + rate-limit tracking | #135 |
+| 2026-02-19 | Fix (P0): loadSkills import crash, conversation corruption, usage poll spam | #134 |
+| 2026-02-19 | Feat: structured log levels — DEBUG/INFO/WARN/ERROR pipeline with per-level routing (BAT-206) | #133 |
+| 2026-02-19 | Chore: prune 36 dead exports, fix silent catches, add ARCHITECTURE.md (BAT-205) | #132 |
+| 2026-02-19 | Refactor: extract tools.js from main.js (BAT-204) | #131 |
+| 2026-02-19 | Refactor: extract claude.js from main.js (BAT-203) | #130 |
+| 2026-02-19 | Refactor: extract solana.js from main.js (BAT-201) | #129 |
+| 2026-02-19 | Refactor: extract database.js from main.js (BAT-202) | #128 |
+| 2026-02-19 | Refactor: extract cron.js from main.js (BAT-200) | #127 |
 | 2026-02-19 | Refactor: extract 7 modules from main.js (config, security, bridge, telegram, web, memory, skills) (BAT-193–199) | #120–126 |
 | 2026-02-19 | Fix wallet cold-start rejection + expand Jupiter trusted programs | direct |
 | 2026-02-19 | Fix OOM crash in LogCollector — tail-only file reading | direct |
