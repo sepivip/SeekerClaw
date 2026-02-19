@@ -388,20 +388,13 @@ fun SystemScreen(onBack: () -> Unit) {
                     label = "Cache Hits",
                     value = if (stats != null) "${(stats.todayCacheHitRate * 100).toInt()}%" else "--",
                 )
-                if (stats != null && stats.monthCostEstimate > 0f) {
-                    InfoRow(
-                        label = "Est. Cost",
-                        value = "$${String.format("%.2f", stats.monthCostEstimate)} /mo",
-                        isLast = true,
-                    )
-                } else {
-                    InfoRow(label = "Tokens In/Out",
-                        value = if (stats != null)
-                            "${formatTokens(stats.todayInputTokens)} / ${formatTokens(stats.todayOutputTokens)}"
-                        else "--",
-                        isLast = true,
-                    )
-                }
+                InfoRow(
+                    label = "Tokens In/Out",
+                    value = if (stats != null)
+                        "${formatTokens(stats.todayInputTokens)} / ${formatTokens(stats.todayOutputTokens)}"
+                    else "--",
+                    isLast = true,
+                )
             }
 
             // ==================== MEMORY INDEX (BAT-33) ====================

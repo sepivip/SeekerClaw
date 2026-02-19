@@ -104,7 +104,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
     // Fetch API stats from bridge (BAT-32)
     var apiRequests by remember { mutableStateOf(0) }
     var apiAvgLatency by remember { mutableStateOf(0) }
-    var monthCost by remember { mutableStateOf(0f) }
+    var apiCacheHits by remember { mutableStateOf(0) }
 
     LaunchedEffect(status) {
         if (status == ServiceStatus.RUNNING) {
@@ -113,18 +113,18 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
                 if (stats != null) {
                     apiRequests = stats.todayRequests
                     apiAvgLatency = stats.todayAvgLatencyMs
-                    monthCost = stats.monthCostEstimate
+                    apiCacheHits = (stats.todayCacheHitRate * 100).toInt()
                 } else {
                     apiRequests = 0
                     apiAvgLatency = 0
-                    monthCost = 0f
+                    apiCacheHits = 0
                 }
                 delay(if (stats != null) 30_000L else 5_000L)
             }
         } else {
             apiRequests = 0
             apiAvgLatency = 0
-            monthCost = 0f
+            apiCacheHits = 0
         }
     }
 
@@ -558,11 +558,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
             ) {
                 StatMini(small = true, label = "API", value = "$apiRequests req")
                 StatMini(small = true, label = "LATENCY", value = "${apiAvgLatency}ms")
-                StatMini(
-                    small = true,
-                    label = "COST",
-                    value = if (monthCost > 0f) "$${String.format("%.2f", monthCost)}" else "--",
-                )
+                StatMini(small = true, label = "CACHE", value = "${apiCacheHits}%")
             }
         }
 
