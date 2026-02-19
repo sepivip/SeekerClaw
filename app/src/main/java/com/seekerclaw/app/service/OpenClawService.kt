@@ -48,6 +48,10 @@ class OpenClawService : Service() {
         val notification = createNotification("SeekerClaw is running")
         startForeground(NOTIFICATION_ID, notification)
 
+        // Clear any lingering setup-required notification from a previous failed start.
+        getSystemService(android.app.NotificationManager::class.java)
+            ?.cancel(SETUP_NOTIFICATION_ID)
+
         // FIX-1 (BAT-219): Guard — refuse to start Node.js when owner ID is not configured.
         // Without a known owner, the first inbound Telegram message would silently claim
         // ownership (auto-detect race). Fail fast here so the user is directed to finish setup.
@@ -67,7 +71,7 @@ class OpenClawService : Service() {
             getSystemService(android.app.NotificationManager::class.java)
                 ?.notify(
                     SETUP_NOTIFICATION_ID,
-                    createNotification("Setup required — open SeekerClaw to finish setup"),
+                    createSetupNotification("Setup required — open SeekerClaw to finish setup"),
                 )
             stopSelf()
             return START_NOT_STICKY
@@ -293,6 +297,22 @@ class OpenClawService : Service() {
             .build()
     }
 
+    // Dismissible, audible notification for actionable setup errors (not tied to service lifetime).
+    private fun createSetupNotification(text: String): Notification {
+        val pendingIntent = PendingIntent.getActivity(
+            this, 0,
+            Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        return NotificationCompat.Builder(this, SeekerClawApplication.CHANNEL_ID)
+            .setContentTitle("SeekerClaw")
+            .setContentText(text)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentIntent(pendingIntent)
+            .setOngoing(false) // dismissible — user can swipe away once they open the app
+            .build()
+    }
+
     companion object {
         private const val NOTIFICATION_ID = 1
         private const val SETUP_NOTIFICATION_ID = 2 // separate ID — persists after service stops
@@ -308,7 +328,10 @@ class OpenClawService : Service() {
             restartHandler.removeCallbacksAndMessages(null)
             runCatching {
                 ServiceState.init(context.applicationContext)
-                ServiceState.updateStatus(ServiceStatus.STOPPED)
+                // Mirror the same guard as onDestroy() — don't wipe ERROR status on a user-stop.
+                if (ServiceState.status.value != ServiceStatus.ERROR) {
+                    ServiceState.updateStatus(ServiceStatus.STOPPED)
+                }
                 ServiceState.updateUptime(0)
             }
             val intent = Intent(context, OpenClawService::class.java)
