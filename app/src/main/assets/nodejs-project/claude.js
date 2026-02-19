@@ -842,7 +842,7 @@ async function claudeApiCall(body, chatId) {
                              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                             [localTimestamp(), String(chatId || ''), 0, 0, 0, 0, -1, retries, durationMs]
                         );
-                    } catch (_) {}
+                    } catch (e) { log(`[Claude] Failed to log network error to DB: ${e.message}`); }
                 }
                 updateAgentHealth('error', { type: 'network', status: -1, message: networkErr.message });
                 throw networkErr;
@@ -1134,16 +1134,14 @@ async function chat(chatId, userMessage) {
 
 module.exports = {
     // API
-    chat, claudeApiCall, visionAnalyzeImage, classifyApiError, reportUsage,
-    buildSystemBlocks,
+    chat, visionAnalyzeImage,
     // Conversations
     conversations, getConversation, addToConversation, clearConversation,
     // Sessions
-    sessionTracking, getSessionTrack,
-    generateSessionSummary, saveSessionSummary,
-    MIN_MESSAGES_FOR_SUMMARY, IDLE_TIMEOUT_MS, sessionStartedAt,
+    sessionTracking, saveSessionSummary,
+    MIN_MESSAGES_FOR_SUMMARY, IDLE_TIMEOUT_MS,
     // Health
-    agentHealth, updateAgentHealth, writeAgentHealthFile, writeClaudeUsageState,
+    writeAgentHealthFile, writeClaudeUsageState,
     // Injection
     setChatDeps,
 };

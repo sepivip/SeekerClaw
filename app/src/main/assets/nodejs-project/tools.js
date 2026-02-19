@@ -1630,7 +1630,7 @@ async function executeTool(name, input, chatId) {
                                 decimals: info.tokenAmount.decimals,
                             });
                         }
-                    } catch (_) {}
+                    } catch (e) { log(`[Tools] Failed to parse token account: ${e.message}`); }
                 }
             }
 
