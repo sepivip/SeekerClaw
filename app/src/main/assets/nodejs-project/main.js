@@ -675,7 +675,7 @@ async function pollClaudeUsage() {
             if (isAuthError && _usagePollFailCount >= USAGE_POLL_MAX_FAILURES && _usagePollTimer) {
                 clearInterval(_usagePollTimer);
                 _usagePollTimer = null;
-                log(`[Usage] Disabled — API returned ${res.status} (authentication/permission error)`, 'WARN');
+                log(`[Usage] Disabled — API returned ${res.status} (expected for setup tokens without usage scope)`, 'DEBUG');
             } else {
                 log(`Claude usage poll: HTTP ${res.status}`, 'DEBUG');
             }

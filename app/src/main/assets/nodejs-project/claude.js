@@ -15,7 +15,7 @@ const {
     getOwnerId,
 } = require('./config');
 
-const { sendTyping, sentMessageCache, SENT_CACHE_TTL, deferStatus } = require('./telegram');
+const { telegram, sendTyping, sentMessageCache, SENT_CACHE_TTL, deferStatus } = require('./telegram');
 const { httpRequest } = require('./web');
 const { androidBridgeCall } = require('./bridge');
 
@@ -737,6 +737,14 @@ let apiCallInFlight = null; // Promise that resolves when current call completes
 let lastRateLimitTokensRemaining = Infinity;
 let lastRateLimitTokensReset = '';
 
+// Setup-token session expiry detection (P0 from SETUP-TOKEN-AUDIT)
+let _consecutiveAuthFailures = 0;
+let _sessionExpired = false;
+let _sessionExpiryNotified = false;
+let _sessionExpiredAt = 0;
+const AUTH_FAIL_THRESHOLD = 3;
+const SESSION_PROBE_INTERVAL_MS = 5 * 60 * 1000; // 5 min cooldown probe
+
 // Classify API errors into retryable vs fatal with user-friendly messages (BAT-22)
 function classifyApiError(status, data) {
     if (status === 401 || status === 403) {
@@ -782,6 +790,21 @@ async function claudeApiCall(body, chatId) {
 
     let resolve;
     apiCallInFlight = new Promise(r => { resolve = r; });
+
+    // Session expiry guard: if expired, allow one probe every 5 min to detect recovery
+    if (_sessionExpired) {
+        const sinceExpiry = Date.now() - _sessionExpiredAt;
+        if (sinceExpiry < SESSION_PROBE_INTERVAL_MS) {
+            apiCallInFlight = null;
+            resolve();
+            const err = new Error('Session expired — waiting for re-pair');
+            err.code = 'SESSION_EXPIRED';
+            throw err;
+        }
+        // Allow this call through as a probe — update timestamp
+        _sessionExpiredAt = Date.now();
+        log('[Session] Probing API to check if token was refreshed', 'DEBUG');
+    }
 
     // Rate-limit pre-check: delay if token budget is critically low
     if (lastRateLimitTokensRemaining < 5000) {
@@ -893,19 +916,50 @@ async function claudeApiCall(body, chatId) {
         if (res.status === 200) {
             reportUsage(res.data?.usage);
             updateAgentHealth('healthy', null);
+            // Reset auth failure counter on success
+            _consecutiveAuthFailures = 0;
+            if (_sessionExpired) {
+                _sessionExpired = false;
+                _sessionExpiryNotified = false;
+                log('[Session] Token recovered — resuming normal operation', 'INFO');
+            }
         } else {
             const errClass = classifyApiError(res.status, res.data);
             updateAgentHealth('error', { type: errClass.type, status: res.status, message: errClass.userMessage });
+
+            // Track consecutive auth failures for session expiry detection
+            if (res.status === 401 || res.status === 403) {
+                _consecutiveAuthFailures++;
+                if (_consecutiveAuthFailures >= AUTH_FAIL_THRESHOLD && !_sessionExpired) {
+                    _sessionExpired = true;
+                    _sessionExpiredAt = Date.now();
+                    log(`[Session] ${_consecutiveAuthFailures} consecutive auth failures — session marked expired`, 'ERROR');
+                    // Notify owner via Telegram (fire-and-forget)
+                    if (!_sessionExpiryNotified) {
+                        _sessionExpiryNotified = true;
+                        const ownerId = getOwnerId();
+                        if (ownerId) {
+                            telegram('sendMessage', {
+                                chat_id: Number(ownerId),
+                                text: '\u26a0\ufe0f Your session has expired. Please re-pair your device to continue.',
+                            }).catch(e => log(`[Session] Failed to notify owner: ${e.message}`, 'WARN'));
+                        }
+                    }
+                }
+            } else {
+                _consecutiveAuthFailures = 0;
+            }
         }
 
         // Capture rate limit headers and update module-level tracking
-        if (AUTH_TYPE === 'api_key' && res.headers) {
+        if (res.headers) {
             const h = res.headers;
             const parsedRemaining = parseInt(h['anthropic-ratelimit-tokens-remaining'], 10);
             lastRateLimitTokensRemaining = Number.isFinite(parsedRemaining) ? parsedRemaining : Infinity;
             lastRateLimitTokensReset = h['anthropic-ratelimit-tokens-reset'] || '';
             writeClaudeUsageState({
                 type: 'api_key',
+                auth_mode: AUTH_TYPE,
                 requests: {
                     limit: parseInt(h['anthropic-ratelimit-requests-limit']) || 0,
                     remaining: parseInt(h['anthropic-ratelimit-requests-remaining']) || 0,
@@ -1227,6 +1281,14 @@ module.exports = {
     MIN_MESSAGES_FOR_SUMMARY, IDLE_TIMEOUT_MS,
     // Health
     writeAgentHealthFile, writeClaudeUsageState,
+    // Session expiry
+    isSessionExpired: () => _sessionExpired,
+    resetSessionExpiry: () => {
+        _sessionExpired = false;
+        _sessionExpiryNotified = false;
+        _consecutiveAuthFailures = 0;
+        log('[Session] Expiry state reset — will retry API calls', 'INFO');
+    },
     // Injection
     setChatDeps,
 };
