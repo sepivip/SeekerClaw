@@ -666,7 +666,7 @@ const cronService = {
 // ============================================================================
 
 const {
-    loadSkills, findMatchingSkills, buildSkillsSection,
+    loadSkills, findMatchingSkills,
 } = require('./skills');
 
 // Global skills cache (refreshed on each message)
