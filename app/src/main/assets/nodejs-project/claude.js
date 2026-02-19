@@ -741,7 +741,9 @@ let lastRateLimitTokensReset = '';
 let _consecutiveAuthFailures = 0;
 let _sessionExpired = false;
 let _sessionExpiryNotified = false;
+let _sessionExpiredAt = 0;
 const AUTH_FAIL_THRESHOLD = 3;
+const SESSION_PROBE_INTERVAL_MS = 5 * 60 * 1000; // 5 min cooldown probe
 
 // Classify API errors into retryable vs fatal with user-friendly messages (BAT-22)
 function classifyApiError(status, data) {
@@ -789,11 +791,19 @@ async function claudeApiCall(body, chatId) {
     let resolve;
     apiCallInFlight = new Promise(r => { resolve = r; });
 
-    // Session expiry guard: if we've already detected expiry, don't hit the API
+    // Session expiry guard: if expired, allow one probe every 5 min to detect recovery
     if (_sessionExpired) {
-        apiCallInFlight = null;
-        resolve();
-        return { status: 401, data: { error: { message: 'Session expired — waiting for re-pair' } } };
+        const sinceExpiry = Date.now() - _sessionExpiredAt;
+        if (sinceExpiry < SESSION_PROBE_INTERVAL_MS) {
+            apiCallInFlight = null;
+            resolve();
+            const err = new Error('Session expired — waiting for re-pair');
+            err.code = 'SESSION_EXPIRED';
+            throw err;
+        }
+        // Allow this call through as a probe — update timestamp
+        _sessionExpiredAt = Date.now();
+        log('[Session] Probing API to check if token was refreshed', 'DEBUG');
     }
 
     // Rate-limit pre-check: delay if token budget is critically low
@@ -922,6 +932,7 @@ async function claudeApiCall(body, chatId) {
                 _consecutiveAuthFailures++;
                 if (_consecutiveAuthFailures >= AUTH_FAIL_THRESHOLD && !_sessionExpired) {
                     _sessionExpired = true;
+                    _sessionExpiredAt = Date.now();
                     log(`[Session] ${_consecutiveAuthFailures} consecutive auth failures — session marked expired`, 'ERROR');
                     // Notify owner via Telegram (fire-and-forget)
                     if (!_sessionExpiryNotified) {
@@ -947,7 +958,8 @@ async function claudeApiCall(body, chatId) {
             lastRateLimitTokensRemaining = Number.isFinite(parsedRemaining) ? parsedRemaining : Infinity;
             lastRateLimitTokensReset = h['anthropic-ratelimit-tokens-reset'] || '';
             writeClaudeUsageState({
-                type: AUTH_TYPE === 'setup_token' ? 'oauth' : 'api_key',
+                type: 'api_key',
+                auth_mode: AUTH_TYPE,
                 requests: {
                     limit: parseInt(h['anthropic-ratelimit-requests-limit']) || 0,
                     remaining: parseInt(h['anthropic-ratelimit-requests-remaining']) || 0,
