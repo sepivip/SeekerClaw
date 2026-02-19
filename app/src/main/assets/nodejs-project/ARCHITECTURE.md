@@ -2,24 +2,26 @@
 
 ## Module Overview
 
-14 CommonJS modules in `nodejs-project/`:
+Core CommonJS modules in `nodejs-project/`:
 
-| Module | Lines | Role |
-|--------|------:|------|
-| `main.js` | 767 | Entry point, orchestrator, dependency wiring |
-| `tools.js` | 3,523 | Tool definitions (`TOOLS` array) and `executeTool()` dispatch |
-| `claude.js` | 1,149 | Claude API (chat, conversations, sessions, health) |
-| `solana.js` | 830 | Solana RPC, Jupiter DEX, wallet management |
-| `mcp-client.js` | 594 | MCP Streamable HTTP client (standalone) |
-| `cron.js` | 588 | Cron scheduling, job persistence, time parsing |
-| `telegram.js` | 511 | Telegram Bot API, formatting, file handling |
-| `database.js` | 454 | SQL.js init, persistence, memory indexing, stats |
-| `skills.js` | 433 | Skill file loading, matching, prompt building |
-| `web.js` | 369 | HTTP helpers, search providers, web fetch |
-| `config.js` | 314 | Config loading, constants, logging (root module) |
-| `memory.js` | 311 | Soul, memory, heartbeat management |
-| `security.js` | 173 | Secret redaction, prompt injection defense |
-| `bridge.js` | 64 | Android bridge HTTP client |
+| Module | Role |
+|--------|------|
+| `main.js` | Entry point, orchestrator, dependency wiring |
+| `tools.js` | Tool definitions (`TOOLS` array) and `executeTool()` dispatch |
+| `claude.js` | Claude API (chat, conversations, sessions, health) |
+| `solana.js` | Solana RPC, Jupiter DEX, wallet management |
+| `mcp-client.js` | MCP Streamable HTTP client (standalone) |
+| `cron.js` | Cron scheduling, job persistence, time parsing |
+| `telegram.js` | Telegram Bot API, formatting, file handling |
+| `database.js` | SQL.js init, persistence, memory indexing, stats |
+| `skills.js` | Skill file loading, matching, prompt building |
+| `web.js` | HTTP helpers, search providers, web fetch |
+| `config.js` | Config loading, constants, logging (root module) |
+| `memory.js` | Soul, memory, heartbeat management |
+| `security.js` | Secret redaction, prompt injection defense |
+| `bridge.js` | Android bridge HTTP client |
+
+Also present: `sql-wasm.js` (third-party SQL.js WASM bundle, not a SeekerClaw module).
 
 ## Dependency Graph
 
@@ -42,16 +44,16 @@ main.js (orchestrator)
 
 ## Dependency Injection
 
-Six injection points break circular dependencies. All wired in `main.js` at startup:
+Six injection points break circular dependencies:
 
-| Setter | Target | Injects |
-|--------|--------|---------|
-| `setSendMessage(fn)` | cron.js | `sendMessage` from telegram.js |
-| `setShutdownDeps(obj)` | database.js | `{conversations, saveSessionSummary, MIN_MESSAGES_FOR_SUMMARY}` |
-| `setChatDeps(obj)` | claude.js | `{executeTool, getTools, getMcpStatus, requestConfirmation, lastToolUseTime, lastIncomingMessages}` |
-| `setMcpExecuteTool(fn)` | tools.js | MCP tool executor from MCPManager |
-| `setRedactFn(fn)` | config.js | `redactSecrets` from security.js |
-| `setDb(fn)` | memory.js | DB getter from database.js |
+| Setter | Target | Wired in | Injects |
+|--------|--------|----------|---------|
+| `setSendMessage(fn)` | cron.js | main.js | `sendMessage` from telegram.js |
+| `setShutdownDeps(obj)` | database.js | main.js | `{conversations, saveSessionSummary, MIN_MESSAGES_FOR_SUMMARY}` |
+| `setChatDeps(obj)` | claude.js | main.js | `{executeTool, getTools, getMcpStatus, requestConfirmation, lastToolUseTime, lastIncomingMessages}` |
+| `setMcpExecuteTool(fn)` | tools.js | main.js | MCP tool executor from MCPManager |
+| `setRedactFn(fn)` | config.js | main.js | `redactSecrets` from security.js |
+| `setDb(fn)` | memory.js | database.js | DB getter (`() => db`) at module load time |
 
 ## Error Signaling Convention
 
@@ -68,8 +70,8 @@ return { error: "Wallet not connected" };
 ```
 
 This is the **only** pattern for tool results. Claude sees the error text as the tool
-response and can retry or inform the user. Never throw from within a `case` block in
-`executeTool()` — always return `{ error }`.
+response and can retry or inform the user. Tool handlers may throw internally, but
+`executeTool()` must always catch and convert failures to `{ error }` (no exceptions escape).
 
 ### Internal module functions
 
