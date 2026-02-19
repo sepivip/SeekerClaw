@@ -184,7 +184,7 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 │   - Dashboard                  - Node.js Runtime   │
 │   - Setup                        - OpenClaw Gateway │
 │   - Logs                         - AI Agent         │
-│   - Settings                     - 54 Tools         │
+│   - Settings                     - 55 Tools         │
 │                                  - SQL.js DB        │
 │  Boot Receiver ──> Auto-start                      │
 │  Watchdog ──> 30s health check                     │
@@ -208,13 +208,13 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Metric | Count |
 |--------|-------|
-| Total commits | 189 |
-| PRs merged | 119 |
-| Tools | 55 (9 Jupiter, 13 Android bridge, web search/fetch, memory, cron, etc.) |
+| Total commits | 197 |
+| PRs merged | 123 |
+| Tools | 55 (9 Jupiter, 13 Android bridge, web search/fetch, memory, cron, etc.) + MCP dynamic |
 | Skills | 34 (19 bundled + 13 workspace + 2 user-created) |
 | Android Bridge endpoints | 18+ |
 | Telegram commands | 7 |
-| Lines of JS (main.js) | ~8,520 |
+| Lines of JS | ~9,700 (main.js 6,924 + 7 extracted modules + mcp-client.js) |
 | Lines of Kotlin | ~10,590 |
 | SQL.js tables | 4 |
 | Themes | 1 (DarkOps only) |
@@ -248,6 +248,8 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Date | Feature | PR |
 |------|---------|-----|
+| 2026-02-19 | Refactor: extract 7 modules from main.js (config, security, bridge, telegram, web, memory, skills) (BAT-193–199) | #120–126 |
+| 2026-02-19 | Fix wallet cold-start rejection + expand Jupiter trusted programs | direct |
 | 2026-02-19 | Fix OOM crash in LogCollector — tail-only file reading | direct |
 | 2026-02-19 | Fix Jupiter API v2 field mismatches + silent response edge cases | direct |
 | 2026-02-18 | Inline keyboard buttons for Telegram messaging (BAT-191) | #119 |

@@ -366,3 +366,102 @@ The cleanup PR addressed every flagged issue from section 4. Dead export rate dr
 ---
 
 *Updated 2026-02-19 after BAT-205 cleanup (PR #132).*
+
+---
+
+## 7. Post-Log-Levels Reassessment (after PR #133)
+
+**PR:** #133 — `feat: structured log levels with DEBUG/INFO/WARN/ERROR pipeline (BAT-206)`
+
+### What PR #133 changed
+
+| Area | Before (#132) | After (#133) | Delta |
+|------|---------------|--------------|-------|
+| Total lines (14 JS modules) | 10,051 | 10,067 | +16 |
+| Log calls without explicit level | ~209 (implicit INFO) | 0 | **−100%** |
+| Log calls with explicit level | 0 | 207 `log()` + 16 `this.log()` = **223** | +223 |
+| Wire format | `[timestamp] message` | `LEVEL\|message` | Structured |
+| Log levels in pipeline | INFO, WARN, ERROR | **DEBUG**, INFO, WARN, ERROR | +1 level |
+| LogsScreen filter chips | 3 (Info, Warn, Error) | **4** (Debug, Info, Warn, Error) | +1 chip |
+| Kotlin files modified | — | 4 (OpenClawService, LogCollector, LogsScreen, Theme) | — |
+| Startup banner lines | ~10+ verbose lines | **1** condensed line | −9+ lines |
+| Per-skill load logs | 34× per message cycle | 34× on first load only + 1 summary | Guarded |
+
+### Log call distribution by level
+
+| Level | Count | % | Examples |
+|-------|------:|--:|---------|
+| DEBUG | 72 | 32% | Message trace, cache hits, heartbeat, media processing |
+| INFO | 47 | 21% | Bot connected, skill summary, MCP status, cron lifecycle |
+| WARN | 61 | 27% | Rate limits, fallback paths, security blocks, parse failures |
+| ERROR | 43 | 19% | API failures, uncaught exceptions, tx verification failures |
+| **Total** | **223** | 100% | |
+
+### Pipeline architecture
+
+```
+  Node.js                      Kotlin
+  ────────                     ──────
+  log(msg, 'WARN')             OpenClawService.kt
+       │                            │
+       ▼                            ▼
+  config.js:log()              Parse LEVEL|message
+       │                       (pipeIdx > 0, explicit
+       ▼                        when-match on known levels)
+  node_debug.log                    │
+  "WARN|message\n"                  ▼
+       │                       LogCollector.append(msg, LogLevel.WARN)
+       │                            │
+       └──── file polling ──────────┘
+                                    ▼
+                               LogsScreen.kt
+                               (filter chips: Debug/Info/Warn/Error)
+                               (colors: gray-500/green/amber/red)
+```
+
+### What improved (relative to 8.5 baseline)
+
+1. **Logging consistency**: Every log call now has an explicit level. Zero implicit-INFO calls remain. The `log(msg, level)` signature enforces this going forward — any new log call is immediately visible as missing its level argument during review.
+
+2. **Observability**: Users can filter DEBUG noise out of the Logs screen (off by default). The DEBUG level captures ~32% of all log calls — previously these showed as undifferentiated INFO alongside genuinely important messages.
+
+3. **Startup noise**: The 10+ verbose startup lines (Node.js version, workspace path, per-skill loads, cron start, etc.) are now DEBUG. A single condensed banner — `SeekerClaw | model | @bot | N skills | N MCP | N cron` — replaces them at INFO level.
+
+4. **Wire format**: The `LEVEL|message` pipe-delimited format is simpler and faster to parse than the old substring-matching approach (`line.contains("ERROR")` was fragile — matched error *messages* not error *levels*).
+
+5. **Kotlin robustness**: OpenClawService now uses explicit `when`-match against known level strings instead of `pipeIdx in 1..5`. Unknown prefixes fall through gracefully to INFO with the full original line preserved.
+
+### What did not change
+
+- Module count (14), export count (135), dead exports (5), silent catches (5) — all unchanged from section 6.
+- No new dependencies, no new modules, no API surface changes.
+- This was a cross-cutting concern (logging) that touched all 14 JS modules + 4 Kotlin files but did not alter any module's responsibility or architecture.
+
+### Updated health rating: 8.5 / 10 (unchanged)
+
+| Category | Before (8.5) | After (8.5) | What changed |
+|----------|:------------:|:-----------:|--------------|
+| **Modularity** | 9 | 9 | Unchanged |
+| **Naming** | 8 | 8 | Unchanged |
+| **Error handling** | 8 | 8 | Unchanged (silent catches already fixed in #132) |
+| **API surface** | 8 | 8 | Unchanged (135 exports, 5 dead) |
+| **Documentation** | 8 | 8 | No new docs needed — log format is self-documenting |
+| **Consistency** | 8 | **9** | All 223 log calls use explicit levels; wire format standardized |
+| **Testability** | 8 | 8 | Unchanged |
+| **Maintainability** | 9 | 9 | Unchanged |
+
+**Composite: 8.5** (was 8.5). The consistency sub-score improved from 8→9, but the composite rounds to the same 8.5. The log-levels work was quality-of-life and observability — it doesn't change the structural health of the codebase, which was already solid after the cleanup in #132.
+
+### What would still push it higher
+
+- **9.0**: Split `tools.js` (3,523 lines) into domain-specific tool files
+- **9.5**: Add JSDoc to public functions; prune 5 residual dead exports
+- **10**: Comprehensive test suite with mocked dependency injection
+
+### Bottom line
+
+BAT-206 is a cross-cutting logging improvement, not a structural refactor. It standardized 223 log calls across 14 JS modules and 4 Kotlin files into a consistent `LEVEL|message` pipeline with UI-level filtering. The health score holds at 8.5 — the logging was the last inconsistency flagged in section 4.3 ("Logging: Consistent"), and it's now even more so.
+
+---
+
+*Updated 2026-02-19 after BAT-206 log levels (PR #133).*
