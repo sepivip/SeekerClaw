@@ -96,7 +96,7 @@ function saveCronStore(store) {
             if (fs.existsSync(CRON_STORE_PATH)) {
                 fs.copyFileSync(CRON_STORE_PATH, CRON_STORE_PATH + '.bak');
             }
-        } catch (_) {}
+        } catch (e) { log(`[Cron] Backup before save failed: ${e.message}`); }
 
         fs.renameSync(tmpPath, CRON_STORE_PATH);
     } catch (e) {
@@ -125,7 +125,7 @@ function appendCronRunLog(jobId, entry) {
                 const kept = lines.slice(-200); // Keep last 200 entries
                 fs.writeFileSync(logPath, kept.join('\n') + '\n', 'utf8');
             }
-        } catch (_) {}
+        } catch (e) { log(`[Cron] Run log prune failed: ${e.message}`); }
     } catch (e) {
         log(`Error writing run log: ${e.message}`);
     }

@@ -399,7 +399,7 @@ function writeDbSummaryFile() {
         const tmpPath = targetPath + '.tmp';
         fs.writeFileSync(tmpPath, JSON.stringify(summary));
         fs.renameSync(tmpPath, targetPath);
-    } catch (_) {}
+    } catch (e) { log(`[DB] Summary file write failed: ${e.message}`); }
 }
 function markDbSummaryDirty() { dbSummaryDirty = true; }
 
@@ -443,10 +443,7 @@ module.exports = {
     getDb,
     setShutdownDeps,
     initDatabase,
-    saveDatabase,
     indexMemoryFiles,
-    gracefulShutdown,
-    getDbSummary,
     writeDbSummaryFile,
     markDbSummaryDirty,
     startDbSummaryInterval,

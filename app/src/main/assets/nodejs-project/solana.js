@@ -804,16 +804,10 @@ async function jupiterPrice(mintAddresses) {
 
 module.exports = {
     solanaRpc,
-    base58Decode,
     base58Encode,
     buildSolTransferTx,
-    jupiterTokenCache,
-    WELL_KNOWN_TOKENS,
-    KNOWN_PROGRAM_NAMES,
-    TRUSTED_PROGRAMS: () => TRUSTED_PROGRAMS,  // getter since it's reassigned
     refreshJupiterProgramLabels,
     jupiterRequest,
-    fetchJupiterTokenList,
     isValidSolanaAddress,
     parseInputAmountToLamports,
     ensureWalletAuthorized,
@@ -821,7 +815,6 @@ module.exports = {
     resolveToken,
     jupiterQuote,
     verifySwapTransaction,
-    readCompactU16,
     jupiterUltraOrder,
     jupiterUltraExecute,
     jupiterTriggerExecute,

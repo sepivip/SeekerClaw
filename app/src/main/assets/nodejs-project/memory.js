@@ -292,20 +292,13 @@ updateHeartbeat();
 
 module.exports = {
     setDb,
-    BOOTSTRAP_PATH,
-    IDENTITY_PATH,
-    USER_PATH,
-    DEFAULT_SOUL,
     loadSoul,
     loadBootstrap,
     loadIdentity,
     loadUser,
     loadMemory,
     saveMemory,
-    getDailyMemoryPath,
     loadDailyMemory,
     appendDailyMemory,
-    STOP_WORDS,
     searchMemory,
-    updateHeartbeat,
 };

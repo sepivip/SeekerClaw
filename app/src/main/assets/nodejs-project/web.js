@@ -357,8 +357,6 @@ module.exports = {
     httpRequest,
     cacheGet,
     cacheSet,
-    decodeEntities,
-    stripTags,
     htmlToMarkdown,
     BRAVE_FRESHNESS_VALUES,
     searchBrave,

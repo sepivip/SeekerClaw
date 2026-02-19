@@ -424,10 +424,6 @@ function buildSkillsSection(skills) {
 // ============================================================================
 
 module.exports = {
-    parseYamlFrontmatter,
-    parseSkillFile,
-    validateSkillFormat,
     loadSkills,
     findMatchingSkills,
-    buildSkillsSection,
 };

@@ -492,9 +492,7 @@ module.exports = {
     telegram,
     telegramSendFile,
     detectTelegramFileType,
-    MEDIA_DIR,
     MAX_FILE_SIZE,
-    MAX_IMAGE_BASE64,
     MAX_IMAGE_SIZE,
     extractMedia,
     downloadTelegramFile,
@@ -505,7 +503,5 @@ module.exports = {
     recordSentMessage,
     sendMessage,
     sendTyping,
-    sendStatusMessage,
-    deleteStatusMessage,
     deferStatus,
 };
