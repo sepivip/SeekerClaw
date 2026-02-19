@@ -311,7 +311,11 @@ object ConfigManager {
     }
 
     fun writeAgentSettingsJson(context: Context) {
-        val config = loadConfig(context) ?: return
+        val config = loadConfig(context)
+        if (config == null) {
+            LogCollector.append("[Config] writeAgentSettingsJson: loadConfig returned null; skipping write", LogLevel.WARN)
+            return
+        }
         val workspaceDir = File(context.filesDir, "workspace").apply { mkdirs() }
         val json = """{"heartbeatIntervalMinutes":${config.heartbeatIntervalMinutes}}"""
         try {
