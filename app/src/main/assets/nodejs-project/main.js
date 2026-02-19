@@ -667,7 +667,11 @@ async function pollClaudeUsage() {
             });
         } else {
             const isAuthError = res.status === 401 || res.status === 403;
-            if (isAuthError) _usagePollFailCount++;
+            if (isAuthError) {
+                _usagePollFailCount++;
+            } else {
+                _usagePollFailCount = 0;
+            }
             if (isAuthError && _usagePollFailCount >= USAGE_POLL_MAX_FAILURES && _usagePollTimer) {
                 clearInterval(_usagePollTimer);
                 _usagePollTimer = null;
