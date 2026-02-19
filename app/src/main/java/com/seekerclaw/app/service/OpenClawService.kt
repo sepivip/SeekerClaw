@@ -48,6 +48,35 @@ class OpenClawService : Service() {
         val notification = createNotification("SeekerClaw is running")
         startForeground(NOTIFICATION_ID, notification)
 
+        // Clear any lingering setup-required notification from a previous failed start.
+        getSystemService(android.app.NotificationManager::class.java)
+            ?.cancel(SETUP_NOTIFICATION_ID)
+
+        // FIX-1 (BAT-219): Guard — refuse to start Node.js when owner ID is not configured.
+        // Without a known owner, the first inbound Telegram message would silently claim
+        // ownership (auto-detect race). Fail fast here so the user is directed to finish setup.
+        val config = ConfigManager.loadConfig(this)
+        val ownerId = config?.telegramOwnerId
+        if (ownerId.isNullOrBlank()) {
+            LogCollector.append(
+                "[Service] Owner ID not configured — Node.js will not start. " +
+                    "Open SeekerClaw and complete the setup to configure your Telegram owner ID.",
+                LogLevel.ERROR,
+            )
+            ServiceState.updateStatus(ServiceStatus.ERROR)
+            // Remove the foreground notification and post a separate persistent setup reminder.
+            // Using a distinct SETUP_NOTIFICATION_ID ensures it is not bound to service lifetime
+            // and survives the stopSelf() call below.
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            getSystemService(android.app.NotificationManager::class.java)
+                ?.notify(
+                    SETUP_NOTIFICATION_ID,
+                    createSetupNotification("Setup required — open SeekerClaw to finish setup"),
+                )
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
         // Acquire partial wake lock (CPU stays on)
         val pm = getSystemService(POWER_SERVICE) as PowerManager
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "SeekerClaw::Service")
@@ -231,7 +260,10 @@ class OpenClawService : Service() {
             if (it.isHeld) it.release()
         }
         ServiceState.clearBridgeToken()
-        ServiceState.updateStatus(ServiceStatus.STOPPED)
+        // Preserve ERROR status (e.g., owner not configured) — only reset to STOPPED on clean exits.
+        if (ServiceState.status.value != ServiceStatus.ERROR) {
+            ServiceState.updateStatus(ServiceStatus.STOPPED)
+        }
         ServiceState.updateUptime(0)
 
         // Clean shutdown should clear crash-loop counters. Unexpected deaths won't hit this path.
@@ -265,8 +297,26 @@ class OpenClawService : Service() {
             .build()
     }
 
+    // Dismissible notification for actionable setup errors (not tied to service lifetime).
+    // Uses ERROR_CHANNEL_ID (IMPORTANCE_HIGH) so the alert is visually prominent.
+    private fun createSetupNotification(text: String): Notification {
+        val pendingIntent = PendingIntent.getActivity(
+            this, 0,
+            Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        return NotificationCompat.Builder(this, SeekerClawApplication.ERROR_CHANNEL_ID)
+            .setContentTitle("SeekerClaw")
+            .setContentText(text)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentIntent(pendingIntent)
+            .setOngoing(false) // dismissible — user can swipe away once they open the app
+            .build()
+    }
+
     companion object {
         private const val NOTIFICATION_ID = 1
+        private const val SETUP_NOTIFICATION_ID = 2 // separate ID — persists after service stops
         private val restartHandler = Handler(Looper.getMainLooper())
 
         fun start(context: Context) {
@@ -279,7 +329,10 @@ class OpenClawService : Service() {
             restartHandler.removeCallbacksAndMessages(null)
             runCatching {
                 ServiceState.init(context.applicationContext)
-                ServiceState.updateStatus(ServiceStatus.STOPPED)
+                // Mirror the same guard as onDestroy() — don't wipe ERROR status on a user-stop.
+                if (ServiceState.status.value != ServiceStatus.ERROR) {
+                    ServiceState.updateStatus(ServiceStatus.STOPPED)
+                }
                 ServiceState.updateUptime(0)
             }
             val intent = Intent(context, OpenClawService::class.java)
