@@ -36,6 +36,7 @@ import com.seekerclaw.app.ui.dashboard.DashboardScreen
 import com.seekerclaw.app.ui.logs.LogsScreen
 import com.seekerclaw.app.ui.settings.SettingsScreen
 import com.seekerclaw.app.ui.setup.SetupScreen
+import com.seekerclaw.app.ui.skills.SkillsScreen
 import com.seekerclaw.app.ui.system.SystemScreen
 import com.seekerclaw.app.R
 import com.seekerclaw.app.ui.theme.SeekerClawColors
@@ -46,6 +47,7 @@ import kotlinx.serialization.Serializable
 @Serializable object SetupRoute
 @Serializable object DashboardRoute
 @Serializable object LogsRoute
+@Serializable object SkillsRoute
 @Serializable object SettingsRoute
 @Serializable object SystemRoute
 
@@ -58,6 +60,7 @@ data class BottomNavItem(
 val bottomNavItems = listOf(
     BottomNavItem("Home", R.drawable.ic_lucide_layout_grid, DashboardRoute),
     BottomNavItem("Console", R.drawable.ic_lucide_terminal, LogsRoute),
+    BottomNavItem("Skills", R.drawable.ic_lucide_layers, SkillsRoute),
     BottomNavItem("Settings", R.drawable.ic_lucide_settings, SettingsRoute),
 )
 
@@ -75,6 +78,7 @@ fun SeekerClawNavHost() {
                 dest.hasRoute(SetupRoute::class) -> "Setup"
                 dest.hasRoute(DashboardRoute::class) -> "Dashboard"
                 dest.hasRoute(LogsRoute::class) -> "Console"
+                dest.hasRoute(SkillsRoute::class) -> "Skills"
                 dest.hasRoute(SettingsRoute::class) -> "Settings"
                 dest.hasRoute(SystemRoute::class) -> "System"
                 else -> dest.route ?: "Unknown"
@@ -195,6 +199,9 @@ fun SeekerClawNavHost() {
             }
             composable<LogsRoute> {
                 LogsScreen()
+            }
+            composable<SkillsRoute> {
+                SkillsScreen()
             }
             composable<SettingsRoute> {
                 SettingsScreen(
