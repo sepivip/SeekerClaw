@@ -434,15 +434,11 @@ async function handleMessage(msg) {
                                     // Non-skill or failed — fall through to normal file note
                                 }
                             } catch (e) {
-                                if (skillAutoInstalled) {
-                                    // Install succeeded but confirmation send failed — still don't forward to chat()
-                                    log(`Skill install confirmation send failed: ${e.message}`, 'WARN');
-                                } else {
-                                    log(`Skill auto-detect error: ${e.message}`, 'WARN');
-                                }
+                                // sendMessage() logs internally and does not throw — only readFileSync / executeTool can throw here
+                                log(`Skill auto-detect error: ${e.message}`, 'WARN');
                             }
                         }
-                        // Routing is OUTSIDE the try so it always runs, even if sendMessage threw above
+                        // Routing is OUTSIDE the try so it always runs regardless of install errors
                         if (skillAutoInstalled) {
                             if (!text) {
                                 return; // No caption — nothing more to do

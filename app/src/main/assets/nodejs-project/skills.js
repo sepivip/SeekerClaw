@@ -112,7 +112,15 @@ function parseYamlLines(lines, parentIndent) {
         // Case 1: JSON value on the same line (e.g., metadata: {"openclaw":...})
         if (value && (value.startsWith('{') || value.startsWith('['))) {
             const parsed = tryJsonParse(value);
-            result[key] = parsed !== null ? parsed : value;
+            if (parsed !== null) {
+                result[key] = parsed;
+            } else if (value.startsWith('[')) {
+                // Simple YAML inline sequence with unquoted strings (e.g., [hello, test])
+                // JSON.parse rejects these — strip brackets, split on commas, trim
+                result[key] = value.slice(1, -1).split(',').map(s => s.trim()).filter(Boolean);
+            } else {
+                result[key] = value;
+            }
             i++;
             continue;
         }
@@ -249,7 +257,8 @@ function parseSkillFile(content, skillDir) {
         }
 
         // Parse trigger keywords (legacy format, still supported)
-        if (line.toLowerCase().startsWith('trigger:')) {
+        // Only apply if triggers weren't already set by YAML frontmatter
+        if (line.toLowerCase().startsWith('trigger:') && skill.triggers.length === 0) {
             skill.triggers = line.slice(8).split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
             continue;
         }
