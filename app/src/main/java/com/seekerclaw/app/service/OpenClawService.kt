@@ -177,16 +177,18 @@ class OpenClawService : Service() {
                         val lines = String(newBytes).lines().filter { it.isNotBlank() }
                         for (line in lines) {
                             val pipeIdx = line.indexOf('|')
-                            val (level, message) = if (pipeIdx in 1..5) {
+                            val (level, message) = if (pipeIdx > 0) {
                                 val lvl = line.substring(0, pipeIdx)
                                 val msg = line.substring(pipeIdx + 1)
                                 val parsed = when (lvl) {
                                     "ERROR" -> LogLevel.ERROR
                                     "WARN" -> LogLevel.WARN
                                     "DEBUG" -> LogLevel.DEBUG
-                                    else -> LogLevel.INFO
+                                    "INFO" -> LogLevel.INFO
+                                    else -> null
                                 }
-                                parsed to msg
+                                if (parsed != null) parsed to msg
+                                else LogLevel.INFO to line  // unknown prefix — treat whole line as INFO
                             } else {
                                 // Fallback for unparsed lines (old format, raw output)
                                 LogLevel.INFO to line
