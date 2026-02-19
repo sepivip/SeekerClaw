@@ -297,26 +297,10 @@ function seedHeartbeatMd() {
     }
 }
 
-function updateHeartbeat() {
-    const now = new Date();
-    const uptime = Math.floor(process.uptime());
-    const content = `# Heartbeat
-
-Last updated: ${localTimestamp(now)}
-Uptime: ${Math.floor(uptime / 3600)}h ${Math.floor((uptime % 3600) / 60)}m ${uptime % 60}s
-Memory: ${Math.round(process.memoryUsage().rss / 1024 / 1024)} MB
-Status: Running
-`;
-    try {
-        fs.writeFileSync(HEARTBEAT_PATH, content, 'utf8');
-    } catch (e) {
-        log(`[Heartbeat] Failed to write HEARTBEAT.md: ${e.message}`, 'WARN');
-    }
-}
-
-// Update heartbeat every 5 minutes
-setInterval(updateHeartbeat, 5 * 60 * 1000);
-updateHeartbeat();
+// updateHeartbeat() removed (BAT-220): it was writing system stats (uptime/memory)
+// to HEARTBEAT.md every 5 minutes, overwriting custom tasks the agent stores there.
+// HEARTBEAT.md belongs to the agent as a persistent task checklist — it must not be
+// touched by the runtime. Uptime/memory/status are already reported via agent_health_state.
 
 // ============================================================================
 // EXPORTS
