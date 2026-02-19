@@ -316,11 +316,15 @@ object ServiceState {
                 consecutiveFailures = json.optInt("consecutiveFailures", 0),
                 isStale = stale,
             )
-            if (_agentHealth.value != health) {
-                val prevStale = _agentHealth.value.isStale
-                // Synchronized + debounce: prevents duplicate logs when overlapping
-                // pollingJob coroutines both read prevStale before the first write commits.
-                synchronized(this) {
+            // Synchronized block: prevStale capture, transition log emission, and StateFlow
+            // update are all atomic. Prevents the TOCTOU where overlapping pollingJob
+            // coroutines both read prevStale before the first write commits, causing
+            // duplicate [Health] log bursts at startup.
+            // The 3s debounce (HEALTH_TRANSITION_LOG_DEBOUNCE_MS) is an additional guard
+            // for any sub-millisecond races at the sync-block entry boundary.
+            synchronized(this) {
+                if (_agentHealth.value != health) {
+                    val prevStale = _agentHealth.value.isStale
                     val now = System.currentTimeMillis()
                     if (!prevStale && stale && lastLoggedStale != true &&
                         now - lastTransitionLogAt >= HEALTH_TRANSITION_LOG_DEBOUNCE_MS) {
@@ -333,8 +337,8 @@ object ServiceState {
                         lastLoggedStale = false
                         lastTransitionLogAt = now
                     }
+                    _agentHealth.value = health
                 }
-                _agentHealth.value = health
             }
         } catch (_: Exception) {}
     }
