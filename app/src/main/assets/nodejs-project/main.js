@@ -430,8 +430,12 @@ async function handleMessage(msg) {
                                         // Caption present — forward to Claude via normal chat flow
                                         userContent = `[Skill just installed. User's message accompanying the file: ${text}]`;
                                         skillAutoInstalled = true;
+                                    } else if (installResult && installResult.error) {
+                                        // Validation failed — tell user why (e.g. missing name, injection blocked)
+                                        await sendMessage(chatId, `Skill install failed: ${installResult.error}`, msg.message_id);
+                                        // Fall through to normal file note so the file is still accessible
                                     }
-                                    // Install failed (not a valid skill) — fall through to normal file note
+                                    // Non-skill or failed — fall through to normal file note
                                 }
                             } catch (e) {
                                 log(`Skill auto-detect error: ${e.message}`, 'WARN');
