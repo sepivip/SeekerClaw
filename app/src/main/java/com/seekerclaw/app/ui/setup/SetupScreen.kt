@@ -1059,13 +1059,13 @@ private fun SetupSuccessStep(
         Box(
             modifier = Modifier
                 .size(80.dp)
-                .background(SeekerClawColors.Accent.copy(alpha = 0.15f), CircleShape),
+                .background(SeekerClawColors.ActionPrimary.copy(alpha = 0.15f), CircleShape),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
                 Icons.Rounded.Check,
                 contentDescription = "Success",
-                tint = SeekerClawColors.Accent,
+                tint = SeekerClawColors.ActionPrimary,
                 modifier = Modifier.size(40.dp),
             )
         }

@@ -393,6 +393,15 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                     .background(SeekerClawColors.Surface, shape),
             ) {
                 ConfigField(
+                    label = "Model",
+                    value = availableModels.find { it.id == config?.model }
+                        ?.let { "${it.displayName} (${it.description})" }
+                        ?: config?.model?.ifBlank { "Not set" }
+                        ?: "Not set",
+                    onClick = { showModelPicker = true },
+                    info = SettingsHelpTexts.MODEL,
+                )
+                ConfigField(
                     label = "Auth Type",
                     value = authTypeLabel,
                     onClick = { showAuthTypePicker = true },
@@ -442,15 +451,6 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                     info = SettingsHelpTexts.OWNER_ID,
                 )
                 ConfigField(
-                    label = "Model",
-                    value = availableModels.find { it.id == config?.model }
-                        ?.let { "${it.displayName} (${it.description})" }
-                        ?: config?.model?.ifBlank { "Not set" }
-                        ?: "Not set",
-                    onClick = { showModelPicker = true },
-                    info = SettingsHelpTexts.MODEL,
-                )
-                ConfigField(
                     label = "Agent Name",
                     value = config?.agentName?.ifBlank { "SeekerClaw" } ?: "SeekerClaw",
                     onClick = {
@@ -463,10 +463,10 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                 ConfigField(
                     label = "Brave API Key",
                     value = config?.braveApiKey?.let { key ->
-                        if (key.isBlank()) "Not set — using DuckDuckGo"
+                        if (key.isBlank()) "Not set (optional)"
                         else if (key.length > 12) "${key.take(8)}${"*".repeat(8)}${key.takeLast(4)}"
                         else "*".repeat(key.length)
-                    } ?: "Not set — using DuckDuckGo",
+                    } ?: "Not set (optional)",
                     onClick = {
                         editField = "braveApiKey"
                         editLabel = "Brave API Key"

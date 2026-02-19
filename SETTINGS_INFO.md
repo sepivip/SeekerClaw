@@ -10,14 +10,14 @@
 
 | # | Setting | Constant | Status | Text |
 |---|---------|----------|--------|------|
-| 1 | Auth Type | `AUTH_TYPE` | ✅ Good | How your agent talks to the AI. API Key = your own Anthropic key (you're the boss). Setup Token = quick temporary access via Claude Code. Pick whichever works for you. |
-| 2 | API Key | `API_KEY` | ✅ Good | Your Anthropic API key — the magic password that makes your agent smart. Grab one at console.anthropic.com → API Keys → Create Key. Starts with "sk-ant-". Guard it like a seed phrase. |
-| 3 | Setup Token | `SETUP_TOKEN` | ✅ Good | A temporary token for quick setup. Run "claude setup-token" on any machine with Claude Code installed — it'll give you a token to paste here. Great if you don't want to deal with API keys. Temporary = it expires. |
-| 4 | Bot Token | `BOT_TOKEN` | ✅ Good | Your Telegram bot's soul. Get one: open Telegram → @BotFather → /newbot → follow the steps. You'll get something like "123456:ABC-DEF". This is how your agent lives on Telegram. |
-| 5 | Owner ID | `OWNER_ID` | ✅ Good | Your Telegram user ID (a number, not your @username). This is who the agent obeys. Leave blank = first person to message becomes owner. Find yours: message @userinfobot on Telegram. |
-| 6 | Model | `MODEL` | ✅ Good | Your agent's brain. Opus 4.6 — big brain, big bill. Sonnet 4.6 — sweet spot. Sonnet 4.5 — last gen, still solid. Haiku 4.5 — fast & cheap. Pick your fighter. |
+| 1 | Model | `MODEL` | ✅ Good | Your agent's brain. Opus 4.6 — big brain, big bill. Sonnet 4.6 — sweet spot. Sonnet 4.5 — last gen, still solid. Haiku 4.5 — fast & cheap. Pick your fighter. |
+| 2 | Auth Type | `AUTH_TYPE` | ✅ Good | How your agent talks to the AI. API Key = your own Anthropic key (you're the boss). Setup Token = quick temporary access via Claude Code. Pick whichever works for you. |
+| 3 | API Key | `API_KEY` | ✅ Good | Your Anthropic API key — the magic password that makes your agent smart. Grab one at console.anthropic.com → API Keys → Create Key. Starts with "sk-ant-". Guard it like a seed phrase. |
+| 4 | Setup Token | `SETUP_TOKEN` | ✅ Good | A temporary token for quick setup. Run "claude setup-token" on any machine with Claude Code installed — it'll give you a token to paste here. Great if you don't want to deal with API keys. Temporary = it expires. |
+| 5 | Bot Token | `BOT_TOKEN` | ✅ Good | Your Telegram bot's soul. Get one: open Telegram → @BotFather → /newbot → follow the steps. You'll get something like "123456:ABC-DEF". This is how your agent lives on Telegram. |
+| 6 | Owner ID | `OWNER_ID` | ✅ Good | Your Telegram user ID (a number, not your @username). This is who the agent obeys. Leave blank = first person to message becomes owner. Find yours: message @userinfobot on Telegram. |
 | 7 | Agent Name | `AGENT_NAME` | ✅ Good | What should we call your agent? Shows on the dashboard and in its personality. Totally cosmetic — go wild. |
-| 8 | Brave API Key | `BRAVE_API_KEY` | ✅ Good | Optional. Gives your agent Brave Search (better results). Free key at brave.com/search/api. Without it, DuckDuckGo handles search — still works, just less fancy. |
+| 8 | Brave API Key | `BRAVE_API_KEY` | ✅ Good | Optional. Gives your agent Brave Search (better results). Free key at brave.com/search/api. |
 
 ## Preferences
 
