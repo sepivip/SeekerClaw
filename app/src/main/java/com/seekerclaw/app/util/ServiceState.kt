@@ -198,6 +198,14 @@ object ServiceState {
      */
     fun startPolling(context: Context) {
         init(context)
+        // Guard: skip if a polling loop is already running (BAT-217).
+        // Prevents overlapping coroutines that could both detect health transitions
+        // and emit duplicate log entries.
+        if (pollingJob?.isActive == true) {
+            Log.d(TAG, "startPolling: already active, skipping")
+            return
+        }
+        Log.d(TAG, "startPolling: launching polling loop")
         pollingJob?.cancel()
         pollingJob = scope.launch {
             while (isActive) {
