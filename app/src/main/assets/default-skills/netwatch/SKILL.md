@@ -90,8 +90,8 @@ Use `js_eval` to decode the hex data if needed:
 ```javascript
 // Example: decode hex IP
 const hex = '0100007F';
-const ip = [3,2,1,0].map(i => parseInt(hex.substr(i*2,2), 16)).join('.');
-// Result: 127.0.0.1
+const ip = [3,2,1,0].map(i => parseInt(hex.substring(i*2, i*2+2), 16)).join('.');
+// '0100007F' → reverse bytes → '7F000001' → 127.0.0.1
 ```
 
 **Parsing /proc/net/route:** Column format:
@@ -231,4 +231,5 @@ What would you like me to investigate further?
 - Use `js_eval` for complex parsing (hex decoding from /proc/net/ files)
 - Target platform is Android/Linux (no Windows commands)
 - No root-required commands — if a command fails due to permissions, note it and move on
+- If `/proc/net/*` files are readable but contain no entries, treat this as "no data found" (not an error) and report it explicitly, e.g., "No open ports detected"
 - Never install packages or modify system configuration
