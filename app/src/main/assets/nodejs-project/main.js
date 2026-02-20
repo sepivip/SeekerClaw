@@ -728,15 +728,21 @@ async function poll() {
                         const isPlainText = msgText && !update.message.photo && !update.message.video
                             && !update.message.document && !update.message.sticker && !update.message.voice;
                         if (pending && isPlainText) {
-                            // Only consume pure text messages as confirmation replies
-                            // (photos with captions, stickers, etc. are enqueued normally)
-                            // Recognize /approve and /deny commands as confirmation responses
-                            // Strip @botusername for group chat compatibility
+                            // Only explicit YES/NO or /approve//deny consume the confirmation.
+                            // Other messages pass through to normal handling so random text
+                            // doesn't accidentally reject a pending action (timeout handles ignore).
+                            // Strip @botusername for group chat compatibility.
                             const normalized = msgText.toLowerCase().replace(/@\w+$/, '');
-                            const confirmed = msgText.toUpperCase() === 'YES' || normalized === '/approve';
-                            log(`[Confirm] User replied "${msgText}" for ${pending.toolName} → ${confirmed ? 'APPROVED' : 'REJECTED'}`, 'INFO');
-                            pending.resolve(confirmed);
-                            pendingConfirmations.delete(msgChatId);
+                            const upper = msgText.toUpperCase();
+                            const isApprove = upper === 'YES' || normalized === '/approve';
+                            const isDeny = upper === 'NO' || normalized === '/deny';
+                            if (isApprove || isDeny) {
+                                log(`[Confirm] User replied "${msgText}" for ${pending.toolName} → ${isApprove ? 'APPROVED' : 'REJECTED'}`, 'INFO');
+                                pending.resolve(isApprove);
+                                pendingConfirmations.delete(msgChatId);
+                            } else {
+                                enqueueMessage(update.message);
+                            }
                         } else {
                             enqueueMessage(update.message);
                         }
