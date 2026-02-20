@@ -94,6 +94,8 @@ const ip = [3,2,1,0].map(i => parseInt(hex.substring(i*2, i*2+2), 16)).join('.')
 // '0100007F' → reverse bytes → '7F000001' → 127.0.0.1
 ```
 
+**Note on IPv6:** `/proc/net/tcp6` and `/proc/net/udp6` use 128-bit (32 hex character) addresses with the same little-endian byte ordering but in 4-byte groups. For v1, focus on IPv4 entries from `/proc/net/tcp` and `/proc/net/udp`. Report IPv6 entries as present but skip detailed parsing unless specifically asked.
+
 **Parsing /proc/net/route:** Column format (0-indexed, tab-separated):
 - Column 0: interface name
 - Column 1: destination (hex, `00000000` = default route)
@@ -134,7 +136,7 @@ What would you like me to investigate further?
 - 0-25: Low risk — standard config, no unexpected ports
 - 26-50: Medium — some open ports or minor config issues
 - 51-75: High — suspicious connections or dangerous ports open
-- 76-100: Critical — active threats or severe misconfig
+- 76-100: Critical — active threats or severe misconfiguration
 
 **Known dangerous ports to flag (decimal):**
 - 21 (FTP), 23 (Telnet), 25 (SMTP), 445 (SMB), 3389 (RDP)
