@@ -275,10 +275,13 @@ Send me anything to get started!`;
                 if (!match) {
                     return `No skill matching \`${args.trim()}\`.\n\nUse /skill to list all installed skills.`;
                 }
+                if (match.triggers.length === 0) {
+                    return `Skill **${match.name}** has no triggers defined and can't be run via /skill.\n\nAdd \`triggers:\` to its YAML frontmatter.`;
+                }
                 // Signal handleMessage to rewrite the text to a trigger word so
                 // findMatchingSkills() in claude.js picks up the skill correctly.
                 // (findMatchingSkills uses word-boundary regex on triggers, not skill names.)
-                return { __skillFallthrough: true, trigger: match.triggers[0] || match.name };
+                return { __skillFallthrough: true, trigger: match.triggers[0] };
             }
 
             // /skill or /skills with no args — list all
@@ -327,12 +330,19 @@ Platform: \`${platform}\``;
         }
 
         case '/logs': {
-            // Read last 10 log entries from the debug log file
+            // Read last 10 log entries from the debug log file (tail-read to avoid blocking)
             try {
                 if (!fs.existsSync(debugLog)) {
                     return 'No log file found.';
                 }
-                const content = fs.readFileSync(debugLog, 'utf8');
+                const TAIL_BYTES = 8192;
+                const stats = fs.statSync(debugLog);
+                const start = Math.max(0, stats.size - TAIL_BYTES);
+                const fd = fs.openSync(debugLog, 'r');
+                const buf = Buffer.alloc(Math.min(stats.size, TAIL_BYTES));
+                fs.readSync(fd, buf, 0, buf.length, start);
+                fs.closeSync(fd);
+                const content = buf.toString('utf8');
                 const lines = content.trim().split('\n').filter(l => l.trim());
                 const last10 = lines.slice(-10);
                 if (last10.length === 0) return 'Log file is empty.';
@@ -706,7 +716,9 @@ async function poll() {
                         if (pending && isPlainText) {
                             // Only consume pure text messages as confirmation replies
                             // (photos with captions, stickers, etc. are enqueued normally)
-                            const confirmed = msgText.toUpperCase() === 'YES';
+                            // Recognize /approve and /deny commands as confirmation responses
+                            const lower = msgText.toLowerCase();
+                            const confirmed = msgText.toUpperCase() === 'YES' || lower === '/approve';
                             log(`[Confirm] User replied "${msgText}" for ${pending.toolName} → ${confirmed ? 'APPROVED' : 'REJECTED'}`, 'INFO');
                             pending.resolve(confirmed);
                             pendingConfirmations.delete(msgChatId);
