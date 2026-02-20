@@ -676,6 +676,8 @@ function handleReactionUpdate(reaction) {
 
 let offset = 0;
 let pollErrors = 0;
+let dnsFailCount = 0;
+let dnsWarnLogged = false;
 // Track the last incoming user message per chat so the dynamic system prompt can
 // provide the correct message_id/chat_id for the telegram_react tool.
 const lastIncomingMessages = new Map(); // chatId -> { messageId, chatId }
@@ -780,11 +782,36 @@ async function poll() {
                 }
             }
             pollErrors = 0;
+            if (dnsFailCount > 0) {
+                log(`[Network] Connection restored after ${dnsFailCount} DNS failure(s)`, 'INFO');
+                dnsFailCount = 0;
+                dnsWarnLogged = false;
+            }
         } catch (error) {
-            pollErrors++;
-            log(`Poll error (${pollErrors}): ${error.message}`, 'ERROR');
-            const delay = Math.min(1000 * Math.pow(2, pollErrors - 1), 30000);
-            await new Promise(r => setTimeout(r, delay));
+            const isDns = error.code === 'ENOTFOUND' || error.code === 'EAI_AGAIN';
+            if (isDns) {
+                dnsFailCount++;
+                pollErrors++;
+                // Single clear message after 3 consecutive DNS failures, then silence
+                if (dnsFailCount === 3) {
+                    log('[Network] DNS resolution failing — check internet connection', 'WARN');
+                    dnsWarnLogged = true;
+                }
+                // Backoff: 2s, 4s, 8s, ... capped at 30s (skip the 1s first step for DNS)
+                const delay = Math.min(2000 * Math.pow(2, Math.min(dnsFailCount, 5) - 1), 30000);
+                await new Promise(r => setTimeout(r, delay));
+            } else {
+                if (dnsFailCount > 0) {
+                    // Non-DNS error after DNS streak — network topology changed, log recovery
+                    log(`[Network] DNS recovered after ${dnsFailCount} failures`, 'INFO');
+                    dnsFailCount = 0;
+                    dnsWarnLogged = false;
+                }
+                pollErrors++;
+                log(`Poll error (${pollErrors}): ${error.message}`, 'ERROR');
+                const delay = Math.min(1000 * Math.pow(2, pollErrors - 1), 30000);
+                await new Promise(r => setTimeout(r, delay));
+            }
         }
     }
 }
