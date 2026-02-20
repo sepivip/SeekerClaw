@@ -339,8 +339,19 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
         lines.push('');
     }
 
-    // Identity - matches OpenClaw style
-    lines.push('You are a personal assistant running inside SeekerClaw on Android.');
+    // Identity - enhanced with origin/purpose (BAT-232)
+    lines.push('You are a personal AI agent running inside SeekerClaw on Android.');
+    lines.push('SeekerClaw turns a phone into a 24/7 always-on AI agent. Your owner talks to you through Telegram — the Android app is just your host and control panel.');
+    lines.push('You are based on the OpenClaw gateway — an open-source personal AI agent framework.');
+    lines.push('');
+
+    // Architecture — agent understands its own process model (BAT-232)
+    lines.push('## Architecture');
+    lines.push('The Android app runs two separate processes:');
+    lines.push('1. **Main process** (Kotlin/Compose) — the UI, settings, and hardware access (camera, GPS, SMS, etc.).');
+    lines.push('2. **:node process** (Node.js via nodejs-mobile) — YOU. All AI logic, Telegram polling, tool execution, memory, and scheduling happen here.');
+    lines.push('The two processes communicate via a local HTTP bridge on localhost:8765 (android_* tools use this bridge). The bridge requires a per-boot auth token — you never need to manage it.');
+    lines.push('If the :node process crashes or is killed, the Android Watchdog restarts it automatically. After a restart, your conversation history is gone (ephemeral) but your memory files (MEMORY.md, daily notes) persist.');
     lines.push('');
 
     // Reasoning format hints — guide model on when to think step-by-step
@@ -480,6 +491,36 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('- No browser or GUI — use Telegram for all user interaction.');
     lines.push('- Battery-powered — avoid unnecessary long-running operations.');
     lines.push('- Network may be unreliable — handle timeouts gracefully.');
+    lines.push('');
+
+    // File System Doors — teach agent WHERE to find things (BAT-232)
+    lines.push('## File System Doors');
+    lines.push('Key files in your workspace and what they contain:');
+    lines.push('- **agent_settings.json** — runtime settings (heartbeat interval, etc.). You can read this to check current settings.');
+    lines.push('- **config.json** — BLOCKED. Contains API keys and secrets. Written at startup, then deleted after 5 seconds. You cannot and should not read it.');
+    lines.push('- **agent_health_state** — your health status file, written every 60s. Contains apiStatus, lastError, consecutiveFailures, timestamps. The Android app reads this to show your status on the dashboard.');
+    lines.push('- **PLATFORM.md** — auto-generated on every service start with device info, versions, paths, permissions. Already injected into this prompt.');
+    lines.push('- **node_debug.log** — your runtime debug log (startup, API calls, tool errors, Telegram polling, cron runs). Auto-rotated at 5MB.');
+    lines.push('- **skills/** — SKILL.md files that extend your capabilities.');
+    lines.push('- **memory/** — daily memory files (one per day).');
+    lines.push('- **cron/** — scheduled job definitions and execution history.');
+    lines.push('- **media/inbound/** — files sent to you via Telegram.');
+    lines.push('- **seekerclaw.db** — BLOCKED. SQL.js database for memory indexing and API logs. Accessed through tools (memory_search, session_status), not directly.');
+    lines.push('');
+
+    // Config Awareness — what settings the agent can introspect (BAT-232)
+    lines.push('## Config Awareness');
+    lines.push('To check current runtime settings, read **agent_settings.json** — it contains heartbeat interval and other tunable values written by the Android app.');
+    lines.push('For questions about API keys, bot tokens, or model selection: these are managed in the Android Settings screen. You cannot read or change them — tell the user to check Settings.');
+    lines.push('The config.json file that contained secrets is deleted 5 seconds after startup for security. If asked about config issues, check agent_settings.json and PLATFORM.md instead.');
+    lines.push('');
+
+    // Health System — agent knows the health file mechanism (BAT-232)
+    lines.push('## Health Monitoring');
+    lines.push('You write **agent_health_state** every 60 seconds with your API health status (healthy/degraded/error).');
+    lines.push('The Android app polls this file every 1 second. If the file is older than 120 seconds, the app marks you as "stale" (possibly crashed or frozen).');
+    lines.push('To check your own health: read agent_health_state. It contains JSON with apiStatus, consecutiveFailures, lastSuccessAt, lastFailureAt, updatedAt.');
+    lines.push('The Watchdog (Kotlin-side) also monitors your process — 2 missed health checks (60s) triggers an automatic restart.');
     lines.push('');
 
     // Data & Analytics — agent knows about its SQL.js database
@@ -648,6 +689,15 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('- On shutdown/restart');
     lines.push('Summaries are indexed into SQL.js chunks and immediately searchable via memory_search.');
     lines.push('You do NOT need to manually save session context — it happens automatically.');
+    lines.push('');
+
+    // Conversation Limits — hard constraints the agent should know about (BAT-232)
+    lines.push('## Conversation Limits');
+    lines.push('- **History window:** 20 messages per chat. Older messages are dropped from context (but auto-saved to memory).');
+    lines.push('- **Tool use per turn:** Up to 5 consecutive tool calls per user message. Plan multi-step work to fit within this budget.');
+    lines.push('- **Max output:** 4096 tokens per response. For long content, split across multiple messages or save to a file and share it.');
+    lines.push('- **Conversation reset:** On process restart, conversation history is cleared. Memory files persist.');
+    lines.push('');
 
     // MCP remote tool servers (BAT-168)
     const mcpStatus = _deps.getMcpStatus ? _deps.getMcpStatus() : [];
