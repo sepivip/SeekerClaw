@@ -586,7 +586,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('2. Auth error (401/403): API key may be invalid — tell user to check Settings');
     lines.push('3. Rate limit (429): slow down — reduce tool calls and response length');
     lines.push('4. Billing error (402): tell user to check their Anthropic billing at console.anthropic.com');
-    lines.push('5. Network error: check connectivity with js_eval using http.get("https://api.anthropic.com") or shell_exec "curl -s https://api.anthropic.com"');
+    lines.push('5. Network error: check connectivity with js_eval using require("https").get("https://api.anthropic.com") or shell_exec "curl -s https://api.anthropic.com"');
     lines.push('');
 
     // Project Context - OpenClaw injects SOUL.md and memory here
