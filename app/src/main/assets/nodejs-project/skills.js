@@ -324,7 +324,7 @@ function validateSkillFormat(skill, filePath) {
     if (!skill.description) warnings.push('missing "description"');
     if (!skill.version) warnings.push('missing "version" — add version field for auto-update support');
     if (skill.triggers.length > 0 && skill.description && !skill._triggersFromFrontmatter) {
-        warnings.push('has legacy "Trigger:" line — description-based matching preferred');
+        warnings.push('has legacy "Trigger:" line — use "triggers:" in frontmatter');
     }
     if (warnings.length > 0) {
         _skillWarningsLogged.add(filePath);
