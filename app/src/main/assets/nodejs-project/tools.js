@@ -1090,8 +1090,8 @@ async function executeTool(name, input, chatId) {
             }
             fs.writeFileSync(filePath, input.content, 'utf8');
 
-            // BAT-236: If agent wrote to agent_settings.json, re-sync API keys into config
-            if (path.basename(filePath) === 'agent_settings.json') {
+            // BAT-236: If agent wrote to workspace root agent_settings.json, re-sync API keys
+            if (filePath === path.join(workDir, 'agent_settings.json')) {
                 syncAgentApiKeys();
             }
 
@@ -1142,8 +1142,8 @@ async function executeTool(name, input, chatId) {
 
             fs.writeFileSync(filePath, content, 'utf8');
 
-            // BAT-236: If agent edited agent_settings.json, re-sync API keys into config
-            if (path.basename(filePath) === 'agent_settings.json') {
+            // BAT-236: If agent edited workspace root agent_settings.json, re-sync API keys
+            if (filePath === path.join(workDir, 'agent_settings.json')) {
                 syncAgentApiKeys();
             }
 

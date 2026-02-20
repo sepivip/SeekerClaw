@@ -294,9 +294,9 @@ function syncAgentApiKeys() {
             if (_androidKeys[configField]) continue;
             const agentKey = s.apiKeys[service];
             if (agentKey && typeof agentKey === 'string' && agentKey.trim()) {
-                const trimmed = agentKey.trim();
-                if (config[configField] !== trimmed) {
-                    config[configField] = trimmed;
+                const normalized = normalizeSecret(agentKey);
+                if (normalized && config[configField] !== normalized) {
+                    config[configField] = normalized;
                     log(`[Config] Loaded ${service} API key from agent_settings.json`, 'INFO');
                 }
             }

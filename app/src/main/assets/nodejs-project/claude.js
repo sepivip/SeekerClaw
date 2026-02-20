@@ -527,7 +527,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('However, if a user provides a key directly in conversation:');
     lines.push('1. Save it to agent_settings.json under apiKeys.<service> (e.g. apiKeys.perplexity)');
     lines.push('2. Confirm it\'s saved');
-    lines.push('3. Use it immediately in fetch() calls');
+    lines.push('3. Built-in tools (web_search, Jupiter, etc.) pick it up immediately — just use them normally');
     lines.push('4. Warn the user:');
     lines.push('   "⚠️ This key appeared in your chat history. For better security:');
     lines.push('   - Rotate/regenerate this key after use');
