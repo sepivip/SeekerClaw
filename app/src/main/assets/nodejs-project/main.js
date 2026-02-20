@@ -290,10 +290,11 @@ Send me anything to get started!`;
 
 Skills are specialized capabilities you can add to your agent.
 
-To add a skill, create a file at:
-\`workspace/skills/your-skill-name/SKILL.md\`
+Create a Markdown file in the \`skills/\` directory:
+• \`skills/your-skill-name/SKILL.md\`
+• \`skills/your-skill-name.md\`
 
-See SKILL-FORMAT.md for the YAML frontmatter format.`;
+Use YAML frontmatter with \`name\`, \`description\`, and \`triggers\` fields.`;
             }
 
             let response = `**Installed Skills (${skills.length})**\n\n`;
@@ -344,11 +345,16 @@ Platform: \`${platform}\``;
                 const TAIL_BYTES = 8192;
                 const stats = fs.statSync(debugLog);
                 const start = Math.max(0, stats.size - TAIL_BYTES);
-                const fd = fs.openSync(debugLog, 'r');
-                const buf = Buffer.alloc(Math.min(stats.size, TAIL_BYTES));
-                fs.readSync(fd, buf, 0, buf.length, start);
-                fs.closeSync(fd);
-                const content = buf.toString('utf8');
+                let fd;
+                let content;
+                try {
+                    fd = fs.openSync(debugLog, 'r');
+                    const buf = Buffer.alloc(Math.min(stats.size, TAIL_BYTES));
+                    fs.readSync(fd, buf, 0, buf.length, start);
+                    content = buf.toString('utf8');
+                } finally {
+                    if (fd !== undefined) fs.closeSync(fd);
+                }
                 const lines = content.trim().split('\n').filter(l => l.trim());
                 const last10 = lines.slice(-10);
                 if (last10.length === 0) return 'Log file is empty.';
@@ -920,6 +926,7 @@ telegram('getMe')
                     { command: 'approve', description: 'Confirm pending action' },
                     { command: 'deny', description: 'Reject pending action' },
                     { command: 'help', description: 'List all commands' },
+                    { command: 'commands', description: 'List all commands' },
                 ],
             }).then(r => {
                 if (r.ok) log('Telegram command menu registered', 'DEBUG');
