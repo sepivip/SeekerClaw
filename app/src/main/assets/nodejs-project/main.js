@@ -223,7 +223,7 @@ Send me anything to get started!`;
             return `🟢 **Alive and kicking**
 
 ⏱️ Uptime: ${uptimeFormatted}
-💬 Messages: ${todayCount} today (${totalCount} since /new)
+💬 Messages: ${todayCount} today (${totalCount} in conversation)
 🧠 Memory: ${memoryFileCount} files
 📊 Model: \`${MODEL}\`
 🧩 Skills: ${skillCount}
@@ -742,7 +742,9 @@ async function poll() {
                                 pending.resolve(isApprove);
                                 pendingConfirmations.delete(msgChatId);
                             } else {
-                                enqueueMessage(update.message);
+                                // Don't enqueue other messages during pending confirmation
+                                // to prevent overlapping tool calls from overwriting the entry
+                                sendMessage(msgChatId, `⏳ Reply YES or NO (or /approve / /deny) to confirm ${pending.toolName} first.`).catch(() => {});
                             }
                         } else {
                             enqueueMessage(update.message);
