@@ -1,56 +1,181 @@
-# NetWatch v2.2 — Testing Guide
+# NetWatch v2.3 — Testing Guide
 
 ## Test Prompts
 
-### 1. Full Network Audit (default mode)
+### 1. Network Audit — Compact (default)
 ```
 scan my network
 ```
-**Expected:** Risk score, network summary from `android_bridge /network`, connectivity probes via `js_eval` HTTPS fetch with latency timing, DNS resolution via `js_eval dns.resolve()`, local port probes via `js_eval net.createConnection()`, recommendations. Telegram-formatted. Zero `shell_exec` calls. Ends with follow-up CTA. Single message — no progress narration.
+**Expected:** Compact TL;DR output. Risk score + one-line summary, top risks (max 3), compact service status, 3 action commands. Fits on mobile without excessive scrolling. Zero `shell_exec`. Single message.
 
-### 2. Port Watch
+### 2. Network Audit — Full
 ```
-check open ports on this device
+full report
 ```
-**Expected:** Probes 9 localhost ports via `js_eval` TCP connect. Each port classified as Expected/Unusual/Dangerous. Summary count. Telegram-formatted bullet list. Zero `shell_exec` calls.
+**Expected:** Full detailed output with all sections (risk score breakdown, all endpoints + latency, DNS results, port details, device info, recommendations). Triggered after a scan, or standalone.
 
-### 3. Connection Status
+### 3. Port Watch — Compact
+```
+check open ports
+```
+**Expected:** Compact one-line-per-port format. Ports grouped by status (expected/unusual/dangerous). Summary count. 3 action commands.
+
+### 4. Connection Status — Compact
 ```
 check my connection
 ```
-**Expected:** Latency via `js_eval` HTTPS fetch + `Date.now()` to 5 endpoints. DNS resolution via `js_eval dns.resolve()`. Network info from `android_bridge /network`. Telegram-formatted. Zero `shell_exec` calls.
+**Expected:** Compact format showing fastest/slowest endpoints, DNS status, connection type. 3 action commands.
 
-### 4. WiFi Query
-```
-what's on my wifi
-```
-**Expected:** Network audit mode. Gets WiFi SSID/signal from `android_bridge /network`. Probes local services via `js_eval`. Full audit with graceful handling of unavailable data.
-
-### 5. Security Focus
-```
-run a network security audit
-```
-**Expected:** Full audit with risk scoring emphasis. Dangerous ports (5555, 4444) probed via `js_eval` TCP connect and flagged if open. Connectivity and DNS validated via `js_eval`. Telegram-formatted output.
-
-### 6. Deep Scan — Single Target
+### 5. Deep Scan — Compact
 ```
 deep scan .130
 ```
-**Expected:** Probes 8 ports on target IP via `js_eval` TCP connect (3s timeout each). Reverse DNS lookup. Returns ONE structured report within 8s. No banner grabbing. No progress narration. Includes reachability, open ports, risk assessment, confidence level, 2 recommendations, CTA options.
+**Expected:** Compact 3-4 line summary: status, open ports, top risk, CTA. Within 8s budget.
 
-### 7. Deep Scan — Multi-Target
+### 6. Deep Scan Multi-Target — Compact
 ```
-deep scan unknown device .130 and check Bobcat .89 SSH risk
+deep scan .130 and check .89 SSH
 ```
-**Expected:** Probes both targets in parallel. Returns ONE combined report within 8s. Each target gets: reachability, open ports, risk assessment, confidence. Ends with recommendations and CTA. No "let me grab banners..." or other progressive narration.
+**Expected:** One compact line per target: IP — status — ports — risk. 3 action commands. Within 8s.
 
-### 8. Deep Scan — Timeout Behavior
+### 7. Full Report After Compact
+```
+scan my network
+→ (gets compact output)
+full report
+→ (gets full detailed output)
+```
+**Expected:** First response is compact TL;DR. Second response is full detailed report with all technical sections.
+
+### 8. Deep Scan — Timeout
 ```
 deep scan 10.0.0.99
 ```
-**Expected:** Target is likely unreachable. All probes timeout within 3s each. Returns report within 8s with all ports marked as timed out. Confidence: LOW. Status shows `❌ unreachable`. Never hangs.
+**Expected:** Compact report showing unreachable status. `⏱️ timed out` markers. Never hangs. 3 action commands.
 
-## Sample Audit Output (v2.2)
+## Sample Compact Outputs (v2.3)
+
+### Network Audit — Compact (healthy)
+
+```
+🛡️ **NetWatch** • 6s scan
+
+📊 Risk: **15/100 LOW** ✅
+✅ All systems healthy, no issues found
+
+📋 **Services**
+• `WiFi` `HomeNetwork` • `192.168.1.42`
+• Bridge `:8765` ✅ • Telegram ✅ • DNS ✅
+• 🔋 85% charging
+
+👉 Reply:
+• `deep scan .1`
+• `check open ports`
+• `full report`
+```
+
+### Network Audit — Compact (issues found)
+
+```
+🛡️ **NetWatch** • 7s scan
+
+📊 Risk: **45/100 MEDIUM** ⚠️
+⚠️ DNS partially failing, high API latency
+
+⚠️ **Top Risks**
+• ❌ DNS failing for `api.anthropic.com`
+  → check DNS settings or ISP issue
+• ⚠️ Latency 220ms to Anthropic API
+  → may affect agent response times
+
+📋 **Services**
+• `WiFi` `HomeNetwork` • `192.168.1.42`
+• Bridge `:8765` ✅ • Telegram ✅
+• 🔋 42% not charging
+
+👉 Reply:
+• `check my connection`
+• `full report`
+• `deep scan .1`
+```
+
+### Port Watch — Compact
+
+```
+🔍 **Ports** • 9 scanned
+
+✅ `8765` bridge
+❌ `5555` ADB open!
+
+1 flagged — 1 open, 8 closed
+
+👉 Reply:
+• `deep scan .1`
+• `full report`
+• `scan my network`
+```
+
+### Connection Status — Compact
+
+```
+📡 **Connection** • `WiFi` `192.168.1.42`
+
+✅ All endpoints reachable
+• Fastest: `1.1.1.1` 12ms
+• Slowest: `api.anthropic.com` 89ms
+• DNS: ✅ all 3 resolving
+
+👉 Reply:
+• `check open ports`
+• `scan my network`
+• `full report`
+```
+
+### Deep Scan — Compact (single target)
+
+```
+🔎 **`192.168.31.89`** • 4s
+
+✅ Online — `22` SSH, `80` HTTP open
+⚠️ SSH exposed — remote access possible
+
+👉 Reply:
+• `full report`
+• `scan my network`
+• `deep scan .1`
+```
+
+### Deep Scan — Compact (multi-target)
+
+```
+🔎 **2 devices** • 5s
+
+`.130` — ⚠️ `443` only, unknown device
+`.89` — ✅ `22` SSH, `80` HTTP — ⚠️ SSH exposed
+
+👉 Reply:
+• `full report`
+• `deep scan .130`
+• `scan my network`
+```
+
+### Deep Scan — Compact (unreachable)
+
+```
+🔎 **`10.0.0.99`** • 7s
+
+❌ Unreachable — 0/8 ports responded
+May be offline, firewalled, or wrong subnet
+
+👉 Reply:
+• `scan my network`
+• `check my connection`
+• `deep scan .1`
+```
+
+## Full Report Samples (v2.3 — on request only)
+
+### Network Audit — Full
 
 ```
 🛡️ **NetWatch Audit Report**
@@ -88,7 +213,7 @@ deep scan 10.0.0.99
 👉 What should I look into next?
 ```
 
-## Sample Deep Scan Output — Single Target (v2.2)
+### Deep Scan — Full (single target)
 
 ```
 🔎 **Deep Scan: `192.168.31.89`**
@@ -123,98 +248,34 @@ deep scan 10.0.0.99
 • `check ports on .1`
 ```
 
-## Sample Deep Scan Output — Multi-Target (v2.2)
-
-```
-🔎 **Deep Scan: 2 devices**
-📅 2026-02-21 14:33 UTC • Scan took 5s
-
-**`192.168.31.130`**
-• Status: ⚠️ partially reachable
-• Open: `443`
-• Closed: `22`, `80`, `8080`, `53`, `21`, `23`, `5555`
-• Reverse DNS: not found
-• Risk: unknown device, HTTPS-only ⚠️
-• Confidence: MEDIUM
-
-**`192.168.31.89`** (Bobcatminer)
-• Status: ✅ online
-• Open: `22` (SSH), `80` (HTTP)
-• Closed: `443`, `8080`, `53`, `21`, `23`, `5555`
-• Risk: SSH exposed ⚠️
-• Confidence: HIGH
-
-✅ **Recommendations**
-1. `.130` — only `443` open, likely IoT; monitor for changes
-2. `.89` — disable SSH if not needed, or restrict to key-only auth
-
-👉 Reply:
-• `full network audit`
-• `monitor .130 ports`
-• `check all SSH devices`
-```
-
-## Sample Deep Scan Output — Unreachable Target (v2.2)
-
-```
-🔎 **Deep Scan: `10.0.0.99`**
-📅 2026-02-21 14:35 UTC • Scan took 7s
-
-**Reachability**
-• Status: ❌ unreachable (0/8 ports responded)
-• Reverse DNS: not found
-
-**Open Ports**
-• `22`: ⏱️ timed out
-• `80`: ⏱️ timed out
-• `443`: ⏱️ timed out
-• `8080`: ⏱️ timed out
-• `53`: ⏱️ timed out
-• `21`: ⏱️ timed out
-• `23`: ⏱️ timed out
-• `5555`: ⏱️ timed out
-
-ℹ️ **Assessment**
-• Device not reachable on this network
-• May be offline, firewalled, or wrong subnet
-• Confidence: LOW (all probes timed out)
-
-👉 Reply:
-• `scan my network` (find active devices)
-• `check my connection`
-```
-
 ## Before/After Comparison
 
-### BEFORE (v2.1) — Deep Scan Problems
-- No defined deep-scan mode — agent improvises multi-stage flow
-- Banner grabbing causes timeout/stall ("let me grab banners...")
-- Progressive narration leaves response hanging
-- No timeout budget — scan can run indefinitely
-- Agent sends multiple messages instead of one structured report
+### BEFORE (v2.2) — UX Problems
+- Default output is a wall of text (15+ lines)
+- Every section always shown even if empty/healthy
+- Technical detail mixed with actionable info
+- User loses trust seeing too much output
+- No way to get compact vs detailed view
 
-### AFTER (v2.2) — Fixed
-- Explicit Mode 4: Deep Scan with strict rules
-- 8-second total budget, 3s per probe
-- Single-pass: probe all ports, compile ONE report
-- No banner grabbing, no fingerprinting, no multi-stage narration
-- Partial results with `⏱️ timed out` markers if budget exceeded
-- Always ends with CTA options — never hangs
+### AFTER (v2.3) — Compact Default
+- Default: TL;DR (3-4 lines) + top risks + compact services + 3 actions
+- Fits cleanly on mobile without scrolling
+- `full report` unlocks complete technical detail on demand
+- Same risk logic, same probe data — better UX only
+- Empty/healthy sections collapsed or omitted
 
 ## Validation Checklist
-- [ ] Skill triggers on all listed phrases (including "deep scan")
-- [ ] Zero `shell_exec` calls in entire skill execution
-- [ ] Zero `FAIL` lines in logs during normal NetWatch run
-- [ ] Deep scan returns single structured report
-- [ ] Deep scan completes within 8 seconds
-- [ ] No "let me grab banners..." or progress narration
-- [ ] Multi-target deep scan returns ONE combined report
-- [ ] Timed-out probes show `⏱️ timed out` (not hang)
-- [ ] Confidence level included (HIGH/MEDIUM/LOW)
-- [ ] Uses `js_eval` for all probes (net, dns, https modules)
-- [ ] Uses `android_bridge` for network/battery info
-- [ ] No ASCII tables in output
-- [ ] Output uses **bold**, `code`, • bullets, status emojis
-- [ ] Report ends with follow-up CTA options
-- [ ] Risk score calculated with clear factors
-- [ ] Graceful handling when probes are unavailable
+- [ ] Default "scan my network" returns compact format (not full)
+- [ ] Compact output fits on mobile screen (under ~15 lines)
+- [ ] "full report" returns full detailed format
+- [ ] "detailed report" also triggers full format
+- [ ] Compact output has exactly 3 action commands
+- [ ] No paragraph blocks longer than 2 lines in compact
+- [ ] Healthy sections collapsed (not listed individually)
+- [ ] Triggers include "full report" and "detailed report"
+- [ ] Zero `shell_exec` calls
+- [ ] Deep scan compact: 3-4 lines per target max
+- [ ] Risk score present in compact format
+- [ ] All modes have both compact and full templates
+- [ ] Single-pass reporting maintained
+- [ ] 8s timeout budget maintained
