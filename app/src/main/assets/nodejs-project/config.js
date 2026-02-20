@@ -294,8 +294,11 @@ function syncAgentApiKeys() {
             if (_androidKeys[configField]) continue;
             const agentKey = s.apiKeys[service];
             if (agentKey && typeof agentKey === 'string' && agentKey.trim()) {
-                config[configField] = agentKey.trim();
-                log(`[Config] Loaded ${service} API key from agent_settings.json`, 'INFO');
+                const trimmed = agentKey.trim();
+                if (config[configField] !== trimmed) {
+                    config[configField] = trimmed;
+                    log(`[Config] Loaded ${service} API key from agent_settings.json`, 'INFO');
+                }
             }
         }
     } catch (_) {}
