@@ -507,15 +507,16 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                     },
                     info = SettingsHelpTexts.AUTO_START,
                 )
-                SettingRow(
+                PermissionRow(
                     label = "Battery unrestricted",
-                    checked = batteryOptimizationDisabled,
-                    onCheckedChange = {
+                    granted = batteryOptimizationDisabled,
+                    onRequest = {
                         val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
                             data = Uri.parse("package:${context.packageName}")
                         }
                         context.startActivity(intent)
                     },
+                    onOpenSettings = { openAppSettings(context) },
                     info = SettingsHelpTexts.BATTERY_UNRESTRICTED,
                 )
                 SettingRow(
@@ -559,6 +560,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                     onRequest = {
                         requestPermissionOrOpenSettings(context, Manifest.permission.CAMERA, cameraLauncher)
                     },
+                    onOpenSettings = { openAppSettings(context) },
                     info = SettingsHelpTexts.CAMERA,
                 )
                 PermissionRow(
@@ -567,6 +569,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                     onRequest = {
                         requestPermissionOrOpenSettings(context, Manifest.permission.ACCESS_FINE_LOCATION, locationLauncher)
                     },
+                    onOpenSettings = { openAppSettings(context) },
                     info = SettingsHelpTexts.GPS_LOCATION,
                 )
                 PermissionRow(
@@ -575,6 +578,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                     onRequest = {
                         requestPermissionOrOpenSettings(context, Manifest.permission.READ_CONTACTS, contactsLauncher)
                     },
+                    onOpenSettings = { openAppSettings(context) },
                     info = SettingsHelpTexts.CONTACTS,
                 )
                 PermissionRow(
@@ -583,6 +587,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                     onRequest = {
                         requestPermissionOrOpenSettings(context, Manifest.permission.SEND_SMS, smsLauncher)
                     },
+                    onOpenSettings = { openAppSettings(context) },
                     info = SettingsHelpTexts.SMS,
                 )
                 PermissionRow(
@@ -591,6 +596,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                     onRequest = {
                         requestPermissionOrOpenSettings(context, Manifest.permission.CALL_PHONE, callLauncher)
                     },
+                    onOpenSettings = { openAppSettings(context) },
                     info = SettingsHelpTexts.PHONE_CALLS,
                 )
             }
@@ -2069,10 +2075,12 @@ private fun PermissionRow(
     label: String,
     granted: Boolean,
     onRequest: () -> Unit,
+    onOpenSettings: () -> Unit = {},
     info: String? = null,
 ) {
     val haptic = LocalHapticFeedback.current
     var showInfo by remember { mutableStateOf(false) }
+    var showRevokeDialog by remember { mutableStateOf(false) }
 
     Row(
         modifier = Modifier
@@ -2102,8 +2110,10 @@ private fun PermissionRow(
         Switch(
             checked = granted,
             onCheckedChange = {
-                if (!granted) {
-                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                if (granted) {
+                    showRevokeDialog = true
+                } else {
                     onRequest()
                 }
             },
@@ -2119,6 +2129,14 @@ private fun PermissionRow(
 
     if (showInfo && info != null) {
         InfoDialog(title = label, message = info, onDismiss = { showInfo = false })
+    }
+
+    if (showRevokeDialog) {
+        RevokePermissionDialog(
+            permissionLabel = label,
+            onOpenSettings = { showRevokeDialog = false; onOpenSettings() },
+            onDismiss = { showRevokeDialog = false },
+        )
     }
 }
 
@@ -2143,6 +2161,59 @@ private fun requestPermissionOrOpenSettings(
             launcher.launch(permission)
         }
     }
+}
+
+private fun openAppSettings(context: Context) {
+    val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+        data = Uri.parse("package:${context.packageName}")
+    }
+    context.startActivity(intent)
+}
+
+@Composable
+private fun RevokePermissionDialog(
+    permissionLabel: String,
+    onOpenSettings: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "Disable $permissionLabel",
+                fontFamily = RethinkSans,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 16.sp,
+                color = SeekerClawColors.TextPrimary,
+            )
+        },
+        text = {
+            Text(
+                text = "Android doesn't allow apps to revoke their own permissions.\n\nTo disable $permissionLabel, go to:\nSystem Settings \u2192 Apps \u2192 SeekerClaw \u2192 Permissions",
+                fontFamily = RethinkSans,
+                fontSize = 14.sp,
+                color = SeekerClawColors.TextSecondary,
+                lineHeight = 20.sp,
+            )
+        },
+        confirmButton = {
+            Button(
+                onClick = onOpenSettings,
+                colors = ButtonDefaults.buttonColors(containerColor = SeekerClawColors.ActionPrimary),
+                shape = shape,
+            ) {
+                Text("Open Settings", fontFamily = RethinkSans, fontWeight = FontWeight.Medium)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel", fontFamily = RethinkSans, color = SeekerClawColors.TextSecondary)
+            }
+        },
+        containerColor = SeekerClawColors.Surface,
+        shape = shape,
+    )
 }
 
 private fun maskSensitive(value: String): String {
