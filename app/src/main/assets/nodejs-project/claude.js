@@ -381,7 +381,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('**JavaScript execution:** Use js_eval to run JavaScript code inside the Node.js process. Supports async/await, require(), and most Node.js built-ins (fs, path, http, crypto, etc. — child_process and vm are blocked). Use for computation, data processing, JSON manipulation, HTTP requests, or anything that needs JavaScript. 30s timeout. Prefer js_eval over shell_exec when the task involves data processing or logic.');
     lines.push('**File attachments (inbound):** When the user sends photos, documents, or other files via Telegram, they are automatically downloaded to media/inbound/ in your workspace. Images are shown to you directly (vision). For other files, you are told the path — use the read tool to access them. Supported: photos, documents (PDF, etc.), video, audio, voice notes.');
     lines.push('**File sending (outbound):** Use telegram_send_file to send any workspace file to the user\'s Telegram chat. Auto-detects type from extension (photo, video, audio, document). Use for sharing reports, camera captures, exported CSVs, generated images, or any file the user needs. Max 50MB, photos max 10MB.');
-    lines.push('**File deletion:** Use the delete tool to clean up temporary files, old media downloads, or files you no longer need. Protected system files (SOUL.md, MEMORY.md, IDENTITY.md, USER.md, HEARTBEAT.md, config.json, seekerclaw.db) cannot be deleted. Directories cannot be deleted — remove files individually.');
+    lines.push('**File deletion:** Use the delete tool to clean up temporary files, old media downloads, or files you no longer need. Protected system files and database files cannot be deleted. Directories cannot be deleted — remove files individually.');
     lines.push('**Inline keyboard buttons:** telegram_send supports an optional `buttons` parameter — an array of button rows. Each button has `text` (label) and `callback_data` (value returned on tap). When the user taps a button, you receive it as a message like `[Tapped button: "yes"]`. Use for confirmations, choices, quick actions. Example: `[[{"text": "✅ Yes", "callback_data": "yes"}, {"text": "❌ No", "callback_data": "no"}]]`');
     lines.push('');
 
@@ -509,7 +509,6 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('## File System Doors');
     lines.push('Key files in your workspace and what they contain:');
     lines.push('- **agent_settings.json** — runtime settings (heartbeat interval, etc.). You can read this to check current settings.');
-    lines.push('- **config.json** — BLOCKED. Contains API keys and secrets. Written at startup, then deleted after 5 seconds. You cannot and should not read it.');
     lines.push('- **agent_health_state** — your health status file, written every 60s. Contains apiStatus, lastError, consecutiveFailures, timestamps. The Android app reads this to show your status on the dashboard.');
     lines.push('- **PLATFORM.md** — auto-generated on every service start with device info, versions, paths, permissions. Already injected into this prompt.');
     lines.push('- **node_debug.log** — your runtime debug log (startup, API calls, tool errors, Telegram polling, cron runs). Auto-rotated at 5MB.');
@@ -520,11 +519,11 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('- **seekerclaw.db** — BLOCKED. SQL.js database for memory indexing and API logs. Accessed through tools (memory_search, session_status), not directly.');
     lines.push('');
 
-    // Config Awareness — what settings the agent can introspect (BAT-232)
+    // Config Awareness — what settings the agent can introspect (BAT-232, BAT-235)
     lines.push('## Config Awareness');
     lines.push('To check current runtime settings, read **agent_settings.json** — it contains heartbeat interval and other tunable values written by the Android app.');
-    lines.push('For questions about API keys, bot tokens, or model selection: these are managed in the Android Settings screen. You cannot read or change them — tell the user to check Settings.');
-    lines.push('The config.json file that contained secrets is deleted 5 seconds after startup for security. If asked about config issues, check agent_settings.json and PLATFORM.md instead.');
+    lines.push('Secrets (API keys, tokens, model) are managed in the Android Settings screen. You cannot read or change them — direct users to Settings for any key/token questions.');
+    lines.push('If asked about config issues, check agent_settings.json and PLATFORM.md.');
     lines.push('');
 
     // Health System — agent knows the health file mechanism (BAT-232)
