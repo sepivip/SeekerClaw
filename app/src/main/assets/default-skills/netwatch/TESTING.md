@@ -1,4 +1,4 @@
-# NetWatch v2.1 — Testing Guide
+# NetWatch v2.2 — Testing Guide
 
 ## Test Prompts
 
@@ -6,7 +6,7 @@
 ```
 scan my network
 ```
-**Expected:** Risk score, network summary from `android_bridge /network`, connectivity probes via `js_eval` HTTPS fetch with latency timing, DNS resolution via `js_eval dns.resolve()`, local port probes via `js_eval net.createConnection()`, recommendations. Telegram-formatted. Zero `shell_exec` calls. Ends with follow-up CTA.
+**Expected:** Risk score, network summary from `android_bridge /network`, connectivity probes via `js_eval` HTTPS fetch with latency timing, DNS resolution via `js_eval dns.resolve()`, local port probes via `js_eval net.createConnection()`, recommendations. Telegram-formatted. Zero `shell_exec` calls. Ends with follow-up CTA. Single message — no progress narration.
 
 ### 2. Port Watch
 ```
@@ -32,11 +32,29 @@ run a network security audit
 ```
 **Expected:** Full audit with risk scoring emphasis. Dangerous ports (5555, 4444) probed via `js_eval` TCP connect and flagged if open. Connectivity and DNS validated via `js_eval`. Telegram-formatted output.
 
-## Sample Audit Output (v2.1 — JS probes)
+### 6. Deep Scan — Single Target
+```
+deep scan .130
+```
+**Expected:** Probes 8 ports on target IP via `js_eval` TCP connect (3s timeout each). Reverse DNS lookup. Returns ONE structured report within 8s. No banner grabbing. No progress narration. Includes reachability, open ports, risk assessment, confidence level, 2 recommendations, CTA options.
+
+### 7. Deep Scan — Multi-Target
+```
+deep scan unknown device .130 and check Bobcat .89 SSH risk
+```
+**Expected:** Probes both targets in parallel. Returns ONE combined report within 8s. Each target gets: reachability, open ports, risk assessment, confidence. Ends with recommendations and CTA. No "let me grab banners..." or other progressive narration.
+
+### 8. Deep Scan — Timeout Behavior
+```
+deep scan 10.0.0.99
+```
+**Expected:** Target is likely unreachable. All probes timeout within 3s each. Returns report within 8s with all ports marked as timed out. Confidence: LOW. Status shows `❌ unreachable`. Never hangs.
+
+## Sample Audit Output (v2.2)
 
 ```
 🛡️ **NetWatch Audit Report**
-📅 2026-02-21 14:30 UTC • Scan took 8s
+📅 2026-02-21 14:30 UTC • Scan took 6s
 📡 Source: Android APIs + JS network probes
 
 📊 **Risk Score: 15/100 (LOW)**
@@ -70,75 +88,133 @@ run a network security audit
 👉 What should I look into next?
 ```
 
-## Sample Port Watch Output (v2.1)
+## Sample Deep Scan Output — Single Target (v2.2)
 
 ```
-🔍 **Port Watch Report**
+🔎 **Deep Scan: `192.168.31.89`**
+📅 2026-02-21 14:32 UTC • Scan took 4s
 
-🟢 **Expected Services**
-• `8765` — Android bridge ✅ responding
+**Reachability**
+• Status: ✅ online (responded on 2 ports)
+• Reverse DNS: not found
 
-📊 **Summary**
-• Scanned: 9 ports
-• Open: 1 • Closed: 8
-• Flagged: 0
+**Open Ports**
+• `22` (SSH): ✅ open
+• `80` (HTTP): ✅ open
+• `443`: ❌ closed
+• `8080`: ❌ closed
+• `53`: ❌ closed
+• `21`: ❌ closed
+• `23`: ❌ closed
+• `5555`: ❌ closed
 
-👉 Want me to investigate any of these?
+⚠️ **Risk Assessment**
+• SSH exposed on `22` — remote access possible
+• HTTP on `80` — web interface accessible
+• Confidence: HIGH (direct probe results)
+
+✅ **Recommendations**
+1. Verify SSH access is intentional
+2. Access `http://192.168.31.89` to identify device
+
+👉 Reply:
+• `scan another device`
+• `full network audit`
+• `check ports on .1`
 ```
 
-## Sample Connection Status Output (v2.1)
+## Sample Deep Scan Output — Multi-Target (v2.2)
 
 ```
-📡 **Connection Status**
+🔎 **Deep Scan: 2 devices**
+📅 2026-02-21 14:33 UTC • Scan took 5s
 
-**Latency**
-• `1.1.1.1` (Cloudflare): 12ms ✅
-• `8.8.8.8` (Google DNS): 15ms ✅
-• `api.telegram.org`: 45ms ✅
-• `google.com`: 18ms ✅
-• `api.anthropic.com`: 89ms ✅
+**`192.168.31.130`**
+• Status: ⚠️ partially reachable
+• Open: `443`
+• Closed: `22`, `80`, `8080`, `53`, `21`, `23`, `5555`
+• Reverse DNS: not found
+• Risk: unknown device, HTTPS-only ⚠️
+• Confidence: MEDIUM
 
-**DNS Resolution**
-• `google.com` → ✅ resolved
-• `api.telegram.org` → ✅ resolved
-• `api.anthropic.com` → ✅ resolved
+**`192.168.31.89`** (Bobcatminer)
+• Status: ✅ online
+• Open: `22` (SSH), `80` (HTTP)
+• Closed: `443`, `8080`, `53`, `21`, `23`, `5555`
+• Risk: SSH exposed ⚠️
+• Confidence: HIGH
 
-**Connection**
-• Type: `WiFi`
-• Signal: Good (-45 dBm)
-• IP: `192.168.1.42`
+✅ **Recommendations**
+1. `.130` — only `443` open, likely IoT; monitor for changes
+2. `.89` — disable SSH if not needed, or restrict to key-only auth
 
-👉 Anything specific you want me to check?
+👉 Reply:
+• `full network audit`
+• `monitor .130 ports`
+• `check all SSH devices`
+```
+
+## Sample Deep Scan Output — Unreachable Target (v2.2)
+
+```
+🔎 **Deep Scan: `10.0.0.99`**
+📅 2026-02-21 14:35 UTC • Scan took 7s
+
+**Reachability**
+• Status: ❌ unreachable (0/8 ports responded)
+• Reverse DNS: not found
+
+**Open Ports**
+• `22`: ⏱️ timed out
+• `80`: ⏱️ timed out
+• `443`: ⏱️ timed out
+• `8080`: ⏱️ timed out
+• `53`: ⏱️ timed out
+• `21`: ⏱️ timed out
+• `23`: ⏱️ timed out
+• `5555`: ⏱️ timed out
+
+ℹ️ **Assessment**
+• Device not reachable on this network
+• May be offline, firewalled, or wrong subnet
+• Confidence: LOW (all probes timed out)
+
+👉 Reply:
+• `scan my network` (find active devices)
+• `check my connection`
 ```
 
 ## Before/After Comparison
 
-### BEFORE (v2.0) — Problems
-- Uses `shell_exec ping` for latency probes → `FAIL` (exit 1) on Android
-- Uses `shell_exec curl` for port/API probes → `FAIL` (exit 127, missing binary) on Android
-- Produces `shell_exec FAIL` lines in logs for every probe
+### BEFORE (v2.1) — Deep Scan Problems
+- No defined deep-scan mode — agent improvises multi-stage flow
+- Banner grabbing causes timeout/stall ("let me grab banners...")
+- Progressive narration leaves response hanging
+- No timeout budget — scan can run indefinitely
+- Agent sends multiple messages instead of one structured report
 
-### AFTER (v2.1) — Fixed
-- Zero `shell_exec` calls — entire skill runs in JS + Android bridge
-- Latency via `js_eval` `https.get()` + `Date.now()` timing
-- DNS health via `js_eval` `require('dns').resolve()`
-- Port probing via `js_eval` `require('net').createConnection()`
-- Device/network info via `android_bridge` `/network` + `/battery`
-- No dependency on `ping`, `curl`, or any shell binary
+### AFTER (v2.2) — Fixed
+- Explicit Mode 4: Deep Scan with strict rules
+- 8-second total budget, 3s per probe
+- Single-pass: probe all ports, compile ONE report
+- No banner grabbing, no fingerprinting, no multi-stage narration
+- Partial results with `⏱️ timed out` markers if budget exceeded
+- Always ends with CTA options — never hangs
 
 ## Validation Checklist
-- [ ] Skill triggers on all listed phrases
+- [ ] Skill triggers on all listed phrases (including "deep scan")
 - [ ] Zero `shell_exec` calls in entire skill execution
 - [ ] Zero `FAIL` lines in logs during normal NetWatch run
-- [ ] Connectivity probes use `js_eval` with `https.get()`
-- [ ] DNS probes use `js_eval` with `dns.resolve()`
-- [ ] Port probes use `js_eval` with `net.createConnection()`
+- [ ] Deep scan returns single structured report
+- [ ] Deep scan completes within 8 seconds
+- [ ] No "let me grab banners..." or progress narration
+- [ ] Multi-target deep scan returns ONE combined report
+- [ ] Timed-out probes show `⏱️ timed out` (not hang)
+- [ ] Confidence level included (HIGH/MEDIUM/LOW)
+- [ ] Uses `js_eval` for all probes (net, dns, https modules)
 - [ ] Uses `android_bridge` for network/battery info
 - [ ] No ASCII tables in output
 - [ ] Output uses **bold**, `code`, • bullets, status emojis
-- [ ] Scan timestamp present in audit report
-- [ ] Data source line present: "Android APIs + JS network probes"
-- [ ] Read-only — no system changes made
-- [ ] Report ends with follow-up CTA
+- [ ] Report ends with follow-up CTA options
 - [ ] Risk score calculated with clear factors
 - [ ] Graceful handling when probes are unavailable

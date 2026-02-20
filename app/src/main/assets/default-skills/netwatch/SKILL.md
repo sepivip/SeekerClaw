@@ -1,7 +1,7 @@
 ---
 name: netwatch
 description: "Network monitoring and security audit. Use when: user asks to scan network, check open ports, network audit, who's on wifi, check connection, port scan, firewall check, network status, or network security. Don't use when: user asks about crypto transactions (use solana tools) or web search (use research skill)."
-version: "2.1.0"
+version: "2.2.0"
 emoji: "🛡️"
 triggers:
   - "scan my network"
@@ -16,6 +16,8 @@ triggers:
   - "network status"
   - "port scan"
   - "firewall check"
+  - "deep scan"
+  - "scan device"
 ---
 
 # NetWatch — Network Monitor & Security Audit
@@ -71,9 +73,31 @@ ALL output MUST follow these Telegram-optimized formatting rules:
 5. Blank line between each section.
 6. End every report with ONE clear follow-up question or CTA.
 
+## UX Guardrails (MANDATORY)
+
+**Single-pass reporting.** Every NetWatch mode MUST produce ONE complete final message. Never do multi-stage narration.
+
+**NEVER do this:**
+- "Let me grab banners from those devices..."
+- "Now scanning ports on .130..."
+- "Checking SSH on .89, one moment..."
+- Any progressive status updates that leave the conversation hanging
+
+**ALWAYS do this:**
+- Run all probes first (gather data silently)
+- Compile ONE structured report from the results
+- Send that report as a single complete message
+- End with a CTA — never end on an unfinished sentence
+
+**Timeout discipline:**
+- Each `js_eval` probe: 3s timeout max
+- Total scan budget per mode: 8 seconds max
+- If probes time out, include partial results + "unknown" markers
+- ALWAYS return a report — never stall waiting for slow probes
+
 ## Instructions
 
-You have three modes. Default to **Network Audit** unless the user asks for something specific.
+You have four modes. Default to **Network Audit** unless the user asks for something specific. Use **Deep Scan** when the user asks to investigate a specific device or IP.
 
 **Allowed tools — ONLY these:**
 - `android_bridge` calls: `/network`, `/battery`, `/storage`, `/ping`
@@ -315,6 +339,119 @@ POST /network
 - ✅ Good: <100ms
 - ⚠️ Elevated: 100-300ms
 - ❌ High/timeout: >300ms or unreachable
+
+### Mode 4: Deep Scan (targeted device investigation)
+
+Use when the user asks to investigate a specific device, IP, or concern (e.g., "deep scan .130", "check SSH on .89", "investigate unknown device").
+
+**CRITICAL: This is a single-pass scan. No banner grabbing. No fingerprinting. No multi-stage narration. Total budget: 8 seconds.**
+
+**Step 1 — Probe target ports (js_eval, each separate, 3s timeout each):**
+For each target IP, run TCP port probe on these ports:
+- `22` (SSH), `80` (HTTP), `443` (HTTPS), `8080` (alt-HTTP)
+- `53` (DNS), `21` (FTP), `23` (Telnet), `5555` (ADB)
+
+Use the TCP port probe pattern but replace `127.0.0.1` with the target IP:
+```javascript
+const net = require('net');
+const port = 22;
+const host = '192.168.31.89';
+const start = Date.now();
+const sock = net.createConnection({ host, port, timeout: 3000 }, () => {
+  const ms = Date.now() - start;
+  sock.destroy();
+  process.stdout.write(JSON.stringify({ host, port, open: true, latencyMs: ms }));
+});
+sock.on('timeout', () => { sock.destroy(); process.stdout.write(JSON.stringify({ host, port, open: false, error: 'timeout' })); });
+sock.on('error', (e) => { process.stdout.write(JSON.stringify({ host, port, open: false, error: e.message })); });
+```
+
+**Step 2 — DNS reverse lookup (js_eval):**
+```javascript
+const dns = require('dns');
+dns.reverse('192.168.31.89', (err, hostnames) => {
+  if (err) {
+    process.stdout.write(JSON.stringify({ ok: false, error: err.code }));
+  } else {
+    process.stdout.write(JSON.stringify({ ok: true, hostnames }));
+  }
+});
+```
+
+**Step 3 — Compile report (single message, no progress narration):**
+
+**Output format (Telegram-optimized):**
+
+```
+🔎 **Deep Scan: `192.168.31.89`**
+📅 <timestamp> • Scan took <X>s
+
+**Reachability**
+• Status: ✅ online (responded on N ports)
+• Reverse DNS: `<hostname>` / not found
+
+**Open Ports**
+• `22` (SSH): ✅ open
+• `80` (HTTP): ✅ open
+• `443`: ❌ closed
+• `8080`: ❌ closed
+
+⚠️ **Risk Assessment**
+• SSH exposed on `22` — remote access possible
+• HTTP on `80` — web interface accessible
+• Confidence: HIGH (direct probe results)
+
+✅ **Recommendations**
+1. Verify SSH access is intentional — check authorized_keys
+2. Access `http://192.168.31.89` to identify the web interface
+
+👉 Reply:
+• `scan another device`
+• `full network audit`
+• `check ports on .1`
+```
+
+**Multi-target deep scan:**
+When the user asks about multiple devices (e.g., "deep scan .130 and check .89 SSH"), probe all targets in parallel (each with 3s timeout), then compile ONE combined report:
+
+```
+🔎 **Deep Scan: 2 devices**
+📅 <timestamp> • Scan took <X>s
+
+**`192.168.31.130`**
+• Status: ⚠️ partially reachable
+• Open: `443`
+• Closed: `22`, `80`, `8080`
+• Reverse DNS: not found
+• Risk: unknown device, HTTPS-only ⚠️
+• Confidence: MEDIUM
+
+**`192.168.31.89`** (Bobcatminer)
+• Status: ✅ online
+• Open: `22` (SSH), `80` (HTTP)
+• Closed: `443`, `8080`
+• Risk: SSH exposed ⚠️
+• Confidence: HIGH
+
+✅ **Recommendations**
+1. `.130` — only `443` open, likely IoT device; monitor for changes
+2. `.89` — disable SSH if not needed, or restrict to key-only auth
+
+👉 Reply:
+• `full network audit`
+• `monitor .130 ports`
+• `check all SSH devices`
+```
+
+**Deep scan rules:**
+- Max 8 ports per target device
+- Max 3s timeout per port probe
+- Total scan budget: 8 seconds (across all targets)
+- If time budget runs out, return partial results with `⏱️ timed out` markers
+- Never attempt banner grabbing, HTTP content fetch, or service fingerprinting
+- Never send progress messages ("scanning...", "now checking...")
+- Always return ONE final structured report
+- Include confidence level: HIGH (direct probe), MEDIUM (partial data), LOW (mostly timed out)
 
 ## Graceful Capability Handling
 
