@@ -223,7 +223,7 @@ Send me anything to get started!`;
             return `🟢 **Alive and kicking**
 
 ⏱️ Uptime: ${uptimeFormatted}
-💬 Messages: ${todayCount} today (${totalCount} in session)
+💬 Messages: ${todayCount} today (${totalCount} since /new)
 🧠 Memory: ${memoryFileCount} files
 📊 Model: \`${MODEL}\`
 🧩 Skills: ${skillCount}
@@ -275,9 +275,10 @@ Send me anything to get started!`;
                 if (!match) {
                     return `No skill matching \`${args.trim()}\`.\n\nUse /skill to list all installed skills.`;
                 }
-                // Fall through to normal message handling — return null so handleMessage
-                // passes it to Claude with the skill injected via keyword matching
-                return null;
+                // Signal handleMessage to rewrite the text to a trigger word so
+                // findMatchingSkills() in claude.js picks up the skill correctly.
+                // (findMatchingSkills uses word-boundary regex on triggers, not skill names.)
+                return { __skillFallthrough: true, trigger: match.triggers[0] || match.name };
             }
 
             // /skill or /skills with no args — list all
@@ -286,8 +287,10 @@ Send me anything to get started!`;
 
 Skills are specialized capabilities you can add to your agent.
 
-To add a skill, create a folder in:
-\`workspace/skills/your-skill-name/SKILL.md\``;
+To add a skill, create a file at:
+\`workspace/skills/your-skill-name/SKILL.md\`
+
+See SKILL-FORMAT.md for the YAML frontmatter format.`;
             }
 
             let response = `**Installed Skills (${skills.length})**\n\n`;
@@ -338,7 +341,7 @@ Platform: \`${platform}\``;
                     const sep = line.indexOf('|');
                     if (sep === -1) return line;
                     const level = line.slice(0, sep);
-                    const msg = line.slice(sep + 1).slice(0, 120);
+                    const msg = line.slice(sep + 1).substring(0, 120);
                     const icon = level === 'ERROR' ? '🔴' : level === 'WARN' ? '🟡' : '⚪';
                     return `${icon} ${msg}`;
                 }).join('\n');
@@ -435,7 +438,11 @@ async function handleMessage(msg) {
             const [command, ...argParts] = rawText.split(' ');
             const args = argParts.join(' ');
             const response = await handleCommand(chatId, command.toLowerCase(), args);
-            if (response) {
+            if (response?.__skillFallthrough) {
+                // /skill <name> matched — rewrite text to trigger word so
+                // findMatchingSkills() picks up the skill via word-boundary match
+                text = response.trigger;
+            } else if (response) {
                 await sendMessage(chatId, response, msg.message_id);
                 return;
             }
@@ -889,6 +896,8 @@ telegram('getMe')
                     { command: 'memory', description: 'View MEMORY.md' },
                     { command: 'logs', description: 'Last 10 log entries' },
                     { command: 'version', description: 'App & runtime versions' },
+                    { command: 'approve', description: 'Confirm pending action' },
+                    { command: 'deny', description: 'Reject pending action' },
                     { command: 'help', description: 'List all commands' },
                 ],
             }).then(r => {
