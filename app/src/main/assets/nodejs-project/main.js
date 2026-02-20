@@ -676,6 +676,8 @@ function handleReactionUpdate(reaction) {
 
 let offset = 0;
 let pollErrors = 0;
+let dnsFailCount = 0;
+let dnsWarnLogged = false;
 // Track the last incoming user message per chat so the dynamic system prompt can
 // provide the correct message_id/chat_id for the telegram_react tool.
 const lastIncomingMessages = new Map(); // chatId -> { messageId, chatId }
@@ -780,11 +782,36 @@ async function poll() {
                 }
             }
             pollErrors = 0;
+            if (dnsFailCount > 0) {
+                log(`[Network] Connection restored after ${dnsFailCount} DNS failure(s)`, 'INFO');
+                dnsFailCount = 0;
+                dnsWarnLogged = false;
+            }
         } catch (error) {
-            pollErrors++;
-            log(`Poll error (${pollErrors}): ${error.message}`, 'ERROR');
-            const delay = Math.min(1000 * Math.pow(2, pollErrors - 1), 30000);
-            await new Promise(r => setTimeout(r, delay));
+            const isDns = error.code === 'ENOTFOUND' || error.code === 'EAI_AGAIN';
+            if (isDns) {
+                dnsFailCount++;
+                pollErrors++;
+                // Single clear message after 3 consecutive DNS failures, then silence
+                if (dnsFailCount === 3) {
+                    log('[Network] DNS resolution failing — check internet connection', 'WARN');
+                    dnsWarnLogged = true;
+                }
+                // Backoff: 2s, 4s, 8s, ... capped at 30s (skip the 1s first step for DNS)
+                const delay = Math.min(2000 * Math.pow(2, Math.min(dnsFailCount, 5) - 1), 30000);
+                await new Promise(r => setTimeout(r, delay));
+            } else {
+                if (dnsFailCount > 0) {
+                    // Non-DNS error after DNS streak — network topology changed, log recovery
+                    log(`[Network] DNS recovered after ${dnsFailCount} failures`, 'INFO');
+                    dnsFailCount = 0;
+                    dnsWarnLogged = false;
+                }
+                pollErrors++;
+                log(`Poll error (${pollErrors}): ${error.message}`, 'ERROR');
+                const delay = Math.min(1000 * Math.pow(2, pollErrors - 1), 30000);
+                await new Promise(r => setTimeout(r, delay));
+            }
         }
     }
 }
@@ -980,9 +1007,9 @@ telegram('getMe')
         process.exit(1);
     });
 
-// Heartbeat log (uptime/memory debug — keep as-is)
+// Runtime status log (uptime/memory debug, every 5 min)
 setInterval(() => {
-    log(`Heartbeat - uptime: ${Math.floor(process.uptime())}s, memory: ${Math.round(process.memoryUsage().rss / 1024 / 1024)}MB`, 'DEBUG');
+    log(`[Runtime] uptime: ${Math.floor(process.uptime())}s, memory: ${Math.round(process.memoryUsage().rss / 1024 / 1024)}MB`, 'DEBUG');
 }, 5 * 60 * 1000);
 
 // ── Heartbeat Agent Timer ───────────────────────────────────────────────────
@@ -1056,6 +1083,8 @@ async function runHeartbeat() {
 
 // Poll every 1 minute; fire when configured interval has elapsed.
 // This allows interval changes in Settings to take effect on the next check cycle.
+const _initIntervalMin = Math.round(getHeartbeatIntervalMs() / 60000);
+log(`[Heartbeat] Interval set to ${_initIntervalMin}min (polled from agent_settings.json)`, 'INFO');
 setInterval(async () => {
     const intervalMs = getHeartbeatIntervalMs();
     if (Date.now() - lastHeartbeatAt >= intervalMs) {
