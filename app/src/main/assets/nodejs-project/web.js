@@ -140,7 +140,7 @@ async function searchBrave(query, count = 5, freshness) {
 
 async function searchPerplexity(query, freshness) {
     const apiKey = config.perplexityApiKey;
-    if (!apiKey) throw new Error('Perplexity API key not configured. Add it in Android Settings, or tell me the key and I\'ll save it to agent_settings.json.');
+    if (!apiKey) throw new Error('Perplexity API key not configured. Tell me the key and I\'ll save it to agent_settings.json.');
 
     // Auto-detect: pplx- prefix → direct API, sk-or- → OpenRouter
     const isDirect = apiKey.startsWith('pplx-');
