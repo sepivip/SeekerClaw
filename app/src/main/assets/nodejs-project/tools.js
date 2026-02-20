@@ -8,7 +8,7 @@ const path = require('path');
 
 const {
     workDir, config, log, localTimestamp, localDateStr,
-    AGENT_NAME, MODEL, SECRETS_BLOCKED, SKILLS_DIR,
+    AGENT_NAME, MODEL, SECRETS_BLOCKED, SKILLS_DIR, SHELL_ALLOWLIST,
 } = require('./config');
 
 const {
@@ -3278,15 +3278,8 @@ async function executeTool(name, input, chatId) {
                 return { error: 'Newline, null, or line separator characters are not allowed in commands' };
             }
 
-            // Allowlist of safe command base names.
-            // Note: node/npm/npx are NOT available — nodejs-mobile runs as libnode.so via JNI,
-            // not as a standalone binary. The allowlist prevents use of destructive system
-            // commands (rm, kill, etc.).
-            const ALLOWED_CMDS = new Set([
-                'cat', 'ls', 'mkdir', 'cp', 'mv', 'echo', 'pwd', 'which',
-                'head', 'tail', 'wc', 'sort', 'uniq', 'grep', 'find',
-                'curl', 'ping', 'date', 'df', 'du', 'uname', 'printenv'
-            ]);
+            // Allowlist of safe command base names (shared constant from config.js).
+            const ALLOWED_CMDS = SHELL_ALLOWLIST;
 
             // Extract the base command (first token before whitespace)
             const firstToken = cmd.split(/\s/)[0].trim();

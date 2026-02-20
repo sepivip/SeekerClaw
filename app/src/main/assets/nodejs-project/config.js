@@ -213,6 +213,19 @@ function truncateToolResult(text) {
 const SECRETS_BLOCKED = new Set(['config.json', 'config.yaml', 'seekerclaw.db']);
 
 // ============================================================================
+// SHELL EXEC ALLOWLIST (shared by tools.js and skills.js requirements gating)
+// ============================================================================
+
+// Note: node/npm/npx are NOT available — nodejs-mobile runs as libnode.so via JNI,
+// not as a standalone binary. The allowlist prevents use of destructive system
+// commands (rm, kill, etc.).
+const SHELL_ALLOWLIST = new Set([
+    'cat', 'ls', 'mkdir', 'cp', 'mv', 'echo', 'pwd', 'which',
+    'head', 'tail', 'wc', 'sort', 'uniq', 'grep', 'find',
+    'curl', 'ping', 'date', 'df', 'du', 'uname', 'printenv'
+]);
+
+// ============================================================================
 // TOOL CONFIRMATION GATES
 // ============================================================================
 
@@ -303,6 +316,7 @@ module.exports = {
     truncateToolResult,
 
     // Security/tool constants
+    SHELL_ALLOWLIST,
     SECRETS_BLOCKED,
     CONFIRM_REQUIRED,
     TOOL_RATE_LIMITS,

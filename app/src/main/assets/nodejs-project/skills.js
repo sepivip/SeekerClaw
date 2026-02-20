@@ -5,7 +5,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const { SKILLS_DIR, log } = require('./config');
+const { SKILLS_DIR, log, config, SHELL_ALLOWLIST } = require('./config');
 
 // ============================================================================
 // SKILLS SYSTEM
@@ -313,6 +313,67 @@ function parseSkillFile(content, skillDir) {
 }
 
 // ============================================================================
+// REQUIREMENTS GATING
+// ============================================================================
+
+// Convert UPPER_SNAKE_CASE env var name to camelCase config key
+// e.g., BRAVE_API_KEY → braveApiKey
+function envToCamelCase(envVar) {
+    return envVar.toLowerCase().replace(/_(.)/g, (_, c) => c.toUpperCase());
+}
+
+// Resolve dot-path config key (e.g., 'solana.wallet' → config.solana.wallet)
+function resolveConfigKey(key) {
+    const parts = key.split('.');
+    let obj = config;
+    for (const part of parts) {
+        if (obj == null || typeof obj !== 'object') return undefined;
+        obj = obj[part];
+    }
+    return obj;
+}
+
+// Check if a skill's requirements are met.
+// Returns { met: boolean, missing: string[] }
+function checkSkillRequirements(skill) {
+    const missing = [];
+    const req = skill.requires;
+
+    // No requirements or all empty → always met
+    if (!req) return { met: true, missing };
+    const hasBins = req.bins && req.bins.length > 0;
+    const hasEnv = req.env && req.env.length > 0;
+    const hasConfig = req.config && req.config.length > 0;
+    if (!hasBins && !hasEnv && !hasConfig) return { met: true, missing };
+
+    // bins: check if each binary is in the shell_exec allowlist
+    for (const bin of (req.bins || [])) {
+        if (!SHELL_ALLOWLIST.has(bin)) {
+            missing.push(`bin:${bin}`);
+        }
+    }
+
+    // env: check process.env or matching config key
+    for (const envVar of (req.env || [])) {
+        const fromEnv = process.env[envVar];
+        const fromConfig = config[envToCamelCase(envVar)];
+        if (fromEnv == null && fromConfig == null) {
+            missing.push(`env:${envVar}`);
+        }
+    }
+
+    // config: check config keys (dot-path notation)
+    for (const key of (req.config || [])) {
+        const val = resolveConfigKey(key);
+        if (val === null || val === undefined) {
+            missing.push(`config:${key}`);
+        }
+    }
+
+    return { met: missing.length === 0, missing };
+}
+
+// ============================================================================
 // SKILL VALIDATION & LOADING
 // ============================================================================
 
@@ -390,12 +451,27 @@ function loadSkills() {
         log(`Error reading skills directory: ${e.message}`, 'ERROR');
     }
 
-    if (isFirstLoad && skills.length > 0) {
-        log(`[Skills] ${skills.length} skills loaded (${dirCount} dir, ${fileCount} flat)`, 'INFO');
+    // Gate skills by requirements
+    const gated = [];
+    const loaded = skills.filter(skill => {
+        const { met, missing } = checkSkillRequirements(skill);
+        if (!met) {
+            gated.push({ name: skill.name, missing });
+            return false;
+        }
+        return true;
+    });
+
+    if (isFirstLoad && (loaded.length > 0 || gated.length > 0)) {
+        const gatedSuffix = gated.length > 0 ? `, ${gated.length} gated (missing requirements)` : '';
+        log(`[Skills] ${loaded.length} loaded (${dirCount} dir, ${fileCount} flat)${gatedSuffix}`, 'INFO');
+        for (const g of gated) {
+            log(`[Skills] Skipping '${g.name}' — missing: ${g.missing.join(', ')}`, 'INFO');
+        }
         _firstLoadLogged = true;
     }
 
-    return skills;
+    return loaded;
 }
 
 // ============================================================================
