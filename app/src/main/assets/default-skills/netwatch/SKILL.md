@@ -43,7 +43,7 @@ Read-only network monitoring and security auditing skill for Android/Linux.
 
 You have three modes. Default to **Network Audit** unless the user asks for something specific.
 
-**Important:** Only use commands from the `shell_exec` allowlist: `cat`, `ls`, `grep`, `find`, `ping`, `curl`, `uname`, `printenv`, `head`, `tail`, `wc`, `sort`, `uniq`, `date`, `df`, `du`, `pwd`, `which`, `echo`, `mkdir`, `cp`, `mv`. No shell operators (`|`, `||`, `&&`, `;`, `>`, `<`, `` ` ``). Run each command as a separate `shell_exec` call.
+**Important:** This skill only uses read-only commands from the `shell_exec` allowlist: `cat`, `ls`, `grep`, `find`, `ping`, `curl`, `uname`, `printenv`, `head`, `tail`, `wc`, `sort`, `uniq`, `date`, `df`, `du`, `pwd`, `which`, `echo`. Do not use file-mutating commands (`mkdir`, `cp`, `mv`). No shell operators (pipes, redirects, semicolons, backticks). Run each command as a separate `shell_exec` call.
 
 Network data is read from `/proc/net/` and `/sys/class/net/` virtual filesystems.
 
@@ -160,7 +160,7 @@ cat /proc/net/udp
 cat /proc/net/udp6
 ```
 
-Parse the hex-encoded output (see Mode 1 parsing notes). Filter for state `0A` (LISTEN) to find listening ports.
+Parse the hex-encoded output (see Mode 1 parsing notes). For TCP entries, filter for state `0A` (LISTEN) to find listening TCP ports. For UDP entries, all rows represent open sockets (UDP is connectionless and has no LISTEN state) — treat any UDP entry with a non-zero local port as an open UDP port.
 
 **Output format:**
 
@@ -226,7 +226,7 @@ What would you like me to investigate further?
 
 ## Constraints
 - v1 is **read-only only** — no iptables, no ifconfig changes, no route modifications
-- Use only `shell_exec` with allowlisted commands: cat, ls, grep, find, ping, curl, uname, printenv, head, tail, wc, sort, uniq, date, df, du, pwd, which, echo
+- Use only read-only `shell_exec` commands: cat, ls, grep, find, ping, curl, uname, printenv, head, tail, wc, sort, uniq, date, df, du, pwd, which, echo
 - No shell operators (|, ||, &&, ;, >, <) — run each command as a separate shell_exec call
 - Use `js_eval` for complex parsing (hex decoding from /proc/net/ files)
 - Target platform is Android/Linux (no Windows commands)

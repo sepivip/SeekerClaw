@@ -48,7 +48,7 @@ run a network security audit
   2. 3 ESTABLISHED connections to non-private IP addresses on non-standard ports
 
 🟢 Info
-  1. Port 8080/tcp listening on 127.0.0.1 — local-only service (SeekerClaw agent)
+  1. Port 8080/tcp listening on 127.0.0.1 — local-only HTTP service
   2. Port 443/tcp outbound — normal HTTPS traffic
   3. DNS using 1.1.1.1 (Cloudflare)
 
