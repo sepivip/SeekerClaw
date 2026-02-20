@@ -268,6 +268,43 @@ const TOOL_STATUS_MAP = {
 };
 
 // ============================================================================
+// CONVERSATIONAL API KEYS (BAT-236)
+// Merges apiKeys from agent_settings.json into the config object so all
+// existing tools (Brave, Perplexity, Jupiter) pick them up automatically.
+// Android Settings keys (from config.json) take priority over conversational
+// keys. Conversational keys fill gaps and can be re-saved by the agent.
+// ============================================================================
+
+const _agentKeyMap = { perplexity: 'perplexityApiKey', brave: 'braveApiKey', jupiter: 'jupiterApiKey' };
+
+// Snapshot which keys came from Android Settings at startup (immutable)
+const _androidKeys = {};
+for (const [, configField] of Object.entries(_agentKeyMap)) {
+    if (config[configField]) _androidKeys[configField] = true;
+}
+
+function syncAgentApiKeys() {
+    try {
+        const settingsPath = path.join(workDir, 'agent_settings.json');
+        if (!fs.existsSync(settingsPath)) return;
+        const s = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+        if (!s.apiKeys || typeof s.apiKeys !== 'object') return;
+        for (const [service, configField] of Object.entries(_agentKeyMap)) {
+            // Android Settings keys always win — don't overwrite
+            if (_androidKeys[configField]) continue;
+            const agentKey = s.apiKeys[service];
+            if (agentKey && typeof agentKey === 'string' && agentKey.trim()) {
+                config[configField] = agentKey.trim();
+                log(`[Config] Loaded ${service} API key from agent_settings.json`, 'INFO');
+            }
+        }
+    } catch (_) {}
+}
+
+// Run once at startup
+syncAgentApiKeys();
+
+// ============================================================================
 // OWNER_ID — mutable (auto-detect from first message)
 // ============================================================================
 
@@ -332,4 +369,7 @@ module.exports = {
     // Mutable owner ID
     getOwnerId,
     setOwnerId,
+
+    // Conversational API keys (BAT-236)
+    syncAgentApiKeys,
 };

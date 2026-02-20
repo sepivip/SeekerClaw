@@ -113,7 +113,7 @@ const BRAVE_FRESHNESS_VALUES = new Set(['day', 'week', 'month']);
 const PERPLEXITY_RECENCY_MAP = { day: 'day', week: 'week', month: 'month' };
 
 async function searchBrave(query, count = 5, freshness) {
-    if (!config.braveApiKey) throw new Error('Brave API key not configured (set braveApiKey in Settings)');
+    if (!config.braveApiKey) throw new Error('Brave API key not configured. Add it in Android Settings, or tell me the key and I\'ll save it to agent_settings.json.');
     const safeCount = Math.min(Math.max(Number(count) || 5, 1), 10);
     let searchPath = `/res/v1/web/search?q=${encodeURIComponent(query)}&count=${safeCount}`;
     if (freshness && BRAVE_FRESHNESS_VALUES.has(freshness)) searchPath += `&freshness=${freshness}`;
@@ -140,7 +140,7 @@ async function searchBrave(query, count = 5, freshness) {
 
 async function searchPerplexity(query, freshness) {
     const apiKey = config.perplexityApiKey;
-    if (!apiKey) throw new Error('Perplexity API key not configured (set perplexityApiKey in Settings)');
+    if (!apiKey) throw new Error('Perplexity API key not configured. Add it in Android Settings, or tell me the key and I\'ll save it to agent_settings.json.');
 
     // Auto-detect: pplx- prefix → direct API, sk-or- → OpenRouter
     const isDirect = apiKey.startsWith('pplx-');
