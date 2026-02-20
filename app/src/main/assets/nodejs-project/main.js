@@ -13,7 +13,7 @@ const {
     MEMORY_DIR,
     localTimestamp, log, setRedactFn,
     getOwnerId, setOwnerId,
-    workDir, config,
+    workDir, config, debugLog,
 } = require('./config');
 
 // OWNER_ID is mutable (auto-detect from first message). Keep a local let
@@ -161,7 +161,7 @@ async function handleCommand(chatId, command, args) {
                 return `Hey, I'm back! ✨
 
 Quick commands if you need them:
-/status · /new · /reset · /soul · /memory · /skills
+/status · /new · /reset · /skill · /logs · /help
 
 Or just talk to me — that works too.`;
             } else {
@@ -177,7 +177,23 @@ Send me anything to get started!`;
         }
 
         case '/help':
-            return handleCommand(chatId, '/start', '');
+        case '/commands': {
+            const skillCount = loadSkills().length;
+            return `**Commands**
+
+/status — bot status, uptime, model
+/new — archive session & start fresh
+/reset — wipe conversation (no backup)
+/skill — list skills (or \`/skill name\` to run one)
+/soul — view SOUL.md
+/memory — view MEMORY.md
+/logs — last 10 log entries
+/version — app & runtime versions
+/approve — confirm pending action
+/deny — reject pending action
+
+*${skillCount} skill${skillCount !== 1 ? 's' : ''} installed · /help to see this again*`;
+        }
 
         case '/status': {
             const uptime = Math.floor(process.uptime());
@@ -199,14 +215,19 @@ Send me anything to get started!`;
                 }
             } catch (e) { /* ignore */ }
 
-            return `🟢 Alive and kicking
+            const skillCount = loadSkills().length;
+            const mem = process.memoryUsage();
+            const heapMB = (mem.heapUsed / 1024 / 1024).toFixed(1);
+            const rssMB = (mem.rss / 1024 / 1024).toFixed(1);
+
+            return `🟢 **Alive and kicking**
 
 ⏱️ Uptime: ${uptimeFormatted}
-💬 Messages: ${todayCount} today (${totalCount} total)
+💬 Messages: ${todayCount} today (${totalCount} in session)
 🧠 Memory: ${memoryFileCount} files
-📊 Model: ${MODEL}
-
-Last active: just now`;
+📊 Model: \`${MODEL}\`
+🧩 Skills: ${skillCount}
+💾 RAM: ${heapMB} MB heap / ${rssMB} MB RSS`;
         }
 
         case '/reset':
@@ -239,44 +260,118 @@ Last active: just now`;
             return `*MEMORY.md*\n\n${memory.slice(0, 3000)}${memory.length > 3000 ? '\n\n...(truncated)' : ''}`;
         }
 
+        case '/skill':
         case '/skills': {
             const skills = loadSkills();
+
+            // /skill <name> — run a specific skill by injecting it into conversation
+            if (args.trim()) {
+                const query = args.trim().toLowerCase();
+                const match = skills.find(s =>
+                    s.name.toLowerCase() === query ||
+                    s.name.toLowerCase().replace(/[^a-z0-9]/g, '') === query.replace(/[^a-z0-9]/g, '') ||
+                    s.triggers.some(t => t.toLowerCase() === query)
+                );
+                if (!match) {
+                    return `No skill matching \`${args.trim()}\`.\n\nUse /skill to list all installed skills.`;
+                }
+                // Fall through to normal message handling — return null so handleMessage
+                // passes it to Claude with the skill injected via keyword matching
+                return null;
+            }
+
+            // /skill or /skills with no args — list all
             if (skills.length === 0) {
-                return `*No skills installed*
+                return `**No skills installed**
 
 Skills are specialized capabilities you can add to your agent.
 
 To add a skill, create a folder in:
-\`workspace/skills/your-skill-name/SKILL.md\`
-
-SKILL.md format:
-\`\`\`
-# Skill Name
-
-Trigger: keyword1, keyword2
-
-## Description
-What this skill does
-
-## Instructions
-How to handle matching requests
-\`\`\``;
+\`workspace/skills/your-skill-name/SKILL.md\``;
             }
 
-            let response = `*Installed Skills (${skills.length})*\n\n`;
+            let response = `**Installed Skills (${skills.length})**\n\n`;
             for (const skill of skills) {
-                response += `**${skill.name}**\n`;
-                response += `Triggers: ${skill.triggers.join(', ')}\n`;
+                const emoji = skill.emoji || '🔧';
+                response += `${emoji} **${skill.name}**`;
+                if (skill.triggers.length > 0) {
+                    response += ` — *${skill.triggers.slice(0, 3).join(', ')}*`;
+                }
+                response += '\n';
                 if (skill.description) {
                     response += `${skill.description.split('\n')[0]}\n`;
                 }
-                response += '\n';
             }
+            response += `\nRun a skill: \`/skill name\``;
             return response;
         }
 
+        case '/version': {
+            const nodeVer = process.version;
+            const platform = `${process.platform}/${process.arch}`;
+            // Try to read package.json for bundled version info
+            let pkgVersion = 'unknown';
+            try {
+                const pkg = JSON.parse(fs.readFileSync(require('path').join(__dirname, 'package.json'), 'utf8'));
+                if (pkg.version) pkgVersion = pkg.version;
+            } catch (_) {}
+            return `**SeekerClaw**
+Agent: \`${AGENT_NAME}\`
+Package: \`${pkgVersion}\`
+Model: \`${MODEL}\`
+Node.js: \`${nodeVer}\`
+Platform: \`${platform}\``;
+        }
+
+        case '/logs': {
+            // Read last 10 log entries from the debug log file
+            try {
+                if (!fs.existsSync(debugLog)) {
+                    return 'No log file found.';
+                }
+                const content = fs.readFileSync(debugLog, 'utf8');
+                const lines = content.trim().split('\n').filter(l => l.trim());
+                const last10 = lines.slice(-10);
+                if (last10.length === 0) return 'Log file is empty.';
+                const formatted = last10.map(line => {
+                    // Lines are: LEVEL|message
+                    const sep = line.indexOf('|');
+                    if (sep === -1) return line;
+                    const level = line.slice(0, sep);
+                    const msg = line.slice(sep + 1).slice(0, 120);
+                    const icon = level === 'ERROR' ? '🔴' : level === 'WARN' ? '🟡' : '⚪';
+                    return `${icon} ${msg}`;
+                }).join('\n');
+                return `**Last ${last10.length} log entries**\n\n\`\`\`\n${formatted}\n\`\`\``;
+            } catch (e) {
+                return `Failed to read logs: ${e.message}`;
+            }
+        }
+
+        case '/approve': {
+            const pending = pendingConfirmations.get(chatId);
+            if (!pending) {
+                return 'No pending confirmation to approve.';
+            }
+            log(`[Confirm] /approve command for ${pending.toolName} → APPROVED`, 'INFO');
+            pending.resolve(true);
+            pendingConfirmations.delete(chatId);
+            return '✅ Approved.';
+        }
+
+        case '/deny': {
+            const pending = pendingConfirmations.get(chatId);
+            if (!pending) {
+                return 'No pending confirmation to deny.';
+            }
+            log(`[Confirm] /deny command for ${pending.toolName} → REJECTED`, 'INFO');
+            pending.resolve(false);
+            pendingConfirmations.delete(chatId);
+            return '❌ Denied.';
+        }
+
         default:
-            return null; // Not a command
+            return null; // Not a command — falls through to agent
     }
 }
 
@@ -783,6 +878,24 @@ telegram('getMe')
             } catch (e) {
                 log(`Warning: Could not flush old updates: ${e.message}`, 'WARN');
             }
+            // Register slash commands with BotFather for Telegram autocomplete menu (BAT-211)
+            telegram('setMyCommands', {
+                commands: [
+                    { command: 'status', description: 'Bot status, uptime, model' },
+                    { command: 'new', description: 'Archive session & start fresh' },
+                    { command: 'reset', description: 'Wipe conversation (no backup)' },
+                    { command: 'skill', description: 'List skills or run one by name' },
+                    { command: 'soul', description: 'View SOUL.md' },
+                    { command: 'memory', description: 'View MEMORY.md' },
+                    { command: 'logs', description: 'Last 10 log entries' },
+                    { command: 'version', description: 'App & runtime versions' },
+                    { command: 'help', description: 'List all commands' },
+                ],
+            }).then(r => {
+                if (r.ok) log('Telegram command menu registered', 'DEBUG');
+                else log(`setMyCommands failed: ${JSON.stringify(r)}`, 'WARN');
+            }).catch(e => log(`setMyCommands error: ${e.message}`, 'WARN'));
+
             poll();
             startClaudeUsagePolling();
 
