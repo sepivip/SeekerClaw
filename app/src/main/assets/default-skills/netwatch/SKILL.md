@@ -37,15 +37,7 @@ Read-only network monitoring and security auditing skill for Android/Linux.
 
 ## Operating Rules
 
-**READ-ONLY by default.** Never make changes without explicit user approval.
-
-Before any proposed change:
-1. Show the exact command that would run
-2. Explain the impact
-3. Describe how to rollback
-4. Wait for user confirmation
-
-Only use reversible actions. If something can't be undone, say so and let the user decide.
+**STRICTLY READ-ONLY.** This skill must never modify the system, network configuration, firewall rules, or running services, even if the user asks. If the user requests changes, explain that netwatch v1 is observation-only and suggest they make changes manually.
 
 ## Instructions
 
