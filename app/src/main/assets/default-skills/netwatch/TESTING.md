@@ -1,4 +1,4 @@
-# NetWatch v2.3 — Testing Guide
+# NetWatch v2.3.1 — Testing Guide
 
 ## Test Prompts
 
@@ -52,6 +52,26 @@ full report
 deep scan 10.0.0.99
 ```
 **Expected:** Compact report showing unreachable status. `⏱️ timed out` markers. Never hangs. 3 action commands.
+
+### 9. DNS Probe Failure — Regression (BAT-241)
+```
+scan my network
+```
+**(Simulate: DNS resolver unavailable or dns.promises.resolve() throws)**
+**Expected:** Scan completes with final report. DNS section shows `⚠️ DNS probe unavailable` or similar warning — NOT a crash. No `TypeError` or `UNCAUGHT` in console logs. Risk score still calculated (DNS failure adds +25 to risk). Report always delivered.
+
+**What MUST NOT happen:**
+- `TypeError: Cannot read properties of undefined (reading 'write')` — this was the v2.3 crash
+- Scan hangs with no output
+- `UNCAUGHT` or `unhandledRejection` in Node.js console
+- `js_eval FAIL` without a graceful report to the user
+
+### 10. All Probes Fail — Resilience
+```
+scan my network
+```
+**(Simulate: no network connectivity — all probes timeout or error)**
+**Expected:** Scan completes with high-risk report (76-100 CRITICAL). Each failed probe appears as warning. Report always delivered with 3 action commands. No crashes.
 
 ## Sample Compact Outputs (v2.3)
 
@@ -279,3 +299,9 @@ May be offline, firewalled, or wrong subnet
 - [ ] All modes have both compact and full templates
 - [ ] Single-pass reporting maintained
 - [ ] 8s timeout budget maintained
+- [ ] No `process.stdout.write()` in any js_eval snippet (BAT-241)
+- [ ] All js_eval snippets wrapped in try/catch (BAT-241)
+- [ ] DNS probe uses `dns.promises.resolve()`, not callback `dns.resolve()` (BAT-241)
+- [ ] DNS probe failure does not crash scan — appears as warning (BAT-241)
+- [ ] No `TypeError` or `UNCAUGHT` errors in console during scan (BAT-241)
+- [ ] Scan always returns final report even if all probes fail (BAT-241)
