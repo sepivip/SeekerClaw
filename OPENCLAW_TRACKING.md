@@ -1,8 +1,8 @@
 # OpenClaw Version Tracking
 
 > **Purpose:** Track OpenClaw releases and identify changes to port to SeekerClaw.
-> **Current OpenClaw Version:** 2026.2.18-dev (main f9e67f3, 2026-02-18)
-> **Last Sync Review:** 2026-02-19
+> **Current OpenClaw Version:** 2026.2.20 (main 741435aac, 2026-02-20)
+> **Last Sync Review:** 2026-02-20
 > **Parity Plan:** See `PARITY_PLAN.md`
 
 ---
@@ -82,7 +82,66 @@ These files in OpenClaw directly affect SeekerClaw behavior. Changes here requir
 
 ## Version History & Changes
 
-### 2026.2.18-dev (Current - f9e67f3)
+### 2026.2.20 (Current - 741435aac)
+- **Release Date:** 2026-02-20
+- **SeekerClaw Sync Status:** Reviewed, nothing to port
+- **505 new commits since last sync (f9e67f3)**
+- **Versions reviewed:** v2026.2.19, v2026.2.20 (HEAD)
+- **Skipped (not applicable):**
+  - Memory: ENOENT hardening for readFile/buildFileEntry — requires node:sqlite (Node 22+)
+  - Memory: fs-utils.ts helper module — Node 22+ infrastructure
+  - Skills: symlink rejection in skill packaging — we don't package skills
+  - Skills: `cask` → `formula` brew field fallback — no brew on Android
+  - Cron: crypto.randomBytes for tmp file names — minor security hardening, our cron uses simpler paths
+  - Cron: cache read/write token counts in /status — server-only
+  - Cron: WhatsApp delivery routing to allowlisted recipients — no WhatsApp
+  - Telegram: version bumps only (2026.2.18 → 2026.2.20), `resolveDefaultTo` — server-only delivery
+  - Web media: LocalMediaAccessError codes, root guard refactoring — server-only WhatsApp media
+  - Test deduplication across memory, cron, web suites — test-only
+
+### 2026.2.17 (gap review — previously covered in 2026.2.18-dev)
+- **Release Date:** 2026-02-17
+- **SeekerClaw Sync Status:** Reviewed, already ported items noted in 2026.2.18-dev
+- **Key Changes Reviewed:**
+  - [x] System prompt: reply tags first-token rule — already ported (BAT-189)
+  - [x] Skills: "Use when / Don't use when" routing blocks — already ported (BAT-189)
+- **Skipped (not applicable):**
+  - System prompt: sub-agent orchestration (`subagents` tool, push-based completion) — no sub-agents
+  - System prompt: `[System Message]` rewrite guidance — no cron/sub-agent system messages
+  - System prompt: sandbox container workspace paths, `sanitizeForPromptLiteral` — no Docker
+  - Inline button `style` param (`primary`/`success`/`danger`) — Discord-only visual styling, Telegram ignores
+  - Identity: `resolveAckReaction` per-channel/per-account — server-only multi-channel
+  - Skills: `.agents/skills/` directories (personal + project), synced skill dedup, sandbox paths — server-only
+  - Cron: massive refactor (stagger, webhook delivery, session scoped, skill filtering, subagent followup) — server-only
+  - Memory: MMR reranking, temporal decay, query expansion, batch refactoring — all Node 22+/embedding
+
+### 2026.2.12 (gap review)
+- **Release Date:** 2026-02-12
+- **SeekerClaw Sync Status:** Reviewed, nothing to port
+- **Key Changes Reviewed:**
+  - System prompt: prefer `[[reply_to_current]]` over `[[reply_to:<id>]]` — we only support `[[reply_to_current]]`, skip
+  - System prompt: filter empty-path context files — defensive, our paths always valid
+  - Skills: `.agents/skills/` personal/project directories, sandbox path resolution — server-only
+  - Cron: session reaper (>24h), timer rearm fixes — server-only (we already have timer re-arm in finally)
+  - Memory: embedding token limits, QMD query parser, session files — all Node 22+
+
+### 2026.2.6 (gap review)
+- **Release Date:** 2026-02-06
+- **SeekerClaw Sync Status:** Key fix already present
+- **Key Changes Reviewed:**
+  - Cron: timer re-arm in `finally` block — **already in our code** (cron.js:477-479)
+  - Cron: handle legacy `atMs` field, prevent recomputeNextRuns skipping — server-specific store migration
+  - Memory: Voyage AI batch embedding — requires Node 22+
+
+### 2026.2.3 (gap review)
+- **Release Date:** 2026-02-03
+- **SeekerClaw Sync Status:** Reviewed, nothing to port
+- **Key Changes Reviewed:**
+  - Identity: `resolveResponsePrefix` per-channel/per-account config — server-only multi-channel
+  - Cron: major delivery normalization (`coerceDelivery`, legacy payload migration, `deleteAfterRun`) — server-only delivery routing; our cron is reminder-only
+  - Skills: SKILL.md updates for bluebubbles, discord, imsg, tmux — platform-specific skills we don't bundle
+
+### 2026.2.18-dev (f9e67f3)
 - **Release Date:** 2026-02-18
 - **SeekerClaw Sync Status:** Ported (BAT-189, PR #117)
 - **1,563 new commits since last sync (e927fd1)**

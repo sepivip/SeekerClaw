@@ -41,7 +41,7 @@
 | Version | Current | Location |
 |---------|---------|----------|
 | **App** | `1.3.0` (code 4) | `app/build.gradle.kts` → `versionName` / `versionCode` |
-| **OpenClaw** | `2026.2.14` | `app/build.gradle.kts` → `OPENCLAW_VERSION` buildConfigField |
+| **OpenClaw** | `2026.2.20` | `app/build.gradle.kts` → `OPENCLAW_VERSION` buildConfigField |
 | **Node.js** | `18 LTS` | `app/build.gradle.kts` → `NODEJS_VERSION` buildConfigField |
 
 ## Tech Stack
