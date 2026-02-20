@@ -315,12 +315,18 @@ See SKILL-FORMAT.md for the YAML frontmatter format.`;
         case '/version': {
             const nodeVer = process.version;
             const platform = `${process.platform}/${process.arch}`;
-            // Try to read package.json for bundled version info
+            // Determine agent version from config, env, or package.json (in priority order)
             let pkgVersion = 'unknown';
-            try {
-                const pkg = JSON.parse(fs.readFileSync(require('path').join(__dirname, 'package.json'), 'utf8'));
-                if (pkg.version) pkgVersion = pkg.version;
-            } catch (_) {}
+            if (config && config.version) {
+                pkgVersion = config.version;
+            } else if (process.env.AGENT_VERSION) {
+                pkgVersion = process.env.AGENT_VERSION;
+            } else {
+                try {
+                    const pkg = JSON.parse(fs.readFileSync(require('path').join(__dirname, 'package.json'), 'utf8'));
+                    if (pkg.version) pkgVersion = pkg.version;
+                } catch (_) {}
+            }
             return `**SeekerClaw**
 Agent: \`${AGENT_NAME}\`
 Package: \`${pkgVersion}\`
@@ -445,9 +451,11 @@ async function handleMessage(msg) {
     try {
         // Check for commands (use rawText so /commands work even in replies)
         if (rawText.startsWith('/')) {
-            const [command, ...argParts] = rawText.split(' ');
+            const [commandToken, ...argParts] = rawText.split(' ');
             const args = argParts.join(' ');
-            const response = await handleCommand(chatId, command.toLowerCase(), args);
+            // Strip @botusername suffix for group chat compatibility (e.g. /status@MyBot → /status)
+            const command = commandToken.toLowerCase().replace(/@\w+$/, '');
+            const response = await handleCommand(chatId, command, args);
             if (response?.__skillFallthrough) {
                 // /skill <name> matched — rewrite text to trigger word so
                 // findMatchingSkills() picks up the skill via word-boundary match
@@ -717,8 +725,9 @@ async function poll() {
                             // Only consume pure text messages as confirmation replies
                             // (photos with captions, stickers, etc. are enqueued normally)
                             // Recognize /approve and /deny commands as confirmation responses
-                            const lower = msgText.toLowerCase();
-                            const confirmed = msgText.toUpperCase() === 'YES' || lower === '/approve';
+                            // Strip @botusername for group chat compatibility
+                            const normalized = msgText.toLowerCase().replace(/@\w+$/, '');
+                            const confirmed = msgText.toUpperCase() === 'YES' || normalized === '/approve';
                             log(`[Confirm] User replied "${msgText}" for ${pending.toolName} → ${confirmed ? 'APPROVED' : 'REJECTED'}`, 'INFO');
                             pending.resolve(confirmed);
                             pendingConfirmations.delete(msgChatId);
