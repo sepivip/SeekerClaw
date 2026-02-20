@@ -317,9 +317,21 @@ object ConfigManager {
             return
         }
         val workspaceDir = File(context.filesDir, "workspace").apply { mkdirs() }
-        val json = """{"heartbeatIntervalMinutes":${config.heartbeatIntervalMinutes}}"""
+        val settingsFile = File(workspaceDir, "agent_settings.json")
         try {
-            File(workspaceDir, "agent_settings.json").writeText(json)
+            // Read existing file to preserve agent-written fields (e.g. apiKeys)
+            val existing = if (settingsFile.exists()) {
+                try { JSONObject(settingsFile.readText()) } catch (_: Exception) { JSONObject() }
+            } else {
+                JSONObject()
+            }
+            // Android-managed fields always overwrite
+            existing.put("heartbeatIntervalMinutes", config.heartbeatIntervalMinutes)
+            // Ensure apiKeys object exists (agent writes individual keys into it)
+            if (!existing.has("apiKeys")) {
+                existing.put("apiKeys", JSONObject())
+            }
+            settingsFile.writeText(existing.toString(2))
         } catch (e: Exception) {
             LogCollector.append("[Config] Failed to write agent_settings.json: ${e.message}", LogLevel.WARN)
         }

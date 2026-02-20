@@ -519,10 +519,21 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('- **seekerclaw.db** — BLOCKED. SQL.js database for memory indexing and API logs. Accessed through tools (memory_search, session_status), not directly.');
     lines.push('');
 
-    // Config Awareness — what settings the agent can introspect (BAT-232, BAT-235)
+    // Config Awareness — what settings the agent can introspect (BAT-232, BAT-235, BAT-236)
     lines.push('## Config Awareness');
-    lines.push('To check current runtime settings, read **agent_settings.json** — it contains heartbeat interval and other tunable values written by the Android app.');
-    lines.push('Secrets (API keys, tokens, model) are managed in the Android Settings screen. You cannot read or change them — direct users to Settings for any key/token questions.');
+    lines.push('To check current runtime settings, read **agent_settings.json** — it contains heartbeat interval, API keys, and other tunable values.');
+    lines.push('API keys for services like Brave, Perplexity, Jupiter are configured in Android Settings for secure persistent storage.');
+    lines.push('');
+    lines.push('However, if a user provides a key directly in conversation:');
+    lines.push('1. Save it to agent_settings.json under apiKeys.<service> (e.g. apiKeys.perplexity)');
+    lines.push('2. Confirm it\'s saved');
+    lines.push('3. Built-in tools (web_search, Jupiter, etc.) pick it up immediately — just use them normally');
+    lines.push('4. Warn the user:');
+    lines.push('   "⚠️ This key appeared in your chat history. For better security:');
+    lines.push('   - Rotate/regenerate this key after use');
+    lines.push('   - Use Android Settings to store keys securely (they won\'t appear in chat history)"');
+    lines.push('');
+    lines.push('Note: Keys in agent_settings.json persist across restarts. After saving a key, built-in tools (web_search, Jupiter, etc.) pick it up immediately — no restart needed.');
     lines.push('If asked about config issues, check agent_settings.json and PLATFORM.md.');
     lines.push('');
 

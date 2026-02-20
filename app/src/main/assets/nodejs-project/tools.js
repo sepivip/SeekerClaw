@@ -9,6 +9,7 @@ const path = require('path');
 const {
     workDir, config, log, localTimestamp, localDateStr,
     AGENT_NAME, MODEL, SECRETS_BLOCKED, SKILLS_DIR, SHELL_ALLOWLIST,
+    syncAgentApiKeys,
 } = require('./config');
 
 const {
@@ -1088,6 +1089,12 @@ async function executeTool(name, input, chatId) {
                 fs.mkdirSync(dir, { recursive: true });
             }
             fs.writeFileSync(filePath, input.content, 'utf8');
+
+            // BAT-236: If agent wrote to workspace root agent_settings.json, re-sync API keys
+            if (filePath === path.join(workDir, 'agent_settings.json')) {
+                syncAgentApiKeys();
+            }
+
             return {
                 success: true,
                 path: input.path,
@@ -1134,6 +1141,12 @@ async function executeTool(name, input, chatId) {
             }
 
             fs.writeFileSync(filePath, content, 'utf8');
+
+            // BAT-236: If agent edited workspace root agent_settings.json, re-sync API keys
+            if (filePath === path.join(workDir, 'agent_settings.json')) {
+                syncAgentApiKeys();
+            }
+
             return {
                 success: true,
                 path: input.path,
