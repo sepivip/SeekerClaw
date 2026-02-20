@@ -79,7 +79,7 @@ cat /proc/net/route
 cat /proc/net/arp
 ```
 
-**Parsing /proc/net/tcp:** Each line has hex-encoded fields:
+**Parsing /proc/net/tcp:** Each line has hex-encoded fields (0-indexed columns):
 - Column 1 (local_address): `IP:PORT` in hex (e.g., `0100007F:1F90` = 127.0.0.1:8080)
 - Column 2 (rem_address): remote address in hex
 - Column 3 (st): state — `0A` = LISTEN, `01` = ESTABLISHED, `06` = TIME_WAIT
@@ -94,9 +94,9 @@ const ip = [3,2,1,0].map(i => parseInt(hex.substring(i*2, i*2+2), 16)).join('.')
 // '0100007F' → reverse bytes → '7F000001' → 127.0.0.1
 ```
 
-**Parsing /proc/net/route:** Column format:
+**Parsing /proc/net/route:** Column format (0-indexed, tab-separated):
 - Column 0: interface name
-- Column 1: destination (hex, `00000000` = default)
+- Column 1: destination (hex, `00000000` = default route)
 - Column 2: gateway (hex IP, reverse byte order)
 
 **Output format:**
@@ -225,7 +225,7 @@ What would you like me to investigate further?
 ```
 
 ## Constraints
-- v1 is **read-only only** — no iptables, no ifconfig changes, no route modifications
+- v1 is **read-only** — no iptables, no ifconfig changes, no route modifications
 - Use only read-only `shell_exec` commands: cat, ls, grep, find, ping, curl, uname, printenv, head, tail, wc, sort, uniq, date, df, du, pwd, which, echo
 - No shell operators (|, ||, &&, ;, >, <) — run each command as a separate shell_exec call
 - Use `js_eval` for complex parsing (hex decoding from /proc/net/ files)
