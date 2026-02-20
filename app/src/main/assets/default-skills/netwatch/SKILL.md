@@ -1,7 +1,7 @@
 ---
 name: netwatch
 description: "Network monitoring and security audit. Use when: user asks to scan network, check open ports, network audit, who's on wifi, check connection, port scan, firewall check, network status, or network security. Don't use when: user asks about crypto transactions (use solana tools) or web search (use research skill)."
-version: "2.2.0"
+version: "2.3.0"
 emoji: "🛡️"
 triggers:
   - "scan my network"
@@ -18,6 +18,8 @@ triggers:
   - "firewall check"
   - "deep scan"
   - "scan device"
+  - "full report"
+  - "detailed report"
 ---
 
 # NetWatch — Network Monitor & Security Audit
@@ -94,6 +96,42 @@ ALL output MUST follow these Telegram-optimized formatting rules:
 - Total scan budget per mode: 8 seconds max
 - If probes time out, include partial results + "unknown" markers
 - ALWAYS return a report — never stall waiting for slow probes
+
+## Report Density (MANDATORY)
+
+NetWatch has two output levels: **compact** (default) and **full** (on request).
+
+### Compact Mode (DEFAULT for all scans)
+
+Every scan defaults to compact output. Structure:
+
+1. **TL;DR** (max 3 lines)
+   - Risk level + score
+   - Biggest risk in one sentence
+   - One immediate action
+
+2. **Top Risks** (max 3 items)
+   - Each: severity emoji + one-sentence why + one action
+   - Skip section entirely if no risks found
+
+3. **Devices / Services** (compact, max 5 rows)
+   - One line per device/service: `IP` — label — ports — status
+   - If more than 5, show top 5 + "N more — reply `full report`"
+
+4. **Actions** (exactly 3 commands)
+   - Three actionable reply options the user can tap
+
+**Rules for compact mode:**
+- No paragraph blocks longer than 2 lines
+- No repeated technical explanations
+- No redundant section headers if section would be empty
+- Total output should fit on a mobile screen without excessive scrolling
+
+### Full Mode (on request only)
+
+Triggered when user says: "full report", "detailed report", "show details", "technical details", or "more info".
+
+In full mode, show the complete detailed output with all sections (risk score breakdown, all endpoints with latency, all DNS results, all port details, device info, full recommendations). This is the existing detailed format from previous versions.
 
 ## Instructions
 
@@ -184,7 +222,30 @@ Run the TCP port probe pattern for each port:
 **Step 5 — Compile report:**
 Process all gathered data, calculate risk score, and format the report.
 
-**Output format (Telegram-optimized):**
+**Compact output (DEFAULT):**
+
+```
+🛡️ **NetWatch** • <X>s scan
+
+📊 Risk: **X/100 LOW** ✅
+✅ All systems healthy, no issues found
+
+⚠️ **Top Risks**
+• ⚠️ High latency to Anthropic API (220ms)
+  → run `check my connection` for details
+
+📋 **Services**
+• `WiFi` `HomeNetwork` • `192.168.1.42`
+• Bridge `:8765` ✅ • Telegram ✅ • DNS ✅
+• 🔋 85% charging
+
+👉 Reply:
+• `deep scan .1`
+• `check open ports`
+• `full report`
+```
+
+**Full output (when user asks for "full report"):**
 
 ```
 🛡️ **NetWatch Audit Report**
@@ -258,7 +319,24 @@ Run the TCP port probe pattern for each port:
 - `80` (HTTP)
 - `443` (HTTPS)
 
-**Output format (Telegram-optimized):**
+**Compact output (DEFAULT):**
+
+```
+🔍 **Ports** • 9 scanned
+
+✅ `8765` bridge • `8080` HTTP
+⚠️ `3000` unknown service
+❌ `5555` ADB open! • `4444` reverse shell!
+
+2 flagged — 2 open, 7 closed
+
+👉 Reply:
+• `deep scan .1`
+• `full report`
+• `scan my network`
+```
+
+**Full output (when user asks for "full report"):**
 
 ```
 🔍 **Port Watch Report**
@@ -310,7 +388,23 @@ Run the DNS resolve probe pattern for:
 POST /network
 ```
 
-**Output format (Telegram-optimized):**
+**Compact output (DEFAULT):**
+
+```
+📡 **Connection** • `WiFi` `192.168.1.42`
+
+✅ All endpoints reachable
+• Fastest: `1.1.1.1` 12ms
+• Slowest: `api.anthropic.com` 89ms
+• DNS: ✅ all 3 resolving
+
+👉 Reply:
+• `check open ports`
+• `scan my network`
+• `full report`
+```
+
+**Full output (when user asks for "full report"):**
 
 ```
 📡 **Connection Status**
@@ -380,7 +474,21 @@ dns.reverse('192.168.31.89', (err, hostnames) => {
 
 **Step 3 — Compile report (single message, no progress narration):**
 
-**Output format (Telegram-optimized):**
+**Compact output (DEFAULT):**
+
+```
+🔎 **`192.168.31.89`** • <X>s
+
+✅ Online — `22` SSH, `80` HTTP open
+⚠️ SSH exposed — remote access possible
+
+👉 Reply:
+• `full report`
+• `scan my network`
+• `deep scan .1`
+```
+
+**Full output (when user asks for "full report"):**
 
 ```
 🔎 **Deep Scan: `192.168.31.89`**
@@ -402,8 +510,8 @@ dns.reverse('192.168.31.89', (err, hostnames) => {
 • Confidence: HIGH (direct probe results)
 
 ✅ **Recommendations**
-1. Verify SSH access is intentional — check authorized_keys
-2. Access `http://192.168.31.89` to identify the web interface
+1. Verify SSH access is intentional
+2. Access `http://192.168.31.89` to identify device
 
 👉 Reply:
 • `scan another device`
@@ -411,8 +519,22 @@ dns.reverse('192.168.31.89', (err, hostnames) => {
 • `check ports on .1`
 ```
 
-**Multi-target deep scan:**
-When the user asks about multiple devices (e.g., "deep scan .130 and check .89 SSH"), probe all targets in parallel (each with 3s timeout), then compile ONE combined report:
+**Multi-target compact output (DEFAULT):**
+When the user asks about multiple devices, probe all targets in parallel (each with 3s timeout), then compile ONE combined report:
+
+```
+🔎 **2 devices** • <X>s
+
+`.130` — ⚠️ `443` only, unknown device
+`.89` — ✅ `22` SSH, `80` HTTP — ⚠️ SSH exposed
+
+👉 Reply:
+• `full report`
+• `deep scan .130`
+• `scan my network`
+```
+
+**Multi-target full output (when user asks for "full report"):**
 
 ```
 🔎 **Deep Scan: 2 devices**
@@ -421,7 +543,7 @@ When the user asks about multiple devices (e.g., "deep scan .130 and check .89 S
 **`192.168.31.130`**
 • Status: ⚠️ partially reachable
 • Open: `443`
-• Closed: `22`, `80`, `8080`
+• Closed: `22`, `80`, `8080`, `53`, `21`, `23`, `5555`
 • Reverse DNS: not found
 • Risk: unknown device, HTTPS-only ⚠️
 • Confidence: MEDIUM
@@ -429,13 +551,13 @@ When the user asks about multiple devices (e.g., "deep scan .130 and check .89 S
 **`192.168.31.89`** (Bobcatminer)
 • Status: ✅ online
 • Open: `22` (SSH), `80` (HTTP)
-• Closed: `443`, `8080`
+• Closed: `443`, `8080`, `53`, `21`, `23`, `5555`
 • Risk: SSH exposed ⚠️
 • Confidence: HIGH
 
 ✅ **Recommendations**
-1. `.130` — only `443` open, likely IoT device; monitor for changes
-2. `.89` — disable SSH if not needed, or restrict to key-only auth
+1. `.130` — only `443` open, likely IoT; monitor for changes
+2. `.89` — disable SSH if not needed, or key-only auth
 
 👉 Reply:
 • `full network audit`
