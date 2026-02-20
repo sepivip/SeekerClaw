@@ -1,7 +1,7 @@
 ---
 name: netwatch
 description: "Network monitoring and security audit. Use when: user asks to scan network, check open ports, network audit, who's on wifi, check connection, port scan, firewall check, network status, or network security. Don't use when: user asks about crypto transactions (use solana tools) or web search (use research skill)."
-version: "2.0.0"
+version: "2.1.0"
 emoji: "🛡️"
 triggers:
   - "scan my network"
@@ -24,14 +24,17 @@ Read-only network monitoring and security auditing skill for Android.
 
 ## Android Sandbox Compatibility
 
-Low-level `/proc/net/` and `/sys/class/net/` inspection is **restricted** on the Android sandbox. This skill uses Android-safe alternatives:
-- **Network info:** Android bridge `/network` endpoint (WiFi SSID, IP, type, signal)
-- **Connectivity:** `ping` to known endpoints (latency + packet loss)
-- **DNS health:** Hostname resolution via `ping -c 1 <hostname>`
-- **Port probing:** `curl --connect-timeout` to localhost services
-- **Device context:** Android bridge `/battery` and `/storage`
+This skill runs entirely within the Node.js runtime and Android bridge. It does **NOT** use `shell_exec` at all — `ping`, `curl`, `cat`, `ls`, and other shell commands are unavailable or unreliable on the Android sandbox.
 
-Do NOT attempt to read `/proc/net/*`, `/sys/class/net/*`, `/etc/resolv.conf`, or other blocked virtual filesystem paths. These will always fail on Android and produce noisy errors.
+**Probe methods used:**
+- **Network info:** `android_bridge` `/network` endpoint (WiFi SSID, IP, type, signal)
+- **Connectivity + latency:** `js_eval` with Node.js `https.get()` + `Date.now()` timing
+- **DNS health:** `js_eval` with `require('dns').resolve()`
+- **Port probing:** `js_eval` with `require('net').createConnection()` to localhost
+- **Device context:** `android_bridge` `/battery`
+
+**Do NOT use `shell_exec` for any probe.** No `ping`, no `curl`, no `cat`. These commands produce `FAIL` noise on Android.
+Do NOT attempt to read `/proc/net/*`, `/sys/class/net/*`, `/etc/resolv.conf`.
 
 ## Use when
 - "scan my network" / "network scan"
@@ -72,15 +75,61 @@ ALL output MUST follow these Telegram-optimized formatting rules:
 
 You have three modes. Default to **Network Audit** unless the user asks for something specific.
 
-**Allowed tools:**
-- `shell_exec` with read-only commands: `ping`, `curl`, `date`, `echo`
+**Allowed tools — ONLY these:**
 - `android_bridge` calls: `/network`, `/battery`, `/storage`, `/ping`
-- `js_eval` for data processing
-- No shell operators (`|`, `||`, `&&`, `;`, `>`, `<`) — run each command as a separate `shell_exec` call
+- `js_eval` for ALL network probes and data processing
+- **NO `shell_exec`** — do not use it at all in this skill
+
+### js_eval Probe Patterns
+
+Use these `js_eval` snippets for network probing. Each returns a JSON result.
+
+**Latency probe (HTTPS endpoint):**
+```javascript
+const https = require('https');
+const start = Date.now();
+const url = 'https://api.telegram.org';
+const req = https.get(url, { timeout: 5000 }, (res) => {
+  res.resume();
+  res.on('end', () => {
+    const ms = Date.now() - start;
+    process.stdout.write(JSON.stringify({ url, status: res.statusCode, latencyMs: ms, ok: true }));
+  });
+});
+req.on('timeout', () => { req.destroy(); process.stdout.write(JSON.stringify({ url, ok: false, error: 'timeout' })); });
+req.on('error', (e) => { process.stdout.write(JSON.stringify({ url, ok: false, error: e.message })); });
+```
+
+**DNS resolution probe:**
+```javascript
+const dns = require('dns');
+const host = 'api.telegram.org';
+dns.resolve(host, (err, addresses) => {
+  if (err) {
+    process.stdout.write(JSON.stringify({ host, ok: false, error: err.code }));
+  } else {
+    process.stdout.write(JSON.stringify({ host, ok: true, addresses }));
+  }
+});
+```
+
+**Local port probe (TCP connect):**
+```javascript
+const net = require('net');
+const port = 8765;
+const start = Date.now();
+const sock = net.createConnection({ host: '127.0.0.1', port, timeout: 3000 }, () => {
+  const ms = Date.now() - start;
+  sock.destroy();
+  process.stdout.write(JSON.stringify({ port, open: true, latencyMs: ms }));
+});
+sock.on('timeout', () => { sock.destroy(); process.stdout.write(JSON.stringify({ port, open: false, error: 'timeout' })); });
+sock.on('error', (e) => { process.stdout.write(JSON.stringify({ port, open: false, error: e.message })); });
+```
 
 ### Mode 1: Network Audit (default)
 
-Gather data from these Android-safe sources via separate tool calls:
+Gather data from these sources via separate tool calls:
 
 **Step 1 — Device & network info (android_bridge):**
 ```
@@ -88,33 +137,27 @@ POST /network  -> { type, ssid, ip, signalStrength, linkSpeed, frequency }
 POST /battery  -> { level, isCharging, chargeType }
 ```
 
-**Step 2 — Connectivity probes (shell_exec, each separate):**
-```
-ping -c 3 -W 3 1.1.1.1
-ping -c 3 -W 3 8.8.8.8
-```
+**Step 2 — Connectivity + latency probes (js_eval, each separate):**
+Run the HTTPS latency probe pattern for each endpoint:
+- `https://1.1.1.1` (Cloudflare)
+- `https://8.8.8.8` (Google DNS)
+- `https://api.telegram.org`
+- `https://www.google.com`
+- `https://api.anthropic.com`
 
-**Step 3 — DNS resolution health (shell_exec, each separate):**
-```
-ping -c 1 -W 5 api.telegram.org
-ping -c 1 -W 5 google.com
-ping -c 1 -W 5 api.anthropic.com
-```
+**Step 3 — DNS resolution health (js_eval, each separate):**
+Run the DNS resolve probe pattern for each hostname:
+- `api.telegram.org`
+- `google.com`
+- `api.anthropic.com`
 
-**Step 4 — Local service port checks (shell_exec, each separate):**
-```
-curl -s --connect-timeout 3 http://localhost:8765/ping
-curl -s --connect-timeout 3 http://localhost:3000/ 2>&1
-curl -s --connect-timeout 3 http://localhost:8080/ 2>&1
-```
+**Step 4 — Local service port checks (js_eval, each separate):**
+Run the TCP port probe pattern for each port:
+- `8765` (Android bridge)
+- `3000` (dev server)
+- `8080` (HTTP)
 
-**Step 5 — External connectivity probe (shell_exec, each separate):**
-```
-curl -s --connect-timeout 5 -o /dev/null -w "%{http_code}" https://api.telegram.org
-curl -s --connect-timeout 5 -o /dev/null -w "%{http_code}" https://api.anthropic.com
-```
-
-**Step 6 — Compile report using js_eval:**
+**Step 5 — Compile report:**
 Process all gathered data, calculate risk score, and format the report.
 
 **Output format (Telegram-optimized):**
@@ -122,7 +165,7 @@ Process all gathered data, calculate risk score, and format the report.
 ```
 🛡️ **NetWatch Audit Report**
 📅 <timestamp> • Scan took <X>s
-📡 Source: Android APIs + safe network probes
+📡 Source: Android APIs + JS network probes
 
 📊 **Risk Score: X/100 (LEVEL)**
 
@@ -141,8 +184,8 @@ Process all gathered data, calculate risk score, and format the report.
 • IP: `<address>`
 • Signal: <level> (<quality>)
 • DNS: ✅ resolving / ❌ failing
-• Telegram API: ✅ reachable / ❌ down
-• Anthropic API: ✅ reachable / ❌ down
+• Telegram API: ✅ reachable (<X>ms) / ❌ down
+• Anthropic API: ✅ reachable (<X>ms) / ❌ down
 
 🔌 **Local Services**
 • `localhost:8765` (bridge): ✅ / ❌
@@ -171,27 +214,25 @@ Process all gathered data, calculate risk score, and format the report.
 - Telegram API unreachable: +20
 - Anthropic API unreachable: +15
 - High latency (>200ms avg): +10
-- Packet loss detected: +15
 - Android bridge not responding: +20
 - Unknown local port open: +5 each
 - Expected services not running: +5
 
 ### Mode 2: Port Watch
 
-Check local service ports using curl connection probes:
+Check local service ports using js_eval TCP connect probes:
 
-**Standard ports to check (shell_exec, each separate):**
-```
-curl -s --connect-timeout 3 http://localhost:8765/ping
-curl -s --connect-timeout 3 http://localhost:3000/ 2>&1
-curl -s --connect-timeout 3 http://localhost:8080/ 2>&1
-curl -s --connect-timeout 3 http://localhost:5555/ 2>&1
-curl -s --connect-timeout 3 http://localhost:4444/ 2>&1
-curl -s --connect-timeout 3 http://localhost:22/ 2>&1
-curl -s --connect-timeout 3 http://localhost:53/ 2>&1
-curl -s --connect-timeout 3 http://localhost:80/ 2>&1
-curl -s --connect-timeout 3 http://localhost:443/ 2>&1
-```
+**Standard ports to check (js_eval, each separate):**
+Run the TCP port probe pattern for each port:
+- `8765` (Android bridge)
+- `3000` (dev server)
+- `8080` (HTTP)
+- `5555` (ADB)
+- `4444` (reverse shell)
+- `22` (SSH)
+- `53` (DNS)
+- `80` (HTTP)
+- `443` (HTTPS)
 
 **Output format (Telegram-optimized):**
 
@@ -226,16 +267,21 @@ curl -s --connect-timeout 3 http://localhost:443/ 2>&1
 
 Check connectivity and latency to key endpoints:
 
-**Step 1 — Latency probes (shell_exec, each separate):**
-```
-ping -c 3 -W 3 1.1.1.1
-ping -c 3 -W 3 8.8.8.8
-ping -c 3 -W 3 api.telegram.org
-ping -c 3 -W 3 google.com
-ping -c 3 -W 3 api.anthropic.com
-```
+**Step 1 — Latency probes (js_eval, each separate):**
+Run the HTTPS latency probe pattern for each endpoint:
+- `https://1.1.1.1` (Cloudflare)
+- `https://8.8.8.8` (Google DNS)
+- `https://api.telegram.org`
+- `https://www.google.com`
+- `https://api.anthropic.com`
 
-**Step 2 — Network info (android_bridge):**
+**Step 2 — DNS resolution (js_eval, each separate):**
+Run the DNS resolve probe pattern for:
+- `google.com`
+- `api.telegram.org`
+- `api.anthropic.com`
+
+**Step 3 — Network info (android_bridge):**
 ```
 POST /network
 ```
@@ -275,16 +321,16 @@ POST /network
 If any probe is unavailable or returns an error:
 - Report it as: `ℹ️ Unavailable on this Android sandbox`
 - Do NOT retry failed probes
-- Do NOT attempt alternative blocked paths
+- Do NOT fall back to `shell_exec`
 - Move on and compile the report with available data
 - Always produce a complete report even if some probes fail
 
 ## Constraints
 - **Read-only** — no iptables, no ifconfig, no route modifications
+- **Do NOT use `shell_exec`** — no `ping`, `curl`, `cat`, `ls`, or any shell command
 - **Do NOT** read from `/proc/net/*`, `/sys/class/net/*`, `/etc/resolv.conf`
-- Use only safe commands: `ping`, `curl`, `date`, `echo`
-- No shell operators (`|`, `||`, `&&`, `;`, `>`, `<`) — separate `shell_exec` calls
-- Use `js_eval` for data processing and formatting
-- Target platform is Android — no desktop/Linux-specific commands
+- Use `js_eval` with Node.js `https`, `dns`, `net` modules for all probes
+- Use `android_bridge` for device info
+- Target platform is Android — no desktop-specific commands
 - Never install packages or modify system configuration
-- If a command fails, note it gracefully and continue
+- If a probe fails, note it gracefully and continue
