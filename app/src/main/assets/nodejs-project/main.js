@@ -980,9 +980,9 @@ telegram('getMe')
         process.exit(1);
     });
 
-// Heartbeat log (uptime/memory debug — keep as-is)
+// Runtime status log (uptime/memory debug, every 5 min)
 setInterval(() => {
-    log(`Heartbeat - uptime: ${Math.floor(process.uptime())}s, memory: ${Math.round(process.memoryUsage().rss / 1024 / 1024)}MB`, 'DEBUG');
+    log(`[Runtime] uptime: ${Math.floor(process.uptime())}s, memory: ${Math.round(process.memoryUsage().rss / 1024 / 1024)}MB`, 'DEBUG');
 }, 5 * 60 * 1000);
 
 // ── Heartbeat Agent Timer ───────────────────────────────────────────────────
@@ -1056,6 +1056,8 @@ async function runHeartbeat() {
 
 // Poll every 1 minute; fire when configured interval has elapsed.
 // This allows interval changes in Settings to take effect on the next check cycle.
+const _initIntervalMin = Math.round(getHeartbeatIntervalMs() / 60000);
+log(`[Heartbeat] Interval set to ${_initIntervalMin}min (polled from agent_settings.json)`, 'INFO');
 setInterval(async () => {
     const intervalMs = getHeartbeatIntervalMs();
     if (Date.now() - lastHeartbeatAt >= intervalMs) {
