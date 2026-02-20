@@ -546,6 +546,49 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('The log is auto-rotated at 5 MB (old entries archived to node_debug.log.old).');
     lines.push('');
 
+    // Self-Diagnosis Playbook — structured troubleshooting (BAT-233)
+    lines.push('## Self-Diagnosis Playbook');
+    lines.push('When something goes wrong, be methodical. Never say "I don\'t know" — say "Let me check" and use your tools to investigate.');
+    lines.push('');
+    lines.push('**If you stop receiving messages:**');
+    lines.push('1. Check for recent Telegram poll activity: shell_exec with "grep -i poll node_debug.log" (look for recent timestamps)');
+    lines.push('2. Check your health file: read agent_health_state — is apiStatus healthy?');
+    lines.push('3. Check for DNS/network errors: shell_exec with "grep -i ENOTFOUND node_debug.log"');
+    lines.push('4. Suggest: "Try /new to archive this session and start fresh"');
+    lines.push('5. Suggest: "Check your internet connection — I may have lost network"');
+    lines.push('');
+    lines.push('**If a skill won\'t trigger:**');
+    lines.push('1. Check if the skill file exists: ls skills/ and look for the SKILL.md');
+    lines.push('2. Check trigger keywords: read the skill file and compare triggers to what the user said');
+    lines.push('3. Check if requirements are gated: the skill may need an API key or binary that is missing');
+    lines.push('4. Explain what triggers the skill and suggest: "Try saying exactly: [trigger phrase]"');
+    lines.push('');
+    lines.push('**If health keeps going stale:**');
+    lines.push('1. Likely cause: Node.js event loop blocked or network dropping repeatedly');
+    lines.push('2. Check: shell_exec with "grep -i error node_debug.log" for recent failures');
+    lines.push('3. Check: is device on WiFi? Any DNS failures? (grep ENOTFOUND or ETIMEDOUT)');
+    lines.push('4. Suggest: "Disable battery optimization for SeekerClaw in Android Settings" and "Check WiFi stability"');
+    lines.push('');
+    lines.push('**If conversation seems corrupted or loops:**');
+    lines.push('1. Use /new to archive and clear conversation history (safe — saves to memory first)');
+    lines.push('2. Use /reset to wipe conversation without backup (nuclear option)');
+    lines.push('3. Tool-use loop protection: max 5 tool calls per turn — if you hit this, summarize progress and ask the user to continue');
+    lines.push('');
+    lines.push('**If a tool fails:**');
+    lines.push('1. shell_exec: check if the command is in the allowlist (cat, ls, mkdir, cp, mv, echo, pwd, which, head, tail, wc, sort, uniq, grep, find, curl, ping, date, df, du, uname, printenv)');
+    lines.push('2. js_eval: check the 10,000-character code limit and 30s timeout');
+    lines.push('3. android_* bridge tools: check if the required permission is granted (e.g., SEND_SMS for android_sms, ACCESS_FINE_LOCATION for android_location)');
+    lines.push('4. Solana tools: check if wallet is configured — read solana_wallet.json');
+    lines.push('5. Jupiter tools: check if Jupiter API key is set — suggest Settings > Configuration > Jupiter API Key');
+    lines.push('');
+    lines.push('**If API calls keep failing:**');
+    lines.push('1. Read agent_health_state — check consecutiveFailures and lastError');
+    lines.push('2. Auth error (401/403): API key may be invalid — tell user to check Settings');
+    lines.push('3. Rate limit (429): slow down — reduce tool calls and response length');
+    lines.push('4. Billing error (402): tell user to check their Anthropic billing at console.anthropic.com');
+    lines.push('5. Network error: check connectivity with js_eval using require("https").get("https://api.anthropic.com") or shell_exec "curl -s https://api.anthropic.com"');
+    lines.push('');
+
     // Project Context - OpenClaw injects SOUL.md and memory here
     lines.push('# Project Context');
     lines.push('');
