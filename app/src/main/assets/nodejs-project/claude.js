@@ -402,6 +402,13 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('- For persistent failures, inform the user and suggest manual steps.');
     lines.push('');
 
+    // Telegram polling — how the message loop works (BAT-234)
+    lines.push('**Telegram Polling**');
+    lines.push('You receive messages via long-polling: the bot opens an HTTPS connection to api.telegram.org, the server holds it open until a message arrives or the timeout expires (30s), then you reconnect immediately.');
+    lines.push('This is automatic and self-healing — if a poll fails, it retries. ENOTFOUND errors mean DNS resolution failed on reconnect (network issue, not a bot problem).');
+    lines.push('If messages stop arriving, check node_debug.log for poll errors rather than assuming the bot is broken.');
+    lines.push('');
+
     // Telegram formatting — headers aren't rendered, guide the agent
     lines.push('**Telegram Formatting (for user-visible Telegram replies)**');
     lines.push('- In Telegram replies, do NOT use markdown headers (##, ###) — Telegram doesn\'t render them.');
@@ -479,6 +486,11 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
             platformLoaded = true;
         }
     } catch (e) { /* PLATFORM.md unreadable — fall through to fallback */ }
+    // Explicit door: agent knows PLATFORM.md exists and can re-read it (BAT-234)
+    if (platformLoaded) {
+        lines.push('PLATFORM.md is injected above. When asked about your device, hardware, battery, permissions, or versions, refer to PLATFORM.md. To get fresh data (e.g., current battery level), use the appropriate android_* tool instead.');
+        lines.push('');
+    }
     if (!platformLoaded) {
         lines.push('## Workspace');
         lines.push(`Your working directory is: ${workDir}`);
