@@ -3,10 +3,23 @@ name: netwatch
 description: "Network monitoring and security audit. Use when: user asks to scan network, check open ports, network audit, who's on wifi, check connection, port scan, firewall check, network status, or network security. Don't use when: user asks about crypto transactions (use solana tools) or web search (use research skill)."
 version: "1.0.0"
 emoji: "🛡️"
+triggers:
+  - "scan my network"
+  - "network scan"
+  - "check open ports"
+  - "open ports"
+  - "network audit"
+  - "network security"
+  - "what's on my wifi"
+  - "who's on my network"
+  - "check my connection"
+  - "network status"
+  - "port scan"
+  - "firewall check"
 metadata:
   openclaw:
     requires:
-      bins: ["ss", "ip"]
+      bins: ["ip"]
 ---
 
 # NetWatch — Network Monitor & Security Audit
@@ -51,7 +64,7 @@ Run these commands via `shell_exec` and compile a report:
 ip addr show | grep -E 'state UP|inet '
 
 # WiFi info (if available)
-dumpsys wifi | grep -E 'SSID|rssi|linkSpeed' 2>/dev/null || echo "WiFi info not available"
+(dumpsys wifi | grep -E 'SSID|rssi|linkSpeed') 2>/dev/null || echo "WiFi info not available"
 
 # Open listening ports + owning process
 ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null
@@ -109,7 +122,7 @@ What would you like me to investigate further?
 - Any port above 49152 with unknown process
 
 **Known suspicious destinations:**
-- Connections to IPs in unusual geolocations
+- Connections to unexpected or unknown external IP addresses (non-private ranges)
 - Many connections to the same IP
 - Connections on non-standard ports to unknown hosts
 
@@ -156,7 +169,7 @@ ping -c 3 1.1.1.1 2>/dev/null
 ping -c 3 api.telegram.org 2>/dev/null
 
 # DNS resolution check
-nslookup google.com 2>/dev/null || host google.com 2>/dev/null
+nslookup google.com 2>/dev/null || host google.com 2>/dev/null || echo "DNS tools (nslookup/host) not available; skipping DNS resolution check."
 
 # Check for VPN/proxy indicators
 ip route show table all 2>/dev/null | grep -i 'tun\|tap\|wg'

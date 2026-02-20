@@ -59,7 +59,7 @@ run a network security audit
   - WiFi: HomeNetwork-5G (signal: -45 dBm)
 
 ✅ Action Checklist
-  1. Disable ADB over network when not in use (adb tcpip off)
+  1. Disable ADB over network when not in use (if enabled with "adb tcpip 5555", revert with "adb usb")
   2. Investigate 3 unknown outbound connections
   3. Consider using DNS-over-HTTPS for privacy
 
