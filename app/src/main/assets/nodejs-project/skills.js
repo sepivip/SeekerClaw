@@ -319,7 +319,7 @@ function parseSkillFile(content, skillDir) {
 // Convert UPPER_SNAKE_CASE env var name to camelCase config key
 // e.g., BRAVE_API_KEY → braveApiKey
 function envToCamelCase(envVar) {
-    return envVar.toLowerCase().replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+    return envVar.toLowerCase().replace(/_(.)/g, (_, c) => c.toUpperCase());
 }
 
 // Resolve dot-path config key (e.g., 'solana.wallet' → config.solana.wallet)
@@ -357,7 +357,7 @@ function checkSkillRequirements(skill) {
     for (const envVar of (req.env || [])) {
         const fromEnv = process.env[envVar];
         const fromConfig = config[envToCamelCase(envVar)];
-        if (!fromEnv && !fromConfig) {
+        if (fromEnv == null && fromConfig == null) {
             missing.push(`env:${envVar}`);
         }
     }
@@ -365,7 +365,7 @@ function checkSkillRequirements(skill) {
     // config: check config keys (dot-path notation)
     for (const key of (req.config || [])) {
         const val = resolveConfigKey(key);
-        if (val == null || val === '') {
+        if (val === null || val === undefined) {
             missing.push(`config:${key}`);
         }
     }
@@ -463,11 +463,11 @@ function loadSkills() {
     });
 
     if (isFirstLoad && (loaded.length > 0 || gated.length > 0)) {
+        const gatedSuffix = gated.length > 0 ? `, ${gated.length} gated (missing requirements)` : '';
+        log(`[Skills] ${loaded.length} loaded (${dirCount} dir, ${fileCount} flat)${gatedSuffix}`, 'INFO');
         for (const g of gated) {
             log(`[Skills] Skipping '${g.name}' — missing: ${g.missing.join(', ')}`, 'INFO');
         }
-        const gatedSuffix = gated.length > 0 ? `, ${gated.length} gated (missing requirements)` : '';
-        log(`[Skills] ${loaded.length} loaded (${dirCount} dir, ${fileCount} flat)${gatedSuffix}`, 'INFO');
         _firstLoadLogged = true;
     }
 
