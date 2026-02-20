@@ -367,7 +367,8 @@ Platform: \`${platform}\``;
                     const icon = level === 'ERROR' ? '🔴' : level === 'WARN' ? '🟡' : '⚪';
                     return `${icon} ${msg}`;
                 }).join('\n');
-                return `**Last ${last10.length} log entries**\n\n\`\`\`\n${formatted}\n\`\`\``;
+                // Re-apply redaction in case early startup logs predate setRedactFn()
+                return `**Last ${last10.length} log entries**\n\n\`\`\`\n${redactSecrets(formatted)}\n\`\`\``;
             } catch (e) {
                 return `Failed to read logs: ${e.message}`;
             }
