@@ -216,10 +216,13 @@ function parseSkillFile(content, skillDir) {
             if (frontmatter.description) skill.description = frontmatter.description;
             if (frontmatter.version) skill.version = frontmatter.version;
             if (frontmatter.triggers) {
-                skill.triggers = toArray(frontmatter.triggers)
+                const parsed = toArray(frontmatter.triggers)
                     .map(t => String(t).trim().toLowerCase())
                     .filter(Boolean);
-                skill._triggersFromFrontmatter = true;
+                if (parsed.length > 0) {
+                    skill.triggers = parsed;
+                    skill._triggersFromFrontmatter = true;
+                }
             }
             if (frontmatter.emoji) skill.emoji = frontmatter.emoji;
 
