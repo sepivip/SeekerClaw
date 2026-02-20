@@ -1,7 +1,7 @@
 ---
 name: netwatch
 description: "Network monitoring and security audit. Use when: user asks to scan network, check open ports, network audit, who's on wifi, check connection, port scan, firewall check, network status, or network security. Don't use when: user asks about crypto transactions (use solana tools) or web search (use research skill)."
-version: "2.3.0"
+version: "2.3.1"
 emoji: "🛡️"
 triggers:
   - "scan my network"
@@ -33,7 +33,7 @@ This skill runs entirely within the Node.js runtime and Android bridge. It does 
 **Probe methods used:**
 - **Network info:** `android_bridge` `/network` endpoint (WiFi SSID, IP, type, signal)
 - **Connectivity + latency:** `js_eval` with Node.js `https.get()` + `Date.now()` timing
-- **DNS health:** `js_eval` with `require('dns').resolve()`
+- **DNS health:** `js_eval` with `require('dns').promises.resolve()`
 - **Port probing:** `js_eval` with `require('net').createConnection()` to localhost
 - **Device context:** `android_bridge` `/battery`
 
@@ -144,49 +144,66 @@ You have four modes. Default to **Network Audit** unless the user asks for somet
 
 ### js_eval Probe Patterns
 
-Use these `js_eval` snippets for network probing. Each returns a JSON result.
+Use these `js_eval` snippets for network probing. Each returns a JSON string via `return`.
+
+**IMPORTANT — js_eval sandbox rules:**
+- **DO NOT use `process.stdout.write()`** — `process.stdout` is undefined in the sandbox and will crash.
+- **Use `return JSON.stringify(...)` to output results** — the return value is captured automatically.
+- **Wrap ALL code in try/catch** — unhandled errors crash the scan. Always return a structured error object.
+- **Use promise-based APIs** — async/await is supported. Never use raw callbacks.
+- **DNS: use `dns.promises`** — callback-based `dns.resolve()` will crash. Use `require('dns').promises.resolve()`.
 
 **Latency probe (HTTPS endpoint):**
 ```javascript
-const https = require('https');
-const start = Date.now();
-const url = 'https://api.telegram.org';
-const req = https.get(url, { timeout: 5000 }, (res) => {
-  res.resume();
-  res.on('end', () => {
-    const ms = Date.now() - start;
-    process.stdout.write(JSON.stringify({ url, status: res.statusCode, latencyMs: ms, ok: true }));
+try {
+  const https = require('https');
+  const url = 'https://api.telegram.org';
+  const start = Date.now();
+  const result = await new Promise((resolve) => {
+    const req = https.get(url, { timeout: 5000 }, (res) => {
+      res.resume();
+      res.on('end', () => resolve({ url, status: res.statusCode, latencyMs: Date.now() - start, ok: true }));
+    });
+    req.on('timeout', () => { req.destroy(); resolve({ url, ok: false, error: 'timeout' }); });
+    req.on('error', (e) => resolve({ url, ok: false, error: e.message }); });
   });
-});
-req.on('timeout', () => { req.destroy(); process.stdout.write(JSON.stringify({ url, ok: false, error: 'timeout' })); });
-req.on('error', (e) => { process.stdout.write(JSON.stringify({ url, ok: false, error: e.message })); });
+  return JSON.stringify(result);
+} catch (e) {
+  return JSON.stringify({ url: 'https://api.telegram.org', ok: false, error: e.message });
+}
 ```
 
 **DNS resolution probe:**
 ```javascript
-const dns = require('dns');
-const host = 'api.telegram.org';
-dns.resolve(host, (err, addresses) => {
-  if (err) {
-    process.stdout.write(JSON.stringify({ host, ok: false, error: err.code }));
-  } else {
-    process.stdout.write(JSON.stringify({ host, ok: true, addresses }));
-  }
-});
+try {
+  const dns = require('dns').promises;
+  const host = 'api.telegram.org';
+  const addresses = await dns.resolve(host);
+  return JSON.stringify({ host, ok: true, addresses });
+} catch (e) {
+  return JSON.stringify({ host: 'api.telegram.org', ok: false, error: e.code || e.message });
+}
 ```
 
 **Local port probe (TCP connect):**
 ```javascript
-const net = require('net');
-const port = 8765;
-const start = Date.now();
-const sock = net.createConnection({ host: '127.0.0.1', port, timeout: 3000 }, () => {
-  const ms = Date.now() - start;
-  sock.destroy();
-  process.stdout.write(JSON.stringify({ port, open: true, latencyMs: ms }));
-});
-sock.on('timeout', () => { sock.destroy(); process.stdout.write(JSON.stringify({ port, open: false, error: 'timeout' })); });
-sock.on('error', (e) => { process.stdout.write(JSON.stringify({ port, open: false, error: e.message })); });
+try {
+  const net = require('net');
+  const port = 8765;
+  const start = Date.now();
+  const result = await new Promise((resolve) => {
+    const sock = net.createConnection({ host: '127.0.0.1', port, timeout: 3000 }, () => {
+      const ms = Date.now() - start;
+      sock.destroy();
+      resolve({ port, open: true, latencyMs: ms });
+    });
+    sock.on('timeout', () => { sock.destroy(); resolve({ port, open: false, error: 'timeout' }); });
+    sock.on('error', (e) => resolve({ port, open: false, error: e.message }); });
+  });
+  return JSON.stringify(result);
+} catch (e) {
+  return JSON.stringify({ port: 8765, open: false, error: e.message });
+}
 ```
 
 ### Mode 1: Network Audit (default)
@@ -447,29 +464,35 @@ For each target IP, run TCP port probe on these ports:
 
 Use the TCP port probe pattern but replace `127.0.0.1` with the target IP:
 ```javascript
-const net = require('net');
-const port = 22;
-const host = '192.168.31.89';
-const start = Date.now();
-const sock = net.createConnection({ host, port, timeout: 3000 }, () => {
-  const ms = Date.now() - start;
-  sock.destroy();
-  process.stdout.write(JSON.stringify({ host, port, open: true, latencyMs: ms }));
-});
-sock.on('timeout', () => { sock.destroy(); process.stdout.write(JSON.stringify({ host, port, open: false, error: 'timeout' })); });
-sock.on('error', (e) => { process.stdout.write(JSON.stringify({ host, port, open: false, error: e.message })); });
+try {
+  const net = require('net');
+  const port = 22;
+  const host = '192.168.31.89';
+  const start = Date.now();
+  const result = await new Promise((resolve) => {
+    const sock = net.createConnection({ host, port, timeout: 3000 }, () => {
+      const ms = Date.now() - start;
+      sock.destroy();
+      resolve({ host, port, open: true, latencyMs: ms });
+    });
+    sock.on('timeout', () => { sock.destroy(); resolve({ host, port, open: false, error: 'timeout' }); });
+    sock.on('error', (e) => resolve({ host, port, open: false, error: e.message }); });
+  });
+  return JSON.stringify(result);
+} catch (e) {
+  return JSON.stringify({ host: '192.168.31.89', port: 22, open: false, error: e.message });
+}
 ```
 
 **Step 2 — DNS reverse lookup (js_eval):**
 ```javascript
-const dns = require('dns');
-dns.reverse('192.168.31.89', (err, hostnames) => {
-  if (err) {
-    process.stdout.write(JSON.stringify({ ok: false, error: err.code }));
-  } else {
-    process.stdout.write(JSON.stringify({ ok: true, hostnames }));
-  }
-});
+try {
+  const dns = require('dns').promises;
+  const hostnames = await dns.reverse('192.168.31.89');
+  return JSON.stringify({ ok: true, hostnames });
+} catch (e) {
+  return JSON.stringify({ ok: false, error: e.code || e.message });
+}
 ```
 
 **Step 3 — Compile report (single message, no progress narration):**
