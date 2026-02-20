@@ -935,7 +935,9 @@ telegram('getMe')
             startDbSummaryInterval();
             startStatsServer();
 
-            // Agent health heartbeat: write every 60s for staleness detection (BAT-134)
+            // Agent health heartbeat: write immediately on startup (prevents false "stale"
+            // when Kotlin reads the old file before the first interval tick), then every 60s.
+            writeAgentHealthFile();
             setInterval(() => writeAgentHealthFile(), 60000);
 
             // Flush old updates to avoid re-processing messages after restart
