@@ -399,8 +399,8 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 > **IMPORTANT:** SeekerClaw must stay in sync with OpenClaw updates. See `OPENCLAW_TRACKING.md` for full details.
 
 ### Current Versions
-- **OpenClaw Reference:** 2026.2.14 (commit e927fd1)
-- **Last Sync Review:** 2026-02-19
+- **OpenClaw Reference:** 2026.2.20
+- **Last Sync Review:** 2026-02-20
 
 ### Quick Update Check
 ```bash

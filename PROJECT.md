@@ -8,7 +8,7 @@ SeekerClaw turns a Solana Seeker phone into a 24/7 personal AI agent you control
 
 ## Elevator Pitch
 
-SeekerClaw embeds a full Node.js runtime inside an Android app, running an OpenClaw-compatible AI gateway as a foreground service. Users interact with their agent through Telegram — the app itself is minimal (setup, status, logs, settings). The agent has 56 tools, 34 skills (19 bundled + 13 workspace + 2 user-created), ranked memory search, cron scheduling, Android device control, Solana wallet integration, and web intelligence — all running locally on the phone, 24/7.
+SeekerClaw embeds a full Node.js runtime inside an Android app, running an OpenClaw-compatible AI gateway as a foreground service. Users interact with their agent through Telegram — the app itself is minimal (setup, status, logs, settings). The agent has 56 tools, 35 skills (20 bundled + 13 workspace + 2 user-created), ranked memory search, cron scheduling, Android device control, Solana wallet integration, and web intelligence — all running locally on the phone, 24/7.
 
 ## What It Is
 
@@ -33,7 +33,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 | AI Provider | Anthropic Claude API | Opus 4.6 default, Sonnet 4.6, Sonnet 4.5, Haiku 4.5 |
 | Messaging | Telegram Bot API (grammy) | — |
 | Database | SQL.js (WASM SQLite) | 1.12.0 |
-| OpenClaw Parity | OpenClaw gateway (ported) | 2026.2.14 |
+| OpenClaw Parity | OpenClaw gateway (ported) | 2026.2.20 |
 | Web Search | Brave Search + Perplexity Sonar | — |
 | Wallet | Solana Web3.js + Jupiter API | — |
 | Build | Gradle (Kotlin DSL) | — |
@@ -51,6 +51,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 - **Debug log self-diagnosis** — Agent knows about `node_debug.log` for troubleshooting tool failures, errors, and silent responses. Log rotation at 5MB with `.old` archive
 - **Structured log levels** — DEBUG/INFO/WARN/ERROR pipeline with per-level routing; UI log viewer color-coded by level; LogCollector filters noise from debug output
 - **Skill routing** — Routing blocks prevent conflicting skills from firing together; reply tag first-token rule for reliable `[[reply_to_current]]` detection
+- **Skill requirements gating** — Skills with `requires.bins` or `requires.env` in YAML frontmatter are checked at runtime; unmet requirements are reported and skill is skipped
 
 ### Memory System
 - **SOUL.md** — Agent personality (user-editable)
@@ -117,15 +118,20 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 | Command | Action |
 |---------|--------|
 | `/start` | Welcome message |
+| `/help` | List available commands |
 | `/status` | System status |
 | `/new` | Save summary, clear conversation |
 | `/reset` | Clear conversation (no summary) |
 | `/soul` | Show personality |
 | `/memory` | Show long-term memory |
 | `/skills` | List installed skills |
+| `/version` | Show app/OpenClaw/Node versions |
+| `/logs` | Show recent debug log entries |
+| `/approve` | Approve pending confirmation |
+| `/deny` | Deny pending confirmation |
 
-### Skills (19 bundled + 13 workspace, version-aware seeding)
-**Bundled skills (OpenClaw format, seeded by ConfigManager.kt with SHA-256 integrity + version tracking):** bookmark, briefing, calclaw (AI calorie tracker), calculator, crypto-prices, define, github, joke, movie-tv, news, notes, quote, reminders, research, summarize, timer, todo, translate, weather
+### Skills (20 bundled + 13 workspace, version-aware seeding)
+**Bundled skills (OpenClaw format, seeded by ConfigManager.kt with SHA-256 integrity + version tracking):** bookmark, briefing, calclaw (AI calorie tracker), calculator, crypto-prices, define, github, joke, movie-tv, netwatch (network monitoring & security audit), news, notes, quote, reminders, research, summarize, timer, todo, translate, weather
 **Workspace skills (agent-usable examples):** crypto-prices, device-status, dictionary, exchange-rates, github, location, movie-tv, phone-call, recipe, sms, solana-dapp, solana-wallet, speak
 **Skill format:** YAML frontmatter (name, description, version, emoji, requires) — see `SKILL-FORMAT.md`
 **Skill install** — `skill_install` tool to install skills from URL or Telegram file attachment, with diagnostics via `/skills` command
@@ -149,7 +155,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 - **Setup wizard** — QR scan or manual API key entry, OAuth/setup token support, haptic feedback
 - **Dashboard** — Status with pulse animation (running) + dimming (stopped), uptime, message stats, active uplinks, mini terminal, API health monitoring (green/amber/red), dismissible error/network banners, deploy button disabled state when config incomplete
 - **Logs viewer** — Color-coded, auto-scrolling monospace, stable keys for performance
-- **Settings** — Collapsible sections with animation, edit config with masked fields, required field indicators (*), model dropdown, auto-start, battery optimization, export/import (allowlist-based, size-capped, auto-backup before import), wallet copy button, MCP server management (add/edit/remove/toggle), visual escalation for danger zone, semantic action colors (green positive, red danger), accessibility content descriptions on all icons
+- **Settings** — Collapsible sections with animation, edit config with masked fields, required field indicators (*), model dropdown, auto-start, battery optimization, export/import (allowlist-based, size-capped, auto-backup before import), wallet copy button, MCP server management (add/edit/remove/toggle), visual escalation for danger zone, semantic action colors (green positive, red danger), accessibility content descriptions on all icons, permission revoke dialog on granted toggles
 - **Skills tab** — Installed skills list with search, skill detail view, marketplace teaser
 - **System screen** — API usage stats, memory index status, colored accent borders on stat cards
 - **Foreground service** — START_STICKY with wake lock, boot receiver, watchdog (30s health check), heartbeat end-to-end probe
@@ -212,14 +218,14 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Metric | Count |
 |--------|-------|
-| Total commits | 225 |
-| PRs merged | 147 |
+| Total commits | 235 |
+| PRs merged | 155 |
 | Tools | 56 (9 Jupiter, 13 Android bridge, web search/fetch, memory, cron, skill_install, etc.) + MCP dynamic |
-| Skills | 34 (19 bundled + 13 workspace + 2 user-created) |
+| Skills | 35 (20 bundled + 13 workspace + 2 user-created) |
 | Android Bridge endpoints | 18+ |
-| Telegram commands | 7 |
-| Lines of JS | ~10,540 (main.js 906 + 13 extracted modules) |
-| Lines of Kotlin | ~11,520 |
+| Telegram commands | 12 |
+| Lines of JS | ~10,820 (main.js 1,096 + 13 extracted modules) |
+| Lines of Kotlin | ~11,600 |
 | SQL.js tables | 4 |
 | Themes | 1 (DarkOps only) |
 
@@ -240,7 +246,7 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | WEBSITE.md Content | config.js Status | Action |
 |-------------------|-----------------|--------|
-| Stats: 55+ tools, 119+ PRs | Shows 43+ tools, 78+ commits | Update config.js stats[] |
+| Stats: 56+ tools, 155+ PRs | Shows 43+ tools, 78+ commits | Update config.js stats[] |
 | Roadmap: 10 shipped items | Shows 10 items (outdated list) | Update roadmap.columns[0] |
 | Feature cards: updated descriptions | Stale descriptions | Update features.items[] + index.html |
 | "NFT tracking" in JSON-LD | Not implemented | Remove from index.html |
@@ -252,6 +258,14 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Date | Feature | PR |
 |------|---------|-----|
+| 2026-02-20 | Feat: enforce skill requirements gating at runtime (BAT-230) | #155 |
+| 2026-02-20 | Fix: suppress false trigger warning for YAML frontmatter skills | #154 |
+| 2026-02-20 | Feat: add netwatch skill — network monitoring and security audit | #153 |
+| 2026-02-20 | Feat: show revoke dialog when tapping granted permission toggles (BAT-223) | #152 |
+| 2026-02-20 | Fix: write agent health file immediately on startup (BAT-222) | #151 |
+| 2026-02-20 | Fix: rename misleading Heartbeat debug log to [Runtime] (BAT-221) | #150 |
+| 2026-02-20 | Fix: prevent duplicate [Health] logs from multi-process polling (BAT-217) | #149 |
+| 2026-02-20 | Feat: Telegram slash commands — /help, /status, /skill, /version, /logs, /approve, /deny (BAT-211) | #148 |
 | 2026-02-20 | Fix: remove updateHeartbeat() — was overwriting agent HEARTBEAT.md every 5 min (BAT-220) | #147 |
 | 2026-02-20 | Fix: owner gate hardening — block service start, reaction comment, WARN log (BAT-219) | #146 |
 | 2026-02-20 | Fix: cache hit rate denominator uses total tokens not just non-cached (BAT-218) | #145 |
