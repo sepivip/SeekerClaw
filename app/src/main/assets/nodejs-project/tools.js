@@ -233,7 +233,7 @@ const TOOLS = [
         input_schema: {
             type: 'object',
             properties: {
-                path: { type: 'string', description: 'File path relative to workspace (e.g., "notes.txt", "data/config.json")' }
+                path: { type: 'string', description: 'File path relative to workspace (e.g., "notes.txt", "data/results.json")' }
             },
             required: ['path']
         }
@@ -788,7 +788,7 @@ const TOOLS = [
     },
     {
         name: 'delete',
-        description: 'Delete a file from the workspace directory. Cannot delete protected system files (SOUL.md, MEMORY.md, IDENTITY.md, USER.md, HEARTBEAT.md, config.json, config.yaml, seekerclaw.db). Cannot delete directories — only individual files. Use this to clean up temporary files, old media downloads, or files you no longer need.',
+        description: 'Delete a file from the workspace directory. Cannot delete protected system files or database files. Cannot delete directories — only individual files. Use this to clean up temporary files, old media downloads, or files you no longer need.',
         input_schema: {
             type: 'object',
             properties: {
