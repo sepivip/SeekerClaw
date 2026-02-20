@@ -22,9 +22,15 @@ class SeekerClawApplication : Application() {
         }
         Analytics.setUserProperty("has_wallet", (!ConfigManager.getWalletAddress(this).isNullOrBlank()).toString())
 
-        // Start cross-process polling so UI picks up state/logs from :node process
-        ServiceState.startPolling(this)
-        LogCollector.startPolling(this)
+        // Start cross-process polling so UI picks up state/logs from :node process.
+        // Guard: only the main UI process should poll. The :node process writes state
+        // files — if it also polled, both processes would detect health transitions
+        // and write duplicate log entries to the shared service_logs file (BAT-217).
+        val isMainProcess = getProcessName() == packageName
+        if (isMainProcess) {
+            ServiceState.startPolling(this)
+            LogCollector.startPolling(this)
+        }
     }
 
     private fun createNotificationChannel() {
