@@ -219,6 +219,7 @@ function parseSkillFile(content, skillDir) {
                 skill.triggers = toArray(frontmatter.triggers)
                     .map(t => String(t).trim().toLowerCase())
                     .filter(Boolean);
+                skill._triggersFromFrontmatter = true;
             }
             if (frontmatter.emoji) skill.emoji = frontmatter.emoji;
 
@@ -319,7 +320,7 @@ function validateSkillFormat(skill, filePath) {
     if (!skill.name) warnings.push('missing "name"');
     if (!skill.description) warnings.push('missing "description"');
     if (!skill.version) warnings.push('missing "version" — add version field for auto-update support');
-    if (skill.triggers.length > 0 && skill.description) {
+    if (skill.triggers.length > 0 && skill.description && !skill._triggersFromFrontmatter) {
         warnings.push('has legacy "Trigger:" line — description-based matching preferred');
     }
     if (warnings.length > 0) {
