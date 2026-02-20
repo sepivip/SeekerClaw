@@ -8,7 +8,7 @@ SeekerClaw turns a Solana Seeker phone into a 24/7 personal AI agent you control
 
 ## Elevator Pitch
 
-SeekerClaw embeds a full Node.js runtime inside an Android app, running an OpenClaw-compatible AI gateway as a foreground service. Users interact with their agent through Telegram — the app itself is minimal (setup, status, logs, settings). The agent has 55 tools, 34 skills (19 bundled + 13 workspace + 2 user-created), ranked memory search, cron scheduling, Android device control, Solana wallet integration, and web intelligence — all running locally on the phone, 24/7.
+SeekerClaw embeds a full Node.js runtime inside an Android app, running an OpenClaw-compatible AI gateway as a foreground service. Users interact with their agent through Telegram — the app itself is minimal (setup, status, logs, settings). The agent has 56 tools, 34 skills (19 bundled + 13 workspace + 2 user-created), ranked memory search, cron scheduling, Android device control, Solana wallet integration, and web intelligence — all running locally on the phone, 24/7.
 
 ## What It Is
 
@@ -42,6 +42,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 
 ### AI Agent Core
 - **Claude integration** — Opus 4.6 (default), Sonnet 4.6, Sonnet 4.5, Haiku 4.5 selectable. Prompt caching, retry with backoff, rate-limit throttling, user-friendly error messages. OAuth/setup token support for Claude Pro/Max users.
+- **Telegram owner gate** — Service refuses to start without valid TELEGRAM_OWNER_ID; unauthorized users get reaction + comment warning; all gate events logged at WARN level
 - **MCP support** — Remote MCP (Model Context Protocol) servers via Streamable HTTP. Users add server URLs in Settings; agent discovers and uses tools at startup. Description sanitization, SHA-256 rug-pull detection, untrusted content wrapping, per-server + global rate limiting.
 - **Telegram bot** — HTML formatting (no markdown headers), native blockquotes, bidirectional reactions, file download with vision, file upload (telegram_send_file tool), long message chunking, quoted replies via `[[reply_to_current]]`, emoji rendering fixed, companion-tone message templates (TEMPLATES.md), context-aware `/start`, sent message ID tracking (ring buffer, 24h TTL) + `telegram_send` tool for same-turn delete flows, contextual status messages for long-running tools (🔍 Searching..., ⚙️ Running..., etc.), inline keyboard buttons via `telegram_send` with callback query handling
 - **SILENT_REPLY protocol** — Agent silently drops messages when it has nothing useful to say
@@ -57,7 +58,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 - **MEMORY.md** — Long-term memory via `memory_save` tool
 - **Daily notes** — `memory/YYYY-MM-DD.md` files via `daily_note` tool
 - **SQL.js memory search** — Files indexed into chunks with TF + recency ranked search
-- **HEARTBEAT.md** — Updated every 5 minutes with status
+- **HEARTBEAT.md** — Real agent probe heartbeat with configurable interval (not overwritten by app)
 - **Auto session summaries** — Generated on idle (10min), message checkpoints (50), `/new`, and shutdown
 
 ### Scheduling (Cron)
@@ -127,6 +128,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 **Bundled skills (OpenClaw format, seeded by ConfigManager.kt with SHA-256 integrity + version tracking):** bookmark, briefing, calclaw (AI calorie tracker), calculator, crypto-prices, define, github, joke, movie-tv, news, notes, quote, reminders, research, summarize, timer, todo, translate, weather
 **Workspace skills (agent-usable examples):** crypto-prices, device-status, dictionary, exchange-rates, github, location, movie-tv, phone-call, recipe, sms, solana-dapp, solana-wallet, speak
 **Skill format:** YAML frontmatter (name, description, version, emoji, requires) — see `SKILL-FORMAT.md`
+**Skill install** — `skill_install` tool to install skills from URL or Telegram file attachment, with diagnostics via `/skills` command
 
 ### Security
 - **Prompt injection defense** — Content Trust Policy in system prompt, `<<<EXTERNAL_UNTRUSTED_CONTENT>>>` boundary markers on all web_fetch/web_search results, 10-pattern suspicious content detection, Unicode homoglyph sanitization, zero-width space normalization
@@ -148,8 +150,9 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 - **Dashboard** — Status with pulse animation (running) + dimming (stopped), uptime, message stats, active uplinks, mini terminal, API health monitoring (green/amber/red), dismissible error/network banners, deploy button disabled state when config incomplete
 - **Logs viewer** — Color-coded, auto-scrolling monospace, stable keys for performance
 - **Settings** — Collapsible sections with animation, edit config with masked fields, required field indicators (*), model dropdown, auto-start, battery optimization, export/import (allowlist-based, size-capped, auto-backup before import), wallet copy button, MCP server management (add/edit/remove/toggle), visual escalation for danger zone, semantic action colors (green positive, red danger), accessibility content descriptions on all icons
+- **Skills tab** — Installed skills list with search, skill detail view, marketplace teaser
 - **System screen** — API usage stats, memory index status, colored accent borders on stat cards
-- **Foreground service** — START_STICKY with wake lock, boot receiver, watchdog (30s health check)
+- **Foreground service** — START_STICKY with wake lock, boot receiver, watchdog (30s health check), heartbeat end-to-end probe
 
 ## Features — In Progress
 
@@ -209,14 +212,14 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Metric | Count |
 |--------|-------|
-| Total commits | 208 |
-| PRs merged | 135 |
-| Tools | 55 (9 Jupiter, 13 Android bridge, web search/fetch, memory, cron, etc.) + MCP dynamic |
+| Total commits | 225 |
+| PRs merged | 147 |
+| Tools | 56 (9 Jupiter, 13 Android bridge, web search/fetch, memory, cron, skill_install, etc.) + MCP dynamic |
 | Skills | 34 (19 bundled + 13 workspace + 2 user-created) |
 | Android Bridge endpoints | 18+ |
 | Telegram commands | 7 |
-| Lines of JS | ~10,200 (main.js 789 + 12 extracted modules + mcp-client.js) |
-| Lines of Kotlin | ~10,600 |
+| Lines of JS | ~10,540 (main.js 906 + 13 extracted modules) |
+| Lines of Kotlin | ~11,520 |
 | SQL.js tables | 4 |
 | Themes | 1 (DarkOps only) |
 
@@ -249,6 +252,18 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Date | Feature | PR |
 |------|---------|-----|
+| 2026-02-20 | Fix: remove updateHeartbeat() — was overwriting agent HEARTBEAT.md every 5 min (BAT-220) | #147 |
+| 2026-02-20 | Fix: owner gate hardening — block service start, reaction comment, WARN log (BAT-219) | #146 |
+| 2026-02-20 | Fix: cache hit rate denominator uses total tokens not just non-cached (BAT-218) | #145 |
+| 2026-02-20 | Fix: deduplicate health transition logs at startup (BAT-217) | #144 |
+| 2026-02-20 | Fix: remove cost metrics from all UI surfaces (BAT-216) | #143 |
+| 2026-02-20 | Feat: heartbeat end-to-end — real agent probe + configurable interval (BAT-215) | #142 |
+| 2026-02-20 | Polish: settings order, brave hint text, onboarding color (BAT-214) | #141 |
+| 2026-02-20 | Feat: skills diagnostics + console filter button fix (BAT-213) | #140 |
+| 2026-02-20 | Fix: remove duplicate version field from bundled skill frontmatter (BAT-212) | #139 |
+| 2026-02-20 | Feat: Skills tab — installed skills list with search and marketplace teaser (BAT-205) | #138 |
+| 2026-02-20 | Fix: skill_install early-return race and YAML triggers not parsed (BAT-210) | #137 |
+| 2026-02-20 | Feat: skill_install tool — install skills from URL or Telegram attachment (BAT-209) | #136 |
 | 2026-02-19 | Fix: setup token session expiry + rate-limit tracking | #135 |
 | 2026-02-19 | Fix (P0): loadSkills import crash, conversation corruption, usage poll spam | #134 |
 | 2026-02-19 | Feat: structured log levels — DEBUG/INFO/WARN/ERROR pipeline with per-level routing (BAT-206) | #133 |
