@@ -363,7 +363,7 @@ Platform: \`${platform}\``;
                     const sep = line.indexOf('|');
                     if (sep === -1) return line;
                     const level = line.slice(0, sep);
-                    const msg = line.slice(sep + 1).substring(0, 120);
+                    const msg = redactSecrets(line.slice(sep + 1)).substring(0, 120);
                     const icon = level === 'ERROR' ? '🔴' : level === 'WARN' ? '🟡' : '⚪';
                     return `${icon} ${msg}`;
                 }).join('\n');
