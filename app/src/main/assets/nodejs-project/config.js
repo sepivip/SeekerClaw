@@ -108,10 +108,11 @@ let BRIDGE_TOKEN = normalizeSecret(config.bridgeToken || '');
 const USER_AGENT = 'SeekerClaw/1.0 (Android; +https://seekerclaw.com)';
 
 // BAT-244: API timeout config — config.json values > env vars > defaults
-const API_TIMEOUT_MS = Math.max(5000, parseInt(config.apiTimeoutMs || process.env.API_TIMEOUT_MS) || 60000);
-const API_TIMEOUT_RETRIES = Math.max(0, Math.min(5, parseInt(config.apiTimeoutRetries || process.env.API_TIMEOUT_RETRIES) || 2));
-const API_TIMEOUT_BACKOFF_MS = Math.max(100, parseInt(config.apiTimeoutBackoffMs || process.env.API_TIMEOUT_BACKOFF_MS) || 500);
-const API_TIMEOUT_MAX_BACKOFF_MS = Math.max(1000, parseInt(config.apiTimeoutMaxBackoffMs || process.env.API_TIMEOUT_MAX_BACKOFF_MS) || 5000);
+// Use ?? (nullish coalescing) so config.json values take priority even if falsy (e.g. 0)
+const API_TIMEOUT_MS = Math.max(5000, parseInt(config.apiTimeoutMs ?? process.env.API_TIMEOUT_MS) || 60000);
+const API_TIMEOUT_RETRIES = Math.max(0, Math.min(5, parseInt(config.apiTimeoutRetries ?? process.env.API_TIMEOUT_RETRIES) || 2));
+const API_TIMEOUT_BACKOFF_MS = Math.max(100, parseInt(config.apiTimeoutBackoffMs ?? process.env.API_TIMEOUT_BACKOFF_MS) || 500);
+const API_TIMEOUT_MAX_BACKOFF_MS = Math.max(1000, parseInt(config.apiTimeoutMaxBackoffMs ?? process.env.API_TIMEOUT_MAX_BACKOFF_MS) || 5000);
 
 // Reaction config with validation
 // FIX-2 (BAT-219): Security note — 'own' (default) restricts reaction events to the owner only.
