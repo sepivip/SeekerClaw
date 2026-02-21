@@ -12,7 +12,7 @@ const { config, log, USER_AGENT, API_TIMEOUT_MS } = require('./config');
 
 // BAT-244: timeout is configurable via options.timeout (ms). Defaults to API_TIMEOUT_MS from config.
 function httpRequest(options, body = null) {
-    const timeoutMs = options.timeout || API_TIMEOUT_MS;
+    const timeoutMs = options.timeout ?? API_TIMEOUT_MS;
     return new Promise((resolve, reject) => {
         const req = https.request(options, (res) => {
             res.setEncoding('utf8'); // Handle multi-byte chars (emoji) split across chunks

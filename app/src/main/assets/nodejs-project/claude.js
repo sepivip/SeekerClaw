@@ -11,7 +11,7 @@ const {
     workDir, MODEL, ANTHROPIC_KEY, AUTH_TYPE,
     REACTION_GUIDANCE, REACTION_NOTIFICATIONS, MEMORY_DIR,
     CONFIRM_REQUIRED, TOOL_RATE_LIMITS, TOOL_STATUS_MAP,
-    API_TIMEOUT_MS, API_TIMEOUT_RETRIES, API_TIMEOUT_BACKOFF_MS, API_TIMEOUT_MAX_BACKOFF_MS,
+    API_TIMEOUT_RETRIES, API_TIMEOUT_BACKOFF_MS, API_TIMEOUT_MAX_BACKOFF_MS,
     truncateToolResult,
     localTimestamp, localDateStr, log,
     getOwnerId,
@@ -939,7 +939,8 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
     }
 
     const startTime = Date.now();
-    const MAX_RETRIES = 3; // 1 initial + up to 3 retries = 4 total attempts max
+    const MAX_RETRIES = 3; // HTTP error retries (429, 5xx)
+    let timeoutRetries = 0; // BAT-245: separate counter for transport timeout retries
 
     // BAT-243: Extract trace metadata from body for structured logging
     const { turnId, iteration } = traceCtx;
@@ -990,19 +991,38 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
             } catch (networkErr) {
                 const attemptEnd = Date.now();
                 timeoutSource = networkErr.timeoutSource || 'network_error';
+                const isTimeoutClass = timeoutSource === 'transport';
 
                 // BAT-243: Structured trace log for network/timeout failures
+                const totalAttempts = retries + timeoutRetries;
                 if (turnId) {
                     log(`[Trace] ${JSON.stringify({
                         turnId, chatId: String(chatId || ''), iteration: iteration ?? null,
-                        attempt: retries, apiCallStart: localTimestamp(new Date(attemptStart)),
+                        attempt: totalAttempts, apiCallStart: localTimestamp(new Date(attemptStart)),
                         apiCallEnd: localTimestamp(new Date(attemptEnd)),
                         elapsedMs: attemptEnd - attemptStart, payloadSize, toolCount,
                         timeoutSource, status: -1, error: networkErr.message
                     })}`, 'WARN');
                 }
 
-                // Log network/timeout failures to DB before rethrowing
+                // BAT-245: Retry timeout-class transport failures with bounded backoff + jitter
+                // Uses separate counter from HTTP retries so budgets don't interfere
+                if (isTimeoutClass && timeoutRetries < API_TIMEOUT_RETRIES) {
+                    const baseBackoff = Math.min(
+                        API_TIMEOUT_BACKOFF_MS * Math.pow(2, timeoutRetries),
+                        API_TIMEOUT_MAX_BACKOFF_MS
+                    );
+                    // Add jitter: ±25% to prevent thundering herd
+                    const jitter = baseBackoff * (0.75 + Math.random() * 0.5);
+                    const waitMs = Math.round(jitter);
+                    log(`[Retry] Transport timeout, retry ${timeoutRetries + 1}/${API_TIMEOUT_RETRIES}, backoff ${waitMs}ms`, 'WARN');
+                    updateAgentHealth('degraded', { type: 'timeout', status: -1, message: 'Transport timeout — retrying' });
+                    timeoutRetries++;
+                    await new Promise(r => setTimeout(r, waitMs));
+                    continue;
+                }
+
+                // Exhausted retries or non-timeout network error — log to DB and throw
                 const durationMs = Date.now() - startTime;
                 if (getDb()) {
                     try {
@@ -1010,11 +1030,11 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
                             `INSERT INTO api_request_log (timestamp, chat_id, input_tokens, output_tokens,
                              cache_creation_tokens, cache_read_tokens, status, retry_count, duration_ms)
                              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                            [localTimestamp(), String(chatId || ''), 0, 0, 0, 0, -1, retries, durationMs]
+                            [localTimestamp(), String(chatId || ''), 0, 0, 0, 0, -1, retries + timeoutRetries, durationMs]
                         );
                     } catch (e) { log(`[Claude] Failed to log network error to DB: ${e.message}`, 'WARN'); }
                 }
-                updateAgentHealth('error', { type: 'network', status: -1, message: networkErr.message });
+                updateAgentHealth('error', { type: isTimeoutClass ? 'timeout' : 'network', status: -1, message: networkErr.message });
                 throw networkErr;
             }
 
@@ -1025,7 +1045,7 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
                 timeoutSource = res.status === 200 ? null : 'api_error';
                 log(`[Trace] ${JSON.stringify({
                     turnId, chatId: String(chatId || ''), iteration: iteration ?? null,
-                    attempt: retries, apiCallStart: localTimestamp(new Date(attemptStart)),
+                    attempt: retries + timeoutRetries, apiCallStart: localTimestamp(new Date(attemptStart)),
                     apiCallEnd: localTimestamp(new Date(attemptEnd)),
                     elapsedMs: attemptEnd - attemptStart, payloadSize, toolCount,
                     timeoutSource, status: res.status
@@ -1065,7 +1085,7 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
                     [localTimestamp(), String(chatId || ''),
                      usage?.input_tokens || 0, usage?.output_tokens || 0,
                      usage?.cache_creation_input_tokens || 0, usage?.cache_read_input_tokens || 0,
-                     res.status, retries, durationMs]
+                     res.status, retries + timeoutRetries, durationMs]
                 );
                 markDbSummaryDirty();
             } catch (dbErr) {
