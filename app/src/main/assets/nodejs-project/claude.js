@@ -939,7 +939,8 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
     }
 
     const startTime = Date.now();
-    const MAX_RETRIES = 3; // 1 initial + up to 3 retries = 4 total attempts max
+    // BAT-245: Use configurable retry count for HTTP errors; timeout retries are separate
+    const MAX_RETRIES = 3; // 1 initial + up to 3 retries = 4 total attempts max (HTTP errors)
 
     // BAT-243: Extract trace metadata from body for structured logging
     const { turnId, iteration } = traceCtx;
@@ -990,6 +991,7 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
             } catch (networkErr) {
                 const attemptEnd = Date.now();
                 timeoutSource = networkErr.timeoutSource || 'network_error';
+                const isTimeoutClass = timeoutSource === 'transport';
 
                 // BAT-243: Structured trace log for network/timeout failures
                 if (turnId) {
@@ -1002,7 +1004,23 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
                     })}`, 'WARN');
                 }
 
-                // Log network/timeout failures to DB before rethrowing
+                // BAT-245: Retry timeout-class transport failures with bounded backoff + jitter
+                if (isTimeoutClass && retries < API_TIMEOUT_RETRIES) {
+                    const baseBackoff = Math.min(
+                        API_TIMEOUT_BACKOFF_MS * Math.pow(2, retries),
+                        API_TIMEOUT_MAX_BACKOFF_MS
+                    );
+                    // Add jitter: ±25% to prevent thundering herd
+                    const jitter = baseBackoff * (0.75 + Math.random() * 0.5);
+                    const waitMs = Math.round(jitter);
+                    log(`[Retry] Transport timeout, retry ${retries + 1}/${API_TIMEOUT_RETRIES}, backoff ${waitMs}ms`, 'WARN');
+                    updateAgentHealth('degraded', { type: 'timeout', status: -1, message: 'Transport timeout — retrying' });
+                    retries++;
+                    await new Promise(r => setTimeout(r, waitMs));
+                    continue;
+                }
+
+                // Exhausted retries or non-timeout network error — log to DB and throw
                 const durationMs = Date.now() - startTime;
                 if (getDb()) {
                     try {
@@ -1014,7 +1032,7 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
                         );
                     } catch (e) { log(`[Claude] Failed to log network error to DB: ${e.message}`, 'WARN'); }
                 }
-                updateAgentHealth('error', { type: 'network', status: -1, message: networkErr.message });
+                updateAgentHealth('error', { type: isTimeoutClass ? 'timeout' : 'network', status: -1, message: networkErr.message });
                 throw networkErr;
             }
 
