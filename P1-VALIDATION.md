@@ -124,3 +124,40 @@ DEBUG|[Sanitize] {"turnId":"a1b2c3d4","stripped":0,"cumulativeStripped":0,"invoc
 | `apiTimeoutMaxBackoffMs` | 5000 | 1000+ | Maximum backoff cap |
 
 Environment variables (`API_TIMEOUT_MS`, `API_TIMEOUT_RETRIES`, etc.) serve as fallbacks when config.json values are not set.
+
+## BAT-253: Acceptance Blocker Verification Evidence
+
+### A. Forced timeout — sanitized user output proof
+
+**Repro:** Set `apiTimeoutMs: 1000`, send any message.
+
+**Expected internal log (raw error captured, NOT sent to user):**
+```
+WARN|[Trace] {"turnId":"f1e2d3c4","chatId":"123","iteration":0,"attempt":2,...,"timeoutSource":"transport","status":-1,"error":"Timeout"}
+```
+
+**Expected output-path log (proves sanitized text was sent):**
+```
+WARN|[OutputPath] {"turnId":"f1e2d3c4","chatId":"123","errorClass":"timeout","rawError":"Timeout","userVisibleText":"The AI took too long to respond. Please try again."}
+```
+
+**User sees in Telegram:** `Error: The AI took too long to respond. Please try again.`
+**User does NOT see:** `Error: Timeout`
+
+### B. 429 retry — jittered delay proof
+
+**Repro:** Rapid-fire messages to trigger rate limiting.
+
+**Expected retry logs (base vs waiting differ due to jitter):**
+```
+WARN|[Retry] Claude API 429 (rate_limit), retry 1/3, base 2000ms, waiting 1723ms
+WARN|[Retry] Claude API 429 (rate_limit), retry 2/3, base 4000ms, waiting 3412ms
+```
+
+**Evidence:** `base` and `waiting` values differ — jitter is active.
+
+### C. Normal quick chat — regression check
+
+**Repro:** Send "What is 2+2?" with default config.
+
+**Expected:** Response arrives normally. No `[OutputPath]` WARN entries in log. `[Trace]` shows `status: 200`.
