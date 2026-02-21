@@ -4,13 +4,15 @@
 
 const https = require('https');
 
-const { config, log, USER_AGENT } = require('./config');
+const { config, log, USER_AGENT, API_TIMEOUT_MS } = require('./config');
 
 // ============================================================================
 // HTTP HELPERS
 // ============================================================================
 
+// BAT-244: timeout is configurable via options.timeout (ms). Defaults to API_TIMEOUT_MS from config.
 function httpRequest(options, body = null) {
+    const timeoutMs = options.timeout || API_TIMEOUT_MS;
     return new Promise((resolve, reject) => {
         const req = https.request(options, (res) => {
             res.setEncoding('utf8'); // Handle multi-byte chars (emoji) split across chunks
@@ -25,7 +27,7 @@ function httpRequest(options, body = null) {
             });
         });
         req.on('error', reject);
-        req.setTimeout(60000, () => { req.destroy(); const err = new Error('Timeout'); err.timeoutSource = 'transport'; reject(err); });
+        req.setTimeout(timeoutMs, () => { req.destroy(); const err = new Error('Timeout'); err.timeoutSource = 'transport'; reject(err); });
         if (body) req.write(typeof body === 'string' ? body : JSON.stringify(body));
         req.end();
     });
