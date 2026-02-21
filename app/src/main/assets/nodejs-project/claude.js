@@ -902,6 +902,24 @@ function classifyApiError(status, data) {
         userMessage: `Unexpected API error (${status}). Please try again.` };
 }
 
+// BAT-253: Classify network-level errors into user-friendly messages
+function classifyNetworkError(err) {
+    const raw = err.message || String(err);
+    if (err.code === 'SESSION_EXPIRED') {
+        return { type: 'session_expired', userMessage: 'Your session has expired. Please re-pair with Settings.' };
+    }
+    if (err.timeoutSource === 'transport' || /timeout/i.test(raw)) {
+        return { type: 'timeout', userMessage: 'The AI took too long to respond. Please try again.' };
+    }
+    if (/ENOTFOUND|EAI_AGAIN/i.test(raw)) {
+        return { type: 'dns', userMessage: 'Cannot reach the AI service — check your internet connection.' };
+    }
+    if (/ECONNREFUSED|ECONNRESET|EPIPE/i.test(raw)) {
+        return { type: 'connection', userMessage: 'Connection to the AI service was lost. Please try again.' };
+    }
+    return { type: 'network', userMessage: 'A network error occurred. Please try again.' };
+}
+
 async function claudeApiCall(body, chatId, traceCtx = {}) {
     // Serialize: wait for any in-flight API call to complete first
     while (apiCallInFlight) {
@@ -1061,8 +1079,10 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
                     // Cloudflare errors use longer backoff (5s, 10s, 20s)
                     const baseMs = errClass.type === 'cloudflare' ? 5000 : 2000;
                     const backoffMs = Math.min(baseMs * Math.pow(2, retries), 30000);
-                    const waitMs = retryAfterMs > 0 ? retryAfterMs : backoffMs;
-                    log(`[Retry] Claude API ${res.status} (${errClass.type}), retry ${retries + 1}/${MAX_RETRIES}, waiting ${waitMs}ms`, 'WARN');
+                    // BAT-253: Add ±25% jitter to prevent thundering herd; respect server retry-after exactly
+                    const jitteredBackoff = Math.round(backoffMs * (0.75 + Math.random() * 0.5));
+                    const waitMs = retryAfterMs > 0 ? retryAfterMs : jitteredBackoff;
+                    log(`[Retry] Claude API ${res.status} (${errClass.type}), retry ${retries + 1}/${MAX_RETRIES}, base ${backoffMs}ms, waiting ${waitMs}ms`, 'WARN');
                     updateAgentHealth('degraded', { type: errClass.type, status: res.status, message: errClass.userMessage });
                     retries++;
                     await new Promise(r => setTimeout(r, waitMs));
@@ -1309,6 +1329,8 @@ async function chat(chatId, userMessage) {
     let toolUseCount = 0;
     const MAX_TOOL_USES = 5;
 
+    try { // BAT-253: catch network errors → sanitize before user output
+
     while (toolUseCount < MAX_TOOL_USES) {
         const body = JSON.stringify({
             model: MODEL,
@@ -1323,7 +1345,14 @@ async function chat(chatId, userMessage) {
         if (res.status !== 200) {
             log(`Claude API error: ${res.status} - ${JSON.stringify(res.data)}`, 'ERROR');
             const errClass = classifyApiError(res.status, res.data);
-            throw new Error(errClass.userMessage || `API error: ${res.status}`);
+            const userText = errClass.userMessage || `API error: ${res.status}`;
+            log(`[OutputPath] ${JSON.stringify({
+                turnId, chatId: String(chatId), errorClass: errClass.type,
+                rawError: `HTTP ${res.status}`, userVisibleText: userText
+            })}`, 'WARN');
+            const httpErr = new Error(userText);
+            httpErr._sanitized = true;
+            throw httpErr;
         }
 
         response = res.data;
@@ -1482,6 +1511,19 @@ async function chat(chatId, userMessage) {
     }
 
     return assistantMessage;
+
+    } catch (apiErr) {
+        // BAT-253: Sanitize network/timeout errors before they reach the user.
+        // HTTP errors (thrown above with _sanitized flag) already have [OutputPath] logged.
+        if (apiErr._sanitized) throw apiErr;
+        const netClass = classifyNetworkError(apiErr);
+        const rawTrunc = (apiErr.message || String(apiErr)).slice(0, 200);
+        log(`[OutputPath] ${JSON.stringify({
+            turnId, chatId: String(chatId), errorClass: netClass.type,
+            rawError: rawTrunc, userVisibleText: netClass.userMessage
+        })}`, 'WARN');
+        throw new Error(netClass.userMessage);
+    }
 }
 
 // ============================================================================
