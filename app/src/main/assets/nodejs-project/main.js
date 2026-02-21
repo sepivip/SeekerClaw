@@ -844,24 +844,22 @@ async function autoResumeOnStartup() {
                 continue;
             }
 
-            // Increment resumeAttempts before attempting (survives crash during resume)
-            full.resumeAttempts = attempts + 1;
-            saveCheckpoint(cp.taskId, full);
-
             const chatId = full.chatId;
             if (!chatId) {
                 log(`[AutoResume] SKIP taskId=${cp.taskId} — no chatId in checkpoint`, 'WARN');
                 continue;
             }
 
+            // Increment resumeAttempts before attempting (survives crash during resume)
+            // Placed after all skip checks so failed validations don't burn attempts.
+            full.resumeAttempts = attempts + 1;
+            saveCheckpoint(cp.taskId, full);
+
             const goalSnippet = full.originalGoal ? full.originalGoal.slice(0, 80) : null;
             log(`[AutoResume] RESUMING taskId=${cp.taskId} chatId=${chatId} age=${ageStr} attempt=${full.resumeAttempts}/${AUTO_RESUME_MAX_ATTEMPTS} goal=${goalSnippet ? '"' + goalSnippet + '"' : 'none'}`, 'INFO');
 
-            // Notify user (include goal snippet so they know what's being resumed)
-            const goalHint = goalSnippet ? `\n> ${goalSnippet}${full.originalGoal.length > 80 ? '...' : ''}` : '';
-            await sendMessage(chatId, `Resuming interrupted task (${cp.taskId})...${goalHint}`);
-
-            // Restore conversation from checkpoint (same logic as /resume Path B)
+            // Restore conversation from checkpoint BEFORE notifying user
+            // (prevents notification from interfering with conversation state)
             if (Array.isArray(full.conversationSlice) && full.conversationSlice.length > 0) {
                 const conv = getConversation(chatId);
                 let restored = full.conversationSlice;
@@ -888,6 +886,10 @@ async function autoResumeOnStartup() {
                 conv.splice(0, 0, ...restored);
                 log(`[AutoResume] Restored ${restored.length} messages into conversation`, 'INFO');
             }
+
+            // Notify user after conversation is restored
+            const goalHint = goalSnippet ? `\n> ${goalSnippet}${full.originalGoal.length > 80 ? '...' : ''}` : '';
+            await sendMessage(chatId, `Resuming interrupted task (${cp.taskId})...${goalHint}`);
 
             // Queue the resume through chatQueues to serialize with any incoming messages
             const prev = chatQueues.get(chatId) || Promise.resolve();

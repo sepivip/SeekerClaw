@@ -44,6 +44,16 @@ function saveCheckpoint(taskId, state) {
                     break;
                 }
             }
+            // Step 3: drop trailing orphaned tool_use (no following tool_result)
+            while (trimmed.conversationSlice.length > 0) {
+                const last = trimmed.conversationSlice[trimmed.conversationSlice.length - 1];
+                if (last.role === 'assistant' && Array.isArray(last.content)
+                    && last.content.some(b => b.type === 'tool_use')) {
+                    trimmed.conversationSlice.pop();
+                } else {
+                    break;
+                }
+            }
         }
         trimmed.updatedAt = Date.now();
 

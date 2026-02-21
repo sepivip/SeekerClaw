@@ -1334,7 +1334,7 @@ async function chat(chatId, userMessage, options = {}) {
     const turnId = crypto.randomBytes(4).toString('hex');
 
     // P2.4: Generate taskId for this turn (used for resume tracking)
-    const taskId = crypto.randomBytes(4).toString('hex');
+    const taskId = crypto.randomBytes(8).toString('hex');
     setActiveTask(chatId, taskId);
 
     // userMessage can be a string or an array of content blocks (for vision)
@@ -1351,12 +1351,16 @@ async function chat(chatId, userMessage, options = {}) {
 
     const { stable: stablePrompt, dynamic: dynamicPrompt } = buildSystemBlocks(matchedSkills, chatId);
 
-    // P2.2: Resume directive — injected as a high-priority system block so Claude
+    // P2.4: Resume directive — injected as a high-priority system block so Claude
     // cannot ignore it. User messages are suggestions; system directives are orders.
     let resumeBlock = '';
     if (options.isResume) {
-        const goalLine = options.originalGoal
-            ? `\nORIGINAL USER REQUEST: "${options.originalGoal}"\n`
+        // Sanitize originalGoal: strip control chars and cap length to prevent prompt injection
+        const safeGoal = options.originalGoal
+            ? options.originalGoal.replace(/[\r\n\0\u2028\u2029]/g, ' ').slice(0, 500)
+            : null;
+        const goalLine = safeGoal
+            ? `\nORIGINAL USER REQUEST: "${safeGoal}"\n`
             : '';
         resumeBlock = '\n\n## MANDATORY TASK RESUME\n' +
             'You are resuming an interrupted task. The conversation history above was ' +
@@ -1656,6 +1660,9 @@ async function chat(chatId, userMessage, options = {}) {
         return assistantMessage;
 
     } catch (apiErr) {
+        // Clean up stale task state on error (prevents ghost activeTask entries)
+        clearActiveTask(chatId);
+
         // BAT-253: Sanitize network/timeout errors before they reach the user.
         // HTTP errors (thrown above with _sanitized flag) already have [OutputPath] logged.
         if (apiErr._sanitized) throw apiErr;
