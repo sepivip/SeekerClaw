@@ -1167,10 +1167,14 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
 // CONVERSATION SANITIZATION
 // ============================================================================
 
+// BAT-246: Diagnostic counters for sanitizer health tracking
+const sanitizerStats = { invocations: 0, totalStripped: 0 };
+
 // Fix orphaned tool_use/tool_result blocks that cause Claude API 400 errors.
 // This can happen when a tool execution throws or times out — the assistant's
 // tool_use message is already in history but the matching tool_result never arrives.
 function sanitizeConversation(messages, turnId) {
+    sanitizerStats.invocations++;
     let stripped = 0;
     const orphanDetails = []; // BAT-243: collect details for correlation logging
 
@@ -1247,13 +1251,17 @@ function sanitizeConversation(messages, turnId) {
         }
     }
 
+    sanitizerStats.totalStripped += stripped;
+    // BAT-246: Always log sanitizer invocation for trend monitoring (WARN when stripping, DEBUG otherwise)
+    const sanitizeLog = {
+        turnId: turnId || null, stripped,
+        cumulativeStripped: sanitizerStats.totalStripped,
+        invocations: sanitizerStats.invocations,
+    };
     if (stripped > 0) {
-        // BAT-243: Correlation log with turnId so sanitizer events can be traced to the triggering turn
-        log(`[Sanitize] ${JSON.stringify({
-            turnId: turnId || null, stripped,
-            orphans: orphanDetails.map(d => ({ type: d.type, id: d.id, tool: d.tool || undefined }))
-        })}`, 'WARN');
+        sanitizeLog.orphans = orphanDetails.map(d => ({ type: d.type, id: d.id, tool: d.tool || undefined }));
     }
+    log(`[Sanitize] ${JSON.stringify(sanitizeLog)}`, stripped > 0 ? 'WARN' : 'DEBUG');
     return stripped;
 }
 
@@ -1335,44 +1343,56 @@ async function chat(chatId, userMessage) {
         messages.push({ role: 'assistant', content: response.content });
 
         // Execute each tool and collect results
+        // BAT-246: Each tool execution is individually guarded — if one tool throws,
+        // the others still run and ALL tool_use blocks get matching tool_result entries.
+        // This prevents orphaned pairs from partial tool execution failures.
         const toolResults = [];
         for (const toolUse of toolUses) {
             log(`Tool use: ${toolUse.name}`, 'DEBUG');
             let result;
 
-            // Confirmation gate: high-impact tools require explicit user YES
-            if (CONFIRM_REQUIRED.has(toolUse.name)) {
-                // Rate limit check first
-                const rateLimit = TOOL_RATE_LIMITS[toolUse.name];
-                const lastUse = _deps.lastToolUseTime ? _deps.lastToolUseTime.get(toolUse.name) : undefined;
-                if (rateLimit && lastUse && (Date.now() - lastUse) < rateLimit) {
-                    const waitSec = Math.ceil((rateLimit - (Date.now() - lastUse)) / 1000);
-                    result = { error: `Rate limited: ${toolUse.name} can only be used once per ${rateLimit / 1000}s. Try again in ${waitSec}s.` };
-                    log(`[RateLimit] ${toolUse.name} blocked — ${waitSec}s remaining`, 'WARN');
-                } else {
-                    // Ask user for confirmation
-                    const confirmed = await _deps.requestConfirmation(chatId, toolUse.name, toolUse.input);
-                    if (confirmed) {
-                        const status = deferStatus(chatId, TOOL_STATUS_MAP[toolUse.name]);
-                        try {
-                            result = await _deps.executeTool(toolUse.name, toolUse.input, chatId);
-                            if (_deps.lastToolUseTime) _deps.lastToolUseTime.set(toolUse.name, Date.now());
-                        } finally {
-                            await status.cleanup();
-                        }
+            try {
+                // Confirmation gate: high-impact tools require explicit user YES
+                if (CONFIRM_REQUIRED.has(toolUse.name)) {
+                    // Rate limit check first
+                    const rateLimit = TOOL_RATE_LIMITS[toolUse.name];
+                    const lastUse = _deps.lastToolUseTime ? _deps.lastToolUseTime.get(toolUse.name) : undefined;
+                    if (rateLimit && lastUse && (Date.now() - lastUse) < rateLimit) {
+                        const waitSec = Math.ceil((rateLimit - (Date.now() - lastUse)) / 1000);
+                        result = { error: `Rate limited: ${toolUse.name} can only be used once per ${rateLimit / 1000}s. Try again in ${waitSec}s.` };
+                        log(`[RateLimit] ${toolUse.name} blocked — ${waitSec}s remaining`, 'WARN');
                     } else {
-                        result = { error: 'Action canceled: user did not confirm (replied NO or timed out after 60s).' };
-                        log(`[Confirm] ${toolUse.name} rejected by user`, 'INFO');
+                        // Ask user for confirmation
+                        const confirmed = await _deps.requestConfirmation(chatId, toolUse.name, toolUse.input);
+                        if (confirmed) {
+                            const status = deferStatus(chatId, TOOL_STATUS_MAP[toolUse.name]);
+                            try {
+                                result = await _deps.executeTool(toolUse.name, toolUse.input, chatId);
+                                if (_deps.lastToolUseTime) _deps.lastToolUseTime.set(toolUse.name, Date.now());
+                            } finally {
+                                await status.cleanup();
+                            }
+                        } else {
+                            result = { error: 'Action canceled: user did not confirm (replied NO or timed out after 60s).' };
+                            log(`[Confirm] ${toolUse.name} rejected by user`, 'INFO');
+                        }
+                    }
+                } else {
+                    // Normal tool execution (no confirmation needed)
+                    const status = deferStatus(chatId, TOOL_STATUS_MAP[toolUse.name]);
+                    try {
+                        result = await _deps.executeTool(toolUse.name, toolUse.input, chatId);
+                    } finally {
+                        await status.cleanup();
                     }
                 }
-            } else {
-                // Normal tool execution (no confirmation needed)
-                const status = deferStatus(chatId, TOOL_STATUS_MAP[toolUse.name]);
-                try {
-                    result = await _deps.executeTool(toolUse.name, toolUse.input, chatId);
-                } finally {
-                    await status.cleanup();
-                }
+            } catch (toolErr) {
+                // BAT-246: Catch tool execution errors to prevent orphaned tool_use blocks.
+                // The tool_use is already in the assistant message — we MUST provide a matching
+                // tool_result even on failure, otherwise the conversation gets corrupted.
+                const errMsg = toolErr instanceof Error ? toolErr.message : String(toolErr ?? 'unknown error');
+                result = { error: `Tool execution failed: ${errMsg}` };
+                log(`[ToolError] ${JSON.stringify({ turnId, tool: toolUse.name, toolUseId: toolUse.id, error: errMsg })}`, 'ERROR');
             }
 
             toolResults.push({
@@ -1382,7 +1402,7 @@ async function chat(chatId, userMessage) {
             });
         }
 
-        // Add tool results to history
+        // Add tool results to history — always pushed, even if some tools errored
         messages.push({ role: 'user', content: toolResults });
     }
 
@@ -1486,6 +1506,8 @@ module.exports = {
         _consecutiveAuthFailures = 0;
         log('[Session] Expiry state reset — will retry API calls', 'INFO');
     },
+    // Sanitizer diagnostics (BAT-246)
+    sanitizerStats,
     // Injection
     setChatDeps,
 };
