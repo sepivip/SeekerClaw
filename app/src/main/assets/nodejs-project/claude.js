@@ -3,6 +3,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 // ── Imports from other SeekerClaw modules ──────────────────────────────────
 
@@ -900,7 +901,7 @@ function classifyApiError(status, data) {
         userMessage: `Unexpected API error (${status}). Please try again.` };
 }
 
-async function claudeApiCall(body, chatId) {
+async function claudeApiCall(body, chatId, traceCtx = {}) {
     // Serialize: wait for any in-flight API call to complete first
     while (apiCallInFlight) {
         await apiCallInFlight;
@@ -939,6 +940,16 @@ async function claudeApiCall(body, chatId) {
     const startTime = Date.now();
     const MAX_RETRIES = 3; // 1 initial + up to 3 retries = 4 total attempts max
 
+    // BAT-243: Extract trace metadata from body for structured logging
+    const { turnId, iteration } = traceCtx;
+    let payloadSize = 0;
+    let toolCount = 0;
+    try {
+        payloadSize = typeof body === 'string' ? body.length : JSON.stringify(body).length;
+        const parsed = typeof body === 'string' ? JSON.parse(body) : body;
+        toolCount = Array.isArray(parsed.tools) ? parsed.tools.length : 0;
+    } catch (_) { /* non-fatal — trace metadata is best-effort */ }
+
     // Keep Telegram "typing..." indicator alive during API call (expires after 5s).
     // Fire immediately (covers gap on 2nd+ API calls in tool-use loop), then every 4s.
     let typingInterval = null;
@@ -958,6 +969,9 @@ async function claudeApiCall(body, chatId) {
 
         // eslint-disable-next-line no-constant-condition
         while (true) {
+            const attemptStart = Date.now();
+            let timeoutSource = null;
+
             try {
                 res = await httpRequest({
                     hostname: 'api.anthropic.com',
@@ -973,6 +987,20 @@ async function claudeApiCall(body, chatId) {
                     }
                 }, body);
             } catch (networkErr) {
+                const attemptEnd = Date.now();
+                timeoutSource = networkErr.timeoutSource || 'network_error';
+
+                // BAT-243: Structured trace log for network/timeout failures
+                if (turnId) {
+                    log(`[Trace] ${JSON.stringify({
+                        turnId, chatId: String(chatId || ''), iteration: iteration ?? null,
+                        attempt: retries, apiCallStart: localTimestamp(new Date(attemptStart)),
+                        apiCallEnd: localTimestamp(new Date(attemptEnd)),
+                        elapsedMs: attemptEnd - attemptStart, payloadSize, toolCount,
+                        timeoutSource, status: -1, error: networkErr.message
+                    })}`, 'WARN');
+                }
+
                 // Log network/timeout failures to DB before rethrowing
                 const durationMs = Date.now() - startTime;
                 if (getDb()) {
@@ -987,6 +1015,20 @@ async function claudeApiCall(body, chatId) {
                 }
                 updateAgentHealth('error', { type: 'network', status: -1, message: networkErr.message });
                 throw networkErr;
+            }
+
+            const attemptEnd = Date.now();
+
+            // BAT-243: Structured trace log for every API attempt
+            if (turnId) {
+                timeoutSource = res.status === 200 ? null : 'api_error';
+                log(`[Trace] ${JSON.stringify({
+                    turnId, chatId: String(chatId || ''), iteration: iteration ?? null,
+                    attempt: retries, apiCallStart: localTimestamp(new Date(attemptStart)),
+                    apiCallEnd: localTimestamp(new Date(attemptEnd)),
+                    elapsedMs: attemptEnd - attemptStart, payloadSize, toolCount,
+                    timeoutSource, status: res.status
+                })}`, res.status === 200 ? 'DEBUG' : 'WARN');
             }
 
             // Classify error and decide whether to retry (BAT-22)
@@ -1107,8 +1149,9 @@ async function claudeApiCall(body, chatId) {
 // Fix orphaned tool_use/tool_result blocks that cause Claude API 400 errors.
 // This can happen when a tool execution throws or times out — the assistant's
 // tool_use message is already in history but the matching tool_result never arrives.
-function sanitizeConversation(messages) {
+function sanitizeConversation(messages, turnId) {
     let stripped = 0;
+    const orphanDetails = []; // BAT-243: collect details for correlation logging
 
     // Pass 1: fix assistant messages with tool_use blocks missing matching tool_results
     for (let i = messages.length - 1; i >= 0; i--) {
@@ -1135,6 +1178,11 @@ function sanitizeConversation(messages) {
 
         // Strip orphaned tool_use blocks
         const orphanedIds = new Set([...toolUseIds].filter(id => !matchedIds.has(id)));
+        for (const b of msg.content) {
+            if (b.type === 'tool_use' && orphanedIds.has(b.id)) {
+                orphanDetails.push({ type: 'tool_use', id: b.id, tool: b.name, msgIndex: i });
+            }
+        }
         msg.content = msg.content.filter(b => !(b.type === 'tool_use' && orphanedIds.has(b.id)));
         stripped += orphanedIds.size;
 
@@ -1167,6 +1215,9 @@ function sanitizeConversation(messages) {
         if (orphaned.length === 0) continue;
 
         const orphanedSet = new Set(orphaned);
+        for (const id of orphaned) {
+            orphanDetails.push({ type: 'tool_result', id, msgIndex: i });
+        }
         msg.content = msg.content.filter(b => !(b.type === 'tool_result' && orphanedSet.has(b.tool_use_id)));
         stripped += orphaned.length;
 
@@ -1176,7 +1227,11 @@ function sanitizeConversation(messages) {
     }
 
     if (stripped > 0) {
-        log(`[Sanitize] Stripped ${stripped} orphaned tool_use/tool_result block(s) from conversation`, 'WARN');
+        // BAT-243: Correlation log with turnId so sanitizer events can be traced to the triggering turn
+        log(`[Sanitize] ${JSON.stringify({
+            turnId: turnId || null, stripped,
+            orphans: orphanDetails.map(d => ({ type: d.type, id: d.id, tool: d.tool || undefined }))
+        })}`, 'WARN');
     }
     return stripped;
 }
@@ -1190,6 +1245,9 @@ async function chat(chatId, userMessage) {
     const track = getSessionTrack(chatId);
     track.lastMessageTime = Date.now();
     if (!track.firstMessageTime) track.firstMessageTime = track.lastMessageTime;
+
+    // BAT-243: Generate unique turn ID for correlating all API calls in this turn
+    const turnId = crypto.randomBytes(4).toString('hex');
 
     // userMessage can be a string or an array of content blocks (for vision)
     // Extract text for skill matching
@@ -1215,7 +1273,7 @@ async function chat(chatId, userMessage) {
 
     // Fix any orphaned tool_use/tool_result blocks from previous failed calls
     // (prevents 400 errors from Claude API due to mismatched pairs)
-    sanitizeConversation(messages);
+    sanitizeConversation(messages, turnId);
 
     // Call Claude API with tool use loop
     let response;
@@ -1231,7 +1289,7 @@ async function chat(chatId, userMessage) {
             messages: messages
         });
 
-        const res = await claudeApiCall(body, chatId);
+        const res = await claudeApiCall(body, chatId, { turnId, iteration: toolUseCount });
 
         if (res.status !== 200) {
             log(`Claude API error: ${res.status} - ${JSON.stringify(res.data)}`, 'ERROR');
@@ -1327,7 +1385,7 @@ async function chat(chatId, userMessage) {
             max_tokens: 4096,
             system: systemBlocks,
             messages: summaryMessages
-        }), chatId);
+        }), chatId, { turnId, iteration: toolUseCount + 1 });
 
         if (summaryRes.status === 200 && summaryRes.data.content) {
             response = summaryRes.data;
