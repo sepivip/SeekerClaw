@@ -1343,7 +1343,7 @@ async function chat(chatId, userMessage) {
     // Call Claude API with tool use loop
     let response;
     let toolUseCount = 0;
-    const MAX_TOOL_USES = 1; // TESTING: set to 1 to verify budget exhaustion fallback
+    const MAX_TOOL_USES = 5;
 
     try { // BAT-253: catch network errors → sanitize before user output
 
