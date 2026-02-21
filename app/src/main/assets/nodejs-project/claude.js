@@ -1251,16 +1251,17 @@ function sanitizeConversation(messages, turnId) {
         }
     }
 
+    sanitizerStats.totalStripped += stripped;
+    // BAT-246: Always log sanitizer invocation for trend monitoring (WARN when stripping, DEBUG otherwise)
+    const sanitizeLog = {
+        turnId: turnId || null, stripped,
+        cumulativeStripped: sanitizerStats.totalStripped,
+        invocations: sanitizerStats.invocations,
+    };
     if (stripped > 0) {
-        sanitizerStats.totalStripped += stripped;
-        // BAT-243 + BAT-246: Correlation log with turnId and cumulative stats
-        log(`[Sanitize] ${JSON.stringify({
-            turnId: turnId || null, stripped,
-            cumulativeStripped: sanitizerStats.totalStripped,
-            invocations: sanitizerStats.invocations,
-            orphans: orphanDetails.map(d => ({ type: d.type, id: d.id, tool: d.tool || undefined }))
-        })}`, 'WARN');
+        sanitizeLog.orphans = orphanDetails.map(d => ({ type: d.type, id: d.id, tool: d.tool || undefined }));
     }
+    log(`[Sanitize] ${JSON.stringify(sanitizeLog)}`, stripped > 0 ? 'WARN' : 'DEBUG');
     return stripped;
 }
 
@@ -1389,8 +1390,9 @@ async function chat(chatId, userMessage) {
                 // BAT-246: Catch tool execution errors to prevent orphaned tool_use blocks.
                 // The tool_use is already in the assistant message — we MUST provide a matching
                 // tool_result even on failure, otherwise the conversation gets corrupted.
-                result = { error: `Tool execution failed: ${toolErr.message}` };
-                log(`[ToolError] ${JSON.stringify({ turnId, tool: toolUse.name, toolUseId: toolUse.id, error: toolErr.message })}`, 'ERROR');
+                const errMsg = toolErr instanceof Error ? toolErr.message : String(toolErr ?? 'unknown error');
+                result = { error: `Tool execution failed: ${errMsg}` };
+                log(`[ToolError] ${JSON.stringify({ turnId, tool: toolUse.name, toolUseId: toolUse.id, error: errMsg })}`, 'ERROR');
             }
 
             toolResults.push({
