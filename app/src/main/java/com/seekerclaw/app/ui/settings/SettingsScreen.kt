@@ -101,7 +101,11 @@ import java.io.File
 import java.util.Date
 
 @Composable
-fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
+fun SettingsScreen(
+    onRunSetupAgain: () -> Unit = {},
+    onNavigateToAnthropic: () -> Unit = {},
+    onNavigateToTelegram: () -> Unit = {}
+) {
     val context = LocalContext.current
     var config by remember { mutableStateOf(ConfigManager.loadConfig(context)) }
 
@@ -169,8 +173,6 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
     var editField by remember { mutableStateOf<String?>(null) }
     var editLabel by remember { mutableStateOf("") }
     var editValue by remember { mutableStateOf("") }
-    var showModelPicker by remember { mutableStateOf(false) }
-    var showAuthTypePicker by remember { mutableStateOf(false) }
 
     // MCP server state
     var mcpServers by remember { mutableStateOf(ConfigManager.loadMcpServers(context)) }
@@ -393,62 +395,16 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                     .background(SeekerClawColors.Surface, shape),
             ) {
                 ConfigField(
-                    label = "Model",
-                    value = availableModels.find { it.id == config?.model }
-                        ?.let { "${it.displayName} (${it.description})" }
-                        ?: config?.model?.ifBlank { "Not set" }
-                        ?: "Not set",
-                    onClick = { showModelPicker = true },
-                    info = SettingsHelpTexts.MODEL,
+                    label = "Anthropic",
+                    value = "Model, Keys, Connection Test",
+                    onClick = onNavigateToAnthropic,
+                    info = "Configure your Anthropic AI model and credentials.",
                 )
                 ConfigField(
-                    label = "Auth Type",
-                    value = authTypeLabel,
-                    onClick = { showAuthTypePicker = true },
-                    info = SettingsHelpTexts.AUTH_TYPE,
-                )
-                ConfigField(
-                    label = if (config?.authType == "api_key") "API Key (active)" else "API Key",
-                    value = maskedApiKey,
-                    onClick = {
-                        editField = "anthropicApiKey"
-                        editLabel = "API Key"
-                        editValue = config?.anthropicApiKey ?: ""
-                    },
-                    info = SettingsHelpTexts.API_KEY,
-                    isRequired = config?.authType == "api_key",
-                )
-                ConfigField(
-                    label = if (config?.authType == "setup_token") "Setup Token (active)" else "Setup Token",
-                    value = maskedSetupToken,
-                    onClick = {
-                        editField = "setupToken"
-                        editLabel = "Setup Token"
-                        editValue = config?.setupToken ?: ""
-                    },
-                    info = SettingsHelpTexts.SETUP_TOKEN,
-                    isRequired = config?.authType == "setup_token",
-                )
-                ConfigField(
-                    label = "Bot Token",
-                    value = maskedBotToken,
-                    onClick = {
-                        editField = "telegramBotToken"
-                        editLabel = "Bot Token"
-                        editValue = config?.telegramBotToken ?: ""
-                    },
-                    info = SettingsHelpTexts.BOT_TOKEN,
-                    isRequired = true,
-                )
-                ConfigField(
-                    label = "Owner ID",
-                    value = config?.telegramOwnerId?.ifBlank { "Auto-detect" } ?: "Auto-detect",
-                    onClick = {
-                        editField = "telegramOwnerId"
-                        editLabel = "Owner ID"
-                        editValue = config?.telegramOwnerId ?: ""
-                    },
-                    info = SettingsHelpTexts.OWNER_ID,
+                    label = "Telegram",
+                    value = "Bot Token, Owner ID, Connection Test",
+                    onClick = onNavigateToTelegram,
+                    info = "Configure your Telegram bot settings.",
                 )
                 ConfigField(
                     label = "Agent Name",
@@ -1029,7 +985,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
             },
             text = {
                 Column {
-                    if (editField == "anthropicApiKey" || editField == "setupToken" || editField == "telegramBotToken" || editField == "braveApiKey" || editField == "jupiterApiKey") {
+                    if (editField == "braveApiKey" || editField == "jupiterApiKey") {
                         Text(
                             "Changing this requires an agent restart.",
                             fontFamily = RethinkSans,
@@ -1043,7 +999,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                         onValueChange = { editValue = it },
                         label = { Text(editLabel, fontFamily = RethinkSans, fontSize = 12.sp) },
                         modifier = Modifier.fillMaxWidth(),
-                        singleLine = editField != "anthropicApiKey" && editField != "setupToken",
+                        singleLine = true,
                         textStyle = androidx.compose.ui.text.TextStyle(
                             fontFamily = FontFamily.Monospace,
                             fontSize = 14.sp,
@@ -1068,23 +1024,7 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
                         } else if (field == "jupiterApiKey") {
                             // Allow empty to disable swaps
                             saveField(field, trimmed)
-                        } else if (field == "setupToken") {
-                            // Allow empty to clear, auto-switch auth type if setting a token
-                            saveField(field, trimmed)
-                            if (trimmed.isNotEmpty()) {
-                                saveField("authType", "setup_token")
-                            }
                         } else if (trimmed.isNotEmpty()) {
-                            if (field == "anthropicApiKey") {
-                                // Auto-detect: if user pastes a setup token into API key field, store it correctly
-                                val detected = ConfigManager.detectAuthType(trimmed)
-                                if (detected == "setup_token") {
-                                    saveField("setupToken", trimmed)
-                                    saveField("authType", "setup_token")
-                                    editField = null
-                                    return@TextButton
-                                }
-                            }
                             saveField(field, trimmed)
                         }
                         editField = null
@@ -1100,170 +1040,6 @@ fun SettingsScreen(onRunSetupAgain: () -> Unit = {}) {
             },
             dismissButton = {
                 TextButton(onClick = { editField = null }) {
-                    Text(
-                        "Cancel",
-                        fontFamily = RethinkSans,
-                        color = SeekerClawColors.TextDim,
-                    )
-                }
-            },
-            containerColor = SeekerClawColors.Surface,
-            shape = shape,
-        )
-    }
-
-    // ==================== Model Picker Dialog ====================
-    if (showModelPicker) {
-        var selectedModel by remember { mutableStateOf(config?.model ?: availableModels[0].id) }
-
-        AlertDialog(
-            onDismissRequest = { showModelPicker = false },
-            title = {
-                Text(
-                    "Select Model",
-                    fontFamily = RethinkSans,
-                    fontWeight = FontWeight.Bold,
-                    color = SeekerClawColors.TextPrimary,
-                )
-            },
-            text = {
-                Column {
-                    availableModels.forEach { model ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { selectedModel = model.id }
-                                .padding(vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            RadioButton(
-                                selected = selectedModel == model.id,
-                                onClick = { selectedModel = model.id },
-                                colors = RadioButtonDefaults.colors(
-                                    selectedColor = SeekerClawColors.Primary,
-                                    unselectedColor = SeekerClawColors.TextDim,
-                                ),
-                            )
-                            Column(modifier = Modifier.padding(start = 8.dp)) {
-                                Text(
-                                    text = "${model.displayName} (${model.description})",
-                                    fontFamily = RethinkSans,
-                                    fontSize = 14.sp,
-                                    color = SeekerClawColors.TextPrimary,
-                                )
-                                Text(
-                                    text = model.id,
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 11.sp,
-                                    color = SeekerClawColors.TextDim,
-                                )
-                            }
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        saveField("model", selectedModel)
-                        Analytics.modelSelected(selectedModel)
-                        showModelPicker = false
-                    },
-                ) {
-                    Text(
-                        "Save",
-                        fontFamily = RethinkSans,
-                        fontWeight = FontWeight.Bold,
-                        color = SeekerClawColors.ActionPrimary,
-                    )
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showModelPicker = false }) {
-                    Text(
-                        "Cancel",
-                        fontFamily = RethinkSans,
-                        color = SeekerClawColors.TextDim,
-                    )
-                }
-            },
-            containerColor = SeekerClawColors.Surface,
-            shape = shape,
-        )
-    }
-
-    // ==================== Auth Type Picker ====================
-    if (showAuthTypePicker) {
-        val authOptions = listOf(
-            "api_key" to "API Key",
-            "setup_token" to "Pro/Max Token",
-        )
-        var selectedAuth by remember { mutableStateOf(config?.authType ?: "api_key") }
-
-        AlertDialog(
-            onDismissRequest = { showAuthTypePicker = false },
-            title = {
-                Text(
-                    "Auth Type",
-                    fontFamily = RethinkSans,
-                    fontWeight = FontWeight.Bold,
-                    color = SeekerClawColors.TextPrimary,
-                )
-            },
-            text = {
-                Column {
-                    authOptions.forEach { (typeId, label) ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { selectedAuth = typeId }
-                                .padding(vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            RadioButton(
-                                selected = selectedAuth == typeId,
-                                onClick = { selectedAuth = typeId },
-                                colors = RadioButtonDefaults.colors(
-                                    selectedColor = SeekerClawColors.Primary,
-                                    unselectedColor = SeekerClawColors.TextDim,
-                                ),
-                            )
-                            Text(
-                                text = label,
-                                fontFamily = RethinkSans,
-                                fontSize = 14.sp,
-                                color = SeekerClawColors.TextPrimary,
-                                modifier = Modifier.padding(start = 8.dp),
-                            )
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = "Both credentials are stored. Switching just changes which one is used.",
-                        fontFamily = RethinkSans,
-                        fontSize = 12.sp,
-                        color = SeekerClawColors.TextDim,
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        saveField("authType", selectedAuth)
-                        Analytics.authTypeChanged(selectedAuth)
-                        showAuthTypePicker = false
-                    },
-                ) {
-                    Text(
-                        "Save",
-                        fontFamily = RethinkSans,
-                        fontWeight = FontWeight.Bold,
-                        color = SeekerClawColors.ActionPrimary,
-                    )
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showAuthTypePicker = false }) {
                     Text(
                         "Cancel",
                         fontFamily = RethinkSans,

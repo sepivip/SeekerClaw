@@ -50,6 +50,8 @@ import kotlinx.serialization.Serializable
 @Serializable object SkillsRoute
 @Serializable object SettingsRoute
 @Serializable object SystemRoute
+@Serializable object AnthropicConfigRoute
+@Serializable object TelegramConfigRoute
 
 data class BottomNavItem(
     val label: String,
@@ -211,7 +213,23 @@ fun SeekerClawNavHost() {
                                 inclusive = true
                             }
                         }
+                    },
+                    onNavigateToAnthropic = {
+                        navController.navigate(AnthropicConfigRoute)
+                    },
+                    onNavigateToTelegram = {
+                        navController.navigate(TelegramConfigRoute)
                     }
+                )
+            }
+            composable<AnthropicConfigRoute> {
+                com.seekerclaw.app.ui.settings.AnthropicConfigScreen(
+                    onBack = { navController.popBackStack() }
+                )
+            }
+            composable<TelegramConfigRoute> {
+                com.seekerclaw.app.ui.settings.TelegramConfigScreen(
+                    onBack = { navController.popBackStack() }
                 )
             }
         }
