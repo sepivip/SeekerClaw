@@ -208,13 +208,13 @@ function clearConversation(chatId) {
 }
 
 // Session slug generator (OpenClaw-style adj-noun, BAT-57)
-const SLUG_ADJ = ['amber','brisk','calm','clear','cool','crisp','dawn','ember','fast','fresh',
-    'gentle','keen','kind','lucky','mellow','mild','neat','nimble','quick','quiet',
-    'rapid','sharp','swift','tender','tidy','vivid','warm','wild'];
-const SLUG_NOUN = ['atlas','bloom','breeze','canyon','cedar','cloud','comet','coral','cove','crest',
-    'daisy','dune','falcon','fjord','forest','glade','harbor','haven','lagoon','meadow',
-    'mist','nexus','orbit','pine','reef','ridge','river','sage','shell','shore',
-    'summit','trail','valley','willow','zephyr'];
+const SLUG_ADJ = ['amber', 'brisk', 'calm', 'clear', 'cool', 'crisp', 'dawn', 'ember', 'fast', 'fresh',
+    'gentle', 'keen', 'kind', 'lucky', 'mellow', 'mild', 'neat', 'nimble', 'quick', 'quiet',
+    'rapid', 'sharp', 'swift', 'tender', 'tidy', 'vivid', 'warm', 'wild'];
+const SLUG_NOUN = ['atlas', 'bloom', 'breeze', 'canyon', 'cedar', 'cloud', 'comet', 'coral', 'cove', 'crest',
+    'daisy', 'dune', 'falcon', 'fjord', 'forest', 'glade', 'harbor', 'haven', 'lagoon', 'meadow',
+    'mist', 'nexus', 'orbit', 'pine', 'reef', 'ridge', 'river', 'sage', 'shell', 'shore',
+    'summit', 'trail', 'valley', 'willow', 'zephyr'];
 
 function generateSlug() {
     const adj = SLUG_ADJ[Math.floor(Math.random() * SLUG_ADJ.length)];
@@ -840,7 +840,7 @@ function reportUsage(usage) {
         output_tokens: usage.output_tokens || 0,
         cache_creation_input_tokens: usage.cache_creation_input_tokens || 0,
         cache_read_input_tokens: usage.cache_read_input_tokens || 0,
-    }).catch(() => {});
+    }).catch(() => { });
     if (usage.cache_read_input_tokens) {
         log(`[Cache] hit: ${usage.cache_read_input_tokens} tokens read from cache`, 'DEBUG');
     }
@@ -868,38 +868,54 @@ const SESSION_PROBE_INTERVAL_MS = 5 * 60 * 1000; // 5 min cooldown probe
 // Classify API errors into retryable vs fatal with user-friendly messages (BAT-22)
 function classifyApiError(status, data) {
     if (status === 401 || status === 403) {
-        return { type: 'auth', retryable: false,
-            userMessage: '🔑 Can\'t reach the AI — API key might be wrong. Check Settings?' };
+        return {
+            type: 'auth', retryable: false,
+            userMessage: '🔑 Can\'t reach the AI — API key might be wrong. Check Settings?'
+        };
     }
     if (status === 402) {
-        return { type: 'billing', retryable: false,
-            userMessage: 'Your API account needs attention — check billing at console.anthropic.com' };
+        return {
+            type: 'billing', retryable: false,
+            userMessage: 'Your API account needs attention — check billing at console.anthropic.com'
+        };
     }
     if (status === 429) {
         const msg = data?.error?.message || '';
         if (/quota|credit/i.test(msg)) {
-            return { type: 'quota', retryable: false,
-                userMessage: 'API usage quota exceeded. Please try again later or upgrade your plan.' };
+            return {
+                type: 'quota', retryable: false,
+                userMessage: 'API usage quota exceeded. Please try again later or upgrade your plan.'
+            };
         }
-        return { type: 'rate_limit', retryable: true,
-            userMessage: '⏳ Got rate limited. Trying again in a moment...' };
+        return {
+            type: 'rate_limit', retryable: true,
+            userMessage: '⏳ Got rate limited. Trying again in a moment...'
+        };
     }
     if (status === 529) {
-        return { type: 'overloaded', retryable: true,
-            userMessage: 'Claude API is temporarily overloaded. Please try again in a moment.' };
+        return {
+            type: 'overloaded', retryable: true,
+            userMessage: 'Claude API is temporarily overloaded. Please try again in a moment.'
+        };
     }
     // Cloudflare errors (520-527)
     if (status >= 520 && status <= 527) {
-        return { type: 'cloudflare', retryable: true,
-            userMessage: 'Claude API is temporarily unreachable. Retrying...' };
+        return {
+            type: 'cloudflare', retryable: true,
+            userMessage: 'Claude API is temporarily unreachable. Retrying...'
+        };
     }
     // Other server errors
     if (status >= 500 && status < 600) {
-        return { type: 'server', retryable: true,
-            userMessage: 'Claude API is temporarily unavailable. Retrying...' };
+        return {
+            type: 'server', retryable: true,
+            userMessage: 'Claude API is temporarily unavailable. Retrying...'
+        };
     }
-    return { type: 'unknown', retryable: false,
-        userMessage: `Unexpected API error (${status}). Please try again.` };
+    return {
+        type: 'unknown', retryable: false,
+        userMessage: `Unexpected API error (${status}). Please try again.`
+    };
 }
 
 // BAT-253: Classify network-level errors into user-friendly messages
@@ -1103,9 +1119,9 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
                      cache_creation_tokens, cache_read_tokens, status, retry_count, duration_ms)
                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                     [localTimestamp(), String(chatId || ''),
-                     usage?.input_tokens || 0, usage?.output_tokens || 0,
-                     usage?.cache_creation_input_tokens || 0, usage?.cache_read_input_tokens || 0,
-                     res.status, retries + timeoutRetries, durationMs]
+                    usage?.input_tokens || 0, usage?.output_tokens || 0,
+                    usage?.cache_creation_input_tokens || 0, usage?.cache_read_input_tokens || 0,
+                    res.status, retries + timeoutRetries, durationMs]
                 );
                 markDbSummaryDirty();
             } catch (dbErr) {
@@ -1327,190 +1343,211 @@ async function chat(chatId, userMessage) {
     // Call Claude API with tool use loop
     let response;
     let toolUseCount = 0;
-    const MAX_TOOL_USES = 5;
+    const MAX_TOOL_USES = 1; // TESTING: set to 1 to verify budget exhaustion fallback
 
     try { // BAT-253: catch network errors → sanitize before user output
 
-    while (toolUseCount < MAX_TOOL_USES) {
-        const body = JSON.stringify({
-            model: MODEL,
-            max_tokens: 4096,
-            system: systemBlocks,
-            tools: _deps.getTools ? _deps.getTools() : [],
-            messages: messages
-        });
-
-        const res = await claudeApiCall(body, chatId, { turnId, iteration: toolUseCount });
-
-        if (res.status !== 200) {
-            log(`Claude API error: ${res.status} - ${JSON.stringify(res.data)}`, 'ERROR');
-            const errClass = classifyApiError(res.status, res.data);
-            const userText = errClass.userMessage || `API error: ${res.status}`;
-            log(`[OutputPath] ${JSON.stringify({
-                turnId, chatId: String(chatId), errorClass: errClass.type,
-                rawError: `HTTP ${res.status}`, userVisibleText: userText
-            })}`, 'WARN');
-            const httpErr = new Error(userText);
-            httpErr._sanitized = true;
-            throw httpErr;
-        }
-
-        response = res.data;
-
-        // Check if we need to handle tool use
-        const toolUses = response.content.filter(c => c.type === 'tool_use');
-
-        if (toolUses.length === 0) {
-            // No tool use, we're done
-            break;
-        }
-
-        // Execute tools and add results
-        toolUseCount++;
-
-        // Add assistant's response with tool use to history
-        messages.push({ role: 'assistant', content: response.content });
-
-        // Execute each tool and collect results
-        // BAT-246: Each tool execution is individually guarded — if one tool throws,
-        // the others still run and ALL tool_use blocks get matching tool_result entries.
-        // This prevents orphaned pairs from partial tool execution failures.
-        const toolResults = [];
-        for (const toolUse of toolUses) {
-            log(`Tool use: ${toolUse.name}`, 'DEBUG');
-            let result;
-
-            try {
-                // Confirmation gate: high-impact tools require explicit user YES
-                if (CONFIRM_REQUIRED.has(toolUse.name)) {
-                    // Rate limit check first
-                    const rateLimit = TOOL_RATE_LIMITS[toolUse.name];
-                    const lastUse = _deps.lastToolUseTime ? _deps.lastToolUseTime.get(toolUse.name) : undefined;
-                    if (rateLimit && lastUse && (Date.now() - lastUse) < rateLimit) {
-                        const waitSec = Math.ceil((rateLimit - (Date.now() - lastUse)) / 1000);
-                        result = { error: `Rate limited: ${toolUse.name} can only be used once per ${rateLimit / 1000}s. Try again in ${waitSec}s.` };
-                        log(`[RateLimit] ${toolUse.name} blocked — ${waitSec}s remaining`, 'WARN');
-                    } else {
-                        // Ask user for confirmation
-                        const confirmed = await _deps.requestConfirmation(chatId, toolUse.name, toolUse.input);
-                        if (confirmed) {
-                            const status = deferStatus(chatId, TOOL_STATUS_MAP[toolUse.name]);
-                            try {
-                                result = await _deps.executeTool(toolUse.name, toolUse.input, chatId);
-                                if (_deps.lastToolUseTime) _deps.lastToolUseTime.set(toolUse.name, Date.now());
-                            } finally {
-                                await status.cleanup();
-                            }
-                        } else {
-                            result = { error: 'Action canceled: user did not confirm (replied NO or timed out after 60s).' };
-                            log(`[Confirm] ${toolUse.name} rejected by user`, 'INFO');
-                        }
-                    }
-                } else {
-                    // Normal tool execution (no confirmation needed)
-                    const status = deferStatus(chatId, TOOL_STATUS_MAP[toolUse.name]);
-                    try {
-                        result = await _deps.executeTool(toolUse.name, toolUse.input, chatId);
-                    } finally {
-                        await status.cleanup();
-                    }
-                }
-            } catch (toolErr) {
-                // BAT-246: Catch tool execution errors to prevent orphaned tool_use blocks.
-                // The tool_use is already in the assistant message — we MUST provide a matching
-                // tool_result even on failure, otherwise the conversation gets corrupted.
-                const errMsg = toolErr instanceof Error ? toolErr.message : String(toolErr ?? 'unknown error');
-                result = { error: `Tool execution failed: ${errMsg}` };
-                log(`[ToolError] ${JSON.stringify({ turnId, tool: toolUse.name, toolUseId: toolUse.id, error: errMsg })}`, 'ERROR');
-            }
-
-            toolResults.push({
-                type: 'tool_result',
-                tool_use_id: toolUse.id,
-                content: truncateToolResult(JSON.stringify(result))
+        while (toolUseCount < MAX_TOOL_USES) {
+            const body = JSON.stringify({
+                model: MODEL,
+                max_tokens: 4096,
+                system: systemBlocks,
+                tools: _deps.getTools ? _deps.getTools() : [],
+                messages: messages
             });
-        }
 
-        // Add tool results to history — always pushed, even if some tools errored
-        messages.push({ role: 'user', content: toolResults });
-    }
+            const res = await claudeApiCall(body, chatId, { turnId, iteration: toolUseCount });
 
-    // Extract text response
-    let textContent = response.content.find(c => c.type === 'text');
-
-    // If no text in final response but we ran tools, make one more call so Claude
-    // can summarize the tool results for the user (e.g. after solana_send)
-    if (!textContent && toolUseCount > 0) {
-        log('No text in final tool response, requesting summary...', 'DEBUG');
-
-        // Add explicit summary prompt — without this, the model may return no text
-        // because the last message is tool_results and it may not realize it needs to respond
-        const summaryMessages = [...messages, {
-            role: 'user',
-            content: '[System: All tool operations are complete. Briefly summarize what was done and the results for the user. You MUST respond with text — do not use tools or return empty.]'
-        }];
-
-        const summaryRes = await claudeApiCall(JSON.stringify({
-            model: MODEL,
-            max_tokens: 4096,
-            system: systemBlocks,
-            messages: summaryMessages
-        }), chatId, { turnId, iteration: toolUseCount + 1 });
-
-        if (summaryRes.status === 200 && summaryRes.data.content) {
-            response = summaryRes.data;
-            textContent = response.content.find(c => c.type === 'text');
-            // Guard: if summary returned SILENT_REPLY token, treat as no text
-            // (model may use it because system prompt teaches SILENT_REPLY — but after tools, silence is wrong)
-            if (textContent && textContent.text.trim() === 'SILENT_REPLY') {
-                log('Summary returned SILENT_REPLY token — falling through to fallback', 'DEBUG');
-                textContent = null;
+            if (res.status !== 200) {
+                log(`Claude API error: ${res.status} - ${JSON.stringify(res.data)}`, 'ERROR');
+                const errClass = classifyApiError(res.status, res.data);
+                const userText = errClass.userMessage || `API error: ${res.status}`;
+                log(`[OutputPath] ${JSON.stringify({
+                    turnId, chatId: String(chatId), errorClass: errClass.type,
+                    rawError: `HTTP ${res.status}`, userVisibleText: userText
+                })}`, 'WARN');
+                const httpErr = new Error(userText);
+                httpErr._sanitized = true;
+                throw httpErr;
             }
-        }
 
-        // If summary call STILL produced no text, build a basic summary from tool results
-        // so the user is never left without a response after tool execution
-        if (!textContent) {
-            log('Summary call also produced no text — building fallback summary', 'DEBUG');
-            const toolNames = [];
-            for (const msg of messages) {
-                if (msg.role === 'assistant' && Array.isArray(msg.content)) {
-                    for (const block of msg.content) {
-                        if (block.type === 'tool_use' && !toolNames.includes(block.name)) {
-                            toolNames.push(block.name);
+            response = res.data;
+
+            // Check if we need to handle tool use
+            const toolUses = response.content.filter(c => c.type === 'tool_use');
+
+            if (toolUses.length === 0) {
+                // No tool use, we're done
+                break;
+            }
+
+            // Execute tools and add results
+            toolUseCount++;
+
+            // Add assistant's response with tool use to history
+            messages.push({ role: 'assistant', content: response.content });
+
+            // Execute each tool and collect results
+            // BAT-246: Each tool execution is individually guarded — if one tool throws,
+            // the others still run and ALL tool_use blocks get matching tool_result entries.
+            // This prevents orphaned pairs from partial tool execution failures.
+            const toolResults = [];
+            for (const toolUse of toolUses) {
+                log(`Tool use: ${toolUse.name}`, 'DEBUG');
+                let result;
+
+                try {
+                    // Confirmation gate: high-impact tools require explicit user YES
+                    if (CONFIRM_REQUIRED.has(toolUse.name)) {
+                        // Rate limit check first
+                        const rateLimit = TOOL_RATE_LIMITS[toolUse.name];
+                        const lastUse = _deps.lastToolUseTime ? _deps.lastToolUseTime.get(toolUse.name) : undefined;
+                        if (rateLimit && lastUse && (Date.now() - lastUse) < rateLimit) {
+                            const waitSec = Math.ceil((rateLimit - (Date.now() - lastUse)) / 1000);
+                            result = { error: `Rate limited: ${toolUse.name} can only be used once per ${rateLimit / 1000}s. Try again in ${waitSec}s.` };
+                            log(`[RateLimit] ${toolUse.name} blocked — ${waitSec}s remaining`, 'WARN');
+                        } else {
+                            // Ask user for confirmation
+                            const confirmed = await _deps.requestConfirmation(chatId, toolUse.name, toolUse.input);
+                            if (confirmed) {
+                                const status = deferStatus(chatId, TOOL_STATUS_MAP[toolUse.name]);
+                                try {
+                                    result = await _deps.executeTool(toolUse.name, toolUse.input, chatId);
+                                    if (_deps.lastToolUseTime) _deps.lastToolUseTime.set(toolUse.name, Date.now());
+                                } finally {
+                                    await status.cleanup();
+                                }
+                            } else {
+                                result = { error: 'Action canceled: user did not confirm (replied NO or timed out after 60s).' };
+                                log(`[Confirm] ${toolUse.name} rejected by user`, 'INFO');
+                            }
+                        }
+                    } else {
+                        // Normal tool execution (no confirmation needed)
+                        const status = deferStatus(chatId, TOOL_STATUS_MAP[toolUse.name]);
+                        try {
+                            result = await _deps.executeTool(toolUse.name, toolUse.input, chatId);
+                        } finally {
+                            await status.cleanup();
                         }
                     }
+                } catch (toolErr) {
+                    // BAT-246: Catch tool execution errors to prevent orphaned tool_use blocks.
+                    // The tool_use is already in the assistant message — we MUST provide a matching
+                    // tool_result even on failure, otherwise the conversation gets corrupted.
+                    const errMsg = toolErr instanceof Error ? toolErr.message : String(toolErr ?? 'unknown error');
+                    result = { error: `Tool execution failed: ${errMsg}` };
+                    log(`[ToolError] ${JSON.stringify({ turnId, tool: toolUse.name, toolUseId: toolUse.id, error: errMsg })}`, 'ERROR');
+                }
+
+                toolResults.push({
+                    type: 'tool_result',
+                    tool_use_id: toolUse.id,
+                    content: truncateToolResult(JSON.stringify(result))
+                });
+            }
+
+            // Add tool results to history — always pushed, even if some tools errored
+            messages.push({ role: 'user', content: toolResults });
+        }
+
+        // Extract text response
+        let textContent = response.content.find(c => c.type === 'text');
+
+        // Budget exhaustion explicit handling
+        if (toolUseCount >= MAX_TOOL_USES) {
+            log(`[Trace] ${JSON.stringify({ turnId, chatId: String(chatId || ''), toolUseCount, maxToolCalls: MAX_TOOL_USES, reason: 'tool_budget_exhausted', userFallbackSent: true })}`, 'WARN');
+            const fallback = "I hit the tool-call limit for this turn. Send 'continue' and I'll finish.";
+
+            addToConversation(chatId, 'assistant', fallback);
+
+            // Session summary tracking
+            {
+                const trk = getSessionTrack(chatId);
+                trk.lastMessageTime = Date.now();
+                trk.messageCount++;
+                const sinceLastSummary = Date.now() - (trk.lastSummaryTime || trk.firstMessageTime || Date.now());
+                if (trk.messageCount >= CHECKPOINT_MESSAGES || sinceLastSummary > CHECKPOINT_INTERVAL_MS) {
+                    saveSessionSummary(chatId, 'checkpoint').catch(e => log(`[SessionSummary] ${e.message}`, 'DEBUG'));
                 }
             }
-            const fallback = `Done — used ${toolUseCount} tool${toolUseCount !== 1 ? 's' : ''} (${toolNames.join(', ') || 'various'}).`;
-            addToConversation(chatId, 'assistant', fallback);
+
             return fallback;
         }
-    }
 
-    // If no text and NO tools were used, return SILENT_REPLY (genuine silent response)
-    if (!textContent) {
-        addToConversation(chatId, 'assistant', '[No response generated]');
-        log('No text content in response (no tools used), returning SILENT_REPLY', 'DEBUG');
-        return 'SILENT_REPLY';
-    }
-    const assistantMessage = textContent.text;
+        // If no text in final response but we ran tools, make one more call so Claude
+        // can summarize the tool results for the user (e.g. after solana_send)
+        if (!textContent && toolUseCount > 0) {
+            log('No text in final tool response, requesting summary...', 'DEBUG');
 
-    // Update conversation history with final response
-    addToConversation(chatId, 'assistant', assistantMessage);
+            // Add explicit summary prompt — without this, the model may return no text
+            // because the last message is tool_results and it may not realize it needs to respond
+            const summaryMessages = [...messages, {
+                role: 'user',
+                content: '[System: All tool operations are complete. Briefly summarize what was done and the results for the user. You MUST respond with text — do not use tools or return empty.]'
+            }];
 
-    // Session summary tracking (BAT-57)
-    {
-        const trk = getSessionTrack(chatId);
-        trk.lastMessageTime = Date.now();
-        trk.messageCount++;
-        const sinceLastSummary = Date.now() - (trk.lastSummaryTime || trk.firstMessageTime || Date.now());
-        if (trk.messageCount >= CHECKPOINT_MESSAGES || sinceLastSummary > CHECKPOINT_INTERVAL_MS) {
-            saveSessionSummary(chatId, 'checkpoint').catch(e => log(`[SessionSummary] ${e.message}`, 'DEBUG'));
+            const summaryRes = await claudeApiCall(JSON.stringify({
+                model: MODEL,
+                max_tokens: 4096,
+                system: systemBlocks,
+                messages: summaryMessages
+            }), chatId, { turnId, iteration: toolUseCount + 1 });
+
+            if (summaryRes.status === 200 && summaryRes.data.content) {
+                response = summaryRes.data;
+                textContent = response.content.find(c => c.type === 'text');
+                // Guard: if summary returned SILENT_REPLY token, treat as no text
+                // (model may use it because system prompt teaches SILENT_REPLY — but after tools, silence is wrong)
+                if (textContent && textContent.text.trim() === 'SILENT_REPLY') {
+                    log('Summary returned SILENT_REPLY token — falling through to fallback', 'DEBUG');
+                    textContent = null;
+                }
+            }
+
+            // If summary call STILL produced no text, build a basic summary from tool results
+            // so the user is never left without a response after tool execution
+            if (!textContent) {
+                log('Summary call also produced no text — building fallback summary', 'DEBUG');
+                const toolNames = [];
+                for (const msg of messages) {
+                    if (msg.role === 'assistant' && Array.isArray(msg.content)) {
+                        for (const block of msg.content) {
+                            if (block.type === 'tool_use' && !toolNames.includes(block.name)) {
+                                toolNames.push(block.name);
+                            }
+                        }
+                    }
+                }
+                const fallback = `Done — used ${toolUseCount} tool${toolUseCount !== 1 ? 's' : ''} (${toolNames.join(', ') || 'various'}).`;
+                addToConversation(chatId, 'assistant', fallback);
+                return fallback;
+            }
         }
-    }
 
-    return assistantMessage;
+        // If no text and NO tools were used, return SILENT_REPLY (genuine silent response)
+        if (!textContent) {
+            addToConversation(chatId, 'assistant', '[No response generated]');
+            log('No text content in response (no tools used), returning SILENT_REPLY', 'DEBUG');
+            return 'SILENT_REPLY';
+        }
+        const assistantMessage = textContent.text;
+
+        // Update conversation history with final response
+        addToConversation(chatId, 'assistant', assistantMessage);
+
+        // Session summary tracking (BAT-57)
+        {
+            const trk = getSessionTrack(chatId);
+            trk.lastMessageTime = Date.now();
+            trk.messageCount++;
+            const sinceLastSummary = Date.now() - (trk.lastSummaryTime || trk.firstMessageTime || Date.now());
+            if (trk.messageCount >= CHECKPOINT_MESSAGES || sinceLastSummary > CHECKPOINT_INTERVAL_MS) {
+                saveSessionSummary(chatId, 'checkpoint').catch(e => log(`[SessionSummary] ${e.message}`, 'DEBUG'));
+            }
+        }
+
+        return assistantMessage;
 
     } catch (apiErr) {
         // BAT-253: Sanitize network/timeout errors before they reach the user.
