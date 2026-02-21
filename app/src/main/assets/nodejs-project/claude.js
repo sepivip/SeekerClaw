@@ -11,7 +11,7 @@ const {
     workDir, MODEL, ANTHROPIC_KEY, AUTH_TYPE,
     REACTION_GUIDANCE, REACTION_NOTIFICATIONS, MEMORY_DIR,
     CONFIRM_REQUIRED, TOOL_RATE_LIMITS, TOOL_STATUS_MAP,
-    API_TIMEOUT_MS, API_TIMEOUT_RETRIES, API_TIMEOUT_BACKOFF_MS, API_TIMEOUT_MAX_BACKOFF_MS,
+    API_TIMEOUT_RETRIES, API_TIMEOUT_BACKOFF_MS, API_TIMEOUT_MAX_BACKOFF_MS,
     truncateToolResult,
     localTimestamp, localDateStr, log,
     getOwnerId,
@@ -1045,7 +1045,7 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
                 timeoutSource = res.status === 200 ? null : 'api_error';
                 log(`[Trace] ${JSON.stringify({
                     turnId, chatId: String(chatId || ''), iteration: iteration ?? null,
-                    attempt: retries, apiCallStart: localTimestamp(new Date(attemptStart)),
+                    attempt: retries + timeoutRetries, apiCallStart: localTimestamp(new Date(attemptStart)),
                     apiCallEnd: localTimestamp(new Date(attemptEnd)),
                     elapsedMs: attemptEnd - attemptStart, payloadSize, toolCount,
                     timeoutSource, status: res.status
@@ -1085,7 +1085,7 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
                     [localTimestamp(), String(chatId || ''),
                      usage?.input_tokens || 0, usage?.output_tokens || 0,
                      usage?.cache_creation_input_tokens || 0, usage?.cache_read_input_tokens || 0,
-                     res.status, retries, durationMs]
+                     res.status, retries + timeoutRetries, durationMs]
                 );
                 markDbSummaryDirty();
             } catch (dbErr) {
