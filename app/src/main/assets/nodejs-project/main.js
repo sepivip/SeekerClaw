@@ -125,7 +125,10 @@ const {
     saveSessionSummary, MIN_MESSAGES_FOR_SUMMARY, IDLE_TIMEOUT_MS,
     writeAgentHealthFile, writeClaudeUsageState,
     setChatDeps,
+    getActiveTask, clearActiveTask,
 } = require('./claude');
+
+const { loadCheckpoint, listCheckpoints, saveCheckpoint, deleteCheckpoint } = require('./task-store');
 
 // ============================================================================
 // TOOLS (extracted to tools.js — BAT-204)
@@ -184,6 +187,7 @@ Send me anything to get started!`;
 /status — bot status, uptime, model
 /new — archive session & start fresh
 /reset — wipe conversation (no backup)
+/resume — continue an interrupted task
 /skill — list skills (or \`/skill name\` to run one)
 /soul — view SOUL.md
 /memory — view MEMORY.md
@@ -396,6 +400,83 @@ Platform: \`${platform}\``;
             return '❌ Denied.';
         }
 
+        case '/resume': {
+            // P2.4 + P2.2: Resume an interrupted task (in-memory or disk checkpoint)
+            // IMPORTANT: Never delete the checkpoint here — let chat() clean up on
+            // successful completion via cleanupChatCheckpoints(chatId).
+            log(`[Resume] /resume invoked for chat ${chatId}`, 'INFO');
+
+            // Path A: in-memory active task (same session, no crash)
+            const task = getActiveTask(chatId);
+            if (task) {
+                log(`[Resume] PATH=memory taskId=${task.taskId} age=${Math.floor((Date.now() - task.startedAt) / 1000)}s reason=${task.reason}`, 'INFO');
+                clearActiveTask(chatId);
+                return { __resumeFallthrough: true };
+            }
+            log(`[Resume] No in-memory task, checking disk checkpoints...`, 'DEBUG');
+
+            // Path B: disk checkpoint (post-restart recovery)
+            const allCheckpoints = listCheckpoints();
+            const checkpoints = allCheckpoints.filter(cp => String(cp.chatId) === String(chatId) && !cp.complete);
+            log(`[Resume] Disk scan: ${allCheckpoints.length} total, ${checkpoints.length} matching chat ${chatId}`, 'INFO');
+
+            if (checkpoints.length === 0) {
+                log(`[Resume] PATH=none — no checkpoint found for chat ${chatId}`, 'INFO');
+                return `No interrupted task to resume.\n\nThis can happen if:\n• The task completed normally\n• The checkpoint expired (>7 days old)`;
+            }
+
+            const cp = checkpoints[0]; // Most recent
+            log(`[Resume] PATH=disk taskId=${cp.taskId} age=${Math.floor((Date.now() - (cp.updatedAt || cp.startedAt)) / 1000)}s reason=${cp.reason}`, 'INFO');
+
+            const full = loadCheckpoint(cp.taskId);
+            if (!full) {
+                log(`[Resume] FAIL: loadCheckpoint returned null for taskId=${cp.taskId}`, 'ERROR');
+                return `Found checkpoint for task ${cp.taskId} but it was corrupt. Please start the task again.`;
+            }
+            log(`[Resume] Loaded taskId=${cp.taskId}: conversationSlice=${Array.isArray(full.conversationSlice) ? full.conversationSlice.length : 'missing'} msgs, goal=${full.originalGoal ? '"' + full.originalGoal.slice(0, 60) + '"' : 'none'}`, 'INFO');
+
+            // Restore conversation from checkpoint
+            if (Array.isArray(full.conversationSlice) && full.conversationSlice.length > 0) {
+                const conv = getConversation(chatId);
+                let restored = full.conversationSlice;
+
+                // Safety net: drop leading orphan tool_results that have no preceding
+                // tool_use. These cause sanitizeConversation to strip them later,
+                // destroying context. (saveCheckpoint should already clean these,
+                // but older checkpoints may not have been cleaned.)
+                while (restored.length > 0) {
+                    const first = restored[0];
+                    if (first.role === 'user' && Array.isArray(first.content)
+                        && first.content.some(b => b.type === 'tool_result')) {
+                        log(`[Resume] Dropped leading orphan tool_result from restored slice`, 'DEBUG');
+                        restored = restored.slice(1);
+                    } else {
+                        break;
+                    }
+                }
+
+                // Ensure the restored slice ends with an assistant message so that
+                // chat() adding the resume instruction maintains valid role alternation.
+                // If it ends with a user message (mid-loop crash), append a synthetic
+                // assistant bridge message.
+                const lastRestored = restored[restored.length - 1];
+                if (lastRestored && lastRestored.role === 'user') {
+                    restored.push({ role: 'assistant', content: 'I was interrupted mid-task. Ready to continue.' });
+                    log(`[Resume] Appended bridge assistant message (last restored was user role)`, 'DEBUG');
+                }
+
+                // Splice into conversation (prepend for priority over any post-restart chat)
+                conv.splice(0, 0, ...restored);
+                log(`[Resume] OK: restored ${restored.length} messages into conversation (total: ${conv.length})`, 'INFO');
+            } else {
+                log(`[Resume] WARN: checkpoint ${cp.taskId} had empty conversation slice`, 'WARN');
+            }
+
+            // Checkpoint stays on disk — chat() will call cleanupChatCheckpoints()
+            // on successful completion.
+            return { __resumeFallthrough: true, originalGoal: full.originalGoal || null };
+        }
+
         default:
             return null; // Not a command — falls through to agent
     }
@@ -456,6 +537,10 @@ async function handleMessage(msg) {
     log(`Message: ${rawText ? rawText.slice(0, 100) + (rawText.length > 100 ? '...' : '') : '(no text)'}${media ? ` [${media.type}]` : ''}${msg.reply_to_message ? ' [reply]' : ''}`, 'DEBUG');
 
     try {
+        // P2.4: resume flag — set by /resume handler, passed to chat() as option
+        let isResume = false;
+        let resumeGoal = null;
+
         // Check for commands (use rawText so /commands work even in replies)
         if (rawText.startsWith('/')) {
             const [commandToken, ...argParts] = rawText.split(' ');
@@ -467,6 +552,13 @@ async function handleMessage(msg) {
                 // /skill <name> matched — rewrite text to trigger word so
                 // findMatchingSkills() picks up the skill via word-boundary match
                 text = response.trigger;
+            } else if (response?.__resumeFallthrough) {
+                // P2.4: /resume matched — fall through to chat() with isResume flag.
+                // The resume directive is injected into the system prompt by chat(),
+                // not as a user message (system directives are authoritative).
+                isResume = true;
+                resumeGoal = response.originalGoal || null;
+                text = 'continue';
             } else if (response) {
                 await sendMessage(chatId, response, msg.message_id);
                 return;
@@ -589,7 +681,7 @@ async function handleMessage(msg) {
             }
         }
 
-        let response = await chat(chatId, userContent);
+        let response = await chat(chatId, userContent, { isResume, originalGoal: resumeGoal });
 
         // Handle special tokens (OpenClaw-style)
         // SILENT_REPLY - discard the message
@@ -700,6 +792,128 @@ function enqueueMessage(msg) {
     next.then(() => {
         if (chatQueues.get(chatId) === next) chatQueues.delete(chatId);
     });
+}
+
+// ============================================================================
+// P2.4b: AUTO-RESUME — scan for fresh incomplete checkpoints on startup
+// ============================================================================
+
+const AUTO_RESUME_MAX_AGE_MS = 5 * 60 * 1000; // Only auto-resume checkpoints < 5 min old
+const AUTO_RESUME_MAX_ATTEMPTS = 2;            // Give up after 2 auto-resume attempts
+
+/**
+ * Called once after poll() starts. Scans for incomplete checkpoints young enough
+ * to auto-resume. Older checkpoints require manual /resume.
+ */
+async function autoResumeOnStartup() {
+    try {
+        const allCheckpoints = listCheckpoints();
+        const incomplete = allCheckpoints.filter(cp => !cp.complete);
+        if (incomplete.length === 0) {
+            log(`[AutoResume] No incomplete checkpoints found`, 'DEBUG');
+            return;
+        }
+
+        const now = Date.now();
+        for (const cp of incomplete) {
+            const age = now - (cp.updatedAt || cp.startedAt || 0);
+            const ageStr = `${Math.floor(age / 1000)}s`;
+
+            // Skip checkpoints that are too old
+            if (age > AUTO_RESUME_MAX_AGE_MS) {
+                log(`[AutoResume] SKIP taskId=${cp.taskId} age=${ageStr} (> ${AUTO_RESUME_MAX_AGE_MS / 1000}s, use /resume)`, 'DEBUG');
+                continue;
+            }
+
+            // Load full checkpoint to check resumeAttempts
+            const full = loadCheckpoint(cp.taskId);
+            if (!full) {
+                log(`[AutoResume] SKIP taskId=${cp.taskId} — corrupt checkpoint`, 'WARN');
+                continue;
+            }
+
+            // Check resume attempt cap (prevent crash loops)
+            const attempts = full.resumeAttempts || 0;
+            if (attempts >= AUTO_RESUME_MAX_ATTEMPTS) {
+                log(`[AutoResume] SKIP taskId=${cp.taskId} — ${attempts} prior attempts (max ${AUTO_RESUME_MAX_ATTEMPTS})`, 'WARN');
+                // Notify user about the stuck task
+                const chatId = full.chatId;
+                if (chatId) {
+                    sendMessage(chatId, `Task ${cp.taskId} failed after ${attempts} auto-resume attempts. Use /resume to try manually, or start the task again.`).catch(() => {});
+                }
+                continue;
+            }
+
+            const chatId = full.chatId;
+            if (!chatId) {
+                log(`[AutoResume] SKIP taskId=${cp.taskId} — no chatId in checkpoint`, 'WARN');
+                continue;
+            }
+
+            // Increment resumeAttempts before attempting (survives crash during resume)
+            // Placed after all skip checks so failed validations don't burn attempts.
+            full.resumeAttempts = attempts + 1;
+            saveCheckpoint(cp.taskId, full);
+
+            const goalSnippet = full.originalGoal ? full.originalGoal.slice(0, 80) : null;
+            log(`[AutoResume] RESUMING taskId=${cp.taskId} chatId=${chatId} age=${ageStr} attempt=${full.resumeAttempts}/${AUTO_RESUME_MAX_ATTEMPTS} goal=${goalSnippet ? '"' + goalSnippet + '"' : 'none'}`, 'INFO');
+
+            // Restore conversation from checkpoint BEFORE notifying user
+            // (prevents notification from interfering with conversation state)
+            if (Array.isArray(full.conversationSlice) && full.conversationSlice.length > 0) {
+                const conv = getConversation(chatId);
+                let restored = full.conversationSlice;
+
+                // Drop leading orphan tool_results
+                while (restored.length > 0) {
+                    const first = restored[0];
+                    if (first.role === 'user' && Array.isArray(first.content)
+                        && first.content.some(b => b.type === 'tool_result')) {
+                        log(`[AutoResume] Dropped leading orphan tool_result`, 'DEBUG');
+                        restored = restored.slice(1);
+                    } else {
+                        break;
+                    }
+                }
+
+                // Ensure valid role alternation: last message must be assistant
+                const lastRestored = restored[restored.length - 1];
+                if (lastRestored && lastRestored.role === 'user') {
+                    restored.push({ role: 'assistant', content: 'I was interrupted mid-task. Ready to continue.' });
+                    log(`[AutoResume] Appended bridge assistant message`, 'DEBUG');
+                }
+
+                conv.splice(0, 0, ...restored);
+                log(`[AutoResume] Restored ${restored.length} messages into conversation`, 'INFO');
+            }
+
+            // Notify user after conversation is restored
+            const goalHint = goalSnippet ? `\n> ${goalSnippet}${full.originalGoal.length > 80 ? '...' : ''}` : '';
+            await sendMessage(chatId, `Resuming interrupted task (${cp.taskId})...${goalHint}`);
+
+            // Queue the resume through chatQueues to serialize with any incoming messages
+            const prev = chatQueues.get(chatId) || Promise.resolve();
+            const task = prev.then(async () => {
+                try {
+                    const response = await chat(chatId, 'continue', { isResume: true, originalGoal: full.originalGoal || null });
+                    if (response && response.trim() !== 'SILENT_REPLY'
+                        && !response.trim().startsWith('HEARTBEAT_OK')) {
+                        await sendMessage(chatId, response);
+                    }
+                } catch (e) {
+                    log(`[AutoResume] chat() error: ${e.message}`, 'ERROR');
+                    await sendMessage(chatId, `Auto-resume failed: ${e.message}`).catch(() => {});
+                }
+            });
+            chatQueues.set(chatId, task);
+            task.then(() => { if (chatQueues.get(chatId) === task) chatQueues.delete(chatId); });
+
+            // Only resume one task per startup (conservative)
+            break;
+        }
+    } catch (e) {
+        log(`[AutoResume] Startup scan failed: ${e.message}`, 'ERROR');
+    }
 }
 
 async function poll() {
@@ -961,6 +1175,7 @@ telegram('getMe')
                     { command: 'memory', description: 'View MEMORY.md' },
                     { command: 'logs', description: 'Last 10 log entries' },
                     { command: 'version', description: 'App & runtime versions' },
+                    { command: 'resume', description: 'Resume an interrupted task' },
                     { command: 'approve', description: 'Confirm pending action' },
                     { command: 'deny', description: 'Reject pending action' },
                     { command: 'help', description: 'List all commands' },
@@ -973,6 +1188,10 @@ telegram('getMe')
 
             poll();
             startClaudeUsagePolling();
+
+            // P2.4b: Auto-resume fresh incomplete checkpoints after startup
+            // Delayed 3s so poll() is active and can receive updates during resume
+            setTimeout(() => autoResumeOnStartup(), 3000);
 
             // Initialize MCP servers in background (non-blocking, won't delay Telegram)
             if (MCP_SERVERS.length > 0) {

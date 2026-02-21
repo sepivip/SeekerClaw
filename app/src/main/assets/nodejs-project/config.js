@@ -176,6 +176,7 @@ const MEMORY_PATH = path.join(workDir, 'MEMORY.md');
 const HEARTBEAT_PATH = path.join(workDir, 'HEARTBEAT.md');
 const MEMORY_DIR = path.join(workDir, 'memory');
 const SKILLS_DIR = path.join(workDir, 'skills');
+const TASKS_DIR = path.join(workDir, 'tasks');  // P2.2: disk-backed task checkpoints
 const DB_PATH = path.join(workDir, 'seekerclaw.db');
 
 // Ensure directories exist
@@ -184,6 +185,9 @@ if (!fs.existsSync(MEMORY_DIR)) {
 }
 if (!fs.existsSync(SKILLS_DIR)) {
     fs.mkdirSync(SKILLS_DIR, { recursive: true });
+}
+if (!fs.existsSync(TASKS_DIR)) {
+    fs.mkdirSync(TASKS_DIR, { recursive: true });
 }
 
 // ============================================================================
@@ -354,6 +358,7 @@ module.exports = {
     HEARTBEAT_PATH,
     MEMORY_DIR,
     SKILLS_DIR,
+    TASKS_DIR,
     DB_PATH,
 
     // Truncation
