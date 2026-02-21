@@ -25,7 +25,7 @@ function httpRequest(options, body = null) {
             });
         });
         req.on('error', reject);
-        req.setTimeout(60000, () => { req.destroy(); reject(new Error('Timeout')); });
+        req.setTimeout(60000, () => { req.destroy(); const err = new Error('Timeout'); err.timeoutSource = 'transport'; reject(err); });
         if (body) req.write(typeof body === 'string' ? body : JSON.stringify(body));
         req.end();
     });
