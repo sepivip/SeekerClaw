@@ -28,6 +28,7 @@ const {
 
 const { findMatchingSkills, loadSkills } = require('./skills');
 const { getDb, markDbSummaryDirty, indexMemoryFiles } = require('./database');
+const { saveCheckpoint, cleanupChatCheckpoints } = require('./task-store');
 
 // ── Injected dependencies (set from main.js at startup) ───────────────────
 // These break circular deps and reference things that still live in main.js
@@ -172,6 +173,24 @@ function updateAgentHealth(newStatus, errorInfo) {
 const conversations = new Map();
 const MAX_HISTORY = 20;
 let sessionStartedAt = Date.now();
+
+// ── Active task tracking (P2.4) ─────────────────────────────────────────────
+// Maps chatId → { taskId, startedAt, toolUseCount, reason } or null.
+// In-memory only — survives budget exhaustion but NOT process restarts.
+// P2.2 will add disk-backed checkpoints; P2.4b will add auto-resume.
+const activeTasks = new Map();
+
+function setActiveTask(chatId, taskId) {
+    activeTasks.set(String(chatId), { taskId, startedAt: Date.now(), toolUseCount: 0, reason: null });
+}
+
+function getActiveTask(chatId) {
+    return activeTasks.get(String(chatId)) || null;
+}
+
+function clearActiveTask(chatId) {
+    activeTasks.delete(String(chatId));
+}
 
 // Session summary tracking — per-chatId state (BAT-57)
 const sessionTracking = new Map(); // chatId → { lastMessageTime, messageCount, lastSummaryTime }
@@ -1305,7 +1324,7 @@ function sanitizeConversation(messages, turnId) {
 // CHAT
 // ============================================================================
 
-async function chat(chatId, userMessage) {
+async function chat(chatId, userMessage, options = {}) {
     // Mark active immediately to prevent idle timer triggering during in-flight API calls
     const track = getSessionTrack(chatId);
     track.lastMessageTime = Date.now();
@@ -1314,27 +1333,60 @@ async function chat(chatId, userMessage) {
     // BAT-243: Generate unique turn ID for correlating all API calls in this turn
     const turnId = crypto.randomBytes(4).toString('hex');
 
+    // P2.4: Generate taskId for this turn (used for resume tracking)
+    const taskId = crypto.randomBytes(4).toString('hex');
+    setActiveTask(chatId, taskId);
+
     // userMessage can be a string or an array of content blocks (for vision)
-    // Extract text for skill matching
-    const textForSkills = typeof userMessage === 'string'
-        ? userMessage
-        : (userMessage.find(b => b.type === 'text')?.text || '');
+    // Extract text for skill matching (skip for resume — don't trigger skills)
+    const textForSkills = options.isResume ? '' : (
+        typeof userMessage === 'string'
+            ? userMessage
+            : (userMessage.find(b => b.type === 'text')?.text || '')
+    );
     const matchedSkills = findMatchingSkills(textForSkills);
     if (matchedSkills.length > 0) {
         log(`Matched skills: ${matchedSkills.map(s => s.name).join(', ')}`, 'DEBUG');
     }
 
     const { stable: stablePrompt, dynamic: dynamicPrompt } = buildSystemBlocks(matchedSkills, chatId);
+
+    // P2.2: Resume directive — injected as a high-priority system block so Claude
+    // cannot ignore it. User messages are suggestions; system directives are orders.
+    let resumeBlock = '';
+    if (options.isResume) {
+        const goalLine = options.originalGoal
+            ? `\nORIGINAL USER REQUEST: "${options.originalGoal}"\n`
+            : '';
+        resumeBlock = '\n\n## MANDATORY TASK RESUME\n' +
+            'You are resuming an interrupted task. The conversation history above was ' +
+            'restored from a checkpoint after a tool-budget hit or crash.\n' +
+            goalLine +
+            'RULES:\n' +
+            '- Do NOT greet the user or introduce yourself\n' +
+            '- Do NOT give a status update or system summary\n' +
+            '- Do NOT start a new conversation\n' +
+            '- IMMEDIATELY continue the interrupted task from where you left off\n' +
+            '- Use tools to finish the remaining work\n' +
+            '- If you are unsure what was being done, examine the tool_use/tool_result ' +
+            'history in the conversation and pick up from there';
+        log(`[Resume] Injected system prompt resume directive for turn ${turnId}${options.originalGoal ? ` goal="${options.originalGoal.slice(0, 80)}"` : ''}`, 'DEBUG');
+    }
+
     // Two system blocks: large stable block (cached) + small dynamic block (per-request)
     const systemBlocks = [
         { type: 'text', text: stablePrompt, cache_control: { type: 'ephemeral' } },
-        { type: 'text', text: dynamicPrompt },
+        { type: 'text', text: dynamicPrompt + resumeBlock },
     ];
 
     // Add user message to history
     addToConversation(chatId, 'user', userMessage);
 
     const messages = getConversation(chatId);
+
+    // P2.4b: Extract original goal from conversation for checkpoint persistence.
+    // On resume, this lets the agent know exactly what it was trying to accomplish.
+    const originalGoal = options.originalGoal || _extractOriginalGoal(messages);
 
     // Fix any orphaned tool_use/tool_result blocks from previous failed calls
     // (prevents 400 errors from Claude API due to mismatched pairs)
@@ -1449,6 +1501,23 @@ async function chat(chatId, userMessage) {
 
             // Add tool results to history — always pushed, even if some tools errored
             messages.push({ role: 'user', content: toolResults });
+
+            // P2.2: Durable checkpoint after each tool round
+            const cpDuration = saveCheckpoint(taskId, {
+                taskId,
+                chatId: String(chatId),
+                turnId,
+                startedAt: getActiveTask(chatId)?.startedAt || Date.now(),
+                toolUseCount,
+                maxToolUses: MAX_TOOL_USES,
+                complete: false,
+                reason: null,
+                originalGoal,
+                conversationSlice: messages.slice(-8),
+            });
+            if (cpDuration >= 0) {
+                log(`[Trace] ${JSON.stringify({ turnId, taskId, checkpoint: 'saved', toolUseCount, durationMs: cpDuration })}`, 'DEBUG');
+            }
         }
 
         // Extract text response
@@ -1456,10 +1525,34 @@ async function chat(chatId, userMessage) {
 
         // Budget exhaustion explicit handling
         if (toolUseCount >= MAX_TOOL_USES) {
-            log(`[Trace] ${JSON.stringify({ turnId, chatId: String(chatId || ''), toolUseCount, maxToolCalls: MAX_TOOL_USES, reason: 'tool_budget_exhausted', userFallbackSent: true })}`, 'WARN');
-            const fallback = "I hit the tool-call limit for this turn. Send 'continue' and I'll finish.";
+            // P2.4: Track exhaustion reason in activeTask
+            const task = getActiveTask(chatId);
+            if (task) {
+                task.toolUseCount = toolUseCount;
+                task.reason = 'budget_exhausted';
+            }
 
+            log(`[Trace] ${JSON.stringify({ turnId, taskId, chatId: String(chatId || ''), toolUseCount, maxToolCalls: MAX_TOOL_USES, reason: 'tool_budget_exhausted', userFallbackSent: true })}`, 'WARN');
+            const fallback = `I hit the tool-call limit for this turn (task ${taskId}). Send 'continue' or /resume to pick up where I left off.`;
+
+            // Add fallback to conversation BEFORE saving checkpoint so the
+            // checkpoint slice ends with an assistant message. This ensures
+            // valid role alternation on restore (assistant → user: "continue").
             addToConversation(chatId, 'assistant', fallback);
+
+            // P2.2: Save checkpoint with budget_exhausted reason (survives crash)
+            saveCheckpoint(taskId, {
+                taskId,
+                chatId: String(chatId),
+                turnId,
+                startedAt: task?.startedAt || Date.now(),
+                toolUseCount,
+                maxToolUses: MAX_TOOL_USES,
+                complete: false,
+                reason: 'budget_exhausted',
+                originalGoal,
+                conversationSlice: messages.slice(-8),
+            });
 
             // Session summary tracking
             {
@@ -1520,6 +1613,8 @@ async function chat(chatId, userMessage) {
                     }
                 }
                 const fallback = `Done — used ${toolUseCount} tool${toolUseCount !== 1 ? 's' : ''} (${toolNames.join(', ') || 'various'}).`;
+                clearActiveTask(chatId);
+                cleanupChatCheckpoints(chatId);
                 addToConversation(chatId, 'assistant', fallback);
                 return fallback;
             }
@@ -1527,11 +1622,22 @@ async function chat(chatId, userMessage) {
 
         // If no text and NO tools were used, return SILENT_REPLY (genuine silent response)
         if (!textContent) {
+            clearActiveTask(chatId);
+            // Only clean up checkpoints if tools were used (task progressed).
+            // A text-only response (e.g. failed resume attempt) should not wipe checkpoints.
+            if (toolUseCount > 0) cleanupChatCheckpoints(chatId);
             addToConversation(chatId, 'assistant', '[No response generated]');
             log('No text content in response (no tools used), returning SILENT_REPLY', 'DEBUG');
             return 'SILENT_REPLY';
         }
         const assistantMessage = textContent.text;
+
+        // P2.4: Task completed successfully — clear active task
+        clearActiveTask(chatId);
+        // P2.2: Only clean up checkpoints if tools were used (task actually progressed).
+        // If Claude responded with text-only (e.g. treated resume as fresh chat),
+        // the checkpoint must survive for a retry.
+        if (toolUseCount > 0) cleanupChatCheckpoints(chatId);
 
         // Update conversation history with final response
         addToConversation(chatId, 'assistant', assistantMessage);
@@ -1564,6 +1670,34 @@ async function chat(chatId, userMessage) {
 }
 
 // ============================================================================
+// INTERNAL HELPERS
+// ============================================================================
+
+/**
+ * Extract the original user goal from conversation history.
+ * Walks messages to find the first plain-text user message (not a tool_result,
+ * not a "continue", not a system event). Returns truncated to 500 chars.
+ */
+function _extractOriginalGoal(messages) {
+    for (const msg of messages) {
+        if (msg.role !== 'user') continue;
+        let text = '';
+        if (typeof msg.content === 'string') {
+            text = msg.content;
+        } else if (Array.isArray(msg.content)) {
+            // Skip tool_result messages
+            if (msg.content.some(b => b.type === 'tool_result')) continue;
+            const textBlock = msg.content.find(b => b.type === 'text');
+            if (textBlock) text = textBlock.text;
+        }
+        // Skip empty, resume triggers, and system events
+        if (!text || text === 'continue' || text.startsWith('[system event]') || text.startsWith('[TASK RESUME]')) continue;
+        return text.slice(0, 500);
+    }
+    return null;
+}
+
+// ============================================================================
 // EXPORTS
 // ============================================================================
 
@@ -1587,6 +1721,8 @@ module.exports = {
     },
     // Sanitizer diagnostics (BAT-246)
     sanitizerStats,
+    // Task tracking (P2.4)
+    getActiveTask, clearActiveTask,
     // Injection
     setChatDeps,
 };
