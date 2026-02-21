@@ -202,6 +202,7 @@ fun AnthropicConfigScreen(onBack: () -> Unit) {
                         testStatus = "Loading"
                         testMessage = ""
                         val activeCredential = config?.activeCredential ?: ""
+                        val authType = config?.authType ?: "api_key"
                         if (activeCredential.isBlank()) {
                             testStatus = "Error"
                             testMessage = "Credential is empty."
@@ -209,7 +210,7 @@ fun AnthropicConfigScreen(onBack: () -> Unit) {
                         }
                         
                         scope.launch {
-                            val result = testAnthropicConnection(activeCredential)
+                            val result = testAnthropicConnection(activeCredential, authType)
                             if (result.isSuccess) {
                                 testStatus = "Success"
                                 testMessage = "Connection successful!"
@@ -246,7 +247,7 @@ fun AnthropicConfigScreen(onBack: () -> Unit) {
                         text = testMessage,
                         fontFamily = RethinkSans,
                         fontSize = 13.sp,
-                        color = if (testStatus == "Success") SeekerClawColors.Primary else SeekerClawColors.Error,
+                        color = if (testStatus == "Success") SeekerClawColors.ActionPrimary else SeekerClawColors.Error,
                     )
                 }
             }
@@ -447,12 +448,18 @@ fun AnthropicConfigScreen(onBack: () -> Unit) {
     }
 }
 
-private suspend fun testAnthropicConnection(credential: String): Result<Unit> = withContext(Dispatchers.IO) {
+private suspend fun testAnthropicConnection(credential: String, authType: String): Result<Unit> = withContext(Dispatchers.IO) {
     runCatching {
         val url = URL("https://api.anthropic.com/v1/models") // models endpoint requires auth
         val conn = url.openConnection() as HttpURLConnection
         conn.requestMethod = "GET"
-        conn.setRequestProperty("x-api-key", credential)
+        if (authType == "setup_token") {
+            conn.setRequestProperty("Authorization", "Bearer $credential")
+            conn.setRequestProperty("anthropic-beta", "prompt-caching-2024-07-31,oauth-2025-04-20")
+        } else {
+            conn.setRequestProperty("x-api-key", credential)
+            conn.setRequestProperty("anthropic-beta", "prompt-caching-2024-07-31")
+        }
         conn.setRequestProperty("anthropic-version", "2023-06-01")
         conn.connectTimeout = 15000
         conn.readTimeout = 15000
@@ -462,19 +469,27 @@ private suspend fun testAnthropicConnection(credential: String): Result<Unit> = 
             if (status in 200..299) {
                 return@runCatching
             } else {
-                val errorStream = conn.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
                 var errorMessage = "HTTP $status"
-                try {
-                    val json = JSONObject(errorStream)
-                    val err = json.optJSONObject("error")
-                    if (err != null && err.has("message")) {
-                        errorMessage += ": ${err.getString("message")}"
+                if (status == 401 || status == 403) {
+                    errorMessage = "Unauthorized / Invalid credential"
+                } else if (status in 500..599) {
+                    errorMessage = "Anthropic API unavailable"
+                } else {
+                    val errorStream = conn.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
+                    try {
+                        val json = JSONObject(errorStream)
+                        val err = json.optJSONObject("error")
+                        if (err != null && err.has("message")) {
+                            errorMessage += ": ${err.getString("message")}"
+                        }
+                    } catch (e: Exception) {
+                        // Ignore JSON parsing errors
                     }
-                } catch (e: Exception) {
-                    // Ignore JSON parsing errors
                 }
                 error("Connection failed ($errorMessage)")
             }
+        } catch (e: java.io.IOException) {
+            error("Network unreachable or timeout")
         } finally {
             conn.disconnect()
         }

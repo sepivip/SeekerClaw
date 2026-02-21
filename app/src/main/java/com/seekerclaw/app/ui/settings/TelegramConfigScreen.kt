@@ -204,7 +204,7 @@ fun TelegramConfigScreen(onBack: () -> Unit) {
                         text = testMessage,
                         fontFamily = RethinkSans,
                         fontSize = 13.sp,
-                        color = if (testStatus == "Success") SeekerClawColors.Primary else SeekerClawColors.Error,
+                        color = if (testStatus == "Success") SeekerClawColors.ActionPrimary else SeekerClawColors.Error,
                     )
                 }
             }
