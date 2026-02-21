@@ -46,7 +46,7 @@
    - First attempt times out after ~1 second
    - `[Trace]` log shows `timeoutSource: "transport"`, `status: -1`
    - `[Retry]` log: "Transport timeout, retry 1/2, backoff XXXms"
-   - Second attempt after backoff delay (400-600ms range with jitter)
+   - Second attempt after backoff delay (375-625ms range with jitter)
    - If all retries exhaust: error message returned to user
    - DB log (`api_request_log`) records `retry_count >= 1`, `status: -1`
 4. Restore original config after test
