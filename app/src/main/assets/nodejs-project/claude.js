@@ -905,6 +905,9 @@ function classifyApiError(status, data) {
 // BAT-253: Classify network-level errors into user-friendly messages
 function classifyNetworkError(err) {
     const raw = err.message || String(err);
+    if (err.code === 'SESSION_EXPIRED') {
+        return { type: 'session_expired', userMessage: 'Your session has expired. Please re-pair with Settings.' };
+    }
     if (err.timeoutSource === 'transport' || /timeout/i.test(raw)) {
         return { type: 'timeout', userMessage: 'The AI took too long to respond. Please try again.' };
     }
