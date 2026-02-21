@@ -1472,7 +1472,7 @@ async function chat(chatId, userMessage) {
                 }
             }
 
-            return textContent && textContent.text && textContent.text !== 'SILENT_REPLY' ? textContent.text.trim() + '\n\n' + fallback : fallback;
+            return fallback;
         }
 
         // If no text in final response but we ran tools, make one more call so Claude
