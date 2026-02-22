@@ -1,6 +1,7 @@
 package com.seekerclaw.app.util
 
 import android.content.Context
+import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -20,16 +21,29 @@ data class LogEntry(
 enum class LogLevel { DEBUG, INFO, WARN, ERROR }
 
 object LogCollector {
+    private const val TAG = "LogCollector"
     private const val MAX_LINES = 300
     private const val LOG_FILE_NAME = "service_logs"
 
     private val _logs = MutableStateFlow<List<LogEntry>>(emptyList())
     val logs: StateFlow<List<LogEntry>> = _logs
 
+    /** Total entries in the buffer (pre-filter). UI can read this for diagnostics. */
+    val bufferedCount: Int get() = _logs.value.size
+
+    /** Timestamp of the most recent log entry, or null if empty. */
+    val lastTimestamp: Long? get() = _logs.value.lastOrNull()?.timestamp
+
     private var logFile: File? = null
     private var pollingJob: Job? = null
-    private var lastReadPosition = 0L
+    @Volatile private var lastReadPosition = 0L
     private val scope = CoroutineScope(Dispatchers.IO)
+
+    // Lock for all in-memory _logs mutations to prevent TOCTOU races.
+    // Multiple threads (Watchdog IO, ServiceState IO, file polling IO) call append()
+    // concurrently — without this lock, concurrent read-modify-write on _logs.value
+    // silently drops entries (the primary cause of the "empty console" bug).
+    private val logsLock = Any()
 
     fun init(context: Context) {
         logFile = File(context.filesDir, LOG_FILE_NAME)
@@ -38,24 +52,30 @@ object LogCollector {
     fun append(message: String, level: LogLevel = LogLevel.INFO) {
         val entry = LogEntry(message = message, level = level)
 
-        // Update in-memory list (for same-process access)
-        val current = _logs.value.toMutableList()
-        current.add(entry)
-        if (current.size > MAX_LINES) {
-            current.removeAt(0)
+        // Thread-safe update of in-memory list
+        synchronized(logsLock) {
+            val current = _logs.value.toMutableList()
+            current.add(entry)
+            if (current.size > MAX_LINES) {
+                current.removeAt(0)
+            }
+            _logs.value = current
         }
-        _logs.value = current
 
         // Also write to shared file (for cross-process access)
         writeToFile(entry)
     }
 
     fun clear() {
-        _logs.value = emptyList()
+        synchronized(logsLock) {
+            _logs.value = emptyList()
+        }
         try {
             logFile?.writeText("")
             lastReadPosition = 0L
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to clear log file", e)
+        }
     }
 
     /**
@@ -64,13 +84,22 @@ object LogCollector {
      */
     fun startPolling(context: Context) {
         init(context)
-        // Read existing logs on start
+
+        // Guard: skip if a polling loop is already running (mirrors ServiceState BAT-217 fix).
+        if (pollingJob?.isActive == true) {
+            Log.d(TAG, "startPolling: already active, skipping")
+            return
+        }
+
+        // Read existing logs from file so the UI has data immediately
         readAllFromFile()
+        Log.d(TAG, "startPolling: launched, loaded ${_logs.value.size} entries from file")
+
         pollingJob?.cancel()
         pollingJob = scope.launch {
             while (isActive) {
-                readNewFromFile()
                 delay(1000)
+                readNewFromFile()
             }
         }
     }
@@ -79,7 +108,9 @@ object LogCollector {
         val file = logFile ?: return
         try {
             file.appendText("${entry.timestamp}|${entry.level.name}|${entry.message}\n")
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to write log entry to file", e)
+        }
     }
 
     private fun readAllFromFile() {
@@ -87,6 +118,7 @@ object LogCollector {
         try {
             if (!file.exists()) return
             val fileLength = file.length()
+            if (fileLength == 0L) return
             // Only read the tail of the file to avoid OOM on large logs
             // ~200 bytes per log line × MAX_LINES = ~60KB is plenty
             val tailBytes = minOf(fileLength, MAX_LINES * 200L)
@@ -99,9 +131,13 @@ object LogCollector {
                 .filter { it.isNotBlank() }
                 .drop(1) // first line may be partial (we seeked mid-line)
             val entries = lines.mapNotNull { parseLine(it) }.takeLast(MAX_LINES)
-            _logs.value = entries
+            synchronized(logsLock) {
+                _logs.value = entries
+            }
             lastReadPosition = fileLength
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to read log file (full)", e)
+        }
     }
 
     private fun readNewFromFile() {
@@ -109,12 +145,13 @@ object LogCollector {
         try {
             if (!file.exists()) return
             val currentLength = file.length()
-            if (currentLength <= lastReadPosition) return
+            val pos = lastReadPosition
+            if (currentLength <= pos) return
 
             // Read only new bytes
             val raf = java.io.RandomAccessFile(file, "r")
-            raf.seek(lastReadPosition)
-            val newBytes = ByteArray((currentLength - lastReadPosition).toInt())
+            raf.seek(pos)
+            val newBytes = ByteArray((currentLength - pos).toInt())
             raf.readFully(newBytes)
             raf.close()
             lastReadPosition = currentLength
@@ -123,13 +160,17 @@ object LogCollector {
             val newEntries = newLines.mapNotNull { parseLine(it) }
             if (newEntries.isEmpty()) return
 
-            val current = _logs.value.toMutableList()
-            current.addAll(newEntries)
-            while (current.size > MAX_LINES) {
-                current.removeAt(0)
+            synchronized(logsLock) {
+                val current = _logs.value.toMutableList()
+                current.addAll(newEntries)
+                while (current.size > MAX_LINES) {
+                    current.removeAt(0)
+                }
+                _logs.value = current
             }
-            _logs.value = current
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to read new log entries from file", e)
+        }
     }
 
     private fun parseLine(line: String): LogEntry? {
