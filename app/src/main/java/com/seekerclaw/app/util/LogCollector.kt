@@ -177,8 +177,8 @@ object LogCollector {
                     current.removeAt(0)
                 }
                 _logs.value = current
+                lastReadPosition = currentLength
             }
-            lastReadPosition = currentLength
         } catch (e: Exception) {
             Log.w(TAG, "Failed to read new log entries from file", e)
         }
