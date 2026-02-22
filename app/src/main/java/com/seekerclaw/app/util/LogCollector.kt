@@ -127,9 +127,10 @@ object LogCollector {
             val bytes = ByteArray(tailBytes.toInt())
             raf.readFully(bytes)
             raf.close()
+            val seekedMidFile = tailBytes < fileLength
             val lines = String(bytes).lines()
                 .filter { it.isNotBlank() }
-                .drop(1) // first line may be partial (we seeked mid-line)
+                .let { if (seekedMidFile) it.drop(1) else it } // drop partial first line only when we seeked mid-file
             val entries = lines.mapNotNull { parseLine(it) }.takeLast(MAX_LINES)
             synchronized(logsLock) {
                 _logs.value = entries
@@ -148,10 +149,19 @@ object LogCollector {
             val pos = lastReadPosition
             if (currentLength <= pos) return
 
+            val delta = currentLength - pos
+            // Cap per-poll read to prevent OOM after long background gaps.
+            // If delta exceeds our tail budget, fall back to full tail read.
+            val maxDelta = MAX_LINES * 200L
+            if (delta > maxDelta) {
+                readAllFromFile()
+                return
+            }
+
             // Read only new bytes
             val raf = java.io.RandomAccessFile(file, "r")
             raf.seek(pos)
-            val newBytes = ByteArray((currentLength - pos).toInt())
+            val newBytes = ByteArray(delta.toInt())
             raf.readFully(newBytes)
             raf.close()
             lastReadPosition = currentLength

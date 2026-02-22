@@ -92,9 +92,11 @@ fun LogsScreen() {
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
     val timePattern = if (android.text.format.DateFormat.is24HourFormat(context)) "HH:mm:ss" else "hh:mm:ss a"
 
-    // Use last entry timestamp (not list size) so auto-scroll still works when
-    // the buffer is full and size stays constant at MAX_LINES.
-    LaunchedEffect(filteredLogs.lastOrNull()?.timestamp, autoScroll) {
+    // Use last entry timestamp+message (not list size) so auto-scroll still works
+    // when the buffer is full and size stays constant at MAX_LINES. Including message
+    // handles timestamp collisions from bursty logging.
+    val lastLog = filteredLogs.lastOrNull()
+    LaunchedEffect(lastLog?.timestamp, lastLog?.message, autoScroll) {
         if (autoScroll && filteredLogs.isNotEmpty()) {
             listState.animateScrollToItem(filteredLogs.size - 1)
         }
@@ -257,6 +259,11 @@ fun LogsScreen() {
                         }
                     } else {
                         // Logs exist but are all filtered out
+                        val hasSearchFilter = searchQuery.isNotBlank()
+                        val reasonText = when {
+                            hasSearchFilter -> "No logs match your search."
+                            else -> "No logs for selected levels."
+                        }
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text(
                                 text = "\u2205",
@@ -265,14 +272,14 @@ fun LogsScreen() {
                             )
                             Spacer(modifier = Modifier.height(8.dp))
                             Text(
-                                text = "No logs for selected levels.",
+                                text = reasonText,
                                 fontFamily = FontFamily.Monospace,
                                 fontSize = 13.sp,
                                 color = SeekerClawColors.TextDim,
                             )
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
-                                text = "${logs.size} entries hidden by filters.",
+                                text = "${logs.size} entries hidden.",
                                 fontFamily = FontFamily.Monospace,
                                 fontSize = 12.sp,
                                 color = SeekerClawColors.TextDim.copy(alpha = 0.6f),
@@ -305,7 +312,7 @@ fun LogsScreen() {
                 ) {
                     itemsIndexed(
                         filteredLogs,
-                        key = { _, entry -> entry.timestamp },
+                        key = { index, entry -> entry.timestamp to index },
                     ) { index, entry ->
                         val color = when (entry.level) {
                             LogLevel.DEBUG -> SeekerClawColors.LogDebug
