@@ -41,14 +41,16 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 ## Features — Shipped
 
 ### AI Agent Core
-- **Claude integration** — Opus 4.6 (default), Sonnet 4.6, Sonnet 4.5, Haiku 4.5 selectable. Prompt caching, retry with backoff, rate-limit throttling, user-friendly error messages. OAuth/setup token support for Claude Pro/Max users.
+- **Claude integration** — Opus 4.6 (default), Sonnet 4.6, Sonnet 4.5, Haiku 4.5 selectable. Prompt caching, retry with backoff, rate-limit throttling, user-friendly error messages. OAuth/setup token support for Claude Pro/Max users. Conversational API key setup flow.
+- **Multi-turn task execution** — Reliable P2 multi-turn: tool budget management with validation-aware restore, silent turn stop prevention on budget exhaustion
+- **API timeout hardening** — Configurable timeouts (replacing hardcoded 60s), bounded retry with backoff for timeout paths, turn-level tracing instrumentation, sanitized user-visible error messages, 429 retry jitter
 - **Telegram owner gate** — Service refuses to start without valid TELEGRAM_OWNER_ID; unauthorized users get reaction + comment warning; all gate events logged at WARN level
 - **MCP support** — Remote MCP (Model Context Protocol) servers via Streamable HTTP. Users add server URLs in Settings; agent discovers and uses tools at startup. Description sanitization, SHA-256 rug-pull detection, untrusted content wrapping, per-server + global rate limiting.
 - **Telegram bot** — HTML formatting (no markdown headers), native blockquotes, bidirectional reactions, file download with vision, file upload (telegram_send_file tool), long message chunking, quoted replies via `[[reply_to_current]]`, emoji rendering fixed, companion-tone message templates (TEMPLATES.md), context-aware `/start`, sent message ID tracking (ring buffer, 24h TTL) + `telegram_send` tool for same-turn delete flows, contextual status messages for long-running tools (🔍 Searching..., ⚙️ Running..., etc.), inline keyboard buttons via `telegram_send` with callback query handling
 - **SILENT_REPLY protocol** — Agent silently drops messages when it has nothing useful to say
 - **Ephemeral session awareness** — Agent knows context resets on restart
 - **PLATFORM.md auto-generation** — Device state (model, RAM, storage, battery, permissions, wallet) written on every service start
-- **Debug log self-diagnosis** — Agent knows about `node_debug.log` for troubleshooting tool failures, errors, and silent responses. Log rotation at 5MB with `.old` archive
+- **Self-awareness system prompt** — Self-knowledge doors, architecture blocks, self-diagnosis playbook for troubleshooting tool failures and silent responses. Debug log rotation at 5MB with `.old` archive
 - **Structured log levels** — DEBUG/INFO/WARN/ERROR pipeline with per-level routing; UI log viewer color-coded by level; LogCollector filters noise from debug output
 - **Skill routing** — Routing blocks prevent conflicting skills from firing together; reply tag first-token rule for reliable `[[reply_to_current]]` detection
 - **Skill requirements gating** — Skills with `requires.bins` or `requires.env` in YAML frontmatter are checked at runtime; unmet requirements are reported and skill is skipped
@@ -155,7 +157,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 - **Setup wizard** — QR scan or manual API key entry, OAuth/setup token support, haptic feedback
 - **Dashboard** — Status with pulse animation (running) + dimming (stopped), uptime, message stats, active uplinks, mini terminal, API health monitoring (green/amber/red), dismissible error/network banners, deploy button disabled state when config incomplete
 - **Logs viewer** — Color-coded, auto-scrolling monospace, stable keys for performance
-- **Settings** — Collapsible sections with animation, edit config with masked fields, required field indicators (*), model dropdown, auto-start, battery optimization, export/import (allowlist-based, size-capped, auto-backup before import), wallet copy button, MCP server management (add/edit/remove/toggle), visual escalation for danger zone, semantic action colors (green positive, red danger), accessibility content descriptions on all icons, permission revoke dialog on granted toggles
+- **Settings** — Collapsible sections with animation, grouped Anthropic & Telegram settings, edit config with masked fields, required field indicators (*), model dropdown, auto-start, battery optimization, export/import (allowlist-based, size-capped, auto-backup before import), wallet copy button, MCP server management (add/edit/remove/toggle), visual escalation for danger zone, semantic action colors (green positive, red danger), accessibility content descriptions on all icons, permission revoke dialog on granted toggles
 - **Skills tab** — Installed skills list with search, skill detail view, marketplace teaser
 - **System screen** — API usage stats, memory index status, colored accent borders on stat cards
 - **Foreground service** — START_STICKY with wake lock, boot receiver, watchdog (30s health check), heartbeat end-to-end probe
@@ -194,7 +196,7 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 │   - Dashboard                  - Node.js Runtime   │
 │   - Setup                        - OpenClaw Gateway │
 │   - Logs                         - AI Agent         │
-│   - Settings                     - 55 Tools         │
+│   - Settings                     - 56 Tools         │
 │                                  - SQL.js DB        │
 │  Boot Receiver ──> Auto-start                      │
 │  Watchdog ──> 30s health check                     │
@@ -218,14 +220,14 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Metric | Count |
 |--------|-------|
-| Total commits | 235 |
-| PRs merged | 155 |
+| Total commits | 257 |
+| PRs merged | 173 |
 | Tools | 56 (9 Jupiter, 13 Android bridge, web search/fetch, memory, cron, skill_install, etc.) + MCP dynamic |
 | Skills | 35 (20 bundled + 13 workspace + 2 user-created) |
 | Android Bridge endpoints | 18+ |
 | Telegram commands | 12 |
-| Lines of JS | ~10,820 (main.js 1,096 + 13 extracted modules) |
-| Lines of Kotlin | ~11,600 |
+| Lines of JS | ~11,800 (main.js 1,315 + 14 extracted modules) |
+| Lines of Kotlin | ~12,400 |
 | SQL.js tables | 4 |
 | Themes | 1 (DarkOps only) |
 
@@ -246,7 +248,7 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | WEBSITE.md Content | config.js Status | Action |
 |-------------------|-----------------|--------|
-| Stats: 56+ tools, 155+ PRs | Shows 43+ tools, 78+ commits | Update config.js stats[] |
+| Stats: 56+ tools, 173+ PRs | Shows 43+ tools, 78+ commits | Update config.js stats[] |
 | Roadmap: 10 shipped items | Shows 10 items (outdated list) | Update roadmap.columns[0] |
 | Feature cards: updated descriptions | Stale descriptions | Update features.items[] + index.html |
 | "NFT tracking" in JSON-LD | Not implemented | Remove from index.html |
@@ -258,6 +260,24 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Date | Feature | PR |
 |------|---------|-----|
+| 2026-02-22 | Feat: P2 reliable multi-turn task execution | #174 |
+| 2026-02-21 | Feat: fix silent turn stops on tool budget exhaustion (BAT-161) | #173 |
+| 2026-02-21 | Fix: sanitize user-visible timeout errors + 429 retry jitter (BAT-253) | #172 |
+| 2026-02-21 | Docs: P1 timeout reliability validation guide (BAT-247) | #171 |
+| 2026-02-21 | Feat: harden tool_use/tool_result integrity + sanitizer diagnostics (BAT-246) | #170 |
+| 2026-02-21 | Feat: add bounded retry/backoff for Claude API timeout path (BAT-245) | #169 |
+| 2026-02-21 | Feat: make API timeout configurable — replace hardcoded 60s (BAT-244) | #168 |
+| 2026-02-21 | Feat: add runtime timeout instrumentation with turn-level tracing (BAT-243) | #167 |
+| 2026-02-21 | Fix: NetWatch dns probe crash in js_eval sandbox (BAT-241) | #166 |
+| 2026-02-21 | Feat: compact TL;DR default for NetWatch reports (BAT-240) | #165 |
+| 2026-02-21 | Fix: NetWatch deep-scan — remove banner grab, enforce 8s timeout (BAT-239) | #164 |
+| 2026-02-21 | Fix: replace shell_exec ping/curl with js_eval probes in NetWatch (BAT-238) | #163 |
+| 2026-02-21 | Feat: polish NetWatch for Android sandbox + Telegram-first UX (BAT-237) | #162 |
+| 2026-02-21 | Feat: conversational API key support (BAT-236) | #161 |
+| 2026-02-21 | Fix: remove config.json/config.yaml mentions from agent prompt (BAT-235) | #160 |
+| 2026-02-21 | Feat: close final SAB gaps — PLATFORM.md door and Telegram polling (BAT-234) | #159 |
+| 2026-02-21 | Feat: add self-diagnosis playbook to system prompt (BAT-233) | #158 |
+| 2026-02-21 | Feat: add self-knowledge doors and architecture to system prompt (BAT-232) | #156 |
 | 2026-02-20 | Feat: enforce skill requirements gating at runtime (BAT-230) | #155 |
 | 2026-02-20 | Fix: suppress false trigger warning for YAML frontmatter skills | #154 |
 | 2026-02-20 | Feat: add netwatch skill — network monitoring and security audit | #153 |
