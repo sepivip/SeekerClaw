@@ -566,6 +566,7 @@ async function handleMessage(msg) {
                 text = 'continue';
             } else if (response) {
                 await sendMessage(chatId, response, msg.message_id);
+                await statusReaction.clear();
                 return;
             }
         }
@@ -593,6 +594,7 @@ async function handleMessage(msg) {
                     if (text) {
                         userContent = `${text}\n\n${tooLargeNote}`;
                     } else {
+                        await statusReaction.clear();
                         return;
                     }
                 } else {
@@ -667,6 +669,7 @@ async function handleMessage(msg) {
                         // Routing is OUTSIDE the try so it always runs regardless of install errors
                         if (skillAutoInstalled) {
                             if (!text) {
+                                await statusReaction.clear();
                                 return; // No caption — nothing more to do
                             }
                             // Caption present — forward to Claude via normal chat flow
