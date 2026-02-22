@@ -16,7 +16,8 @@ const { androidBridgeCall } = require('./bridge');
 
 const SOLANA_RPC_URL = 'https://api.mainnet-beta.solana.com';
 
-async function solanaRpc(method, params = []) {
+// Single-shot RPC call (no retry)
+async function solanaRpcOnce(method, params = []) {
     return new Promise((resolve) => {
         const postData = JSON.stringify({
             jsonrpc: '2.0',
@@ -61,6 +62,35 @@ async function solanaRpc(method, params = []) {
         req.write(postData);
         req.end();
     });
+}
+
+// BAT-255: Retry wrapper for transient RPC failures (timeout, network error).
+// 2 attempts total, 1.5s backoff with jitter. Non-retriable errors (RPC-level
+// application errors like "account not found") fast-fail immediately.
+const RPC_TRANSIENT_PATTERNS = ['timeout', 'econnreset', 'econnrefused', 'etimedout', 'socket hang up', 'fetch failed', 'eai_again'];
+
+async function solanaRpc(method, params = []) {
+    const MAX_ATTEMPTS = 2;
+    const BASE_DELAY_MS = 1500;
+
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        const result = await solanaRpcOnce(method, params);
+
+        // Success or non-retriable RPC application error → return immediately
+        if (!result.error) return result;
+
+        const errMsg = String(result.error).toLowerCase();
+        const isTransient = RPC_TRANSIENT_PATTERNS.some(p => errMsg.includes(p));
+        if (!isTransient || attempt === MAX_ATTEMPTS) {
+            if (attempt > 1) log(`[Solana RPC] ${method} failed after ${attempt} attempts: ${errMsg}`, 'WARN');
+            return result;
+        }
+
+        // Transient failure — retry with jitter
+        const delay = BASE_DELAY_MS + Math.random() * 500;
+        log(`[Solana RPC] ${method} transient failure (attempt ${attempt}/${MAX_ATTEMPTS}): ${errMsg} — retrying in ${Math.round(delay)}ms`, 'WARN');
+        await new Promise(r => setTimeout(r, delay));
+    }
 }
 
 // Base58 decode for Solana public keys and blockhashes
@@ -563,14 +593,58 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
         const numAccounts = readCompactU16(txBuf, offset);
         offset = numAccounts.offset;
 
-        // First account is fee payer
-        if (numAccounts.value > 0) {
-            const payer = base58Encode(txBuf.slice(offset, offset + 32));
-            if (payer !== expectedPayerBase58) {
-                return { valid: false, error: `Fee payer mismatch: expected ${expectedPayerBase58}, got ${payer}` };
-            }
+        // Read all account keys
+        const legacyAccountKeys = [];
+        for (let i = 0; i < numAccounts.value; i++) {
+            legacyAccountKeys.push(base58Encode(txBuf.slice(offset, offset + 32)));
+            offset += 32;
         }
-        return { valid: true }; // Legacy tx basic check passed
+
+        // First account is fee payer
+        if (legacyAccountKeys.length > 0 && legacyAccountKeys[0] !== expectedPayerBase58) {
+            return { valid: false, error: `Fee payer mismatch: expected ${expectedPayerBase58}, got ${legacyAccountKeys[0]}` };
+        }
+
+        // BAT-255: Skip blockhash (32 bytes) and verify program whitelist (matches v0 path)
+        offset += 32;
+
+        const legacyNumInstructions = readCompactU16(txBuf, offset);
+        offset = legacyNumInstructions.offset;
+
+        const legacyUntrusted = [];
+        for (let i = 0; i < legacyNumInstructions.value; i++) {
+            const programIdIdx = txBuf[offset]; offset++;
+            if (programIdIdx >= legacyAccountKeys.length) {
+                return { valid: false, error: `Instruction ${i} references invalid account index ${programIdIdx} (only ${legacyAccountKeys.length} accounts). Transaction rejected for safety.` };
+            }
+            const programId = legacyAccountKeys[programIdIdx];
+            if (!TRUSTED_PROGRAMS.has(programId)) {
+                legacyUntrusted.push(programId);
+            }
+            // Skip accounts
+            const numAcctIdx = readCompactU16(txBuf, offset);
+            offset = numAcctIdx.offset;
+            offset += numAcctIdx.value;
+            // Skip data
+            const dataLen = readCompactU16(txBuf, offset);
+            offset = dataLen.offset;
+            offset += dataLen.value;
+        }
+
+        if (legacyUntrusted.length > 0) {
+            const unique = [...new Set(legacyUntrusted)];
+            const labeled = unique.map(id => {
+                const name = KNOWN_PROGRAM_NAMES.get(id);
+                return name ? `${id} (${name})` : id;
+            });
+            return {
+                valid: false,
+                error: `Transaction contains unwhitelisted program(s): ${labeled.join(', ')}. ` +
+                       `This may be a new routing program not yet in the trusted list.`
+            };
+        }
+
+        return { valid: true }; // Legacy tx passed payer + program whitelist check
     }
 
     // V0 transaction format — skip prefix byte

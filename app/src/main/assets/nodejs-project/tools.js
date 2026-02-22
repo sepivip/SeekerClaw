@@ -69,6 +69,14 @@ function setMcpExecuteTool(fn) {
 const pendingConfirmations = new Map(); // chatId -> { resolve, timer }
 const lastToolUseTime = new Map();      // toolName -> timestamp
 
+// BAT-255: Safe number-to-decimal-string conversion.
+// String(0.0000001) → "1e-7" but we need "0.0000001" for parseInputAmountToLamports.
+function numberToDecimalString(n) {
+    const s = String(n);
+    if (!s.includes('e') && !s.includes('E')) return s;
+    return n.toFixed(20).replace(/\.?0+$/, '');
+}
+
 // Format a human-readable confirmation message for the user
 function formatConfirmationMessage(toolName, input) {
     const esc = (s) => {
@@ -83,6 +91,12 @@ function formatConfirmationMessage(toolName, input) {
             break;
         case 'android_call':
             details = `\u{1F4DE} <b>Make Phone Call</b>\n  To: <code>${esc(input.phone)}</code>`;
+            break;
+        case 'solana_send':
+            details = `\u{1F4B8} <b>Send SOL</b>\n  To: <code>${esc(input.to)}</code>\n  Amount: ${esc(input.amount)} SOL`;
+            break;
+        case 'solana_swap':
+            details = `\u{1F504} <b>Swap Tokens</b>\n  Sell: ${esc(input.amount)} ${esc(input.inputToken)}\n  Buy: ${esc(input.outputToken)}`;
             break;
         case 'jupiter_trigger_create':
             details = `\u{1F4CA} <b>Create Trigger Order</b>\n  Sell: ${esc(input.inputAmount)} ${esc(input.inputToken)}\n  For: ${esc(input.outputToken)}\n  Trigger price: ${esc(input.triggerPrice)}`;
@@ -1840,7 +1854,8 @@ async function executeTool(name, input, chatId) {
             if (!recentBlockhash) return { error: 'No blockhash returned from RPC' };
 
             // Step 2: Build unsigned transaction
-            const lamports = Math.round(amount * 1e9);
+            // BAT-255: use BigInt-safe parsing to avoid floating-point precision loss
+            const lamports = parseInputAmountToLamports(numberToDecimalString(amount), 9); // SOL has 9 decimals
             let unsignedTx;
             try {
                 unsignedTx = buildSolTransferTx(from, to, lamports, recentBlockhash);
@@ -2013,6 +2028,39 @@ async function executeTool(name, input, chatId) {
 
                 if (inputToken.decimals === null) return { error: `Cannot determine decimals for input token ${input.inputToken}. Use a known symbol or verified mint.` };
 
+                // BAT-255: Pre-swap balance check — fail fast before wallet popup / Jupiter order
+                const SOL_NATIVE_MINT = 'So11111111111111111111111111111111111111112';
+                const isNativeSOL = inputToken.address === SOL_NATIVE_MINT;
+                try {
+                    if (isNativeSOL) {
+                        const bal = await solanaRpc('getBalance', [userPublicKey]);
+                        if (!bal.error) {
+                            const solBalance = (bal.value || 0) / 1e9;
+                            if (input.amount > solBalance) {
+                                return { error: `Insufficient SOL balance: you have ${solBalance} SOL but tried to swap ${input.amount} SOL.` };
+                            }
+                        }
+                    } else {
+                        const tokenAccts = await solanaRpc('getTokenAccountsByOwner', [
+                            userPublicKey,
+                            { mint: inputToken.address },
+                            { encoding: 'jsonParsed' }
+                        ]);
+                        if (!tokenAccts.error && tokenAccts.value) {
+                            let tokenBalance = 0;
+                            for (const acct of tokenAccts.value) {
+                                try { tokenBalance += parseFloat(acct.account.data.parsed.info.tokenAmount.uiAmountString); } catch (_) {}
+                            }
+                            if (input.amount > tokenBalance) {
+                                return { error: `Insufficient ${inputToken.symbol} balance: you have ${tokenBalance} ${inputToken.symbol} but tried to swap ${input.amount} ${inputToken.symbol}.` };
+                            }
+                        }
+                    }
+                } catch (balErr) {
+                    log(`[Jupiter Ultra] Balance pre-check skipped: ${balErr.message}`, 'DEBUG');
+                    // Non-fatal: continue to Ultra order (Jupiter will reject if insufficient)
+                }
+
                 // Pre-swap price confidence check — fail closed on low-confidence data
                 try {
                     const priceData = await jupiterPrice([inputToken.address]);
@@ -2029,7 +2077,9 @@ async function executeTool(name, input, chatId) {
                 }
 
                 // Jupiter Ultra flow: gasless, RPC-less swaps
-                const amountRaw = Math.round(input.amount * Math.pow(10, inputToken.decimals));
+                // BAT-255: use BigInt-safe parsing (same as trigger/DCA) to avoid
+                // floating-point precision loss (e.g., 0.1 + 0.2 !== 0.3 in JS)
+                const amountRaw = parseInputAmountToLamports(numberToDecimalString(input.amount), inputToken.decimals);
 
                 // Step 1: Get Ultra order (quote + unsigned tx in one call)
                 // Ultra signed payloads have ~2 min TTL — track timing for re-quote
