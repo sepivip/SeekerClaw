@@ -69,12 +69,12 @@ object LogCollector {
     fun clear() {
         synchronized(logsLock) {
             _logs.value = emptyList()
-        }
-        try {
-            logFile?.writeText("")
-            lastReadPosition = 0L
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to clear log file", e)
+            try {
+                logFile?.writeText("")
+                lastReadPosition = 0L
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to clear log file", e)
+            }
         }
     }
 
@@ -122,11 +122,10 @@ object LogCollector {
             // Only read the tail of the file to avoid OOM on large logs
             // ~200 bytes per log line × MAX_LINES = ~60KB is plenty
             val tailBytes = minOf(fileLength, MAX_LINES * 200L)
-            val raf = java.io.RandomAccessFile(file, "r")
-            raf.seek(fileLength - tailBytes)
-            val bytes = ByteArray(tailBytes.toInt())
-            raf.readFully(bytes)
-            raf.close()
+            val bytes = java.io.RandomAccessFile(file, "r").use { raf ->
+                raf.seek(fileLength - tailBytes)
+                ByteArray(tailBytes.toInt()).also { raf.readFully(it) }
+            }
             val seekedMidFile = tailBytes < fileLength
             val lines = String(bytes).lines()
                 .filter { it.isNotBlank() }
@@ -159,16 +158,17 @@ object LogCollector {
             }
 
             // Read only new bytes
-            val raf = java.io.RandomAccessFile(file, "r")
-            raf.seek(pos)
-            val newBytes = ByteArray(delta.toInt())
-            raf.readFully(newBytes)
-            raf.close()
-            lastReadPosition = currentLength
+            val newBytes = java.io.RandomAccessFile(file, "r").use { raf ->
+                raf.seek(pos)
+                ByteArray(delta.toInt()).also { raf.readFully(it) }
+            }
 
             val newLines = String(newBytes).lines().filter { it.isNotBlank() }
             val newEntries = newLines.mapNotNull { parseLine(it) }
-            if (newEntries.isEmpty()) return
+            if (newEntries.isEmpty()) {
+                lastReadPosition = currentLength
+                return
+            }
 
             synchronized(logsLock) {
                 val current = _logs.value.toMutableList()
@@ -178,6 +178,7 @@ object LogCollector {
                 }
                 _logs.value = current
             }
+            lastReadPosition = currentLength
         } catch (e: Exception) {
             Log.w(TAG, "Failed to read new log entries from file", e)
         }
