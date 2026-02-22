@@ -25,8 +25,8 @@ android {
         applicationId = "com.seekerclaw.app"
         minSdk = 34
         targetSdk = 35
-        versionCode = 4
-        versionName = "1.3.0"
+        versionCode = 5
+        versionName = "1.4.0"
 
         // Keep these in sync when updating OpenClaw or nodejs-mobile
         buildConfigField("String", "OPENCLAW_VERSION", "\"2026.2.20\"")
@@ -189,6 +189,10 @@ dependencies {
     // Firebase Analytics
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.analytics)
+
+    // Testing
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
 
     debugImplementation(libs.androidx.ui.tooling)
 }

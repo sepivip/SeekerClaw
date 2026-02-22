@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -41,6 +40,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -64,16 +64,16 @@ fun LogsScreen() {
     val haptic = LocalHapticFeedback.current
     val logs by LogCollector.logs.collectAsState()
     val listState = rememberLazyListState()
-    var autoScroll by remember { mutableStateOf(true) }
+    var autoScroll by rememberSaveable { mutableStateOf(true) }
 
     var showClearDialog by remember { mutableStateOf(false) }
-    var searchQuery by remember { mutableStateOf("") }
+    var searchQuery by rememberSaveable { mutableStateOf("") }
 
-    // Filter toggles — all enabled by default except DEBUG
-    var showDebug by remember { mutableStateOf(false) }
-    var showInfo by remember { mutableStateOf(true) }
-    var showWarn by remember { mutableStateOf(true) }
-    var showError by remember { mutableStateOf(true) }
+    // Filter toggles — rememberSaveable so they survive tab switches and config changes
+    var showDebug by rememberSaveable { mutableStateOf(false) }
+    var showInfo by rememberSaveable { mutableStateOf(true) }
+    var showWarn by rememberSaveable { mutableStateOf(true) }
+    var showError by rememberSaveable { mutableStateOf(true) }
 
     val filteredLogs = remember(logs, showDebug, showInfo, showWarn, showError, searchQuery) {
         logs.filter { entry ->
@@ -92,7 +92,11 @@ fun LogsScreen() {
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
     val timePattern = if (android.text.format.DateFormat.is24HourFormat(context)) "HH:mm:ss" else "hh:mm:ss a"
 
-    LaunchedEffect(filteredLogs.size, autoScroll) {
+    // Use last entry timestamp+message (not list size) so auto-scroll still works
+    // when the buffer is full and size stays constant at MAX_LINES. Including message
+    // handles timestamp collisions from bursty logging.
+    val lastLog = filteredLogs.lastOrNull()
+    LaunchedEffect(lastLog?.timestamp, lastLog?.message, autoScroll) {
         if (autoScroll && filteredLogs.isNotEmpty()) {
             listState.animateScrollToItem(filteredLogs.size - 1)
         }
@@ -236,20 +240,67 @@ fun LogsScreen() {
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(
-                            text = "$ _",
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 24.sp,
-                            color = SeekerClawColors.TextDim.copy(alpha = 0.4f),
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = "Awaiting output\u2026",
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 13.sp,
-                            color = SeekerClawColors.TextDim,
-                        )
+                    if (logs.isEmpty()) {
+                        // Genuine empty — no logs at all
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                text = "$ _",
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 24.sp,
+                                color = SeekerClawColors.TextDim.copy(alpha = 0.4f),
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = "No logs yet.",
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 13.sp,
+                                color = SeekerClawColors.TextDim,
+                            )
+                        }
+                    } else {
+                        // Logs exist but are all filtered out
+                        val hasSearchFilter = searchQuery.isNotBlank()
+                        val reasonText = when {
+                            hasSearchFilter -> "No logs match your search."
+                            else -> "No logs for selected levels."
+                        }
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                text = "\u2205",
+                                fontSize = 28.sp,
+                                color = SeekerClawColors.TextDim.copy(alpha = 0.4f),
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = reasonText,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 13.sp,
+                                color = SeekerClawColors.TextDim,
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "${logs.size} entries hidden.",
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 12.sp,
+                                color = SeekerClawColors.TextDim.copy(alpha = 0.6f),
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            TextButton(onClick = {
+                                showDebug = true
+                                showInfo = true
+                                showWarn = true
+                                showError = true
+                                searchQuery = ""
+                            }) {
+                                Text(
+                                    text = "Show all",
+                                    fontFamily = RethinkSans,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = SeekerClawColors.Primary,
+                                )
+                            }
+                        }
                     }
                 }
             } else {
@@ -261,7 +312,7 @@ fun LogsScreen() {
                 ) {
                     itemsIndexed(
                         filteredLogs,
-                        key = { index, _ -> index },
+                        key = { index, entry -> entry.timestamp to index },
                     ) { index, entry ->
                         val color = when (entry.level) {
                             LogLevel.DEBUG -> SeekerClawColors.LogDebug
@@ -283,7 +334,23 @@ fun LogsScreen() {
             }
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
+        // Diagnostic status line — non-spammy, always visible
+        if (logs.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(6.dp))
+            val hiddenCount = logs.size - filteredLogs.size
+            val statusText = buildString {
+                append("${filteredLogs.size}/${logs.size} entries")
+                if (hiddenCount > 0) append(" \u00b7 $hiddenCount filtered")
+            }
+            Text(
+                text = statusText,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 11.sp,
+                color = SeekerClawColors.TextDim.copy(alpha = 0.5f),
+            )
+        }
+
+        Spacer(modifier = Modifier.height(6.dp))
 
         // Auto-scroll toggle
         Row(
