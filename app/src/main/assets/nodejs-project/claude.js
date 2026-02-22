@@ -343,8 +343,10 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
 
     const lines = [];
 
-    // BOOTSTRAP MODE - First run ritual takes priority
-    if (bootstrap) {
+    // BOOTSTRAP MODE - First run ritual takes priority.
+    // Guard: skip if IDENTITY.md already exists (ritual already completed,
+    // BOOTSTRAP.md just wasn't cleaned up — crash, backup restore, etc.)
+    if (bootstrap && !identity) {
         lines.push('# FIRST RUN - BOOTSTRAP MODE');
         lines.push('');
         lines.push('**IMPORTANT:** This is your first conversation. BOOTSTRAP.md exists in your workspace.');
