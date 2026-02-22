@@ -529,36 +529,48 @@ function createStatusReactionController(chatId, messageId) {
     let holdTimer = null;
     let disposed = false;
 
+    // Serialize reaction updates to avoid races between overlapping calls.
+    let reactionChain = Promise.resolve();
+
     async function setReaction(emoji) {
         // No disposed check here — terminal methods (setDone/setError) set
         // disposed=true before calling this. Intermediate callers (debouncedSet,
         // stall timers) already guard with their own `if (!disposed)` checks.
         if (!emoji || !TELEGRAM_SUPPORTED_REACTIONS.has(emoji)) return;
-        if (emoji === currentEmoji) return;
-        currentEmoji = emoji;
-        try {
-            await telegram('setMessageReaction', {
-                chat_id: chatId,
-                message_id: messageId,
-                reaction: [{ type: 'emoji', emoji }],
-            });
-        } catch (e) {
-            // Non-critical — reaction API can fail (old messages, permissions)
-            log(`Status reaction failed: ${e.message}`, 'DEBUG');
-        }
+
+        reactionChain = reactionChain.then(async () => {
+            if (emoji === currentEmoji) return;
+            try {
+                await telegram('setMessageReaction', {
+                    chat_id: chatId,
+                    message_id: messageId,
+                    reaction: [{ type: 'emoji', emoji }],
+                });
+                currentEmoji = emoji;
+            } catch (e) {
+                // Non-critical — reaction API can fail (old messages, permissions)
+                log(`Status reaction failed: ${e.message}`, 'DEBUG');
+            }
+        });
+
+        return reactionChain;
     }
 
     async function clearReaction() {
-        currentEmoji = null;
-        try {
-            await telegram('setMessageReaction', {
-                chat_id: chatId,
-                message_id: messageId,
-                reaction: [],
-            });
-        } catch {
-            // Ignore — clearing a non-existent reaction is fine
-        }
+        reactionChain = reactionChain.then(async () => {
+            currentEmoji = null;
+            try {
+                await telegram('setMessageReaction', {
+                    chat_id: chatId,
+                    message_id: messageId,
+                    reaction: [],
+                });
+            } catch {
+                // Ignore — clearing a non-existent reaction is fine
+            }
+        });
+
+        return reactionChain;
     }
 
     function resetStallTimers() {

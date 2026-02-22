@@ -528,9 +528,11 @@ const cronService = {
         let error = null;
         let delivered = false;
 
-        // Timeout race (OpenClaw parity: AbortController for job timeouts).
-        // _sendMessage doesn't accept an AbortSignal, so we race the operation
-        // against a timeout promise to enforce the deadline.
+        // Timeout race for job execution.
+        // Note: OpenClaw uses AbortController-based job timeouts, but here we only
+        // approximate that behavior by racing _sendMessage against a timeout promise;
+        // the underlying _sendMessage call is not actually cancelled, we just stop
+        // awaiting it after JOB_TIMEOUT_MS.
         let timeoutId;
         const timeoutPromise = new Promise((_, reject) => {
             timeoutId = setTimeout(() => reject(new Error(`Job timed out after ${JOB_TIMEOUT_MS}ms`)), JOB_TIMEOUT_MS);
