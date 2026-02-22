@@ -485,6 +485,160 @@ function deferStatus(chatId, statusText) {
 }
 
 // ============================================================================
+// STATUS REACTIONS — lifecycle emoji on user messages (OpenClaw parity)
+// ============================================================================
+
+// Telegram only supports a fixed set of reaction emojis.
+// Subset of the full list — just the ones we use for status.
+const TELEGRAM_SUPPORTED_REACTIONS = new Set([
+    '👍', '👀', '🔥', '🤔', '😱', '🥱', '😨', '⚡', '👨‍💻',
+]);
+
+const STATUS_EMOJIS = {
+    queued:    '👀',
+    thinking:  '🤔',
+    tool:      '🔥',
+    coding:    '👨‍💻',
+    web:       '⚡',
+    done:      '👍',
+    error:     '😱',
+    stallSoft: '🥱',
+    stallHard: '😨',
+};
+
+const STATUS_TIMING = {
+    debounceMs:  700,
+    stallSoftMs: 10000,
+    stallHardMs: 30000,
+    doneHoldMs:  1500,
+    errorHoldMs: 2500,
+};
+
+const CODING_TOOL_TOKENS = ['exec', 'process', 'read', 'write', 'edit', 'session_status', 'bash'];
+const WEB_TOOL_TOKENS = ['web_search', 'web_fetch', 'browser'];
+
+/**
+ * Create a status reaction controller for a single message.
+ * Mirrors OpenClaw's channel-agnostic status-reactions.ts adapted for Telegram.
+ */
+function createStatusReactionController(chatId, messageId) {
+    let currentEmoji = null;
+    let debounceTimer = null;
+    let stallSoftTimer = null;
+    let stallHardTimer = null;
+    let holdTimer = null;
+    let disposed = false;
+
+    // Serialize reaction updates to avoid races between overlapping calls.
+    let reactionChain = Promise.resolve();
+
+    async function setReaction(emoji) {
+        // No disposed check here — terminal methods (setDone/setError) set
+        // disposed=true before calling this. Intermediate callers (debouncedSet,
+        // stall timers) already guard with their own `if (!disposed)` checks.
+        if (!emoji || !TELEGRAM_SUPPORTED_REACTIONS.has(emoji)) return;
+
+        reactionChain = reactionChain.then(async () => {
+            if (emoji === currentEmoji) return;
+            try {
+                await telegram('setMessageReaction', {
+                    chat_id: chatId,
+                    message_id: messageId,
+                    reaction: [{ type: 'emoji', emoji }],
+                });
+                currentEmoji = emoji;
+            } catch (e) {
+                // Non-critical — reaction API can fail (old messages, permissions)
+                log(`Status reaction failed: ${e.message}`, 'DEBUG');
+            }
+        });
+
+        return reactionChain;
+    }
+
+    async function clearReaction() {
+        reactionChain = reactionChain.then(async () => {
+            currentEmoji = null;
+            try {
+                await telegram('setMessageReaction', {
+                    chat_id: chatId,
+                    message_id: messageId,
+                    reaction: [],
+                });
+            } catch {
+                // Ignore — clearing a non-existent reaction is fine
+            }
+        });
+
+        return reactionChain;
+    }
+
+    function resetStallTimers() {
+        if (stallSoftTimer) { clearTimeout(stallSoftTimer); stallSoftTimer = null; }
+        if (stallHardTimer) { clearTimeout(stallHardTimer); stallHardTimer = null; }
+        stallSoftTimer = setTimeout(() => {
+            if (!disposed) setReaction(STATUS_EMOJIS.stallSoft);
+        }, STATUS_TIMING.stallSoftMs);
+        stallHardTimer = setTimeout(() => {
+            if (!disposed) setReaction(STATUS_EMOJIS.stallHard);
+        }, STATUS_TIMING.stallHardMs);
+    }
+
+    function debouncedSet(emoji) {
+        if (debounceTimer) clearTimeout(debounceTimer);
+        resetStallTimers();
+        debounceTimer = setTimeout(() => {
+            if (!disposed) setReaction(emoji);
+        }, STATUS_TIMING.debounceMs);
+    }
+
+    return {
+        setQueued() {
+            resetStallTimers();
+            // Queued is immediate (no debounce) — first signal to user
+            setReaction(STATUS_EMOJIS.queued);
+        },
+        setThinking() { debouncedSet(STATUS_EMOJIS.thinking); },
+        setTool(toolName) {
+            const name = (toolName || '').toLowerCase();
+            if (CODING_TOOL_TOKENS.some(t => name.includes(t))) {
+                debouncedSet(STATUS_EMOJIS.coding);
+            } else if (WEB_TOOL_TOKENS.some(t => name.includes(t))) {
+                debouncedSet(STATUS_EMOJIS.web);
+            } else {
+                debouncedSet(STATUS_EMOJIS.tool);
+            }
+        },
+        async setDone() {
+            disposed = true;
+            if (debounceTimer) clearTimeout(debounceTimer);
+            if (stallSoftTimer) clearTimeout(stallSoftTimer);
+            if (stallHardTimer) clearTimeout(stallHardTimer);
+            if (holdTimer) clearTimeout(holdTimer);
+            await setReaction(STATUS_EMOJIS.done);
+            holdTimer = setTimeout(() => clearReaction(), STATUS_TIMING.doneHoldMs);
+        },
+        async setError() {
+            disposed = true;
+            if (debounceTimer) clearTimeout(debounceTimer);
+            if (stallSoftTimer) clearTimeout(stallSoftTimer);
+            if (stallHardTimer) clearTimeout(stallHardTimer);
+            if (holdTimer) clearTimeout(holdTimer);
+            await setReaction(STATUS_EMOJIS.error);
+            holdTimer = setTimeout(() => clearReaction(), STATUS_TIMING.errorHoldMs);
+        },
+        async clear() {
+            disposed = true;
+            if (debounceTimer) clearTimeout(debounceTimer);
+            if (stallSoftTimer) clearTimeout(stallSoftTimer);
+            if (stallHardTimer) clearTimeout(stallHardTimer);
+            if (holdTimer) clearTimeout(holdTimer);
+            await clearReaction();
+        },
+    };
+}
+
+// ============================================================================
 // EXPORTS
 // ============================================================================
 
@@ -504,4 +658,6 @@ module.exports = {
     sendMessage,
     sendTyping,
     deferStatus,
+    createStatusReactionController,
+    STATUS_EMOJIS,
 };

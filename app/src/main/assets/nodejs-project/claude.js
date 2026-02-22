@@ -343,8 +343,10 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
 
     const lines = [];
 
-    // BOOTSTRAP MODE - First run ritual takes priority
-    if (bootstrap) {
+    // BOOTSTRAP MODE - First run ritual takes priority.
+    // Guard: skip if IDENTITY.md already exists (ritual already completed,
+    // BOOTSTRAP.md just wasn't cleaned up — crash, backup restore, etc.)
+    if (bootstrap && !identity) {
         lines.push('# FIRST RUN - BOOTSTRAP MODE');
         lines.push('');
         lines.push('**IMPORTANT:** This is your first conversation. BOOTSTRAP.md exists in your workspace.');
@@ -692,10 +694,9 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('Do not infer tasks from prior conversations. Only act on what HEARTBEAT.md explicitly says.');
     lines.push('');
 
-    // User Identity section - OpenClaw style
-    lines.push('## User Identity');
-    lines.push(`Telegram Owner ID: ${getOwnerId() || '(pending auto-detect)'}`);
-    lines.push('You are talking to your owner. Treat messages from this ID as trusted.');
+    // Authorized Senders section - OpenClaw style
+    lines.push('## Authorized Senders');
+    lines.push(`Authorized senders: ${getOwnerId() || '(pending auto-detect)'}. These senders are allowlisted; do not assume they are the owner.`);
     lines.push('');
 
     // Silent Replies section - OpenClaw style
@@ -1450,6 +1451,8 @@ async function chat(chatId, userMessage, options = {}) {
             const toolResults = [];
             for (const toolUse of toolUses) {
                 log(`Tool use: ${toolUse.name}`, 'DEBUG');
+                // Status reaction: show tool-specific emoji (OpenClaw parity)
+                if (options.statusReaction) options.statusReaction.setTool(toolUse.name);
                 let result;
 
                 try {
@@ -1505,6 +1508,9 @@ async function chat(chatId, userMessage, options = {}) {
 
             // Add tool results to history — always pushed, even if some tools errored
             messages.push({ role: 'user', content: toolResults });
+
+            // Status reaction: back to thinking before next Claude API call
+            if (options.statusReaction) options.statusReaction.setThinking();
 
             // P2.2: Durable checkpoint after each tool round
             const cpDuration = saveCheckpoint(taskId, {
