@@ -526,6 +526,7 @@ function createStatusReactionController(chatId, messageId) {
     let debounceTimer = null;
     let stallSoftTimer = null;
     let stallHardTimer = null;
+    let holdTimer = null;
     let disposed = false;
 
     async function setReaction(emoji) {
@@ -602,21 +603,23 @@ function createStatusReactionController(chatId, messageId) {
             if (stallSoftTimer) clearTimeout(stallSoftTimer);
             if (stallHardTimer) clearTimeout(stallHardTimer);
             await setReaction(STATUS_EMOJIS.done);
-            setTimeout(() => clearReaction(), STATUS_TIMING.doneHoldMs);
+            holdTimer = setTimeout(() => clearReaction(), STATUS_TIMING.doneHoldMs);
         },
         async setError() {
             disposed = true;
             if (debounceTimer) clearTimeout(debounceTimer);
             if (stallSoftTimer) clearTimeout(stallSoftTimer);
             if (stallHardTimer) clearTimeout(stallHardTimer);
+            if (holdTimer) clearTimeout(holdTimer);
             await setReaction(STATUS_EMOJIS.error);
-            setTimeout(() => clearReaction(), STATUS_TIMING.errorHoldMs);
+            holdTimer = setTimeout(() => clearReaction(), STATUS_TIMING.errorHoldMs);
         },
         async clear() {
             disposed = true;
             if (debounceTimer) clearTimeout(debounceTimer);
             if (stallSoftTimer) clearTimeout(stallSoftTimer);
             if (stallHardTimer) clearTimeout(stallHardTimer);
+            if (holdTimer) clearTimeout(holdTimer);
             await clearReaction();
         },
     };
