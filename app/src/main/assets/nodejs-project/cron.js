@@ -528,20 +528,21 @@ const cronService = {
         let error = null;
         let delivered = false;
 
-        // AbortController for job timeout (OpenClaw parity)
-        const ac = typeof AbortController !== 'undefined' ? new AbortController() : null;
-        const timeoutId = ac ? setTimeout(() => ac.abort(), JOB_TIMEOUT_MS) : null;
+        // Timeout race (OpenClaw parity: AbortController for job timeouts).
+        // _sendMessage doesn't accept an AbortSignal, so we race the operation
+        // against a timeout promise to enforce the deadline.
+        const timeoutPromise = new Promise((_, reject) => {
+            const id = setTimeout(() => reject(new Error(`Job timed out after ${JOB_TIMEOUT_MS}ms`)), JOB_TIMEOUT_MS);
+            if (id.unref) id.unref(); // Don't keep process alive
+        });
 
         try {
-            // Check if aborted before starting
-            if (ac?.signal?.aborted) throw new Error('Job aborted before start');
-
             // Execute based on payload type
             if (job.payload.kind === 'reminder') {
                 const ownerId = getOwnerId();
                 const message = `⏰ **Reminder**\n\n${job.payload.message}\n\n_Set ${formatDuration(Date.now() - job.createdAtMs)} ago_`;
                 if (_sendMessage) {
-                    await _sendMessage(ownerId, message);
+                    await Promise.race([_sendMessage(ownerId, message), timeoutPromise]);
                     delivered = true;
                 } else {
                     log(`[Cron] WARNING: sendMessage not injected, cannot deliver reminder for job ${job.id}`, 'ERROR');
@@ -551,10 +552,8 @@ const cronService = {
             }
         } catch (e) {
             status = 'error';
-            error = ac?.signal?.aborted ? `Job timed out after ${JOB_TIMEOUT_MS}ms` : e.message;
+            error = e.message;
             log(`[Cron] Job error ${job.id}: ${error}`, 'ERROR');
-        } finally {
-            if (timeoutId) clearTimeout(timeoutId);
         }
 
         const durationMs = Date.now() - startTime;
