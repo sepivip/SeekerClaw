@@ -109,6 +109,7 @@ const {
     MAX_FILE_SIZE, MAX_IMAGE_SIZE,
     extractMedia, downloadTelegramFile,
     sendMessage, sendTyping,
+    createStatusReactionController,
 } = require('./telegram');
 
 // Wire sendMessage into cron.js so reminders can be delivered via Telegram
@@ -536,6 +537,10 @@ async function handleMessage(msg) {
 
     log(`Message: ${rawText ? rawText.slice(0, 100) + (rawText.length > 100 ? '...' : '') : '(no text)'}${media ? ` [${media.type}]` : ''}${msg.reply_to_message ? ' [reply]' : ''}`, 'DEBUG');
 
+    // Status reactions — lifecycle emoji on the user's message (OpenClaw parity)
+    const statusReaction = createStatusReactionController(chatId, msg.message_id);
+    statusReaction.setQueued();
+
     try {
         // P2.4: resume flag — set by /resume handler, passed to chat() as option
         let isResume = false;
@@ -566,6 +571,7 @@ async function handleMessage(msg) {
         }
 
         // Regular message - send to Claude (text includes quoted context if replying)
+        statusReaction.setThinking();
         await sendTyping(chatId);
         lastIncomingMessages.set(String(chatId), { messageId: msg.message_id, chatId });
 
@@ -681,18 +687,20 @@ async function handleMessage(msg) {
             }
         }
 
-        let response = await chat(chatId, userContent, { isResume, originalGoal: resumeGoal });
+        let response = await chat(chatId, userContent, { isResume, originalGoal: resumeGoal, statusReaction });
 
         // Handle special tokens (OpenClaw-style)
         // SILENT_REPLY - discard the message
         if (response.trim() === 'SILENT_REPLY') {
             log('Agent returned SILENT_REPLY, not sending to Telegram', 'DEBUG');
+            await statusReaction.clear();
             return;
         }
 
         // HEARTBEAT_OK - discard heartbeat acks (handled by watchdog)
         if (response.trim() === 'HEARTBEAT_OK' || response.trim().startsWith('HEARTBEAT_OK')) {
             log('Agent returned HEARTBEAT_OK', 'DEBUG');
+            await statusReaction.clear();
             return;
         }
 
@@ -704,12 +712,14 @@ async function handleMessage(msg) {
         }
 
         await sendMessage(chatId, response, replyToId || msg.message_id);
+        await statusReaction.setDone();
 
         // Report message to Android for stats tracking
         androidBridgeCall('/stats/message').catch(() => {});
 
     } catch (error) {
         log(`Error: ${error.message}`, 'ERROR');
+        await statusReaction.setError();
         await sendMessage(chatId, `Error: ${error.message}`, msg.message_id);
     }
 }

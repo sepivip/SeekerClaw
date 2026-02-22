@@ -29,6 +29,8 @@ function setSendMessage(fn) {
 const CRON_STORE_PATH = path.join(workDir, 'cron', 'jobs.json');
 const CRON_RUN_LOG_DIR = path.join(workDir, 'cron', 'runs');
 const MAX_TIMEOUT_MS = 2147483647; // 2^31 - 1 (setTimeout max)
+const MAX_CONCURRENT_RUNS = 1; // Default concurrent job limit (OpenClaw: configurable)
+const JOB_TIMEOUT_MS = 60000; // 60s timeout per job execution
 
 // ============================================================================
 // DURATION FORMATTING
@@ -144,8 +146,15 @@ function generateJobId() {
 // ============================================================================
 
 function computeNextRunAtMs(schedule, nowMs) {
+    // Guard: validate schedule object (OpenClaw parity — defensive against corrupt jobs)
+    if (!schedule || typeof schedule !== 'object' || !schedule.kind) {
+        return undefined;
+    }
+
     switch (schedule.kind) {
         case 'at':
+            // Guard: atMs must be a finite number
+            if (typeof schedule.atMs !== 'number' || !isFinite(schedule.atMs)) return undefined;
             // One-shot: fire once at atMs, undefined if past
             return schedule.atMs > nowMs ? schedule.atMs : undefined;
 
@@ -153,7 +162,8 @@ function computeNextRunAtMs(schedule, nowMs) {
             // Repeating interval with optional anchor
             const anchor = schedule.anchorMs || 0;
             const interval = schedule.everyMs;
-            if (interval <= 0) return undefined;
+            // Guard: everyMs must be a positive finite number
+            if (typeof interval !== 'number' || !isFinite(interval) || interval <= 0) return undefined;
             const elapsed = nowMs - anchor;
             // Fix 2 (BAT-21): Use floor+1 to always advance past current time.
             // Math.ceil can return the current second when nowMs lands exactly
@@ -476,6 +486,8 @@ const cronService = {
             log(`[Cron] Timer error: ${e.message}`, 'ERROR');
         } finally {
             this.running = false;
+            // Re-arm after execution completes (OpenClaw parity: ensures
+            // jobs that became due during execution are picked up promptly)
             this._armTimer();
         }
     },
@@ -489,9 +501,19 @@ const cronService = {
             j.state.nextRunAtMs <= now
         );
 
-        for (const job of dueJobs) {
-            await this._executeJob(job, now);
-        }
+        if (dueJobs.length === 0) return;
+
+        // Worker pool pattern (OpenClaw parity: maxConcurrentRuns)
+        const concurrency = Math.max(1, MAX_CONCURRENT_RUNS);
+        let cursor = 0;
+        const worker = async () => {
+            while (cursor < dueJobs.length) {
+                const job = dueJobs[cursor++];
+                await this._executeJob(job, now);
+            }
+        };
+        const workers = Array.from({ length: Math.min(concurrency, dueJobs.length) }, () => worker());
+        await Promise.all(workers);
     },
 
     async _executeJob(job, nowMs) {
@@ -504,14 +526,23 @@ const cronService = {
         const startTime = Date.now();
         let status = 'ok';
         let error = null;
+        let delivered = false;
+
+        // AbortController for job timeout (OpenClaw parity)
+        const ac = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        const timeoutId = ac ? setTimeout(() => ac.abort(), JOB_TIMEOUT_MS) : null;
 
         try {
+            // Check if aborted before starting
+            if (ac?.signal?.aborted) throw new Error('Job aborted before start');
+
             // Execute based on payload type
             if (job.payload.kind === 'reminder') {
                 const ownerId = getOwnerId();
                 const message = `⏰ **Reminder**\n\n${job.payload.message}\n\n_Set ${formatDuration(Date.now() - job.createdAtMs)} ago_`;
                 if (_sendMessage) {
                     await _sendMessage(ownerId, message);
+                    delivered = true;
                 } else {
                     log(`[Cron] WARNING: sendMessage not injected, cannot deliver reminder for job ${job.id}`, 'ERROR');
                     throw new Error('sendMessage not available');
@@ -520,8 +551,10 @@ const cronService = {
             }
         } catch (e) {
             status = 'error';
-            error = e.message;
-            log(`[Cron] Job error ${job.id}: ${e.message}`, 'ERROR');
+            error = ac?.signal?.aborted ? `Job timed out after ${JOB_TIMEOUT_MS}ms` : e.message;
+            log(`[Cron] Job error ${job.id}: ${error}`, 'ERROR');
+        } finally {
+            if (timeoutId) clearTimeout(timeoutId);
         }
 
         const durationMs = Date.now() - startTime;
@@ -532,12 +565,14 @@ const cronService = {
         job.state.lastStatus = status;
         job.state.lastError = error;
         job.state.lastDurationMs = durationMs;
+        job.state.lastDelivered = delivered; // OpenClaw parity: track delivery
 
         // Log execution
         appendCronRunLog(job.id, {
             action: 'finished',
             status,
             error,
+            delivered,
             durationMs,
             nextRunAtMs: undefined,
         });

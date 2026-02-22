@@ -1440,6 +1440,7 @@ async function executeTool(name, input, chatId) {
                     nextRunIn: j.state.nextRunAtMs ? formatDuration(j.state.nextRunAtMs - Date.now()) : null,
                     lastRun: j.state.lastRunAtMs ? localTimestamp(new Date(j.state.lastRunAtMs)) : null,
                     lastStatus: j.state.lastStatus || 'never',
+                    lastDelivered: j.state.lastDelivered,
                 }))
             };
         }
