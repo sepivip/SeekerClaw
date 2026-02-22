@@ -614,6 +614,7 @@ function createStatusReactionController(chatId, messageId) {
             if (debounceTimer) clearTimeout(debounceTimer);
             if (stallSoftTimer) clearTimeout(stallSoftTimer);
             if (stallHardTimer) clearTimeout(stallHardTimer);
+            if (holdTimer) clearTimeout(holdTimer);
             await setReaction(STATUS_EMOJIS.done);
             holdTimer = setTimeout(() => clearReaction(), STATUS_TIMING.doneHoldMs);
         },

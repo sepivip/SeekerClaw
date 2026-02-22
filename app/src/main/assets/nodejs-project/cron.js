@@ -545,6 +545,9 @@ const cronService = {
                 const ownerId = getOwnerId();
                 const message = `⏰ **Reminder**\n\n${job.payload.message}\n\n_Set ${formatDuration(Date.now() - job.createdAtMs)} ago_`;
                 if (_sendMessage) {
+                    // Note: on timeout, delivered stays false even though _sendMessage
+                    // may still complete in the background. This is a known limitation
+                    // of Promise.race — true cancellation requires AbortSignal plumbing.
                     await Promise.race([_sendMessage(ownerId, message), timeoutPromise]);
                     delivered = true;
                 } else {
