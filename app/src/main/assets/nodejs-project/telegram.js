@@ -529,7 +529,9 @@ function createStatusReactionController(chatId, messageId) {
     let disposed = false;
 
     async function setReaction(emoji) {
-        if (disposed) return;
+        // No disposed check here — terminal methods (setDone/setError) set
+        // disposed=true before calling this. Intermediate callers (debouncedSet,
+        // stall timers) already guard with their own `if (!disposed)` checks.
         if (!emoji || !TELEGRAM_SUPPORTED_REACTIONS.has(emoji)) return;
         if (emoji === currentEmoji) return;
         currentEmoji = emoji;
@@ -546,7 +548,6 @@ function createStatusReactionController(chatId, messageId) {
     }
 
     async function clearReaction() {
-        if (disposed) return;
         currentEmoji = null;
         try {
             await telegram('setMessageReaction', {

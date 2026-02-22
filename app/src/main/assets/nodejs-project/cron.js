@@ -160,7 +160,7 @@ function computeNextRunAtMs(schedule, nowMs) {
 
         case 'every': {
             // Repeating interval with optional anchor
-            const anchor = schedule.anchorMs || 0;
+            const anchor = (typeof schedule.anchorMs === 'number' && isFinite(schedule.anchorMs)) ? schedule.anchorMs : 0;
             const interval = schedule.everyMs;
             // Guard: everyMs must be a positive finite number
             if (typeof interval !== 'number' || !isFinite(interval) || interval <= 0) return undefined;
