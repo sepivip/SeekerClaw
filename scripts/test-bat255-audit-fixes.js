@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 /**
- * BAT-255: Jupiter Audit Top-5 Fixes — Deterministic Test Suite
+ * BAT-255: Jupiter Audit Fixes — Deterministic Test Suite
  *
- * Tests all 5 fixes from JUPITER-AUDIT.md without network or wallet access.
+ * Tests all audit fixes from JUPITER-AUDIT.md without network or wallet access.
+ * 6 test groups: confirm gates, message formatting, amount parsing, balance check,
+ * RPC retry, and legacy TX verification.
  * Run: node scripts/test-bat255-audit-fixes.js
  */
 
@@ -87,14 +89,14 @@ console.log('\n── Test 3: Safe amount parsing (no floating-point) ──');
     assert(swapExecStart > 0, 'solana_swap executor case found');
     const swapSection = toolsSrc.substring(swapExecStart, swapExecStart + 8000);
     assert(!swapSection.includes('Math.round(input.amount'), 'solana_swap does NOT use Math.round for amount');
-    assert(swapSection.includes('parseInputAmountToLamports(String(input.amount), inputToken.decimals)'), 'solana_swap uses parseInputAmountToLamports');
+    assert(swapSection.includes('parseInputAmountToLamports(numberToDecimalString(input.amount), inputToken.decimals)'), 'solana_swap uses parseInputAmountToLamports with safe decimal conversion');
 
     // Also check solana_send executor case (with opening brace)
     const sendExecStart = toolsSrc.indexOf("case 'solana_send': {");
     assert(sendExecStart > 0, 'solana_send executor case found');
     const sendSection = toolsSrc.substring(sendExecStart, sendExecStart + 2000);
     assert(!sendSection.includes('Math.round(amount * 1e9)'), 'solana_send does NOT use Math.round');
-    assert(sendSection.includes('parseInputAmountToLamports(String(amount), 9)'), 'solana_send uses parseInputAmountToLamports with decimals=9');
+    assert(sendSection.includes('parseInputAmountToLamports(numberToDecimalString(amount), 9)'), 'solana_send uses parseInputAmountToLamports with safe decimal conversion');
 
     // Test parseInputAmountToLamports edge cases directly
     // We need to extract it without requiring the whole module (has side effects).
@@ -154,6 +156,18 @@ console.log('\n── Test 3: Safe amount parsing (no floating-point) ──');
     // The point is: parseInputAmountToLamports is string-based, never uses float math
     assert(safeResult === '100000000', `Safe parsing matches expected for 0.1 (${safeResult})`);
 
+    // Test numberToDecimalString (prevents scientific notation from breaking parsing)
+    const toolsSrcForHelper = fs.readFileSync(path.join(ASSETS, 'tools.js'), 'utf8');
+    assert(toolsSrcForHelper.includes('function numberToDecimalString('), 'numberToDecimalString helper exists');
+    const ndsFnMatch = toolsSrcForHelper.match(/function numberToDecimalString\(n\) \{[\s\S]*?\n\}/);
+    assert(ndsFnMatch, 'numberToDecimalString function extractable');
+    const numberToDecimalString = new Function('n',
+        ndsFnMatch[0].replace('function numberToDecimalString(n) {', '').replace(/\}$/, '')
+    );
+    assert(numberToDecimalString(0.0000001) === '0.0000001', 'numberToDecimalString(0.0000001) = "0.0000001" not "1e-7"');
+    assert(numberToDecimalString(1.5) === '1.5', 'numberToDecimalString(1.5) = "1.5"');
+    assert(numberToDecimalString(100) === '100', 'numberToDecimalString(100) = "100"');
+
     // Floating-point trap: 0.1 + 0.2 = 0.30000000000000004 in JS
     const unsafeTrap = Math.round((0.1 + 0.2) * 1e9);
     const safeTrap = parseInputAmountToLamports('0.3', 9);
@@ -175,7 +189,7 @@ console.log('\n── Test 4: Balance pre-check in solana_swap ──');
 
     assert(swapSection.includes('BAT-255: Pre-swap balance check'), 'Balance pre-check comment exists');
     assert(swapSection.includes('Insufficient SOL balance'), 'SOL insufficient balance error message exists');
-    assert(swapSection.includes('Insufficient ${inputToken.symbol} balance'), 'SPL token insufficient balance error message exists');
+    assert(swapSection.includes('Insufficient ${inputToken.symbol} balance') && swapSection.includes('${inputToken.symbol}.'), 'SPL token insufficient balance error message with symbol exists');
     assert(swapSection.includes('getTokenAccountsByOwner'), 'SPL token balance lookup via RPC');
 
     // Verify balance check comes BEFORE Jupiter Ultra order
@@ -206,9 +220,11 @@ console.log('\n── Test 5: Solana RPC retry wrapper ──');
 
     // Verify transient patterns include key errors
     assert(solanaSrc.includes("'timeout'"), 'Retries on timeout');
-    assert(solanaSrc.includes("'ECONNRESET'"), 'Retries on ECONNRESET');
-    assert(solanaSrc.includes("'ECONNREFUSED'"), 'Retries on ECONNREFUSED');
-    assert(solanaSrc.includes("'ETIMEDOUT'"), 'Retries on ETIMEDOUT');
+    assert(solanaSrc.includes("'econnreset'"), 'Retries on econnreset (case-insensitive matching)');
+    assert(solanaSrc.includes("'econnrefused'"), 'Retries on econnrefused (case-insensitive matching)');
+    assert(solanaSrc.includes("'etimedout'"), 'Retries on etimedout (case-insensitive matching)');
+    // Verify case-insensitive comparison
+    assert(solanaSrc.includes('.toLowerCase()'), 'Error message lowercased before matching');
 
     // Verify non-transient errors fast-fail
     assert(solanaSrc.includes('isTransient'), 'Transient check distinguishes retriable from non-retriable');
@@ -247,11 +263,8 @@ console.log('\n── Test 6: Legacy TX verification program whitelist ──');
     // Verify it reads instructions like the v0 path does
     assert(legacySection.includes('legacyNumInstructions'), 'Legacy path reads instruction count');
 
-    // Now test with a real crafted legacy transaction
-    // Build a minimal legacy tx that references System Program (trusted)
-    const SYSTEM_PROGRAM = '11111111111111111111111111111111'; // base58 of 32 zero bytes
-
-    // We can verify the function signature accepts the right args
+    // Verify function signature and structural correctness (behavioral tests
+    // require the full module context with TRUSTED_PROGRAMS populated).
     const fnSignature = solanaSrc.match(/function verifySwapTransaction\(([^)]+)\)/);
     assert(fnSignature, 'verifySwapTransaction function exists');
     assert(fnSignature[1].includes('txBase64'), 'Accepts txBase64 parameter');

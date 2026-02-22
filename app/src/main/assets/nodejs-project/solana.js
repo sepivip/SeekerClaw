@@ -67,7 +67,7 @@ async function solanaRpcOnce(method, params = []) {
 // BAT-255: Retry wrapper for transient RPC failures (timeout, network error).
 // 2 attempts total, 1.5s backoff with jitter. Non-retriable errors (RPC-level
 // application errors like "account not found") fast-fail immediately.
-const RPC_TRANSIENT_PATTERNS = ['timeout', 'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'socket hang up', 'fetch failed', 'EAI_AGAIN'];
+const RPC_TRANSIENT_PATTERNS = ['timeout', 'econnreset', 'econnrefused', 'etimedout', 'socket hang up', 'fetch failed', 'eai_again'];
 
 async function solanaRpc(method, params = []) {
     const MAX_ATTEMPTS = 2;
@@ -79,7 +79,7 @@ async function solanaRpc(method, params = []) {
         // Success or non-retriable RPC application error → return immediately
         if (!result.error) return result;
 
-        const errMsg = String(result.error);
+        const errMsg = String(result.error).toLowerCase();
         const isTransient = RPC_TRANSIENT_PATTERNS.some(p => errMsg.includes(p));
         if (!isTransient || attempt === MAX_ATTEMPTS) {
             if (attempt > 1) log(`[Solana RPC] ${method} failed after ${attempt} attempts: ${errMsg}`, 'WARN');

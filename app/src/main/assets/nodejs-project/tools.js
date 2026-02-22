@@ -69,6 +69,14 @@ function setMcpExecuteTool(fn) {
 const pendingConfirmations = new Map(); // chatId -> { resolve, timer }
 const lastToolUseTime = new Map();      // toolName -> timestamp
 
+// BAT-255: Safe number-to-decimal-string conversion.
+// String(0.0000001) → "1e-7" but we need "0.0000001" for parseInputAmountToLamports.
+function numberToDecimalString(n) {
+    const s = String(n);
+    if (!s.includes('e') && !s.includes('E')) return s;
+    return n.toFixed(20).replace(/\.?0+$/, '');
+}
+
 // Format a human-readable confirmation message for the user
 function formatConfirmationMessage(toolName, input) {
     const esc = (s) => {
@@ -1847,7 +1855,7 @@ async function executeTool(name, input, chatId) {
 
             // Step 2: Build unsigned transaction
             // BAT-255: use BigInt-safe parsing to avoid floating-point precision loss
-            const lamports = parseInputAmountToLamports(String(amount), 9); // SOL has 9 decimals
+            const lamports = parseInputAmountToLamports(numberToDecimalString(amount), 9); // SOL has 9 decimals
             let unsignedTx;
             try {
                 unsignedTx = buildSolTransferTx(from, to, lamports, recentBlockhash);
@@ -2044,7 +2052,7 @@ async function executeTool(name, input, chatId) {
                                 try { tokenBalance += parseFloat(acct.account.data.parsed.info.tokenAmount.uiAmountString); } catch (_) {}
                             }
                             if (input.amount > tokenBalance) {
-                                return { error: `Insufficient ${inputToken.symbol} balance: you have ${tokenBalance} but tried to swap ${input.amount}.` };
+                                return { error: `Insufficient ${inputToken.symbol} balance: you have ${tokenBalance} ${inputToken.symbol} but tried to swap ${input.amount} ${inputToken.symbol}.` };
                             }
                         }
                     }
@@ -2071,7 +2079,7 @@ async function executeTool(name, input, chatId) {
                 // Jupiter Ultra flow: gasless, RPC-less swaps
                 // BAT-255: use BigInt-safe parsing (same as trigger/DCA) to avoid
                 // floating-point precision loss (e.g., 0.1 + 0.2 !== 0.3 in JS)
-                const amountRaw = parseInputAmountToLamports(String(input.amount), inputToken.decimals);
+                const amountRaw = parseInputAmountToLamports(numberToDecimalString(input.amount), inputToken.decimals);
 
                 // Step 1: Get Ultra order (quote + unsigned tx in one call)
                 // Ultra signed payloads have ~2 min TTL — track timing for re-quote
