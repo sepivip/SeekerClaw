@@ -171,7 +171,7 @@ function updateAgentHealth(newStatus, errorInfo) {
 
 // Conversation history per chat (ephemeral — cleared on every restart, BAT-30)
 const conversations = new Map();
-const MAX_HISTORY = 20;
+const MAX_HISTORY = 35;
 let sessionStartedAt = Date.now();
 
 // ── Active task tracking (P2.4) ─────────────────────────────────────────────
@@ -246,7 +246,7 @@ async function generateSessionSummary(chatId) {
     const conv = conversations.get(chatId);
     if (!conv || conv.length < MIN_MESSAGES_FOR_SUMMARY) return null;
 
-    // Build a condensed view of the conversation (last 20 messages max)
+    // Build a condensed view of the conversation (last 35 messages max)
     const messagesToSummarize = conv.slice(-20);
     const summaryInput = messagesToSummarize.map(m => {
         const text = typeof m.content === 'string' ? m.content :
@@ -780,8 +780,8 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
 
     // Conversation Limits — hard constraints the agent should know about (BAT-232)
     lines.push('## Conversation Limits');
-    lines.push('- **History window:** 20 messages per chat. Older messages are dropped from context (but auto-saved to memory).');
-    lines.push('- **Tool use per turn:** Up to 5 consecutive tool calls per user message. Plan multi-step work to fit within this budget.');
+    lines.push('- **History window:** 35 messages per chat. Older messages are dropped from context (but auto-saved to memory).');
+    lines.push('- **Tool use per turn:** Up to 15 tool-call rounds per user message. Plan multi-step work to fit within this budget.');
     lines.push('- **Max output:** 4096 tokens per response. For long content, split across multiple messages or save to a file and share it.');
     lines.push('- **Conversation reset:** On process restart, conversation history is cleared. Memory files persist.');
     lines.push('');
