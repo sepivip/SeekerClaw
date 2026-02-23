@@ -8,7 +8,14 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
-    alias(libs.plugins.google.services)
+    alias(libs.plugins.google.services) apply false
+}
+
+// Firebase: only apply google-services when the config file is present.
+// Published builds ship with google-services.json (gitignored);
+// open-source clones without it build fine — analytics become no-ops.
+if (file("google-services.json").exists()) {
+    apply(plugin = "com.google.gms.google-services")
 }
 
 // Load signing config from local.properties (not in version control)
