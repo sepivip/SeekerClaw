@@ -33,6 +33,181 @@ function httpRequest(options, body = null) {
     });
 }
 
+// BAT-259: Streaming HTTP request for Claude API — SSE parsing, same return shape as httpRequest.
+// Eliminates transport timeouts: SSE events reset the socket idle timer every few seconds,
+// so even 120s responses never trigger the 60s timeout.
+function httpStreamingRequest(options, body = null) {
+    const timeoutMs = options.timeout ?? API_TIMEOUT_MS;
+    const HARD_TIMEOUT_MS = 5 * 60 * 1000; // 5 min absolute cap
+
+    return new Promise((resolve, reject) => {
+        let settled = false;
+        const settle = (fn, val) => { if (!settled) { settled = true; fn(val); } };
+
+        let req = null;
+        let hardTimer = null;
+
+        // Hard timeout — prevent infinite hanging (armed after req is created)
+        const armHardTimeout = () => {
+            hardTimer = setTimeout(() => {
+                if (req) req.destroy();
+                const err = new Error('Streaming hard timeout (5 min)');
+                err.timeoutSource = 'transport';
+                settle(reject, err);
+            }, HARD_TIMEOUT_MS);
+        };
+
+        try {
+        req = https.request(options, (res) => {
+            // Non-2xx with non-SSE content-type → fall back to buffered read
+            const ct = res.headers['content-type'] || '';
+            if (res.statusCode !== 200 || !ct.includes('text/event-stream')) {
+                res.setEncoding('utf8');
+                let data = '';
+                res.on('data', chunk => data += chunk);
+                res.on('end', () => {
+                    clearTimeout(hardTimer);
+                    try {
+                        settle(resolve, { status: res.statusCode, data: JSON.parse(data), headers: res.headers });
+                    } catch (_) {
+                        settle(resolve, { status: res.statusCode, data, headers: res.headers });
+                    }
+                });
+                return;
+            }
+
+            // SSE streaming — accumulate content blocks into a non-streaming response shape
+            res.setEncoding('utf8');
+            const message = { id: null, type: 'message', role: 'assistant', content: [], model: null, stop_reason: null, usage: {} };
+            const blocks = []; // indexed by content_block index
+            let sseBuffer = '';
+
+            res.on('data', chunk => {
+                // Normalize CRLF/CR to LF (SSE spec, matches mcp-client.js parseSSEEvents)
+                sseBuffer += chunk.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
+                // Process complete SSE events (double newline delimited)
+                let boundary;
+                while ((boundary = sseBuffer.indexOf('\n\n')) !== -1) {
+                    const raw = sseBuffer.slice(0, boundary);
+                    sseBuffer = sseBuffer.slice(boundary + 2);
+
+                    // Parse event type and data
+                    let eventType = 'message', eventData = '';
+                    for (const line of raw.split('\n')) {
+                        if (line.startsWith('event:')) eventType = line.slice(6).trim();
+                        else if (line.startsWith('data:')) {
+                            const d = line.slice(5);
+                            eventData += (eventData ? '\n' : '') + (d.startsWith(' ') ? d.slice(1) : d);
+                        }
+                    }
+                    if (!eventData) continue;
+
+                    // SSE error event — map to HTTP-style error for retry logic
+                    if (eventType === 'error') {
+                        clearTimeout(hardTimer);
+                        try {
+                            const errPayload = JSON.parse(eventData);
+                            const status = errPayload.error?.type === 'overloaded_error' ? 529 : 500;
+                            settle(resolve, { status, data: errPayload, headers: res.headers });
+                        } catch (_) {
+                            settle(resolve, { status: 500, data: { error: { message: eventData } }, headers: res.headers });
+                        }
+                        res.destroy();
+                        return;
+                    }
+
+                    let parsed;
+                    try { parsed = JSON.parse(eventData); } catch (_) { continue; }
+
+                    switch (eventType) {
+                        case 'message_start':
+                            if (parsed.message) {
+                                message.id = parsed.message.id;
+                                message.model = parsed.message.model;
+                                Object.assign(message.usage, parsed.message.usage || {});
+                            }
+                            break;
+                        case 'content_block_start':
+                            if (typeof parsed.index === 'number' && parsed.content_block) {
+                                blocks[parsed.index] = parsed.content_block;
+                                if (blocks[parsed.index].type === 'tool_use') {
+                                    blocks[parsed.index]._inputJson = '';
+                                }
+                            }
+                            break;
+                        case 'content_block_delta': {
+                            const blk = blocks[parsed.index];
+                            if (!blk || !parsed.delta) break;
+                            if (parsed.delta.type === 'text_delta') {
+                                blk.text = (blk.text || '') + parsed.delta.text;
+                            } else if (parsed.delta.type === 'input_json_delta') {
+                                if (typeof blk._inputJson !== 'string') blk._inputJson = '';
+                                blk._inputJson += parsed.delta.partial_json;
+                            }
+                            break;
+                        }
+                        case 'content_block_stop': {
+                            const blk = blocks[parsed.index];
+                            if (blk?.type === 'tool_use' && blk._inputJson) {
+                                try { blk.input = JSON.parse(blk._inputJson); } catch (_) { blk.input = {}; }
+                                delete blk._inputJson;
+                            }
+                            break;
+                        }
+                        case 'message_delta':
+                            if (parsed.delta) {
+                                message.stop_reason = parsed.delta.stop_reason ?? message.stop_reason;
+                            }
+                            Object.assign(message.usage, parsed.usage || {});
+                            break;
+                        case 'message_stop':
+                            clearTimeout(hardTimer);
+                            message.content = blocks.filter(Boolean).map(b => {
+                                if (b.type === 'text') return { type: 'text', text: b.text || '' };
+                                if (b.type === 'tool_use') return { type: 'tool_use', id: b.id, name: b.name, input: b.input || {} };
+                                return b;
+                            });
+                            settle(resolve, { status: 200, data: message, headers: res.headers });
+                            break;
+                    }
+                }
+            });
+
+            res.on('end', () => {
+                clearTimeout(hardTimer);
+                if (!settled) {
+                    // Stream ended without message_stop — always treat as transport error
+                    // so the existing retry logic can handle it. Attach partial message for diagnostics.
+                    const err = new Error('Stream ended before message_stop');
+                    err.timeoutSource = 'transport';
+                    if (blocks.length > 0) {
+                        message.content = blocks.filter(Boolean);
+                        err.partialMessage = message;
+                    }
+                    settle(reject, err);
+                }
+            });
+        });
+
+        armHardTimeout();
+        req.on('error', (err) => { clearTimeout(hardTimer); settle(reject, err); });
+        req.setTimeout(timeoutMs, () => {
+            req.destroy();
+            clearTimeout(hardTimer);
+            const err = new Error('Timeout');
+            err.timeoutSource = 'transport';
+            settle(reject, err);
+        });
+        if (body) req.write(typeof body === 'string' ? body : JSON.stringify(body));
+        req.end();
+        } catch (syncErr) {
+            if (hardTimer) clearTimeout(hardTimer);
+            settle(reject, syncErr);
+        }
+    });
+}
+
 // ============================================================================
 // WEB TOOL UTILITIES
 // ============================================================================
@@ -357,6 +532,7 @@ async function webFetch(urlString, options = {}) {
 
 module.exports = {
     httpRequest,
+    httpStreamingRequest,
     cacheGet,
     cacheSet,
     htmlToMarkdown,

@@ -18,7 +18,7 @@ const {
 } = require('./config');
 
 const { telegram, sendTyping, sentMessageCache, SENT_CACHE_TTL, deferStatus } = require('./telegram');
-const { httpRequest } = require('./web');
+const { httpStreamingRequest } = require('./web');
 const { androidBridgeCall } = require('./bridge');
 
 const {
@@ -171,7 +171,7 @@ function updateAgentHealth(newStatus, errorInfo) {
 
 // Conversation history per chat (ephemeral — cleared on every restart, BAT-30)
 const conversations = new Map();
-const MAX_HISTORY = 20;
+const MAX_HISTORY = 35;
 let sessionStartedAt = Date.now();
 
 // ── Active task tracking (P2.4) ─────────────────────────────────────────────
@@ -246,7 +246,7 @@ async function generateSessionSummary(chatId) {
     const conv = conversations.get(chatId);
     if (!conv || conv.length < MIN_MESSAGES_FOR_SUMMARY) return null;
 
-    // Build a condensed view of the conversation (last 20 messages max)
+    // Build a condensed view of the conversation (last 35 messages max)
     const messagesToSummarize = conv.slice(-20);
     const summaryInput = messagesToSummarize.map(m => {
         const text = typeof m.content === 'string' ? m.content :
@@ -617,7 +617,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('**If conversation seems corrupted or loops:**');
     lines.push('1. Use /new to archive and clear conversation history (safe — saves to memory first)');
     lines.push('2. Use /reset to wipe conversation without backup (nuclear option)');
-    lines.push('3. Tool-use loop protection: max 5 tool calls per turn — if you hit this, summarize progress and ask the user to continue');
+    lines.push('3. Tool-use loop protection: max 15 tool calls per turn — if you hit this, summarize progress and ask the user to continue');
     lines.push('');
     lines.push('**If a tool fails:**');
     lines.push('1. shell_exec: check if the command is in the allowlist (cat, ls, mkdir, cp, mv, echo, pwd, which, head, tail, wc, sort, uniq, grep, find, curl, ping, date, df, du, uname, printenv)');
@@ -780,8 +780,8 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
 
     // Conversation Limits — hard constraints the agent should know about (BAT-232)
     lines.push('## Conversation Limits');
-    lines.push('- **History window:** 20 messages per chat. Older messages are dropped from context (but auto-saved to memory).');
-    lines.push('- **Tool use per turn:** Up to 5 consecutive tool calls per user message. Plan multi-step work to fit within this budget.');
+    lines.push('- **History window:** 35 messages per chat. Older messages are dropped from context (but auto-saved to memory).');
+    lines.push('- **Tool use per turn:** Up to 15 tool-call rounds per user message. Plan multi-step work to fit within this budget.');
     lines.push('- **Max output:** 4096 tokens per response. For long content, split across multiple messages or save to a file and share it.');
     lines.push('- **Conversation reset:** On process restart, conversation history is cleared. Memory files persist.');
     lines.push('');
@@ -1029,7 +1029,9 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
             let timeoutSource = null;
 
             try {
-                res = await httpRequest({
+                // BAT-259: Use streaming to eliminate transport timeouts —
+                // SSE events reset the socket idle timer every few seconds.
+                res = await httpStreamingRequest({
                     hostname: 'api.anthropic.com',
                     path: '/v1/messages',
                     method: 'POST',
@@ -1322,6 +1324,61 @@ function sanitizeConversation(messages, turnId) {
 }
 
 // ============================================================================
+// TOOL RESULT AGING (BAT-259)
+// Trim old, large tool results to reduce payload bloat during multi-tool turns.
+// A skill_read result (~18KB) sitting in history 10 messages back is dead weight —
+// the agent already used it. Replace with a compact placeholder.
+// ============================================================================
+
+const AGING_RECENCY_THRESHOLD = 6;  // messages within this distance from end are "recent"
+const AGING_SIZE_THRESHOLD = 800;   // chars — only age results larger than this
+
+function ageToolResults(messages, turnId) {
+    let aged = 0;
+    let bytesSaved = 0;
+    const recentBoundary = messages.length - AGING_RECENCY_THRESHOLD;
+
+    for (let i = 0; i < recentBoundary; i++) {
+        const msg = messages[i];
+        if (msg.role !== 'user' || !Array.isArray(msg.content)) continue;
+
+        for (let j = 0; j < msg.content.length; j++) {
+            const block = msg.content[j];
+            if (block.type !== 'tool_result') continue;
+
+            let contentLen = 0;
+            if (typeof block.content === 'string') {
+                contentLen = block.content.length;
+            } else if (Array.isArray(block.content)) {
+                contentLen = block.content.reduce((sum, c) =>
+                    sum + (c.type === 'text' ? (c.text || '').length : 0), 0);
+            }
+            if (contentLen <= AGING_SIZE_THRESHOLD) continue;
+
+            // Resolve tool name from preceding assistant message
+            let toolName = 'unknown';
+            if (i > 0) {
+                const prev = messages[i - 1];
+                if (prev && prev.role === 'assistant' && Array.isArray(prev.content)) {
+                    const match = prev.content.find(b => b.type === 'tool_use' && b.id === block.tool_use_id);
+                    if (match) toolName = match.name;
+                }
+            }
+
+            const placeholder = `[Trimmed: ${toolName} result — ${contentLen} chars]`;
+            bytesSaved += contentLen - placeholder.length;
+            block.content = placeholder;
+            aged++;
+        }
+    }
+
+    if (aged > 0) {
+        log(`[Aging] turnId=${turnId || 'n/a'} aged=${aged} bytesSaved=${bytesSaved}`, 'DEBUG');
+    }
+    return { aged, bytesSaved };
+}
+
+// ============================================================================
 // CHAT
 // ============================================================================
 
@@ -1405,11 +1462,26 @@ async function chat(chatId, userMessage, options = {}) {
     try { // BAT-253: catch network errors → sanitize before user output
 
         while (toolUseCount < MAX_TOOL_USES) {
+            // BAT-259: Age old tool results to reduce payload bloat
+            ageToolResults(messages, turnId);
+
+            // BAT-259: Prompt caching for tools — cache_control on last tool
+            // so Anthropic caches all 56+ tool schemas after the first call.
+            // Shallow-clone last tool to avoid mutating shared TOOLS array.
+            const rawTools = _deps.getTools ? _deps.getTools() : [];
+            if (rawTools.length > 0) {
+                rawTools[rawTools.length - 1] = {
+                    ...rawTools[rawTools.length - 1],
+                    cache_control: { type: 'ephemeral' }
+                };
+            }
+
             const body = JSON.stringify({
                 model: MODEL,
                 max_tokens: 4096,
+                stream: true,
                 system: systemBlocks,
-                tools: _deps.getTools ? _deps.getTools() : [],
+                tools: rawTools,
                 messages: messages
             });
 

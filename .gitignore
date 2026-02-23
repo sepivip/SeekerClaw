@@ -79,3 +79,10 @@ openclaw-reference/
 /skills/
 # Bundled agent skills must be tracked (extracted to device on first launch)
 !app/src/main/assets/nodejs-project/workspace/skills/
+
+# Build debug artifacts
+build_output.txt
+compile_out.txt
+
+# Developer-specific MCP config
+.mcp.json

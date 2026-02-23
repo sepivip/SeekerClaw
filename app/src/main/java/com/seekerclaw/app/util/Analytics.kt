@@ -2,18 +2,29 @@ package com.seekerclaw.app.util
 
 import android.content.Context
 import android.os.Bundle
+import android.util.Log
 import com.google.firebase.analytics.FirebaseAnalytics
 
 object Analytics {
+    private const val TAG = "Analytics"
     private var fb: FirebaseAnalytics? = null
 
     fun init(context: Context) {
-        fb = FirebaseAnalytics.getInstance(context)
+        try {
+            fb = FirebaseAnalytics.getInstance(context)
+        } catch (e: IllegalStateException) {
+            Log.w(TAG, "Firebase unavailable — analytics disabled", e)
+            fb = null
+        } catch (e: Exception) {
+            Log.e(TAG, "Unexpected error initializing Firebase — analytics disabled", e)
+            fb = null
+        }
     }
 
     // ── Core ──
 
     fun logEvent(name: String, params: Map<String, Any?> = emptyMap()) {
+        val analytics = fb ?: return
         val bundle = Bundle().apply {
             for ((k, v) in params) {
                 when (v) {
@@ -26,7 +37,7 @@ object Analytics {
                 }
             }
         }
-        fb?.logEvent(name, bundle)
+        analytics.logEvent(name, bundle)
     }
 
     fun setUserProperty(key: String, value: String?) {
