@@ -1,0 +1,43 @@
+NOTICES — Third-Party Software
+
+SeekerClaw includes or depends on the following third-party software:
+
+Rethink Sans Font
+  License: SIL Open Font License 1.1
+  Source: https://fonts.google.com/specimen/Rethink+Sans
+
+nodejs-mobile (community fork)
+  License: MIT
+  Source: https://github.com/nicolo-ribaudo/nodejs-mobile
+
+SQL.js
+  License: MIT
+  Source: https://github.com/nicolo-ribaudo/sql.js-pglite-build
+
+NanoHTTPD
+  License: BSD 3-Clause
+  Source: https://github.com/nicolo-ribaudo/nanohttpd
+
+sol4k
+  License: MIT
+  Source: https://github.com/nicolo-ribaudo/sol4k
+
+grammY (Telegram Bot Framework)
+  License: MIT
+  Source: https://github.com/grammyjs/grammy
+
+AndroidX / Jetpack Libraries
+  License: Apache 2.0
+  Source: https://developer.android.com/jetpack
+
+ML Kit Barcode Scanning
+  License: Apache 2.0
+  Source: https://developers.google.com/ml-kit/vision/barcode-scanning
+
+CameraX
+  License: Apache 2.0
+  Source: https://developer.android.com/training/camerax
+
+Firebase Analytics (optional)
+  License: Apache 2.0
+  Source: https://firebase.google.com/docs/analytics
