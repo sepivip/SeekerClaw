@@ -79,9 +79,7 @@ These 18 files are audit reports, strategy docs, and internal plans that clutter
 
 > **Already implemented.** The `google-services` Gradle plugin is conditional in `app/build.gradle.kts` (lines 14-18) — only applied when `google-services.json` exists. Firebase deps remain in `libs.versions.toml` (compile fine without the plugin). `google-services.json` is gitignored.
 >
-> **Still need to verify** (on a machine with JDK 17):
-> - [ ] Remove `google-services.json` temporarily → build succeeds, analytics are no-ops
-> - [ ] Restore `google-services.json` → build succeeds with Firebase active
+> **Verified by CI** (run #3, `ec32e19`): GitHub Actions runner has no `google-services.json` — build succeeded, confirming analytics are no-ops without it.
 
 ---
 
@@ -226,7 +224,7 @@ Turn your Solana Seeker into a 24/7 personal AI agent.
 
 Run these before flipping the repo to public:
 
-- [ ] `git clone <repo> && ./gradlew assembleDebug` builds cleanly
+- [x] `git clone <repo> && ./gradlew assembleDebug` builds cleanly (CI run #3, `ec32e19`)
 - [x] `git log --all -p | grep -iE "lin_api|sk-ant-api03-[A-Za-z0-9]|jupiter_api"` returns nothing real
 - [x] `LICENSE` exists at root (MIT)
 - [ ] `README.md` exists at root
@@ -237,9 +235,9 @@ Run these before flipping the repo to public:
 - [x] `build_output.txt` / `compile_out.txt` / `.mcp.json` are not tracked
 - [ ] CLAUDE.md has no Linear IDs, BAT- references, or internal process details
 - [x] `google-services` plugin is conditional (only applies when `google-services.json` exists)
-- [ ] Build succeeds without `google-services.json` (analytics become no-ops)
+- [x] Build succeeds without `google-services.json` (CI has no google-services.json — analytics are no-ops)
 - [x] No merged feature branches on remote (only `main`)
-- [ ] GitHub Actions `build.yml` passes on main (assembleDebug succeeds)
+- [x] GitHub Actions `build.yml` passes on main (CI run #3, 3m, green)
 - [ ] GitHub Actions `release.yml` triggers correctly on tag push
 
 ---
