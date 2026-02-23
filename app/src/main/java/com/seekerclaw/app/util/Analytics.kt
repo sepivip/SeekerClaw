@@ -6,13 +6,14 @@ import android.util.Log
 import com.google.firebase.analytics.FirebaseAnalytics
 
 object Analytics {
+    private const val TAG = "Analytics"
     private var fb: FirebaseAnalytics? = null
 
     fun init(context: Context) {
         try {
             fb = FirebaseAnalytics.getInstance(context)
         } catch (e: Exception) {
-            Log.w("Analytics", "Firebase unavailable — analytics disabled", e)
+            Log.w(TAG, "Firebase unavailable — analytics disabled", e)
             fb = null
         }
     }
@@ -20,7 +21,7 @@ object Analytics {
     // ── Core ──
 
     fun logEvent(name: String, params: Map<String, Any?> = emptyMap()) {
-        fb ?: return
+        val analytics = fb ?: return
         val bundle = Bundle().apply {
             for ((k, v) in params) {
                 when (v) {
@@ -33,7 +34,7 @@ object Analytics {
                 }
             }
         }
-        fb?.logEvent(name, bundle)
+        analytics.logEvent(name, bundle)
     }
 
     fun setUserProperty(key: String, value: String?) {

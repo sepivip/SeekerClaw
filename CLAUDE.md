@@ -129,12 +129,14 @@ seekerclaw/
 - **Boot Receiver** auto-starts the service after device reboot (`directBootAware=false` for v1 — starts after first unlock)
 - **IPC** uses nodejs-mobile JNI bridge for lifecycle + localhost HTTP for rich API
 
-## Screens (4 total)
+## Screens (6 routes)
 
-1. **Setup** (first launch only) — notification permission request (API 33+), QR scan or manual entry of API key, Telegram bot token, owner ID, model, agent name
-2. **Dashboard** (main) — status indicator (green/red/yellow), uptime, start/stop toggle, message stats (all local, no telemetry)
-3. **Logs** — monospace auto-scrolling view, color-coded (white=info, yellow=warn, red=error)
-4. **Settings** — edit config (masked fields), model dropdown, auto-start toggle, battery optimization, danger zone (reset/clear memory), about
+1. **Setup** (first launch only) — notification permission, QR scan or manual entry of API key, Telegram bot token, owner ID, model, agent name
+2. **Dashboard / Home** — status indicator (green/red/yellow), uptime, start/stop toggle, message stats
+3. **Console / Logs** — monospace auto-scrolling view, color-coded (white=info, yellow=warn, red=error)
+4. **Settings** — edit config (masked fields), model dropdown, auto-start toggle, battery optimization, danger zone
+5. **System** — device info, versions, diagnostics
+6. **Skills** — installed skills list, install from URL/Telegram, skill diagnostics
 
 **Navigation:** Bottom bar with 4 tabs (Home | Console | Skills | Settings). Setup screen has no bottom bar.
 
