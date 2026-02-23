@@ -42,8 +42,9 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 
 ### AI Agent Core
 - **Claude integration** — Opus 4.6 (default), Sonnet 4.6, Sonnet 4.5, Haiku 4.5 selectable. Prompt caching, retry with backoff, rate-limit throttling, user-friendly error messages. OAuth/setup token support for Claude Pro/Max users. Conversational API key setup flow.
-- **Multi-turn task execution** — Reliable P2 multi-turn: tool budget management with validation-aware restore, silent turn stop prevention on budget exhaustion
+- **Multi-turn task execution** — Reliable P2 multi-turn: tool budget management with validation-aware restore, silent turn stop prevention on budget exhaustion, MAX_TOOL_USES=15 for complex tasks
 - **API timeout hardening** — Configurable timeouts (replacing hardcoded 60s), bounded retry with backoff for timeout paths, turn-level tracing instrumentation, sanitized user-visible error messages, 429 retry jitter
+- **Streaming + payload optimization** — Eliminates API transport timeouts via streaming responses, response field whitelisting to prevent payload bloat (_inputJson leak fix), MAX_HISTORY bumped 20→35 for richer context
 - **Telegram owner gate** — Service refuses to start without valid TELEGRAM_OWNER_ID; unauthorized users get reaction + comment warning; all gate events logged at WARN level
 - **MCP support** — Remote MCP (Model Context Protocol) servers via Streamable HTTP. Users add server URLs in Settings; agent discovers and uses tools at startup. Description sanitization, SHA-256 rug-pull detection, untrusted content wrapping, per-server + global rate limiting.
 - **Telegram bot** — HTML formatting (no markdown headers), native blockquotes, bidirectional reactions, file download with vision, file upload (telegram_send_file tool), long message chunking, quoted replies via `[[reply_to_current]]`, emoji rendering fixed, companion-tone message templates (TEMPLATES.md), context-aware `/start`, sent message ID tracking (ring buffer, 24h TTL) + `telegram_send` tool for same-turn delete flows, contextual status messages for long-running tools (🔍 Searching..., ⚙️ Running..., etc.), inline keyboard buttons via `telegram_send` with callback query handling
@@ -161,6 +162,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 - **Skills tab** — Installed skills list with search, skill detail view, marketplace teaser
 - **System screen** — API usage stats, memory index status, colored accent borders on stat cards
 - **Foreground service** — START_STICKY with wake lock, boot receiver, watchdog (30s health check), heartbeat end-to-end probe
+- **Open-source ready** — MIT license, CONTRIBUTING.md, issue/PR templates, GitHub Actions CI + release workflows, Firebase Analytics build-optional
 
 ## Features — In Progress
 
@@ -220,13 +222,13 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Metric | Count |
 |--------|-------|
-| Total commits | 263 |
-| PRs merged | 177 |
+| Total commits | 278 |
+| PRs merged | 179 |
 | Tools | 56 (9 Jupiter, 13 Android bridge, web search/fetch, memory, cron, skill_install, etc.) + MCP dynamic |
 | Skills | 35 (20 bundled + 13 workspace + 2 user-created) |
 | Android Bridge endpoints | 18+ |
 | Telegram commands | 12 |
-| Lines of JS | ~12,300 (main.js 1,328 + 14 extracted modules) |
+| Lines of JS | ~13,900 (main.js + 14 extracted modules) |
 | Lines of Kotlin | ~12,500 |
 | SQL.js tables | 4 |
 | Themes | 1 (DarkOps only) |
@@ -260,6 +262,12 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Date | Feature | PR |
 |------|---------|-----|
+| 2026-02-23 | Chore: open-source prep — LICENSE, CONTRIBUTING.md, issue/PR templates, CI/release workflows | direct |
+| 2026-02-23 | Feat: eliminate API transport timeouts — streaming + payload optimization (BAT-259) | #179 |
+| 2026-02-23 | Feat: make Firebase Analytics build-optional for open-source (BAT-258) | #178 |
+| 2026-02-23 | Chore: bump MAX_HISTORY 20→35, fix stale system prompt constants | direct |
+| 2026-02-23 | Fix: whitelist streaming response fields to prevent _inputJson leak | direct |
+| 2026-02-23 | Docs: slim CLAUDE.md from 627→213 lines — quick-reference only | direct |
 | 2026-02-22 | Feat: OpenClaw parity 2026.2.22 — status reactions, cron hardening (BAT-256) | #177 |
 | 2026-02-22 | Fix: Console logs intermittently empty — thread safety + filter persistence (BAT-257) | #176 |
 | 2026-02-22 | Fix: Jupiter audit top-5 fixes — BigInt precision, balance pre-check, confirmation gates (BAT-255) | #175 |
