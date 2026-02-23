@@ -163,7 +163,11 @@ function httpStreamingRequest(options, body = null) {
                             break;
                         case 'message_stop':
                             clearTimeout(hardTimer);
-                            message.content = blocks.filter(Boolean);
+                            message.content = blocks.filter(Boolean).map(b => {
+                                if (b.type === 'text') return { type: 'text', text: b.text || '' };
+                                if (b.type === 'tool_use') return { type: 'tool_use', id: b.id, name: b.name, input: b.input || {} };
+                                return b;
+                            });
                             settle(resolve, { status: 200, data: message, headers: res.headers });
                             break;
                     }
