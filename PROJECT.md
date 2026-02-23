@@ -33,7 +33,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 | AI Provider | Anthropic Claude API | Opus 4.6 default, Sonnet 4.6, Sonnet 4.5, Haiku 4.5 |
 | Messaging | Telegram Bot API (grammy) | — |
 | Database | SQL.js (WASM SQLite) | 1.12.0 |
-| OpenClaw Parity | OpenClaw gateway (ported) | 2026.2.20 |
+| OpenClaw Parity | OpenClaw gateway (ported) | 2026.2.22 |
 | Web Search | Brave Search + Perplexity Sonar | — |
 | Wallet | Solana Web3.js + Jupiter API | — |
 | Build | Gradle (Kotlin DSL) | — |
@@ -141,7 +141,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 ### Security
 - **Prompt injection defense** — Content Trust Policy in system prompt, `<<<EXTERNAL_UNTRUSTED_CONTENT>>>` boundary markers on all web_fetch/web_search results, 10-pattern suspicious content detection, Unicode homoglyph sanitization, zero-width space normalization
 - **Skill file protection** — Writes/edits to `skills/` blocked when suspicious injection patterns detected in content
-- **Tool confirmation gates** — `android_sms`, `android_call`, `jupiter_trigger_create`, `jupiter_dca_create` require explicit user YES via Telegram before execution. 60s timeout auto-cancels. Rate limited (SMS/call 1 per 60s, Jupiter 1 per 30s)
+- **Tool confirmation gates** — `android_sms`, `android_call`, `solana_send`, `solana_swap`, `jupiter_trigger_create`, `jupiter_dca_create` require explicit user YES via Telegram before execution. 60s timeout auto-cancels. Rate limited (SMS/call 1 per 60s, Solana 1 per 15s, Jupiter 1 per 30s)
 - **Jupiter API hardening** — 7 fixes from official skill audit (BAT-151-157): no retry for non-idempotent POSTs, amount validation, slippage bounds, error message sanitization
 - **Secrets blocklist** — `config.json`, `config.yaml`, `seekerclaw.db` blocked from `read` tool (with symlink resolution) and `js_eval` fs access (proxied `fs`/`fs.promises` modules)
 - **ALT-safe swap verification** — `verifySwapTransaction()` rejects instructions referencing programs via Address Lookup Tables (prevents drainer bypass)
@@ -220,14 +220,14 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Metric | Count |
 |--------|-------|
-| Total commits | 257 |
-| PRs merged | 173 |
+| Total commits | 263 |
+| PRs merged | 177 |
 | Tools | 56 (9 Jupiter, 13 Android bridge, web search/fetch, memory, cron, skill_install, etc.) + MCP dynamic |
 | Skills | 35 (20 bundled + 13 workspace + 2 user-created) |
 | Android Bridge endpoints | 18+ |
 | Telegram commands | 12 |
-| Lines of JS | ~11,800 (main.js 1,315 + 14 extracted modules) |
-| Lines of Kotlin | ~12,400 |
+| Lines of JS | ~12,300 (main.js 1,328 + 14 extracted modules) |
+| Lines of Kotlin | ~12,500 |
 | SQL.js tables | 4 |
 | Themes | 1 (DarkOps only) |
 
@@ -260,6 +260,9 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Date | Feature | PR |
 |------|---------|-----|
+| 2026-02-22 | Feat: OpenClaw parity 2026.2.22 — status reactions, cron hardening (BAT-256) | #177 |
+| 2026-02-22 | Fix: Console logs intermittently empty — thread safety + filter persistence (BAT-257) | #176 |
+| 2026-02-22 | Fix: Jupiter audit top-5 fixes — BigInt precision, balance pre-check, confirmation gates (BAT-255) | #175 |
 | 2026-02-22 | Feat: P2 reliable multi-turn task execution | #174 |
 | 2026-02-21 | Feat: fix silent turn stops on tool budget exhaustion (BAT-161) | #173 |
 | 2026-02-21 | Fix: sanitize user-visible timeout errors + 429 retry jitter (BAT-253) | #172 |
