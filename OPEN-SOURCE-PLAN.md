@@ -1,8 +1,8 @@
 # Open Source Preparation Plan
 
 > **Goal:** Prepare SeekerClaw for public release on GitHub.
-> **Status:** Planning
-> **Date:** 2026-02-22
+> **Status:** Ready to execute
+> **Date:** 2026-02-23 (reviewed & updated)
 
 ---
 
@@ -54,7 +54,7 @@ These files are tracked in git but shouldn't be public:
 
 ## Phase 3: Move Internal Docs → `docs/internal/`
 
-These 17 files are audit reports, strategy docs, and internal plans that clutter the root. Move them to `docs/internal/` to keep the root clean for contributors.
+These 18 files are audit reports, strategy docs, and internal plans that clutter the root. Move them to `docs/internal/` to keep the root clean for contributors.
 
 **Move these:**
 - [ ] `HEARTBEAT-AUDIT.md`
@@ -62,6 +62,7 @@ These 17 files are audit reports, strategy docs, and internal plans that clutter
 - [ ] `JUPITER-AUDIT.md`
 - [ ] `JUPITER-TEST-CHECKLIST.md`
 - [ ] `LOG-AUDIT.md`
+- [ ] `OPEN-SOURCE-PLAN.md`
 - [ ] `OWNER-GATE-AUDIT.md`
 - [ ] `P1-VALIDATION.md`
 - [ ] `P2-PLAN.md`
@@ -89,22 +90,13 @@ These 17 files are audit reports, strategy docs, and internal plans that clutter
 
 ---
 
-## Phase 4: Make Firebase Analytics Build-Optional (BAT-258)
+## ~~Phase 4: Make Firebase Analytics Build-Optional (BAT-258)~~ DONE
 
-> **Assigned to other instance.** See [BAT-258](https://linear.app/batcave/issue/BAT-258/make-firebase-analytics-build-optional-for-open-source).
-
-Firebase Analytics is a hard dependency — without `google-services.json`, fresh clones **won't build**. Make it conditional so your published builds get analytics while open-source clones build fine.
-
-**Approach:**
-- [ ] Make `com.google.gms.google-services` Gradle plugin conditional (only apply when `google-services.json` exists)
-- [ ] Verify `Analytics.kt` null-safety (already uses `fb?` — ensure init handles missing Firebase)
-- [ ] Guard `Analytics.init()` in `SeekerClawApplication.kt` with try-catch
-- [ ] Keep Firebase deps in `gradle/libs.versions.toml` (they compile fine without the plugin)
-- [ ] Keep `google-services.json` in `.gitignore` (already there)
-
-**Verification:**
-- [ ] Remove `google-services.json` temporarily → build succeeds, analytics are no-ops
-- [ ] Restore `google-services.json` → build succeeds with Firebase active
+> **Already implemented.** The `google-services` Gradle plugin is conditional in `app/build.gradle.kts` (lines 14-18) — only applied when `google-services.json` exists. Firebase deps remain in `libs.versions.toml` (compile fine without the plugin). `google-services.json` is gitignored.
+>
+> **Still need to verify** (on a machine with JDK 17):
+> - [ ] Remove `google-services.json` temporarily → build succeeds, analytics are no-ops
+> - [ ] Restore `google-services.json` → build succeeds with Firebase active
 
 ---
 
@@ -226,18 +218,14 @@ Third-party attributions:
 
 ---
 
-## Phase 7: Branch Cleanup
+## ~~Phase 7: Branch Cleanup~~ DONE
 
-- [ ] Delete ~50 merged `feature/BAT-*` remote branches
-- [ ] Keep `main` branch only
-
-```bash
-# Preview what would be deleted
-git branch -r --merged origin/main | grep -v 'main' | sed 's/origin\///'
-
-# Delete them
-git branch -r --merged origin/main | grep -v 'main' | sed 's/origin\///' | xargs -I{} git push origin --delete {}
-```
+> **Already clean.** No merged remote feature branches remain — only `main` exists on origin.
+>
+> Re-run before going public to catch any new branches:
+> ```bash
+> git branch -r --merged origin/main | grep -v 'main'
+> ```
 
 ---
 
@@ -271,8 +259,9 @@ Run these before flipping the repo to public:
 - [ ] Internal audit docs are in `docs/internal/`, not root
 - [ ] `build_output.txt` / `compile_out.txt` / `.mcp.json` are not tracked
 - [ ] CLAUDE.md has no Linear IDs, BAT- references, or internal process details
-- [ ] Firebase deps fully removed from build files
-- [ ] No `google-services` plugin in build files
+- [ ] `google-services` plugin is conditional (only applies when `google-services.json` exists)
+- [ ] Build succeeds without `google-services.json` (analytics become no-ops)
+- [ ] No merged feature branches on remote (only `main`)
 
 ---
 
@@ -281,7 +270,7 @@ Run these before flipping the repo to public:
 | Action | Files |
 |--------|-------|
 | **Create** | `LICENSE`, `README.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, `NOTICES`, `.github/ISSUE_TEMPLATE/bug_report.md`, `.github/ISSUE_TEMPLATE/feature_request.md`, `.github/PULL_REQUEST_TEMPLATE.md` |
-| **Edit** | `CLAUDE.md` (trim), `.gitignore` (add entries), `app/build.gradle.kts` (remove Firebase), `gradle/libs.versions.toml` (remove Firebase) |
-| **Move** | 17 audit/internal `.md` files → `docs/internal/` |
+| **Edit** | `CLAUDE.md` (trim), `.gitignore` (add entries) |
+| **Move** | 18 audit/internal `.md` files → `docs/internal/` |
 | **Untrack** | `build_output.txt`, `compile_out.txt`, `.mcp.json` |
-| **Delete remote** | ~50 merged `feature/BAT-*` branches |
+| **Already done** | Firebase conditional (BAT-258), branch cleanup |
