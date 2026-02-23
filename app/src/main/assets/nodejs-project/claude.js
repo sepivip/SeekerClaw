@@ -18,7 +18,7 @@ const {
 } = require('./config');
 
 const { telegram, sendTyping, sentMessageCache, SENT_CACHE_TTL, deferStatus } = require('./telegram');
-const { httpRequest } = require('./web');
+const { httpRequest, httpStreamingRequest } = require('./web');
 const { androidBridgeCall } = require('./bridge');
 
 const {
@@ -1029,7 +1029,9 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
             let timeoutSource = null;
 
             try {
-                res = await httpRequest({
+                // BAT-259: Use streaming to eliminate transport timeouts —
+                // SSE events reset the socket idle timer every few seconds.
+                res = await httpStreamingRequest({
                     hostname: 'api.anthropic.com',
                     path: '/v1/messages',
                     method: 'POST',
@@ -1322,6 +1324,61 @@ function sanitizeConversation(messages, turnId) {
 }
 
 // ============================================================================
+// TOOL RESULT AGING (BAT-259)
+// Trim old, large tool results to reduce payload bloat during multi-tool turns.
+// A skill_read result (~18KB) sitting in history 10 messages back is dead weight —
+// the agent already used it. Replace with a compact placeholder.
+// ============================================================================
+
+const AGING_RECENCY_THRESHOLD = 6;  // messages within this distance from end are "recent"
+const AGING_SIZE_THRESHOLD = 800;   // chars — only age results larger than this
+
+function ageToolResults(messages, turnId) {
+    let aged = 0;
+    let bytesSaved = 0;
+    const recentBoundary = messages.length - AGING_RECENCY_THRESHOLD;
+
+    for (let i = 0; i < recentBoundary; i++) {
+        const msg = messages[i];
+        if (msg.role !== 'user' || !Array.isArray(msg.content)) continue;
+
+        for (let j = 0; j < msg.content.length; j++) {
+            const block = msg.content[j];
+            if (block.type !== 'tool_result') continue;
+
+            let contentLen = 0;
+            if (typeof block.content === 'string') {
+                contentLen = block.content.length;
+            } else if (Array.isArray(block.content)) {
+                contentLen = block.content.reduce((sum, c) =>
+                    sum + (c.type === 'text' ? (c.text || '').length : 0), 0);
+            }
+            if (contentLen <= AGING_SIZE_THRESHOLD) continue;
+
+            // Resolve tool name from preceding assistant message
+            let toolName = 'unknown';
+            if (i > 0) {
+                const prev = messages[i - 1];
+                if (prev && prev.role === 'assistant' && Array.isArray(prev.content)) {
+                    const match = prev.content.find(b => b.type === 'tool_use' && b.id === block.tool_use_id);
+                    if (match) toolName = match.name;
+                }
+            }
+
+            const placeholder = `[Trimmed: ${toolName} result — ${contentLen} chars]`;
+            bytesSaved += contentLen - placeholder.length;
+            block.content = placeholder;
+            aged++;
+        }
+    }
+
+    if (aged > 0) {
+        log(`[Aging] turnId=${turnId || 'n/a'} aged=${aged} bytesSaved=${bytesSaved}`, 'DEBUG');
+    }
+    return { aged, bytesSaved };
+}
+
+// ============================================================================
 // CHAT
 // ============================================================================
 
@@ -1405,11 +1462,26 @@ async function chat(chatId, userMessage, options = {}) {
     try { // BAT-253: catch network errors → sanitize before user output
 
         while (toolUseCount < MAX_TOOL_USES) {
+            // BAT-259: Age old tool results to reduce payload bloat
+            ageToolResults(messages, turnId);
+
+            // BAT-259: Prompt caching for tools — cache_control on last tool
+            // so Anthropic caches all 56+ tool schemas after the first call.
+            // Shallow-clone last tool to avoid mutating shared TOOLS array.
+            const rawTools = _deps.getTools ? _deps.getTools() : [];
+            if (rawTools.length > 0) {
+                rawTools[rawTools.length - 1] = {
+                    ...rawTools[rawTools.length - 1],
+                    cache_control: { type: 'ephemeral' }
+                };
+            }
+
             const body = JSON.stringify({
                 model: MODEL,
                 max_tokens: 4096,
+                stream: true,
                 system: systemBlocks,
-                tools: _deps.getTools ? _deps.getTools() : [],
+                tools: rawTools,
                 messages: messages
             });
 

@@ -194,10 +194,10 @@ if (!fs.existsSync(TASKS_DIR)) {
 // TOOL RESULT TRUNCATION (ported from OpenClaw)
 // ============================================================================
 
-const HARD_MAX_TOOL_RESULT_CHARS = 400000;  // ~100K tokens, absolute safety net
+const HARD_MAX_TOOL_RESULT_CHARS = 50000;   // BAT-259: 50K chars — no single result should dominate payload (was 400K)
 const MAX_TOOL_RESULT_CONTEXT_SHARE = 0.3;  // Max 30% of context per tool result
 const MIN_KEEP_CHARS = 2000;                // Always keep at least this much
-const MODEL_CONTEXT_CHARS = 400000;         // ~100K tokens for typical model context
+const MODEL_CONTEXT_CHARS = 200000;         // BAT-259: Realistic context budget (was 400K)
 
 function truncateToolResult(text) {
     if (typeof text !== 'string') return text;
