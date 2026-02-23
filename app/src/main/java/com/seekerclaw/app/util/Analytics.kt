@@ -8,7 +8,11 @@ object Analytics {
     private var fb: FirebaseAnalytics? = null
 
     fun init(context: Context) {
-        fb = FirebaseAnalytics.getInstance(context)
+        try {
+            fb = FirebaseAnalytics.getInstance(context)
+        } catch (_: Exception) {
+            fb = null
+        }
     }
 
     // ── Core ──
