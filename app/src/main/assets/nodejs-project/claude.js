@@ -1400,7 +1400,7 @@ async function chat(chatId, userMessage, options = {}) {
     // Call Claude API with tool use loop
     let response;
     let toolUseCount = 0;
-    const MAX_TOOL_USES = 5;
+    const MAX_TOOL_USES = 15;
 
     try { // BAT-253: catch network errors → sanitize before user output
 
