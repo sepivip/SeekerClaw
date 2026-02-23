@@ -617,7 +617,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('**If conversation seems corrupted or loops:**');
     lines.push('1. Use /new to archive and clear conversation history (safe — saves to memory first)');
     lines.push('2. Use /reset to wipe conversation without backup (nuclear option)');
-    lines.push('3. Tool-use loop protection: max 5 tool calls per turn — if you hit this, summarize progress and ask the user to continue');
+    lines.push('3. Tool-use loop protection: max 15 tool calls per turn — if you hit this, summarize progress and ask the user to continue');
     lines.push('');
     lines.push('**If a tool fails:**');
     lines.push('1. shell_exec: check if the command is in the allowlist (cat, ls, mkdir, cp, mv, echo, pwd, which, head, tail, wc, sort, uniq, grep, find, curl, ping, date, df, du, uname, printenv)');
@@ -1400,7 +1400,7 @@ async function chat(chatId, userMessage, options = {}) {
     // Call Claude API with tool use loop
     let response;
     let toolUseCount = 0;
-    const MAX_TOOL_USES = 5;
+    const MAX_TOOL_USES = 15;
 
     try { // BAT-253: catch network errors → sanitize before user output
 
