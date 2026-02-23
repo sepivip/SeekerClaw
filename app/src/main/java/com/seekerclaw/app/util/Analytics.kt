@@ -12,8 +12,11 @@ object Analytics {
     fun init(context: Context) {
         try {
             fb = FirebaseAnalytics.getInstance(context)
-        } catch (e: Exception) {
+        } catch (e: IllegalStateException) {
             Log.w(TAG, "Firebase unavailable — analytics disabled", e)
+            fb = null
+        } catch (e: Exception) {
+            Log.e(TAG, "Unexpected error initializing Firebase — analytics disabled", e)
             fb = null
         }
     }
