@@ -18,7 +18,7 @@ const {
 } = require('./config');
 
 const { telegram, sendTyping, sentMessageCache, SENT_CACHE_TTL, deferStatus } = require('./telegram');
-const { httpRequest, httpStreamingRequest } = require('./web');
+const { httpStreamingRequest } = require('./web');
 const { androidBridgeCall } = require('./bridge');
 
 const {

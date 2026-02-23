@@ -77,7 +77,8 @@ function httpStreamingRequest(options, body = null) {
             let sseBuffer = '';
 
             res.on('data', chunk => {
-                sseBuffer += chunk;
+                // Normalize CRLF/CR to LF (SSE spec, matches mcp-client.js parseSSEEvents)
+                sseBuffer += chunk.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 
                 // Process complete SSE events (double newline delimited)
                 let boundary;
@@ -122,18 +123,24 @@ function httpStreamingRequest(options, body = null) {
                             }
                             break;
                         case 'content_block_start':
-                            blocks[parsed.index] = parsed.content_block;
-                            if (blocks[parsed.index].type === 'tool_use') {
-                                blocks[parsed.index]._inputJson = '';
+                            if (typeof parsed.index === 'number' && parsed.content_block) {
+                                blocks[parsed.index] = parsed.content_block;
+                                if (blocks[parsed.index].type === 'tool_use') {
+                                    blocks[parsed.index]._inputJson = '';
+                                }
                             }
                             break;
-                        case 'content_block_delta':
-                            if (parsed.delta?.type === 'text_delta') {
-                                blocks[parsed.index].text = (blocks[parsed.index].text || '') + parsed.delta.text;
-                            } else if (parsed.delta?.type === 'input_json_delta') {
-                                blocks[parsed.index]._inputJson += parsed.delta.partial_json;
+                        case 'content_block_delta': {
+                            const blk = blocks[parsed.index];
+                            if (!blk || !parsed.delta) break;
+                            if (parsed.delta.type === 'text_delta') {
+                                blk.text = (blk.text || '') + parsed.delta.text;
+                            } else if (parsed.delta.type === 'input_json_delta') {
+                                if (typeof blk._inputJson !== 'string') blk._inputJson = '';
+                                blk._inputJson += parsed.delta.partial_json;
                             }
                             break;
+                        }
                         case 'content_block_stop': {
                             const blk = blocks[parsed.index];
                             if (blk?.type === 'tool_use' && blk._inputJson) {
@@ -160,16 +167,15 @@ function httpStreamingRequest(options, body = null) {
             res.on('end', () => {
                 clearTimeout(hardTimer);
                 if (!settled) {
-                    // Stream ended without message_stop — treat as incomplete
+                    // Stream ended without message_stop — always treat as transport error
+                    // so the existing retry logic can handle it. Attach partial message for diagnostics.
+                    const err = new Error('Stream ended before message_stop');
+                    err.timeoutSource = 'transport';
                     if (blocks.length > 0) {
                         message.content = blocks.filter(Boolean);
-                        message.stop_reason = message.stop_reason || 'end_turn';
-                        settle(resolve, { status: 200, data: message, headers: res.headers });
-                    } else {
-                        const err = new Error('Stream ended before message_stop');
-                        err.timeoutSource = 'transport';
-                        settle(reject, err);
+                        err.partialMessage = message;
                     }
+                    settle(reject, err);
                 }
             });
         });
