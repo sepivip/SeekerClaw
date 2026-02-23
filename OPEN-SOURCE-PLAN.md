@@ -31,24 +31,9 @@
 
 ---
 
-## Phase 2: Remove Tracked Build Artifacts
+## ~~Phase 2: Remove Tracked Build Artifacts~~ DONE
 
-These files are tracked in git but shouldn't be public:
-
-| File | Reason |
-|------|--------|
-| `build_output.txt` | Build debug artifact |
-| `compile_out.txt` | Build debug artifact |
-| `.mcp.json` | Developer-specific MCP config |
-
-**Actions:**
-- [ ] `git rm --cached build_output.txt compile_out.txt .mcp.json`
-- [ ] Add to `.gitignore`:
-  ```
-  build_output.txt
-  compile_out.txt
-  .mcp.json
-  ```
+> **Completed in `12b8d0d`.** Untracked `build_output.txt`, `compile_out.txt`, `.mcp.json` and added to `.gitignore`.
 
 ---
 
@@ -100,7 +85,9 @@ These 18 files are audit reports, strategy docs, and internal plans that clutter
 
 ---
 
-## Phase 5: Trim CLAUDE.md
+## Phase 5: Trim CLAUDE.md (Mostly Done)
+
+> **Already trimmed** from 627 → 214 lines in commit `fdc72aa`. A few internal sections remain (PROJECT.md rules, UX principle, Version Tracking, Model List, OpenClaw Compatibility) — final cut needed before go-public.
 
 Transform from internal team guide → public contributor guide. (~625 lines → ~300 lines)
 
@@ -149,10 +136,9 @@ Transform from internal team guide → public contributor guide. (~625 lines →
 
 ## Phase 6: Create New Files
 
-### 6A: `LICENSE`
+### ~~6A: `LICENSE`~~ DONE
 
-- **Type:** MIT
-- **Copyright:** `Copyright (c) 2025-2026 SeekerClaw Contributors`
+> Created in `12b8d0d`. MIT, `Copyright (c) 2025-2026 SeekerClaw Contributors`.
 
 ### 6B: `README.md`
 
@@ -183,84 +169,29 @@ Turn your Solana Seeker into a 24/7 personal AI agent.
 - Version tracking table (moved from CLAUDE.md)
 - CLAUDE.md as the architecture reference
 
-### 6D: `CODE_OF_CONDUCT.md`
+### ~~6D: `CODE_OF_CONDUCT.md`~~ DONE
 
-Contributor Covenant v2.1 (industry standard).
+> Created in `12b8d0d`. Links to Contributor Covenant v2.1 + reporting email.
 
-### 6E: `SECURITY.md`
+### ~~6E: `SECURITY.md`~~ DONE
 
-- Responsible disclosure process (email, not public issue)
-- Security model overview (Keystore encryption, HTTPS-only, no telemetry)
+> Created in `12b8d0d`. Disclosure process (security@seekerclaw.dev) + security model overview.
 
-### 6F: `NOTICES`
+### ~~6F: `NOTICES`~~ DONE
 
-Third-party attributions:
+> Created in `12b8d0d`. Third-party attributions for all dependencies.
 
-| Library | License |
-|---------|---------|
-| Rethink Sans font | SIL Open Font License 1.1 |
-| nodejs-mobile | MIT |
-| SQL.js | MIT |
-| NanoHTTPD | BSD 3-Clause |
-| sol4k | MIT |
-| AndroidX / Jetpack | Apache 2.0 |
-| ML Kit Barcode | Apache 2.0 |
+### ~~6G: `.github/` Templates~~ DONE
 
-### 6G: `.github/` Templates
+> Created in `12b8d0d`. Bug report, feature request, and PR templates.
 
-```
-.github/
-├── ISSUE_TEMPLATE/
-│   ├── bug_report.md
-│   └── feature_request.md
-└── PULL_REQUEST_TEMPLATE.md
-```
+### ~~6H: GitHub Actions Workflows~~ DONE
 
-### 6H: GitHub Actions Workflows
-
-Two workflows — CI for every push, and automated releases on version tags.
-
-**`.github/workflows/build.yml`** — CI
-
-```yaml
-# Triggers: push to main, PRs targeting main
-# Steps:
-#   1. Checkout
-#   2. Set up JDK 17
-#   3. Gradle cache
-#   4. ./gradlew assembleDebug
-```
-
-- Validates the project builds for every PR
-- No signing needed (debug build)
-- Use as required status check in branch protection (Phase 8)
-
-**`.github/workflows/release.yml`** — Automated releases
-
-```yaml
-# Triggers: push tag matching v*  (e.g. v1.4.0)
-# Steps:
-#   1. Checkout
-#   2. Set up JDK 17
-#   3. Gradle cache
-#   4. ./gradlew assembleRelease
-#   5. Create GitHub Release from tag
-#   6. Upload APK as release artifact
-```
-
-- **Unsigned by default** — builds a debug-signed APK that contributors can test
-- **Optional: signed release builds** — add these repository secrets for production-signed APKs:
-  - `KEYSTORE_BASE64` — base64-encoded `.jks` keystore
-  - `KEYSTORE_PASSWORD` — keystore password
-  - `KEY_ALIAS` — key alias
-  - `KEY_PASSWORD` — key password
-- Release notes: auto-generated from tag, or manually edited after creation
-
-**Release workflow:**
-```
-git tag v1.5.0 && git push origin v1.5.0
-→ GitHub Actions builds APK → creates Release → uploads artifact
-```
+> Created in `12b8d0d`.
+> - `build.yml` — CI on push/PR to main (assembleDebug, JDK 17, Gradle cache, uploads debug APK artifact)
+> - `release.yml` — Triggered on `v*` tags. Builds release APK, creates GitHub Release, uploads artifact. Supports optional signing via repository secrets (`KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`).
+>
+> **Release workflow:** `git tag v1.5.0 && git push origin v1.5.0` → auto-build → auto-release
 
 ---
 
@@ -296,18 +227,18 @@ git tag v1.5.0 && git push origin v1.5.0
 Run these before flipping the repo to public:
 
 - [ ] `git clone <repo> && ./gradlew assembleDebug` builds cleanly
-- [ ] `git log --all -p | grep -iE "lin_api|sk-ant-api03-[A-Za-z0-9]|jupiter_api"` returns nothing real (only placeholder examples)
-- [ ] `LICENSE` exists at root (MIT)
+- [x] `git log --all -p | grep -iE "lin_api|sk-ant-api03-[A-Za-z0-9]|jupiter_api"` returns nothing real
+- [x] `LICENSE` exists at root (MIT)
 - [ ] `README.md` exists at root
 - [ ] `CONTRIBUTING.md` exists at root
-- [ ] `CODE_OF_CONDUCT.md` exists at root
-- [ ] `SECURITY.md` exists at root
+- [x] `CODE_OF_CONDUCT.md` exists at root
+- [x] `SECURITY.md` exists at root
 - [ ] Internal audit docs are in `docs/internal/`, not root
-- [ ] `build_output.txt` / `compile_out.txt` / `.mcp.json` are not tracked
+- [x] `build_output.txt` / `compile_out.txt` / `.mcp.json` are not tracked
 - [ ] CLAUDE.md has no Linear IDs, BAT- references, or internal process details
-- [ ] `google-services` plugin is conditional (only applies when `google-services.json` exists)
+- [x] `google-services` plugin is conditional (only applies when `google-services.json` exists)
 - [ ] Build succeeds without `google-services.json` (analytics become no-ops)
-- [ ] No merged feature branches on remote (only `main`)
+- [x] No merged feature branches on remote (only `main`)
 - [ ] GitHub Actions `build.yml` passes on main (assembleDebug succeeds)
 - [ ] GitHub Actions `release.yml` triggers correctly on tag push
 
@@ -315,10 +246,9 @@ Run these before flipping the repo to public:
 
 ## Files Summary
 
-| Action | Files |
-|--------|-------|
-| **Create** | `LICENSE`, `README.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, `NOTICES`, `.github/ISSUE_TEMPLATE/bug_report.md`, `.github/ISSUE_TEMPLATE/feature_request.md`, `.github/PULL_REQUEST_TEMPLATE.md`, `.github/workflows/build.yml`, `.github/workflows/release.yml` |
-| **Edit** | `CLAUDE.md` (trim), `.gitignore` (add entries) |
-| **Move** | 18 audit/internal `.md` files → `docs/internal/` |
-| **Untrack** | `build_output.txt`, `compile_out.txt`, `.mcp.json` |
-| **Already done** | Firebase conditional (BAT-258), branch cleanup |
+| Action | Files | Status |
+|--------|-------|--------|
+| **Create** | `README.md`, `CONTRIBUTING.md` | TODO |
+| **Edit** | `CLAUDE.md` (final trim — remove ~5 internal sections) | TODO |
+| **Move** | 18 audit/internal `.md` files → `docs/internal/` | TODO |
+| **Done** | `LICENSE`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, `NOTICES`, `.github/` templates, `.github/workflows/`, `.gitignore` updates, untrack artifacts, Firebase conditional, branch cleanup | `12b8d0d` |
