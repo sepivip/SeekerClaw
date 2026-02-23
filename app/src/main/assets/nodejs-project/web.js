@@ -44,15 +44,21 @@ function httpStreamingRequest(options, body = null) {
         let settled = false;
         const settle = (fn, val) => { if (!settled) { settled = true; fn(val); } };
 
-        // Hard timeout — prevent infinite hanging
-        const hardTimer = setTimeout(() => {
-            req.destroy();
-            const err = new Error('Streaming hard timeout (5 min)');
-            err.timeoutSource = 'transport';
-            settle(reject, err);
-        }, HARD_TIMEOUT_MS);
+        let req = null;
+        let hardTimer = null;
 
-        const req = https.request(options, (res) => {
+        // Hard timeout — prevent infinite hanging (armed after req is created)
+        const armHardTimeout = () => {
+            hardTimer = setTimeout(() => {
+                if (req) req.destroy();
+                const err = new Error('Streaming hard timeout (5 min)');
+                err.timeoutSource = 'transport';
+                settle(reject, err);
+            }, HARD_TIMEOUT_MS);
+        };
+
+        try {
+        req = https.request(options, (res) => {
             // Non-2xx with non-SSE content-type → fall back to buffered read
             const ct = res.headers['content-type'] || '';
             if (res.statusCode !== 200 || !ct.includes('text/event-stream')) {
@@ -180,6 +186,7 @@ function httpStreamingRequest(options, body = null) {
             });
         });
 
+        armHardTimeout();
         req.on('error', (err) => { clearTimeout(hardTimer); settle(reject, err); });
         req.setTimeout(timeoutMs, () => {
             req.destroy();
@@ -190,6 +197,10 @@ function httpStreamingRequest(options, body = null) {
         });
         if (body) req.write(typeof body === 'string' ? body : JSON.stringify(body));
         req.end();
+        } catch (syncErr) {
+            if (hardTimer) clearTimeout(hardTimer);
+            settle(reject, syncErr);
+        }
     });
 }
 
