@@ -2,6 +2,7 @@ package com.seekerclaw.app.util
 
 import android.content.Context
 import android.os.Bundle
+import android.util.Log
 import com.google.firebase.analytics.FirebaseAnalytics
 
 object Analytics {
@@ -10,7 +11,8 @@ object Analytics {
     fun init(context: Context) {
         try {
             fb = FirebaseAnalytics.getInstance(context)
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.w("Analytics", "Firebase unavailable — analytics disabled", e)
             fb = null
         }
     }
@@ -18,6 +20,7 @@ object Analytics {
     // ── Core ──
 
     fun logEvent(name: String, params: Map<String, Any?> = emptyMap()) {
+        fb ?: return
         val bundle = Bundle().apply {
             for ((k, v) in params) {
                 when (v) {

@@ -136,7 +136,7 @@ seekerclaw/
 3. **Logs** — monospace auto-scrolling view, color-coded (white=info, yellow=warn, red=error)
 4. **Settings** — edit config (masked fields), model dropdown, auto-start toggle, battery optimization, danger zone (reset/clear memory), about
 
-**Navigation:** Bottom bar with 3 tabs (Dashboard | Logs | Settings). Setup screen has no bottom bar.
+**Navigation:** Bottom bar with 4 tabs (Home | Console | Skills | Settings). Setup screen has no bottom bar.
 
 ## Design Theme (Dark Only)
 
