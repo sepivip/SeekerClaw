@@ -216,6 +216,52 @@ Third-party attributions:
 └── PULL_REQUEST_TEMPLATE.md
 ```
 
+### 6H: GitHub Actions Workflows
+
+Two workflows — CI for every push, and automated releases on version tags.
+
+**`.github/workflows/build.yml`** — CI
+
+```yaml
+# Triggers: push to main, PRs targeting main
+# Steps:
+#   1. Checkout
+#   2. Set up JDK 17
+#   3. Gradle cache
+#   4. ./gradlew assembleDebug
+```
+
+- Validates the project builds for every PR
+- No signing needed (debug build)
+- Use as required status check in branch protection (Phase 8)
+
+**`.github/workflows/release.yml`** — Automated releases
+
+```yaml
+# Triggers: push tag matching v*  (e.g. v1.4.0)
+# Steps:
+#   1. Checkout
+#   2. Set up JDK 17
+#   3. Gradle cache
+#   4. ./gradlew assembleRelease
+#   5. Create GitHub Release from tag
+#   6. Upload APK as release artifact
+```
+
+- **Unsigned by default** — builds a debug-signed APK that contributors can test
+- **Optional: signed release builds** — add these repository secrets for production-signed APKs:
+  - `KEYSTORE_BASE64` — base64-encoded `.jks` keystore
+  - `KEYSTORE_PASSWORD` — keystore password
+  - `KEY_ALIAS` — key alias
+  - `KEY_PASSWORD` — key password
+- Release notes: auto-generated from tag, or manually edited after creation
+
+**Release workflow:**
+```
+git tag v1.5.0 && git push origin v1.5.0
+→ GitHub Actions builds APK → creates Release → uploads artifact
+```
+
 ---
 
 ## ~~Phase 7: Branch Cleanup~~ DONE
@@ -241,7 +287,7 @@ Third-party attributions:
   - No force push
 - [ ] **Enable GitHub Discussions**
 - [ ] **Disable wiki** (docs live in repo)
-- [ ] **Create Release v1.4.0** with APK artifact + release notes from CHANGELOG.md
+- [ ] **Create Release v1.4.0** — either via `git tag v1.4.0 && git push origin v1.4.0` (triggers release workflow) or manually with APK artifact + release notes from CHANGELOG.md
 
 ---
 
@@ -262,6 +308,8 @@ Run these before flipping the repo to public:
 - [ ] `google-services` plugin is conditional (only applies when `google-services.json` exists)
 - [ ] Build succeeds without `google-services.json` (analytics become no-ops)
 - [ ] No merged feature branches on remote (only `main`)
+- [ ] GitHub Actions `build.yml` passes on main (assembleDebug succeeds)
+- [ ] GitHub Actions `release.yml` triggers correctly on tag push
 
 ---
 
@@ -269,7 +317,7 @@ Run these before flipping the repo to public:
 
 | Action | Files |
 |--------|-------|
-| **Create** | `LICENSE`, `README.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, `NOTICES`, `.github/ISSUE_TEMPLATE/bug_report.md`, `.github/ISSUE_TEMPLATE/feature_request.md`, `.github/PULL_REQUEST_TEMPLATE.md` |
+| **Create** | `LICENSE`, `README.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, `NOTICES`, `.github/ISSUE_TEMPLATE/bug_report.md`, `.github/ISSUE_TEMPLATE/feature_request.md`, `.github/PULL_REQUEST_TEMPLATE.md`, `.github/workflows/build.yml`, `.github/workflows/release.yml` |
 | **Edit** | `CLAUDE.md` (trim), `.gitignore` (add entries) |
 | **Move** | 18 audit/internal `.md` files → `docs/internal/` |
 | **Untrack** | `build_output.txt`, `compile_out.txt`, `.mcp.json` |
