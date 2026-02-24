@@ -235,7 +235,7 @@ const SHELL_ALLOWLIST = new Set([
     'cat', 'ls', 'mkdir', 'cp', 'mv', 'echo', 'pwd', 'which',
     'head', 'tail', 'wc', 'sort', 'uniq', 'grep', 'find',
     'curl', 'ping', 'date', 'df', 'du', 'uname', 'printenv',
-    'touch', 'diff', 'sed', 'awk', 'tr', 'cut', 'base64',
+    'touch', 'diff', 'sed', 'cut', 'base64',
     'stat', 'file', 'sleep', 'getprop', 'md5sum', 'sha256sum',
     'screencap'
 ]);

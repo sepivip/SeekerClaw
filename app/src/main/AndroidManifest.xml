@@ -24,7 +24,7 @@
     <!-- Remove AD_ID permission merged from dependencies (app does not use advertising ID) -->
     <uses-permission android:name="com.google.android.gms.permission.AD_ID" tools:node="remove" />
 
-    <!-- Package visibility: see all apps with a launcher activity (android_apps_list/launch) -->
+    <!-- Package visibility: see all apps with a launcher activity (android_apps_list / android_apps_launch) -->
     <queries>
         <intent>
             <action android:name="android.intent.action.MAIN" />
