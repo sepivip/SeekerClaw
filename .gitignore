@@ -46,6 +46,7 @@ app/libnode/
 *.pem
 *.p12
 signing.properties
+keystore.properties
 
 # dApp Store publishing — keypairs and local config
 publishing/node_modules/

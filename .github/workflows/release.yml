@@ -8,6 +8,9 @@ on:
 permissions:
   contents: write
 
+env:
+  KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+
 jobs:
   release:
     runs-on: ubuntu-latest
@@ -27,33 +30,75 @@ jobs:
 
       - name: Decode keystore
         if: env.KEYSTORE_BASE64 != ''
-        env:
-          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         run: echo "$KEYSTORE_BASE64" | base64 -d > app/release.jks
 
       - name: Create signing properties
         if: env.KEYSTORE_BASE64 != ''
         env:
-          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
         run: |
           cat > local.properties <<EOF
+          sdk.dir=$ANDROID_HOME
           SEEKERCLAW_KEYSTORE_PATH=release.jks
-          SEEKERCLAW_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD
+          SEEKERCLAW_STORE_PASSWORD=$STORE_PASSWORD
           SEEKERCLAW_KEY_ALIAS=$KEY_ALIAS
           SEEKERCLAW_KEY_PASSWORD=$KEY_PASSWORD
           EOF
+          # Strip leading whitespace from heredoc indentation
+          sed -i 's/^[[:space:]]*//' local.properties
 
       - name: Build release APK
         run: chmod +x gradlew && ./gradlew assembleRelease
+
+      - name: Verify APK is signed
+        if: env.KEYSTORE_BASE64 != ''
+        run: |
+          APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
+          if [ -z "$APK" ]; then
+            echo "::error::No release APK found"
+            exit 1
+          fi
+          # apksigner verify returns non-zero if unsigned
+          ${ANDROID_HOME}/build-tools/$(ls ${ANDROID_HOME}/build-tools/ | tail -1)/apksigner verify "$APK"
+          echo "APK signed successfully: $APK"
 
       - name: Get version from tag
         id: version
         run: echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
 
-      - name: Create GitHub Release
+      - name: Extract changelog for version
+        id: changelog
+        run: |
+          TAG="${GITHUB_REF#refs/tags/v}"
+          # Extract the section for this version from CHANGELOG.md
+          # Matches from "## [version]" to the next "## [" or end of file
+          NOTES=$(awk "/^## \\[${TAG}\\]/{found=1; next} /^## \\[/{if(found) exit} found{print}" CHANGELOG.md)
+          if [ -z "$NOTES" ]; then
+            echo "No changelog entry found for v${TAG}, using auto-generated notes"
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            # Write multiline output using delimiter
+            {
+              echo "notes<<CHANGELOG_EOF"
+              echo "$NOTES"
+              echo "CHANGELOG_EOF"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release (with changelog)
+        if: steps.changelog.outputs.found == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: SeekerClaw ${{ steps.version.outputs.tag }}
+          body: ${{ steps.changelog.outputs.notes }}
+          files: app/build/outputs/apk/release/*.apk
+
+      - name: Create GitHub Release (auto-generated notes)
+        if: steps.changelog.outputs.found != 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
