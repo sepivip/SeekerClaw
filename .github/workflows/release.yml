@@ -64,6 +64,11 @@ jobs:
           ${ANDROID_HOME}/build-tools/$(ls ${ANDROID_HOME}/build-tools/ | tail -1)/apksigner verify "$APK"
           echo "APK signed successfully: $APK"
 
+      - name: Rename APK
+        run: |
+          APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
+          mv "$APK" "app/build/outputs/apk/release/SeekerClaw-${{ github.ref_name }}.apk"
+
       - name: Get version from tag
         id: version
         run: echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
