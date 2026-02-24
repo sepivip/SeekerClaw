@@ -370,6 +370,21 @@ Good: Adding `memory_search` tool with description "Search your SQL.js database 
 - **ServiceState:** Singleton with `StateFlow<ServiceStatus>` (STOPPED, STARTING, RUNNING, ERROR), uptime, and message count. UI observes these flows.
 - **Metrics:** All metrics (message count, uptime, response times) tracked locally on-device only. No analytics servers, no telemetry.
 
+## Jupiter / Solana Integration (Live-tested 2026-02-22)
+
+Full Jupiter DEX integration via MWA (Mobile Wallet Adapter). Tested on Solana Seeker with real funds.
+
+**Capabilities:** wallet connect, balance, quotes, swaps (Jupiter Ultra — gasless), SOL/SPL transfers, token search, price lookup, security checks, holdings
+
+**Safety layers (all verified):**
+- Two-step confirmation gate (quote → YES/NO prompt → 60s auto-cancel)
+- Balance pre-check blocks insufficient-funds swaps before wallet popup
+- Rate limiting (15s cooldown on swap/send)
+- MWA sign-only mode (no private keys in app)
+- Clean error handling on wallet rejection, timeout, network loss
+
+**Test docs:** `JUPITER-AUDIT.md` (code audit), `JUPITER-TEST-CHECKLIST.md` (29 tests, all must-pass green)
+
 ## What NOT to Build (v1)
 
 - No in-app chat (users use Telegram)

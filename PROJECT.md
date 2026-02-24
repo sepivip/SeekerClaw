@@ -51,7 +51,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 - **SILENT_REPLY protocol** — Agent silently drops messages when it has nothing useful to say
 - **Ephemeral session awareness** — Agent knows context resets on restart
 - **PLATFORM.md auto-generation** — Device state (model, RAM, storage, battery, permissions, wallet) written on every service start
-- **Self-awareness system prompt** — Self-knowledge doors, architecture blocks, self-diagnosis playbook for troubleshooting tool failures and silent responses. Debug log rotation at 5MB with `.old` archive
+- **Self-awareness system prompt** — Self-knowledge doors, architecture blocks, self-diagnosis playbook for troubleshooting tool failures and silent responses. Debug log rotation at 5MB with `.old` archive. DIAGNOSTICS.md deep troubleshooting guide. SAB-AUDIT-v5: 100% score (36/36 audit points)
 - **Structured log levels** — DEBUG/INFO/WARN/ERROR pipeline with per-level routing; UI log viewer color-coded by level; LogCollector filters noise from debug output
 - **Skill routing** — Routing blocks prevent conflicting skills from firing together; reply tag first-token rule for reliable `[[reply_to_current]]` detection
 - **Skill requirements gating** — Skills with `requires.bins` or `requires.env` in YAML frontmatter are checked at runtime; unmet requirements are reported and skill is skipped
@@ -103,7 +103,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 - **Wallet holdings** — Full portfolio view with USD values via Jupiter
 
 ### Execution
-- **Shell exec** — 22 sandboxed Unix commands (cat, ls, curl, grep, find, etc.), workspace-restricted
+- **Shell exec** — 33 sandboxed commands including Android tools (cat, ls, curl, grep, find, sed, diff, screencap, getprop, etc.), workspace-restricted
 - **JS eval** — Run JavaScript inside Node.js process, async/await, require() for builtins
 
 ### File Management
@@ -222,13 +222,13 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Metric | Count |
 |--------|-------|
-| Total commits | 279 |
-| PRs merged | 179 |
+| Total commits | 286 |
+| PRs merged | 182 |
 | Tools | 56 (9 Jupiter, 13 Android bridge, web search/fetch, memory, cron, skill_install, etc.) + MCP dynamic |
 | Skills | 35 (20 bundled + 13 workspace + 2 user-created) |
 | Android Bridge endpoints | 18+ |
 | Telegram commands | 12 |
-| Lines of JS | ~13,900 (main.js + 14 extracted modules) |
+| Lines of JS | ~12,600 (main.js + 15 extracted modules) |
 | Lines of Kotlin | ~12,500 |
 | SQL.js tables | 4 |
 | Themes | 1 (DarkOps only) |
@@ -250,7 +250,7 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | WEBSITE.md Content | config.js Status | Action |
 |-------------------|-----------------|--------|
-| Stats: 56+ tools, 173+ PRs | Shows 43+ tools, 78+ commits | Update config.js stats[] |
+| Stats: 56+ tools, 182+ PRs | Shows 43+ tools, 78+ commits | Update config.js stats[] |
 | Roadmap: 10 shipped items | Shows 10 items (outdated list) | Update roadmap.columns[0] |
 | Feature cards: updated descriptions | Stale descriptions | Update features.items[] + index.html |
 | "NFT tracking" in JSON-LD | Not implemented | Remove from index.html |
@@ -262,6 +262,13 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Date | Feature | PR |
 |------|---------|-----|
+| 2026-02-24 | Docs: SAB-AUDIT-v5 report (100% score, 36/36 audit points) | direct |
+| 2026-02-24 | Fix: remove stale battery info from PLATFORM.md (BAT-262) | #182 |
+| 2026-02-24 | Feat: expand agent capabilities — app launch, screencap, shell tools (BAT-261) | #181 |
+| 2026-02-24 | Fix: move camera captures to workspace for Telegram send (BAT-260) | #180 |
+| 2026-02-24 | Feat: bump MAX_TOOL_USES 15→25 + add SAB section to WEBSITE.md | direct |
+| 2026-02-24 | Feat: SAB-AUDIT-v4 — diagnostic coverage section + DIAGNOSTICS.md | direct |
+| 2026-02-24 | Docs: OpenClaw parity 2026.2.23 — 660 commits reviewed, nothing to port | direct |
 | 2026-02-23 | Chore: open-source prep — LICENSE, CONTRIBUTING.md, issue/PR templates, CI/release workflows | direct |
 | 2026-02-23 | Feat: eliminate API transport timeouts — streaming + payload optimization (BAT-259) | #179 |
 | 2026-02-23 | Feat: make Firebase Analytics build-optional for open-source (BAT-258) | #178 |
