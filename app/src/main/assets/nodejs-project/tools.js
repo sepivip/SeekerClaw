@@ -1705,13 +1705,22 @@ async function executeTool(name, input, chatId) {
             const result = await androidBridgeCall('/camera/capture', { lens }, 45000);
             // Move capture into workspace so telegram_send_file can access it
             if (result && result.success && result.path && fs.existsSync(result.path)) {
-                const filename = path.basename(result.path);
-                const inboundDir = path.join(workDir, 'media', 'inbound');
-                fs.mkdirSync(inboundDir, { recursive: true });
-                const dest = path.join(inboundDir, filename);
-                fs.copyFileSync(result.path, dest);
-                try { fs.unlinkSync(result.path); } catch (e) { /* ignore cleanup failure */ }
-                result.path = 'media/inbound/' + filename;
+                try {
+                    const filename = path.basename(result.path);
+                    const inboundDir = path.join(workDir, 'media', 'inbound');
+                    fs.mkdirSync(inboundDir, { recursive: true });
+                    const dest = path.join(inboundDir, filename);
+                    try {
+                        fs.renameSync(result.path, dest);
+                    } catch (e) {
+                        // Cross-filesystem fallback: copy + delete
+                        fs.copyFileSync(result.path, dest);
+                        try { fs.unlinkSync(result.path); } catch (_) { /* ignore cleanup */ }
+                    }
+                    result.path = 'media/inbound/' + filename;
+                } catch (e) {
+                    log(`Camera move to workspace failed: ${e.message}`, 'WARN');
+                }
             }
             return result;
         }
