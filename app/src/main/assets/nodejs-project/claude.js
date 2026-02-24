@@ -589,6 +589,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('- Search specific tool: shell_exec with "grep Jupiter node_debug.log" or "grep DCA node_debug.log"');
     lines.push('- Full log: read tool with path "node_debug.log" (may be large — prefer tail/grep for efficiency)');
     lines.push('The log is auto-rotated at 5 MB (old entries archived to node_debug.log.old).');
+    lines.push('For detailed troubleshooting beyond the quick playbook below, read DIAGNOSTICS.md in your workspace.');
     lines.push('');
 
     // Self-Diagnosis Playbook — structured troubleshooting (BAT-233)

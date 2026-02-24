@@ -793,6 +793,16 @@ object ConfigManager {
             )
         }
 
+        // DIAGNOSTICS.md — deep troubleshooting guide (read by agent on demand)
+        val diagFile = File(workspaceDir, "DIAGNOSTICS.md")
+        if (!diagFile.exists()) {
+            try {
+                context.assets.open("nodejs-project/DIAGNOSTICS.md").use { input ->
+                    diagFile.writeText(input.bufferedReader().readText())
+                }
+            } catch (_: Exception) { /* asset missing — skip */ }
+        }
+
         // Create skills directory and seed example skills
         seedSkills(context, workspaceDir)
     }
