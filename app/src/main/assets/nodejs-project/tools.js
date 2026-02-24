@@ -477,7 +477,7 @@ const TOOLS = [
     },
     {
         name: 'android_camera_capture',
-        description: 'Capture a photo from the device camera. Requires CAMERA permission. Useful for quick snapshots.',
+        description: 'Capture a photo from the device camera. Requires CAMERA permission. Returns a workspace-relative path (media/inbound/) that can be used directly with telegram_send_file.',
         input_schema: {
             type: 'object',
             properties: {
@@ -1702,7 +1702,27 @@ async function executeTool(name, input, chatId) {
 
         case 'android_camera_capture': {
             const lens = input.lens === 'front' ? 'front' : 'back';
-            return await androidBridgeCall('/camera/capture', { lens }, 45000);
+            const result = await androidBridgeCall('/camera/capture', { lens }, 45000);
+            // Move capture into workspace so telegram_send_file can access it
+            if (result && result.success && result.path && fs.existsSync(result.path)) {
+                try {
+                    const filename = path.basename(result.path);
+                    const inboundDir = path.join(workDir, 'media', 'inbound');
+                    fs.mkdirSync(inboundDir, { recursive: true });
+                    const dest = path.join(inboundDir, filename);
+                    try {
+                        fs.renameSync(result.path, dest);
+                    } catch (e) {
+                        // Cross-filesystem fallback: copy + delete
+                        fs.copyFileSync(result.path, dest);
+                        try { fs.unlinkSync(result.path); } catch (_) { /* ignore cleanup */ }
+                    }
+                    result.path = 'media/inbound/' + filename;
+                } catch (e) {
+                    log(`Camera move to workspace failed: ${e.message}`, 'WARN');
+                }
+            }
+            return result;
         }
 
         case 'android_camera_check': {
