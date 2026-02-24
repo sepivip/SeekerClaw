@@ -173,7 +173,7 @@ Turn your Solana Seeker into a 24/7 personal AI agent.
 
 ### ~~6E: `SECURITY.md`~~ DONE
 
-> Created in `12b8d0d`. Disclosure process (security@seekerclaw.dev) + security model overview.
+> Created in `12b8d0d`. Disclosure process (security@seekerclaw.xyz) + security model overview.
 
 ### ~~6F: `NOTICES`~~ DONE
 
@@ -209,7 +209,7 @@ Turn your Solana Seeker into a 24/7 personal AI agent.
 - [ ] **Visibility:** Private → Public
 - [ ] **Description:** "Turn your Solana Seeker into a 24/7 personal AI agent"
 - [ ] **Topics:** `android`, `ai-agent`, `solana`, `telegram-bot`, `kotlin`, `jetpack-compose`, `nodejs`, `claude`, `anthropic`
-- [ ] **Website:** `seekerclaw.dev`
+- [ ] **Website:** `seekerclaw.xyz`
 - [ ] **Branch protection on `main`:**
   - Require PR reviews (1 reviewer)
   - Require status checks to pass

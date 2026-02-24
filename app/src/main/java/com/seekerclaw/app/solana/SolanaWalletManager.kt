@@ -12,7 +12,7 @@ object SolanaWalletManager {
 
     private val walletAdapter = MobileWalletAdapter(
         connectionIdentity = ConnectionIdentity(
-            identityUri = Uri.parse("https://seekerclaw.dev"),
+            identityUri = Uri.parse("https://seekerclaw.xyz"),
             iconUri = Uri.parse("favicon.ico"),
             identityName = "SeekerClaw",
         )

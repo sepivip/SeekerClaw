@@ -4,7 +4,7 @@
 
 **Please do NOT open a public GitHub issue for security vulnerabilities.**
 
-Instead, report vulnerabilities by emailing **security@seekerclaw.dev**.
+Instead, report vulnerabilities by emailing **security@seekerclaw.xyz**.
 
 Include:
 - Description of the vulnerability

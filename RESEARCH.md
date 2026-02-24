@@ -456,7 +456,7 @@ However, if you want faster prototyping and already have a JS-heavy team: **Reac
 ```
 
 **Flow:**
-1. User generates QR via web tool (seekerclaw.dev/setup)
+1. User generates QR via web tool (seekerclaw.xyz/setup)
 2. Opens SeekerClaw app → scans QR
 3. App decrypts/stores config in Android Keystore
 4. Starts the Node.js service with this config

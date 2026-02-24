@@ -6,6 +6,6 @@ Please read the full text at the link above. By participating in this project, y
 
 ## Reporting
 
-If you experience or witness unacceptable behavior, please report it by emailing **conduct@seekerclaw.dev**.
+If you experience or witness unacceptable behavior, please report it by emailing **conduct@seekerclaw.xyz**.
 
 All reports will be reviewed and investigated promptly and fairly. The project team is obligated to maintain confidentiality with regard to the reporter.

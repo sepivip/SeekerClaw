@@ -202,7 +202,7 @@ Base64-encoded JSON:
 }
 ```
 
-Sensitive fields encrypted via Android Keystore (AES-256-GCM). Non-sensitive fields (model, agent_name) in SharedPreferences. QR generation web tool at `seekerclaw.dev/setup` (client-side only, keys never leave the browser).
+Sensitive fields encrypted via Android Keystore (AES-256-GCM). Non-sensitive fields (model, agent_name) in SharedPreferences. QR generation web tool at `seekerclaw.xyz/setup` (client-side only, keys never leave the browser).
 
 ## OpenClaw Config Generation
 
