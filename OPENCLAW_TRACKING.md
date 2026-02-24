@@ -1,8 +1,8 @@
 # OpenClaw Version Tracking
 
 > **Purpose:** Track OpenClaw releases and identify changes to port to SeekerClaw.
-> **Current OpenClaw Version:** 2026.2.22 (main 40a68a893, 2026-02-22)
-> **Last Sync Review:** 2026-02-22
+> **Current OpenClaw Version:** 2026.2.23 (main 4b316c33d, 2026-02-24)
+> **Last Sync Review:** 2026-02-24
 > **Parity Plan:** See `PARITY_PLAN.md`
 
 ---
@@ -82,7 +82,26 @@ These files in OpenClaw directly affect SeekerClaw behavior. Changes here requir
 
 ## Version History & Changes
 
-### 2026.2.20 (Current - 741435aac)
+### 2026.2.23 (Current - 4b316c33d)
+- **Release Date:** 2026-02-24
+- **SeekerClaw Sync Status:** Reviewed, nothing to port
+- **660 new commits since last sync (40a68a893)**
+- **Versions reviewed:** v2026.2.23-beta.1, v2026.2.23 (HEAD)
+- **Skipped (not applicable):**
+  - System prompt: remove `isMinimal` guard from `buildSkillsSection` — SeekerClaw always includes skills (no promptMode)
+  - System prompt: extract `EmbeddedSandboxInfo` type — sandbox/container not applicable
+  - System prompt: dedupe runtime path helpers — pure refactor
+  - Memory: Gemini batch SSRF policy, QMD query expansion, remote HTTP helper, Mistral provider, batch error utils — all Node 22+ / embedding infrastructure
+  - Skills: `WorkspaceSkillBuildOptions` type extraction, `resolveWorkspaceSkillPromptState` helper — pure refactor
+  - Skills: Python script fixes (skill-creator path escaping, openai-image-gen XSS, model-usage input validation) — not bundled on Android
+  - Cron: isolated agent auth profile propagation, delivery target validation, timeout cancellation, session cleanup, manual run markers — all server-side orchestration
+  - Cron: treat embedded error payloads as run failures — server-side delivery
+  - Telegram: version bump 2026.2.22→2026.2.23, webhookPort wiring, mediaLocalRoots passthrough — server-side webhook/media features
+  - Web: WhatsApp media compression tests, heartbeat runner refactoring, outbound media routing — server-only
+  - Auto-reply: stop signal normalization, multilingual triggers — WhatsApp auto-reply only
+  - Massive test refactoring and deduplication across cron, web, memory suites — test-only
+
+### 2026.2.20 (741435aac)
 - **Release Date:** 2026-02-20
 - **SeekerClaw Sync Status:** Reviewed, nothing to port
 - **505 new commits since last sync (f9e67f3)**
