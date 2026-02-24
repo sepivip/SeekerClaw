@@ -10,8 +10,9 @@ Secrets required by the [release workflow](.github/workflows/release.yml) to bui
 | `KEY_ALIAS` | Key alias inside the keystore (e.g. `seekerclaw`) |
 | `KEY_PASSWORD` | Password for the key alias |
 | `STORE_PASSWORD` | Password for the keystore file |
+| `GOOGLE_SERVICES_JSON` | Base64-encoded `google-services.json` (optional — Firebase analytics) |
 
-## How to encode your keystore as Base64
+## How to encode files as Base64
 
 ```bash
 # Linux / macOS
@@ -25,6 +26,12 @@ base64 -i seekerclaw-release.jks -o keystore.b64
 ```
 
 The contents of `keystore.b64` is what you paste into the `KEYSTORE_BASE64` secret.
+
+Same approach for Firebase:
+```bash
+base64 -w 0 app/google-services.json    # Linux
+```
+Paste the output into the `GOOGLE_SERVICES_JSON` secret. If omitted, the build still succeeds — Firebase analytics just becomes a no-op.
 
 ## Adding secrets to GitHub
 
