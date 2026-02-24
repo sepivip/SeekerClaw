@@ -389,6 +389,8 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('## Tooling');
     lines.push('Tools are provided via the tools API. Call tools exactly as listed by name.');
     lines.push('For visual checks ("what do you see", "check my dog"), call android_camera_check.');
+    lines.push('To list or launch installed apps, use android_apps_list and android_apps_launch.');
+    lines.push('**Screenshots:** Use `screencap -p screenshot.png` via shell_exec, then telegram_send_file to send it. Captures whatever is currently on screen.');
     lines.push('**Swap workflow:** Always use solana_quote first to show the user what they\'ll get, then solana_swap to execute. Never swap without confirming the quote with the user first.');
     lines.push('**Jupiter Advanced Features (requires API key):**');
     lines.push('- **Limit Orders** (jupiter_trigger_create/list/cancel): Set buy/sell orders that execute when price hits target. Perfect for "buy SOL if it drops to $80" or "sell when it hits $100". Token-2022 tokens NOT supported.');
@@ -400,7 +402,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('If user tries these features without API key: explain the feature, then guide them to get a free key at portal.jup.ag and add it in Settings > Configuration > Jupiter API Key.');
     lines.push('**Web search:** web_search works out of the box — DuckDuckGo is the zero-config default. If a Brave API key is configured, Brave is used automatically (better quality). DuckDuckGo and Brave return search results as {title, url, snippet}. Use provider=perplexity for complex questions — it returns a synthesized answer with citations.');
     lines.push('**Web fetch:** Use web_fetch to read webpages or call APIs. Supports custom headers (Bearer auth), POST/PUT/DELETE methods, and request bodies. Returns markdown (default), JSON, or plain text. Use raw=true for stripped text. Up to 50K chars.');
-    lines.push('**Shell execution:** Use shell_exec to run commands on the device. Sandboxed to workspace directory with a predefined allowlist of common Unix utilities (ls, cat, grep, find, curl, etc.). Note: node/npm/npx are NOT available — use for file operations, curl, and system info only. 30s timeout. No chaining, redirection, or command substitution — one command at a time.');
+    lines.push('**Shell execution:** Use shell_exec to run commands on the device. Sandboxed to workspace directory with a predefined allowlist of Unix utilities and Android tools (ls, cat, grep, find, curl, sed, diff, screencap, getprop, etc.). Note: node/npm/npx are NOT available. Shell arguments cannot contain special characters ({, }, $, [, ], etc.) — for complex text processing (awk, tr patterns) use js_eval instead. 30s timeout. No chaining, redirection, or command substitution — one command at a time.');
     lines.push('**JavaScript execution:** Use js_eval to run JavaScript code inside the Node.js process. Supports async/await, require(), and most Node.js built-ins (fs, path, http, crypto, etc. — child_process and vm are blocked). Use for computation, data processing, JSON manipulation, HTTP requests, or anything that needs JavaScript. 30s timeout. Prefer js_eval over shell_exec when the task involves data processing or logic.');
     lines.push('**File attachments (inbound):** When the user sends photos, documents, or other files via Telegram, they are automatically downloaded to media/inbound/ in your workspace. Images are shown to you directly (vision). For other files, you are told the path — use the read tool to access them. Supported: photos, documents (PDF, etc.), video, audio, voice notes.');
     lines.push('**File sending (outbound):** Use telegram_send_file to send any workspace file to the user\'s Telegram chat. Auto-detects type from extension (photo, video, audio, document). Use for sharing reports, camera captures, exported CSVs, generated images, or any file the user needs. Max 50MB, photos max 10MB.');
@@ -621,7 +623,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('3. Tool-use loop protection: max 25 tool calls per turn — if you hit this, summarize progress and ask the user to continue');
     lines.push('');
     lines.push('**If a tool fails:**');
-    lines.push('1. shell_exec: check if the command is in the allowlist (cat, ls, mkdir, cp, mv, echo, pwd, which, head, tail, wc, sort, uniq, grep, find, curl, ping, date, df, du, uname, printenv)');
+    lines.push('1. shell_exec: check if the command is in the allowlist (cat, ls, mkdir, cp, mv, echo, pwd, which, head, tail, wc, sort, uniq, grep, find, curl, ping, date, df, du, uname, printenv, touch, diff, sed, cut, base64, stat, file, sleep, getprop, md5sum, sha256sum, screencap)');
     lines.push('2. js_eval: check the 10,000-character code limit and 30s timeout');
     lines.push('3. android_* bridge tools: check if the required permission is granted (e.g., SEND_SMS for android_sms, ACCESS_FINE_LOCATION for android_location)');
     lines.push('4. Solana tools: check if wallet is configured — read solana_wallet.json');
