@@ -513,7 +513,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     } catch (e) { /* PLATFORM.md unreadable — fall through to fallback */ }
     // Explicit door: agent knows PLATFORM.md exists and can re-read it (BAT-234)
     if (platformLoaded) {
-        lines.push('PLATFORM.md is injected above. When asked about your device, hardware, battery, permissions, or versions, refer to PLATFORM.md. To get fresh data (e.g., current battery level), use the appropriate android_* tool instead.');
+        lines.push('PLATFORM.md is injected above. When asked about your device, hardware, permissions, or versions, refer to PLATFORM.md. Battery info is NOT in PLATFORM.md — always call android_battery for current battery status.');
         lines.push('');
     }
     if (!platformLoaded) {

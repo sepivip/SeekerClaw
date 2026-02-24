@@ -2,12 +2,9 @@ package com.seekerclaw.app.config
 
 import android.Manifest
 import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.net.Uri
-import android.os.BatteryManager
 import android.os.Build
 import android.os.StatFs
 import android.util.Base64
@@ -492,26 +489,8 @@ object ConfigManager {
         val storageTotalGb = stat.totalBytes / (1024.0 * 1024.0 * 1024.0)
         val storageUsedGb = (stat.totalBytes - stat.availableBytes) / (1024.0 * 1024.0 * 1024.0)
 
-        // Battery
-        val batteryIntent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-        val batteryLevel = batteryIntent?.let { intent ->
-            val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
-            val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
-            if (level >= 0 && scale > 0) (level * 100) / scale else 0
-        } ?: 0
-        val plugged = batteryIntent?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0
-        val isCharging = plugged != 0
-        val chargeType: String? = when (plugged) {
-            BatteryManager.BATTERY_PLUGGED_AC -> "AC"
-            BatteryManager.BATTERY_PLUGGED_USB -> "USB"
-            BatteryManager.BATTERY_PLUGGED_WIRELESS -> "Wireless"
-            else -> null
-        }
-        val batteryStatus = if (isCharging) {
-            if (chargeType != null) "Charging ($chargeType)" else "Charging"
-        } else {
-            "Not charging"
-        }
+        // Battery: intentionally omitted — goes stale immediately.
+        // Agent must call android_battery tool for real-time data (BAT-262).
 
         // Permissions
         fun perm(permission: String): String =
@@ -556,10 +535,6 @@ object ConfigManager {
             appendLine("- Android: $androidVersion (SDK $sdkVersion)")
             appendLine("- RAM: ${String.format(Locale.US, "%,d", ramAvailMb)} MB available / ${String.format(Locale.US, "%,d", ramTotalMb)} MB total")
             appendLine("- Storage: ${String.format(Locale.US, "%.1f", storageUsedGb)} GB used / ${String.format(Locale.US, "%.1f", storageTotalGb)} GB total")
-            appendLine()
-            appendLine("## Battery")
-            appendLine("- Level: $batteryLevel%")
-            appendLine("- Status: $batteryStatus")
             appendLine()
             appendLine("## Permissions")
             appendLine("- Camera: $permCamera")
