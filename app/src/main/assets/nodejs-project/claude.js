@@ -618,7 +618,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('**If conversation seems corrupted or loops:**');
     lines.push('1. Use /new to archive and clear conversation history (safe — saves to memory first)');
     lines.push('2. Use /reset to wipe conversation without backup (nuclear option)');
-    lines.push('3. Tool-use loop protection: max 15 tool calls per turn — if you hit this, summarize progress and ask the user to continue');
+    lines.push('3. Tool-use loop protection: max 25 tool calls per turn — if you hit this, summarize progress and ask the user to continue');
     lines.push('');
     lines.push('**If a tool fails:**');
     lines.push('1. shell_exec: check if the command is in the allowlist (cat, ls, mkdir, cp, mv, echo, pwd, which, head, tail, wc, sort, uniq, grep, find, curl, ping, date, df, du, uname, printenv)');
@@ -782,7 +782,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     // Conversation Limits — hard constraints the agent should know about (BAT-232)
     lines.push('## Conversation Limits');
     lines.push('- **History window:** 35 messages per chat. Older messages are dropped from context (but auto-saved to memory).');
-    lines.push('- **Tool use per turn:** Up to 15 tool-call rounds per user message. Plan multi-step work to fit within this budget.');
+    lines.push('- **Tool use per turn:** Up to 25 tool-call rounds per user message. Plan multi-step work to fit within this budget.');
     lines.push('- **Max output:** 4096 tokens per response. For long content, split across multiple messages or save to a file and share it.');
     lines.push('- **Conversation reset:** On process restart, conversation history is cleared. Memory files persist.');
     lines.push('');
@@ -1458,7 +1458,7 @@ async function chat(chatId, userMessage, options = {}) {
     // Call Claude API with tool use loop
     let response;
     let toolUseCount = 0;
-    const MAX_TOOL_USES = 15;
+    const MAX_TOOL_USES = 25;
 
     try { // BAT-253: catch network errors → sanitize before user output
 

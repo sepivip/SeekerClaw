@@ -42,7 +42,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 
 ### AI Agent Core
 - **Claude integration** — Opus 4.6 (default), Sonnet 4.6, Sonnet 4.5, Haiku 4.5 selectable. Prompt caching, retry with backoff, rate-limit throttling, user-friendly error messages. OAuth/setup token support for Claude Pro/Max users. Conversational API key setup flow.
-- **Multi-turn task execution** — Reliable P2 multi-turn: tool budget management with validation-aware restore, silent turn stop prevention on budget exhaustion, MAX_TOOL_USES=15 for complex tasks
+- **Multi-turn task execution** — Reliable P2 multi-turn: tool budget management with validation-aware restore, silent turn stop prevention on budget exhaustion, MAX_TOOL_USES=25 for complex tasks
 - **API timeout hardening** — Configurable timeouts (replacing hardcoded 60s), bounded retry with backoff for timeout paths, turn-level tracing instrumentation, sanitized user-visible error messages, 429 retry jitter
 - **Streaming + payload optimization** — Eliminates API transport timeouts via streaming responses, response field whitelisting to prevent payload bloat (_inputJson leak fix), MAX_HISTORY bumped 20→35 for richer context
 - **Telegram owner gate** — Service refuses to start without valid TELEGRAM_OWNER_ID; unauthorized users get reaction + comment warning; all gate events logged at WARN level

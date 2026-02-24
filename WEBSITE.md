@@ -73,6 +73,8 @@ create limit orders and DCA positions — all secured by Seed Vault hardware.
 ### 2. Autonomous AI Agent (icon: brain)
 Powered by Claude (Opus / Sonnet / Haiku) with persistent memory,
 customizable personality, and scheduled automation running 24/7.
+Self-aware — knows its own capabilities, diagnoses its own issues,
+and tells you what went wrong instead of failing silently.
 
 ### 3. Social & Messaging (icon: chat)
 Telegram integration with reactions, file sharing, and vision analysis.
@@ -93,6 +95,25 @@ reminders, research, and more. Add custom skills without touching code.
 <!-- REVIEW: Card order matters. Currently: Wallet → AI → Social → Device → Web → Skills
    Should Wallet lead? Or should AI Agent lead since that's the primary value prop?
    Consider: AI Agent → Wallet → Web → Device → Social → Skills -->
+
+---
+
+## Self-Aware Agent
+<!-- Maps to: new section in index.html, after features/capabilities -->
+<!-- Position: after "What SeekerClaw Does" (capabilities), before "How It Works" or Use Cases -->
+
+**Title:** An Agent That Knows Itself
+
+**Subtitle:** SeekerClaw scores 100% on SAB (Self-Awareness Benchmark) — 36 audit points across knowledge and diagnostics.
+
+**Three points:**
+
+- **Knows what it can do** — Your agent understands its own tools, limits, and configuration. Ask it anything about itself and it answers accurately.
+- **Diagnoses its own problems** — When something breaks, it checks logs, reads health files, and pinpoints the issue — across Telegram, wallet, memory, scheduling, and device control.
+- **Tells you what's wrong** — No silent failures. If the API is down, a permission is missing, or a tool times out — your agent explains what happened and what to do next.
+
+<!-- REVIEW: Consider a visual element — a circular badge showing "100%" or "36/36 ✅"
+   alongside the three points. Keeps it punchy and adds visual proof. -->
 
 ---
 
@@ -146,6 +167,7 @@ reminders, research, and more. Add custom skills without touching code.
 | Cron scheduling | ✗ | ✓ Natural language + recurring |
 | Usage analytics | ✗ | ✓ Per-session token tracking |
 | Error resilience | ✗ | ✓ Auto-retry + graceful fallback |
+| Self-diagnosis | ✗ | ✓ Agent knows when something's wrong and tells you |
 | Hardware wallet security | ✗ | ✓ Seed Vault signing |
 
 <!-- REVIEW: "Regular AI Apps" is vague. Users compare against ChatGPT, Siri, Gemini.

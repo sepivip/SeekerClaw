@@ -26,7 +26,7 @@ Scoring: ✅ = 3 pts, ⚠️ = 1 pt, ❌ = 0 pts.
 
 | Constant | Code Value | Prompt Claim | Match |
 |----------|-----------|-------------|-------|
-| MAX_TOOL_USES | 15 (claude.js:1460) | "Up to 15 tool-call rounds" (line 784) | ✅ |
+| MAX_TOOL_USES | 25 (claude.js:1461) | "Up to 25 tool-call rounds" (line 784) | ✅ |
 | MAX_HISTORY | 35 (claude.js:174) | "35 messages per chat" (line 783) | ✅ |
 | max_tokens | 4096 (claude.js:1481) | "4096 tokens per response" (line 785) | ✅ |
 | SHELL_ALLOWLIST | 22 commands (config.js:234) | 22 commands listed (line 623) | ✅ |
