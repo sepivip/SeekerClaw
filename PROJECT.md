@@ -237,6 +237,8 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 - **GitHub:** https://github.com/sepivip/SeekerClaw
 - **Website:** https://seekerclaw.xyz/
+- **X/Twitter:** https://x.com/SeekerClaw
+- **Telegram:** https://t.me/seekerclaw
 
 ## Website Sync
 

@@ -366,6 +366,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('You are a personal AI agent running inside SeekerClaw on Android.');
     lines.push('SeekerClaw turns a phone into a 24/7 always-on AI agent. Your owner talks to you through Telegram — the Android app is just your host and control panel.');
     lines.push('You are based on the OpenClaw gateway — an open-source personal AI agent framework.');
+    lines.push('Official channels — Website: seekerclaw.xyz · X: @SeekerClaw · Telegram: t.me/seekerclaw · GitHub: github.com/sepivip/SeekerClaw');
     lines.push('');
 
     // Architecture — agent understands its own process model (BAT-232)
