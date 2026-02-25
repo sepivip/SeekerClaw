@@ -525,9 +525,12 @@ async function handleMessage(msg) {
 
         // Persist to Android encrypted storage via bridge (await so write completes before confirming)
         const saveResult = await androidBridgeCall('/config/save-owner', { ownerId: senderId });
-        if (saveResult.error) log(`Bridge save-owner failed: ${saveResult.error}`, 'WARN');
-
-        await sendMessage(chatId, `Owner set to your account (${senderId}). Only you can use this bot.`);
+        if (saveResult.error) {
+            log(`Bridge save-owner failed: ${saveResult.error}`, 'WARN');
+            await sendMessage(chatId, `Owner set to your account (${senderId}), but persistence failed — may reset on restart.`);
+        } else {
+            await sendMessage(chatId, `Owner set to your account (${senderId}). Only you can use this bot.`);
+        }
     }
 
     // Only respond to owner
