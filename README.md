@@ -1,7 +1,8 @@
 <div align="center">
   <img src="design/symbol.svg" alt="SeekerClaw" width="80">
   <h1>SeekerClaw</h1>
-  <p><strong>Turn your Solana Seeker into a 24/7 personal AI agent</strong></p>
+  <p><em>AgentOS for Android</em></p>
+  <p><strong>A 24/7 AI agent that lives on your phone</strong></p>
 
   <p>
     <img src="https://img.shields.io/badge/Android-14+-3DDC84?logo=android&logoColor=white" alt="Android 14+">
@@ -15,7 +16,7 @@
 
 ---
 
-SeekerClaw embeds a Node.js AI agent inside an Android app, running 24/7 as a foreground service. You interact through Telegram — ask questions, control your phone, trade crypto, schedule tasks. **56 tools, 35 skills, Solana wallet**, all running locally on your device.
+SeekerClaw embeds a Node.js AI agent inside an Android app, running 24/7 as a foreground service. You interact through Telegram — ask questions, control your phone, trade crypto, schedule tasks. **56 tools, 35 skills, Solana wallet**, all running locally on your device. Built for the Solana Seeker, runs on any Android 14+ phone.
 
 ## Features
 
@@ -81,6 +82,8 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 ```
 
 Open the app → scan QR or enter your [Anthropic API key](https://console.anthropic.com/) + [Telegram bot token](https://t.me/BotFather) → choose a model → name your agent → done.
+
+> **Beta** — SeekerClaw is under active development. Expect rough edges and breaking changes. Issues and PRs welcome.
 
 ## Links
 
