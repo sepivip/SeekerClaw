@@ -113,14 +113,20 @@ function loadBootstrap() {
 
 function loadIdentity() {
     if (fs.existsSync(IDENTITY_PATH)) {
-        return fs.readFileSync(IDENTITY_PATH, 'utf8');
+        const content = fs.readFileSync(IDENTITY_PATH, 'utf8');
+        // Kotlin pre-creates template with placeholders — treat as no identity
+        if (content.includes('(not yet named)')) return null;
+        return content;
     }
     return null;
 }
 
 function loadUser() {
     if (fs.existsSync(USER_PATH)) {
-        return fs.readFileSync(USER_PATH, 'utf8');
+        const content = fs.readFileSync(USER_PATH, 'utf8');
+        // Kotlin pre-creates template with placeholders — treat as no user profile
+        if (content.includes('(not yet known)')) return null;
+        return content;
     }
     return null;
 }
