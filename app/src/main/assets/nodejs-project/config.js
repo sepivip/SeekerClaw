@@ -160,7 +160,8 @@ if (!BOT_TOKEN || !ANTHROPIC_KEY) {
 if (!OWNER_ID) {
     // An unconfigured owner ID means the first inbound Telegram message will claim ownership.
     // This is the intended auto-detect flow — the owner ID is persisted via the Android bridge.
-    log('WARNING: Owner ID not set — first inbound message will claim ownership.', 'WARN');
+    log('WARNING: Owner ID not set — first inbound message will claim ownership. ' +
+        'This is expected on first run; use the Android setup flow to set or reset the owner.', 'WARN');
 } else {
     const authLabel = AUTH_TYPE === 'setup_token' ? 'setup-token' : 'api-key';
     log(`Agent: ${AGENT_NAME} | Model: ${MODEL} | Auth: ${authLabel} | Owner: ${OWNER_ID}`, 'DEBUG');

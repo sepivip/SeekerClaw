@@ -48,12 +48,13 @@ class OpenClawService : Service() {
         val notification = createNotification("SeekerClaw is running")
         startForeground(NOTIFICATION_ID, notification)
 
-        // Clear any lingering setup-required notification from a previous failed start.
+        // Clear any lingering setup-required notification from a previous version.
         getSystemService(android.app.NotificationManager::class.java)
             ?.cancel(SETUP_NOTIFICATION_ID)
 
-        // Owner ID may be blank on first run — Node.js auto-detects from the first
-        // Telegram message and persists via /config/save-owner bridge callback.
+        // Owner ID may be blank on first run — this is expected. Node.js auto-detects
+        // it from the first Telegram message and persists it via the /config/save-owner
+        // bridge callback; the service logs a warning here rather than blocking startup.
         if (ConfigManager.loadConfig(this)?.telegramOwnerId.isNullOrBlank()) {
             LogCollector.append(
                 "[Service] Owner ID not configured — first Telegram message will claim ownership.",
