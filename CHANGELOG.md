@@ -3,6 +3,30 @@
 All notable changes to SeekerClaw are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.4.1] - 2026-02-25
+
+### Added
+- **App launch & listing** — agent can discover and launch installed apps via android_apps_list/android_apps_launch
+- **Screenshots** — agent captures screen via `screencap -p` through shell_exec
+- **Expanded shell allowlist** — 22→34 commands (touch, diff, sed, cut, base64, stat, file, sleep, getprop, md5sum, sha256sum, screencap)
+- **Official socials** in agent identity — website, X, Telegram, GitHub links in system prompt
+- **DIAGNOSTICS.md** — self-diagnosis reference file shipped with APK, agent reads on demand
+- **SAB diagnostic coverage** — 16 failure modes audited across all subsystems (SAB-AUDIT v4→v6, 111/111)
+- **Open-source prep** — README with screenshots, MIT license, CONTRIBUTING.md, SECURITY.md, issue/PR templates, GitHub Actions CI + release workflows
+
+### Fixed
+- Camera captures moved to workspace directory for Telegram file send (was saving outside accessible path)
+- Stale battery info removed from PLATFORM.md (was persisting across charges)
+- `_inputJson` leak in streaming responses filtered from output
+- `seekerclaw.dev` → `seekerclaw.xyz` across all files
+
+### Changed
+- **MAX_TOOL_USES** bumped 5→15→25 — complex skills need more rounds; all safeguards are limit-agnostic
+- **API transport** — eliminated timeouts via streaming + payload size optimization
+- **Firebase Analytics** now build-optional — build succeeds without google-services.json
+- **Internal docs** moved to `docs/internal/` for cleaner repo root
+- **OpenClaw parity** synced to v2026.2.25 (reviewed 936+ upstream commits, nothing to port)
+
 ## [1.3.0] - 2026-02-20
 
 ### Added
