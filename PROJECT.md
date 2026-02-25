@@ -47,7 +47,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 - **Streaming + payload optimization** — Eliminates API transport timeouts via streaming responses, response field whitelisting to prevent payload bloat (_inputJson leak fix), MAX_HISTORY bumped 20→35 for richer context
 - **Telegram owner gate** — Service refuses to start without valid TELEGRAM_OWNER_ID; unauthorized users get reaction + comment warning; all gate events logged at WARN level
 - **MCP support** — Remote MCP (Model Context Protocol) servers via Streamable HTTP. Users add server URLs in Settings; agent discovers and uses tools at startup. Description sanitization, SHA-256 rug-pull detection, untrusted content wrapping, per-server + global rate limiting.
-- **Telegram bot** — HTML formatting (no markdown headers), native blockquotes, bidirectional reactions, file download with vision, file upload (telegram_send_file tool), long message chunking, quoted replies via `[[reply_to_current]]`, emoji rendering fixed, companion-tone message templates (TEMPLATES.md), context-aware `/start`, sent message ID tracking (ring buffer, 24h TTL) + `telegram_send` tool for same-turn delete flows, contextual status messages for long-running tools (🔍 Searching..., ⚙️ Running..., etc.), inline keyboard buttons via `telegram_send` with callback query handling
+- **Telegram bot** — HTML formatting (no markdown headers), native blockquotes, bidirectional reactions, file download with vision, file upload (telegram_send_file tool), long message chunking, quoted replies via `[[reply_to_current]]`, emoji rendering fixed, companion-tone message templates (docs/internal/TEMPLATES.md), context-aware `/start`, sent message ID tracking (ring buffer, 24h TTL) + `telegram_send` tool for same-turn delete flows, contextual status messages for long-running tools (🔍 Searching..., ⚙️ Running..., etc.), inline keyboard buttons via `telegram_send` with callback query handling
 - **SILENT_REPLY protocol** — Agent silently drops messages when it has nothing useful to say
 - **Ephemeral session awareness** — Agent knows context resets on restart
 - **PLATFORM.md auto-generation** — Device state (model, RAM, storage, battery, permissions, wallet) written on every service start
@@ -240,13 +240,13 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 ## Website Sync
 
-> **`WEBSITE.md`** is the staging area for website content updates.
+> **`docs/internal/WEBSITE.md`** is the staging area for website content updates.
 > It contains curated, accurate content with editorial review comments.
 > Good-morning skill keeps it in sync with PROJECT.md.
 >
-> **Workflow:** PROJECT.md (source of truth) → WEBSITE.md (curated staging) → `config.js` + `index.html` (live website)
+> **Workflow:** PROJECT.md (source of truth) → `docs/internal/WEBSITE.md` (curated staging) → `config.js` + `index.html` (live website)
 
-### Pending Deployment (WEBSITE.md → config.js)
+### Pending Deployment (docs/internal/WEBSITE.md → config.js)
 
 | WEBSITE.md Content | config.js Status | Action |
 |-------------------|-----------------|--------|
