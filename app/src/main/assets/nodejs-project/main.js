@@ -523,9 +523,9 @@ async function handleMessage(msg) {
         setOwnerId(senderId); // sync to config.js for cross-module access
         log(`Owner claimed by ${senderId} (auto-detect)`, 'INFO');
 
-        // Persist to Android encrypted storage via bridge
-        androidBridgeCall('/config/save-owner', { ownerId: senderId })
-            .then(r => { if (r.error) log(`Bridge save-owner failed: ${r.error}`, 'WARN'); });
+        // Persist to Android encrypted storage via bridge (await so write completes before confirming)
+        const saveResult = await androidBridgeCall('/config/save-owner', { ownerId: senderId });
+        if (saveResult.error) log(`Bridge save-owner failed: ${saveResult.error}`, 'WARN');
 
         await sendMessage(chatId, `Owner set to your account (${senderId}). Only you can use this bot.`);
     }
