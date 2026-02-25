@@ -561,7 +561,7 @@ private fun WelcomeStep(
         Spacer(modifier = Modifier.height(8.dp))
 
         TextButton(
-            onClick = { uriHandler.openUri("https://seekerclaw.xyz/quick-setup.html") },
+            onClick = { uriHandler.openUri("https://seekerclaw.xyz/setup") },
         ) {
             Icon(
                 @Suppress("DEPRECATION") Icons.Default.HelpOutline,

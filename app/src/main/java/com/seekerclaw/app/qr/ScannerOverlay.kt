@@ -265,7 +265,7 @@ private fun ScannerBottomStatus(
         )
         Spacer(modifier = Modifier.height(4.dp))
         Text(
-            text = "seekerclaw.xyz/quick-setup",
+            text = "seekerclaw.xyz/setup",
             fontFamily = FontFamily.Monospace,
             fontSize = 11.sp,
             color = SeekerClawColors.TextDim,
