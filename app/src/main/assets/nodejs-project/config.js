@@ -158,10 +158,9 @@ if (!BOT_TOKEN || !ANTHROPIC_KEY) {
 }
 
 if (!OWNER_ID) {
-    // FIX-3 (BAT-219): Upgraded DEBUG → WARN. An unconfigured owner ID means the first
-    // inbound Telegram message will silently claim ownership. OpenClawService should have
-    // blocked startup before reaching this point, but log clearly if it is ever bypassed.
-    log('WARNING: Owner ID not set — first inbound message will claim ownership. Complete setup via the Android app.', 'WARN');
+    // An unconfigured owner ID means the first inbound Telegram message will claim ownership.
+    // This is the intended auto-detect flow — the owner ID is persisted via the Android bridge.
+    log('WARNING: Owner ID not set — first inbound message will claim ownership.', 'WARN');
 } else {
     const authLabel = AUTH_TYPE === 'setup_token' ? 'setup-token' : 'api-key';
     log(`Agent: ${AGENT_NAME} | Model: ${MODEL} | Auth: ${authLabel} | Owner: ${OWNER_ID}`, 'DEBUG');

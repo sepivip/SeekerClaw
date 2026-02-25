@@ -52,29 +52,13 @@ class OpenClawService : Service() {
         getSystemService(android.app.NotificationManager::class.java)
             ?.cancel(SETUP_NOTIFICATION_ID)
 
-        // FIX-1 (BAT-219): Guard — refuse to start Node.js when owner ID is not configured.
-        // Without a known owner, the first inbound Telegram message would silently claim
-        // ownership (auto-detect race). Fail fast here so the user is directed to finish setup.
-        val config = ConfigManager.loadConfig(this)
-        val ownerId = config?.telegramOwnerId
-        if (ownerId.isNullOrBlank()) {
+        // Owner ID may be blank on first run — Node.js auto-detects from the first
+        // Telegram message and persists via /config/save-owner bridge callback.
+        if (ConfigManager.loadConfig(this)?.telegramOwnerId.isNullOrBlank()) {
             LogCollector.append(
-                "[Service] Owner ID not configured — Node.js will not start. " +
-                    "Open SeekerClaw and complete the setup to configure your Telegram owner ID.",
-                LogLevel.ERROR,
+                "[Service] Owner ID not configured — first Telegram message will claim ownership.",
+                LogLevel.WARN,
             )
-            ServiceState.updateStatus(ServiceStatus.ERROR)
-            // Remove the foreground notification and post a separate persistent setup reminder.
-            // Using a distinct SETUP_NOTIFICATION_ID ensures it is not bound to service lifetime
-            // and survives the stopSelf() call below.
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            getSystemService(android.app.NotificationManager::class.java)
-                ?.notify(
-                    SETUP_NOTIFICATION_ID,
-                    createSetupNotification("Setup required — open SeekerClaw to finish setup"),
-                )
-            stopSelf()
-            return START_NOT_STICKY
         }
 
         // Acquire partial wake lock (CPU stays on)
