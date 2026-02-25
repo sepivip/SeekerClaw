@@ -344,15 +344,24 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     const lines = [];
 
     // BOOTSTRAP MODE - First run ritual takes priority.
-    // Guard: skip if IDENTITY.md already exists (ritual already completed,
-    // BOOTSTRAP.md just wasn't cleaned up — crash, backup restore, etc.)
-    if (bootstrap && !identity) {
+    // BOOTSTRAP.md existence is the sole source of truth for "ritual in progress."
+    // The agent deletes BOOTSTRAP.md when the ritual is complete.
+    // If identity already exists (crash recovery / partial write), inject a resume note.
+    if (bootstrap) {
         lines.push('# FIRST RUN - BOOTSTRAP MODE');
         lines.push('');
+        if (identity) {
+            lines.push('**NOTE:** IDENTITY.md already has content (from a partial save or restart).');
+            lines.push('Review what is saved, determine which ritual questions were already answered,');
+            lines.push('and continue from where you left off. Do NOT restart from the beginning.');
+            lines.push('');
+        }
         lines.push('**IMPORTANT:** This is your first conversation. BOOTSTRAP.md exists in your workspace.');
         lines.push('You must follow the bootstrap ritual to establish your identity and learn about your human.');
         lines.push('Read BOOTSTRAP.md carefully and guide this conversation through the ritual steps.');
-        lines.push('After completing all steps, use the write tool to delete BOOTSTRAP.md (write empty content to it).');
+        lines.push('**CRITICAL:** Do NOT write to IDENTITY.md, USER.md, or SOUL.md until ALL 8 questions have been asked and answered.');
+        lines.push('Collect all answers in the conversation first, then write everything at the end in one batch.');
+        lines.push('After writing all files, delete BOOTSTRAP.md (write empty content to it).');
         lines.push('');
         lines.push('---');
         lines.push('');

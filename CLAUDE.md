@@ -724,14 +724,14 @@ lastDelivered: j.state.lastDelivered,
 lastDelivered: j.state.lastDelivered ?? null,
 ```
 
-### Bootstrap / One-Time Ritual Guards
+### Bootstrap / Multi-Step Ritual Guards
 
-**Gate one-time operations on both trigger AND absence of result.** If a ritual creates `IDENTITY.md` from `BOOTSTRAP.md`, check that identity doesn't already exist — otherwise a crash mid-ritual (before BOOTSTRAP.md cleanup) causes infinite re-triggers.
+**For multi-step rituals, gate on the trigger file only.** The trigger file (BOOTSTRAP.md) is the source of truth for "ritual in progress." The agent deletes it when done. If the result file (IDENTITY.md) already exists alongside the trigger, treat it as crash recovery — inject resume context, don't skip.
 
 ```javascript
-// BAD — re-triggers if BOOTSTRAP.md wasn't cleaned up
-if (bootstrap) { runRitual(); }
-
-// GOOD — skip if ritual already completed
+// BAD — kills multi-step ritual if agent writes partial results mid-way
 if (bootstrap && !identity) { runRitual(); }
+
+// GOOD — trigger file is sole source of truth; add resume note if identity exists
+if (bootstrap) { runRitual(/* resume: !!identity */); }
 ```
