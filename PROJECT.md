@@ -33,7 +33,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 | AI Provider | Anthropic Claude API | Opus 4.6 default, Sonnet 4.6, Sonnet 4.5, Haiku 4.5 |
 | Messaging | Telegram Bot API (grammy) | — |
 | Database | SQL.js (WASM SQLite) | 1.12.0 |
-| OpenClaw Parity | OpenClaw gateway (ported) | 2026.2.23 |
+| OpenClaw Parity | OpenClaw gateway (ported) | 2026.2.25 |
 | Web Search | Brave Search + Perplexity Sonar | — |
 | Wallet | Solana Web3.js + Jupiter API | — |
 | Build | Gradle (Kotlin DSL) | — |
@@ -222,8 +222,8 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Metric | Count |
 |--------|-------|
-| Total commits | 293 |
-| PRs merged | 182 |
+| Total commits | 308 |
+| PRs merged | 191 |
 | Tools | 56 (9 Jupiter, 13 Android bridge, web search/fetch, memory, cron, skill_install, etc.) + MCP dynamic |
 | Skills | 35 (20 bundled + 13 workspace + 2 user-created) |
 | Android Bridge endpoints | 18+ |
@@ -264,6 +264,17 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Date | Feature | PR |
 |------|---------|-----|
+| 2026-02-25 | Fix: persist owner ID across restarts — .apply() → .commit() (BAT-270) | #191 |
+| 2026-02-25 | Chore: update setup URL from /quick-setup to /setup | #190 |
+| 2026-02-25 | Fix: set MWA blockchain to Solana.Mainnet instead of default Devnet (BAT-269) | #189 |
+| 2026-02-25 | Fix: bootstrap ritual stops after 2 questions (BAT-268) | #188 |
+| 2026-02-25 | Fix: restore owner ID auto-detect (BAT-267) | #187 |
+| 2026-02-25 | Fix: bootstrap ritual not triggering on first run (BAT-266) | #186 |
+| 2026-02-25 | Feat: add official SeekerClaw socials to agent identity (BAT-263) | #185 |
+| 2026-02-25 | Chore: bump OpenClaw reference to 2026.2.25 | direct |
+| 2026-02-25 | Docs: create README.md + screenshots for open-source launch (BAT-265) | #184 |
+| 2026-02-25 | Chore: move internal docs to docs/internal/ for open-source prep (BAT-264) | #183 |
+| 2026-02-25 | Docs: update PROJECT.md with recent changes and commit count | direct |
 | 2026-02-25 | Fix: replace seekerclaw.dev with seekerclaw.xyz everywhere | direct |
 | 2026-02-25 | CI: add GOOGLE_SERVICES_JSON secret for Firebase in CI builds | direct |
 | 2026-02-25 | Chore: remove unused publishing/, scripts/, web-prototype/ directories | direct |

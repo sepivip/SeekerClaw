@@ -18,11 +18,14 @@ if (file("google-services.json").exists()) {
     apply(plugin = "com.google.gms.google-services")
 }
 
-// Load signing config from local.properties (not in version control)
+// Load signing config from local.properties (Android Studio) with env var fallback (GitHub Actions CI)
 val localProps = Properties().apply {
     val f = rootProject.file("local.properties")
     if (f.exists()) f.inputStream().use { load(it) }
 }
+
+fun signingProp(localKey: String, envKey: String): String? =
+    localProps.getProperty(localKey) ?: System.getenv(envKey)
 
 android {
     namespace = "com.seekerclaw.app"
@@ -51,14 +54,40 @@ android {
     }
 
     signingConfigs {
-        create("release") {
-            val ksPath = localProps.getProperty("SEEKERCLAW_KEYSTORE_PATH")
+        create("dappStore") {
+            val ksPath = signingProp("SEEKERCLAW_KEYSTORE_PATH", "SEEKERCLAW_KEYSTORE_PATH")
             if (ksPath != null) {
                 storeFile = file(ksPath)
-                storePassword = localProps.getProperty("SEEKERCLAW_STORE_PASSWORD")
-                keyAlias = localProps.getProperty("SEEKERCLAW_KEY_ALIAS")
-                keyPassword = localProps.getProperty("SEEKERCLAW_KEY_PASSWORD")
+                storePassword = signingProp("SEEKERCLAW_STORE_PASSWORD", "SEEKERCLAW_STORE_PASSWORD")
+                keyAlias = signingProp("SEEKERCLAW_KEY_ALIAS", "SEEKERCLAW_KEY_ALIAS")
+                keyPassword = signingProp("SEEKERCLAW_KEY_PASSWORD", "SEEKERCLAW_KEY_PASSWORD")
             }
+        }
+        create("googlePlay") {
+            val ksPath = signingProp("PLAY_KEYSTORE_PATH", "PLAY_KEYSTORE_PATH")
+            if (ksPath != null) {
+                storeFile = file(ksPath)
+                storePassword = signingProp("PLAY_STORE_PASSWORD", "PLAY_STORE_PASSWORD")
+                keyAlias = signingProp("PLAY_KEY_ALIAS", "PLAY_KEY_ALIAS")
+                keyPassword = signingProp("PLAY_KEY_PASSWORD", "PLAY_KEY_PASSWORD")
+            }
+        }
+    }
+
+    flavorDimensions += "distribution"
+
+    productFlavors {
+        create("dappStore") {
+            dimension = "distribution"
+            buildConfigField("String", "DISTRIBUTION", "\"dappStore\"")
+            buildConfigField("String", "STORE_NAME", "\"Solana dApp Store\"")
+            signingConfig = signingConfigs.getByName("dappStore")
+        }
+        create("googlePlay") {
+            dimension = "distribution"
+            buildConfigField("String", "DISTRIBUTION", "\"googlePlay\"")
+            buildConfigField("String", "STORE_NAME", "\"Google Play\"")
+            signingConfig = signingConfigs.getByName("googlePlay")
         }
     }
 
@@ -70,10 +99,6 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            val ksPath = localProps.getProperty("SEEKERCLAW_KEYSTORE_PATH")
-            if (ksPath != null) {
-                signingConfig = signingConfigs.getByName("release")
-            }
         }
     }
 

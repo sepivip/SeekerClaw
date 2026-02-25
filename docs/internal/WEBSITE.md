@@ -1,6 +1,6 @@
 # WEBSITE.md — Website Content
 
-> Last updated: 2026-02-24 | Last deployed: _never_
+> Last updated: 2026-02-25 | Last deployed: _never_
 >
 > **Rule:** Every item must earn its screen space. Less is more.
 > Before deploying, review the Editorial Notes in each section.
@@ -38,7 +38,7 @@
 |-------|-------|---------------|
 | 150,000+ | Seeker Devices | Social proof — large addressable market |
 | 56+ | Built-in Tools | Shows depth — but consider "50+" for cleaner number |
-| 182+ | PRs Shipped | Shows velocity — but do users care about PRs? |
+| 191+ | PRs Shipped | Shows velocity — but do users care about PRs? |
 | 24/7 | Autonomous Agent | Key differentiator — always on |
 
 <!-- REVIEW: Is "PRs Shipped" the right 3rd stat? Alternatives:
@@ -194,7 +194,7 @@ reminders, research, and more. Add custom skills without touching code.
 - Multi-provider web search + page reading
 - MCP server support for extensible tools
 - 35 skills including CalClaw calorie tracker and Netwatch security audit
-- OpenClaw v2026.2.23 parity
+- OpenClaw v2026.2.25 parity
 - Open-source: MIT license, CI/CD, community contribution ready
 - Self-aware agent: 100% SAB score (36/36 audit points)
 

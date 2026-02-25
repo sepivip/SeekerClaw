@@ -8,13 +8,13 @@ on:
 permissions:
   contents: write
 
-env:
-  KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-  GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
-
 jobs:
-  release:
+  build-dappstore:
     runs-on: ubuntu-latest
+
+    env:
+      KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+      GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
 
     steps:
       - name: Checkout
@@ -33,46 +33,110 @@ jobs:
         if: env.GOOGLE_SERVICES_JSON != ''
         run: echo "$GOOGLE_SERVICES_JSON" | base64 -d > app/google-services.json
 
-      - name: Decode keystore
+      - name: Decode dApp Store keystore
         if: env.KEYSTORE_BASE64 != ''
-        run: echo "$KEYSTORE_BASE64" | base64 -d > app/release.jks
+        run: echo "$KEYSTORE_BASE64" | base64 -d > app/dappstore-release.jks
 
-      - name: Create signing properties
-        if: env.KEYSTORE_BASE64 != ''
+      - name: Build dApp Store release APK
+        run: chmod +x gradlew && ./gradlew assembleDappStoreRelease
         env:
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
-        run: |
-          cat > local.properties <<EOF
-          sdk.dir=$ANDROID_HOME
-          SEEKERCLAW_KEYSTORE_PATH=release.jks
-          SEEKERCLAW_STORE_PASSWORD=$STORE_PASSWORD
-          SEEKERCLAW_KEY_ALIAS=$KEY_ALIAS
-          SEEKERCLAW_KEY_PASSWORD=$KEY_PASSWORD
-          EOF
-          # Strip leading whitespace from heredoc indentation
-          sed -i 's/^[[:space:]]*//' local.properties
-
-      - name: Build release APK
-        run: chmod +x gradlew && ./gradlew assembleRelease
+          SEEKERCLAW_KEYSTORE_PATH: dappstore-release.jks
+          SEEKERCLAW_STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          SEEKERCLAW_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          SEEKERCLAW_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
 
       - name: Verify APK is signed
         if: env.KEYSTORE_BASE64 != ''
         run: |
-          APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
+          APK=$(find app/build/outputs/apk/dappStore/release -name '*.apk' | head -1)
           if [ -z "$APK" ]; then
-            echo "::error::No release APK found"
+            echo "::error::No dApp Store release APK found"
             exit 1
           fi
-          # apksigner verify returns non-zero if unsigned
           ${ANDROID_HOME}/build-tools/$(ls ${ANDROID_HOME}/build-tools/ | tail -1)/apksigner verify "$APK"
           echo "APK signed successfully: $APK"
 
       - name: Rename APK
         run: |
-          APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          mv "$APK" "app/build/outputs/apk/release/SeekerClaw-${{ github.ref_name }}.apk"
+          APK=$(find app/build/outputs/apk/dappStore/release -name '*.apk' | head -1)
+          mv "$APK" "SeekerClaw-${{ github.ref_name }}.apk"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dappstore-apk
+          path: "SeekerClaw-${{ github.ref_name }}.apk"
+
+  build-googleplay:
+    runs-on: ubuntu-latest
+
+    env:
+      PLAY_KEYSTORE_BASE64: ${{ secrets.PLAY_KEYSTORE_BASE64 }}
+      GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Decode google-services.json
+        if: env.GOOGLE_SERVICES_JSON != ''
+        run: echo "$GOOGLE_SERVICES_JSON" | base64 -d > app/google-services.json
+
+      - name: Decode Google Play keystore
+        if: env.PLAY_KEYSTORE_BASE64 != ''
+        run: echo "$PLAY_KEYSTORE_BASE64" | base64 -d > app/googleplay-release.jks
+
+      - name: Build Google Play release AAB
+        run: chmod +x gradlew && ./gradlew bundleGooglePlayRelease
+        env:
+          PLAY_KEYSTORE_PATH: googleplay-release.jks
+          PLAY_STORE_PASSWORD: ${{ secrets.PLAY_STORE_PASSWORD }}
+          PLAY_KEY_ALIAS: ${{ secrets.PLAY_KEY_ALIAS }}
+          PLAY_KEY_PASSWORD: ${{ secrets.PLAY_KEY_PASSWORD }}
+
+      - name: Rename AAB
+        run: |
+          AAB=$(find app/build/outputs/bundle/googlePlayRelease -name '*.aab' | head -1)
+          if [ -n "$AAB" ]; then
+            mv "$AAB" "SeekerClaw-${{ github.ref_name }}.aab"
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: googleplay-aab
+          path: "SeekerClaw-${{ github.ref_name }}.aab"
+          if-no-files-found: ignore
+
+  release:
+    needs: [build-dappstore, build-googleplay]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout (for CHANGELOG.md)
+        uses: actions/checkout@v4
+
+      - name: Download dApp Store APK
+        uses: actions/download-artifact@v4
+        with:
+          name: dappstore-apk
+          path: artifacts/
+
+      - name: Download Google Play AAB
+        uses: actions/download-artifact@v4
+        with:
+          name: googleplay-aab
+          path: artifacts/
+        continue-on-error: true
 
       - name: Get version from tag
         id: version
@@ -82,15 +146,12 @@ jobs:
         id: changelog
         run: |
           TAG="${GITHUB_REF#refs/tags/v}"
-          # Extract the section for this version from CHANGELOG.md
-          # Matches from "## [version]" to the next "## [" or end of file
           NOTES=$(awk "/^## \\[${TAG}\\]/{found=1; next} /^## \\[/{if(found) exit} found{print}" CHANGELOG.md)
           if [ -z "$NOTES" ]; then
             echo "No changelog entry found for v${TAG}, using auto-generated notes"
             echo "found=false" >> "$GITHUB_OUTPUT"
           else
             echo "found=true" >> "$GITHUB_OUTPUT"
-            # Write multiline output using delimiter
             {
               echo "notes<<CHANGELOG_EOF"
               echo "$NOTES"
@@ -105,7 +166,7 @@ jobs:
           tag_name: ${{ steps.version.outputs.tag }}
           name: SeekerClaw ${{ steps.version.outputs.tag }}
           body: ${{ steps.changelog.outputs.notes }}
-          files: app/build/outputs/apk/release/*.apk
+          files: artifacts/*
 
       - name: Create GitHub Release (auto-generated notes)
         if: steps.changelog.outputs.found != 'true'
@@ -114,4 +175,4 @@ jobs:
           tag_name: ${{ steps.version.outputs.tag }}
           name: SeekerClaw ${{ steps.version.outputs.tag }}
           generate_release_notes: true
-          files: app/build/outputs/apk/release/*.apk
+          files: artifacts/*
