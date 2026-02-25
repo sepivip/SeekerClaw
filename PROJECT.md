@@ -222,7 +222,7 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Metric | Count |
 |--------|-------|
-| Total commits | 286 |
+| Total commits | 293 |
 | PRs merged | 182 |
 | Tools | 56 (9 Jupiter, 13 Android bridge, web search/fetch, memory, cron, skill_install, etc.) + MCP dynamic |
 | Skills | 35 (20 bundled + 13 workspace + 2 user-created) |
@@ -262,6 +262,11 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Date | Feature | PR |
 |------|---------|-----|
+| 2026-02-25 | Fix: replace seekerclaw.dev with seekerclaw.xyz everywhere | direct |
+| 2026-02-25 | CI: add GOOGLE_SERVICES_JSON secret for Firebase in CI builds | direct |
+| 2026-02-25 | Chore: remove unused publishing/, scripts/, web-prototype/ directories | direct |
+| 2026-02-25 | CI: fix release workflow signing + changelog extraction, bump v1.4.1 | direct |
+| 2026-02-25 | Docs: add SKILL-CREATOR.md spec + update project docs | direct |
 | 2026-02-24 | Docs: SAB-AUDIT-v5 report (100% score, 36/36 audit points) | direct |
 | 2026-02-24 | Fix: remove stale battery info from PLATFORM.md (BAT-262) | #182 |
 | 2026-02-24 | Feat: expand agent capabilities — app launch, screencap, shell tools (BAT-261) | #181 |
