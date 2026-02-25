@@ -5,27 +5,70 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [1.4.1] - 2026-02-25
 
-### Added
-- **App launch & listing** — agent can discover and launch installed apps via android_apps_list/android_apps_launch
-- **Screenshots** — agent captures screen via `screencap -p` through shell_exec
-- **Expanded shell allowlist** — 22→34 commands (touch, diff, sed, cut, base64, stat, file, sleep, getprop, md5sum, sha256sum, screencap)
-- **Official socials** in agent identity — website, X, Telegram, GitHub links in system prompt
-- **DIAGNOSTICS.md** — self-diagnosis reference file shipped with APK, agent reads on demand
-- **SAB diagnostic coverage** — 16 failure modes audited across all subsystems (SAB-AUDIT v4→v6, 111/111)
-- **Open-source prep** — README with screenshots, MIT license, CONTRIBUTING.md, SECURITY.md, issue/PR templates, GitHub Actions CI + release workflows
+**First public release.** Everything below shipped across v1.0.0–v1.4.1 (293 commits, 185 PRs).
 
-### Fixed
-- Camera captures moved to workspace directory for Telegram file send (was saving outside accessible path)
-- Stale battery info removed from PLATFORM.md (was persisting across charges)
-- `_inputJson` leak in streaming responses filtered from output
-- `seekerclaw.dev` → `seekerclaw.xyz` across all files
+### Core
+- **On-device AI agent** — Claude (Opus / Sonnet / Haiku) running 24/7 as an Android foreground service via embedded Node.js (nodejs-mobile, Node 18 LTS ARM64)
+- **56 tools** — file I/O, shell exec, web search/fetch, device sensors, Solana transactions, MCP remote tools, and more
+- **35 skills** — bundled YAML-frontmatter skills with semantic trigger routing, plus install-from-URL and Telegram file attachment
+- **Multi-turn tool use** — up to 25 tool-call rounds per conversation turn with per-round checkpoints and crash-safe resume
+- **Prompt caching** — reduces cost and latency on repeated context across Claude API calls
 
-### Changed
-- **MAX_TOOL_USES** bumped 5→15→25 — complex skills need more rounds; all safeguards are limit-agnostic
-- **API transport** — eliminated timeouts via streaming + payload size optimization
-- **Firebase Analytics** now build-optional — build succeeds without google-services.json
-- **Internal docs** moved to `docs/internal/` for cleaner repo root
-- **OpenClaw parity** synced to v2026.2.25 (reviewed 936+ upstream commits, nothing to port)
+### Telegram
+- Full bot integration — reactions, inline keyboards, file send/download, blockquote rendering, typing indicators
+- 12 slash commands — /help, /version, /logs, /approve, /deny, and more
+- File sharing with Claude vision (send an image, agent sees it)
+- Owner-gate hardening — blocks service start without valid Telegram owner ID
+
+### Solana
+- **Jupiter DEX** — swaps, quotes, limit orders, DCA via Jupiter Ultra API with sign-only MWA flow
+- **Mobile Wallet Adapter** (MWA) integration for on-device transaction signing
+- Wallet & secrets protection with encrypted credentials store (Android Keystore, AES-256-GCM)
+
+### Device Control
+- **Android Bridge** — local HTTP bridge exposing battery, storage, network, GPS, camera, SMS, calls, clipboard, TTS, contacts, app launch/listing
+- **Screenshots** — agent captures screen via `screencap -p`
+- **34 shell commands** in sandboxed allowlist (ls, cat, grep, find, curl, wget, sed, diff, base64, screencap, and more)
+- **Boot receiver** — auto-start agent after device reboot
+- **Watchdog** — 30s health checks with auto-restart on unresponsive Node.js
+
+### Intelligence
+- **Persistent memory** — daily notes, personality, ranked keyword search across memory files (SQL.js backed)
+- **Web search** — Brave, DuckDuckGo, Perplexity with zero-config DDG fallback
+- **Web fetch** — markdown conversion, caching, redirect handling
+- **Cron/scheduling** — one-shot or recurring jobs with natural language time parsing ("remind me in 30 min")
+- **Remote MCP servers** — add external tool providers via Streamable HTTP (JSON-RPC 2.0)
+- **Auto session summary** — agent saves memory before session dies
+- **Ephemeral session awareness** — agent knows when Node.js restarted mid-conversation
+
+### Security
+- Prompt injection defense with content trust scoring
+- Tool confirmation gates (YES/NO for dangerous actions)
+- Secrets blocked from agent access (config files, database)
+- js_eval sandbox for in-process code execution
+- Setup-token authentication for initial configuration
+
+### Android App
+- **Jetpack Compose + Material 3** — DarkOps theme (dark navy + crimson + green)
+- **6 screens** — Setup (QR scan + manual entry), Dashboard (status/uptime/stats), Logs (searchable monospace viewer), Settings (config editor), Skills (browse + diagnostics), System
+- **Redesigned onboarding** — branded cards, step indicator, themed QR scanner, success screen
+- Haptic feedback, network offline banner, loading states, navigation transitions
+- Log viewer with text search/filter, export/share, structured log levels (DEBUG/INFO/WARN/ERROR)
+- Agent health dashboard with real heartbeat probes
+- WCAG AA text contrast, 48dp touch targets
+
+### Architecture
+- **14 focused Node.js modules** — main, claude, tools, solana, telegram, memory, skills, cron, web, database, security, bridge, config, mcp-client (refactored from 6,924-line monolith)
+- **API resilience** — retry with exponential backoff on 429/529, rate-limit-aware throttling, centralized API wrapper with mutex
+- **Firebase Analytics** build-optional — build succeeds without google-services.json
+- **OpenClaw parity** synced to v2026.2.25 (reviewed 936+ upstream commits)
+
+### Open Source
+- MIT license
+- README with screenshots and architecture diagram
+- CONTRIBUTING.md, SECURITY.md, issue/PR templates
+- GitHub Actions CI (build on push) + release workflow (tag → signed APK → GitHub Release)
+- CHANGELOG, DIAGNOSTICS.md, SAB self-awareness audit (111/111, 100%)
 
 ## [1.3.0] - 2026-02-20
 
