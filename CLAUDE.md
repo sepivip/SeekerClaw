@@ -57,7 +57,7 @@
 - **IPC:** nodejs-mobile JNI bridge + localhost HTTP
 - **Database:** SQL.js (WASM-compiled SQLite) — no native bindings needed
 - **Build:** Gradle (Kotlin DSL)
-- **Distribution:** Solana dApp Store (primary), direct APK sideload (fallback)
+- **Distribution:** Solana dApp Store APK (primary), Google Play AAB (secondary), direct APK sideload (fallback)
 
 ## Project Structure
 
@@ -163,7 +163,7 @@ REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, POST_NOTIFICATIONS
 ```
 
 - **`POST_NOTIFICATIONS`:** Required on API 33+. Request at runtime during Setup flow before starting the service.
-- **`specialUse` service type:** dApp Store friendly — no justification needed. For Google Play, must provide written justification. Consider `dataSync` as alternative for Play Store (but note 6-hour time limit on Android 14+).
+- **`specialUse` service type:** dApp Store friendly — no justification needed. Google Play requires written justification for `specialUse`. Consider `dataSync` as alternative for Play Store (but note 6-hour time limit on Android 14+). Can be flavor-gated if needed.
 
 ## Model List
 
@@ -393,11 +393,71 @@ Full Jupiter DEX integration via MWA (Mobile Wallet Adapter). Tested on Solana S
 - No OTA updates (update via app store)
 - No multi-channel (Telegram only)
 
+## Product Flavors (Distribution)
+
+Two product flavors under the `distribution` dimension, defined in `app/build.gradle.kts`:
+
+| Flavor | Output | Signing Config | Use |
+|--------|--------|---------------|-----|
+| `dappStore` | APK | `dappStore` (SEEKERCLAW_* keys) | Solana dApp Store + sideload |
+| `googlePlay` | AAB | `googlePlay` (PLAY_* keys) | Google Play Store |
+
+**BuildConfig fields** available in Kotlin code:
+- `BuildConfig.DISTRIBUTION` — `"dappStore"` or `"googlePlay"`
+- `BuildConfig.STORE_NAME` — `"Solana dApp Store"` or `"Google Play"`
+
+**Signing config resolution:** `signingProp(localKey, envKey)` helper checks `local.properties` first (Android Studio), then `System.getenv()` (GitHub Actions CI).
+
+**Build variants** (flavor + buildType):
+- `dappStoreDebug`, `dappStoreRelease`
+- `googlePlayDebug`, `googlePlayRelease`
+
+**Android Studio:** Select build variant in Build Variants panel (default: `dappStoreDebug`).
+
+**Future:** Flavors enable feature stripping per store (e.g., removing Solana wallet from Google Play version).
+
 ## Build & Run
 
 ```bash
-./gradlew assembleDebug
-adb install app/build/outputs/apk/debug/app-debug.apk
+# dApp Store debug (default for development)
+./gradlew assembleDappStoreDebug
+adb install app/build/outputs/apk/dappStore/debug/app-dappStore-debug.apk
+
+# Google Play debug
+./gradlew assembleGooglePlayDebug
+
+# Release builds (require signing keys)
+./gradlew assembleDappStoreRelease    # → APK
+./gradlew bundleGooglePlayRelease     # → AAB
+```
+
+## CI/CD (GitHub Actions)
+
+**`.github/workflows/build.yml`** — runs on push/PR to main, builds both flavor debug APKs for validation.
+
+**`.github/workflows/release.yml`** — triggered by `v*` tags, 3 parallel jobs:
+1. `build-dappstore` — signed APK (`assembleDappStoreRelease`), renamed to `SeekerClaw-{tag}.apk`
+2. `build-googleplay` — signed AAB (`bundleGooglePlayRelease`), renamed to `SeekerClaw-{tag}.aab`
+3. `release` — downloads both artifacts, extracts changelog, creates GitHub Release
+
+**GitHub Secrets:**
+
+| Secret | Purpose |
+|--------|---------|
+| `KEYSTORE_BASE64` | Base64-encoded dApp Store .jks |
+| `STORE_PASSWORD` | dApp Store keystore password |
+| `KEY_ALIAS` | dApp Store key alias |
+| `KEY_PASSWORD` | dApp Store key password |
+| `PLAY_KEYSTORE_BASE64` | Base64-encoded Google Play .jks |
+| `PLAY_STORE_PASSWORD` | Google Play keystore password |
+| `PLAY_KEY_ALIAS` | Google Play key alias |
+| `PLAY_KEY_PASSWORD` | Google Play key password |
+| `GOOGLE_SERVICES_JSON` | Base64-encoded Firebase config |
+
+**Re-releasing:** To rebuild artifacts for an existing tag, delete and recreate the tag:
+```bash
+git tag -d v1.x.x && git push origin :refs/tags/v1.x.x
+git tag v1.x.x && git push origin v1.x.x
 ```
 
 ## Reference Documents
