@@ -5,6 +5,7 @@ import android.util.Log
 import com.solana.mobilewalletadapter.clientlib.ActivityResultSender
 import com.solana.mobilewalletadapter.clientlib.ConnectionIdentity
 import com.solana.mobilewalletadapter.clientlib.MobileWalletAdapter
+import com.solana.mobilewalletadapter.clientlib.Solana
 import com.solana.mobilewalletadapter.clientlib.TransactionResult
 
 object SolanaWalletManager {
@@ -16,7 +17,9 @@ object SolanaWalletManager {
             iconUri = Uri.parse("favicon.ico"),
             identityName = "SeekerClaw",
         )
-    )
+    ).apply {
+        blockchain = Solana.Mainnet
+    }
 
     // NOTE: Must be called from Dispatchers.Main — MWA's ActivityResultLauncher
     // requires the main thread. The SDK handles its own IO threading internally.
