@@ -621,8 +621,12 @@ class AndroidBridge(
         if (ownerId.isBlank()) {
             return jsonResponse(400, mapOf("error" to "ownerId is required"))
         }
-        ConfigManager.saveOwnerId(context, ownerId)
-        return jsonResponse(200, mapOf("success" to true))
+        val persisted = ConfigManager.saveOwnerId(context, ownerId)
+        return if (persisted) {
+            jsonResponse(200, mapOf("success" to true))
+        } else {
+            jsonResponse(500, mapOf("error" to "Failed to persist owner ID"))
+        }
     }
 
     // ==================== Helpers ====================

@@ -230,9 +230,14 @@ object ConfigManager {
         writeAgentSettingsJson(context)
     }
 
-    fun saveOwnerId(context: Context, ownerId: String) {
-        prefs(context).edit().putString(KEY_OWNER_ID, ownerId).apply()
-        configVersion.intValue++
+    fun saveOwnerId(context: Context, ownerId: String): Boolean {
+        val persisted = prefs(context).edit().putString(KEY_OWNER_ID, ownerId).commit()
+        if (persisted) {
+            configVersion.intValue++
+        } else {
+            LogCollector.append("[Config] Failed to persist owner ID (commit=false)", LogLevel.ERROR)
+        }
+        return persisted
     }
 
     fun clearConfig(context: Context) {
