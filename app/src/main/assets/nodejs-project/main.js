@@ -524,7 +524,8 @@ async function handleMessage(msg) {
         log(`Owner claimed by ${senderId} (auto-detect)`, 'INFO');
 
         // Persist to Android encrypted storage via bridge
-        androidBridgeCall('/config/save-owner', { ownerId: senderId }).catch(() => {});
+        androidBridgeCall('/config/save-owner', { ownerId: senderId })
+            .then(r => { if (r.error) log(`Bridge save-owner failed: ${r.error}`, 'WARN'); });
 
         await sendMessage(chatId, `Owner set to your account (${senderId}). Only you can use this bot.`);
     }

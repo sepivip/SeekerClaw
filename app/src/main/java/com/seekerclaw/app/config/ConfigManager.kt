@@ -231,7 +231,7 @@ object ConfigManager {
     }
 
     fun saveOwnerId(context: Context, ownerId: String) {
-        prefs(context).edit().putString(KEY_OWNER_ID, ownerId).apply()
+        prefs(context).edit().putString(KEY_OWNER_ID, ownerId).commit()
         configVersion.intValue++
     }
 
