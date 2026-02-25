@@ -97,7 +97,7 @@ Open the app → scan QR or enter your [Anthropic API key](https://console.anthr
 
 ## Links
 
-**Website:** [seekerclaw.xyz](https://seekerclaw.xyz) · **Twitter:** [@SeekerClaw](https://x.com/SeekerClaw)
+**Website:** [seekerclaw.xyz](https://seekerclaw.xyz) · **Twitter:** [@SeekerClaw](https://x.com/SeekerClaw) · **Telegram:** [t.me/seekerclaw](https://t.me/seekerclaw)
 
 ---
 
