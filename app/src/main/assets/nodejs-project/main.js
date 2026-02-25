@@ -149,7 +149,7 @@ const {
 async function handleCommand(chatId, command, args) {
     switch (command) {
         case '/start': {
-            // Templates defined in TEMPLATES.md — update there first, then sync here
+            // Templates defined in docs/internal/TEMPLATES.md — update there first, then sync here
             const bootstrap = loadBootstrap();
             const identity = loadIdentity();
 

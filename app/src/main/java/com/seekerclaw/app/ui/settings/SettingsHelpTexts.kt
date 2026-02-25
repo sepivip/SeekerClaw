@@ -3,7 +3,7 @@ package com.seekerclaw.app.ui.settings
 /**
  * Centralized info/tooltip texts for all settings.
  * Update these constants to change what users see when tapping [i] icons.
- * Mirror changes in /SETTINGS_INFO.md for review tracking.
+ * Mirror changes in /docs/internal/SETTINGS_INFO.md for review tracking.
  */
 object SettingsHelpTexts {
 

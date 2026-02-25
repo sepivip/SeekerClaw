@@ -1,6 +1,6 @@
 # CLAUDE.md — SeekerClaw Project Guide
 
-> **Background research:** See `RESEARCH.md` | **Source of truth:** See `PROJECT.md`
+> **Background research:** See `docs/internal/RESEARCH.md` | **Source of truth:** See `PROJECT.md`
 
 ## PROJECT.md — Source of Truth
 
@@ -95,7 +95,7 @@ seekerclaw/
 ├── build.gradle.kts                          # Root build file
 ├── settings.gradle.kts
 ├── CLAUDE.md
-└── RESEARCH.md
+└── docs/internal/          # Internal docs (audits, tracking, plans)
 ```
 
 ## Architecture
@@ -383,7 +383,7 @@ Full Jupiter DEX integration via MWA (Mobile Wallet Adapter). Tested on Solana S
 - MWA sign-only mode (no private keys in app)
 - Clean error handling on wallet rejection, timeout, network loss
 
-**Test docs:** `JUPITER-AUDIT.md` (code audit), `JUPITER-TEST-CHECKLIST.md` (29 tests, all must-pass green)
+**Test docs:** `docs/internal/audits/JUPITER-AUDIT.md` (code audit), `docs/internal/audits/JUPITER-TEST-CHECKLIST.md` (29 tests, all must-pass green)
 
 ## What NOT to Build (v1)
 
@@ -402,14 +402,14 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 
 ## Reference Documents
 
-- `RESEARCH.md` — Deep feasibility research on Node.js on Android, background services, Solana Mobile, competitive landscape
-- `OPENCLAW_TRACKING.md` — **Critical:** Version tracking, change detection, and update process
+- `docs/internal/RESEARCH.md` — Deep feasibility research on Node.js on Android, background services, Solana Mobile, competitive landscape
+- `docs/internal/OPENCLAW_TRACKING.md` — **Critical:** Version tracking, change detection, and update process
 
 ---
 
 ## OpenClaw Version Tracking
 
-> **IMPORTANT:** SeekerClaw must stay in sync with OpenClaw updates. See `OPENCLAW_TRACKING.md` for full details.
+> **IMPORTANT:** SeekerClaw must stay in sync with OpenClaw updates. See `docs/internal/OPENCLAW_TRACKING.md` for full details.
 
 ### Current Versions
 - **OpenClaw Reference:** 2026.2.23
@@ -423,13 +423,13 @@ git log --oneline HEAD..origin/main
 
 # If updates exist, pull and review
 git pull origin main
-# Then review OPENCLAW_TRACKING.md for what to check
+# Then review docs/internal/OPENCLAW_TRACKING.md for what to check
 ```
 
 ### When OpenClaw Updates
 
 1. **Pull the update:** `cd openclaw-reference && git pull`
-2. **Check critical files:** See priority list in `OPENCLAW_TRACKING.md`
+2. **Check critical files:** See priority list in `docs/internal/OPENCLAW_TRACKING.md`
 3. **Compare changes:** `git diff <old>..<new> -- <file>`
 4. **Port relevant changes** to `main.js` and skills
 5. **Update tracking docs** with new version info
