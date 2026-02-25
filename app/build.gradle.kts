@@ -36,7 +36,7 @@ android {
         versionName = "1.4.1"
 
         // Keep these in sync when updating OpenClaw or nodejs-mobile
-        buildConfigField("String", "OPENCLAW_VERSION", "\"2026.2.23\"")
+        buildConfigField("String", "OPENCLAW_VERSION", "\"2026.2.25\"")
         buildConfigField("String", "NODEJS_VERSION", "\"18 LTS\"")
 
         externalNativeBuild {

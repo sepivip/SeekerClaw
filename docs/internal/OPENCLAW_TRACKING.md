@@ -1,8 +1,8 @@
 # OpenClaw Version Tracking
 
 > **Purpose:** Track OpenClaw releases and identify changes to port to SeekerClaw.
-> **Current OpenClaw Version:** 2026.2.23 (main 4b316c33d, 2026-02-24)
-> **Last Sync Review:** 2026-02-24
+> **Current OpenClaw Version:** 2026.2.25 (main b3f46f0e2, 2026-02-25)
+> **Last Sync Review:** 2026-02-25
 > **Parity Plan:** See `PARITY_PLAN.md`
 
 ---
@@ -82,7 +82,29 @@ These files in OpenClaw directly affect SeekerClaw behavior. Changes here requir
 
 ## Version History & Changes
 
-### 2026.2.23 (Current - 4b316c33d)
+### 2026.2.25 (Current - b3f46f0e2)
+- **Release Date:** 2026-02-25
+- **SeekerClaw Sync Status:** Reviewed, nothing to port
+- **276 new commits since last sync (4b316c33d)**
+- **Versions reviewed:** v2026.2.24, v2026.2.24-beta.1, v2026.2.25 (HEAD)
+- **Skipped (not applicable):**
+  - System prompt: zero changes since last sync
+  - Memory: zero changes since last sync
+  - Skills: zero changes (src/agents/skills/ and skills/) since last sync
+  - Tools: `web-search.ts` — Brave `search_lang`/`ui_lang` format validation + LLM swap recovery — our Brave search doesn't expose these params, skip
+  - Tools: model fallback refactor (allowlist handling, fallback chain traversal, unrecognized error resilience) — server-only model fallback infrastructure
+  - Tools: shell-utils PowerShell 7 preference, `sanitizeHostBaseEnv` — server-only exec tooling
+  - Tools: sandbox bind-spec, fs-bridge, host-paths, network-mode hardening — no Docker/sandbox
+  - Tools: subagent announce formatting, session tool-result guard — no sub-agents
+  - Web: WhatsApp auto-reply reasoning suppression, 440 non-retryable status, reconnect hardening — WhatsApp Web only
+  - Web: media `dev=0` stat workaround for Windows — WhatsApp media routing only
+  - Cron: `setSessionRuntimeModel` refactor, test mock update — server-only session management
+  - Telegram: version bump 2026.2.23→2026.2.25, removed dev dependency — no functional changes
+  - Android (OpenClaw's own): AGP 9 migration, QR onboarding, GFM markdown renderer, canvas webview, tab shell, IME stabilization, gateway auth — separate app architecture
+  - Security: Slack file-only fallback, Discord component auth, IRC/Nextcloud/Line/MSTeams channel isolation — server-only channel plugins
+  - Massive test stabilization and refactoring across agents, sandbox, cron, web suites — test-only
+
+### 2026.2.23 (4b316c33d)
 - **Release Date:** 2026-02-24
 - **SeekerClaw Sync Status:** Reviewed, nothing to port
 - **660 new commits since last sync (40a68a893)**
