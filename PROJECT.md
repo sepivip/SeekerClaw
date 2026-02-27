@@ -264,6 +264,7 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Date | Feature | PR |
 |------|---------|-----|
+| 2026-02-27 | Fix: Telegram message formatting — italic/bold nesting, link support, strikethrough, fallback logging | #194 (BAT-278) |
 | 2026-02-27 | Fix: OpenClaw parity 2026.2.26 — 5 bug fixes (tool name trim, result normalize, sendChatAction backoff, poll outage alert, BOT_COMMANDS_TOO_MUCH) | #193 (BAT-277) |
 | 2026-02-27 | Chore: add Ko-fi funding option | direct |
 | 2026-02-26 | Feat: add Google Play AAB build with product flavors (full/foss) | direct |
