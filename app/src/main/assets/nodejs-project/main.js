@@ -1012,11 +1012,19 @@ async function poll() {
                     }
                 }
             }
-            pollErrors = 0;
-            if (dnsFailCount > 0) {
-                log(`[Network] Connection restored after ${dnsFailCount} DNS failure(s)`, 'INFO');
-                dnsFailCount = 0;
-                dnsWarnLogged = false;
+            // Only reset error counters on successful poll (OpenClaw parity:
+            // non-OK responses like 401/409/5xx should NOT reset pollErrors)
+            if (result && result.ok !== false) {
+                pollErrors = 0;
+                if (dnsFailCount > 0) {
+                    log(`[Network] Connection restored after ${dnsFailCount} DNS failure(s)`, 'INFO');
+                    dnsFailCount = 0;
+                    dnsWarnLogged = false;
+                }
+            } else if (result && result.ok === false) {
+                pollErrors++;
+                if (pollErrors === 20) log('[Network] Prolonged outage — 20+ consecutive poll failures', 'ERROR');
+                log(`[Telegram] getUpdates error: ${result.error_code} ${result.description || ''}`, 'WARN');
             }
         } catch (error) {
             pollErrors++;
