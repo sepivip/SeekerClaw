@@ -327,12 +327,19 @@ function toTelegramHtml(text) {
     html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => `<pre>${code.trim()}</pre>`);
     // Inline code
     html = html.replace(/`([^`\n]+)`/g, '<code>$1</code>');
-    // Bold (**text** or __text__)
-    html = html.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
-    html = html.replace(/__(.+?)__/g, '<b>$1</b>');
-    // Italic (*text* or _text_) — avoid matching inside words
+    // Strikethrough (~~text~~)
+    html = html.replace(/~~(.+?)~~/g, '<s>$1</s>');
+    // Links [text](url) — require http(s)://, supports parens in URLs (e.g. Wikipedia)
+    // Note: &amp; in href is valid HTML — Telegram decodes it correctly
+    html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+(?:\([^\s)]+\)[^\s)]*)*)\)/g, '<a href="$2">$1</a>');
+    // Italic BEFORE bold — prevents mismatched <b><i>...</b></i> nesting (BAT-278)
     html = html.replace(/(?<!\w)\*([^*\n]+)\*(?!\w)/g, '<i>$1</i>');
     html = html.replace(/(?<!\w)_([^_\n]+)_(?!\w)/g, '<i>$1</i>');
+    // Bold (now wraps cleanly around resolved <i> tags) — [^\n]+? prevents cross-line matches
+    html = html.replace(/\*\*([^\n]+?)\*\*/g, '<b>$1</b>');
+    html = html.replace(/__([^\n]+?)__/g, '<b>$1</b>');
+    // Horizontal rules — only --- (*** and ___ conflict with bold/italic syntax)
+    html = html.replace(/^---$/gm, '—————');
     // Blockquotes: consecutive > lines become <blockquote>
     html = html.replace(/(^|\n)(&gt; .+(?:\n&gt; .+)*)/g, (_, pre, block) => {
         const content = block.replace(/&gt; /g, '').trim();
@@ -414,9 +421,11 @@ async function sendMessage(chatId, text, replyTo = null, buttons = null) {
                 if (result.result && result.result.message_id) {
                     recordSentMessage(chatId, result.result.message_id, chunk);
                 }
+            } else if (result && !result.ok) {
+                log(`HTML format rejected: ${result.description || 'unknown'}`, 'WARN');
             }
         } catch (e) {
-            // Formatting error or network error - will retry as plain text
+            log(`sendMessage HTML failed: ${e.message}`, 'WARN');
         }
 
         // Only retry as plain text if the HTML attempt failed
