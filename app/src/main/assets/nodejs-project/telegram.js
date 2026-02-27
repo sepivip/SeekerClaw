@@ -329,7 +329,7 @@ function toTelegramHtml(text) {
     html = html.replace(/`([^`\n]+)`/g, '<code>$1</code>');
     // Strikethrough (~~text~~)
     html = html.replace(/~~(.+?)~~/g, '<s>$1</s>');
-    // Links [text](url) — require https:// to avoid false positives
+    // Links [text](url) — require http:// or https:// to avoid false positives
     html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2">$1</a>');
     // Italic BEFORE bold — prevents mismatched <b><i>...</b></i> nesting (BAT-278)
     html = html.replace(/(?<!\w)\*([^*\n]+)\*(?!\w)/g, '<i>$1</i>');
