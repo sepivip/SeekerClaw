@@ -210,7 +210,7 @@ Turn your Solana Seeker into a 24/7 personal AI agent.
 - [x] **Description:** "Turn your Solana Seeker into a 24/7 personal AI agent"
 - [x] **Topics:** `nodejs`, `android`, `kotlin`, `telegram-bot`, `claude`, `solana`, `jetpack-compose`, `ai-agent`, `anthropic`, `openclaw`
 - [x] **Website:** `seekerclaw.xyz`
-- [ ] **Branch protection on `main`** (optional, can enable later)
+- [x] **Branch protection on `main`** — 1 review, status checks, no force push
 - [ ] **Enable GitHub Discussions** (optional)
 - [ ] **Disable wiki** (optional)
 - [x] **Create Release v1.4.1** — released, live on dApp Store
