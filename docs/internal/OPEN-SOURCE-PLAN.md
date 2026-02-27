@@ -206,17 +206,14 @@ Turn your Solana Seeker into a 24/7 personal AI agent.
 
 ## Phase 8: GitHub Repository Settings (Manual)
 
-- [ ] **Visibility:** Private → Public
-- [ ] **Description:** "Turn your Solana Seeker into a 24/7 personal AI agent"
-- [ ] **Topics:** `android`, `ai-agent`, `solana`, `telegram-bot`, `kotlin`, `jetpack-compose`, `nodejs`, `claude`, `anthropic`
-- [ ] **Website:** `seekerclaw.xyz`
-- [ ] **Branch protection on `main`:**
-  - Require PR reviews (1 reviewer)
-  - Require status checks to pass
-  - No force push
-- [ ] **Enable GitHub Discussions**
-- [ ] **Disable wiki** (docs live in repo)
-- [ ] **Create Release v1.4.0** — either via `git tag v1.4.0 && git push origin v1.4.0` (triggers release workflow) or manually with APK artifact + release notes from CHANGELOG.md
+- [x] **Visibility:** Private → Public
+- [x] **Description:** "Turn your Solana Seeker into a 24/7 personal AI agent"
+- [x] **Topics:** `nodejs`, `android`, `kotlin`, `telegram-bot`, `claude`, `solana`, `jetpack-compose`, `ai-agent`, `anthropic`, `openclaw`
+- [x] **Website:** `seekerclaw.xyz`
+- [ ] **Branch protection on `main`** (optional, can enable later)
+- [ ] **Enable GitHub Discussions** (optional)
+- [ ] **Disable wiki** (optional)
+- [x] **Create Release v1.4.1** — released, live on dApp Store
 
 ---
 
@@ -227,18 +224,18 @@ Run these before flipping the repo to public:
 - [x] `git clone <repo> && ./gradlew assembleDebug` builds cleanly (CI run #3, `ec32e19`)
 - [x] `git log --all -p | grep -iE "lin_api|sk-ant-api03-[A-Za-z0-9]|jupiter_api"` returns nothing real
 - [x] `LICENSE` exists at root (MIT)
-- [ ] `README.md` exists at root
-- [ ] `CONTRIBUTING.md` exists at root
+- [x] `README.md` exists at root
+- [x] `CONTRIBUTING.md` exists at root
 - [x] `CODE_OF_CONDUCT.md` exists at root
 - [x] `SECURITY.md` exists at root
-- [ ] Internal audit docs are in `docs/internal/`, not root
+- [x] Internal audit docs are in `docs/internal/`, not root
 - [x] `build_output.txt` / `compile_out.txt` / `.mcp.json` are not tracked
-- [ ] CLAUDE.md has no Linear IDs, BAT- references, or internal process details
+- [x] CLAUDE.md has no Linear IDs, BAT- references, or internal process details
 - [x] `google-services` plugin is conditional (only applies when `google-services.json` exists)
 - [x] Build succeeds without `google-services.json` (CI has no google-services.json — analytics are no-ops)
 - [x] No merged feature branches on remote (only `main`)
 - [x] GitHub Actions `build.yml` passes on main (CI run #3, 3m, green)
-- [ ] GitHub Actions `release.yml` triggers correctly on tag push
+- [x] GitHub Actions `release.yml` triggers correctly on tag push
 
 ---
 
@@ -246,7 +243,7 @@ Run these before flipping the repo to public:
 
 | Action | Files | Status |
 |--------|-------|--------|
-| **Create** | `README.md`, `CONTRIBUTING.md` | TODO |
-| **Edit** | `CLAUDE.md` (final trim — remove ~5 internal sections) | TODO |
-| **Move** | 18 audit/internal `.md` files → `docs/internal/` | TODO |
+| **Create** | `README.md`, `CONTRIBUTING.md` | DONE |
+| **Edit** | `CLAUDE.md` (final trim — removed BAT-59 reference) | DONE |
+| **Move** | Internal `.md` files → `docs/internal/` | DONE |
 | **Done** | `LICENSE`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, `NOTICES`, `.github/` templates, `.github/workflows/`, `.gitignore` updates, untrack artifacts, Firebase conditional, branch cleanup | `12b8d0d` |

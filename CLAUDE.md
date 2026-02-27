@@ -361,7 +361,7 @@ Good: Adding `memory_search` tool with description "Search your SQL.js database 
   - `process.env.PATH` primarily contains Android system directories (e.g., `/system/bin`, `/vendor/bin`)
   - `node`, `npm`, `npx` commands **cannot** be found or executed via `shell_exec` / `child_process`
   - `shell_exec` uses Android's `/system/bin/sh` (toybox) — completely separate from the Node.js process
-  - To run JavaScript code, tools must use `eval()`/`require()` inside the existing Node.js process (see BAT-59: `js_eval` tool)
+  - To run JavaScript code, tools must use `eval()`/`require()` inside the existing Node.js process (`js_eval` tool)
   - All existing tools (read, write, web_fetch, etc.) already work within the Node.js process — they don't shell out
 - **Phase 1 mock:** Create `assets/openclaw/` with `package.json` and `index.js` that starts a Telegram bot (`grammy`/`telegraf`), responds to a hardcoded message from the owner, and sends heartbeat pings back to the Android bridge.
 - **Phase 2 real:** Replace mock with actual OpenClaw gateway bundle. Config, workspace, and all features work as documented.

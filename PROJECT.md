@@ -162,7 +162,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 - **Skills tab** — Installed skills list with search, skill detail view, marketplace teaser
 - **System screen** — API usage stats, memory index status, colored accent borders on stat cards
 - **Foreground service** — START_STICKY with wake lock, boot receiver, watchdog (30s health check), heartbeat end-to-end probe
-- **Open-source ready** — MIT license, CONTRIBUTING.md, issue/PR templates, GitHub Actions CI + release workflows, Firebase Analytics build-optional
+- **Open-source ready** — MIT license, CONTRIBUTING.md, issue/PR templates, GitHub Actions CI + release workflows, Firebase Analytics build-optional, product flavors (full w/ Firebase + FOSS without)
 
 ## Features — In Progress
 
@@ -222,7 +222,7 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Metric | Count |
 |--------|-------|
-| Total commits | 308 |
+| Total commits | 311 |
 | PRs merged | 191 |
 | Tools | 56 (9 Jupiter, 13 Android bridge, web search/fetch, memory, cron, skill_install, etc.) + MCP dynamic |
 | Skills | 35 (20 bundled + 13 workspace + 2 user-created) |
@@ -264,6 +264,9 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Date | Feature | PR |
 |------|---------|-----|
+| 2026-02-27 | Chore: add Ko-fi funding option | direct |
+| 2026-02-26 | Feat: add Google Play AAB build with product flavors (full/foss) | direct |
+| 2026-02-26 | Docs: add safety disclaimer to README, document product flavors in CLAUDE.md | direct |
 | 2026-02-25 | Fix: persist owner ID across restarts — .apply() → .commit() (BAT-270) | #191 |
 | 2026-02-25 | Chore: update setup URL from /quick-setup to /setup | #190 |
 | 2026-02-25 | Fix: set MWA blockchain to Solana.Mainnet instead of default Devnet (BAT-269) | #189 |
