@@ -933,6 +933,8 @@ async function autoResumeOnStartup() {
     }
 }
 
+let _prolongedOutageLogged = false; // OpenClaw parity: log once per outage cycle
+
 async function poll() {
     while (true) {
         try {
@@ -1014,8 +1016,9 @@ async function poll() {
             }
             // Only reset error counters on successful poll (OpenClaw parity:
             // non-OK responses like 401/409/5xx should NOT reset pollErrors)
-            if (result && result.ok !== false) {
+            if (result && result.ok === true) {
                 pollErrors = 0;
+                _prolongedOutageLogged = false;
                 if (dnsFailCount > 0) {
                     log(`[Network] Connection restored after ${dnsFailCount} DNS failure(s)`, 'INFO');
                     dnsFailCount = 0;
@@ -1023,13 +1026,18 @@ async function poll() {
                 }
             } else if (result && result.ok === false) {
                 pollErrors++;
-                if (pollErrors === 20) log('[Network] Prolonged outage — 20+ consecutive poll failures', 'ERROR');
+                if (pollErrors >= 20 && !_prolongedOutageLogged) {
+                    log('[Network] Prolonged outage — 20+ consecutive poll failures', 'ERROR');
+                    _prolongedOutageLogged = true;
+                }
                 log(`[Telegram] getUpdates error: ${result.error_code} ${result.description || ''}`, 'WARN');
             }
         } catch (error) {
             pollErrors++;
-            // OpenClaw parity: flag prolonged outage (covers both DNS and non-DNS errors)
-            if (pollErrors === 20) log('[Network] Prolonged outage — 20+ consecutive poll failures', 'ERROR');
+            if (pollErrors >= 20 && !_prolongedOutageLogged) {
+                log('[Network] Prolonged outage — 20+ consecutive poll failures', 'ERROR');
+                _prolongedOutageLogged = true;
+            }
 
             const isDns = error.code === 'ENOTFOUND' || error.code === 'EAI_AGAIN';
             if (isDns) {
