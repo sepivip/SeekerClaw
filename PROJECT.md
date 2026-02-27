@@ -33,7 +33,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 | AI Provider | Anthropic Claude API | Opus 4.6 default, Sonnet 4.6, Sonnet 4.5, Haiku 4.5 |
 | Messaging | Telegram Bot API (grammy) | — |
 | Database | SQL.js (WASM SQLite) | 1.12.0 |
-| OpenClaw Parity | OpenClaw gateway (ported) | 2026.2.25 |
+| OpenClaw Parity | OpenClaw gateway (ported) | 2026.2.26 |
 | Web Search | Brave Search + Perplexity Sonar | — |
 | Wallet | Solana Web3.js + Jupiter API | — |
 | Build | Gradle (Kotlin DSL) | — |
@@ -264,6 +264,7 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Date | Feature | PR |
 |------|---------|-----|
+| 2026-02-27 | Fix: OpenClaw parity 2026.2.26 — 5 bug fixes (tool name trim, result normalize, sendChatAction backoff, poll outage alert, BOT_COMMANDS_TOO_MUCH) | #193 (BAT-277) |
 | 2026-02-27 | Chore: add Ko-fi funding option | direct |
 | 2026-02-26 | Feat: add Google Play AAB build with product flavors (full/foss) | direct |
 | 2026-02-26 | Docs: add safety disclaimer to README, document product flavors in CLAUDE.md | direct |
