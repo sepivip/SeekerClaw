@@ -1535,6 +1535,9 @@ async function chat(chatId, userMessage, options = {}) {
             // This prevents orphaned pairs from partial tool execution failures.
             const toolResults = [];
             for (const toolUse of toolUses) {
+                // OpenClaw parity: normalize tool name before ALL gating checks
+                // (prevents whitespace-padded names from bypassing confirmation/rate-limit gates)
+                if (typeof toolUse.name === 'string') toolUse.name = toolUse.name.trim();
                 log(`Tool use: ${toolUse.name}`, 'DEBUG');
                 // Status reaction: show tool-specific emoji (OpenClaw parity)
                 if (options.statusReaction) options.statusReaction.setTool(toolUse.name);

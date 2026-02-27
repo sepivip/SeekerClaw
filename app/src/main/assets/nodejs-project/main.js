@@ -1019,10 +1019,13 @@ async function poll() {
                 dnsWarnLogged = false;
             }
         } catch (error) {
+            pollErrors++;
+            // OpenClaw parity: flag prolonged outage (covers both DNS and non-DNS errors)
+            if (pollErrors === 20) log('[Network] Prolonged outage — 20+ consecutive poll failures', 'ERROR');
+
             const isDns = error.code === 'ENOTFOUND' || error.code === 'EAI_AGAIN';
             if (isDns) {
                 dnsFailCount++;
-                pollErrors++;
                 // Single clear message after 3 consecutive DNS failures, then silence
                 if (dnsFailCount === 3) {
                     log('[Network] DNS resolution failing — check internet connection', 'WARN');
@@ -1038,9 +1041,6 @@ async function poll() {
                     dnsFailCount = 0;
                     dnsWarnLogged = false;
                 }
-                pollErrors++;
-                // OpenClaw parity: flag prolonged outage
-                if (pollErrors === 20) log('[Network] Prolonged outage — 20+ consecutive poll failures', 'ERROR');
                 log(`Poll error (${pollErrors}): ${error.message}`, 'ERROR');
                 const delay = Math.min(1000 * Math.pow(2, pollErrors - 1), 30000);
                 await new Promise(r => setTimeout(r, delay));
@@ -1202,7 +1202,7 @@ telegram('getMe')
                 ],
             }).then(r => {
                 if (r.ok) log('Telegram command menu registered', 'DEBUG');
-                else if (r.description && /too many/i.test(r.description)) {
+                else if (r.description && /too.?m(any|uch)|BOT_COMMANDS/i.test(r.description)) {
                     // OpenClaw parity: degrade on BOT_COMMANDS_TOO_MUCH
                     log('Too many bot commands, retrying with essentials only', 'WARN');
                     telegram('setMyCommands', { commands: [

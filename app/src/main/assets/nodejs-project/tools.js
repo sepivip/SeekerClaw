@@ -829,7 +829,9 @@ function compareVersions(a, b) {
 
 async function executeTool(name, input, chatId) {
     log(`Executing tool: ${name}`, 'DEBUG');
-    name = name.trim(); // OpenClaw parity: normalize whitespace-padded tool names
+    // OpenClaw parity: normalize whitespace-padded tool names
+    name = typeof name === 'string' ? name.trim() : '';
+    if (!name) return { error: 'Tool name is required and must be a non-empty string.' };
 
     switch (name) {
         case 'web_search': {
