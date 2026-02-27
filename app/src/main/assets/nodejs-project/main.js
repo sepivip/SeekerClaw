@@ -1039,6 +1039,8 @@ async function poll() {
                     dnsWarnLogged = false;
                 }
                 pollErrors++;
+                // OpenClaw parity: flag prolonged outage
+                if (pollErrors === 20) log('[Network] Prolonged outage — 20+ consecutive poll failures', 'ERROR');
                 log(`Poll error (${pollErrors}): ${error.message}`, 'ERROR');
                 const delay = Math.min(1000 * Math.pow(2, pollErrors - 1), 30000);
                 await new Promise(r => setTimeout(r, delay));
@@ -1200,7 +1202,18 @@ telegram('getMe')
                 ],
             }).then(r => {
                 if (r.ok) log('Telegram command menu registered', 'DEBUG');
-                else log(`setMyCommands failed: ${JSON.stringify(r)}`, 'WARN');
+                else if (r.description && /too many/i.test(r.description)) {
+                    // OpenClaw parity: degrade on BOT_COMMANDS_TOO_MUCH
+                    log('Too many bot commands, retrying with essentials only', 'WARN');
+                    telegram('setMyCommands', { commands: [
+                        { command: 'status', description: 'Bot status' },
+                        { command: 'new', description: 'New session' },
+                        { command: 'skill', description: 'Run a skill' },
+                        { command: 'help', description: 'Help' },
+                    ]}).catch(() => {});
+                } else {
+                    log(`setMyCommands failed: ${JSON.stringify(r)}`, 'WARN');
+                }
             }).catch(e => log(`setMyCommands error: ${e.message}`, 'WARN'));
 
             poll();

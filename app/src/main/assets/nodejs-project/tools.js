@@ -829,6 +829,7 @@ function compareVersions(a, b) {
 
 async function executeTool(name, input, chatId) {
     log(`Executing tool: ${name}`, 'DEBUG');
+    name = name.trim(); // OpenClaw parity: normalize whitespace-padded tool names
 
     switch (name) {
         case 'web_search': {

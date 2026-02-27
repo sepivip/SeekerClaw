@@ -1584,6 +1584,13 @@ async function chat(chatId, userMessage, options = {}) {
                     log(`[ToolError] ${JSON.stringify({ turnId, tool: toolUse.name, toolUseId: toolUse.id, error: errMsg })}`, 'ERROR');
                 }
 
+                // OpenClaw parity: normalize malformed tool results
+                if (result === undefined || result === null) {
+                    result = { ok: true, result: 'completed (no output)' };
+                } else if (typeof result === 'string') {
+                    result = { ok: true, result };
+                }
+
                 toolResults.push({
                     type: 'tool_result',
                     tool_use_id: toolUse.id,

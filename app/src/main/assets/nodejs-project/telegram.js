@@ -439,8 +439,18 @@ async function sendMessage(chatId, text, replyTo = null, buttons = null) {
     }
 }
 
+// OpenClaw parity: backoff on 401/403 to avoid hammering Telegram with invalid token
+let _chatActionBackoff = 0;
+
 async function sendTyping(chatId) {
-    await telegram('sendChatAction', { chat_id: chatId, action: 'typing' }).catch(() => {});
+    if (_chatActionBackoff > Date.now()) return;
+    try {
+        const res = await telegram('sendChatAction', { chat_id: chatId, action: 'typing' });
+        if (res && !res.ok && (res.error_code === 401 || res.error_code === 403)) {
+            _chatActionBackoff = Date.now() + 10000;
+            log(`sendChatAction ${res.error_code} — backing off 10s`, 'WARN');
+        }
+    } catch (e) { /* typing is non-critical */ }
 }
 
 async function sendStatusMessage(chatId, text) {
