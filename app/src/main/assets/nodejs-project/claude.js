@@ -1535,6 +1535,9 @@ async function chat(chatId, userMessage, options = {}) {
             // This prevents orphaned pairs from partial tool execution failures.
             const toolResults = [];
             for (const toolUse of toolUses) {
+                // OpenClaw parity: normalize tool name before ALL gating checks
+                // (prevents whitespace-padded names from bypassing confirmation/rate-limit gates)
+                if (typeof toolUse.name === 'string') toolUse.name = toolUse.name.trim();
                 log(`Tool use: ${toolUse.name}`, 'DEBUG');
                 // Status reaction: show tool-specific emoji (OpenClaw parity)
                 if (options.statusReaction) options.statusReaction.setTool(toolUse.name);
@@ -1582,6 +1585,13 @@ async function chat(chatId, userMessage, options = {}) {
                     const errMsg = toolErr instanceof Error ? toolErr.message : String(toolErr ?? 'unknown error');
                     result = { error: `Tool execution failed: ${errMsg}` };
                     log(`[ToolError] ${JSON.stringify({ turnId, tool: toolUse.name, toolUseId: toolUse.id, error: errMsg })}`, 'ERROR');
+                }
+
+                // OpenClaw parity: normalize malformed tool results
+                if (result === undefined || result === null) {
+                    result = { ok: true, result: 'completed (no output)' };
+                } else if (typeof result === 'string') {
+                    result = { ok: true, result };
                 }
 
                 toolResults.push({
