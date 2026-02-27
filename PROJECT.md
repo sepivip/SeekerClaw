@@ -215,7 +215,7 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 - **No browser/screen/canvas skills** — Can't be ported from OpenClaw (requires desktop environment)
 - **Ephemeral context** — Conversation history resets on Node.js restart (mitigated by session summaries)
 - **Single channel** — Telegram only (no Discord, WhatsApp, etc.)
-- **dApp Store not live** — Build pipeline exists but app hasn't been submitted yet
+- **dApp Store live** — Available on Solana dApp Store (v1.4.1)
 - **No light theme** — Dark only (DarkOps single theme)
 
 ## Stats
