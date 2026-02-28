@@ -319,33 +319,122 @@ function cleanResponse(text) {
     return cleaned.trim();
 }
 
-// Convert markdown to Telegram HTML with native blockquote support (BAT-24)
+// markdown-it parser — proper AST-based markdown parsing (replaces fragile regex, BAT-291)
+// Uses the same library as OpenClaw for parity.
+const md = require('./markdown-it.min.js')({ html: false, linkify: true, breaks: false });
+md.enable('strikethrough');
+// Disable tables — renderTokens() doesn't handle table_*/tr_*/td_* tokens;
+// leaving raw pipe-based markdown is better than garbled concatenated cells.
+md.disable('table');
+
+function escapeHtml(text) {
+    return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function escapeHtmlAttr(text) {
+    return escapeHtml(text).replace(/"/g, '&quot;');
+}
+
+// Convert markdown to Telegram HTML using markdown-it AST (BAT-291, replaces regex BAT-24/BAT-278)
 function toTelegramHtml(text) {
-    // Escape HTML entities first
-    let html = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    // Code blocks (``` ... ```)
-    html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => `<pre>${code.trim()}</pre>`);
-    // Inline code
-    html = html.replace(/`([^`\n]+)`/g, '<code>$1</code>');
-    // Strikethrough (~~text~~)
-    html = html.replace(/~~(.+?)~~/g, '<s>$1</s>');
-    // Links [text](url) — require http(s)://, supports parens in URLs (e.g. Wikipedia)
-    // Note: &amp; in href is valid HTML — Telegram decodes it correctly
-    html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+(?:\([^\s)]+\)[^\s)]*)*)\)/g, '<a href="$2">$1</a>');
-    // Italic BEFORE bold — prevents mismatched <b><i>...</b></i> nesting (BAT-278)
-    html = html.replace(/(?<!\w)\*([^*\n]+)\*(?!\w)/g, '<i>$1</i>');
-    html = html.replace(/(?<!\w)_([^_\n]+)_(?!\w)/g, '<i>$1</i>');
-    // Bold (now wraps cleanly around resolved <i> tags) — [^\n]+? prevents cross-line matches
-    html = html.replace(/\*\*([^\n]+?)\*\*/g, '<b>$1</b>');
-    html = html.replace(/__([^\n]+?)__/g, '<b>$1</b>');
-    // Horizontal rules — only --- (*** and ___ conflict with bold/italic syntax)
-    html = html.replace(/^---$/gm, '—————');
-    // Blockquotes: consecutive > lines become <blockquote>
-    html = html.replace(/(^|\n)(&gt; .+(?:\n&gt; .+)*)/g, (_, pre, block) => {
-        const content = block.replace(/&gt; /g, '').trim();
-        return `${pre}<blockquote>${content}</blockquote>`;
-    });
+    const tokens = md.parse(text || '', {});
+    return renderTokens(tokens).replace(/\n{3,}/g, '\n\n').trimEnd();
+}
+
+function renderTokens(tokens) {
+    let html = '';
+    for (const token of tokens) {
+        switch (token.type) {
+            case 'paragraph_open': break;
+            case 'paragraph_close':
+                // markdown-it marks paragraph tokens as hidden for tight list items — skip to avoid extra blank lines
+                if (!token.hidden) html += '\n\n';
+                break;
+            case 'heading_open': html += '<b>'; break;
+            case 'heading_close': html += '</b>\n\n'; break;
+            case 'inline':
+                html += renderInline(token.children || []);
+                break;
+            case 'fence':
+            case 'code_block':
+                html += `<pre>${escapeHtml((token.content || '').trimEnd())}</pre>\n`;
+                break;
+            case 'blockquote_open': html += '<blockquote>'; break;
+            case 'blockquote_close':
+                html = html.replace(/\n+$/, '');
+                html += '</blockquote>';
+                break;
+            case 'bullet_list_open':
+            case 'bullet_list_close':
+            case 'ordered_list_open':
+            case 'ordered_list_close':
+                break;
+            case 'list_item_open': html += '• '; break;
+            case 'list_item_close': html += '\n'; break;
+            case 'hr': html += '—————\n'; break;
+            default:
+                if (token.children) {
+                    html += renderTokens(token.children);
+                }
+                break;
+        }
+    }
     return html;
+}
+
+function renderInline(tokens) {
+    let html = '';
+    let linkOpen = false;
+    for (const token of tokens) {
+        switch (token.type) {
+            case 'text': html += escapeHtml(token.content || ''); break;
+            case 'strong_open': html += '<b>'; break;
+            case 'strong_close': html += '</b>'; break;
+            case 'em_open': html += '<i>'; break;
+            case 'em_close': html += '</i>'; break;
+            case 's_open': html += '<s>'; break;
+            case 's_close': html += '</s>'; break;
+            case 'code_inline': html += `<code>${escapeHtml(token.content || '')}</code>`; break;
+            case 'link_open': {
+                const hrefAttr = (token.attrs || []).find(a => a[0] === 'href');
+                const href = hrefAttr ? hrefAttr[1] : '';
+                // Only allow http(s) links — preserves prior safety behavior (BAT-291)
+                if (/^https?:\/\//i.test(href)) {
+                    html += `<a href="${escapeHtmlAttr(href)}">`;
+                    linkOpen = true;
+                } else {
+                    linkOpen = false;
+                }
+                break;
+            }
+            case 'link_close':
+                if (linkOpen) html += '</a>';
+                linkOpen = false;
+                break;
+            case 'softbreak': html += '\n'; break;
+            case 'hardbreak': html += '\n'; break;
+            default:
+                html += escapeHtml(token.content || '');
+                break;
+        }
+    }
+    return html;
+}
+
+// Strip markdown syntax for clean plain-text fallback (BAT-291)
+function stripMarkdown(text) {
+    return text
+        .replace(/```\w*\n?([\s\S]*?)```/g, (_, code) => code.trim())
+        .replace(/`([^`\n]+)`/g, '$1')
+        .replace(/\*\*\*(.+?)\*\*\*/g, '$1')
+        .replace(/\*\*(.+?)\*\*/g, '$1')
+        .replace(/\*([^*\n]+)\*/g, '$1')
+        .replace(/___(.+?)___/g, '$1')
+        .replace(/__(.+?)__/g, '$1')
+        .replace(/_([^_\n]+)_/g, '$1')
+        .replace(/~~(.+?)~~/g, '$1')
+        .replace(/^\s*>+\s?/gm, '')
+        .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
 }
 
 // ============================================================================
@@ -433,7 +522,7 @@ async function sendMessage(chatId, text, replyTo = null, buttons = null) {
             try {
                 const payload = {
                     chat_id: chatId,
-                    text: chunk,
+                    text: stripMarkdown(chunk),
                     reply_to_message_id: replyTo,
                 };
                 if (replyMarkup) payload.reply_markup = replyMarkup;
@@ -671,6 +760,7 @@ module.exports = {
     downloadTelegramFile,
     cleanResponse,
     toTelegramHtml,
+    stripMarkdown,
     sentMessageCache,
     SENT_CACHE_TTL,
     recordSentMessage,
