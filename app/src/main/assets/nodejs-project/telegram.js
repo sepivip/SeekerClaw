@@ -381,6 +381,7 @@ function renderTokens(tokens) {
 
 function renderInline(tokens) {
     let html = '';
+    let linkOpen = false;
     for (const token of tokens) {
         switch (token.type) {
             case 'text': html += escapeHtml(token.content || ''); break;
@@ -392,11 +393,21 @@ function renderInline(tokens) {
             case 's_close': html += '</s>'; break;
             case 'code_inline': html += `<code>${escapeHtml(token.content || '')}</code>`; break;
             case 'link_open': {
-                const href = (token.attrs || []).find(a => a[0] === 'href');
-                html += `<a href="${escapeHtmlAttr(href ? href[1] : '')}">`;
+                const hrefAttr = (token.attrs || []).find(a => a[0] === 'href');
+                const href = hrefAttr ? hrefAttr[1] : '';
+                // Only allow http(s) links — preserves prior safety behavior (BAT-291)
+                if (/^https?:\/\//i.test(href)) {
+                    html += `<a href="${escapeHtmlAttr(href)}">`;
+                    linkOpen = true;
+                } else {
+                    linkOpen = false;
+                }
                 break;
             }
-            case 'link_close': html += '</a>'; break;
+            case 'link_close':
+                if (linkOpen) html += '</a>';
+                linkOpen = false;
+                break;
             case 'softbreak': html += '\n'; break;
             case 'hardbreak': html += '\n'; break;
             default:
@@ -410,7 +421,7 @@ function renderInline(tokens) {
 // Strip markdown syntax for clean plain-text fallback (BAT-291)
 function stripMarkdown(text) {
     return text
-        .replace(/```[\s\S]*?```/g, m => m.slice(3, -3).trim())
+        .replace(/```\w*\n?([\s\S]*?)```/g, (_, code) => code.trim())
         .replace(/`([^`\n]+)`/g, '$1')
         .replace(/\*\*\*(.+?)\*\*\*/g, '$1')
         .replace(/\*\*(.+?)\*\*/g, '$1')
