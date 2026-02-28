@@ -343,7 +343,10 @@ function renderTokens(tokens) {
     for (const token of tokens) {
         switch (token.type) {
             case 'paragraph_open': break;
-            case 'paragraph_close': html += '\n\n'; break;
+            case 'paragraph_close':
+                // markdown-it marks paragraph tokens as hidden for tight list items — skip to avoid extra blank lines
+                if (!token.hidden) html += '\n\n';
+                break;
             case 'heading_open': html += '<b>'; break;
             case 'heading_close': html += '</b>\n\n'; break;
             case 'inline':
