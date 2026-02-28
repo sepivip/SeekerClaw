@@ -696,20 +696,13 @@ async function handleMessage(msg) {
 
         let response = await chat(chatId, userContent, { isResume, originalGoal: resumeGoal, statusReaction });
 
-        // Handle special tokens (OpenClaw-style)
-        // SILENT_REPLY - discard the message
-        if (response.trim() === 'SILENT_REPLY') {
-            log('Agent returned SILENT_REPLY, not sending to Telegram', 'DEBUG');
-            await statusReaction.clear();
-            return;
-        }
-
-        // HEARTBEAT_OK - discard heartbeat acks (handled by watchdog)
-        // TODO: consider stripping protocol tokens (HEARTBEAT_OK, SILENT_REPLY) from all
-        // response paths, not just runHeartbeat(). Currently only heartbeat has the observed
-        // bug, but the same vulnerability exists here. See BAT-279.
-        if (response.trim() === 'HEARTBEAT_OK' || response.trim().startsWith('HEARTBEAT_OK')) {
-            log('Agent returned HEARTBEAT_OK', 'DEBUG');
+        // Strip protocol tokens the agent may have mixed into content (BAT-279)
+        response = response.trim()
+            .replace(/\bHEARTBEAT_OK\b/gi, '')
+            .replace(/\bSILENT_REPLY\b/gi, '')
+            .trim();
+        if (!response) {
+            log('Agent returned protocol-token-only response, discarding', 'DEBUG');
             await statusReaction.clear();
             return;
         }
@@ -916,9 +909,13 @@ async function autoResumeOnStartup() {
             const task = prev.then(async () => {
                 try {
                     const response = await chat(chatId, 'continue', { isResume: true, originalGoal: full.originalGoal || null });
-                    if (response && response.trim() !== 'SILENT_REPLY'
-                        && !response.trim().startsWith('HEARTBEAT_OK')) {
-                        await sendMessage(chatId, response);
+                    // Strip protocol tokens (BAT-279)
+                    const cleaned = response ? response.trim()
+                        .replace(/\bHEARTBEAT_OK\b/gi, '')
+                        .replace(/\bSILENT_REPLY\b/gi, '')
+                        .trim() : '';
+                    if (cleaned) {
+                        await sendMessage(chatId, cleaned);
                     }
                 } catch (e) {
                     log(`[AutoResume] chat() error: ${e.message}`, 'ERROR');
@@ -1340,7 +1337,7 @@ async function runHeartbeat() {
                 .replace(/\bSILENT_REPLY\b/gi, '')
                 .trim();
             if (!cleaned) {
-                log('[Heartbeat] All clear (response was empty or protocol-token-only)', 'DEBUG');
+                log('[Heartbeat] All clear', 'DEBUG');
             } else {
                 log('[Heartbeat] Agent has alert: ' + cleaned.slice(0, 80), 'INFO');
                 await sendMessage(ownerChatId, cleaned);
