@@ -323,6 +323,9 @@ function cleanResponse(text) {
 // Uses the same library as OpenClaw for parity.
 const md = require('./markdown-it.min.js')({ html: false, linkify: true, breaks: false });
 md.enable('strikethrough');
+// Disable tables — renderTokens() doesn't handle table_*/tr_*/td_* tokens;
+// leaving raw pipe-based markdown is better than garbled concatenated cells.
+md.disable('table');
 
 function escapeHtml(text) {
     return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
