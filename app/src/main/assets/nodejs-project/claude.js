@@ -950,11 +950,13 @@ function classifyApiError(status, data) {
         };
     }
     // BAT-289: Include actual API error reason so users can diagnose without device logs
-    const reason = data?.error?.message || '';
+    // Sanitize reason to prevent markdown injection in Telegram messages
+    const rawReason = data?.error?.message || '';
+    const reason = rawReason.replace(/[*_`\[\]()~>#+\-=|{}.!]/g, '').slice(0, 200);
     return {
         type: 'unknown', retryable: false,
-        userMessage: reason
-            ? `API error (${status}): ${reason}`
+        userMessage: reason.trim()
+            ? `API error (${status}): ${reason.trim()}`
             : `Unexpected API error (${status}). Please try again.`
     };
 }
