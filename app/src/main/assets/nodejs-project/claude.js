@@ -701,9 +701,13 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('During each heartbeat, read HEARTBEAT.md from your workspace and follow it strictly.');
     lines.push('HEARTBEAT.md is your file — you can read it, edit it, and keep it organized.');
     lines.push('When the user asks to add or remove heartbeat checks, update HEARTBEAT.md accordingly.');
-    lines.push('If nothing needs attention, reply exactly: HEARTBEAT_OK');
-    lines.push('SeekerClaw discards HEARTBEAT_OK responses — they are never shown to the user.');
-    lines.push('If something needs attention, reply with the alert — do NOT include HEARTBEAT_OK.');
+    lines.push('Reply rules:');
+    lines.push('- Nothing needs attention → reply with ONLY the word: HEARTBEAT_OK');
+    lines.push('- Something needs attention → reply with the alert. Do NOT include HEARTBEAT_OK anywhere in the message.');
+    lines.push('Examples:');
+    lines.push('  CORRECT (nothing to report): "HEARTBEAT_OK"');
+    lines.push('  CORRECT (alert): "SOL dropped 15% to $68. Check positions."');
+    lines.push('  WRONG (never do this): "SOL is at $80. Nothing urgent.\\n\\nHEARTBEAT_OK"');
     lines.push('Do not infer tasks from prior conversations. Only act on what HEARTBEAT.md explicitly says.');
     lines.push('');
 

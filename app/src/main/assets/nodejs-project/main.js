@@ -705,6 +705,9 @@ async function handleMessage(msg) {
         }
 
         // HEARTBEAT_OK - discard heartbeat acks (handled by watchdog)
+        // TODO: consider stripping protocol tokens (HEARTBEAT_OK, SILENT_REPLY) from all
+        // response paths, not just runHeartbeat(). Currently only heartbeat has the observed
+        // bug, but the same vulnerability exists here. See BAT-279.
         if (response.trim() === 'HEARTBEAT_OK' || response.trim().startsWith('HEARTBEAT_OK')) {
             log('Agent returned HEARTBEAT_OK', 'DEBUG');
             await statusReaction.clear();
@@ -1331,12 +1334,16 @@ async function runHeartbeat() {
         log('[Heartbeat] Running probe...', 'DEBUG');
         try {
             const response = await chat(ownerChatId, HEARTBEAT_PROMPT);
-            const trimmed = response.trim();
-            if (trimmed === 'HEARTBEAT_OK' || trimmed.startsWith('HEARTBEAT_OK')) {
-                log('[Heartbeat] Agent returned HEARTBEAT_OK — all clear', 'DEBUG');
-            } else if (trimmed !== 'SILENT_REPLY') {
-                log('[Heartbeat] Agent has alert: ' + trimmed.slice(0, 80), 'INFO');
-                await sendMessage(ownerChatId, trimmed);
+            // Strip protocol tokens the agent may have mixed into content
+            const cleaned = response.trim()
+                .replace(/\bHEARTBEAT_OK\b/gi, '')
+                .replace(/\bSILENT_REPLY\b/gi, '')
+                .trim();
+            if (!cleaned) {
+                log('[Heartbeat] All clear (response was empty or protocol-token-only)', 'DEBUG');
+            } else {
+                log('[Heartbeat] Agent has alert: ' + cleaned.slice(0, 80), 'INFO');
+                await sendMessage(ownerChatId, cleaned);
             }
         } catch (e) {
             log(`[Heartbeat] Error: ${e.message}`, 'WARN');
