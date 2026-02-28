@@ -49,7 +49,7 @@ const {
 
 const {
     telegram, telegramSendFile, detectTelegramFileType,
-    cleanResponse, toTelegramHtml,
+    cleanResponse, toTelegramHtml, stripMarkdown,
     recordSentMessage, sendMessage,
 } = require('./telegram');
 
@@ -3329,7 +3329,7 @@ async function executeTool(name, input, chatId) {
                 if (htmlFailed || !result || !result.ok) {
                     const payload = {
                         chat_id: chatId,
-                        text: cleaned,
+                        text: stripMarkdown(cleaned),
                     };
                     if (replyMarkup) payload.reply_markup = replyMarkup;
                     result = await telegram('sendMessage', payload);
