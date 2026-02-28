@@ -174,7 +174,7 @@ grep -i "rug.pull\|hash.*mismatch\|tool.*blocked\|sha.256" node_debug.log | tail
 ```
 grep -i "rate limit.*mcp\|rate limit.*exceeded" node_debug.log | tail -10
 ```
-**Diagnosis:** Per-server and global MCP rate limits are enforced to prevent abuse. Default: 30 calls/minute per server, 100 calls/minute global.
+**Diagnosis:** Per-server and global MCP rate limits are enforced to prevent abuse. Default: 10 calls/minute per server (configurable), 50 calls/minute global.
 **Fix:**
 1. Reduce the frequency of MCP tool calls
 2. Space out requests — the rate limit resets each minute
