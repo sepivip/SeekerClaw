@@ -41,7 +41,7 @@
 | Version | Current | Location |
 |---------|---------|----------|
 | **App** | `1.4.1` (code 6) | `app/build.gradle.kts` → `versionName` / `versionCode` |
-| **OpenClaw** | `2026.2.25` | `app/build.gradle.kts` → `OPENCLAW_VERSION` buildConfigField |
+| **OpenClaw** | `2026.2.28` | `app/build.gradle.kts` → `OPENCLAW_VERSION` buildConfigField |
 | **Node.js** | `18 LTS` | `app/build.gradle.kts` → `NODEJS_VERSION` buildConfigField |
 
 ## Tech Stack
@@ -472,8 +472,8 @@ git tag v1.x.x && git push origin v1.x.x
 > **IMPORTANT:** SeekerClaw must stay in sync with OpenClaw updates. See `docs/internal/OPENCLAW_TRACKING.md` for full details.
 
 ### Current Versions
-- **OpenClaw Reference:** 2026.2.25
-- **Last Sync Review:** 2026-02-25
+- **OpenClaw Reference:** 2026.2.28
+- **Last Sync Review:** 2026-02-28
 
 ### Quick Update Check
 ```bash

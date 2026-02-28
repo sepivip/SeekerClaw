@@ -1,8 +1,8 @@
 # OpenClaw Version Tracking
 
 > **Purpose:** Track OpenClaw releases and identify changes to port to SeekerClaw.
-> **Current OpenClaw Version:** 2026.2.25 (main b3f46f0e2, 2026-02-25)
-> **Last Sync Review:** 2026-02-25
+> **Current OpenClaw Version:** 2026.2.28 (main be8a5b9d6, 2026-02-28)
+> **Last Sync Review:** 2026-02-28
 > **Parity Plan:** See `PARITY_PLAN.md`
 
 ---
@@ -82,7 +82,23 @@ These files in OpenClaw directly affect SeekerClaw behavior. Changes here requir
 
 ## Version History & Changes
 
-### 2026.2.25 (Current - b3f46f0e2)
+### 2026.2.28 (Current - be8a5b9d6)
+- **Release Date:** 2026-02-28
+- **SeekerClaw Sync Status:** 1 line ported
+- **652 new commits since last sync (b3f46f0e2)**
+- **Ported:**
+  - [x] System prompt: "tool-first" guidance — use tools directly instead of suggesting CLI/slash commands to user
+- **Skipped (not applicable):**
+  - System prompt: ACP (`acpEnabled`) routing, sessions_spawn ACP harness intent, config.schema for gateway — server-only, no sub-agents/Discord/gateway
+  - Memory: `INDEX_CACHE_PENDING` concurrency guard, SQLite readonly recovery — Node 22+ embedding infrastructure
+  - Skills: coding-agent ACP routing, plugin-skills ACP filter, env-overrides apiKey trim — server-only
+  - Tools/Web: WhatsApp auto-reply refactoring, inbound access-control — server-only
+  - Cron: `isFiniteTimestamp()` guards (our cron.js already guards inputs), `accountId` delivery field, delivery dispatch/session key/thread targeting, timeout policy — server-only or defensive-only
+  - Channels: thread bindings, typing guard, WhatsApp heartbeat, onboarding helpers — server-only
+  - Telegram: version bump only — no functional changes
+  - 700+ lines of test additions — test-only
+
+### 2026.2.25 (b3f46f0e2)
 - **Release Date:** 2026-02-25
 - **SeekerClaw Sync Status:** Reviewed, nothing to port
 - **276 new commits since last sync (4b316c33d)**
