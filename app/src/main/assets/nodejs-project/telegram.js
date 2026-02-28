@@ -367,7 +367,7 @@ function renderTokens(tokens) {
             case 'ordered_list_close':
                 break;
             case 'list_item_open': html += '• '; break;
-            case 'list_item_close': break;
+            case 'list_item_close': html += '\n'; break;
             case 'hr': html += '—————\n'; break;
             default:
                 if (token.children) {
