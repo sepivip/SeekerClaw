@@ -949,9 +949,13 @@ function classifyApiError(status, data) {
             userMessage: 'Claude API is temporarily unavailable. Retrying...'
         };
     }
+    // BAT-289: Include actual API error reason so users can diagnose without device logs
+    const reason = data?.error?.message || '';
     return {
         type: 'unknown', retryable: false,
-        userMessage: `Unexpected API error (${status}). Please try again.`
+        userMessage: reason
+            ? `API error (${status}): ${reason}`
+            : `Unexpected API error (${status}). Please try again.`
     };
 }
 
