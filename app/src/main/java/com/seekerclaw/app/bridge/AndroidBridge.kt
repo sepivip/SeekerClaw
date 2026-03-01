@@ -313,9 +313,12 @@ class AndroidBridge(
         if (phone.isBlank()) {
             return jsonResponse(400, mapOf("error" to "phone is required"))
         }
+        if (!phone.matches(Regex("^[+0-9 ()\\-]{3,20}$"))) {
+            return jsonResponse(400, mapOf("error" to "Invalid phone number format"))
+        }
 
         val intent = Intent(Intent.ACTION_CALL).apply {
-            data = Uri.parse("tel:$phone")
+            data = Uri.parse("tel:${Uri.encode(phone)}")
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         context.startActivity(intent)
