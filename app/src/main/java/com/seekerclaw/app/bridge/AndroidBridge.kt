@@ -17,6 +17,7 @@ import android.os.StatFs
 import android.provider.ContactsContract
 import android.speech.tts.TextToSpeech
 import android.telephony.SmsManager
+import android.os.FileObserver
 import android.util.Log
 import androidx.core.content.ContextCompat
 import com.seekerclaw.app.camera.CameraCaptureActivity
@@ -28,6 +29,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.security.MessageDigest
 import java.util.Locale
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /**
  * AndroidBridge - HTTP server for Node.js <-> Kotlin IPC
@@ -414,30 +417,26 @@ class AndroidBridge(
         }
 
         val resultFile = java.io.File(java.io.File(context.filesDir, CameraCaptureActivity.RESULTS_DIR), "$requestId.json")
-        val deadline = System.currentTimeMillis() + 30_000
-        while (System.currentTimeMillis() < deadline) {
-            if (resultFile.exists()) {
-                val result = JSONObject(resultFile.readText())
-                resultFile.delete()
-                val error = result.optString("error", "")
-                val imagePath = result.optString("path", "")
-                val capturedAt = result.optLong("capturedAt", 0L)
-
-                return if (error.isBlank() && imagePath.isNotBlank()) {
-                    jsonResponse(200, mapOf(
-                        "success" to true,
-                        "path" to imagePath,
-                        "lens" to result.optString("lens", lens),
-                        "capturedAt" to capturedAt
-                    ))
-                } else {
-                    jsonResponse(400, mapOf("error" to error.ifBlank { "Camera capture failed" }))
-                }
-            }
-            Thread.sleep(250)
+        if (!waitForResultFile(resultFile, 30_000)) {
+            return jsonResponse(408, mapOf("error" to "Camera capture timed out"))
         }
 
-        return jsonResponse(408, mapOf("error" to "Camera capture timed out"))
+        val result = JSONObject(resultFile.readText())
+        resultFile.delete()
+        val error = result.optString("error", "")
+        val imagePath = result.optString("path", "")
+        val capturedAt = result.optLong("capturedAt", 0L)
+
+        return if (error.isBlank() && imagePath.isNotBlank()) {
+            jsonResponse(200, mapOf(
+                "success" to true,
+                "path" to imagePath,
+                "lens" to result.optString("lens", lens),
+                "capturedAt" to capturedAt
+            ))
+        } else {
+            jsonResponse(400, mapOf("error" to error.ifBlank { "Camera capture failed" }))
+        }
     }
 
     // ==================== Apps ====================
@@ -506,23 +505,20 @@ class AndroidBridge(
         context.startActivity(intent)
 
         val resultFile = java.io.File(java.io.File(context.filesDir, "solana_results"), "$requestId.json")
-        val deadline = System.currentTimeMillis() + 60_000
-        while (System.currentTimeMillis() < deadline) {
-            if (resultFile.exists()) {
-                val result = JSONObject(resultFile.readText())
-                resultFile.delete()
-                val address = result.optString("address", "")
-                val error = result.optString("error", "")
-
-                return if (address.isNotBlank()) {
-                    jsonResponse(200, mapOf("address" to address, "success" to true))
-                } else {
-                    jsonResponse(400, mapOf("error" to error.ifBlank { "Authorization failed" }))
-                }
-            }
-            Thread.sleep(300)
+        if (!waitForResultFile(resultFile, 60_000)) {
+            return jsonResponse(408, mapOf("error" to "Authorization timed out"))
         }
-        return jsonResponse(408, mapOf("error" to "Authorization timed out"))
+
+        val result = JSONObject(resultFile.readText())
+        resultFile.delete()
+        val address = result.optString("address", "")
+        val error = result.optString("error", "")
+
+        return if (address.isNotBlank()) {
+            jsonResponse(200, mapOf("address" to address, "success" to true))
+        } else {
+            jsonResponse(400, mapOf("error" to error.ifBlank { "Authorization failed" }))
+        }
     }
 
     private fun handleSolanaAddress(): Response {
@@ -553,23 +549,20 @@ class AndroidBridge(
         context.startActivity(intent)
 
         val resultFile = java.io.File(java.io.File(context.filesDir, "solana_results"), "$requestId.json")
-        val deadline = System.currentTimeMillis() + 120_000
-        while (System.currentTimeMillis() < deadline) {
-            if (resultFile.exists()) {
-                val result = JSONObject(resultFile.readText())
-                resultFile.delete()
-                val sigB64 = result.optString("signature", "")
-                val error = result.optString("error", "")
-
-                return if (sigB64.isNotBlank()) {
-                    jsonResponse(200, mapOf("signature" to sigB64, "success" to true))
-                } else {
-                    jsonResponse(400, mapOf("error" to error.ifBlank { "Transaction rejected by user" }))
-                }
-            }
-            Thread.sleep(300)
+        if (!waitForResultFile(resultFile, 120_000)) {
+            return jsonResponse(408, mapOf("error" to "Signing timed out"))
         }
-        return jsonResponse(408, mapOf("error" to "Signing timed out"))
+
+        val result = JSONObject(resultFile.readText())
+        resultFile.delete()
+        val sigB64 = result.optString("signature", "")
+        val error = result.optString("error", "")
+
+        return if (sigB64.isNotBlank()) {
+            jsonResponse(200, mapOf("signature" to sigB64, "success" to true))
+        } else {
+            jsonResponse(400, mapOf("error" to error.ifBlank { "Transaction rejected by user" }))
+        }
     }
 
     /**
@@ -600,23 +593,20 @@ class AndroidBridge(
 
         val resultsDir = java.io.File(context.filesDir, com.seekerclaw.app.solana.SolanaAuthActivity.RESULTS_DIR)
         val resultFile = java.io.File(resultsDir, "$requestId.json")
-        val deadline = System.currentTimeMillis() + 120_000
-        while (System.currentTimeMillis() < deadline) {
-            if (resultFile.exists()) {
-                val result = JSONObject(resultFile.readText())
-                resultFile.delete()
-                val signedTx = result.optString("signedTransaction", "")
-                val error = result.optString("error", "")
-
-                return if (signedTx.isNotBlank()) {
-                    jsonResponse(200, mapOf("signedTransaction" to signedTx, "success" to true))
-                } else {
-                    jsonResponse(400, mapOf("error" to error.ifBlank { "Transaction rejected by user" }))
-                }
-            }
-            Thread.sleep(300)
+        if (!waitForResultFile(resultFile, 120_000)) {
+            return jsonResponse(408, mapOf("error" to "Signing timed out"))
         }
-        return jsonResponse(408, mapOf("error" to "Signing timed out"))
+
+        val result = JSONObject(resultFile.readText())
+        resultFile.delete()
+        val signedTx = result.optString("signedTransaction", "")
+        val error = result.optString("error", "")
+
+        return if (signedTx.isNotBlank()) {
+            jsonResponse(200, mapOf("signedTransaction" to signedTx, "success" to true))
+        } else {
+            jsonResponse(400, mapOf("error" to error.ifBlank { "Transaction rejected by user" }))
+        }
     }
 
     private fun handleSolanaSend(params: JSONObject): Response {
@@ -645,6 +635,39 @@ class AndroidBridge(
             jsonResponse(200, mapOf("success" to true))
         } else {
             jsonResponse(500, mapOf("error" to "Failed to persist owner ID"))
+        }
+    }
+
+    // ==================== Result File Waiting (H-12) ====================
+
+    /**
+     * Wait for a result file to appear using FileObserver + CountDownLatch.
+     * Replaces Thread.sleep polling loops that blocked NanoHTTPD worker threads.
+     * Returns true if the file appeared within the timeout, false on timeout.
+     */
+    private fun waitForResultFile(resultFile: java.io.File, timeoutMs: Long): Boolean {
+        // Fast path: file already exists
+        if (resultFile.exists()) return true
+
+        val dir = resultFile.parentFile ?: return false
+        dir.mkdirs()
+        val latch = CountDownLatch(1)
+
+        val observer = object : FileObserver(dir, CLOSE_WRITE or MOVED_TO) {
+            override fun onEvent(event: Int, path: String?) {
+                if (path == resultFile.name) {
+                    latch.countDown()
+                }
+            }
+        }
+        observer.startWatching()
+        try {
+            // Check again after observer is registered to avoid race
+            if (resultFile.exists()) return true
+            latch.await(timeoutMs, TimeUnit.MILLISECONDS)
+            return resultFile.exists()
+        } finally {
+            observer.stopWatching()
         }
     }
 
