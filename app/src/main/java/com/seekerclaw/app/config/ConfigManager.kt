@@ -230,6 +230,10 @@ object ConfigManager {
         writeAgentSettingsJson(context)
     }
 
+    fun getOwnerId(context: Context): String? {
+        return prefs(context).getString(KEY_OWNER_ID, null)
+    }
+
     fun saveOwnerId(context: Context, ownerId: String): Boolean {
         val persisted = prefs(context).edit().putString(KEY_OWNER_ID, ownerId).commit()
         if (persisted) {
