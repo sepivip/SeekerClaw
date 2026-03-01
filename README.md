@@ -91,7 +91,7 @@ cd SeekerClaw
 adb install app/build/outputs/apk/debug/app-debug.apk
 ```
 
-Open the app → scan QR or enter your [Anthropic API key](https://console.anthropic.com/) + [Telegram bot token](https://t.me/BotFather) → choose a model → name your agent → done.
+Open the app → enter your [Anthropic API key](https://console.anthropic.com/) + [Telegram bot token](https://t.me/BotFather) + choose a model + name your agent — or generate a QR code at [seekerclaw.xyz/setup](https://seekerclaw.xyz/setup) and scan it. Done.
 
 > **Beta** — SeekerClaw is under active development. Expect rough edges and breaking changes. Issues and PRs welcome.
 
