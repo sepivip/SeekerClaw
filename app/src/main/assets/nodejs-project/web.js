@@ -477,8 +477,12 @@ async function webFetch(urlString, options = {}) {
 
         // SSRF guard: block private/local/reserved addresses (IPv4 + IPv6)
         const ssrfHost = url.hostname.replace(/^\[|\]$/g, '');
-        if (/^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|0\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.|localhost)/i.test(ssrfHost)
-            || ssrfHost === '::1'
+        // Extract mapped IPv4 from IPv4-mapped IPv6 (::ffff:1.2.3.4)
+        const mappedV4Match = ssrfHost.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i);
+        const hostToCheck = mappedV4Match ? mappedV4Match[1] : ssrfHost;
+        if (/^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|0\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.|localhost)/i.test(hostToCheck)
+            || ssrfHost === '::1' || ssrfHost === '::'
+            || /^::ffff:/i.test(ssrfHost)
             || /^fe[89ab][0-9a-f]:/i.test(ssrfHost)
             || /^f[cd][0-9a-f]{2}:/i.test(ssrfHost)) {
             throw new Error('Blocked: private/local address');
