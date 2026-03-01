@@ -475,8 +475,12 @@ async function webFetch(urlString, options = {}) {
             throw new Error('Unsupported URL protocol: ' + url.protocol);
         }
 
-        // SSRF guard: block private/local/reserved addresses
-        if (/^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|0\.|localhost)/i.test(url.hostname)) {
+        // SSRF guard: block private/local/reserved addresses (IPv4 + IPv6)
+        const ssrfHost = url.hostname.replace(/^\[|\]$/g, '');
+        if (/^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|0\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.|localhost)/i.test(ssrfHost)
+            || ssrfHost === '::1'
+            || /^fe[89ab][0-9a-f]:/i.test(ssrfHost)
+            || /^f[cd][0-9a-f]{2}:/i.test(ssrfHost)) {
             throw new Error('Blocked: private/local address');
         }
 
