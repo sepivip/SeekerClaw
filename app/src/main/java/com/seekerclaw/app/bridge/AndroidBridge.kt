@@ -71,9 +71,11 @@ class AndroidBridge(
         }
 
         // Verify auth token on every request (per-boot random secret)
-        // Use constant-time comparison to prevent timing attacks (M-01)
+        // Compare fixed-length SHA-256 digests for length-independent constant-time comparison
         val token = session.headers?.get(AUTH_HEADER.lowercase()) ?: ""
-        if (!MessageDigest.isEqual(token.toByteArray(), authToken.toByteArray())) {
+        val tokenHash = MessageDigest.getInstance("SHA-256").digest(token.toByteArray(Charsets.UTF_8))
+        val expectedHash = MessageDigest.getInstance("SHA-256").digest(authToken.toByteArray(Charsets.UTF_8))
+        if (!MessageDigest.isEqual(tokenHash, expectedHash)) {
             Log.w(TAG, "Unauthorized request to $uri (bad/missing token)")
             return jsonResponse(403, mapOf("error" to "Unauthorized"))
         }
