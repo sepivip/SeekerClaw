@@ -458,6 +458,9 @@ class AndroidBridge(
         if (packageName.isBlank()) {
             return jsonResponse(400, mapOf("error" to "package is required"))
         }
+        if (!packageName.matches(Regex("^[a-zA-Z][a-zA-Z0-9_.]{1,150}$"))) {
+            return jsonResponse(400, mapOf("error" to "Invalid package name format"))
+        }
 
         val intent = context.packageManager.getLaunchIntentForPackage(packageName)
         if (intent == null) {
