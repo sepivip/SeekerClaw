@@ -123,7 +123,7 @@ class AndroidBridge(
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error handling $uri", e)
-            jsonResponse(500, mapOf("error" to e.message))
+            jsonResponse(500, mapOf("error" to "Internal error"))
         }
     }
 
