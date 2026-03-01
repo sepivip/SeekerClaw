@@ -137,7 +137,7 @@ abstract class DownloadNodejsTask : DefaultTask() {
     @TaskAction
     fun run() {
         val url = "https://github.com/nodejs-mobile/nodejs-mobile/releases/download/v18.20.4/nodejs-mobile-v18.20.4-android.zip"
-        val expectedSha256 = "e6c6f1fba38f4b6a0b8ad2bbbd0f0df1be9c3667c14b653c3cd7a0af8e8f5bab"
+        val expectedSha256 = "bd7321eaa1a7602fbe0bb87302df2d79d87835cf4363fbdd17c350dbb485c2af"
         val zipFile = project.file("./libnode/nodejs-mobile-v18.20.4-android.zip")
         val extractDir = project.file("./libnode")
 
