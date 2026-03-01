@@ -172,7 +172,7 @@ object NodeBridge {
             val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
             lastUpdateTime = packageInfo.lastUpdateTime
         } catch (e: PackageManager.NameNotFoundException) {
-            e.printStackTrace()
+            LogCollector.append("[NodeBridge] ${e.message}", LogLevel.ERROR)
         }
         return lastUpdateTime != previousLastUpdateTime
     }
@@ -184,7 +184,7 @@ object NodeBridge {
             val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
             lastUpdateTime = packageInfo.lastUpdateTime
         } catch (e: PackageManager.NameNotFoundException) {
-            e.printStackTrace()
+            LogCollector.append("[NodeBridge] ${e.message}", LogLevel.ERROR)
         }
         prefs.edit().putLong("NODEJS_MOBILE_APK_LastUpdateTime", lastUpdateTime).apply()
     }
@@ -202,7 +202,7 @@ object NodeBridge {
             }
             res and file.delete()
         } catch (e: Exception) {
-            e.printStackTrace()
+            LogCollector.append("[NodeBridge] ${e.message}", LogLevel.ERROR)
             false
         }
     }
@@ -224,7 +224,7 @@ object NodeBridge {
                 success
             }
         } catch (e: Exception) {
-            e.printStackTrace()
+            LogCollector.append("[NodeBridge] ${e.message}", LogLevel.ERROR)
             false
         }
     }
@@ -243,7 +243,7 @@ object NodeBridge {
             }
             true
         } catch (e: IOException) {
-            e.printStackTrace()
+            LogCollector.append("[NodeBridge] ${e.message}", LogLevel.ERROR)
             false
         } finally {
             inputStream?.close()
