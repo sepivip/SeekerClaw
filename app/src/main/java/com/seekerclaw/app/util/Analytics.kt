@@ -3,20 +3,31 @@ package com.seekerclaw.app.util
 import android.content.Context
 import android.os.Bundle
 import android.util.Log
-import com.google.firebase.analytics.FirebaseAnalytics
 
+/**
+ * Analytics wrapper that loads Firebase via reflection.
+ * When Firebase classes are absent (dappStore flavor), all calls are no-ops.
+ * M-19: Firebase is only bundled in googlePlay flavor.
+ */
 object Analytics {
     private const val TAG = "Analytics"
-    private var fb: FirebaseAnalytics? = null
+    private var fb: Any? = null  // FirebaseAnalytics instance (loaded via reflection)
+    private var logEventMethod: java.lang.reflect.Method? = null
+    private var setUserPropertyMethod: java.lang.reflect.Method? = null
 
     fun init(context: Context) {
         try {
-            fb = FirebaseAnalytics.getInstance(context)
-        } catch (e: IllegalStateException) {
-            Log.w(TAG, "Firebase unavailable — analytics disabled", e)
+            val clazz = Class.forName("com.google.firebase.analytics.FirebaseAnalytics")
+            val getInstance = clazz.getMethod("getInstance", Context::class.java)
+            fb = getInstance.invoke(null, context)
+            logEventMethod = clazz.getMethod("logEvent", String::class.java, Bundle::class.java)
+            setUserPropertyMethod = clazz.getMethod("setUserProperty", String::class.java, String::class.java)
+        } catch (e: ClassNotFoundException) {
+            // Firebase not bundled (dappStore flavor) — analytics disabled
+            Log.d(TAG, "Firebase not available — analytics disabled")
             fb = null
         } catch (e: Exception) {
-            Log.e(TAG, "Unexpected error initializing Firebase — analytics disabled", e)
+            Log.w(TAG, "Firebase init failed — analytics disabled", e)
             fb = null
         }
     }
@@ -37,17 +48,20 @@ object Analytics {
                 }
             }
         }
-        analytics.logEvent(name, bundle)
+        try {
+            logEventMethod?.invoke(analytics, name, bundle)
+        } catch (_: Exception) {}
     }
 
     fun setUserProperty(key: String, value: String?) {
-        fb?.setUserProperty(key, value)
+        val analytics = fb ?: return
+        try {
+            setUserPropertyMethod?.invoke(analytics, key, value)
+        } catch (_: Exception) {}
     }
 
     fun logScreenView(screenName: String) {
-        logEvent(FirebaseAnalytics.Event.SCREEN_VIEW, mapOf(
-            FirebaseAnalytics.Param.SCREEN_NAME to screenName,
-        ))
+        logEvent("screen_view", mapOf("screen_name" to screenName))
     }
 
     // ── Service lifecycle ──

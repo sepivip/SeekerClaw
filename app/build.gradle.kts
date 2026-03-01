@@ -244,9 +244,9 @@ dependencies {
     implementation("androidx.camera:camera-view:1.4.1")
     implementation("com.google.mlkit:barcode-scanning:17.3.0")
 
-    // Firebase Analytics
-    implementation(platform(libs.firebase.bom))
-    implementation(libs.firebase.analytics)
+    // Firebase Analytics — googlePlay flavor only (M-19: dappStore builds have no telemetry)
+    "googlePlayImplementation"(platform(libs.firebase.bom))
+    "googlePlayImplementation"(libs.firebase.analytics)
 
     // Testing
     testImplementation("junit:junit:4.13.2")
