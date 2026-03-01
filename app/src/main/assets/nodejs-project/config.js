@@ -89,6 +89,10 @@ if (!fs.existsSync(configPath)) {
 
 const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
 
+// H-11: Delete config.json immediately after parsing to minimize plaintext window.
+// Secrets are now in memory only — no file on disk for other processes to read.
+try { fs.unlinkSync(configPath); } catch (_) {}
+
 // Strip hidden line breaks from secrets (clipboard paste can include \r\n, Unicode separators)
 function normalizeSecret(val) {
     return typeof val === 'string' ? val.replace(/[\r\n\u2028\u2029]+/g, '').trim() : '';

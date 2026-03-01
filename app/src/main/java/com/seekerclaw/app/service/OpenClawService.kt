@@ -140,13 +140,15 @@ class OpenClawService : Service() {
             return START_NOT_STICKY
         }
 
-        // Delete config.json after Node.js has had time to read it (ephemeral credentials)
+        // H-11: Defense-in-depth — Node.js deletes config.json immediately after parsing
+        // (see config.js fs.unlinkSync). This fallback catches edge cases where Node.js
+        // crashes before the unlink or the file is recreated by a bug.
         scope.launch {
-            delay(5000) // Give Node.js 5s to read config
-            val configFile = File(workDir, "config.json")
-            if (configFile.exists()) {
-                configFile.delete()
-                LogCollector.append("[Service] Deleted ephemeral config.json")
+            delay(5000)
+            val cfgFile = File(workDir, "config.json")
+            if (cfgFile.exists()) {
+                cfgFile.delete()
+                LogCollector.append("[Service] Deleted stale config.json (fallback cleanup)")
             }
         }
 
