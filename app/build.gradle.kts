@@ -1,5 +1,6 @@
 import java.net.HttpURLConnection
 import java.net.URI
+import java.security.MessageDigest
 import java.util.Properties
 import java.util.zip.ZipInputStream
 
@@ -163,7 +164,7 @@ abstract class DownloadNodejsTask : DefaultTask() {
             connection.disconnect()
 
             // H-05: Verify SHA-256 integrity before extraction
-            val digest = java.security.MessageDigest.getInstance("SHA-256")
+            val digest = MessageDigest.getInstance("SHA-256")
             zipFile.inputStream().use { stream ->
                 val buf = ByteArray(8192)
                 var n: Int
