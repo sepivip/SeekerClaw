@@ -518,7 +518,12 @@ async function handleMessage(msg) {
     }
 
     // Owner auto-detect: first person to message claims ownership
+    // H-04: Validate sender ID is numeric (Telegram user IDs are always numeric)
     if (!OWNER_ID) {
+        if (!/^\d{1,15}$/.test(senderId)) {
+            log(`Rejected invalid owner claim from "${senderId}" (non-numeric)`, 'WARN');
+            return;
+        }
         OWNER_ID = senderId;
         setOwnerId(senderId); // sync to config.js for cross-module access
         log(`Owner claimed by ${senderId} (auto-detect)`, 'INFO');
