@@ -238,10 +238,10 @@ dependencies {
     implementation("org.sol4k:sol4k:0.4.2")
 
     // CameraX (Seeker Camera / vision capture)
-    implementation("androidx.camera:camera-core:1.4.1")
-    implementation("androidx.camera:camera-camera2:1.4.1")
-    implementation("androidx.camera:camera-lifecycle:1.4.1")
-    implementation("androidx.camera:camera-view:1.4.1")
+    implementation(libs.androidx.camera.core)
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.view)
     implementation("com.google.mlkit:barcode-scanning:17.3.0")
 
     // Firebase Analytics — googlePlay flavor only (M-19: dappStore builds have no telemetry)
