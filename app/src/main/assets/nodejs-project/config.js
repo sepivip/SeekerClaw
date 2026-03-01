@@ -157,6 +157,10 @@ if (!BOT_TOKEN || !ANTHROPIC_KEY) {
     process.exit(1);
 }
 
+if (!BRIDGE_TOKEN) {
+    log('WARNING: bridgeToken missing — android_* tools will be unavailable', 'WARN');
+}
+
 if (!OWNER_ID) {
     // An unconfigured owner ID means the first inbound Telegram message will claim ownership.
     // This is the intended auto-detect flow — the owner ID is persisted via the Android bridge.
