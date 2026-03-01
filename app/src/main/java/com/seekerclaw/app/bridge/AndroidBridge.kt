@@ -226,7 +226,7 @@ class AndroidBridge(
         }
 
         val query = params.optString("query", "")
-        val limit = params.optInt("limit", 10)
+        val limit = params.optInt("limit", 10).coerceIn(1, 100)
 
         val contacts = mutableListOf<Map<String, String?>>()
         val cursor = context.contentResolver.query(
