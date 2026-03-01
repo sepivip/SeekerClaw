@@ -378,8 +378,8 @@ class AndroidBridge(
             return jsonResponse(400, mapOf("error" to "text is required"))
         }
 
-        val pitch = params.optDouble("pitch", 1.0).toFloat()
-        val speed = params.optDouble("speed", 1.0).toFloat()
+        val pitch = params.optDouble("pitch", 1.0).toFloat().coerceIn(0.1f, 4.0f)
+        val speed = params.optDouble("speed", 1.0).toFloat().coerceIn(0.1f, 4.0f)
 
         tts?.setPitch(pitch)
         tts?.setSpeechRate(speed)
