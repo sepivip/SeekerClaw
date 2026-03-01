@@ -3383,6 +3383,15 @@ async function executeTool(name, input, chatId) {
                 return { error: 'Shell operators (;, &, |, `, <, >, $, *, ?, ~, {}, []) are not allowed in arguments. Run one simple command at a time.' };
             }
 
+            // Block access to SECRETS_BLOCKED files via shell commands (H-01)
+            const cmdArgs = cmd.slice(firstToken.length);
+            for (const blocked of SECRETS_BLOCKED) {
+                // Match as standalone path segment (basename) in arguments
+                if (new RegExp('(^|\\s|/)' + blocked.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(\\s|$)', 'i').test(cmdArgs)) {
+                    return { error: `Access to ${blocked} is blocked for security.` };
+                }
+            }
+
             // Resolve working directory (must be within workspace)
             let cwd = workDir;
             if (input.cwd) {
