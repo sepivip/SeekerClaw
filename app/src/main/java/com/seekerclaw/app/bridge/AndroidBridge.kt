@@ -26,6 +26,7 @@ import com.seekerclaw.app.util.ServiceState
 import fi.iki.elonen.NanoHTTPD
 import org.json.JSONArray
 import org.json.JSONObject
+import java.security.MessageDigest
 import java.util.Locale
 
 /**
@@ -70,8 +71,9 @@ class AndroidBridge(
         }
 
         // Verify auth token on every request (per-boot random secret)
-        val token = session.headers?.get(AUTH_HEADER.lowercase())
-        if (token != authToken) {
+        // Use constant-time comparison to prevent timing attacks (M-01)
+        val token = session.headers?.get(AUTH_HEADER.lowercase()) ?: ""
+        if (!MessageDigest.isEqual(token.toByteArray(), authToken.toByteArray())) {
             Log.w(TAG, "Unauthorized request to $uri (bad/missing token)")
             return jsonResponse(403, mapOf("error" to "Unauthorized"))
         }
