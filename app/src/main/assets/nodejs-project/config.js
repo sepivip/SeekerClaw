@@ -232,12 +232,11 @@ const SECRETS_BLOCKED = new Set(['config.json', 'config.yaml', 'seekerclaw.db'])
 // not as a standalone binary. The allowlist prevents use of destructive system
 // commands (rm, kill, etc.).
 const SHELL_ALLOWLIST = new Set([
-    'cat', 'ls', 'mkdir', 'cp', 'mv', 'echo', 'pwd', 'which',
+    'ls', 'mkdir', 'cp', 'mv', 'echo', 'pwd', 'which',
     'head', 'tail', 'wc', 'sort', 'uniq', 'grep', 'find',
-    'curl', 'ping', 'date', 'df', 'du', 'uname', 'printenv',
-    'touch', 'diff', 'sed', 'cut', 'base64',
-    'stat', 'file', 'sleep', 'getprop', 'md5sum', 'sha256sum',
-    'screencap'
+    'ping', 'date', 'df', 'du', 'uname',
+    'touch', 'diff', 'sed', 'cut',
+    'stat', 'file', 'sleep', 'md5sum', 'sha256sum',
 ]);
 
 // ============================================================================
