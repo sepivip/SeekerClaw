@@ -1,6 +1,7 @@
 package com.seekerclaw.app.config
 
 import android.net.Uri
+import com.seekerclaw.app.BuildConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -234,7 +235,7 @@ object ConfigClaimImporter {
                 if (sig.isNotBlank()) params += "sig=${Uri.encode(sig)}"
                 if (token.isNotBlank()) params += "token=${Uri.encode(token)}"
                 val query = if (params.isEmpty()) "" else "?${params.joinToString("&")}"
-                return ClaimRef("$base/api/mobile/config-claims/$claimId$query", claimId)
+                return ClaimRef("$base/api/mobile/config-claims/${Uri.encode(claimId)}$query", claimId)
             }
             return null
         }
@@ -250,7 +251,9 @@ object ConfigClaimImporter {
         if (uri.scheme.equals("https", ignoreCase = true)) return true
         if (!uri.scheme.equals("http", ignoreCase = true)) return false
         val host = uri.host?.lowercase() ?: return false
-        return host == "localhost" || host == "127.0.0.1" || host == "10.0.2.2"
+        // M-22: Only allow emulator gateway address in debug builds
+        if (host == "10.0.2.2") return BuildConfig.DEBUG
+        return host == "localhost" || host == "127.0.0.1"
     }
 
     private fun httpGet(url: String): Pair<Int, String> {
