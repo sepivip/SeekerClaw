@@ -629,6 +629,15 @@ class AndroidBridge(
         if (ownerId.isBlank()) {
             return jsonResponse(400, mapOf("error" to "ownerId is required"))
         }
+        // H-04: Validate owner ID format (Telegram IDs are numeric, max 15 digits)
+        if (!ownerId.matches(Regex("^\\d{1,15}$"))) {
+            return jsonResponse(400, mapOf("error" to "Invalid owner ID format (must be numeric)"))
+        }
+        // H-04: Reject if owner already claimed (claim-once enforcement)
+        val existing = ConfigManager.getOwnerId(context)
+        if (!existing.isNullOrBlank()) {
+            return jsonResponse(403, mapOf("error" to "Owner already set"))
+        }
         val persisted = ConfigManager.saveOwnerId(context, ownerId)
         return if (persisted) {
             jsonResponse(200, mapOf("success" to true))
