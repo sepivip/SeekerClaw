@@ -261,6 +261,28 @@ fun SettingsScreen(
         }
     }
 
+    val skillsImportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            val count = ConfigManager.importUserSkills(context, uri)
+            Analytics.featureUsed("skills_imported")
+            if (count > 0) {
+                Toast.makeText(
+                    context,
+                    "Imported $count skill${if (count > 1) "s" else ""}",
+                    Toast.LENGTH_SHORT,
+                ).show()
+            } else {
+                Toast.makeText(
+                    context,
+                    if (count == 0) "No skills found in file" else "Import failed",
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
+        }
+    }
+
     val scope = rememberCoroutineScope()
     val qrConfigLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -905,6 +927,26 @@ fun SettingsScreen(
                 ) {
                     Text(
                         "Export Skills",
+                        fontFamily = RethinkSans,
+                        fontSize = 14.sp,
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                OutlinedButton(
+                    onClick = {
+                        skillsImportLauncher.launch(arrayOf("*/*"))
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = shape,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, SeekerClawColors.BorderSubtle),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = SeekerClawColors.TextPrimary,
+                    ),
+                ) {
+                    Text(
+                        "Import Skills",
                         fontFamily = RethinkSans,
                         fontSize = 14.sp,
                     )

@@ -104,6 +104,7 @@ private fun SkillsListContent(
     val context = LocalContext.current
     var skills by remember { mutableStateOf<List<SkillInfo>>(emptyList()) }
     var searchQuery by remember { mutableStateOf("") }
+    var reloadTrigger by remember { mutableStateOf(0) }
     val shape = remember { RoundedCornerShape(SeekerClawColors.CornerRadius) }
 
     // Bulk export launcher
@@ -121,6 +122,30 @@ private fun SkillsListContent(
         }
     }
 
+    // Import skills launcher (accepts ZIP + .md)
+    val importSkillsLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            val count = ConfigManager.importUserSkills(context, uri)
+            Analytics.featureUsed("skills_imported")
+            if (count > 0) {
+                reloadTrigger++
+                Toast.makeText(
+                    context,
+                    "Imported $count skill${if (count > 1) "s" else ""}",
+                    Toast.LENGTH_SHORT,
+                ).show()
+            } else {
+                Toast.makeText(
+                    context,
+                    if (count == 0) "No skills found in file" else "Import failed",
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
+        }
+    }
+
     suspend fun loadSkills() {
         val loaded = withContext(Dispatchers.IO) {
             val defaultNames = ConfigManager.getDefaultSkillNames(context)
@@ -130,7 +155,7 @@ private fun SkillsListContent(
         skills = loaded
     }
 
-    LaunchedEffect(Unit) { loadSkills() }
+    LaunchedEffect(reloadTrigger) { loadSkills() }
 
     val filtered = remember(skills, searchQuery) {
         if (searchQuery.isEmpty()) skills
@@ -155,14 +180,32 @@ private fun SkillsListContent(
             modifier = Modifier.fillMaxSize(),
         ) {
             item {
-                Text(
-                    text = if (searchQuery.isEmpty()) "Skills (${skills.size})"
-                           else "Skills (${filtered.size} of ${skills.size})",
-                    fontFamily = RethinkSans,
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = SeekerClawColors.TextPrimary,
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = if (searchQuery.isEmpty()) "Skills (${skills.size})"
+                               else "Skills (${filtered.size} of ${skills.size})",
+                        fontFamily = RethinkSans,
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = SeekerClawColors.TextPrimary,
+                    )
+                    Text(
+                        text = "Import",
+                        fontFamily = RethinkSans,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = SeekerClawColors.Accent,
+                        modifier = Modifier
+                            .clickable(onClickLabel = "Import skills") {
+                                importSkillsLauncher.launch(arrayOf("*/*"))
+                            }
+                            .padding(4.dp),
+                    )
+                }
             }
 
             item {
