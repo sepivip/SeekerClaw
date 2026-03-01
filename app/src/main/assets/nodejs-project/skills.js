@@ -195,6 +195,7 @@ function parseSkillFile(content, skillDir) {
         version: '',
         tools: [],
         emoji: '',
+        image: '',
         requires: { bins: [], env: [], config: [] },
         allowedTools: [],
         dir: skillDir
@@ -225,6 +226,9 @@ function parseSkillFile(content, skillDir) {
                 }
             }
             if (frontmatter.emoji) skill.emoji = frontmatter.emoji;
+            if (frontmatter.image && (frontmatter.image.startsWith('https://') || frontmatter.image.startsWith('http://'))) {
+                skill.image = frontmatter.image;
+            }
 
             // Handle metadata.openclaw.emoji
             if (frontmatter.metadata?.openclaw?.emoji) {

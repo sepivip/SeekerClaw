@@ -980,6 +980,138 @@ object ConfigManager {
         saveSkillManifest(manifestFile, manifest)
     }
 
+    // ==================== Skill Export ====================
+
+    /**
+     * Returns the set of skill directory names tracked in skills-manifest.json
+     * (i.e., default/bundled skills). User-added skills are NOT in the manifest.
+     */
+    fun getDefaultSkillNames(context: Context): Set<String> {
+        val manifestFile = File(File(context.filesDir, "workspace"), "skills-manifest.json")
+        if (!manifestFile.exists()) return emptySet()
+        return try {
+            val json = JSONObject(manifestFile.readText())
+            json.keys().asSequence().toSet()
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to read skill manifest for default names", e)
+            emptySet()
+        }
+    }
+
+    /**
+     * Returns a map of default skill name → content hash from skills-manifest.json.
+     * Used to detect user-modified default skills (hash differs from manifest).
+     */
+    fun getDefaultSkillHashes(context: Context): Map<String, String> {
+        val manifestFile = File(File(context.filesDir, "workspace"), "skills-manifest.json")
+        if (!manifestFile.exists()) return emptyMap()
+        return try {
+            val json = JSONObject(manifestFile.readText())
+            val result = mutableMapOf<String, String>()
+            for (key in json.keys()) {
+                val entry = json.getJSONObject(key)
+                val hash = entry.optString("hash", "")
+                if (hash.isNotEmpty()) result[key] = hash
+            }
+            result
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to read skill manifest hashes", e)
+            emptyMap()
+        }
+    }
+
+    /**
+     * Export a single skill as a raw .md file at the given URI.
+     * Reads the SKILL.md content and writes it directly — shareable via Telegram.
+     */
+    fun exportSkill(context: Context, uri: Uri, skillDirName: String): Boolean {
+        val skillsDir = File(File(context.filesDir, "workspace"), "skills")
+        val skillFile = File(File(skillsDir, skillDirName), "SKILL.md").takeIf { it.exists() }
+            ?: File(skillsDir, "$skillDirName.md").takeIf { it.exists() }
+
+        if (skillFile == null) {
+            Log.e(TAG, "Skill file not found for: $skillDirName")
+            return false
+        }
+
+        return try {
+            val outputStream = context.contentResolver.openOutputStream(uri)
+            if (outputStream == null) {
+                Log.e(TAG, "Failed to open output stream for skill export")
+                return false
+            }
+            outputStream.use { out ->
+                skillFile.inputStream().use { it.copyTo(out) }
+            }
+            Log.i(TAG, "Skill $skillDirName exported as .md")
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to export skill $skillDirName", e)
+            false
+        }
+    }
+
+    /**
+     * Export all user-added skills as a ZIP at the given URI.
+     * Only includes skills NOT in skills-manifest.json (user-added only).
+     */
+    fun exportUserSkills(context: Context, uri: Uri): Boolean {
+        val workspaceDir = File(context.filesDir, "workspace")
+        val skillsDir = File(workspaceDir, "skills")
+        if (!skillsDir.exists()) return false
+
+        val defaultNames = getDefaultSkillNames(context)
+        var exportedCount = 0
+
+        return try {
+            val outputStream = context.contentResolver.openOutputStream(uri)
+            if (outputStream == null) {
+                Log.e(TAG, "Failed to open output stream for skills export")
+                return false
+            }
+            outputStream.use { out ->
+                ZipOutputStream(out).use { zip ->
+                    skillsDir.listFiles()?.forEach { entry ->
+                        val shouldExport = when {
+                            entry.isDirectory && entry.name !in defaultNames -> true
+                            entry.isFile && entry.name.endsWith(".md") -> true
+                            else -> false
+                        }
+
+                        if (shouldExport) {
+                            if (entry.isDirectory) {
+                                addDirectoryToZip(zip, entry, skillsDir)
+                            } else {
+                                zip.putNextEntry(ZipEntry(entry.name))
+                                entry.inputStream().use { it.copyTo(zip) }
+                                zip.closeEntry()
+                            }
+                            exportedCount++
+                        }
+                    }
+                }
+            }
+            if (exportedCount == 0) {
+                Log.i(TAG, "No user skills to export")
+                return false
+            }
+            Log.i(TAG, "Exported $exportedCount user skills")
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to export user skills", e)
+            false
+        }
+    }
+
+    private fun addDirectoryToZip(zip: ZipOutputStream, dir: File, baseDir: File) {
+        dir.walkTopDown().filter { it.isFile }.forEach { file ->
+            val relativePath = file.relativeTo(baseDir).path.replace("\\", "/")
+            zip.putNextEntry(ZipEntry(relativePath))
+            file.inputStream().use { it.copyTo(zip) }
+            zip.closeEntry()
+        }
+    }
+
     /**
      * Delete workspace memory files (MEMORY.md + memory/ directory).
      */

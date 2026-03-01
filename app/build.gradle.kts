@@ -211,6 +211,9 @@ dependencies {
     // Solana transaction building (pure Kotlin)
     implementation("org.sol4k:sol4k:0.4.2")
 
+    // Coil — image loading for skill avatars
+    implementation(libs.coil.compose)
+
     // CameraX (Seeker Camera / vision capture)
     implementation("androidx.camera:camera-core:1.4.1")
     implementation("androidx.camera:camera-camera2:1.4.1")

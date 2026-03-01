@@ -1,6 +1,9 @@
 package com.seekerclaw.app.ui.skills
 
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -31,14 +34,19 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.SubcomposeAsyncImage
+import coil.request.ImageRequest
+import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.ui.theme.RethinkSans
 import com.seekerclaw.app.ui.theme.SeekerClawColors
+import com.seekerclaw.app.util.Analytics
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -49,12 +57,36 @@ fun SkillsScreen() {
     val workspaceDir = remember { File(context.filesDir, "workspace") }
     var selectedSkill by remember { mutableStateOf<SkillInfo?>(null) }
 
+    // Single-skill export launcher (registered at screen level so it survives detail→list navigation)
+    var pendingExportDirName by remember { mutableStateOf<String?>(null) }
+    val singleSkillExportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("*/*")
+    ) { uri ->
+        val dirName = pendingExportDirName
+        if (uri != null && dirName != null) {
+            val success = ConfigManager.exportSkill(context, uri, dirName)
+            Analytics.featureUsed("skill_exported")
+            Toast.makeText(
+                context,
+                if (success) "Skill exported" else "Export failed",
+                Toast.LENGTH_SHORT,
+            ).show()
+        }
+        pendingExportDirName = null
+    }
+
     val skill = selectedSkill
     if (skill != null) {
         BackHandler { selectedSkill = null }
         SkillDetailScreen(
             skill = skill,
             onBack = { selectedSkill = null },
+            onExport = if (!skill.isDefault || skill.isModifiedDefault) {
+                {
+                    pendingExportDirName = skill.dirName
+                    singleSkillExportLauncher.launch("${skill.dirName}.md")
+                }
+            } else null,
         )
     } else {
         SkillsListContent(
@@ -69,12 +101,32 @@ private fun SkillsListContent(
     workspaceDir: File,
     onSkillClick: (SkillInfo) -> Unit,
 ) {
+    val context = LocalContext.current
     var skills by remember { mutableStateOf<List<SkillInfo>>(emptyList()) }
     var searchQuery by remember { mutableStateOf("") }
     val shape = remember { RoundedCornerShape(SeekerClawColors.CornerRadius) }
 
+    // Bulk export launcher
+    val bulkExportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/zip")
+    ) { uri ->
+        if (uri != null) {
+            val success = ConfigManager.exportUserSkills(context, uri)
+            Analytics.featureUsed("skills_bulk_exported")
+            Toast.makeText(
+                context,
+                if (success) "Skills exported" else "Export failed",
+                Toast.LENGTH_SHORT,
+            ).show()
+        }
+    }
+
     suspend fun loadSkills() {
-        val loaded = withContext(Dispatchers.IO) { SkillsRepository.loadSkills(workspaceDir) }
+        val loaded = withContext(Dispatchers.IO) {
+            val defaultNames = ConfigManager.getDefaultSkillNames(context)
+            val defaultHashes = ConfigManager.getDefaultSkillHashes(context)
+            SkillsRepository.loadSkills(workspaceDir, defaultNames, defaultHashes)
+        }
         skills = loaded
     }
 
@@ -88,6 +140,9 @@ private fun SkillsListContent(
                 s.triggers.any { it.contains(searchQuery, ignoreCase = true) }
         }
     }
+
+    val addedSkills = remember(filtered) { filtered.filter { !it.isDefault } }
+    val defaultSkills = remember(filtered) { filtered.filter { it.isDefault } }
 
     Box(
         modifier = Modifier
@@ -128,10 +183,71 @@ private fun SkillsListContent(
                     EmptySkillsState(isFiltered = searchQuery.isNotEmpty())
                 }
             } else {
-                items(filtered, key = { it.filePath }) { skill ->
-                    SkillCard(skill = skill, shape = shape, onClick = { onSkillClick(skill) })
+                // Added skills section
+                if (addedSkills.isNotEmpty()) {
+                    item {
+                        SectionHeader(
+                            title = "Added (${addedSkills.size})",
+                            actionLabel = "Export All",
+                            onAction = {
+                                val timestamp = android.text.format.DateFormat.format(
+                                    "yyyyMMdd", java.util.Date()
+                                )
+                                bulkExportLauncher.launch("seekerclaw_skills_$timestamp.zip")
+                            },
+                        )
+                    }
+                    items(addedSkills, key = { it.filePath }) { skill ->
+                        SkillCard(skill = skill, shape = shape, onClick = { onSkillClick(skill) })
+                    }
+                }
+
+                // Default skills section
+                if (defaultSkills.isNotEmpty()) {
+                    item {
+                        SectionHeader(title = "Default (${defaultSkills.size})")
+                    }
+                    items(defaultSkills, key = { it.filePath }) { skill ->
+                        SkillCard(skill = skill, shape = shape, onClick = { onSkillClick(skill) })
+                    }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun SectionHeader(
+    title: String,
+    actionLabel: String? = null,
+    onAction: (() -> Unit)? = null,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp, bottom = 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = title,
+            fontFamily = RethinkSans,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Bold,
+            color = SeekerClawColors.TextDim,
+            letterSpacing = 0.5.sp,
+        )
+        if (actionLabel != null && onAction != null) {
+            Text(
+                text = actionLabel,
+                fontFamily = RethinkSans,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                color = SeekerClawColors.Accent,
+                modifier = Modifier
+                    .clickable(onClickLabel = actionLabel, onClick = onAction)
+                    .padding(4.dp),
+            )
         }
     }
 }
@@ -239,6 +355,72 @@ private fun MarketplaceTeaserCard(shape: RoundedCornerShape) {
 }
 
 @Composable
+fun SkillAvatar(
+    skill: SkillInfo,
+    size: Int = 44,
+    shape: RoundedCornerShape = RoundedCornerShape(SeekerClawColors.CornerRadius),
+    emojiFontSize: Int = 22,
+) {
+    if (skill.imageUrl.isNotEmpty()) {
+        SubcomposeAsyncImage(
+            model = ImageRequest.Builder(LocalContext.current)
+                .data(skill.imageUrl)
+                .crossfade(true)
+                .build(),
+            contentDescription = skill.name,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .size(size.dp)
+                .clip(shape),
+            loading = {
+                EmojiAvatar(
+                    emoji = skill.emoji,
+                    size = size,
+                    shape = shape,
+                    emojiFontSize = emojiFontSize,
+                )
+            },
+            error = {
+                EmojiAvatar(
+                    emoji = skill.emoji,
+                    size = size,
+                    shape = shape,
+                    emojiFontSize = emojiFontSize,
+                )
+            },
+        )
+    } else {
+        EmojiAvatar(
+            emoji = skill.emoji,
+            size = size,
+            shape = shape,
+            emojiFontSize = emojiFontSize,
+        )
+    }
+}
+
+@Composable
+private fun EmojiAvatar(
+    emoji: String,
+    size: Int,
+    shape: RoundedCornerShape,
+    emojiFontSize: Int,
+) {
+    Box(
+        modifier = Modifier
+            .size(size.dp)
+            .clip(shape)
+            .background(SeekerClawColors.SurfaceHighlight),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = emoji.ifEmpty { "⚡" },
+            fontSize = emojiFontSize.sp,
+        )
+    }
+}
+
+@Composable
 private fun SkillCard(
     skill: SkillInfo,
     shape: RoundedCornerShape,
@@ -252,18 +434,7 @@ private fun SkillCard(
             .padding(16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(
-            modifier = Modifier
-                .size(44.dp)
-                .clip(shape)
-                .background(SeekerClawColors.SurfaceHighlight),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = skill.emoji.ifEmpty { "⚡" },
-                fontSize = 22.sp,
-            )
-        }
+        SkillAvatar(skill = skill, size = 44, shape = shape)
         Spacer(Modifier.width(14.dp))
         Column(modifier = Modifier.weight(1f)) {
             Row(

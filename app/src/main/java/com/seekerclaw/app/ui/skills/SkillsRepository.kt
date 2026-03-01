@@ -2,12 +2,17 @@ package com.seekerclaw.app.ui.skills
 
 import android.util.Log
 import java.io.File
+import java.security.MessageDigest
 
 object SkillsRepository {
 
     private const val TAG = "SkillsRepository"
 
-    fun loadSkills(workspaceDir: File): List<SkillInfo> {
+    fun loadSkills(
+        workspaceDir: File,
+        defaultSkillNames: Set<String> = emptySet(),
+        defaultSkillHashes: Map<String, String> = emptyMap(),
+    ): List<SkillInfo> {
         val skillsDir = File(workspaceDir, "skills")
         if (!skillsDir.exists()) return emptyList()
 
@@ -22,8 +27,16 @@ object SkillsRepository {
                             runCatching { skillFile.readText() }
                                 .onFailure { e -> Log.w(TAG, "Failed to read ${skillFile.path}: ${e.message}") }
                                 .getOrNull()
-                                ?.let { parseSkillFile(it, entry.name, skillFile.absolutePath) }
-                                ?.let { result.add(it) }
+                                ?.let { content ->
+                                    parseSkillFile(content, entry.name, skillFile.absolutePath)?.let { skill ->
+                                        val isDefault = entry.name in defaultSkillNames
+                                        val isModified = if (isDefault) {
+                                            val currentHash = computeHash(content)
+                                            currentHash != defaultSkillHashes[entry.name]
+                                        } else false
+                                        result.add(skill.copy(isDefault = isDefault, isModifiedDefault = isModified))
+                                    }
+                                }
                         }
                     }
                     entry.isFile && entry.name.endsWith(".md") -> {
@@ -31,11 +44,17 @@ object SkillsRepository {
                             .onFailure { e -> Log.w(TAG, "Failed to read ${entry.path}: ${e.message}") }
                             .getOrNull()
                             ?.let { parseSkillFile(it, entry.nameWithoutExtension, entry.absolutePath) }
-                            ?.let { result.add(it) }
+                            ?.let { result.add(it) } // Flat files are never default
                     }
                 }
             }
         return result.sortedBy { it.name.lowercase() }
+    }
+
+    private fun computeHash(content: String): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        val bytes = digest.digest(content.toByteArray(Charsets.UTF_8))
+        return bytes.joinToString("") { "%02x".format(it) }
     }
 
     private fun parseSkillFile(content: String, dirName: String, filePath: String): SkillInfo? {
@@ -47,6 +66,9 @@ object SkillsRepository {
         val version = (fm["version"] as? String)?.trim() ?: ""
         val emoji = (fm["emoji"] as? String)?.trim()?.takeIf { it.isNotEmpty() }
             ?: extractFrontmatterLine(content, "emoji")
+        val imageUrl = (fm["image"] as? String)?.trim()?.takeIf {
+            it.startsWith("https://") || it.startsWith("http://")
+        } ?: ""
         @Suppress("UNCHECKED_CAST")
         val triggers: List<String> = when (val t = fm["triggers"]) {
             is List<*> -> (t as? List<String>)
@@ -66,6 +88,7 @@ object SkillsRepository {
             filePath = filePath,
             dirName = dirName,
             warnings = warnings,
+            imageUrl = imageUrl,
         )
     }
 

@@ -35,6 +35,7 @@ import com.seekerclaw.app.ui.theme.SeekerClawColors
 fun SkillDetailScreen(
     skill: SkillInfo,
     onBack: () -> Unit,
+    onExport: (() -> Unit)? = null,
 ) {
     val shape = remember { RoundedCornerShape(SeekerClawColors.CornerRadius) }
 
@@ -50,6 +51,7 @@ fun SkillDetailScreen(
                 .fillMaxWidth()
                 .padding(horizontal = 20.dp, vertical = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Text(
                 text = "← Skills",
@@ -59,6 +61,18 @@ fun SkillDetailScreen(
                 color = SeekerClawColors.Primary,
                 modifier = Modifier.clickable(onClickLabel = "Back to skills list", onClick = onBack),
             )
+            if (onExport != null) {
+                Text(
+                    text = "Export",
+                    fontFamily = RethinkSans,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = SeekerClawColors.Accent,
+                    modifier = Modifier
+                        .clickable(onClickLabel = "Export skill", onClick = onExport)
+                        .padding(4.dp),
+                )
+            }
         }
 
         HorizontalDivider(
@@ -70,12 +84,10 @@ fun SkillDetailScreen(
             modifier = Modifier.padding(horizontal = 20.dp, vertical = 24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            // Header: emoji + name + version
+            // Header: avatar + name + version
             Row(verticalAlignment = Alignment.CenterVertically) {
-                if (skill.emoji.isNotEmpty()) {
-                    Text(text = skill.emoji, fontSize = 40.sp)
-                    Spacer(Modifier.width(16.dp))
-                }
+                SkillAvatar(skill = skill, size = 56, emojiFontSize = 32)
+                Spacer(Modifier.width(16.dp))
                 Column {
                     Text(
                         text = skill.name,
@@ -94,6 +106,16 @@ fun SkillDetailScreen(
                         )
                     }
                 }
+            }
+
+            // Type
+            InfoSection(label = "TYPE", shape = shape) {
+                Text(
+                    text = if (skill.isDefault) "Default (bundled)" else "Added by user",
+                    fontFamily = RethinkSans,
+                    fontSize = 14.sp,
+                    color = SeekerClawColors.TextPrimary,
+                )
             }
 
             // Description

@@ -9,4 +9,7 @@ data class SkillInfo(
     val filePath: String,
     val dirName: String,
     val warnings: List<String> = emptyList(),
+    val isDefault: Boolean = false,
+    val isModifiedDefault: Boolean = false,
+    val imageUrl: String = "",
 )

@@ -247,6 +247,20 @@ fun SettingsScreen(
         }
     }
 
+    val skillsExportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/zip")
+    ) { uri ->
+        if (uri != null) {
+            val success = ConfigManager.exportUserSkills(context, uri)
+            Analytics.featureUsed("skills_bulk_exported")
+            Toast.makeText(
+                context,
+                if (success) "Skills exported" else "No added skills to export",
+                Toast.LENGTH_SHORT,
+            ).show()
+        }
+    }
+
     val scope = rememberCoroutineScope()
     val qrConfigLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -870,6 +884,27 @@ fun SettingsScreen(
                 ) {
                     Text(
                         "Import Memory",
+                        fontFamily = RethinkSans,
+                        fontSize = 14.sp,
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                OutlinedButton(
+                    onClick = {
+                        val timestamp = android.text.format.DateFormat.format("yyyyMMdd", java.util.Date())
+                        skillsExportLauncher.launch("seekerclaw_skills_$timestamp.zip")
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = shape,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, SeekerClawColors.BorderSubtle),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = SeekerClawColors.TextPrimary,
+                    ),
+                ) {
+                    Text(
+                        "Export Skills",
                         fontFamily = RethinkSans,
                         fontSize = 14.sp,
                     )
