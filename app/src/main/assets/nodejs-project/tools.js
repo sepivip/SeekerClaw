@@ -3501,7 +3501,7 @@ async function executeTool(name, input, chatId) {
             };
 
             // Sandboxed require: block dangerous modules and restrict fs access to sensitive files
-            const BLOCKED_MODULES = new Set(['child_process', 'cluster', 'worker_threads', 'vm', 'v8', 'perf_hooks']);
+            const BLOCKED_MODULES = new Set(['child_process', 'cluster', 'worker_threads', 'vm', 'v8', 'perf_hooks', 'http', 'https', 'http2', 'net', 'tls', 'dgram', 'dns', 'module']);
             // Create a guarded fs proxy that blocks reads AND writes to sensitive files
             // promisesGuard: optional set of guarded methods for the .promises sub-property
             const createGuardedFsProxy = (realModule, guardedMethods, promisesGuard) => {
