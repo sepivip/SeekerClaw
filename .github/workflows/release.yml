@@ -26,7 +26,7 @@ jobs:
           distribution: 'temurin'
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@ac638b010cf58a27ee6c972e999cca798e6adc81 # v4.4.1
+        uses: gradle/actions/setup-gradle@ac638b010cf58a27ee6c972d7336334ccaf61c96 # v4.4.1
 
       - name: Decode google-services.json
         if: env.GOOGLE_SERVICES_JSON != ''
@@ -93,7 +93,7 @@ jobs:
           distribution: 'temurin'
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@ac638b010cf58a27ee6c972e999cca798e6adc81 # v4.4.1
+        uses: gradle/actions/setup-gradle@ac638b010cf58a27ee6c972d7336334ccaf61c96 # v4.4.1
 
       - name: Decode google-services.json
         if: env.GOOGLE_SERVICES_JSON != ''
