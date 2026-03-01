@@ -3383,6 +3383,26 @@ async function executeTool(name, input, chatId) {
                 return { error: 'Shell operators (;, &, |, `, <, >, $, *, ?, ~, {}, []) are not allowed in arguments. Run one simple command at a time.' };
             }
 
+            // Block access to SECRETS_BLOCKED files via shell commands (H-01)
+            // Tokenize the command to handle quoted arguments (e.g. head "config.json")
+            const tokens = [];
+            let tok = '', inSingle = false, inDouble = false;
+            for (const ch of cmd.slice(firstToken.length)) {
+                if (inSingle) { if (ch === "'") inSingle = false; else tok += ch; }
+                else if (inDouble) { if (ch === '"') inDouble = false; else tok += ch; }
+                else if (ch === "'") inSingle = true;
+                else if (ch === '"') inDouble = true;
+                else if (ch === ' ' || ch === '\t') { if (tok) { tokens.push(tok); tok = ''; } }
+                else tok += ch;
+            }
+            if (tok) tokens.push(tok);
+            for (const arg of tokens) {
+                const basename = path.basename(arg);
+                if (SECRETS_BLOCKED.has(basename)) {
+                    return { error: `Access to ${basename} is blocked for security.` };
+                }
+            }
+
             // Resolve working directory (must be within workspace)
             let cwd = workDir;
             if (input.cwd) {
@@ -3501,7 +3521,19 @@ async function executeTool(name, input, chatId) {
             };
 
             // Sandboxed require: block dangerous modules and restrict fs access to sensitive files
-            const BLOCKED_MODULES = new Set(['child_process', 'cluster', 'worker_threads', 'vm', 'v8', 'perf_hooks']);
+            const RAW_BLOCKED_MODULES = ['child_process', 'cluster', 'worker_threads', 'vm', 'v8', 'perf_hooks', 'http', 'https', 'http2', 'net', 'tls', 'dgram', 'dns', 'module'];
+            const BLOCKED_MODULES = {
+                _set: new Set(RAW_BLOCKED_MODULES),
+                has(specifier) {
+                    if (typeof specifier !== 'string') return false;
+                    let id = specifier.startsWith('node:') ? specifier.slice(5) : specifier;
+                    if (this._set.has(id)) return true;
+                    for (const mod of this._set) {
+                        if (id.startsWith(mod + '/')) return true;
+                    }
+                    return false;
+                }
+            };
             // Create a guarded fs proxy that blocks reads AND writes to sensitive files
             // promisesGuard: optional set of guarded methods for the .promises sub-property
             const createGuardedFsProxy = (realModule, guardedMethods, promisesGuard) => {

@@ -63,31 +63,40 @@ Java_com_seekerclaw_app_service_NodeBridge_startNodeWithArguments(
 
     int c_arguments_size = 0;
     for (int i = 0; i < argument_count; i++) {
-        c_arguments_size += strlen(env->GetStringUTFChars((jstring)env->GetObjectArrayElement(arguments, i), 0));
-        c_arguments_size++;
+        jstring jarg = (jstring)env->GetObjectArrayElement(arguments, i);
+        const char* arg = env->GetStringUTFChars(jarg, 0);
+        c_arguments_size += strlen(arg) + 1;
+        env->ReleaseStringUTFChars(jarg, arg);
+        env->DeleteLocalRef(jarg);
     }
 
     char* args_buffer = (char*)calloc(c_arguments_size, sizeof(char));
-    char* argv[argument_count];
+    // H-09: Use heap allocation instead of VLA (L-14)
+    char** argv = (char**)calloc(argument_count, sizeof(char*));
     char* current_args_position = args_buffer;
 
     for (int i = 0; i < argument_count; i++) {
-        const char* current_argument = env->GetStringUTFChars((jstring)env->GetObjectArrayElement(arguments, i), 0);
+        jstring jarg = (jstring)env->GetObjectArrayElement(arguments, i);
+        const char* current_argument = env->GetStringUTFChars(jarg, 0);
         strncpy(current_args_position, current_argument, strlen(current_argument));
         argv[i] = current_args_position;
-        current_args_position += strlen(current_args_position) + 1;
+        current_args_position += strlen(current_argument) + 1;
+        env->ReleaseStringUTFChars(jarg, current_argument);
+        env->DeleteLocalRef(jarg);
     }
 
     if (start_redirecting_stdout_stderr() == -1) {
         __android_log_write(ANDROID_LOG_ERROR, ADBTAG, "Couldn't start redirecting stdout and stderr to logcat.");
     }
 
-    // Log arguments before starting
+#ifndef NDEBUG
+    // L-15: Only log arguments in debug builds
     for (int i = 0; i < argument_count; i++) {
         char logbuf[512];
         snprintf(logbuf, sizeof(logbuf), "argv[%d] = %s", i, argv[i]);
         __android_log_write(ANDROID_LOG_INFO, ADBTAG, logbuf);
     }
+#endif
     __android_log_write(ANDROID_LOG_INFO, ADBTAG, "Calling node::Start()...");
 
     int exitCode = node::Start(argument_count, argv);
@@ -95,6 +104,9 @@ Java_com_seekerclaw_app_service_NodeBridge_startNodeWithArguments(
     char exitBuf[64];
     snprintf(exitBuf, sizeof(exitBuf), "node::Start() returned with code: %d", exitCode);
     __android_log_write(ANDROID_LOG_INFO, ADBTAG, exitBuf);
+
+    free(argv);
+    free(args_buffer);
 
     return jint(exitCode);
 }

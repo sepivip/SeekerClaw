@@ -1,5 +1,6 @@
 import java.net.HttpURLConnection
 import java.net.URI
+import java.security.MessageDigest
 import java.util.Properties
 import java.util.zip.ZipInputStream
 
@@ -136,6 +137,7 @@ abstract class DownloadNodejsTask : DefaultTask() {
     @TaskAction
     fun run() {
         val url = "https://github.com/nodejs-mobile/nodejs-mobile/releases/download/v18.20.4/nodejs-mobile-v18.20.4-android.zip"
+        val expectedSha256 = "bd7321eaa1a7602fbe0bb87302df2d79d87835cf4363fbdd17c350dbb485c2af"
         val zipFile = project.file("./libnode/nodejs-mobile-v18.20.4-android.zip")
         val extractDir = project.file("./libnode")
 
@@ -161,12 +163,36 @@ abstract class DownloadNodejsTask : DefaultTask() {
             }
             connection.disconnect()
 
+            // H-05: Verify SHA-256 integrity before extraction
+            val digest = MessageDigest.getInstance("SHA-256")
+            zipFile.inputStream().use { stream ->
+                val buf = ByteArray(8192)
+                var n: Int
+                while (stream.read(buf).also { n = it } != -1) {
+                    digest.update(buf, 0, n)
+                }
+            }
+            val actualHash = digest.digest().joinToString("") { "%02x".format(it) }
+            if (actualHash != expectedSha256) {
+                zipFile.delete()
+                throw GradleException(
+                    "nodejs-mobile checksum mismatch!\n  Expected: $expectedSha256\n  Actual:   $actualHash\n" +
+                    "If upgrading nodejs-mobile, update expectedSha256 in build.gradle.kts."
+                )
+            }
+            println("SHA-256 verified: $actualHash")
+
             println("Extracting Node.js to: $extractDir")
             extractDir.mkdirs()
             ZipInputStream(zipFile.inputStream()).use { zis ->
                 var entry = zis.nextEntry
                 while (entry != null) {
                     val targetFile = File(extractDir, entry.name)
+                    // H-06: Zip Slip guard — ensure entries stay within extractDir
+                    val canonicalTarget = targetFile.canonicalPath
+                    if (!canonicalTarget.startsWith(extractDir.canonicalPath + File.separator) && canonicalTarget != extractDir.canonicalPath) {
+                        throw GradleException("Zip Slip detected: ${entry.name}")
+                    }
                     if (entry.isDirectory) {
                         targetFile.mkdirs()
                     } else {
@@ -212,15 +238,15 @@ dependencies {
     implementation("org.sol4k:sol4k:0.4.2")
 
     // CameraX (Seeker Camera / vision capture)
-    implementation("androidx.camera:camera-core:1.4.1")
-    implementation("androidx.camera:camera-camera2:1.4.1")
-    implementation("androidx.camera:camera-lifecycle:1.4.1")
-    implementation("androidx.camera:camera-view:1.4.1")
+    implementation(libs.androidx.camera.core)
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.view)
     implementation("com.google.mlkit:barcode-scanning:17.3.0")
 
-    // Firebase Analytics
-    implementation(platform(libs.firebase.bom))
-    implementation(libs.firebase.analytics)
+    // Firebase Analytics — googlePlay flavor only (M-19: dappStore builds have no telemetry)
+    "googlePlayImplementation"(platform(libs.firebase.bom))
+    "googlePlayImplementation"(libs.firebase.analytics)
 
     // Testing
     testImplementation("junit:junit:4.13.2")

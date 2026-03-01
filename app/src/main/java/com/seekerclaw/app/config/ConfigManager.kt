@@ -230,6 +230,10 @@ object ConfigManager {
         writeAgentSettingsJson(context)
     }
 
+    fun getOwnerId(context: Context): String? {
+        return prefs(context).getString(KEY_OWNER_ID, null)
+    }
+
     fun saveOwnerId(context: Context, ownerId: String): Boolean {
         val persisted = prefs(context).edit().putString(KEY_OWNER_ID, ownerId).commit()
         if (persisted) {
@@ -455,7 +459,11 @@ object ConfigManager {
         val address = prefs(context).getString(KEY_WALLET_ADDRESS, null) ?: return
         val label = prefs(context).getString(KEY_WALLET_LABEL, "") ?: ""
         val workspaceDir = File(context.filesDir, "workspace").apply { mkdirs() }
-        val json = """{"publicKey": "$address", "label": "$label"}"""
+        // M-03: Use JSONObject instead of string interpolation to prevent JSON injection
+        val json = JSONObject().apply {
+            put("publicKey", address)
+            put("label", label)
+        }.toString()
         File(workspaceDir, "solana_wallet.json").writeText(json)
     }
 

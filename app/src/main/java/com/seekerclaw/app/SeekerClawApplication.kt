@@ -14,13 +14,15 @@ class SeekerClawApplication : Application() {
         super.onCreate()
         createNotificationChannel()
 
-        // Firebase Analytics
-        Analytics.init(this)
-        ConfigManager.loadConfig(this)?.let { config ->
-            Analytics.setUserProperty("model", config.model)
-            Analytics.setUserProperty("auth_type", config.authType)
+        // Firebase Analytics — only active in googlePlay flavor (M-19)
+        if (BuildConfig.DISTRIBUTION == "googlePlay") {
+            Analytics.init(this)
+            ConfigManager.loadConfig(this)?.let { config ->
+                Analytics.setUserProperty("model", config.model)
+                Analytics.setUserProperty("auth_type", config.authType)
+            }
+            Analytics.setUserProperty("has_wallet", (!ConfigManager.getWalletAddress(this).isNullOrBlank()).toString())
         }
-        Analytics.setUserProperty("has_wallet", (!ConfigManager.getWalletAddress(this).isNullOrBlank()).toString())
 
         // Start cross-process polling so UI picks up state/logs from :node process.
         // Guard: only the main UI process should poll. The :node process writes state

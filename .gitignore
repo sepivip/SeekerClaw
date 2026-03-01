@@ -40,11 +40,14 @@ obj/
 # Node.js mobile binaries (auto-downloaded by Gradle task)
 app/libnode/
 
-# Signing keys — NEVER commit these
+# Signing keys and certificates — NEVER commit these
 *.jks
 *.keystore
 *.pem
 *.p12
+*.p8
+*.bks
+*.cer
 signing.properties
 keystore.properties
 

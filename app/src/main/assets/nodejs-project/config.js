@@ -89,6 +89,10 @@ if (!fs.existsSync(configPath)) {
 
 const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
 
+// H-11: Delete config.json immediately after parsing to minimize plaintext window.
+// Secrets are now in memory only — no file on disk for other processes to read.
+try { fs.unlinkSync(configPath); } catch (_) {}
+
 // Strip hidden line breaks from secrets (clipboard paste can include \r\n, Unicode separators)
 function normalizeSecret(val) {
     return typeof val === 'string' ? val.replace(/[\r\n\u2028\u2029]+/g, '').trim() : '';
@@ -157,6 +161,10 @@ if (!BOT_TOKEN || !ANTHROPIC_KEY) {
     process.exit(1);
 }
 
+if (!BRIDGE_TOKEN) {
+    log('WARNING: bridgeToken missing — android_* tools will be unavailable', 'WARN');
+}
+
 if (!OWNER_ID) {
     // An unconfigured owner ID means the first inbound Telegram message will claim ownership.
     // This is the intended auto-detect flow — the owner ID is persisted via the Android bridge.
@@ -222,7 +230,7 @@ function truncateToolResult(text) {
 // SENSITIVE FILE BLOCKLIST (shared by read tool, js_eval, delete tool)
 // ============================================================================
 
-const SECRETS_BLOCKED = new Set(['config.json', 'config.yaml', 'seekerclaw.db']);
+const SECRETS_BLOCKED = new Set(['config.json', 'config.yaml', 'seekerclaw.db', 'agent_settings.json']);
 
 // ============================================================================
 // SHELL EXEC ALLOWLIST (shared by tools.js and skills.js requirements gating)
@@ -232,12 +240,11 @@ const SECRETS_BLOCKED = new Set(['config.json', 'config.yaml', 'seekerclaw.db'])
 // not as a standalone binary. The allowlist prevents use of destructive system
 // commands (rm, kill, etc.).
 const SHELL_ALLOWLIST = new Set([
-    'cat', 'ls', 'mkdir', 'cp', 'mv', 'echo', 'pwd', 'which',
+    'ls', 'mkdir', 'cp', 'mv', 'echo', 'pwd', 'which',
     'head', 'tail', 'wc', 'sort', 'uniq', 'grep', 'find',
-    'curl', 'ping', 'date', 'df', 'du', 'uname', 'printenv',
-    'touch', 'diff', 'sed', 'cut', 'base64',
-    'stat', 'file', 'sleep', 'getprop', 'md5sum', 'sha256sum',
-    'screencap'
+    'ping', 'date', 'df', 'du', 'uname',
+    'touch', 'diff', 'sed', 'cut',
+    'stat', 'file', 'sleep', 'md5sum', 'sha256sum',
 ]);
 
 // ============================================================================
@@ -249,6 +256,8 @@ const SHELL_ALLOWLIST = new Set([
 const CONFIRM_REQUIRED = new Set([
     'android_sms',
     'android_call',
+    'android_camera_capture', // SAB-v8 M-05: silent photo capture risk from prompt injection
+    'android_location',       // SAB-v8 M-05: location tracking risk from prompt injection
     'solana_send',           // BAT-255: P0 — wallet-draining risk from prompt injection
     'solana_swap',           // BAT-255: P0 — wallet-draining risk from prompt injection
     'jupiter_trigger_create',
