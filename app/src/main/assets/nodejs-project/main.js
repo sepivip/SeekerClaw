@@ -1189,12 +1189,21 @@ telegram('getMe')
             writeAgentHealthFile();
             setInterval(() => writeAgentHealthFile(), 60000);
 
-            // Flush old updates to avoid re-processing messages after restart
+            // Flush old updates to avoid re-processing stale messages after restart,
+            // and notify owner if any messages arrived while offline.
             try {
                 const flush = await telegram('getUpdates', { offset: -1, timeout: 0 });
                 if (flush.ok && flush.result.length > 0) {
                     offset = flush.result[flush.result.length - 1].update_id + 1;
-                    log(`Flushed ${flush.result.length} old update(s), offset now ${offset}`, 'DEBUG');
+                    log(`Flushed old update(s), offset now ${offset}`, 'DEBUG');
+                    const ownerChat = parseInt(OWNER_ID);
+                    if (ownerChat) {
+                        telegram('sendMessage', {
+                            chat_id: ownerChat,
+                            text: 'Back online — resend anything important.',
+                            disable_notification: true,
+                        }).catch(e => log(`Back-online notify failed: ${e.message}`, 'WARN'));
+                    }
                 }
             } catch (e) {
                 log(`Warning: Could not flush old updates: ${e.message}`, 'WARN');
