@@ -1196,8 +1196,8 @@ telegram('getMe')
                 if (flush.ok && flush.result.length > 0) {
                     offset = flush.result[flush.result.length - 1].update_id + 1;
                     log(`Flushed old update(s), offset now ${offset}`, 'DEBUG');
-                    const ownerChat = parseInt(OWNER_ID);
-                    if (ownerChat) {
+                    const ownerChat = parseInt(OWNER_ID, 10);
+                    if (!isNaN(ownerChat)) {
                         telegram('sendMessage', {
                             chat_id: ownerChat,
                             text: 'Back online — resend anything important.',
