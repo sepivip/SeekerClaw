@@ -697,9 +697,10 @@ async function handleMessage(msg) {
         let response = await chat(chatId, userContent, { isResume, originalGoal: resumeGoal, statusReaction });
 
         // Strip protocol tokens the agent may have mixed into content (BAT-279)
+        // Also strip preceding bold-markdown/whitespace before tokens (OpenClaw parity 2026.3.1)
         response = response.trim()
-            .replace(/\bHEARTBEAT_OK\b/gi, '')
-            .replace(/\bSILENT_REPLY\b/gi, '')
+            .replace(/(?:^|\s+|\*+)HEARTBEAT_OK\s*$/gi, '').replace(/\bHEARTBEAT_OK\b/gi, '')
+            .replace(/(?:^|\s+|\*+)SILENT_REPLY\s*$/gi, '').replace(/\bSILENT_REPLY\b/gi, '')
             .trim();
         if (!response) {
             log('Agent returned protocol-token-only response, discarding', 'DEBUG');
@@ -909,10 +910,10 @@ async function autoResumeOnStartup() {
             const task = prev.then(async () => {
                 try {
                     const response = await chat(chatId, 'continue', { isResume: true, originalGoal: full.originalGoal || null });
-                    // Strip protocol tokens (BAT-279)
+                    // Strip protocol tokens (BAT-279, OpenClaw parity 2026.3.1)
                     const cleaned = response ? response.trim()
-                        .replace(/\bHEARTBEAT_OK\b/gi, '')
-                        .replace(/\bSILENT_REPLY\b/gi, '')
+                        .replace(/(?:^|\s+|\*+)HEARTBEAT_OK\s*$/gi, '').replace(/\bHEARTBEAT_OK\b/gi, '')
+                        .replace(/(?:^|\s+|\*+)SILENT_REPLY\s*$/gi, '').replace(/\bSILENT_REPLY\b/gi, '')
                         .trim() : '';
                     if (cleaned) {
                         await sendMessage(chatId, cleaned);
@@ -1340,10 +1341,10 @@ async function runHeartbeat() {
         log('[Heartbeat] Running probe...', 'DEBUG');
         try {
             const response = await chat(ownerChatId, HEARTBEAT_PROMPT);
-            // Strip protocol tokens the agent may have mixed into content
+            // Strip protocol tokens the agent may have mixed into content (OpenClaw parity 2026.3.1)
             const cleaned = response.trim()
-                .replace(/\bHEARTBEAT_OK\b/gi, '')
-                .replace(/\bSILENT_REPLY\b/gi, '')
+                .replace(/(?:^|\s+|\*+)HEARTBEAT_OK\s*$/gi, '').replace(/\bHEARTBEAT_OK\b/gi, '')
+                .replace(/(?:^|\s+|\*+)SILENT_REPLY\s*$/gi, '').replace(/\bSILENT_REPLY\b/gi, '')
                 .trim();
             if (!cleaned) {
                 log('[Heartbeat] All clear', 'DEBUG');

@@ -1,8 +1,8 @@
 # OpenClaw Version Tracking
 
 > **Purpose:** Track OpenClaw releases and identify changes to port to SeekerClaw.
-> **Current OpenClaw Version:** 2026.2.28 (main be8a5b9d6, 2026-02-28)
-> **Last Sync Review:** 2026-02-28
+> **Current OpenClaw Version:** 2026.3.1 (main 3a08e69a0, 2026-03-03)
+> **Last Sync Review:** 2026-03-03
 > **Parity Plan:** See `PARITY_PLAN.md`
 
 ---
@@ -82,7 +82,32 @@ These files in OpenClaw directly affect SeekerClaw behavior. Changes here requir
 
 ## Version History & Changes
 
-### 2026.2.28 (Current - be8a5b9d6)
+### 2026.3.1 (Current - 3a08e69a0)
+- **Release Date:** 2026-03-02
+- **SeekerClaw Sync Status:** Reviewed, 1 fix ported, 1 deferred
+- **835 new commits since last sync (be8a5b9d6)**
+- **Ported:**
+  - [x] NO_REPLY bold-markdown stripping — two-pass regex to handle `**SILENT_REPLY` pattern (3 locations in main.js)
+- **Deferred:**
+  - [ ] Claude 4.6 adaptive thinking (`thinking: { type: "adaptive" }`) — separate task
+  - [ ] Cron transient retry for one-shot jobs (BAT-303) — backlogged
+- **Skipped (not applicable):**
+  - System prompt: completion events wording, ACP sections, session/subagent routing — server-only
+  - Model selection: provider routing for non-Anthropic (OpenRouter, xAI, Google) — we only use Anthropic
+  - Telegram: `sendMessageDraft` streaming (requires forum topics mode, not available in regular DMs), multi-bot, webhook mode — server-only or API limitation
+  - Telegram: filename preservation in media — minor, defer
+  - Memory: embedding/vector/SQLite references — Node 22+
+  - Skills: plugin skills, requirement installation — server-only
+  - Cron: session routing, delivery destinations, isolated agents — server-only
+  - Draft streaming: protocol changes — deferred until Telegram supports regular DM streaming
+  - Channels: multi-channel, multi-account routing — single-user Telegram only
+- **Notable upstream:**
+  - Telegram Bot API 9.5 `sendMessageDraft` for streaming (forum topics only)
+  - Claude 4.6 adaptive thinking defaults
+  - Transient retry for one-shot cron jobs
+  - New version tag: v2026.3.1
+
+### 2026.2.28 (be8a5b9d6)
 - **Release Date:** 2026-02-28
 - **SeekerClaw Sync Status:** 1 line ported
 - **652 new commits since last sync (b3f46f0e2)**
