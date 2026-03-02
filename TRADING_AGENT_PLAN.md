@@ -1,11 +1,13 @@
 # Trading Agent — Full Implementation Plan
 
-> **Codename:** TBD (your choice)
+> **Name:** Nikita
 > **Runtime:** VPS (Node.js 22+, Linux)
-> **Exchange:** Binance Futures
+> **Exchange:** Paper trading (v1) → Binance Futures (v2)
 > **AI:** Claude API (Anthropic)
 > **Interface:** Telegram Bot
-> **Data Source:** Your analysis API (http://38.242.154.6:8000)
+> **Data Source:** Analysis API (http://38.242.154.6:8000)
+> **Risk:** All limits adjustable via STRATEGY.md — owner + agent can modify
+> **Positions:** Agent decides (multi-position possible) — owner can override via Telegram
 
 ---
 
@@ -82,7 +84,7 @@ trading-agent/
 │   ├── scheduler.js          # Self-scheduling callback system
 │   ├── memory.js             # Memory file CRUD + SQLite indexing
 │   ├── data-api.js           # Your analysis API client (typed wrappers)
-│   ├── trade-api.js          # Binance Futures API client
+│   ├── trade-api.js          # PaperTrader (v1) / BinanceExecutor (v2)
 │   ├── trade-monitor.js      # Watches open positions, auto-schedules checks
 │   ├── learning.js           # Post-mortem engine + performance reviews
 │   └── config.js             # Environment config (.env loading)
@@ -97,6 +99,7 @@ trading-agent/
 │   └── memory/              # Daily memory files (YYYY-MM-DD.md)
 ├── data/
 │   ├── schedule.json         # Persisted callbacks
+│   ├── paper-trades.json     # Paper trade positions (active + closed)
 │   └── agent.db              # SQLite database
 ├── package.json
 ├── .env                      # API keys, tokens (never committed)
@@ -608,7 +611,7 @@ Approaching TP1 at 1929.99. Moved SL to breakeven. Next check in 2h.
 ```javascript
 {
     name: "execute_trade",
-    description: "Send a trade execution command to the trading system. This will open a position on Binance Futures via your existing bot. The agent decides; the system executes.",
+    description: "Open a paper trade position (v1) or real Binance Futures position (v2). Tracks entry price, SL, TP1, TP2, and monitors via scheduled callbacks. The agent decides; the system tracks.",
     input_schema: {
         type: "object",
         properties: {
@@ -1101,18 +1104,20 @@ CREATE TABLE IF NOT EXISTS signal_outcomes (
 ## 14. Implementation Order
 
 1. **Project setup** — package.json, .env, config.js, directory structure
-2. **Memory system** — memory.js, workspace seeding, SQLite indexing
+2. **Memory system** — memory.js, workspace seeding, SQLite FTS5 indexing
 3. **Data API client** — data-api.js (all 15 endpoint wrappers)
-4. **Tool definitions** — tools.js (all tools defined + dispatch)
-5. **System prompt builder** — context.js (per-trigger assembly)
-6. **Claude API integration** — brain.js (API call + tool use loop)
-7. **Telegram bot** — telegram.js (user messages → brain)
-8. **Webhook server** — webhook.js (signals → brain)
-9. **Scheduler** — scheduler.js (callbacks, persistence, timers)
-10. **Trade monitor** — trade-monitor.js (auto-scheduling on trade open/close)
-11. **Learning loop** — learning.js (post-mortem, daily/weekly reviews)
-12. **Testing** — end-to-end with mock signals
-13. **Deploy** — PM2 on VPS, systemd service
+4. **Paper trader** — trade-api.js (PaperTrader class, position tracking, SL/TP detection)
+5. **Tool definitions** — tools.js (all 26 tools defined + dispatch)
+6. **System prompt builder** — context.js (per-trigger assembly, dynamic)
+7. **Claude API integration** — brain.js (API call + tool use loop)
+8. **Telegram bot** — telegram.js (user messages → brain, proactive alerts)
+9. **Webhook server** — webhook.js (signals → brain)
+10. **Scheduler** — scheduler.js (callbacks, persistence, timers, catch-up)
+11. **Trade monitor** — trade-monitor.js (auto-scheduling, price-based SL/TP checks)
+12. **Learning loop** — learning.js (post-mortem, daily/weekly reviews)
+13. **Testing** — end-to-end with mock signals
+14. **Deploy** — PM2 on VPS, systemd service
+15. *(v2)* — Replace PaperTrader with BinanceExecutor
 
 ---
 
@@ -1141,10 +1146,52 @@ Minimal. No bloat. Each dependency has a clear purpose:
 
 ---
 
-## 16. Open Questions for You
+## 16. Decided Questions
 
-1. **Trade execution:** Does your system have an API endpoint to open/close trades? Or should the agent call Binance directly?
-2. **Webhook from your system:** Can you add webhook push from your signal engine? What format works best?
-3. **Agent name:** What do you want to call it?
-4. **Risk limits:** Maximum position size? Maximum daily loss before stopping?
-5. **Multiple positions:** Can the agent hold BTC + ETH + SOL simultaneously, or one at a time?
+1. **Trade execution:** Paper trading first (PaperTrader module). Internal position tracking using real-time prices from data API. Future v2 replaces with BinanceExecutor — same interface, zero brain changes.
+2. **Webhook from your system:** Yes — signal engine will POST to Nikita's webhook server.
+3. **Agent name:** **Nikita**
+4. **Risk limits:** All adjustable. Live in STRATEGY.md. Owner changes via Telegram ("set max risk to 1%"), agent proposes changes during reviews. Nothing hardcoded.
+5. **Multiple positions:** Agent decides based on strategy rules + market conditions. Owner can override ("only 1 position at a time") and Nikita saves to STRATEGY.md as a permanent rule.
+
+## 17. Paper Trading Architecture (v1)
+
+Paper trading is not a "mock mode" — it's a full position tracker using real prices:
+
+```javascript
+// PaperTrader interface (trade-api.js)
+class PaperTrader {
+    openPosition(symbol, direction, entryPrice, sl, tp1, tp2, metadata)
+    closePosition(id, exitPrice, reason)
+    modifyPosition(id, { newSl, newTp1, newTp2 })
+    getActivePositions()
+    getPositionById(id)
+    getClosedPositions()
+    getStats() // win rate, avg PnL, total trades
+    checkStopLevels(id, currentPrice) // returns 'sl_hit' | 'tp1_hit' | 'tp2_hit' | null
+}
+
+// BinanceExecutor (v2) — same interface, real orders
+class BinanceExecutor {
+    openPosition(symbol, direction, entryPrice, sl, tp1, tp2, metadata)
+    closePosition(id, exitPrice, reason)
+    modifyPosition(id, { newSl, newTp1, newTp2 })
+    getActivePositions()
+    getPositionById(id)
+    getClosedPositions()
+    getStats()
+    checkStopLevels(id, currentPrice) // reads from exchange
+}
+```
+
+State persisted in `data/paper-trades.json`:
+- `active[]` — open positions with entry, SL, TP, timestamps, metadata
+- `closed[]` — closed positions with exit, PnL, hold time, reason
+- Atomic writes with `.bak` backup (same pattern as scheduler)
+
+Trade monitor flow:
+1. On trade open → schedule `trade_check` callback (default every 30 min)
+2. On each callback → fetch current price via `get_market_data`
+3. Call `checkStopLevels(id, currentPrice)`
+4. If SL/TP hit → auto-close, trigger post-mortem pipeline
+5. If nothing hit → agent evaluates conditions, may adjust SL/TP or reschedule

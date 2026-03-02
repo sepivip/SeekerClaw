@@ -1,5 +1,6 @@
 # NikitaMWM — Engineering Brief & Agent Prompt
 
+> **Agent Name:** Nikita
 > **For:** Software engineer building NikitaMWM
 > **Reference project:** SeekerClaw (in this repo — Android AI agent with memory system)
 > **Date:** 2026-03-01
@@ -12,7 +13,7 @@ NikitaMWM is a **self-improving AI trading agent** that runs on a VPS (Node.js),
 
 ### One-Sentence Summary
 
-**An AI agent that sits between your signal engine and Binance Futures — it decides which signals to trade, monitors positions, writes post-mortems on every trade, and rewrites its own strategy rules based on what it learns.**
+**"Nikita" — an AI agent that sits between your signal engine and Binance Futures — it decides which signals to trade, monitors positions, writes post-mortems on every trade, and rewrites its own strategy rules based on what it learns.**
 
 ### What Makes It Different From a Normal Trading Bot
 
@@ -102,33 +103,37 @@ The agent reads from an existing analysis API that runs on a separate VPS. This 
 ## 4. Architecture
 
 ```
-YOUR SIGNAL ENGINE                    NIKITAMWM (AI AGENT)
+YOUR SIGNAL ENGINE                    NIKITA (AI AGENT on VPS)
 ┌──────────────────┐                  ┌─────────────────────────────────┐
 │                  │  webhook:signal  │                                 │
 │  Cluster         │ ───────────────► │  1. Fetch full context (API)    │
 │  Detection       │                  │  2. Read STRATEGY.md            │
 │  Prediction      │                  │  3. Read SIGNAL_TRUST.md        │
 │  Engine          │                  │  4. Decide: TAKE or SKIP        │
-│                  │                  │  5. If TAKE → execute_trade     │
-│  ┌────────────┐  │  webhook:opened  │  6. Schedule self-callbacks     │
-│  │ Binance    │  │ ◄─────────────── │  7. Log decision + reasoning    │
-│  │ Futures    │  │ ───────────────► │                                 │
-│  │ Execution  │  │  webhook:closed  │  On self-callback:              │
-│  └────────────┘  │ ───────────────► │  - Fetch fresh data             │
-│                  │                  │  - Check trade status            │
-└──────────────────┘                  │  - HOLD / CLOSE / ADJUST        │
-                                      │  - Schedule next check           │
+│                  │  reads market    │  5. If TAKE → paper trade       │
+│  ┌────────────┐  │ ◄─────────────── │  6. Schedule self-callbacks     │
+│  │ Data API   │  │ ───────────────► │  7. Log decision + reasoning    │
+│  │ (prices,   │  │  price for SL/TP │                                 │
+│  │  clusters, │  │  monitoring      │  On self-callback:              │
+│  │  structure) │  │                  │  - Fetch fresh price + data     │
+│  └────────────┘  │                  │  - Check SL/TP1/TP2 hit?       │
+│                  │                  │  - HOLD / CLOSE / ADJUST        │
+└──────────────────┘                  │  - Schedule next check           │
+                                      │                                 │
+      ┌──────────┐                    │  On paper trade close:          │
+      │ Telegram │ ◄────────────────► │  - Post-mortem → JOURNAL.md     │
+      │ (owner)  │  user messages +   │  - Failures → MISTAKES.md       │
+      └──────────┘  proactive alerts  │  - Update SIGNAL_TRUST.md       │
+                                      │  - Refine STRATEGY.md           │
       ┌──────────┐                    │                                 │
-      │ Telegram │ ◄────────────────► │  On trade close:                │
-      │ (owner)  │  user messages +   │  - Post-mortem → JOURNAL.md     │
-      └──────────┘  proactive alerts  │  - Failures → MISTAKES.md       │
-                                      │  - Update SIGNAL_TRUST.md       │
-      ┌──────────┐                    │  - Refine STRATEGY.md           │
-      │ Claude   │ ◄────────────────► │                                 │
-      │ API      │  reasoning engine  │  On user message:               │
-      └──────────┘                    │  - Full context + memory search │
-                                      │  - Answer anything              │
-                                      └─────────────────────────────────┘
+      │ Claude   │ ◄────────────────► │  On user message:               │
+      │ API      │  reasoning engine  │  - Full context + memory search │
+      └──────────┘                    │  - Answer anything              │
+                                      │                                 │
+      ┌──────────┐                    │  [FUTURE: BinanceExecutor]      │
+      │ Binance  │ ◄ · · · · · · · · │  - Same interface as PaperTrader│
+      │ Futures  │   (v2 — real exec) │  - Brain code: zero changes     │
+      └──────────┘                    └─────────────────────────────────┘
 ```
 
 ### Three Trigger Types
@@ -201,9 +206,11 @@ The system prompt is NOT static. It's assembled per invocation based on what tri
 `schedule_callback`, `cancel_callback`, `list_callbacks`
 
 ### Action Tools (4) — Execute decisions
-`execute_trade`, `close_trade`, `modify_trade`, `send_telegram`
+`execute_trade` (paper trade in v1, Binance in v2), `close_trade`, `modify_trade`, `send_telegram`
 
 Full tool schemas are in `TRADING_AGENT_PLAN.md` (Section 4).
+
+> **Note on paper trading:** `execute_trade`, `close_trade`, and `modify_trade` go through the `PaperTrader` module in v1. The agent doesn't know or care whether trades are paper or real — the interface is identical. When upgrading to live, only `trade-api.js` changes.
 
 ---
 
@@ -250,17 +257,94 @@ The agent schedules its own callbacks. This is critical — it's what makes it a
 
 ---
 
-## 9. Open Questions (Must Answer Before Building)
+## 9. Decided: Answers to Key Questions
 
-1. **Trade execution** — Does your system have an API endpoint to open/close trades? Or should the agent call Binance directly?
+1. **Agent name:** **Nikita**
 
-2. **Webhook push** — Can you add webhook output from your signal engine to POST to the agent's webhook server?
+2. **Trade execution — Paper trade first.** No real Binance execution in v1. The agent tracks simulated positions internally using real-time price data from the analysis API. Everything else (decision logic, memory, learning loop, post-mortems) works identically. When ready, a `BinanceExecutor` replaces the `PaperTrader` — the brain doesn't change. See Section 9.1 below.
 
-3. **Risk limits** — Maximum position size? Maximum daily loss before agent stops trading?
+3. **Webhook push — Yes.** The signal engine will POST to Nikita's webhook server when signals fire.
 
-4. **Multiple positions** — Can the agent hold BTC + ETH + SOL simultaneously, or one at a time?
+4. **Risk limits — Fully adjustable.** All risk parameters live in STRATEGY.md. The agent reads them before every decision. The owner can change any limit via Telegram ("set max daily loss to 3%") and the agent saves it to STRATEGY.md. Defaults are conservative but the agent can also propose changes during weekly reviews. Nothing hardcoded.
 
-5. **Agent name** — What do you want to call it?
+5. **Multiple positions — Agent decides.** Nikita evaluates whether to hold simultaneous positions based on its strategy rules, market conditions, and confidence. The owner can override via Telegram ("don't hold more than 1 position at a time") and Nikita saves that instruction to STRATEGY.md. The agent remembers owner instructions — they become permanent rules until the owner changes them.
+
+### 9.1 Paper Trading Architecture
+
+Paper trading is not a "mock mode" — it's a full internal position tracker that mirrors real execution:
+
+```
+Signal → Agent decides TAKE → PaperTrader opens position
+                                    │
+                                    ├── Tracks: symbol, direction, entry price, SL, TP1, TP2
+                                    ├── Monitors: real-time price from API (get_market_data)
+                                    ├── Detects: SL hit, TP1 hit, TP2 hit, manual close
+                                    ├── Calculates: unrealized PnL, hold time, R multiple
+                                    └── On close: triggers full post-mortem pipeline
+```
+
+**Paper trade state** is persisted in `data/paper-trades.json`:
+
+```javascript
+{
+    "active": [{
+        "id": 1,
+        "symbol": "BTCUSDT",
+        "direction": "LONG",
+        "entry_price": 66285.7,
+        "entry_time": "2026-03-01T17:30:00Z",
+        "sl_price": 65800.0,
+        "tp1_price": 67200.0,
+        "tp2_price": 67800.0,
+        "signal_score": 7,
+        "signal_rule": 1,
+        "status": "open",      // open, tp1_hit, trailing
+        "trailing_sl": null,    // set after TP1 hit
+        "reason": "R1 absorption long, HTF aligned, price at HVN support"
+    }],
+    "closed": [{
+        "id": 1,
+        "symbol": "BTCUSDT",
+        "direction": "LONG",
+        "entry_price": 66285.7,
+        "exit_price": 67200.0,
+        "entry_time": "2026-03-01T17:30:00Z",
+        "exit_time": "2026-03-01T21:30:00Z",
+        "pnl_pct": 1.38,
+        "exit_reason": "TP1",
+        "hold_seconds": 14400
+    }]
+}
+```
+
+**The trade monitor** polls `get_market_data` on each scheduled `trade_check` callback:
+- Compares current price against SL, TP1, TP2
+- If SL hit → close paper position, trigger post-mortem with loss
+- If TP1 hit → move SL to breakeven (or agent decides), continue monitoring
+- If TP2 hit → close position, trigger post-mortem with win
+- Agent can also manually close via `close_trade` tool
+
+**When upgrading to real Binance:**
+- Replace `PaperTrader` with `BinanceExecutor` in `trade-api.js`
+- Same interface: `openPosition()`, `closePosition()`, `modifyPosition()`, `getPosition()`
+- Brain, memory, learning loop — zero changes
+- Paper trade history stays in memory for comparison ("was I better on paper or live?")
+
+### 9.2 Owner Instructions → Memory
+
+When the owner tells Nikita something via Telegram, Nikita decides where to save it:
+
+| Owner says | Nikita saves to |
+|---|---|
+| "Don't trade SOL at night" | STRATEGY.md → Symbol-Specific Notes → SOLUSDT |
+| "Max 2% risk per trade" | STRATEGY.md → Risk Management |
+| "Only hold 1 position at a time" | STRATEGY.md → Core Rules |
+| "I'm going on vacation, don't trade" | STRATEGY.md → Core Rules (temporary) + daily_note |
+| "I prefer shorter trades" | STRATEGY.md → Position Sizing or Core Rules |
+| "Good job on that BTC trade" | daily_note (observation) |
+| "Your analysis of ETH was wrong because..." | MISTAKES.md (owner feedback) + daily_note |
+
+The agent classifies owner instructions into the right memory file. Trading rules → STRATEGY.md. Feedback → MISTAKES.md or daily note. Identity preferences → IDENTITY.md. This is not hardcoded routing — Claude decides based on content.
 
 ---
 
@@ -269,16 +353,18 @@ The agent schedules its own callbacks. This is critical — it's what makes it a
 1. Project setup — package.json, .env, config.js, directory structure
 2. Memory system — memory.js, workspace seeding, SQLite FTS5 indexing
 3. Data API client — data-api.js (15 endpoint wrappers)
-4. Tool definitions — tools.js (26 tools + dispatch)
-5. System prompt builder — context.js (dynamic per-trigger assembly)
-6. Claude API integration — brain.js (streaming + tool use loop)
-7. Telegram bot — telegram.js (user messages → brain)
-8. Webhook server — webhook.js (signals → brain)
-9. Scheduler — scheduler.js (callbacks, persistence, timers)
-10. Trade monitor — trade-monitor.js (auto-scheduling on trade open/close)
-11. Learning loop — learning.js (post-mortem, daily/weekly reviews)
-12. Testing — end-to-end with mock signals
-13. Deploy — PM2 on VPS
+4. **Paper trader** — trade-api.js (PaperTrader class, position tracking, SL/TP detection)
+5. Tool definitions — tools.js (26 tools + dispatch)
+6. System prompt builder — context.js (dynamic per-trigger assembly)
+7. Claude API integration — brain.js (streaming + tool use loop)
+8. Telegram bot — telegram.js (user messages → brain)
+9. Webhook server — webhook.js (signals → brain)
+10. Scheduler — scheduler.js (callbacks, persistence, timers)
+11. Trade monitor — trade-monitor.js (auto-scheduling on trade open/close, price-based SL/TP checks)
+12. Learning loop — learning.js (post-mortem, daily/weekly reviews)
+13. Testing — end-to-end with mock signals
+14. Deploy — PM2 on VPS
+15. *(Future v2)* — Replace PaperTrader with BinanceExecutor
 
 ---
 
@@ -287,10 +373,19 @@ The agent schedules its own callbacks. This is critical — it's what makes it a
 Use this prompt when starting a Claude Code session to build NikitaMWM:
 
 ```
-You are building NikitaMWM — a self-improving AI trading agent for Binance
-Futures (BTCUSDT, ETHUSDT, SOLUSDT). It runs on a VPS (Node.js 22+), receives
-signals from an existing analysis system via webhooks, and communicates with the
-owner via Telegram.
+You are building NikitaMWM — a self-improving AI trading agent named "Nikita"
+for Binance Futures (BTCUSDT, ETHUSDT, SOLUSDT). It runs on a VPS (Node.js 22+),
+receives signals from an existing analysis system via webhooks, and communicates
+with the owner via Telegram.
+
+PHASE 1: PAPER TRADING
+- Nikita does NOT execute real trades yet. It uses an internal PaperTrader that
+  simulates positions using real-time prices from the data API.
+- PaperTrader tracks: entry, SL, TP1, TP2, unrealized PnL, hold time.
+- On each trade_check callback, it fetches current price and checks SL/TP hits.
+- Paper trades persist in data/paper-trades.json (survives restarts).
+- The learning loop (post-mortems, journal, mistakes) works identically on paper trades.
+- Future v2: replace PaperTrader with BinanceExecutor — same interface, zero brain changes.
 
 CRITICAL ARCHITECTURE:
 - Agent does NOT generate signals. It receives them from an external system.
@@ -298,46 +393,53 @@ CRITICAL ARCHITECTURE:
 - Agent MONITORS open trades via self-scheduled callbacks.
 - Agent LEARNS from outcomes by writing post-mortems and updating strategy rules.
 - Agent has 7 separate memory files (not one blob) — each injected only when relevant.
+- Risk limits, position rules, and all parameters live in STRATEGY.md — fully adjustable
+  by both the agent (via learning) and the owner (via Telegram instructions).
+- Owner instructions via Telegram are saved to the appropriate memory file automatically.
+  "Don't hold more than 1 position" → STRATEGY.md. "Good job" → daily_note.
+  Nikita classifies where to save based on content.
 
 MEMORY FILES (in workspace/):
-- IDENTITY.md — who the agent is, owner info
-- STRATEGY.md — trading playbook (AGENT REWRITES THIS as it learns)
+- IDENTITY.md — who Nikita is, owner info, personality
+- STRATEGY.md — trading playbook (NIKITA REWRITES THIS as it learns)
 - JOURNAL.md — structured trade log (entry, exit, reasoning, outcome, lesson)
 - MARKET_STATE.md — current market snapshot (overwritten on each analysis)
 - MISTAKES.md — failure log with root cause + pattern detection
-- SIGNAL_TRUST.md — tracks signal accuracy from agent's perspective
+- SIGNAL_TRUST.md — tracks signal accuracy from Nikita's perspective
 - memory/*.md — daily observation notes
 
 TOOLS (26 total):
 - Data (15): Wrappers for analysis API (market, structure, predictions, clusters, VP, trades)
 - Memory (6): read, write, append, search (FTS5), daily_note, stats
 - Schedule (3): schedule_callback, cancel_callback, list_callbacks
-- Action (4): execute_trade, close_trade, modify_trade, send_telegram
+- Action (4): execute_trade (paper), close_trade, modify_trade, send_telegram
 
 THREE TRIGGER TYPES:
-1. Webhook (signal from analysis system) → agent analyzes + decides
-2. Self-scheduled callback (agent set its own timer) → agent re-evaluates
-3. User message (Telegram) → agent responds with full context
+1. Webhook (signal from analysis system) → Nikita analyzes + decides
+2. Self-scheduled callback (Nikita set its own timer) → Nikita re-evaluates
+3. User message (Telegram) → Nikita responds with full context
 
 THE LEARNING LOOP:
-Signal → Decision → Trade → Outcome → Post-Mortem → Strategy Update → Loop
+Signal → Decision → Paper Trade → Outcome → Post-Mortem → Strategy Update → Loop
 
 SYSTEM PROMPT IS DYNAMIC — assembled per trigger type:
 - Signal: IDENTITY + STRATEGY + SIGNAL_TRUST + recent daily notes
-- Trade check: IDENTITY + STRATEGY (risk only) + trade details
+- Trade check: IDENTITY + STRATEGY (risk only) + trade details + current price
 - Trade closed: IDENTITY + STRATEGY + MISTAKES + journal template
 - User message: IDENTITY + STRATEGY + MARKET_STATE + recent notes
 - Review: IDENTITY + STRATEGY + full journal + MISTAKES + SIGNAL_TRUST
 
 KEY RULES:
 1. Memory files are sacred — never delete workspace/ contents
-2. STRATEGY.md is the agent's brain — it reads before every decision
-3. Every early return in async handlers must clean up state
-4. All setTimeout/setInterval must be tracked and clearable
-5. Tool results: success = { data } / failure = { error: "message" }
-6. Guard persisted JSON defensively (type check + isFinite)
-7. Use ?? null for optional fields (not undefined)
-8. Webhook auth: verify X-Webhook-Secret header on every request
+2. STRATEGY.md is Nikita's brain — read before every decision
+3. Owner instructions from Telegram → saved to appropriate memory file
+4. Every early return in async handlers must clean up state
+5. All setTimeout/setInterval must be tracked and clearable
+6. Tool results: success = { data } / failure = { error: "message" }
+7. Guard persisted JSON defensively (type check + isFinite)
+8. Use ?? null for optional fields (not undefined)
+9. Webhook auth: verify X-Webhook-Secret header on every request
+10. Paper trades persist to disk — must survive process restarts
 
 DATA API:
 - Base: http://38.242.154.6:8000
@@ -349,20 +451,22 @@ DATA API:
 
 REFERENCE: See TRADING_AGENT_PLAN.md for full tool schemas, memory file
 templates, webhook formats, scheduler design, and database schema.
+See NIKITAMWM_ENGINEERING_BRIEF.md for architecture rationale, SeekerClaw
+analysis, paper trading design, and owner instruction routing.
 
 PROJECT FILES:
 src/index.js        — entry point, starts all services
 src/brain.js        — Claude API + tool use loop
-src/context.js      — dynamic system prompt builder
+src/context.js      — dynamic system prompt builder (per trigger type)
 src/tools.js        — 26 tool definitions + dispatch
-src/telegram.js     — Telegram bot (Grammy)
-src/webhook.js      — Express server for signal webhooks
-src/scheduler.js    — self-scheduling callback system
+src/telegram.js     — Telegram bot (Grammy) — user messages + proactive alerts
+src/webhook.js      — Express server for signal webhooks from analysis system
+src/scheduler.js    — self-scheduling callback system (persistent, catch-up on restart)
 src/memory.js       — memory file CRUD + SQLite FTS5 indexing
 src/data-api.js     — analysis API client (15 endpoints)
-src/trade-api.js    — trade execution client
-src/trade-monitor.js — monitors open positions, auto-schedules checks
-src/learning.js     — post-mortem engine + performance reviews
+src/trade-api.js    — PaperTrader (v1) / BinanceExecutor (v2) — same interface
+src/trade-monitor.js — monitors open positions, auto-schedules checks, SL/TP detection
+src/learning.js     — post-mortem engine + daily/weekly reviews
 src/config.js       — .env loading + validation
 ```
 
