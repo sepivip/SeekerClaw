@@ -95,7 +95,9 @@ import com.seekerclaw.app.util.Analytics
 import com.seekerclaw.app.util.LogCollector
 import com.seekerclaw.app.util.LogLevel
 import com.seekerclaw.app.BuildConfig
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
 import java.util.Date
@@ -251,13 +253,15 @@ fun SettingsScreen(
         contract = ActivityResultContracts.CreateDocument("application/zip")
     ) { uri ->
         if (uri != null) {
-            val success = ConfigManager.exportUserSkills(context, uri)
-            Analytics.featureUsed("skills_bulk_exported")
-            Toast.makeText(
-                context,
-                if (success) "Skills exported" else "No added skills to export",
-                Toast.LENGTH_SHORT,
-            ).show()
+            scope.launch {
+                val success = withContext(Dispatchers.IO) { ConfigManager.exportUserSkills(context, uri) }
+                Analytics.featureUsed("skills_bulk_exported")
+                Toast.makeText(
+                    context,
+                    if (success) "Skills exported" else "No added skills to export",
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
         }
     }
 
@@ -265,20 +269,22 @@ fun SettingsScreen(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
         if (uri != null) {
-            val count = ConfigManager.importUserSkills(context, uri)
-            Analytics.featureUsed("skills_imported")
-            if (count > 0) {
-                Toast.makeText(
-                    context,
-                    "Imported $count skill${if (count > 1) "s" else ""}",
-                    Toast.LENGTH_SHORT,
-                ).show()
-            } else {
-                Toast.makeText(
-                    context,
-                    if (count == 0) "No skills found in file" else "Import failed",
-                    Toast.LENGTH_SHORT,
-                ).show()
+            scope.launch {
+                val count = withContext(Dispatchers.IO) { ConfigManager.importUserSkills(context, uri) }
+                Analytics.featureUsed("skills_imported")
+                if (count > 0) {
+                    Toast.makeText(
+                        context,
+                        "Imported $count skill${if (count > 1) "s" else ""}",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                } else {
+                    Toast.makeText(
+                        context,
+                        if (count == 0) "No skills found in file" else "Import failed",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
             }
         }
     }

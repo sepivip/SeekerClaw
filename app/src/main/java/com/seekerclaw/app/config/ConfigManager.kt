@@ -1131,7 +1131,11 @@ object ConfigManager {
 
         val isZip = bytesRead >= 4 &&
             magic[0] == 0x50.toByte() && magic[1] == 0x4B.toByte() &&
-            magic[2] == 0x03.toByte() && magic[3] == 0x04.toByte()
+            (
+                (magic[2] == 0x03.toByte() && magic[3] == 0x04.toByte()) || // Local file header
+                (magic[2] == 0x05.toByte() && magic[3] == 0x06.toByte()) || // End of central directory (empty ZIP)
+                (magic[2] == 0x07.toByte() && magic[3] == 0x08.toByte())    // Data descriptor
+            )
 
         return if (isZip) {
             importSkillsFromZip(context, uri, skillsDir, defaultNames)
@@ -1198,11 +1202,11 @@ object ConfigManager {
                         }
 
                         if (entry.isDirectory) {
-                            if (!destFile.exists()) createdDirs.add(destFile)
+                            trackNewDirs(destFile, skillsDir, createdDirs)
                             destFile.mkdirs()
                         } else {
                             destFile.parentFile?.let { parent ->
-                                if (!parent.exists()) createdDirs.add(parent)
+                                trackNewDirs(parent, skillsDir, createdDirs)
                                 parent.mkdirs()
                             }
                             destFile.outputStream().use { out ->
@@ -1253,8 +1257,8 @@ object ConfigManager {
             }
 
             val bytes = inputStream.use { it.readBytes() }
-            if (bytes.size > IMPORT_MAX_BYTES) {
-                Log.e(TAG, "Skill file exceeds ${IMPORT_MAX_BYTES / 1024 / 1024}MB limit (${bytes.size / 1024}KB)")
+            if (bytes.size > SKILL_IMPORT_MAX_BYTES) {
+                Log.e(TAG, "Skill file exceeds ${SKILL_IMPORT_MAX_BYTES / 1024 / 1024}MB limit (${bytes.size / 1024}KB)")
                 return -1
             }
 
@@ -1299,7 +1303,7 @@ object ConfigManager {
                     if (trimmed.startsWith("name:")) {
                         val name = trimmed.substringAfter("name:").trim()
                             .removeSurrounding("\"").removeSurrounding("'").trim()
-                        if (name.isNotEmpty()) return name.lowercase().replace(Regex("[^a-z0-9_-]"), "-")
+                        if (name.isNotEmpty()) return name.lowercase(Locale.ROOT).replace(Regex("[^a-z0-9_-]"), "-")
                     }
                 }
             }
@@ -1308,9 +1312,20 @@ object ConfigManager {
         val headingLine = content.lines().firstOrNull { it.startsWith("# ") }
         if (headingLine != null) {
             val name = headingLine.substring(2).trim()
-            if (name.isNotEmpty()) return name.lowercase().replace(Regex("[^a-z0-9_-]"), "-")
+            if (name.isNotEmpty()) return name.lowercase(Locale.ROOT).replace(Regex("[^a-z0-9_-]"), "-")
         }
         return null
+    }
+
+    /** Track all non-existent ancestor directories under [root] for rollback. */
+    private fun trackNewDirs(dir: File, root: File, createdDirs: MutableSet<File>) {
+        var current: File? = dir
+        while (current != null && !current.exists() &&
+            current.canonicalPath.startsWith(root.canonicalPath)
+        ) {
+            createdDirs.add(current)
+            current = current.parentFile
+        }
     }
 
     /**
@@ -1333,6 +1348,9 @@ object ConfigManager {
 
     /** Max total uncompressed size to extract from a backup ZIP (50 MB). */
     private const val IMPORT_MAX_BYTES = 50L * 1024 * 1024
+
+    /** Max size for a single .md skill import (5 MB). */
+    private const val SKILL_IMPORT_MAX_BYTES = 5L * 1024 * 1024
 
     /**
      * Allowlist of exact files and directory prefixes for export/import.

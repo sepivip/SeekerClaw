@@ -29,6 +29,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -47,7 +48,9 @@ import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.ui.theme.RethinkSans
 import com.seekerclaw.app.ui.theme.SeekerClawColors
 import com.seekerclaw.app.util.Analytics
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
@@ -56,6 +59,7 @@ fun SkillsScreen() {
     val context = LocalContext.current
     val workspaceDir = remember { File(context.filesDir, "workspace") }
     var selectedSkill by remember { mutableStateOf<SkillInfo?>(null) }
+    val scope = rememberCoroutineScope()
 
     // Single-skill export launcher (registered at screen level so it survives detail→list navigation)
     var pendingExportDirName by remember { mutableStateOf<String?>(null) }
@@ -64,13 +68,15 @@ fun SkillsScreen() {
     ) { uri ->
         val dirName = pendingExportDirName
         if (uri != null && dirName != null) {
-            val success = ConfigManager.exportSkill(context, uri, dirName)
-            Analytics.featureUsed("skill_exported")
-            Toast.makeText(
-                context,
-                if (success) "Skill exported" else "Export failed",
-                Toast.LENGTH_SHORT,
-            ).show()
+            scope.launch {
+                val success = withContext(Dispatchers.IO) { ConfigManager.exportSkill(context, uri, dirName) }
+                Analytics.featureUsed("skill_exported")
+                Toast.makeText(
+                    context,
+                    if (success) "Skill exported" else "Export failed",
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
         }
         pendingExportDirName = null
     }
@@ -106,19 +112,22 @@ private fun SkillsListContent(
     var searchQuery by remember { mutableStateOf("") }
     var reloadTrigger by remember { mutableStateOf(0) }
     val shape = remember { RoundedCornerShape(SeekerClawColors.CornerRadius) }
+    val scope = rememberCoroutineScope()
 
     // Bulk export launcher
     val bulkExportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/zip")
     ) { uri ->
         if (uri != null) {
-            val success = ConfigManager.exportUserSkills(context, uri)
-            Analytics.featureUsed("skills_bulk_exported")
-            Toast.makeText(
-                context,
-                if (success) "Skills exported" else "Export failed",
-                Toast.LENGTH_SHORT,
-            ).show()
+            scope.launch {
+                val success = withContext(Dispatchers.IO) { ConfigManager.exportUserSkills(context, uri) }
+                Analytics.featureUsed("skills_bulk_exported")
+                Toast.makeText(
+                    context,
+                    if (success) "Skills exported" else "Export failed",
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
         }
     }
 
@@ -127,21 +136,23 @@ private fun SkillsListContent(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
         if (uri != null) {
-            val count = ConfigManager.importUserSkills(context, uri)
-            Analytics.featureUsed("skills_imported")
-            if (count > 0) {
-                reloadTrigger++
-                Toast.makeText(
-                    context,
-                    "Imported $count skill${if (count > 1) "s" else ""}",
-                    Toast.LENGTH_SHORT,
-                ).show()
-            } else {
-                Toast.makeText(
-                    context,
-                    if (count == 0) "No skills found in file" else "Import failed",
-                    Toast.LENGTH_SHORT,
-                ).show()
+            scope.launch {
+                val count = withContext(Dispatchers.IO) { ConfigManager.importUserSkills(context, uri) }
+                Analytics.featureUsed("skills_imported")
+                if (count > 0) {
+                    reloadTrigger++
+                    Toast.makeText(
+                        context,
+                        "Imported $count skill${if (count > 1) "s" else ""}",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                } else {
+                    Toast.makeText(
+                        context,
+                        if (count == 0) "No skills found in file" else "Import failed",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
             }
         }
     }
