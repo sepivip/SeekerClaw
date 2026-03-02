@@ -3681,10 +3681,26 @@ async function executeTool(name, input, chatId) {
                 }
 
                 fs.unlinkSync(filePath);
+
+                // Auto-clean empty parent directory inside skills/
+                let directoryRemoved = false;
+                const parentDir = path.dirname(filePath);
+                const relParent = path.relative(workDir, parentDir);
+                const parentParts = relParent.split('/');
+                if (parentParts[0] === 'skills' && parentParts.length === 2) {
+                    try {
+                        if (fs.readdirSync(parentDir).length === 0) {
+                            fs.rmdirSync(parentDir);
+                            directoryRemoved = true;
+                            log(`Removed empty skill directory: ${relParent}`, 'DEBUG');
+                        }
+                    } catch (_) { /* best-effort — rmdirSync only removes empty dirs */ }
+                }
+
                 // Sanitize path for logging (strip control chars)
                 const safLogPath = String(input.path).replace(/[\r\n\0\u2028\u2029]/g, '_');
                 log(`File deleted: ${safLogPath}`, 'DEBUG');
-                return { success: true, path: input.path, deleted: true };
+                return { success: true, path: input.path, deleted: true, directoryRemoved };
             } catch (err) {
                 log(`Error deleting file: ${err && err.message ? err.message : String(err)}`, 'ERROR');
                 return { error: `Failed to delete file: ${err && err.message ? err.message : String(err)}` };
