@@ -212,7 +212,7 @@ private fun SkillsListContent(
                         color = SeekerClawColors.Accent,
                         modifier = Modifier
                             .clickable(onClickLabel = "Import skills") {
-                                importSkillsLauncher.launch(arrayOf("*/*"))
+                                importSkillsLauncher.launch(arrayOf("application/zip", "text/markdown", "text/plain"))
                             }
                             .padding(4.dp),
                     )

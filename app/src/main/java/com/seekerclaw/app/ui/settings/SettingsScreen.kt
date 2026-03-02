@@ -942,7 +942,7 @@ fun SettingsScreen(
 
                 OutlinedButton(
                     onClick = {
-                        skillsImportLauncher.launch(arrayOf("*/*"))
+                        skillsImportLauncher.launch(arrayOf("application/zip", "text/markdown", "text/plain"))
                     },
                     modifier = Modifier.fillMaxWidth(),
                     shape = shape,

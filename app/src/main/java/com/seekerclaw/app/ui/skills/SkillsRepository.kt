@@ -31,8 +31,8 @@ object SkillsRepository {
                                     parseSkillFile(content, entry.name, skillFile.absolutePath)?.let { skill ->
                                         val isDefault = entry.name in defaultSkillNames
                                         val isModified = if (isDefault) {
-                                            val currentHash = computeHash(content)
-                                            currentHash != defaultSkillHashes[entry.name]
+                                            val expectedHash = defaultSkillHashes[entry.name]
+                                            if (expectedHash != null) computeHash(content) != expectedHash else false
                                         } else false
                                         result.add(skill.copy(isDefault = isDefault, isModifiedDefault = isModified))
                                     }

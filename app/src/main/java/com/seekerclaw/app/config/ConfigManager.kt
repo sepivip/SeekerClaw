@@ -1181,15 +1181,15 @@ object ConfigManager {
                         }
 
                         // Skip entries that would overwrite bundled/default skills
-                        if (segments[0] in defaultNames) {
-                            skippedDefaults.add(segments[0])
+                        // Check both directory name and root-level .md filename without extension
+                        val skillKey = if (segments.size == 1 && segments[0].endsWith(".md"))
+                            segments[0].removeSuffix(".md") else segments[0]
+                        if (skillKey in defaultNames) {
+                            skippedDefaults.add(skillKey)
                             zip.closeEntry()
                             entry = zip.nextEntry
                             continue
                         }
-
-                        // Track top-level skill name for count
-                        importedDirs.add(segments[0])
 
                         val destFile = File(skillsDir, segments.joinToString("/"))
 
@@ -1200,6 +1200,9 @@ object ConfigManager {
                             entry = zip.nextEntry
                             continue
                         }
+
+                        // Track top-level skill name for count (after validation)
+                        importedDirs.add(segments[0])
 
                         if (entry.isDirectory) {
                             trackNewDirs(destFile, skillsDir, createdDirs)
