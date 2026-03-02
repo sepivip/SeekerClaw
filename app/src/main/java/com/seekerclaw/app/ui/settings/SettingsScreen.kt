@@ -249,6 +249,8 @@ fun SettingsScreen(
         }
     }
 
+    val scope = rememberCoroutineScope()
+
     val skillsExportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/zip")
     ) { uri ->
@@ -289,7 +291,6 @@ fun SettingsScreen(
         }
     }
 
-    val scope = rememberCoroutineScope()
     val qrConfigLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
