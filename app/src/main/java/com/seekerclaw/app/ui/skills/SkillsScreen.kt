@@ -60,7 +60,7 @@ fun SkillsScreen() {
     // Single-skill export launcher (registered at screen level so it survives detail→list navigation)
     var pendingExportDirName by remember { mutableStateOf<String?>(null) }
     val singleSkillExportLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("*/*")
+        contract = ActivityResultContracts.CreateDocument("text/markdown")
     ) { uri ->
         val dirName = pendingExportDirName
         if (uri != null && dirName != null) {
