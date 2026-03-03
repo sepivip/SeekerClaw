@@ -3535,6 +3535,9 @@ async function executeTool(name, input, chatId) {
                 'copyFileSync', 'copyFile', 'cpSync', 'cp',
             ]);
             const FSP_GUARDED = new Set(['readFile', 'writeFile', 'appendFile', 'open', 'copyFile', 'cp']);
+            // Safe process subset — env is empty to prevent leaking sensitive variables
+            // Defined here so sandboxedRequire can return it for require('process')
+            const safeProcess = { env: {}, cwd: () => workDir, platform: process.platform, arch: process.arch, version: process.version };
             const sandboxedRequire = (mod) => {
                 if (typeof mod !== 'string') {
                     throw new Error('Module identifier must be a string in js_eval.');
@@ -3577,6 +3580,10 @@ async function executeTool(name, input, chatId) {
                 if (normalizedMod === 'fs/promises') {
                     return createGuardedFsProxy(require('fs/promises'), FSP_GUARDED);
                 }
+                // Return safe process stub instead of real process (blocks env, mainModule)
+                if (normalizedMod === 'process') {
+                    return safeProcess;
+                }
 
                 return require(normalizedMod);
             };
@@ -3584,8 +3591,6 @@ async function executeTool(name, input, chatId) {
             let timerId;
             try {
                 const vm = require('vm');
-                // Safe process subset — env is empty to prevent leaking sensitive variables
-                const safeProcess = { env: {}, cwd: () => workDir, platform: process.platform, arch: process.arch, version: process.version };
 
                 // Create a proper VM sandbox — codeGeneration:{strings:false} blocks
                 // Function(), eval(), and constructor-based escapes entirely.
@@ -3614,7 +3619,9 @@ async function executeTool(name, input, chatId) {
                 // Wrap in async IIFE for top-level await support, enforce strict mode
                 const wrappedCode = `(async () => {\n'use strict';\n${code}\n})()`;
                 const script = new vm.Script(wrappedCode, { filename: 'js_eval.js' });
-                const resultPromise = script.runInContext(context);
+                // VM timeout kills synchronous infinite loops (while(true){});
+                // Promise.race timeout handles async hangs (await never resolves)
+                const resultPromise = script.runInContext(context, { timeout });
 
                 const timeoutPromise = new Promise((_, rej) => {
                     timerId = setTimeout(() => rej(new Error(`Execution timed out after ${timeout}ms`)), timeout);
