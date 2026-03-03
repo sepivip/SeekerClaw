@@ -3583,15 +3583,39 @@ async function executeTool(name, input, chatId) {
 
             let timerId;
             try {
-                // AsyncFunction allows top-level await
-                const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
-                // Shadow process/global/globalThis to prevent process.mainModule.require bypass
-                // Provide safe process subset — env is empty to prevent leaking sensitive variables
+                const vm = require('vm');
+                // Safe process subset — env is empty to prevent leaking sensitive variables
                 const safeProcess = { env: {}, cwd: () => workDir, platform: process.platform, arch: process.arch, version: process.version };
-                // Enforce strict mode so `this` is undefined (prevents this.process.mainModule.require bypass)
-                const fn = new AsyncFunction('console', 'require', '__dirname', '__filename', 'process', 'global', 'globalThis', `'use strict';\n${code}`);
 
-                const resultPromise = fn.call(null, mockConsole, sandboxedRequire, workDir, path.join(workDir, 'eval.js'), safeProcess, undefined, undefined);
+                // Create a proper VM sandbox — codeGeneration:{strings:false} blocks
+                // Function(), eval(), and constructor-based escapes entirely.
+                const sandbox = {
+                    console: mockConsole,
+                    require: sandboxedRequire,
+                    __dirname: workDir,
+                    __filename: path.join(workDir, 'eval.js'),
+                    process: safeProcess,
+                    global: undefined,
+                    globalThis: undefined,
+                    // Node.js globals that user code may need
+                    setTimeout, clearTimeout, setInterval, clearInterval,
+                    Buffer, URL, URLSearchParams,
+                    TextEncoder: typeof TextEncoder !== 'undefined' ? TextEncoder : undefined,
+                    TextDecoder: typeof TextDecoder !== 'undefined' ? TextDecoder : undefined,
+                    atob: typeof atob !== 'undefined' ? atob : undefined,
+                    btoa: typeof btoa !== 'undefined' ? btoa : undefined,
+                    AbortController: typeof AbortController !== 'undefined' ? AbortController : undefined,
+                    queueMicrotask,
+                };
+                const context = vm.createContext(sandbox, {
+                    codeGeneration: { strings: false, wasm: false },
+                });
+
+                // Wrap in async IIFE for top-level await support, enforce strict mode
+                const wrappedCode = `(async () => {\n'use strict';\n${code}\n})()`;
+                const script = new vm.Script(wrappedCode, { filename: 'js_eval.js' });
+                const resultPromise = script.runInContext(context);
+
                 const timeoutPromise = new Promise((_, rej) => {
                     timerId = setTimeout(() => rej(new Error(`Execution timed out after ${timeout}ms`)), timeout);
                 });
