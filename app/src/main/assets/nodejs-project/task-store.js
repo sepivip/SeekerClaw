@@ -68,6 +68,14 @@ function saveCheckpoint(taskId, state) {
                         const b = { ...block };
                         if (typeof b.text === 'string') b.text = redactSecrets(b.text);
                         if (typeof b.content === 'string') b.content = redactSecrets(b.content);
+                        // Deep-redact tool_use input (may contain API keys, tokens, etc.)
+                        if (b.type === 'tool_use' && b.input && typeof b.input === 'object') {
+                            b.input = _redactObject(b.input);
+                        }
+                        // Also redact tool_result content if it's a string
+                        if (b.type === 'tool_result' && typeof b.content === 'string') {
+                            b.content = redactSecrets(b.content);
+                        }
                         return b;
                     });
                 }
@@ -235,6 +243,20 @@ function cleanupExpired() {
 // ============================================================================
 // INTERNAL
 // ============================================================================
+
+// Deep-redact all string values in an object (for tool_use input payloads)
+function _redactObject(obj) {
+    if (typeof obj === 'string') return redactSecrets(obj);
+    if (Array.isArray(obj)) return obj.map(item => _redactObject(item));
+    if (obj && typeof obj === 'object') {
+        const out = {};
+        for (const key of Object.keys(obj)) {
+            out[key] = _redactObject(obj[key]);
+        }
+        return out;
+    }
+    return obj;
+}
 
 function _readJson(filePath) {
     try {

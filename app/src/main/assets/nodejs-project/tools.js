@@ -3536,20 +3536,41 @@ async function executeTool(name, input, chatId) {
             ]);
             const FSP_GUARDED = new Set(['readFile', 'writeFile', 'appendFile', 'open', 'copyFile', 'cp']);
             const sandboxedRequire = (mod) => {
-                if (BLOCKED_MODULES.has(mod)) {
-                    throw new Error(`Module "${mod}" is blocked in js_eval for security. Use shell_exec for command execution.`);
+                if (typeof mod !== 'string') {
+                    throw new Error('Module identifier must be a string in js_eval.');
                 }
-                // Block relative requires — prevents access to config.js (secrets), security.js, etc.
-                if (mod.startsWith('./') || mod.startsWith('../') || mod.startsWith('.\\') || mod.startsWith('..\\')) {
+                // Normalize Node core specifiers like "node:fs" → "fs"
+                let normalizedMod = mod.startsWith('node:') ? mod.slice(5) : mod;
+
+                // Block relative requires (including ".", "..") — prevents access to config.js (secrets), security.js, etc.
+                if (
+                    normalizedMod === '.' ||
+                    normalizedMod === '..' ||
+                    normalizedMod.startsWith('./') ||
+                    normalizedMod.startsWith('../') ||
+                    normalizedMod.startsWith('.\\') ||
+                    normalizedMod.startsWith('..\\')
+                ) {
                     throw new Error('Relative module imports are blocked in js_eval for security.');
                 }
+
                 // Block absolute paths into workspace or source directory
-                if (path.isAbsolute(mod) && (mod.startsWith(workDir) || mod.startsWith(__dirname))) {
+                if (path.isAbsolute(normalizedMod) && (normalizedMod.startsWith(workDir) || normalizedMod.startsWith(__dirname))) {
                     throw new Error('Direct module imports from app directories are blocked in js_eval for security.');
                 }
-                if (mod === 'fs') return createGuardedFsProxy(require('fs'), FS_GUARDED, FSP_GUARDED);
-                if (mod === 'fs/promises') return createGuardedFsProxy(require('fs/promises'), FSP_GUARDED);
-                return require(mod);
+
+                if (BLOCKED_MODULES.has(normalizedMod)) {
+                    throw new Error(`Module "${normalizedMod}" is blocked in js_eval for security. Use shell_exec for command execution.`);
+                }
+
+                if (normalizedMod === 'fs') {
+                    return createGuardedFsProxy(require('fs'), FS_GUARDED, FSP_GUARDED);
+                }
+                if (normalizedMod === 'fs/promises') {
+                    return createGuardedFsProxy(require('fs/promises'), FSP_GUARDED);
+                }
+
+                return require(normalizedMod);
             };
 
             let timerId;
