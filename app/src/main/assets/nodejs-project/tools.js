@@ -13,7 +13,7 @@ const {
 } = require('./config');
 
 const {
-    safePath, detectSuspiciousPatterns,
+    redactSecrets, rebuildRedactPatterns, safePath, detectSuspiciousPatterns,
     wrapExternalContent, wrapSearchResults,
 } = require('./security');
 
@@ -1005,7 +1005,7 @@ async function executeTool(name, input, chatId) {
 
         case 'memory_save': {
             const currentMemory = loadMemory();
-            const newMemory = currentMemory + '\n\n---\n\n' + input.content;
+            const newMemory = currentMemory + '\n\n---\n\n' + redactSecrets(input.content);
             saveMemory(newMemory.trim());
             return { success: true, message: 'Memory saved' };
         }
@@ -1016,7 +1016,7 @@ async function executeTool(name, input, chatId) {
         }
 
         case 'daily_note': {
-            appendDailyMemory(input.note);
+            appendDailyMemory(redactSecrets(input.note));
             return { success: true, message: 'Note added to daily memory' };
         }
 
@@ -1110,6 +1110,7 @@ async function executeTool(name, input, chatId) {
             // BAT-236: If agent wrote to workspace root agent_settings.json, re-sync API keys
             if (filePath === path.join(workDir, 'agent_settings.json')) {
                 syncAgentApiKeys();
+                rebuildRedactPatterns();
             }
 
             return {
@@ -1162,6 +1163,7 @@ async function executeTool(name, input, chatId) {
             // BAT-236: If agent edited workspace root agent_settings.json, re-sync API keys
             if (filePath === path.join(workDir, 'agent_settings.json')) {
                 syncAgentApiKeys();
+                rebuildRedactPatterns();
             }
 
             return {
@@ -3536,6 +3538,14 @@ async function executeTool(name, input, chatId) {
             const sandboxedRequire = (mod) => {
                 if (BLOCKED_MODULES.has(mod)) {
                     throw new Error(`Module "${mod}" is blocked in js_eval for security. Use shell_exec for command execution.`);
+                }
+                // Block relative requires — prevents access to config.js (secrets), security.js, etc.
+                if (mod.startsWith('./') || mod.startsWith('../') || mod.startsWith('.\\') || mod.startsWith('..\\')) {
+                    throw new Error('Relative module imports are blocked in js_eval for security.');
+                }
+                // Block absolute paths into workspace or source directory
+                if (path.isAbsolute(mod) && (mod.startsWith(workDir) || mod.startsWith(__dirname))) {
+                    throw new Error('Direct module imports from app directories are blocked in js_eval for security.');
                 }
                 if (mod === 'fs') return createGuardedFsProxy(require('fs'), FS_GUARDED, FSP_GUARDED);
                 if (mod === 'fs/promises') return createGuardedFsProxy(require('fs/promises'), FSP_GUARDED);

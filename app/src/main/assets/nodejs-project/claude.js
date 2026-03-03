@@ -17,6 +17,7 @@ const {
     getOwnerId,
 } = require('./config');
 
+const { redactSecrets } = require('./security');
 const { telegram, sendTyping, sentMessageCache, SENT_CACHE_TTL, deferStatus } = require('./telegram');
 const { httpStreamingRequest } = require('./web');
 const { androidBridgeCall } = require('./bridge');
@@ -313,7 +314,7 @@ async function saveSessionSummary(chatId, trigger, { force = false, skipIndex = 
         // Write the summary file
         const header = `# Session Summary — ${localTimestamp()}\n\n`;
         const meta = `> Trigger: ${trigger} | Exchanges: ${track.messageCount} | Model: ${MODEL}\n\n`;
-        fs.writeFileSync(finalPath, header + meta + summary + '\n', 'utf8');
+        fs.writeFileSync(finalPath, header + meta + redactSecrets(summary) + '\n', 'utf8');
 
         log(`[SessionSummary] Saved: ${path.basename(finalPath)} (trigger: ${trigger})`, 'DEBUG');
 
@@ -510,6 +511,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('1. Use memory_search to find relevant information first (faster, more targeted).');
     lines.push('2. Only use memory_read on specific files if search results are insufficient.');
     lines.push('3. Keep memory entries concise and well-organized when writing.');
+    lines.push('4. **NEVER write API keys, passwords, seed phrases, private keys, or auth tokens to memory files.** Save keys ONLY to agent_settings.json under apiKeys.');
     lines.push('If low confidence after searching, tell the user you checked but found nothing relevant.');
     lines.push('');
 
@@ -564,6 +566,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('');
     lines.push('However, if a user provides a key directly in conversation:');
     lines.push('1. Save it to agent_settings.json under apiKeys.<service> (e.g. apiKeys.perplexity)');
+    lines.push('   IMPORTANT: NEVER save the key to memory files (MEMORY.md, daily notes). Keys go ONLY in agent_settings.json.');
     lines.push('2. Confirm it\'s saved');
     lines.push('3. Built-in tools (web_search, Jupiter, etc.) pick it up immediately — just use them normally');
     lines.push('4. Warn the user:');

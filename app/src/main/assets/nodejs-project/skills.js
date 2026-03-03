@@ -197,7 +197,6 @@ function parseSkillFile(content, skillDir) {
         emoji: '',
         image: '',
         requires: { bins: [], env: [], config: [] },
-        allowedTools: [],
         dir: skillDir
     };
 
@@ -243,10 +242,9 @@ function parseSkillFile(content, skillDir) {
                 skill.requires.config = toArray(reqSource.config);
             }
 
-            // Handle allowed-tools (OpenClaw format)
-            if (frontmatter['allowed-tools']) {
-                skill.allowedTools = toArray(frontmatter['allowed-tools']);
-            }
+            // Note: allowed-tools was previously parsed here but never enforced.
+            // Removed in BAT-305 to avoid false sense of security. If needed,
+            // implement proper per-skill tool restriction in executeTool().
 
             // Body is everything after frontmatter
             body = content.slice(endIndex + 3).trim();

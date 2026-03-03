@@ -6,6 +6,7 @@ const fs = require('fs');
 const path = require('path');
 
 const { TASKS_DIR, log } = require('./config');
+const { redactSecrets } = require('./security');
 
 const MAX_CHECKPOINT_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const MAX_CONVERSATION_SLICE = 8; // Keep last 8 messages in checkpoint
@@ -55,6 +56,28 @@ function saveCheckpoint(taskId, state) {
                 }
             }
         }
+
+        // Redact secrets from conversation slice before writing to disk (BAT-305)
+        if (Array.isArray(trimmed.conversationSlice)) {
+            trimmed.conversationSlice = trimmed.conversationSlice.map(msg => {
+                const clone = { ...msg };
+                if (typeof clone.content === 'string') {
+                    clone.content = redactSecrets(clone.content);
+                } else if (Array.isArray(clone.content)) {
+                    clone.content = clone.content.map(block => {
+                        const b = { ...block };
+                        if (typeof b.text === 'string') b.text = redactSecrets(b.text);
+                        if (typeof b.content === 'string') b.content = redactSecrets(b.content);
+                        return b;
+                    });
+                }
+                return clone;
+            });
+        }
+        if (typeof trimmed.originalGoal === 'string') {
+            trimmed.originalGoal = redactSecrets(trimmed.originalGoal);
+        }
+
         trimmed.updatedAt = Date.now();
 
         const json = JSON.stringify(trimmed, null, 2);
