@@ -245,8 +245,9 @@ function _redactObject(obj) {
     if (typeof obj === 'string') return redactSecrets(obj);
     if (Array.isArray(obj)) return obj.map(item => _redactObject(item));
     if (obj && typeof obj === 'object') {
-        const out = {};
+        const out = Object.create(null);
         for (const key of Object.keys(obj)) {
+            if (key === '__proto__' || key === 'constructor' || key === 'prototype') continue;
             out[key] = _redactObject(obj[key]);
         }
         return out;

@@ -3518,7 +3518,10 @@ async function executeTool(name, input, chatId) {
                         if (guardedMethods.has(prop)) {
                             return function(...args) {
                                 const filePath = String(args[0]);
-                                const basename = path.basename(filePath);
+                                // Resolve symlinks to prevent alias bypass (symlink → config.json)
+                                let resolvedPath = filePath;
+                                try { resolvedPath = fs.realpathSync(filePath); } catch (_) {}
+                                const basename = path.basename(resolvedPath);
                                 if (SECRETS_BLOCKED.has(basename)) {
                                     throw new Error(`Access to ${basename} is blocked for security.`);
                                 }
@@ -3533,6 +3536,7 @@ async function executeTool(name, input, chatId) {
                 'readFileSync', 'readFile', 'createReadStream', 'openSync', 'open',
                 'writeFileSync', 'writeFile', 'appendFileSync', 'appendFile', 'createWriteStream',
                 'copyFileSync', 'copyFile', 'cpSync', 'cp',
+                'symlinkSync', 'symlink', 'linkSync', 'link',
             ]);
             const FSP_GUARDED = new Set(['readFile', 'writeFile', 'appendFile', 'open', 'copyFile', 'cp']);
             // Safe process subset — env is empty to prevent leaking sensitive variables
