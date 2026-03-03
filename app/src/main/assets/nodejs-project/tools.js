@@ -3596,8 +3596,11 @@ async function executeTool(name, input, chatId) {
             try {
                 const vm = require('vm');
 
-                // Create a proper VM sandbox — codeGeneration:{strings:false} blocks
-                // Function(), eval(), and constructor-based escapes entirely.
+                // VM sandbox with codeGeneration:{strings:false} — blocks Function(),
+                // eval(), and direct constructor escapes. Known limitation: host-realm
+                // objects passed into the sandbox (setTimeout, Buffer, etc.) expose
+                // .constructor leading back to the unrestricted host Function. Full
+                // isolation would require worker_threads — deferred to a follow-up task.
                 const sandbox = {
                     console: mockConsole,
                     require: sandboxedRequire,
