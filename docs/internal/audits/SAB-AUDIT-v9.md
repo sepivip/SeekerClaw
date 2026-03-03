@@ -28,7 +28,7 @@ Scoring: ✅ = 3 pts, ⚠️ = 1 pt, ❌ = 0 pts.
 | max_tokens | 4096 (claude.js:1510) | "4096 tokens per response" (line 808) | ✅ |
 | SHELL_ALLOWLIST | 34 commands (config.js:234-241) | 34 commands listed (line 642) | ✅ |
 | SECRETS_BLOCKED | config.json, config.yaml, seekerclaw.db (config.js:225) | seekerclaw.db listed as BLOCKED (line 559) | ✅ |
-| BLOCKED_MODULES | 7 modules (tools.js:3506) | **Fixed:** now lists child_process, vm, cluster, worker_threads, module (line 417) | ✅ |
+| BLOCKED_MODULES | 7 modules (tools.js:3506) | **Fixed:** now lists all 7: child_process, vm, cluster, worker_threads, v8, perf_hooks, module (line 417) | ✅ |
 | js_eval code limit | 10,000 chars (tools.js:3471) | "10,000-character code limit" (line 643) | ✅ |
 
 ---
@@ -147,7 +147,7 @@ No new failure modes to add.
 
 | File | Line | Issue | Fix |
 |------|------|-------|-----|
-| claude.js | 417 | js_eval description said "child_process and vm are blocked" — stale after BAT-305 added 5 more blocked modules + path restrictions | Updated to: "Blocked for security: child_process, vm, cluster, worker_threads, module, and relative/absolute path requires" |
+| claude.js | 417 | js_eval description said "child_process and vm are blocked" — stale after BAT-305 added 5 more blocked modules + path restrictions | Updated to: "Blocked for security: child_process, vm, cluster, worker_threads, v8, perf_hooks, module, and relative/absolute path requires" |
 
 ---
 
