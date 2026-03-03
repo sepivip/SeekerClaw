@@ -3588,9 +3588,10 @@ async function executeTool(name, input, chatId) {
                 // Shadow process/global/globalThis to prevent process.mainModule.require bypass
                 // Provide safe process subset — env is empty to prevent leaking sensitive variables
                 const safeProcess = { env: {}, cwd: () => workDir, platform: process.platform, arch: process.arch, version: process.version };
-                const fn = new AsyncFunction('console', 'require', '__dirname', '__filename', 'process', 'global', 'globalThis', code);
+                // Enforce strict mode so `this` is undefined (prevents this.process.mainModule.require bypass)
+                const fn = new AsyncFunction('console', 'require', '__dirname', '__filename', 'process', 'global', 'globalThis', `'use strict';\n${code}`);
 
-                const resultPromise = fn(mockConsole, sandboxedRequire, workDir, path.join(workDir, 'eval.js'), safeProcess, undefined, undefined);
+                const resultPromise = fn.call(null, mockConsole, sandboxedRequire, workDir, path.join(workDir, 'eval.js'), safeProcess, undefined, undefined);
                 const timeoutPromise = new Promise((_, rej) => {
                     timerId = setTimeout(() => rej(new Error(`Execution timed out after ${timeout}ms`)), timeout);
                 });

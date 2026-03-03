@@ -72,10 +72,6 @@ function saveCheckpoint(taskId, state) {
                         if (b.type === 'tool_use' && b.input && typeof b.input === 'object') {
                             b.input = _redactObject(b.input);
                         }
-                        // Also redact tool_result content if it's a string
-                        if (b.type === 'tool_result' && typeof b.content === 'string') {
-                            b.content = redactSecrets(b.content);
-                        }
                         return b;
                     });
                 }
