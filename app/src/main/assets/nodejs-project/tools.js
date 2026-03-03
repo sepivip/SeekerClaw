@@ -3503,7 +3503,7 @@ async function executeTool(name, input, chatId) {
             };
 
             // Sandboxed require: block dangerous modules and restrict fs access to sensitive files
-            const BLOCKED_MODULES = new Set(['child_process', 'cluster', 'worker_threads', 'vm', 'v8', 'perf_hooks']);
+            const BLOCKED_MODULES = new Set(['child_process', 'cluster', 'worker_threads', 'vm', 'v8', 'perf_hooks', 'module']);
             // Create a guarded fs proxy that blocks reads AND writes to sensitive files
             // promisesGuard: optional set of guarded methods for the .promises sub-property
             const createGuardedFsProxy = (realModule, guardedMethods, promisesGuard) => {
@@ -3555,8 +3555,16 @@ async function executeTool(name, input, chatId) {
                 }
 
                 // Block absolute paths into workspace or source directory
-                if (path.isAbsolute(normalizedMod) && (normalizedMod.startsWith(workDir) || normalizedMod.startsWith(__dirname))) {
-                    throw new Error('Direct module imports from app directories are blocked in js_eval for security.');
+                // Resolve to canonical path to prevent bypass via ".." segments or case differences
+                if (path.isAbsolute(normalizedMod)) {
+                    const resolvedMod = path.resolve(normalizedMod);
+                    const resolvedWork = path.resolve(workDir);
+                    const resolvedSrc = path.resolve(__dirname);
+                    const inWorkDir = resolvedMod === resolvedWork || resolvedMod.startsWith(resolvedWork + path.sep);
+                    const inSourceDir = resolvedMod === resolvedSrc || resolvedMod.startsWith(resolvedSrc + path.sep);
+                    if (inWorkDir || inSourceDir) {
+                        throw new Error('Direct module imports from app directories are blocked in js_eval for security.');
+                    }
                 }
 
                 if (BLOCKED_MODULES.has(normalizedMod)) {
