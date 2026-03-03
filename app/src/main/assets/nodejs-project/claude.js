@@ -17,6 +17,7 @@ const {
     getOwnerId,
 } = require('./config');
 
+const { redactSecrets } = require('./security');
 const { telegram, sendTyping, sentMessageCache, SENT_CACHE_TTL, deferStatus } = require('./telegram');
 const { httpStreamingRequest } = require('./web');
 const { androidBridgeCall } = require('./bridge');
@@ -313,7 +314,7 @@ async function saveSessionSummary(chatId, trigger, { force = false, skipIndex = 
         // Write the summary file
         const header = `# Session Summary — ${localTimestamp()}\n\n`;
         const meta = `> Trigger: ${trigger} | Exchanges: ${track.messageCount} | Model: ${MODEL}\n\n`;
-        fs.writeFileSync(finalPath, header + meta + summary + '\n', 'utf8');
+        fs.writeFileSync(finalPath, header + meta + redactSecrets(summary) + '\n', 'utf8');
 
         log(`[SessionSummary] Saved: ${path.basename(finalPath)} (trigger: ${trigger})`, 'DEBUG');
 
@@ -413,7 +414,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('**Web search:** web_search works out of the box — DuckDuckGo is the zero-config default. If a Brave API key is configured, Brave is used automatically (better quality). DuckDuckGo and Brave return search results as {title, url, snippet}. Use provider=perplexity for complex questions — it returns a synthesized answer with citations.');
     lines.push('**Web fetch:** Use web_fetch to read webpages or call APIs. Supports custom headers (Bearer auth), POST/PUT/DELETE methods, and request bodies. Returns markdown (default), JSON, or plain text. Use raw=true for stripped text. Up to 50K chars.');
     lines.push('**Shell execution:** Use shell_exec to run commands on the device. Sandboxed to workspace directory with a predefined allowlist of Unix utilities and Android tools (ls, cat, grep, find, curl, sed, diff, screencap, getprop, etc.). Note: node/npm/npx are NOT available. Shell arguments cannot contain special characters ({, }, $, [, ], etc.) — for complex text processing (awk, tr patterns) use js_eval instead. 30s timeout. No chaining, redirection, or command substitution — one command at a time.');
-    lines.push('**JavaScript execution:** Use js_eval to run JavaScript code inside the Node.js process. Supports async/await, require(), and most Node.js built-ins (fs, path, http, crypto, etc. — child_process and vm are blocked). Use for computation, data processing, JSON manipulation, HTTP requests, or anything that needs JavaScript. 30s timeout. Prefer js_eval over shell_exec when the task involves data processing or logic.');
+    lines.push('**JavaScript execution:** Use js_eval to run JavaScript code in a sandboxed VM context. Supports async/await, require(), and most Node.js built-ins (fs, path, http, crypto, etc.). Blocked for security: child_process, vm, cluster, worker_threads, v8, perf_hooks, module, and relative/absolute path requires. Use for computation, data processing, JSON manipulation, HTTP requests, or anything that needs JavaScript. 30s timeout. Prefer js_eval over shell_exec when the task involves data processing or logic.');
     lines.push('**File attachments (inbound):** When the user sends photos, documents, or other files via Telegram, they are automatically downloaded to media/inbound/ in your workspace. Images are shown to you directly (vision). For other files, you are told the path — use the read tool to access them. Supported: photos, documents (PDF, etc.), video, audio, voice notes.');
     lines.push('**File sending (outbound):** Use telegram_send_file to send any workspace file to the user\'s Telegram chat. Auto-detects type from extension (photo, video, audio, document). Use for sharing reports, camera captures, exported CSVs, generated images, or any file the user needs. Max 50MB, photos max 10MB.');
     lines.push('**File deletion:** Use the delete tool to clean up temporary files, old media downloads, or files you no longer need. Protected system files and database files cannot be deleted. Directories cannot be deleted — remove files individually.');
@@ -510,6 +511,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('1. Use memory_search to find relevant information first (faster, more targeted).');
     lines.push('2. Only use memory_read on specific files if search results are insufficient.');
     lines.push('3. Keep memory entries concise and well-organized when writing.');
+    lines.push('4. **NEVER write API keys, passwords, seed phrases, private keys, or auth tokens to memory files.** Save keys ONLY to agent_settings.json under apiKeys.');
     lines.push('If low confidence after searching, tell the user you checked but found nothing relevant.');
     lines.push('');
 
@@ -564,6 +566,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('');
     lines.push('However, if a user provides a key directly in conversation:');
     lines.push('1. Save it to agent_settings.json under apiKeys.<service> (e.g. apiKeys.perplexity)');
+    lines.push('   IMPORTANT: NEVER save the key to memory files (MEMORY.md, daily notes). Keys go ONLY in agent_settings.json.');
     lines.push('2. Confirm it\'s saved');
     lines.push('3. Built-in tools (web_search, Jupiter, etc.) pick it up immediately — just use them normally');
     lines.push('4. Warn the user:');

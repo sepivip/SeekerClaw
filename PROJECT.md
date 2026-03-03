@@ -33,7 +33,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 | AI Provider | Anthropic Claude API | Opus 4.6 default, Sonnet 4.6, Sonnet 4.5, Haiku 4.5 |
 | Messaging | Telegram Bot API (grammy) | — |
 | Database | SQL.js (WASM SQLite) | 1.12.0 |
-| OpenClaw Parity | OpenClaw gateway (ported) | 2026.2.28 |
+| OpenClaw Parity | OpenClaw gateway (ported) | 2026.3.1 |
 | Web Search | Brave Search + Perplexity Sonar | — |
 | Wallet | Solana Web3.js + Jupiter API | — |
 | Build | Gradle (Kotlin DSL) | — |
@@ -218,15 +218,15 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 - **No browser/screen/canvas skills** — Can't be ported from OpenClaw (requires desktop environment)
 - **Ephemeral context** — Conversation history resets on Node.js restart (mitigated by session summaries)
 - **Single channel** — Telegram only (no Discord, WhatsApp, etc.)
-- **dApp Store live** — Available on Solana dApp Store (v1.4.2)
+- **dApp Store live** — Available on Solana dApp Store (v1.4.3)
 - **No light theme** — Dark only (DarkOps single theme)
 
 ## Stats
 
 | Metric | Count |
 |--------|-------|
-| Total commits | 386 |
-| PRs merged | 200+ |
+| Total commits | 335 |
+| PRs merged | 221+ |
 | Tools | 56 (9 Jupiter, 13 Android bridge, web search/fetch, memory, cron, skill_install, etc.) + MCP dynamic |
 | Skills | 35 (20 bundled + 13 workspace + 2 user-created) |
 | Android Bridge endpoints | 18+ |
@@ -267,6 +267,10 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Date | Feature | PR |
 |------|---------|-----|
+| 2026-03-03 | Chore: bump version to 1.4.3 (code 9) | direct |
+| 2026-03-03 | Docs: SAB-AUDIT-v8 — enrich restart flushing door, strengthen 3-part test | direct |
+| 2026-03-03 | Fix: NO_REPLY bold-markdown stripping + OpenClaw 2026.3.1 sync | direct |
+| 2026-03-02 | Feat: notify owner of missed messages on service restart | #221 |
 | 2026-03-02 | Feat: skill export/import, images, labels & hardening — ZIP/md export, import with protection, Coil images, Added/Default grouping | #220 |
 | 2026-03-01 | Docs: update README setup instructions to mention QR generator | direct |
 | 2026-03-01 | Chore: bump versionCode to 8 for dApp Store resubmission | direct |

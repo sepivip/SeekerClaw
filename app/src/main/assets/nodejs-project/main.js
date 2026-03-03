@@ -660,7 +660,7 @@ async function handleMessage(msg) {
                                         await sendMessage(chatId, installResult.result, msg.message_id);
                                     } else if (installResult && installResult.error) {
                                         // Validation failed — tell user why (e.g. missing name, injection blocked)
-                                        await sendMessage(chatId, `Skill install failed: ${installResult.error}`, msg.message_id);
+                                        await sendMessage(chatId, `Skill install failed: ${redactSecrets(installResult.error)}`, msg.message_id);
                                         // Fall through to normal file note so the file is still accessible
                                     }
                                     // Non-skill or failed — fall through to normal file note
@@ -724,7 +724,7 @@ async function handleMessage(msg) {
     } catch (error) {
         log(`Error: ${error.message}`, 'ERROR');
         await statusReaction.setError();
-        await sendMessage(chatId, `Error: ${error.message}`, msg.message_id);
+        await sendMessage(chatId, `Error: ${redactSecrets(error.message)}`, msg.message_id);
     }
 }
 
@@ -920,7 +920,7 @@ async function autoResumeOnStartup() {
                     }
                 } catch (e) {
                     log(`[AutoResume] chat() error: ${e.message}`, 'ERROR');
-                    await sendMessage(chatId, `Auto-resume failed: ${e.message}`).catch(() => {});
+                    await sendMessage(chatId, `Auto-resume failed: ${redactSecrets(e.message)}`).catch(() => {});
                 }
             });
             chatQueues.set(chatId, task);

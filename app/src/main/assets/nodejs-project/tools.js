@@ -13,7 +13,7 @@ const {
 } = require('./config');
 
 const {
-    safePath, detectSuspiciousPatterns,
+    redactSecrets, rebuildRedactPatterns, safePath, detectSuspiciousPatterns,
     wrapExternalContent, wrapSearchResults,
 } = require('./security');
 
@@ -1005,7 +1005,7 @@ async function executeTool(name, input, chatId) {
 
         case 'memory_save': {
             const currentMemory = loadMemory();
-            const newMemory = currentMemory + '\n\n---\n\n' + input.content;
+            const newMemory = currentMemory + '\n\n---\n\n' + redactSecrets(input.content);
             saveMemory(newMemory.trim());
             return { success: true, message: 'Memory saved' };
         }
@@ -1016,7 +1016,7 @@ async function executeTool(name, input, chatId) {
         }
 
         case 'daily_note': {
-            appendDailyMemory(input.note);
+            appendDailyMemory(redactSecrets(input.note));
             return { success: true, message: 'Note added to daily memory' };
         }
 
@@ -1110,6 +1110,7 @@ async function executeTool(name, input, chatId) {
             // BAT-236: If agent wrote to workspace root agent_settings.json, re-sync API keys
             if (filePath === path.join(workDir, 'agent_settings.json')) {
                 syncAgentApiKeys();
+                rebuildRedactPatterns();
             }
 
             return {
@@ -1162,6 +1163,7 @@ async function executeTool(name, input, chatId) {
             // BAT-236: If agent edited workspace root agent_settings.json, re-sync API keys
             if (filePath === path.join(workDir, 'agent_settings.json')) {
                 syncAgentApiKeys();
+                rebuildRedactPatterns();
             }
 
             return {
@@ -3501,7 +3503,7 @@ async function executeTool(name, input, chatId) {
             };
 
             // Sandboxed require: block dangerous modules and restrict fs access to sensitive files
-            const BLOCKED_MODULES = new Set(['child_process', 'cluster', 'worker_threads', 'vm', 'v8', 'perf_hooks']);
+            const BLOCKED_MODULES = new Set(['child_process', 'cluster', 'worker_threads', 'vm', 'v8', 'perf_hooks', 'module']);
             // Create a guarded fs proxy that blocks reads AND writes to sensitive files
             // promisesGuard: optional set of guarded methods for the .promises sub-property
             const createGuardedFsProxy = (realModule, guardedMethods, promisesGuard) => {
@@ -3516,7 +3518,10 @@ async function executeTool(name, input, chatId) {
                         if (guardedMethods.has(prop)) {
                             return function(...args) {
                                 const filePath = String(args[0]);
-                                const basename = path.basename(filePath);
+                                // Resolve symlinks to prevent alias bypass (symlink → config.json)
+                                let resolvedPath = filePath;
+                                try { resolvedPath = fs.realpathSync(filePath); } catch (_) {}
+                                const basename = path.basename(resolvedPath);
                                 if (SECRETS_BLOCKED.has(basename)) {
                                     throw new Error(`Access to ${basename} is blocked for security.`);
                                 }
@@ -3531,27 +3536,100 @@ async function executeTool(name, input, chatId) {
                 'readFileSync', 'readFile', 'createReadStream', 'openSync', 'open',
                 'writeFileSync', 'writeFile', 'appendFileSync', 'appendFile', 'createWriteStream',
                 'copyFileSync', 'copyFile', 'cpSync', 'cp',
+                'symlinkSync', 'symlink', 'linkSync', 'link',
             ]);
             const FSP_GUARDED = new Set(['readFile', 'writeFile', 'appendFile', 'open', 'copyFile', 'cp']);
+            // Safe process subset — env is empty to prevent leaking sensitive variables
+            // Defined here so sandboxedRequire can return it for require('process')
+            const safeProcess = { env: {}, cwd: () => workDir, platform: process.platform, arch: process.arch, version: process.version };
             const sandboxedRequire = (mod) => {
-                if (BLOCKED_MODULES.has(mod)) {
-                    throw new Error(`Module "${mod}" is blocked in js_eval for security. Use shell_exec for command execution.`);
+                if (typeof mod !== 'string') {
+                    throw new Error('Module identifier must be a string in js_eval.');
                 }
-                if (mod === 'fs') return createGuardedFsProxy(require('fs'), FS_GUARDED, FSP_GUARDED);
-                if (mod === 'fs/promises') return createGuardedFsProxy(require('fs/promises'), FSP_GUARDED);
-                return require(mod);
+                // Normalize Node core specifiers like "node:fs" → "fs"
+                let normalizedMod = mod.startsWith('node:') ? mod.slice(5) : mod;
+
+                // Block relative requires (including ".", "..") — prevents access to config.js (secrets), security.js, etc.
+                if (
+                    normalizedMod === '.' ||
+                    normalizedMod === '..' ||
+                    normalizedMod.startsWith('./') ||
+                    normalizedMod.startsWith('../') ||
+                    normalizedMod.startsWith('.\\') ||
+                    normalizedMod.startsWith('..\\')
+                ) {
+                    throw new Error('Relative module imports are blocked in js_eval for security.');
+                }
+
+                // Block absolute paths into workspace or source directory
+                // Resolve to canonical path to prevent bypass via ".." segments or case differences
+                if (path.isAbsolute(normalizedMod)) {
+                    const resolvedMod = path.resolve(normalizedMod);
+                    const resolvedWork = path.resolve(workDir);
+                    const resolvedSrc = path.resolve(__dirname);
+                    const inWorkDir = resolvedMod === resolvedWork || resolvedMod.startsWith(resolvedWork + path.sep);
+                    const inSourceDir = resolvedMod === resolvedSrc || resolvedMod.startsWith(resolvedSrc + path.sep);
+                    if (inWorkDir || inSourceDir) {
+                        throw new Error('Direct module imports from app directories are blocked in js_eval for security.');
+                    }
+                }
+
+                if (BLOCKED_MODULES.has(normalizedMod)) {
+                    throw new Error(`Module "${normalizedMod}" is blocked in js_eval for security. Use shell_exec for command execution.`);
+                }
+
+                if (normalizedMod === 'fs') {
+                    return createGuardedFsProxy(require('fs'), FS_GUARDED, FSP_GUARDED);
+                }
+                if (normalizedMod === 'fs/promises') {
+                    return createGuardedFsProxy(require('fs/promises'), FSP_GUARDED);
+                }
+                // Return safe process stub instead of real process (blocks env, mainModule)
+                if (normalizedMod === 'process') {
+                    return safeProcess;
+                }
+
+                return require(normalizedMod);
             };
 
             let timerId;
             try {
-                // AsyncFunction allows top-level await
-                const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
-                // Shadow process/global/globalThis to prevent process.mainModule.require bypass
-                // Provide safe process subset — env is empty to prevent leaking sensitive variables
-                const safeProcess = { env: {}, cwd: () => workDir, platform: process.platform, arch: process.arch, version: process.version };
-                const fn = new AsyncFunction('console', 'require', '__dirname', '__filename', 'process', 'global', 'globalThis', code);
+                const vm = require('vm');
 
-                const resultPromise = fn(mockConsole, sandboxedRequire, workDir, path.join(workDir, 'eval.js'), safeProcess, undefined, undefined);
+                // VM sandbox with codeGeneration:{strings:false} — blocks Function(),
+                // eval(), and direct constructor escapes. Known limitation: host-realm
+                // objects passed into the sandbox (setTimeout, Buffer, etc.) expose
+                // .constructor leading back to the unrestricted host Function. Full
+                // isolation would require worker_threads — deferred to a follow-up task.
+                const sandbox = {
+                    console: mockConsole,
+                    require: sandboxedRequire,
+                    __dirname: workDir,
+                    __filename: path.join(workDir, 'eval.js'),
+                    process: safeProcess,
+                    global: undefined,
+                    globalThis: undefined,
+                    // Node.js globals that user code may need
+                    setTimeout, clearTimeout, setInterval, clearInterval,
+                    Buffer, URL, URLSearchParams,
+                    TextEncoder: typeof TextEncoder !== 'undefined' ? TextEncoder : undefined,
+                    TextDecoder: typeof TextDecoder !== 'undefined' ? TextDecoder : undefined,
+                    atob: typeof atob !== 'undefined' ? atob : undefined,
+                    btoa: typeof btoa !== 'undefined' ? btoa : undefined,
+                    AbortController: typeof AbortController !== 'undefined' ? AbortController : undefined,
+                    queueMicrotask,
+                };
+                const context = vm.createContext(sandbox, {
+                    codeGeneration: { strings: false, wasm: false },
+                });
+
+                // Wrap in async IIFE for top-level await support, enforce strict mode
+                const wrappedCode = `(async () => {\n'use strict';\n${code}\n})()`;
+                const script = new vm.Script(wrappedCode, { filename: 'js_eval.js' });
+                // VM timeout kills synchronous infinite loops (while(true){});
+                // Promise.race timeout handles async hangs (await never resolves)
+                const resultPromise = script.runInContext(context, { timeout });
+
                 const timeoutPromise = new Promise((_, rej) => {
                     timerId = setTimeout(() => rej(new Error(`Execution timed out after ${timeout}ms`)), timeout);
                 });
