@@ -1507,6 +1507,10 @@ async function chat(chatId, userMessage, options = {}) {
                 messages.push(tr);
             }
 
+            // Enforce MAX_HISTORY cap after tool round (trimming mid-loop would break
+            // model context, so we trim after all tool results are added)
+            while (messages.length > MAX_HISTORY) messages.shift();
+
             // Status reaction: back to thinking before next Claude API call
             if (options.statusReaction) options.statusReaction.setThinking();
 
