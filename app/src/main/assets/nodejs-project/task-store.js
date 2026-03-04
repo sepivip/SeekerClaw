@@ -35,21 +35,28 @@ function saveCheckpoint(taskId, state) {
             if (trimmed.conversationSlice.length > MAX_CONVERSATION_SLICE) {
                 trimmed.conversationSlice = trimmed.conversationSlice.slice(-MAX_CONVERSATION_SLICE);
             }
-            // Step 2: ALWAYS drop leading orphaned tool_result (no matching tool_use before it)
+            // Step 2: ALWAYS drop leading orphaned tool results (no matching tool call before them)
+            // Handles both Claude-native (role:'user' + tool_result blocks) and neutral (role:'tool') formats
             while (trimmed.conversationSlice.length > 0) {
                 const first = trimmed.conversationSlice[0];
-                if (first.role === 'user' && Array.isArray(first.content)
-                    && first.content.some(b => b.type === 'tool_result')) {
+                const isClaudeToolResult = first.role === 'user' && Array.isArray(first.content)
+                    && first.content.some(b => b.type === 'tool_result');
+                const isNeutralToolResult = first.role === 'tool';
+                if (isClaudeToolResult || isNeutralToolResult) {
                     trimmed.conversationSlice = trimmed.conversationSlice.slice(1);
                 } else {
                     break;
                 }
             }
-            // Step 3: drop trailing orphaned tool_use (no following tool_result)
+            // Step 3: drop trailing orphaned tool calls (no following tool result)
+            // Handles both Claude-native (tool_use blocks) and neutral (toolCalls array) formats
             while (trimmed.conversationSlice.length > 0) {
                 const last = trimmed.conversationSlice[trimmed.conversationSlice.length - 1];
-                if (last.role === 'assistant' && Array.isArray(last.content)
-                    && last.content.some(b => b.type === 'tool_use')) {
+                const isClaudeToolUse = last.role === 'assistant' && Array.isArray(last.content)
+                    && last.content.some(b => b.type === 'tool_use');
+                const isNeutralToolUse = last.role === 'assistant'
+                    && Array.isArray(last.toolCalls) && last.toolCalls.length > 0;
+                if (isClaudeToolUse || isNeutralToolUse) {
                     trimmed.conversationSlice.pop();
                 } else {
                     break;
@@ -58,6 +65,7 @@ function saveCheckpoint(taskId, state) {
         }
 
         // Redact secrets from conversation slice before writing to disk (BAT-305)
+        // Handles both Claude-native and neutral message formats
         if (Array.isArray(trimmed.conversationSlice)) {
             trimmed.conversationSlice = trimmed.conversationSlice.map(msg => {
                 const clone = { ...msg };
@@ -68,11 +76,21 @@ function saveCheckpoint(taskId, state) {
                         const b = { ...block };
                         if (typeof b.text === 'string') b.text = redactSecrets(b.text);
                         if (typeof b.content === 'string') b.content = redactSecrets(b.content);
-                        // Deep-redact tool_use input (may contain API keys, tokens, etc.)
+                        // Deep-redact tool_use input — Claude-native format
                         if (b.type === 'tool_use' && b.input && typeof b.input === 'object') {
                             b.input = _redactObject(b.input);
                         }
                         return b;
+                    });
+                }
+                // Deep-redact toolCalls[].input — neutral format (OpenAI adapter)
+                if (Array.isArray(clone.toolCalls)) {
+                    clone.toolCalls = clone.toolCalls.map(tc => {
+                        const t = { ...tc };
+                        if (t.input && typeof t.input === 'object') {
+                            t.input = _redactObject(t.input);
+                        }
+                        return t;
                     });
                 }
                 return clone;
@@ -240,7 +258,7 @@ function cleanupExpired() {
 // INTERNAL
 // ============================================================================
 
-// Deep-redact all string values in an object (for tool_use input payloads)
+// Deep-redact all string values in an object (for tool call input payloads)
 function _redactObject(obj) {
     if (typeof obj === 'string') return redactSecrets(obj);
     if (Array.isArray(obj)) return obj.map(item => _redactObject(item));
