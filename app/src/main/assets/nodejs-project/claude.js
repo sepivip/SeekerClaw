@@ -425,6 +425,17 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('For long waits, avoid rapid poll loops: use shell_exec with enough timeout or check status on-demand rather than in a tight loop.');
     lines.push('');
 
+    // OpenAI models need stronger emphasis on actually calling tools vs describing them
+    if (PROVIDER === 'openai') {
+        lines.push('## CRITICAL: Tool Use Behavior');
+        lines.push('You MUST call tools to take actions. NEVER describe what a tool does instead of calling it.');
+        lines.push('NEVER tell the user to "check settings" or "enable" something when you have a tool that can do it.');
+        lines.push('If a skill says to perform an action and you have the tool for it, CALL the tool immediately.');
+        lines.push('Wrong: "You can use web_search to find that" → Right: call web_search directly.');
+        lines.push('Wrong: "Check Settings → Skills" → Right: call skill_read to load the skill.');
+        lines.push('');
+    }
+
     // Error recovery guidance — how agent should handle tool failures
     lines.push('## Error Recovery');
     lines.push('- If a tool call fails, explain what happened and try an alternative approach.');
@@ -452,18 +463,37 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     // Skills section - OpenClaw semantic selection style
     if (allSkills.length > 0) {
         lines.push('## Skills (mandatory)');
-        lines.push('Before replying: scan the <available_skills> list below.');
-        lines.push('- If exactly one skill clearly applies to the user\'s request: use skill_read to load it, then follow its instructions.');
-        lines.push('- If multiple skills could apply: choose the most specific one.');
-        lines.push('- If none clearly apply: do not load any skill, just respond normally.');
-        lines.push('');
-        lines.push('<available_skills>');
-        for (const skill of allSkills) {
-            const emoji = skill.emoji ? `${skill.emoji} ` : '';
-            const desc = skill.description.split('\n')[0] || 'No description';
-            lines.push(`${emoji}${skill.name}: ${desc}`);
+        if (PROVIDER === 'openai') {
+            // OpenAI/Codex: matched skills are pre-loaded into the dynamic section.
+            // Tell the model to follow injected instructions directly — do NOT rely on
+            // it calling skill_read, as GPT/Codex models are less reliable at
+            // following tool-call directives in system prompts.
+            lines.push('You have skills that extend your capabilities. When skill instructions appear');
+            lines.push('in the "Active Skills for This Request" section below, you MUST follow them.');
+            lines.push('For skills NOT pre-loaded, use the skill_read tool to load them.');
+            lines.push('');
+            lines.push('<available_skills>');
+            for (const skill of allSkills) {
+                const emoji = skill.emoji ? `${skill.emoji} ` : '';
+                const desc = skill.description.split('\n')[0] || 'No description';
+                lines.push(`${emoji}${skill.name}: ${desc}`);
+            }
+            lines.push('</available_skills>');
+        } else {
+            // Claude: use skill_read indirection (works reliably with Claude's instruction following)
+            lines.push('Before replying: scan the <available_skills> list below.');
+            lines.push('- If exactly one skill clearly applies to the user\'s request: use skill_read to load it, then follow its instructions.');
+            lines.push('- If multiple skills could apply: choose the most specific one.');
+            lines.push('- If none clearly apply: do not load any skill, just respond normally.');
+            lines.push('');
+            lines.push('<available_skills>');
+            for (const skill of allSkills) {
+                const emoji = skill.emoji ? `${skill.emoji} ` : '';
+                const desc = skill.description.split('\n')[0] || 'No description';
+                lines.push(`${emoji}${skill.name}: ${desc}`);
+            }
+            lines.push('</available_skills>');
         }
-        lines.push('</available_skills>');
         lines.push('');
         lines.push('**Skill auto-install:** When a user sends a skill file, the system installs it automatically before your turn starts. If a message begins with `[Skill just installed.]`, the skill is already installed and working — do NOT search for, re-download, or re-install the file. Just acknowledge the install and respond to any accompanying message.');
         lines.push('');
@@ -849,7 +879,12 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     if (matchedSkills.length > 0) {
         dynamicLines.push('');
         dynamicLines.push('## Active Skills for This Request');
-        dynamicLines.push('The following skills have been automatically loaded based on keywords:');
+        if (PROVIDER === 'openai') {
+            dynamicLines.push('MANDATORY: The following skill instructions are pre-loaded and MUST be followed.');
+            dynamicLines.push('Execute the skill by calling the required tools. Do NOT tell the user to do it manually.');
+        } else {
+            dynamicLines.push('The following skills have been automatically loaded based on keywords:');
+        }
         dynamicLines.push('');
         for (const skill of matchedSkills) {
             const emoji = skill.emoji ? `${skill.emoji} ` : '';
