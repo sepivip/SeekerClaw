@@ -3,7 +3,6 @@ package com.seekerclaw.app.ui.settings
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -90,7 +89,8 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
 
     fun maskKey(key: String?): String {
         if (key.isNullOrBlank()) return "Not set"
-        return if (key.length > 12) "${key.take(8)}${"*".repeat(8)}${key.takeLast(4)}" else "*".repeat(key.length)
+        if (key.length <= 8) return "*".repeat(key.length)
+        return "${key.take(6)}${"*".repeat(8)}${key.takeLast(4)}"
     }
 
     Scaffold(

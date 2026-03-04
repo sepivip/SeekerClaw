@@ -2,7 +2,7 @@
 // Claude (Anthropic) provider adapter. Translates between neutral internal
 // message format and Claude Messages API format.
 
-const { AUTH_TYPE, log } = require('../config');
+const { log } = require('../config');
 
 // ── Neutral ↔ Claude message translation ────────────────────────────────────
 
