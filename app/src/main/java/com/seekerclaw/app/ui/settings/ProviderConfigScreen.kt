@@ -52,6 +52,7 @@ import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.config.availableModels
 import com.seekerclaw.app.config.availableProviders
 import com.seekerclaw.app.config.modelsForProvider
+import com.seekerclaw.app.config.providerById
 import com.seekerclaw.app.config.openaiModels
 import com.seekerclaw.app.util.Analytics
 import com.seekerclaw.app.ui.theme.RethinkSans
