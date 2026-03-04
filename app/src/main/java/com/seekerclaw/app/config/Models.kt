@@ -15,5 +15,7 @@ val availableModels = listOf(
 
 fun modelDisplayName(modelId: String?): String {
     if (modelId.isNullOrBlank()) return "Not configured"
-    return availableModels.find { it.id == modelId }?.displayName ?: modelId
+    return availableModels.find { it.id == modelId }?.displayName
+        ?: openaiModels.find { it.id == modelId }?.displayName
+        ?: modelId
 }

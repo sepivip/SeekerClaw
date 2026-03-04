@@ -1,0 +1,581 @@
+package com.seekerclaw.app.ui.settings
+
+import android.widget.Toast
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.RadioButtonDefaults
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.seekerclaw.app.config.ConfigManager
+import com.seekerclaw.app.config.availableModels
+import com.seekerclaw.app.config.availableProviders
+import com.seekerclaw.app.config.modelsForProvider
+import com.seekerclaw.app.config.openaiModels
+import com.seekerclaw.app.util.Analytics
+import com.seekerclaw.app.ui.theme.RethinkSans
+import com.seekerclaw.app.ui.theme.SeekerClawColors
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ProviderConfigScreen(onBack: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var config by remember { mutableStateOf(ConfigManager.loadConfig(context)) }
+
+    val currentProvider = config?.provider ?: "claude"
+    var selectedTab by remember { mutableStateOf(currentProvider) }
+    var editField by remember { mutableStateOf<String?>(null) }
+    var editLabel by remember { mutableStateOf("") }
+    var editValue by remember { mutableStateOf("") }
+    var showModelPicker by remember { mutableStateOf(false) }
+    var showAuthTypePicker by remember { mutableStateOf(false) }
+    var testStatus by remember { mutableStateOf("Idle") }
+    var testMessage by remember { mutableStateOf("") }
+
+    val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
+
+    fun saveField(field: String, value: String) {
+        ConfigManager.updateConfigField(context, field, value)
+        config = ConfigManager.loadConfig(context)
+    }
+
+    fun maskKey(key: String?): String {
+        if (key.isNullOrBlank()) return "Not set"
+        return if (key.length > 12) "${key.take(8)}${"*".repeat(8)}${key.takeLast(4)}" else "*".repeat(key.length)
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Text(
+                        text = "AI Provider",
+                        fontFamily = RethinkSans,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = SeekerClawColors.TextPrimary,
+                    )
+                },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = SeekerClawColors.TextPrimary,
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = SeekerClawColors.Background,
+                ),
+            )
+        },
+        containerColor = SeekerClawColors.Background,
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(horizontal = 20.dp, vertical = 8.dp)
+                .verticalScroll(rememberScrollState()),
+        ) {
+            // Provider tabs (segmented control)
+            SingleChoiceSegmentedButtonRow(
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                availableProviders.forEachIndexed { index, provider ->
+                    SegmentedButton(
+                        selected = selectedTab == provider.id,
+                        onClick = { selectedTab = provider.id },
+                        shape = SegmentedButtonDefaults.itemShape(
+                            index = index,
+                            count = availableProviders.size,
+                        ),
+                        colors = SegmentedButtonDefaults.colors(
+                            activeContainerColor = SeekerClawColors.Primary.copy(alpha = 0.15f),
+                            activeContentColor = SeekerClawColors.Primary,
+                            inactiveContainerColor = SeekerClawColors.Surface,
+                            inactiveContentColor = SeekerClawColors.TextDim,
+                            activeBorderColor = SeekerClawColors.Primary,
+                            inactiveBorderColor = SeekerClawColors.CardBorder,
+                        ),
+                    ) {
+                        Text(
+                            text = provider.displayName,
+                            fontFamily = RethinkSans,
+                            fontWeight = if (selectedTab == provider.id) FontWeight.Bold else FontWeight.Normal,
+                            fontSize = 14.sp,
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Active provider indicator
+            if (currentProvider == selectedTab) {
+                Text(
+                    text = "Active provider",
+                    fontFamily = RethinkSans,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = SeekerClawColors.Accent,
+                )
+            } else {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "Tap to activate",
+                        fontFamily = RethinkSans,
+                        fontSize = 12.sp,
+                        color = SeekerClawColors.TextDim,
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    TextButton(
+                        onClick = {
+                            saveField("provider", selectedTab)
+                            // Also switch to a model appropriate for this provider if current model is from the other
+                            val currentModel = config?.model ?: ""
+                            val modelsForNew = modelsForProvider(selectedTab)
+                            if (modelsForNew.none { it.id == currentModel }) {
+                                saveField("model", modelsForNew[0].id)
+                            }
+                            Toast.makeText(context, "Switched to ${availableProviders.find { it.id == selectedTab }?.displayName}. Restart agent to apply.", Toast.LENGTH_LONG).show()
+                        },
+                    ) {
+                        Text(
+                            text = "Set as Active",
+                            fontFamily = RethinkSans,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp,
+                            color = SeekerClawColors.ActionPrimary,
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Provider-specific fields
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(SeekerClawColors.Surface, shape),
+            ) {
+                when (selectedTab) {
+                    "claude" -> {
+                        val authTypeLabel = if (config?.authType == "setup_token") "Pro/Max Token" else "API Key"
+                        ProviderConfigField(
+                            label = "Model",
+                            value = availableModels.find { it.id == config?.model }
+                                ?.let { "${it.displayName} (${it.description})" }
+                                ?: config?.model?.ifBlank { "Not set" } ?: "Not set",
+                            onClick = { showModelPicker = true },
+                            info = SettingsHelpTexts.MODEL,
+                        )
+                        ProviderConfigField(
+                            label = "Auth Type",
+                            value = authTypeLabel,
+                            onClick = { showAuthTypePicker = true },
+                            info = SettingsHelpTexts.AUTH_TYPE,
+                        )
+                        ProviderConfigField(
+                            label = if (config?.authType == "api_key") "API Key (active)" else "API Key",
+                            value = maskKey(config?.anthropicApiKey),
+                            onClick = {
+                                editField = "anthropicApiKey"
+                                editLabel = "Anthropic API Key"
+                                editValue = config?.anthropicApiKey ?: ""
+                            },
+                            info = SettingsHelpTexts.API_KEY,
+                            isRequired = config?.authType == "api_key",
+                        )
+                        ProviderConfigField(
+                            label = if (config?.authType == "setup_token") "Setup Token (active)" else "Setup Token",
+                            value = maskKey(config?.setupToken),
+                            onClick = {
+                                editField = "setupToken"
+                                editLabel = "Setup Token"
+                                editValue = config?.setupToken ?: ""
+                            },
+                            info = SettingsHelpTexts.SETUP_TOKEN,
+                            isRequired = config?.authType == "setup_token",
+                            showDivider = false,
+                        )
+                    }
+                    "openai" -> {
+                        ProviderConfigField(
+                            label = "Model",
+                            value = openaiModels.find { it.id == config?.model }
+                                ?.let { "${it.displayName} (${it.description})" }
+                                ?: config?.model?.ifBlank { "Not set" } ?: "Not set",
+                            onClick = { showModelPicker = true },
+                            info = SettingsHelpTexts.MODEL,
+                        )
+                        ProviderConfigField(
+                            label = "API Key",
+                            value = maskKey(config?.openaiApiKey),
+                            onClick = {
+                                editField = "openaiApiKey"
+                                editLabel = "OpenAI API Key"
+                                editValue = config?.openaiApiKey ?: ""
+                            },
+                            info = SettingsHelpTexts.OPENAI_API_KEY,
+                            isRequired = true,
+                            showDivider = false,
+                        )
+                    }
+                }
+            }
+
+            // Connection test
+            Spacer(modifier = Modifier.height(28.dp))
+            ProviderSectionLabel("Connection Test")
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(SeekerClawColors.Surface, shape)
+                    .padding(16.dp),
+            ) {
+                Text(
+                    text = "Verify your credentials are valid and the API is reachable.",
+                    fontFamily = RethinkSans,
+                    fontSize = 13.sp,
+                    color = SeekerClawColors.TextDim,
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Button(
+                    onClick = {
+                        if (testStatus == "Loading") return@Button
+                        testStatus = "Loading"
+                        testMessage = ""
+                        scope.launch {
+                            val result = when (selectedTab) {
+                                "openai" -> testOpenAIConnection(config?.openaiApiKey ?: "")
+                                else -> testAnthropicConnection(config?.activeCredential ?: "", config?.authType ?: "api_key")
+                            }
+                            if (result.isSuccess) {
+                                testStatus = "Success"
+                                testMessage = "Connection successful!"
+                            } else {
+                                testStatus = "Error"
+                                testMessage = result.exceptionOrNull()?.message ?: "Connection failed"
+                            }
+                        }
+                    },
+                    enabled = testStatus != "Loading",
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = shape,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = SeekerClawColors.ActionPrimary,
+                        contentColor = Color.White,
+                    ),
+                ) {
+                    if (testStatus == "Loading") {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                            color = Color.White,
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Testing...", fontFamily = RethinkSans, fontSize = 14.sp)
+                    } else {
+                        Text("Test Connection", fontFamily = RethinkSans, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    }
+                }
+
+                if (testStatus == "Success" || testStatus == "Error") {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = testMessage,
+                        fontFamily = RethinkSans,
+                        fontSize = 13.sp,
+                        color = if (testStatus == "Success") SeekerClawColors.ActionPrimary else SeekerClawColors.Error,
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+        }
+    }
+
+    // Edit dialog
+    if (editField != null) {
+        ProviderEditDialog(
+            editField = editField,
+            editLabel = editLabel,
+            editValue = editValue,
+            onValueChange = { editValue = it },
+            onSave = {
+                val field = editField ?: return@ProviderEditDialog
+                val trimmed = editValue.trim()
+                if (field == "setupToken") {
+                    saveField(field, trimmed)
+                    if (trimmed.isNotEmpty()) saveField("authType", "setup_token")
+                } else if (trimmed.isNotEmpty()) {
+                    if (field == "anthropicApiKey") {
+                        val detected = ConfigManager.detectAuthType(trimmed)
+                        if (detected == "setup_token") {
+                            saveField("setupToken", trimmed)
+                            saveField("authType", "setup_token")
+                            editField = null
+                            return@ProviderEditDialog
+                        }
+                    }
+                    saveField(field, trimmed)
+                }
+                editField = null
+            },
+            onDismiss = { editField = null },
+        )
+    }
+
+    // Model picker dialog — shows models for the selected tab's provider
+    if (showModelPicker) {
+        val models = modelsForProvider(selectedTab)
+        var selectedModel by remember { mutableStateOf(config?.model ?: models[0].id) }
+
+        AlertDialog(
+            onDismissRequest = { showModelPicker = false },
+            title = {
+                Text(
+                    "Select Model",
+                    fontFamily = RethinkSans,
+                    fontWeight = FontWeight.Bold,
+                    color = SeekerClawColors.TextPrimary,
+                )
+            },
+            text = {
+                Column {
+                    models.forEach { model ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { selectedModel = model.id }
+                                .padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(
+                                selected = selectedModel == model.id,
+                                onClick = { selectedModel = model.id },
+                                colors = RadioButtonDefaults.colors(
+                                    selectedColor = SeekerClawColors.Primary,
+                                    unselectedColor = SeekerClawColors.TextDim,
+                                ),
+                            )
+                            Column(modifier = Modifier.padding(start = 8.dp)) {
+                                Text(
+                                    text = "${model.displayName} (${model.description})",
+                                    fontFamily = RethinkSans,
+                                    fontSize = 14.sp,
+                                    color = SeekerClawColors.TextPrimary,
+                                )
+                                Text(
+                                    text = model.id,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 11.sp,
+                                    color = SeekerClawColors.TextDim,
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        saveField("model", selectedModel)
+                        Analytics.modelSelected(selectedModel)
+                        showModelPicker = false
+                    },
+                ) {
+                    Text("Save", fontFamily = RethinkSans, fontWeight = FontWeight.Bold, color = SeekerClawColors.ActionPrimary)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showModelPicker = false }) {
+                    Text("Cancel", fontFamily = RethinkSans, color = SeekerClawColors.TextDim)
+                }
+            },
+            containerColor = SeekerClawColors.Surface,
+            shape = shape,
+        )
+    }
+
+    // Auth type picker (Claude only)
+    if (showAuthTypePicker) {
+        val authOptions = listOf("api_key" to "API Key", "setup_token" to "Pro/Max Token")
+        var selectedAuth by remember { mutableStateOf(config?.authType ?: "api_key") }
+
+        AlertDialog(
+            onDismissRequest = { showAuthTypePicker = false },
+            title = {
+                Text("Auth Type", fontFamily = RethinkSans, fontWeight = FontWeight.Bold, color = SeekerClawColors.TextPrimary)
+            },
+            text = {
+                Column {
+                    authOptions.forEach { (typeId, label) ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { selectedAuth = typeId }
+                                .padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(
+                                selected = selectedAuth == typeId,
+                                onClick = { selectedAuth = typeId },
+                                colors = RadioButtonDefaults.colors(
+                                    selectedColor = SeekerClawColors.Primary,
+                                    unselectedColor = SeekerClawColors.TextDim,
+                                ),
+                            )
+                            Text(
+                                text = label,
+                                fontFamily = RethinkSans,
+                                fontSize = 14.sp,
+                                color = SeekerClawColors.TextPrimary,
+                                modifier = Modifier.padding(start = 8.dp),
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Both credentials are stored. Switching just changes which one is used.",
+                        fontFamily = RethinkSans,
+                        fontSize = 12.sp,
+                        color = SeekerClawColors.TextDim,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        saveField("authType", selectedAuth)
+                        Analytics.authTypeChanged(selectedAuth)
+                        showAuthTypePicker = false
+                    },
+                ) {
+                    Text("Save", fontFamily = RethinkSans, fontWeight = FontWeight.Bold, color = SeekerClawColors.ActionPrimary)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAuthTypePicker = false }) {
+                    Text("Cancel", fontFamily = RethinkSans, color = SeekerClawColors.TextDim)
+                }
+            },
+            containerColor = SeekerClawColors.Surface,
+            shape = shape,
+        )
+    }
+}
+
+private suspend fun testAnthropicConnection(credential: String, authType: String): Result<Unit> = withContext(Dispatchers.IO) {
+    runCatching {
+        if (credential.isBlank()) error("Credential is empty")
+        val url = URL("https://api.anthropic.com/v1/models")
+        val conn = url.openConnection() as HttpURLConnection
+        conn.requestMethod = "GET"
+        if (authType == "setup_token") {
+            conn.setRequestProperty("Authorization", "Bearer $credential")
+            conn.setRequestProperty("anthropic-beta", "prompt-caching-2024-07-31,oauth-2025-04-20")
+        } else {
+            conn.setRequestProperty("x-api-key", credential)
+            conn.setRequestProperty("anthropic-beta", "prompt-caching-2024-07-31")
+        }
+        conn.setRequestProperty("anthropic-version", "2023-06-01")
+        conn.connectTimeout = 15000
+        conn.readTimeout = 15000
+        try {
+            val status = conn.responseCode
+            if (status in 200..299) return@runCatching
+            val errorMessage = when {
+                status == 401 || status == 403 -> "Unauthorized / Invalid credential"
+                status in 500..599 -> "Anthropic API unavailable"
+                else -> {
+                    val errorStream = conn.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
+                    try {
+                        val json = JSONObject(errorStream)
+                        val err = json.optJSONObject("error")
+                        if (err?.has("message") == true) "HTTP $status: ${err.getString("message")}" else "HTTP $status"
+                    } catch (_: Exception) { "HTTP $status" }
+                }
+            }
+            error("Connection failed ($errorMessage)")
+        } finally { conn.disconnect() }
+    }
+}
+
+private suspend fun testOpenAIConnection(apiKey: String): Result<Unit> = withContext(Dispatchers.IO) {
+    runCatching {
+        if (apiKey.isBlank()) error("API key is empty")
+        val url = URL("https://api.openai.com/v1/models")
+        val conn = url.openConnection() as HttpURLConnection
+        conn.requestMethod = "GET"
+        conn.setRequestProperty("Authorization", "Bearer $apiKey")
+        conn.connectTimeout = 15000
+        conn.readTimeout = 15000
+        try {
+            val status = conn.responseCode
+            if (status in 200..299) return@runCatching
+            val errorMessage = when {
+                status == 401 || status == 403 -> "Unauthorized / Invalid API key"
+                status == 429 -> "Rate limited — try again in a moment"
+                status in 500..599 -> "OpenAI API unavailable"
+                else -> "HTTP $status"
+            }
+            error("Connection failed ($errorMessage)")
+        } finally { conn.disconnect() }
+    }
+}

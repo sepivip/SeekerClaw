@@ -27,6 +27,8 @@ import java.util.zip.ZipOutputStream
 
 data class AppConfig(
     val anthropicApiKey: String,
+    val openaiApiKey: String = "",
+    val provider: String = "claude",  // "claude" or "openai" — migration-safe default
     val setupToken: String = "",
     val authType: String = "api_key", // "api_key" or "setup_token"
     val telegramBotToken: String,
@@ -38,9 +40,12 @@ data class AppConfig(
     val autoStartOnBoot: Boolean = true,
     val heartbeatIntervalMinutes: Int = 30,
 ) {
-    /** Returns the credential that should be used based on the current authType. */
+    /** Returns the credential that should be used based on the current provider/authType. */
     val activeCredential: String
-        get() = if (authType == "setup_token") setupToken else anthropicApiKey
+        get() = when (provider) {
+            "openai" -> openaiApiKey
+            else -> if (authType == "setup_token") setupToken else anthropicApiKey
+        }
 }
 
 data class McpServerConfig(
@@ -69,6 +74,8 @@ object ConfigManager {
     private const val KEY_SETUP_TOKEN_ENC = "setup_token_enc"
     private const val KEY_BRAVE_API_KEY_ENC = "brave_api_key_enc"
     private const val KEY_JUPITER_API_KEY_ENC = "jupiter_api_key_enc"
+    private const val KEY_OPENAI_API_KEY_ENC = "openai_api_key_enc"
+    private const val KEY_PROVIDER = "provider"
     private const val KEY_WALLET_ADDRESS = "wallet_address"
     private const val KEY_WALLET_LABEL = "wallet_label"
     private const val KEY_MCP_SERVERS_ENC = "mcp_servers_enc"
@@ -97,9 +104,18 @@ object ConfigManager {
             .putString(KEY_MODEL, config.model)
             .putString(KEY_AGENT_NAME, config.agentName)
             .putString(KEY_AUTH_TYPE, config.authType)
+            .putString(KEY_PROVIDER, config.provider)
             .putBoolean(KEY_AUTO_START, config.autoStartOnBoot)
             .putInt(KEY_HEARTBEAT_INTERVAL, config.heartbeatIntervalMinutes)
             .putBoolean(KEY_SETUP_COMPLETE, true)
+
+        // Store OpenAI key separately (both keys persist for fallback)
+        if (config.openaiApiKey.isNotBlank()) {
+            val encOpenai = KeystoreHelper.encrypt(config.openaiApiKey)
+            editor.putString(KEY_OPENAI_API_KEY_ENC, Base64.encodeToString(encOpenai, Base64.NO_WRAP))
+        } else {
+            editor.remove(KEY_OPENAI_API_KEY_ENC)
+        }
 
         // Store setup token separately so switching auth type preserves both
         if (config.setupToken.isNotBlank()) {
@@ -180,8 +196,19 @@ object ConfigManager {
             ""
         }
 
+        val openaiApiKey = try {
+            val enc = p.getString(KEY_OPENAI_API_KEY_ENC, null)
+            if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to decrypt OpenAI API key", e)
+            LogCollector.append("[Config] Failed to decrypt OpenAI API key: ${e.javaClass.simpleName}", LogLevel.ERROR)
+            ""
+        }
+
         return AppConfig(
             anthropicApiKey = apiKey,
+            openaiApiKey = openaiApiKey,
+            provider = p.getString(KEY_PROVIDER, "claude") ?: "claude",
             setupToken = setupToken,
             authType = p.getString(KEY_AUTH_TYPE, "api_key") ?: "api_key",
             telegramBotToken = botToken,
@@ -213,6 +240,8 @@ object ConfigManager {
         val config = loadConfig(context) ?: return
         val updated = when (field) {
             "anthropicApiKey" -> config.copy(anthropicApiKey = value)
+            "openaiApiKey" -> config.copy(openaiApiKey = value)
+            "provider" -> config.copy(provider = value)
             "setupToken" -> config.copy(setupToken = value)
             "telegramBotToken" -> config.copy(telegramBotToken = value)
             "telegramOwnerId" -> config.copy(telegramOwnerId = value)
@@ -273,6 +302,10 @@ object ConfigManager {
         }
         val workspaceDir = File(context.filesDir, "workspace").apply { mkdirs() }
         val credential = escapeJson(config.activeCredential)
+        val openaiKeyField = if (config.openaiApiKey.isNotBlank()) {
+            """,
+            |  "openaiApiKey": "${escapeJson(config.openaiApiKey)}""""
+        } else ""
         val braveField = if (config.braveApiKey.isNotBlank()) {
             """,
             |  "braveApiKey": "${escapeJson(config.braveApiKey)}""""
@@ -301,12 +334,13 @@ object ConfigManager {
             |{
             |  "botToken": "${escapeJson(config.telegramBotToken)}",
             |  "ownerId": "${escapeJson(config.telegramOwnerId)}",
+            |  "provider": "${escapeJson(config.provider)}",
             |  "anthropicApiKey": "$credential",
             |  "authType": "${escapeJson(config.authType)}",
             |  "model": "${escapeJson(config.model)}",
             |  "agentName": "${escapeJson(config.agentName)}",
             |  "heartbeatIntervalMinutes": ${config.heartbeatIntervalMinutes},
-            |  "bridgeToken": "${escapeJson(bridgeToken)}"$braveField$jupiterField$mcpField
+            |  "bridgeToken": "${escapeJson(bridgeToken)}"$openaiKeyField$braveField$jupiterField$mcpField
             |}
         """.trimMargin()
         File(workspaceDir, "config.json").writeText(json)
@@ -348,9 +382,9 @@ object ConfigManager {
 
     fun redactedSnapshot(config: AppConfig?): String {
         if (config == null) return "setup=false"
-        return "setup=true authType=${config.authType} botSet=${config.telegramBotToken.isNotBlank()} " +
-            "apiSet=${config.anthropicApiKey.isNotBlank()} setupTokenSet=${config.setupToken.isNotBlank()} " +
-            "activeSet=${config.activeCredential.isNotBlank()} model=${config.model}"
+        return "setup=true provider=${config.provider} authType=${config.authType} botSet=${config.telegramBotToken.isNotBlank()} " +
+            "apiSet=${config.anthropicApiKey.isNotBlank()} openaiSet=${config.openaiApiKey.isNotBlank()} " +
+            "setupTokenSet=${config.setupToken.isNotBlank()} activeSet=${config.activeCredential.isNotBlank()} model=${config.model}"
     }
 
     // ==================== Auth Type Detection ====================
