@@ -39,6 +39,7 @@ import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
@@ -881,8 +882,17 @@ private fun OptionsStep(
     onBack: () -> Unit,
 ) {
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
-    val isCustomModel = availableModels.none { it.id == selectedModel }
-    var customModelText by remember { mutableStateOf(if (isCustomModel) selectedModel else "") }
+    val isCustomModelSelected = selectedModel == CUSTOM_MODEL
+    val isCustomModel = isCustomModelSelected || availableModels.none { it.id == selectedModel }
+    var customModelText by remember(selectedModel) {
+        mutableStateOf(
+            when {
+                isCustomModelSelected -> ""
+                isCustomModel -> selectedModel
+                else -> ""
+            }
+        )
+    }
 
     Column(modifier = Modifier.fillMaxWidth()) {
         SectionLabel("Configuration")
@@ -927,15 +937,16 @@ private fun OptionsStep(
                         )
                     },
                     trailingIcon = {
-                        Icon(
-                            imageVector = Icons.Filled.CheckCircle,
-                            contentDescription = "Switch to preset",
-                            tint = SeekerClawColors.TextDim,
-                            modifier = Modifier.clickable {
-                                onModelChange(availableModels[0].id)
-                                customModelText = ""
-                            },
-                        )
+                        IconButton(onClick = {
+                            onModelChange(availableModels[0].id)
+                            customModelText = ""
+                        }) {
+                            Icon(
+                                imageVector = Icons.Filled.CheckCircle,
+                                contentDescription = "Switch to preset models",
+                                tint = SeekerClawColors.TextDim,
+                            )
+                        }
                     },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
