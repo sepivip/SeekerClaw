@@ -33,6 +33,8 @@ val openaiModels = listOf(
     ModelInfo("gpt-4.1", "GPT-4.1", "flagship"),
     ModelInfo("gpt-4.1-mini", "GPT-4.1 Mini", "balanced"),
     ModelInfo("gpt-4.1-nano", "GPT-4.1 Nano", "fast"),
+    ModelInfo("o3", "o3", "reasoning"),
+    ModelInfo("o3-mini", "o3-mini", "fast reasoning"),
     ModelInfo("o4-mini", "o4-mini", "reasoning"),
 )
 

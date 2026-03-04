@@ -22,14 +22,12 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -52,8 +50,8 @@ import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.config.availableModels
 import com.seekerclaw.app.config.availableProviders
 import com.seekerclaw.app.config.modelsForProvider
-import com.seekerclaw.app.config.providerById
 import com.seekerclaw.app.config.openaiModels
+import com.seekerclaw.app.config.providerById
 import com.seekerclaw.app.util.Analytics
 import com.seekerclaw.app.ui.theme.RethinkSans
 import com.seekerclaw.app.ui.theme.SeekerClawColors
@@ -71,8 +69,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     var config by remember { mutableStateOf(ConfigManager.loadConfig(context)) }
 
-    val currentProvider = providerById(config?.provider ?: "claude").id  // clamp to known provider
-    var selectedTab by remember { mutableStateOf(currentProvider) }
+    val activeProvider = providerById(config?.provider ?: "claude").id
     var editField by remember { mutableStateOf<String?>(null) }
     var editLabel by remember { mutableStateOf("") }
     var editValue by remember { mutableStateOf("") }
@@ -92,6 +89,21 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
         if (key.isNullOrBlank()) return "Not set"
         if (key.length <= 8) return "*".repeat(key.length)
         return "${key.take(6)}${"*".repeat(8)}${key.takeLast(4)}"
+    }
+
+    fun switchProvider(newProviderId: String) {
+        saveField("provider", newProviderId)
+        // Auto-switch model to the new provider's default if current model doesn't belong
+        val currentModel = config?.model ?: ""
+        val modelsForNew = modelsForProvider(newProviderId)
+        if (modelsForNew.none { it.id == currentModel }) {
+            saveField("model", modelsForNew.firstOrNull()?.id ?: "")
+        }
+        Toast.makeText(
+            context,
+            "Switched to ${providerById(newProviderId).displayName}. Restart agent to apply.",
+            Toast.LENGTH_LONG,
+        ).show()
     }
 
     Scaffold(
@@ -129,89 +141,64 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                 .padding(horizontal = 20.dp, vertical = 8.dp)
                 .verticalScroll(rememberScrollState()),
         ) {
-            // Provider tabs (segmented control)
-            SingleChoiceSegmentedButtonRow(
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                availableProviders.forEachIndexed { index, provider ->
-                    SegmentedButton(
-                        selected = selectedTab == provider.id,
-                        onClick = { selectedTab = provider.id },
-                        shape = SegmentedButtonDefaults.itemShape(
-                            index = index,
-                            count = availableProviders.size,
-                        ),
-                        colors = SegmentedButtonDefaults.colors(
-                            activeContainerColor = SeekerClawColors.Primary.copy(alpha = 0.15f),
-                            activeContentColor = SeekerClawColors.Primary,
-                            inactiveContainerColor = SeekerClawColors.Surface,
-                            inactiveContentColor = SeekerClawColors.TextDim,
-                            activeBorderColor = SeekerClawColors.Primary,
-                            inactiveBorderColor = SeekerClawColors.CardBorder,
-                        ),
-                    ) {
-                        Text(
-                            text = provider.displayName,
-                            fontFamily = RethinkSans,
-                            fontWeight = if (selectedTab == provider.id) FontWeight.Bold else FontWeight.Normal,
-                            fontSize = 14.sp,
-                        )
-                    }
-                }
-            }
+            // Provider selection — two rows matching existing field pattern
+            ProviderSectionLabel("Provider")
+            Spacer(modifier = Modifier.height(10.dp))
 
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Active provider indicator
-            if (currentProvider == selectedTab) {
-                Text(
-                    text = "Active provider",
-                    fontFamily = RethinkSans,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = SeekerClawColors.Accent,
-                )
-            } else {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = "Tap to activate",
-                        fontFamily = RethinkSans,
-                        fontSize = 12.sp,
-                        color = SeekerClawColors.TextDim,
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    TextButton(
-                        onClick = {
-                            saveField("provider", selectedTab)
-                            // Also switch to a model appropriate for this provider if current model is from the other
-                            val currentModel = config?.model ?: ""
-                            val modelsForNew = modelsForProvider(selectedTab)
-                            if (modelsForNew.none { it.id == currentModel }) {
-                                saveField("model", modelsForNew.firstOrNull()?.id ?: "")
-                            }
-                            Toast.makeText(context, "Switched to ${availableProviders.find { it.id == selectedTab }?.displayName}. Restart agent to apply.", Toast.LENGTH_LONG).show()
-                        },
-                    ) {
-                        Text(
-                            text = "Set as Active",
-                            fontFamily = RethinkSans,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 13.sp,
-                            color = SeekerClawColors.ActionPrimary,
-                        )
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Provider-specific fields
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(SeekerClawColors.Surface, shape),
             ) {
-                when (selectedTab) {
+                availableProviders.forEachIndexed { index, provider ->
+                    val isActive = provider.id == activeProvider
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { if (!isActive) switchProvider(provider.id) }
+                            .padding(horizontal = 16.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceBetween,
+                    ) {
+                        Column {
+                            Text(
+                                text = provider.displayName,
+                                fontFamily = RethinkSans,
+                                fontSize = 14.sp,
+                                fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
+                                color = SeekerClawColors.TextPrimary,
+                            )
+                        }
+                        if (isActive) {
+                            Text(
+                                text = "Active",
+                                fontFamily = RethinkSans,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = SeekerClawColors.Accent,
+                            )
+                        }
+                    }
+                    if (index < availableProviders.size - 1) {
+                        HorizontalDivider(
+                            color = SeekerClawColors.TextDim.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(horizontal = 16.dp),
+                        )
+                    }
+                }
+            }
+
+            // Active provider fields
+            Spacer(modifier = Modifier.height(28.dp))
+            ProviderSectionLabel("${providerById(activeProvider).displayName} Settings")
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(SeekerClawColors.Surface, shape),
+            ) {
+                when (activeProvider) {
                     "claude" -> {
                         val authTypeLabel = if (config?.authType == "setup_token") "Pro/Max Token" else "API Key"
                         ProviderConfigField(
@@ -302,7 +289,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                         testStatus = "Loading"
                         testMessage = ""
                         scope.launch {
-                            val result = when (selectedTab) {
+                            val result = when (activeProvider) {
                                 "openai" -> testOpenAIConnection(config?.openaiApiKey ?: "")
                                 else -> {
                                     // Use Claude-specific credential derived from authType
@@ -391,9 +378,9 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
         )
     }
 
-    // Model picker dialog — shows models for the selected tab's provider
+    // Model picker dialog — shows models for active provider only
     if (showModelPicker) {
-        val models = modelsForProvider(selectedTab)
+        val models = modelsForProvider(activeProvider)
         var selectedModel by remember {
             mutableStateOf(models.firstOrNull { it.id == config?.model }?.id ?: models.firstOrNull()?.id ?: "")
         }
@@ -448,11 +435,6 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                 TextButton(
                     onClick = {
                         saveField("model", selectedModel)
-                        // Auto-activate the tab's provider when saving its model,
-                        // preventing provider/model mismatch at runtime
-                        if (selectedTab != (config?.provider ?: "claude")) {
-                            saveField("provider", selectedTab)
-                        }
                         Analytics.modelSelected(selectedModel)
                         showModelPicker = false
                     },
