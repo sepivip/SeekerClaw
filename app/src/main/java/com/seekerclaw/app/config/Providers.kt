@@ -31,9 +31,7 @@ val availableProviders = listOf(
 
 val openaiModels = listOf(
     ModelInfo("gpt-5.2", "GPT-5.2", "flagship"),
-    ModelInfo("gpt-5.2-pro", "GPT-5.2 Pro", "smartest, expensive"),
     ModelInfo("gpt-5.3-codex", "GPT-5.3 Codex", "code agent"),
-    ModelInfo("gpt-5-mini", "GPT-5 Mini", "fast, cheap"),
 )
 
 fun modelsForProvider(providerId: String): List<ModelInfo> = when (providerId) {

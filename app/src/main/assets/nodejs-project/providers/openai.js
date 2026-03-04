@@ -179,9 +179,8 @@ function formatRequest(model, maxTokens, instructions, input, tools) {
         body.tools = tools;
     }
 
-    // GPT-5 family models support reasoning — Codex/Pro require it for tool calling.
-    // effort:'low' is the lightest setting; 'medium'/'high'/'xhigh' for deeper reasoning.
-    if (model && (model.includes('codex') || model.includes('pro'))) {
+    // Codex models are reasoning models — they need the reasoning parameter for tool calling.
+    if (model && model.includes('codex')) {
         body.reasoning = { effort: 'medium', summary: 'auto' };
     }
 
