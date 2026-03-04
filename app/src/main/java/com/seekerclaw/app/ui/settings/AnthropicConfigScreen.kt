@@ -58,12 +58,8 @@ import com.seekerclaw.app.config.availableModels
 import com.seekerclaw.app.util.Analytics
 import com.seekerclaw.app.ui.theme.RethinkSans
 import com.seekerclaw.app.ui.theme.SeekerClawColors
-import kotlinx.coroutines.Dispatchers
+
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

@@ -572,11 +572,19 @@ private suspend fun testOpenAIConnection(apiKey: String): Result<Unit> = withCon
         try {
             val status = conn.responseCode
             if (status in 200..299) return@runCatching
+            // Parse error body for actionable message
+            val errorBody = try {
+                val stream = conn.errorStream ?: conn.inputStream
+                stream?.bufferedReader()?.readText() ?: ""
+            } catch (_: Exception) { "" }
+            val apiMessage = try {
+                org.json.JSONObject(errorBody).optJSONObject("error")?.optString("message", "") ?: ""
+            } catch (_: Exception) { "" }
             val errorMessage = when {
-                status == 401 || status == 403 -> "Unauthorized / Invalid API key"
+                status == 401 || status == 403 -> apiMessage.ifBlank { "Unauthorized / Invalid API key" }
                 status == 429 -> "Rate limited — try again in a moment"
                 status in 500..599 -> "OpenAI API unavailable"
-                else -> "HTTP $status"
+                else -> apiMessage.ifBlank { "HTTP $status" }
             }
             error("Connection failed ($errorMessage)")
         } catch (_: java.net.SocketTimeoutException) {
