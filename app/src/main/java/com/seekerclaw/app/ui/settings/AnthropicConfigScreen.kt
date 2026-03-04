@@ -374,6 +374,7 @@ fun AnthropicConfigScreen(onBack: () -> Unit) {
                         OutlinedTextField(
                             value = customModelText,
                             onValueChange = { customModelText = it },
+                            label = { Text("Custom model ID", fontSize = 12.sp) },
                             placeholder = {
                                 Text(
                                     "e.g. claude-opus-5",

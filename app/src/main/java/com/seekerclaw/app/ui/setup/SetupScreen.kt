@@ -214,7 +214,8 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                 authType = authType,
                 telegramBotToken = botToken.trim(),
                 telegramOwnerId = ownerId.trim(),
-                model = selectedModel,
+                model = selectedModel.trim().takeIf { it.isNotBlank() && it != CUSTOM_MODEL }
+                    ?: availableModels[0].id,
                 agentName = agentName.trim().ifBlank { "SeekerClaw" },
             )
             ConfigManager.saveConfig(context, config)
