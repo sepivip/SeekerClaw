@@ -179,6 +179,12 @@ function formatRequest(model, maxTokens, instructions, input, tools) {
         body.tools = tools;
     }
 
+    // Codex models are reasoning models — they need the reasoning parameter
+    // to function properly (like o-series). Without it, tool calling degrades.
+    if (model && model.includes('codex')) {
+        body.reasoning = { effort: 'low', summary: 'auto' };
+    }
+
     return JSON.stringify(body);
 }
 
