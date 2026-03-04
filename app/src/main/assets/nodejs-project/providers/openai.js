@@ -148,23 +148,16 @@ function formatTools(tools) {
 
 /**
  * Build full OpenAI API request body.
- * Note: reasoning/codex models use max_completion_tokens instead of max_tokens.
+ * All current OpenAI models (GPT-5.x, o-series, codex) use max_completion_tokens.
  */
 function formatRequest(model, maxTokens, systemPromptMsg, messages, tools) {
-    const useCompletionTokens = /^o\d/.test(model) || /codex/i.test(model);
     const body = {
         model,
         stream: true,
         stream_options: { include_usage: true },
+        max_completion_tokens: maxTokens,
         messages: [systemPromptMsg, ...messages],
     };
-
-    // Reasoning & codex models use max_completion_tokens; standard models use max_tokens
-    if (useCompletionTokens) {
-        body.max_completion_tokens = maxTokens;
-    } else {
-        body.max_tokens = maxTokens;
-    }
 
     if (tools && tools.length > 0) {
         body.tools = tools;
