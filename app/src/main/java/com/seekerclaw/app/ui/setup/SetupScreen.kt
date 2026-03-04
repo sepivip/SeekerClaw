@@ -148,7 +148,9 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                     }
                     botToken = cfg.telegramBotToken
                     ownerId = cfg.telegramOwnerId
-                    selectedModel = cfg.model.ifBlank { availableModels[0].id }
+                    selectedModel = cfg.model.trim().let { m ->
+                        if (m.isBlank() || m == CUSTOM_MODEL) availableModels[0].id else m
+                    }
                     agentName = cfg.agentName
                     isQrImporting = false
                     errorMessage = null
@@ -885,7 +887,7 @@ private fun OptionsStep(
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
     val isCustomModelSelected = selectedModel == CUSTOM_MODEL
     val isCustomModel = isCustomModelSelected || availableModels.none { it.id == selectedModel }
-    var customModelText by remember(selectedModel) {
+    var customModelText by remember {
         mutableStateOf(
             when {
                 isCustomModelSelected -> ""
