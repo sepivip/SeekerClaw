@@ -39,6 +39,7 @@ import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
@@ -80,6 +81,7 @@ import com.seekerclaw.app.R
 import com.seekerclaw.app.config.AppConfig
 import com.seekerclaw.app.config.ConfigClaimImporter
 import com.seekerclaw.app.config.ConfigManager
+import com.seekerclaw.app.config.CUSTOM_MODEL
 import com.seekerclaw.app.config.availableModels
 import com.seekerclaw.app.qr.QrScannerActivity
 import com.seekerclaw.app.service.OpenClawService
@@ -103,8 +105,8 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
     var ownerId by remember { mutableStateOf(existingConfig?.telegramOwnerId ?: "") }
     var selectedModel by remember {
         mutableStateOf(
-            existingConfig?.model?.takeIf { model ->
-                availableModels.any { it.id == model }
+            existingConfig?.model?.trim()?.let { m ->
+                if (m.isBlank() || m == CUSTOM_MODEL) availableModels[0].id else m
             } ?: availableModels[0].id
         )
     }
@@ -150,9 +152,9 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                     }
                     botToken = cfg.telegramBotToken
                     ownerId = cfg.telegramOwnerId
-                    selectedModel = cfg.model.takeIf { m ->
-                        availableModels.any { it.id == m }
-                    } ?: availableModels[0].id
+                    selectedModel = cfg.model.trim().let { m ->
+                        if (m.isBlank() || m == CUSTOM_MODEL) availableModels[0].id else m
+                    }
                     agentName = cfg.agentName
                     isQrImporting = false
                     errorMessage = null
@@ -218,7 +220,8 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                 authType = authType,
                 telegramBotToken = botToken.trim(),
                 telegramOwnerId = ownerId.trim(),
-                model = selectedModel,
+                model = selectedModel.trim().takeIf { it.isNotBlank() && it != CUSTOM_MODEL }
+                    ?: availableModels[0].id,
                 agentName = agentName.trim().ifBlank { "SeekerClaw" },
             )
             ConfigManager.saveConfig(context, config)
@@ -886,6 +889,17 @@ private fun OptionsStep(
     onBack: () -> Unit,
 ) {
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
+    val isCustomModelSelected = selectedModel == CUSTOM_MODEL
+    val isCustomModel = isCustomModelSelected || availableModels.none { it.id == selectedModel }
+    var customModelText by remember {
+        mutableStateOf(
+            when {
+                isCustomModelSelected -> ""
+                isCustomModel -> selectedModel
+                else -> ""
+            }
+        )
+    }
 
     Column(modifier = Modifier.fillMaxWidth()) {
         SectionLabel("Configuration")
@@ -909,36 +923,96 @@ private fun OptionsStep(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            ExposedDropdownMenuBox(
-                expanded = modelDropdownExpanded,
-                onExpandedChange = onModelDropdownExpandedChange,
-            ) {
+            if (isCustomModel) {
                 OutlinedTextField(
-                    value = availableModels.first { it.id == selectedModel }.let { "${it.displayName} (${it.description})" },
-                    onValueChange = {},
-                    readOnly = true,
-                    label = { Text("Model", fontSize = 12.sp) },
-                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = modelDropdownExpanded) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .menuAnchor(MenuAnchorType.PrimaryNotEditable),
+                    value = customModelText,
+                    onValueChange = {
+                        customModelText = it
+                        val trimmed = it.trim()
+                        if (trimmed.isNotEmpty()) {
+                            onModelChange(trimmed)
+                        } else {
+                            onModelChange(CUSTOM_MODEL)
+                        }
+                    },
+                    label = { Text("Custom Model ID", fontSize = 12.sp) },
+                    placeholder = {
+                        Text(
+                            "e.g. claude-opus-5",
+                            fontSize = 13.sp,
+                            color = SeekerClawColors.TextDim,
+                        )
+                    },
+                    trailingIcon = {
+                        IconButton(onClick = {
+                            onModelChange(availableModels[0].id)
+                            customModelText = ""
+                        }) {
+                            Icon(
+                                imageVector = Icons.Filled.CheckCircle,
+                                contentDescription = "Switch to preset models",
+                                tint = SeekerClawColors.TextDim,
+                            )
+                        }
+                    },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
                     colors = fieldColors,
                     shape = shape,
+                    textStyle = androidx.compose.ui.text.TextStyle(
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 14.sp,
+                    ),
                 )
-                ExposedDropdownMenu(
+            } else {
+                ExposedDropdownMenuBox(
                     expanded = modelDropdownExpanded,
-                    onDismissRequest = { onModelDropdownExpandedChange(false) },
+                    onExpandedChange = onModelDropdownExpandedChange,
                 ) {
-                    availableModels.forEach { model ->
+                    OutlinedTextField(
+                        value = availableModels.firstOrNull { it.id == selectedModel }
+                            ?.let { "${it.displayName} (${it.description})" } ?: selectedModel,
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Model", fontSize = 12.sp) },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = modelDropdownExpanded) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .menuAnchor(MenuAnchorType.PrimaryNotEditable),
+                        colors = fieldColors,
+                        shape = shape,
+                    )
+                    ExposedDropdownMenu(
+                        expanded = modelDropdownExpanded,
+                        onDismissRequest = { onModelDropdownExpandedChange(false) },
+                    ) {
+                        availableModels.forEach { model ->
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        "${model.displayName} (${model.description})",
+                                        color = SeekerClawColors.TextPrimary,
+                                    )
+                                },
+                                onClick = {
+                                    onModelChange(model.id)
+                                    onModelDropdownExpandedChange(false)
+                                },
+                            )
+                        }
+                        HorizontalDivider(color = SeekerClawColors.CardBorder)
                         DropdownMenuItem(
                             text = {
                                 Text(
-                                    "${model.displayName} (${model.description})",
-                                    color = SeekerClawColors.TextPrimary,
+                                    "Custom model ID...",
+                                    color = SeekerClawColors.TextDim,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 13.sp,
                                 )
                             },
                             onClick = {
-                                onModelChange(model.id)
+                                onModelChange(CUSTOM_MODEL)
+                                customModelText = ""
                                 onModelDropdownExpandedChange(false)
                             },
                         )
@@ -996,7 +1070,7 @@ private fun OptionsStep(
 
             Button(
                 onClick = onStartAgent,
-                enabled = !isStarting,
+                enabled = !isStarting && selectedModel != CUSTOM_MODEL && selectedModel.isNotBlank(),
                 modifier = Modifier.height(56.dp),
                 shape = shape,
                 colors = ButtonDefaults.buttonColors(

@@ -1,5 +1,7 @@
 package com.seekerclaw.app.config
 
+const val CUSTOM_MODEL = "__custom__"
+
 data class ModelInfo(
     val id: String,
     val displayName: String,
@@ -9,7 +11,6 @@ data class ModelInfo(
 val availableModels = listOf(
     ModelInfo("claude-opus-4-6", "Opus 4.6", "default"),
     ModelInfo("claude-sonnet-4-6", "Sonnet 4.6", "balanced"),
-    ModelInfo("claude-sonnet-4-5", "Sonnet 4.5", "previous gen"),
     ModelInfo("claude-haiku-4-5", "Haiku 4.5", "fast"),
 )
 

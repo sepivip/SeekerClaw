@@ -53,6 +53,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.animation.AnimatedVisibility
+import com.seekerclaw.app.config.CUSTOM_MODEL
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.config.availableModels
 import com.seekerclaw.app.util.Analytics
@@ -287,7 +289,15 @@ fun AnthropicConfigScreen(onBack: () -> Unit) {
     }
 
     if (showModelPicker) {
-        var selectedModel by remember { mutableStateOf(config?.model ?: availableModels[0].id) }
+        val currentModel = config?.model?.trim()?.let { m ->
+            if (m.isBlank() || m == CUSTOM_MODEL) availableModels[0].id else m
+        } ?: availableModels[0].id
+        val isCurrentCustom = availableModels.none { it.id == currentModel }
+        var selectedModel by remember { mutableStateOf(if (isCurrentCustom) CUSTOM_MODEL else currentModel) }
+        var customModelText by remember { mutableStateOf(if (isCurrentCustom) currentModel else "") }
+        val isCustomSelected = selectedModel == CUSTOM_MODEL
+        val canSave = !isCustomSelected || (customModelText.trim().isNotEmpty() && customModelText.trim() != CUSTOM_MODEL)
+
         AlertDialog(
             onDismissRequest = { showModelPicker = false },
             title = {
@@ -332,13 +342,75 @@ fun AnthropicConfigScreen(onBack: () -> Unit) {
                             }
                         }
                     }
+
+                    HorizontalDivider(
+                        color = SeekerClawColors.CardBorder,
+                        modifier = Modifier.padding(vertical = 4.dp),
+                    )
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { selectedModel = CUSTOM_MODEL }
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(
+                            selected = isCustomSelected,
+                            onClick = { selectedModel = CUSTOM_MODEL },
+                            colors = RadioButtonDefaults.colors(
+                                selectedColor = SeekerClawColors.Primary,
+                                unselectedColor = SeekerClawColors.TextDim,
+                            ),
+                        )
+                        Text(
+                            text = "Custom model ID",
+                            fontFamily = RethinkSans,
+                            fontSize = 14.sp,
+                            color = SeekerClawColors.TextPrimary,
+                            modifier = Modifier.padding(start = 8.dp),
+                        )
+                    }
+
+                    AnimatedVisibility(visible = isCustomSelected) {
+                        OutlinedTextField(
+                            value = customModelText,
+                            onValueChange = { customModelText = it },
+                            label = { Text("Custom model ID", fontSize = 12.sp) },
+                            placeholder = {
+                                Text(
+                                    "e.g. claude-opus-5",
+                                    fontSize = 13.sp,
+                                    color = SeekerClawColors.TextDim,
+                                )
+                            },
+                            singleLine = true,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(start = 40.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = SeekerClawColors.TextPrimary,
+                                unfocusedTextColor = SeekerClawColors.TextPrimary,
+                                cursorColor = SeekerClawColors.Primary,
+                                focusedBorderColor = SeekerClawColors.Primary,
+                                unfocusedBorderColor = SeekerClawColors.CardBorder,
+                            ),
+                            textStyle = androidx.compose.ui.text.TextStyle(
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 13.sp,
+                            ),
+                            shape = RoundedCornerShape(SeekerClawColors.CornerRadius),
+                        )
+                    }
                 }
             },
             confirmButton = {
                 TextButton(
+                    enabled = canSave,
                     onClick = {
-                        saveField("model", selectedModel)
-                        Analytics.modelSelected(selectedModel)
+                        val modelToSave = if (isCustomSelected) customModelText.trim() else selectedModel
+                        saveField("model", modelToSave)
+                        Analytics.modelSelected(modelToSave)
                         showModelPicker = false
                     },
                 ) {
@@ -346,7 +418,7 @@ fun AnthropicConfigScreen(onBack: () -> Unit) {
                         "Save",
                         fontFamily = RethinkSans,
                         fontWeight = FontWeight.Bold,
-                        color = SeekerClawColors.ActionPrimary,
+                        color = if (canSave) SeekerClawColors.ActionPrimary else SeekerClawColors.TextDim,
                     )
                 }
             },
