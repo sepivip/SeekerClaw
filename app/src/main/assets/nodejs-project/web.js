@@ -208,6 +208,166 @@ function httpStreamingRequest(options, body = null) {
     });
 }
 
+// BAT-315: Streaming HTTP request for OpenAI API — SSE parsing.
+// OpenAI uses a simpler SSE format: data: {...} with choices[0].delta,
+// tool call arguments stream incrementally and must be accumulated.
+function httpOpenAIStreamingRequest(options, body = null) {
+    const timeoutMs = options.timeout ?? API_TIMEOUT_MS;
+    const HARD_TIMEOUT_MS = 5 * 60 * 1000;
+
+    return new Promise((resolve, reject) => {
+        let settled = false;
+        const settle = (fn, val) => { if (!settled) { settled = true; fn(val); } };
+
+        let req = null;
+        let hardTimer = null;
+
+        const armHardTimeout = () => {
+            hardTimer = setTimeout(() => {
+                if (req) req.destroy();
+                const err = new Error('Streaming hard timeout (5 min)');
+                err.timeoutSource = 'transport';
+                settle(reject, err);
+            }, HARD_TIMEOUT_MS);
+        };
+
+        try {
+        req = https.request(options, (res) => {
+            const ct = res.headers['content-type'] || '';
+            if (res.statusCode !== 200 || !ct.includes('text/event-stream')) {
+                res.setEncoding('utf8');
+                let data = '';
+                res.on('data', chunk => data += chunk);
+                res.on('end', () => {
+                    clearTimeout(hardTimer);
+                    try {
+                        settle(resolve, { status: res.statusCode, data: JSON.parse(data), headers: res.headers });
+                    } catch (_) {
+                        settle(resolve, { status: res.statusCode, data, headers: res.headers });
+                    }
+                });
+                return;
+            }
+
+            // OpenAI SSE accumulator
+            res.setEncoding('utf8');
+            const message = {
+                choices: [{ message: { role: 'assistant', content: '', tool_calls: [] }, finish_reason: null }],
+                usage: null
+            };
+            const toolCallAccum = []; // indexed by tool_call index — accumulates argument fragments
+            let sseBuffer = '';
+
+            res.on('data', chunk => {
+                sseBuffer += chunk.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
+                let boundary;
+                while ((boundary = sseBuffer.indexOf('\n\n')) !== -1) {
+                    const raw = sseBuffer.slice(0, boundary);
+                    sseBuffer = sseBuffer.slice(boundary + 2);
+
+                    let eventData = '';
+                    for (const line of raw.split('\n')) {
+                        if (line.startsWith('data:')) {
+                            const d = line.slice(5);
+                            eventData += (eventData ? '\n' : '') + (d.startsWith(' ') ? d.slice(1) : d);
+                        }
+                    }
+                    if (!eventData) continue;
+
+                    // Terminal marker
+                    if (eventData.trim() === '[DONE]') {
+                        clearTimeout(hardTimer);
+                        // Finalize tool call arguments
+                        for (let i = 0; i < toolCallAccum.length; i++) {
+                            const tc = toolCallAccum[i];
+                            if (tc) {
+                                message.choices[0].message.tool_calls.push({
+                                    id: tc.id,
+                                    type: 'function',
+                                    function: { name: tc.name, arguments: tc.arguments }
+                                });
+                            }
+                        }
+                        // Trim empty content
+                        if (!message.choices[0].message.content) {
+                            message.choices[0].message.content = null;
+                        }
+                        settle(resolve, { status: 200, data: message, headers: res.headers });
+                        return;
+                    }
+
+                    let parsed;
+                    try { parsed = JSON.parse(eventData); } catch (_) { continue; }
+
+                    const choice = parsed.choices?.[0];
+                    if (choice) {
+                        const delta = choice.delta || {};
+
+                        // Accumulate text content
+                        if (delta.content) {
+                            message.choices[0].message.content =
+                                (message.choices[0].message.content || '') + delta.content;
+                        }
+
+                        // Accumulate tool calls (streamed incrementally by index)
+                        if (delta.tool_calls) {
+                            for (const tc of delta.tool_calls) {
+                                const idx = tc.index ?? 0;
+                                if (!toolCallAccum[idx]) {
+                                    toolCallAccum[idx] = {
+                                        id: tc.id || '',
+                                        name: tc.function?.name || '',
+                                        arguments: ''
+                                    };
+                                }
+                                if (tc.id) toolCallAccum[idx].id = tc.id;
+                                if (tc.function?.name) toolCallAccum[idx].name = tc.function.name;
+                                if (tc.function?.arguments) toolCallAccum[idx].arguments += tc.function.arguments;
+                            }
+                        }
+
+                        // Track finish reason
+                        if (choice.finish_reason) {
+                            message.choices[0].finish_reason = choice.finish_reason;
+                        }
+                    }
+
+                    // Capture usage from final chunk (stream_options: {include_usage: true})
+                    if (parsed.usage) {
+                        message.usage = parsed.usage;
+                    }
+                }
+            });
+
+            res.on('end', () => {
+                clearTimeout(hardTimer);
+                if (!settled) {
+                    const err = new Error('Stream ended before [DONE]');
+                    err.timeoutSource = 'transport';
+                    settle(reject, err);
+                }
+            });
+        });
+
+        armHardTimeout();
+        req.on('error', (err) => { clearTimeout(hardTimer); settle(reject, err); });
+        req.setTimeout(timeoutMs, () => {
+            req.destroy();
+            clearTimeout(hardTimer);
+            const err = new Error('Timeout');
+            err.timeoutSource = 'transport';
+            settle(reject, err);
+        });
+        if (body) req.write(typeof body === 'string' ? body : JSON.stringify(body));
+        req.end();
+        } catch (syncErr) {
+            if (hardTimer) clearTimeout(hardTimer);
+            settle(reject, syncErr);
+        }
+    });
+}
+
 // ============================================================================
 // WEB TOOL UTILITIES
 // ============================================================================
@@ -533,6 +693,7 @@ async function webFetch(urlString, options = {}) {
 module.exports = {
     httpRequest,
     httpStreamingRequest,
+    httpOpenAIStreamingRequest,
     cacheGet,
     cacheSet,
     htmlToMarkdown,

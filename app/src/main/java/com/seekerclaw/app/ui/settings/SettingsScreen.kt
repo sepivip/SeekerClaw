@@ -105,7 +105,7 @@ import java.util.Date
 @Composable
 fun SettingsScreen(
     onRunSetupAgain: () -> Unit = {},
-    onNavigateToAnthropic: () -> Unit = {},
+    onNavigateToProvider: () -> Unit = {},
     onNavigateToTelegram: () -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -438,10 +438,10 @@ fun SettingsScreen(
                     .background(SeekerClawColors.Surface, shape),
             ) {
                 ConfigField(
-                    label = "Anthropic",
-                    value = "Model, Keys, Connection Test",
-                    onClick = onNavigateToAnthropic,
-                    info = "Configure your Anthropic AI model and credentials.",
+                    label = "AI Provider",
+                    value = "${config?.provider?.replaceFirstChar { it.uppercase() } ?: "Claude"} \u2022 ${com.seekerclaw.app.config.modelDisplayName(config?.model)}",
+                    onClick = onNavigateToProvider,
+                    info = SettingsHelpTexts.PROVIDER,
                 )
                 ConfigField(
                     label = "Telegram",

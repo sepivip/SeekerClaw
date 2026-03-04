@@ -50,6 +50,9 @@ function redactSecrets(msg) {
     msg = msg.replace(/pplx-[a-zA-Z0-9_-]{10,}/g, 'pplx-***');
     // Redact OpenRouter API keys (sk-or-...)
     msg = msg.replace(/sk-or-[a-zA-Z0-9_-]{10,}/g, 'sk-or-***');
+    // Redact OpenAI API keys (sk-proj-..., sk-...)
+    msg = msg.replace(/sk-proj-[a-zA-Z0-9_-]{20,}/g, 'sk-proj-***');
+    msg = msg.replace(/sk-[a-zA-Z0-9]{20,}/g, 'sk-***');
     // Redact bridge tokens (UUID format)
     if (BRIDGE_TOKEN) msg = msg.replace(new RegExp(_escRx(BRIDGE_TOKEN), 'g'), '***bridge-token***');
     // Redact Jupiter API key + MCP auth tokens (cached literal patterns)
