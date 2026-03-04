@@ -104,7 +104,11 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
     var botToken by remember { mutableStateOf(existingConfig?.telegramBotToken ?: "") }
     var ownerId by remember { mutableStateOf(existingConfig?.telegramOwnerId ?: "") }
     var selectedModel by remember {
-        mutableStateOf(existingConfig?.model ?: availableModels[0].id)
+        mutableStateOf(
+            existingConfig?.model?.trim()?.let { m ->
+                if (m.isBlank() || m == CUSTOM_MODEL) availableModels[0].id else m
+            } ?: availableModels[0].id
+        )
     }
     var agentName by remember { mutableStateOf(existingConfig?.agentName ?: "SeekerClaw") }
     var modelDropdownExpanded by remember { mutableStateOf(false) }
