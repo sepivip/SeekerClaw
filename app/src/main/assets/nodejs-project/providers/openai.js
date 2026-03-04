@@ -1,136 +1,151 @@
 // SeekerClaw — providers/openai.js
 // OpenAI provider adapter. Translates between neutral internal
-// message format and OpenAI Chat Completions API format.
+// message format and OpenAI Responses API format (/v1/responses).
+// All OpenAI models route through the Responses API — future-proof
+// as OpenAI transitions away from Chat Completions.
 
 const { log } = require('../config');
 
-// ── Neutral ↔ OpenAI message translation ────────────────────────────────────
+// ── Neutral ↔ OpenAI Responses API message translation ──────────────────────
 
 /**
- * Convert neutral internal messages to OpenAI API messages format.
+ * Convert neutral internal messages to OpenAI Responses API `input` array.
  *
- * Key differences from Claude:
- * - System prompt goes as role:'developer' message (prepended by caller)
- * - Tool calls use { tool_calls: [{type:'function', function:{name, arguments: JSON_STRING}}] }
- * - Tool results are individual messages with role:'tool', NOT grouped in user message
- * - Text content is a plain string, not content block array
+ * Key differences from Chat Completions:
+ * - No `messages` array — uses `input` items
+ * - Tool calls are top-level `function_call` items (not nested in assistant message)
+ * - Tool results are `function_call_output` items (not role:'tool' messages)
+ * - Vision uses `input_image` type (not `image_url`)
  */
 function toApiMessages(messages) {
-    const out = [];
+    const input = [];
 
     for (const msg of messages) {
         if (msg.role === 'tool') {
-            out.push({
-                role: 'tool',
-                tool_call_id: msg.toolCallId,
-                content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
+            // Tool results → function_call_output items
+            input.push({
+                type: 'function_call_output',
+                call_id: msg.toolCallId,
+                output: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
             });
             continue;
         }
 
         if (msg.role === 'assistant') {
-            const apiMsg = { role: 'assistant' };
-            apiMsg.content = msg.content || null;
-
+            // Assistant text → message item
+            if (msg.content) {
+                input.push({ role: 'assistant', content: msg.content });
+            }
+            // Tool calls → function_call items
             if (msg.toolCalls && msg.toolCalls.length > 0) {
-                apiMsg.tool_calls = msg.toolCalls.map(tc => ({
-                    id: tc.id,
-                    type: 'function',
-                    function: {
+                for (const tc of msg.toolCalls) {
+                    input.push({
+                        type: 'function_call',
+                        call_id: tc.id,
                         name: tc.name,
                         arguments: JSON.stringify(tc.input || {}),
-                    },
-                }));
+                    });
+                }
             }
-            out.push(apiMsg);
             continue;
         }
 
         if (msg.role === 'user') {
             if (typeof msg.content === 'string') {
-                out.push({ role: 'user', content: msg.content });
+                input.push({ role: 'user', content: msg.content });
             } else if (Array.isArray(msg.content)) {
-                // Vision or multi-part content — translate content blocks
+                // Vision or multi-part content
                 const parts = msg.content.map(block => {
-                    if (block.type === 'text') return { type: 'text', text: block.text };
+                    if (block.type === 'text') return { type: 'input_text', text: block.text };
                     if (block.type === 'image') {
-                        // Convert from Claude vision format to OpenAI format
                         const mediaType = block.source?.media_type || 'image/jpeg';
                         const data = block.source?.data || '';
-                        return {
-                            type: 'image_url',
-                            image_url: { url: `data:${mediaType};base64,${data}` },
-                        };
+                        return { type: 'input_image', image_url: `data:${mediaType};base64,${data}` };
                     }
-                    if (block.type === 'image_url') return block; // already OpenAI format
-                    return { type: 'text', text: JSON.stringify(block) };
+                    if (block.type === 'image_url') {
+                        return { type: 'input_image', image_url: block.image_url?.url || '' };
+                    }
+                    return { type: 'input_text', text: JSON.stringify(block) };
                 });
-                out.push({ role: 'user', content: parts });
+                input.push({ role: 'user', content: parts });
             } else {
-                out.push({ role: 'user', content: String(msg.content || '') });
+                input.push({ role: 'user', content: String(msg.content || '') });
             }
         }
     }
 
-    return out;
+    return input;
 }
 
 /**
- * Parse OpenAI API response into neutral format.
- * Works with both streaming-accumulated and non-streaming responses.
+ * Parse OpenAI Responses API response into neutral format.
+ * The response comes from `response.completed` SSE event or non-streaming response.
+ * Shape: { id, output: [...], status, usage, ... }
  */
 function fromApiResponse(raw) {
-    const choice = raw.choices?.[0];
-    if (!choice) {
-        return { text: null, toolCalls: [], stopReason: 'end_turn', usage: raw.usage || {} };
+    // Handle nested response object (from response.completed event)
+    const resp = raw.response || raw;
+
+    const textParts = [];
+    const toolCalls = [];
+
+    for (const item of (resp.output || [])) {
+        // Text output items
+        if (item.type === 'message' && item.content) {
+            for (const part of item.content) {
+                if (part.type === 'output_text' && part.text) textParts.push(part.text);
+            }
+        }
+        // Function call output items
+        if (item.type === 'function_call') {
+            let input = {};
+            try {
+                input = typeof item.arguments === 'string'
+                    ? JSON.parse(item.arguments)
+                    : (item.arguments || {});
+            } catch (e) {
+                log(`[OpenAI] Failed to parse tool arguments for ${item.name}: ${e.message}`, 'WARN');
+            }
+            toolCalls.push({
+                id: item.call_id,
+                name: item.name || 'unknown',
+                input,
+            });
+        }
     }
 
-    const message = choice.message || choice.delta || {};
-    const text = message.content || null;
+    const text = textParts.length > 0 ? textParts.join('') : null;
 
-    const toolCalls = (message.tool_calls || []).map(tc => {
-        let input = {};
-        try {
-            input = typeof tc.function?.arguments === 'string'
-                ? JSON.parse(tc.function.arguments)
-                : (tc.function?.arguments || {});
-        } catch (e) {
-            log(`[OpenAI] Failed to parse tool arguments for ${tc.function?.name}: ${e.message}`, 'WARN');
-        }
-        return {
-            id: tc.id,
-            name: tc.function?.name || 'unknown',
-            input,
-        };
-    });
-
-    // Map OpenAI finish_reason → neutral stopReason
-    const finishReason = choice.finish_reason || '';
+    // Map Responses API status → neutral stopReason
+    const status = resp.status || 'completed';
     let stopReason = 'end_turn';
-    if (finishReason === 'tool_calls') stopReason = 'tool_use';
-    else if (finishReason === 'length') stopReason = 'max_tokens';
-    else if (finishReason === 'stop') stopReason = 'end_turn';
+    if (toolCalls.length > 0) {
+        stopReason = 'tool_use';
+    } else if (status === 'incomplete') {
+        const reason = resp.incomplete_details?.reason || '';
+        if (reason === 'max_output_tokens') stopReason = 'max_tokens';
+        else stopReason = 'max_tokens'; // any incomplete = truncation
+    }
 
-    return { text, toolCalls, stopReason, usage: raw.usage || {} };
+    return { text, toolCalls, stopReason, usage: resp.usage || {} };
 }
 
 // ── System prompt ───────────────────────────────────────────────────────────
 
 /**
- * Format system prompt for OpenAI API.
- * OpenAI uses a 'developer' role message (preferred over 'system' for newer models).
- * No prompt caching support — combine stable + dynamic into one message.
+ * Format system prompt for OpenAI Responses API.
+ * Returns a plain string — the `instructions` field in the request body.
+ * No prompt caching support — combine stable + dynamic.
  */
 function formatSystemPrompt(stable, dynamic) {
-    return { role: 'developer', content: stable + '\n\n' + dynamic };
+    return stable + '\n\n' + dynamic;
 }
 
 // ── Tool schema formatting ──────────────────────────────────────────────────
 
 /**
  * Format tools for OpenAI API.
- * Claude format: { name, description, input_schema }
- * OpenAI format: { type:'function', function:{ name, description, parameters } }
+ * Same format for both Chat Completions and Responses API.
  */
 function formatTools(tools) {
     if (!tools || tools.length === 0) return [];
@@ -147,16 +162,17 @@ function formatTools(tools) {
 // ── API request building ────────────────────────────────────────────────────
 
 /**
- * Build full OpenAI API request body.
- * All current OpenAI models (GPT-5.x, o-series, codex) use max_completion_tokens.
+ * Build OpenAI Responses API request body.
+ * Uses `instructions` (system prompt) + `input` (messages) instead of
+ * Chat Completions' `messages` array.
  */
-function formatRequest(model, maxTokens, systemPromptMsg, messages, tools) {
+function formatRequest(model, maxTokens, instructions, input, tools) {
     const body = {
         model,
         stream: true,
-        stream_options: { include_usage: true },
-        max_completion_tokens: maxTokens,
-        messages: [systemPromptMsg, ...messages],
+        max_output_tokens: maxTokens,
+        instructions: typeof instructions === 'string' ? instructions : (instructions?.content || String(instructions)),
+        input,
     };
 
     if (tools && tools.length > 0) {
@@ -168,7 +184,7 @@ function formatRequest(model, maxTokens, systemPromptMsg, messages, tools) {
 
 // ── Connection details ──────────────────────────────────────────────────────
 
-const endpoint = { hostname: 'api.openai.com', path: '/v1/chat/completions' };
+const endpoint = { hostname: 'api.openai.com', path: '/v1/responses' };
 
 function buildHeaders(apiKey) {
     return {
@@ -178,13 +194,13 @@ function buildHeaders(apiKey) {
 }
 
 // ── Streaming ───────────────────────────────────────────────────────────────
-// OpenAI uses a simpler SSE format:
-//   data: {"choices":[{"delta":{"content":"..."}}]}
-//   data: {"choices":[{"delta":{"tool_calls":[...]}}]}
-//   data: [DONE]
-// Tool call arguments stream incrementally — we must accumulate them.
+// Responses API uses typed SSE events:
+//   event: response.output_text.delta         → text chunks
+//   event: response.function_call_arguments.delta → tool arg chunks
+//   event: response.completed                 → final full response
+//   event: response.incomplete                → truncated response
 
-const streamProtocol = 'openai';
+const streamProtocol = 'openai-responses';
 
 // ── Error classification ────────────────────────────────────────────────────
 
@@ -249,8 +265,6 @@ function classifyNetworkError(err) {
 function parseRateLimitHeaders(headers) {
     if (!headers) return { tokensRemaining: Infinity, tokensReset: '' };
     const remaining = parseInt(headers['x-ratelimit-remaining-tokens'], 10);
-    // OpenAI reset is a duration like "120ms" or "6s" — convert to absolute ISO timestamp
-    // so claude.js rate-limit pre-check (which uses new Date(tokensReset)) works uniformly
     const resetStr = headers['x-ratelimit-reset-tokens'] || '';
     let tokensReset = '';
     if (resetStr) {
@@ -282,10 +296,11 @@ function parseRateLimitHeaders(headers) {
 function normalizeUsage(usage) {
     if (!usage) return { inputTokens: 0, outputTokens: 0, cacheRead: 0, cacheWrite: 0 };
     return {
-        inputTokens: usage.prompt_tokens || 0,
-        outputTokens: usage.completion_tokens || 0,
-        cacheRead: usage.prompt_tokens_details?.cached_tokens || 0,
-        cacheWrite: 0, // OpenAI doesn't report cache write separately
+        // Responses API: input_tokens/output_tokens
+        inputTokens: usage.input_tokens || usage.prompt_tokens || 0,
+        outputTokens: usage.output_tokens || usage.completion_tokens || 0,
+        cacheRead: usage.input_tokens_details?.cached_tokens || usage.prompt_tokens_details?.cached_tokens || 0,
+        cacheWrite: 0,
     };
 }
 

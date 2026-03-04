@@ -978,7 +978,7 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
         const headers = adapter.buildHeaders(apiKey, AUTH_TYPE);
 
         // Select streaming function based on provider protocol
-        const streamFn = adapter.streamProtocol === 'openai'
+        const streamFn = (adapter.streamProtocol === 'openai' || adapter.streamProtocol === 'openai-responses')
             ? httpOpenAIStreamingRequest
             : httpStreamingRequest;
 

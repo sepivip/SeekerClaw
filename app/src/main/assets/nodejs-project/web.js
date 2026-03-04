@@ -208,9 +208,10 @@ function httpStreamingRequest(options, body = null) {
     });
 }
 
-// BAT-315: Streaming HTTP request for OpenAI API — SSE parsing.
-// OpenAI uses a simpler SSE format: data: {...} with choices[0].delta,
-// tool call arguments stream incrementally and must be accumulated.
+// BAT-315: Streaming HTTP request for OpenAI Responses API — typed SSE events.
+// Responses API uses semantic events: response.output_text.delta, response.completed, etc.
+// Tool call arguments stream via response.function_call_arguments.delta.
+// The response.completed event contains the full authoritative response.
 function httpOpenAIStreamingRequest(options, body = null) {
     const timeoutMs = options.timeout ?? API_TIMEOUT_MS;
     const HARD_TIMEOUT_MS = 5 * 60 * 1000;
@@ -249,14 +250,40 @@ function httpOpenAIStreamingRequest(options, body = null) {
                 return;
             }
 
-            // OpenAI SSE accumulator
+            // Responses API SSE accumulators (fallback if stream disconnects)
             res.setEncoding('utf8');
-            const message = {
-                choices: [{ message: { role: 'assistant', content: '', tool_calls: [] }, finish_reason: null }],
-                usage: null
-            };
-            const toolCallAccum = []; // indexed by tool_call index — accumulates argument fragments
+            const outputItems = {};  // output_index → item skeleton
+            const textAccum = {};    // "output_index:content_index" → accumulated text
+            const funcArgAccum = {}; // output_index → accumulated arguments string
+            let accumulatedUsage = null;
             let sseBuffer = '';
+
+            // Build response from accumulated deltas (fallback path)
+            const buildFromAccum = () => {
+                const output = [];
+                const indices = Object.keys(outputItems).map(Number).sort((a, b) => a - b);
+                for (const idx of indices) {
+                    const item = outputItems[idx];
+                    if (item.type === 'message') {
+                        const content = [];
+                        // Collect all text parts for this output index
+                        for (const key of Object.keys(textAccum)) {
+                            if (key.startsWith(`${idx}:`)) {
+                                content.push({ type: 'output_text', text: textAccum[key] });
+                            }
+                        }
+                        output.push({ ...item, content });
+                    } else if (item.type === 'function_call') {
+                        output.push({
+                            ...item,
+                            arguments: funcArgAccum[idx] || item.arguments || '',
+                        });
+                    } else {
+                        output.push(item);
+                    }
+                }
+                return { output, status: 'completed', usage: accumulatedUsage || {} };
+            };
 
             res.on('data', chunk => {
                 sseBuffer += chunk.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
@@ -266,86 +293,78 @@ function httpOpenAIStreamingRequest(options, body = null) {
                     const raw = sseBuffer.slice(0, boundary);
                     sseBuffer = sseBuffer.slice(boundary + 2);
 
-                    let eventData = '';
+                    let eventType = '', eventData = '';
                     for (const line of raw.split('\n')) {
-                        if (line.startsWith('data:')) {
+                        if (line.startsWith('event:')) eventType = line.slice(6).trim();
+                        else if (line.startsWith('data:')) {
                             const d = line.slice(5);
                             eventData += (eventData ? '\n' : '') + (d.startsWith(' ') ? d.slice(1) : d);
                         }
                     }
                     if (!eventData) continue;
 
-                    // Terminal marker
-                    if (eventData.trim() === '[DONE]') {
-                        clearTimeout(hardTimer);
-                        // Finalize tool call arguments
-                        for (let i = 0; i < toolCallAccum.length; i++) {
-                            const tc = toolCallAccum[i];
-                            if (tc) {
-                                message.choices[0].message.tool_calls.push({
-                                    id: tc.id,
-                                    type: 'function',
-                                    function: { name: tc.name, arguments: tc.arguments }
-                                });
-                            }
-                        }
-                        // Trim empty content
-                        if (!message.choices[0].message.content) {
-                            message.choices[0].message.content = null;
-                        }
-                        settle(resolve, { status: 200, data: message, headers: res.headers });
-                        return;
-                    }
-
                     let parsed;
                     try { parsed = JSON.parse(eventData); } catch (_) { continue; }
 
-                    const choice = parsed.choices?.[0];
-                    if (choice) {
-                        const delta = choice.delta || {};
-
-                        // Accumulate text content
-                        if (delta.content) {
-                            message.choices[0].message.content =
-                                (message.choices[0].message.content || '') + delta.content;
-                        }
-
-                        // Accumulate tool calls (streamed incrementally by index)
-                        if (delta.tool_calls) {
-                            for (const tc of delta.tool_calls) {
-                                const idx = tc.index ?? 0;
-                                if (!toolCallAccum[idx]) {
-                                    toolCallAccum[idx] = {
-                                        id: tc.id || '',
-                                        name: tc.function?.name || '',
-                                        arguments: ''
-                                    };
+                    switch (eventType) {
+                        case 'response.output_item.added':
+                            if (typeof parsed.output_index === 'number' && parsed.item) {
+                                outputItems[parsed.output_index] = parsed.item;
+                                if (parsed.item.type === 'function_call') {
+                                    funcArgAccum[parsed.output_index] = '';
                                 }
-                                if (tc.id) toolCallAccum[idx].id = tc.id;
-                                if (tc.function?.name) toolCallAccum[idx].name = tc.function.name;
-                                if (tc.function?.arguments) toolCallAccum[idx].arguments += tc.function.arguments;
                             }
-                        }
+                            break;
 
-                        // Track finish reason
-                        if (choice.finish_reason) {
-                            message.choices[0].finish_reason = choice.finish_reason;
-                        }
+                        case 'response.output_text.delta':
+                            if (typeof parsed.output_index === 'number') {
+                                const key = `${parsed.output_index}:${parsed.content_index ?? 0}`;
+                                textAccum[key] = (textAccum[key] || '') + (parsed.delta || '');
+                            }
+                            break;
+
+                        case 'response.function_call_arguments.delta':
+                            if (typeof parsed.output_index === 'number') {
+                                funcArgAccum[parsed.output_index] =
+                                    (funcArgAccum[parsed.output_index] || '') + (parsed.delta || '');
+                            }
+                            break;
+
+                        case 'response.completed':
+                            clearTimeout(hardTimer);
+                            // Authoritative: use the full response object directly
+                            settle(resolve, { status: 200, data: parsed, headers: res.headers });
+                            return;
+
+                        case 'response.incomplete':
+                            clearTimeout(hardTimer);
+                            // Truncated response — use what we have
+                            settle(resolve, { status: 200, data: parsed, headers: res.headers });
+                            return;
+
+                        case 'error':
+                            clearTimeout(hardTimer);
+                            settle(resolve, { status: parsed.code || 500, data: parsed, headers: res.headers });
+                            res.destroy();
+                            return;
                     }
 
-                    // Capture usage from final chunk (stream_options: {include_usage: true})
-                    if (parsed.usage) {
-                        message.usage = parsed.usage;
-                    }
+                    // Track usage from any event that includes it
+                    if (parsed.usage) accumulatedUsage = parsed.usage;
                 }
             });
 
             res.on('end', () => {
                 clearTimeout(hardTimer);
                 if (!settled) {
-                    const err = new Error('Stream ended before [DONE]');
-                    err.timeoutSource = 'transport';
-                    settle(reject, err);
+                    // Stream ended without response.completed — build from accumulated deltas
+                    if (Object.keys(outputItems).length > 0) {
+                        settle(resolve, { status: 200, data: buildFromAccum(), headers: res.headers });
+                    } else {
+                        const err = new Error('Stream ended before response.completed');
+                        err.timeoutSource = 'transport';
+                        settle(reject, err);
+                    }
                 }
             });
         });
