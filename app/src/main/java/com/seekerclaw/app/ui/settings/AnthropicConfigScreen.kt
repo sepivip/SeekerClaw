@@ -289,7 +289,7 @@ fun AnthropicConfigScreen(onBack: () -> Unit) {
     }
 
     if (showModelPicker) {
-        val currentModel = config?.model ?: availableModels[0].id
+        val currentModel = config?.model?.ifBlank { availableModels[0].id } ?: availableModels[0].id
         val isCurrentCustom = availableModels.none { it.id == currentModel }
         var selectedModel by remember { mutableStateOf(if (isCurrentCustom) CUSTOM_MODEL else currentModel) }
         var customModelText by remember { mutableStateOf(if (isCurrentCustom) currentModel else "") }
