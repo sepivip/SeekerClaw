@@ -1451,13 +1451,6 @@ async function chat(chatId, userMessage, options = {}) {
             // BAT-315: Provider-agnostic tool formatting + request body building
             const rawTools = _deps.getTools ? _deps.getTools() : [];
             const formattedTools = adapter.formatTools(rawTools);
-            if (toolUseCount === 0 && PROVIDER === 'openai') {
-                log(`[BAT-315] Provider=${PROVIDER} tools=${formattedTools.length} model=${MODEL}`, 'DEBUG');
-                // Dump first tool to verify schema format
-                if (formattedTools.length > 0) {
-                    log(`[BAT-315] Sample tool: ${JSON.stringify(formattedTools[0])}`, 'DEBUG');
-                }
-            }
 
             // Convert neutral messages to provider API format for the request
             const apiMessages = adapter.toApiMessages(messages);
@@ -1484,12 +1477,6 @@ async function chat(chatId, userMessage, options = {}) {
             response = res.data;
             response._parsed = parsed;
 
-            // BAT-315: Debug — log what the model returned
-            if (PROVIDER === 'openai') {
-                const outputTypes = (res.data?.response?.output || res.data?.output || [])
-                    .map(o => o.type).join(',');
-                log(`[BAT-315] Response: toolCalls=${parsed.toolCalls.length} text=${parsed.text ? parsed.text.length + 'ch' : 'null'} stopReason=${parsed.stopReason} outputTypes=[${outputTypes}]`, 'DEBUG');
-            }
 
             if (parsed.toolCalls.length === 0) {
                 break;
