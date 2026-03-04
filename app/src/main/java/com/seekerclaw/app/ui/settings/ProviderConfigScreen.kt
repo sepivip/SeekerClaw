@@ -394,7 +394,9 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
     // Model picker dialog — shows models for the selected tab's provider
     if (showModelPicker) {
         val models = modelsForProvider(selectedTab)
-        var selectedModel by remember { mutableStateOf(config?.model ?: models[0].id) }
+        var selectedModel by remember {
+            mutableStateOf(models.firstOrNull { it.id == config?.model }?.id ?: models[0].id)
+        }
 
         AlertDialog(
             onDismissRequest = { showModelPicker = false },
