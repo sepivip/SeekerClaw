@@ -144,18 +144,17 @@ function formatSystemPrompt(stable, dynamic) {
 // ── Tool schema formatting ──────────────────────────────────────────────────
 
 /**
- * Format tools for OpenAI API.
- * Same format for both Chat Completions and Responses API.
+ * Format tools for OpenAI Responses API.
+ * Responses API uses a FLAT format (name/description/parameters at top level),
+ * NOT the nested {function: {name, ...}} format used by Chat Completions.
  */
 function formatTools(tools) {
     if (!tools || tools.length === 0) return [];
     return tools.map(tool => ({
         type: 'function',
-        function: {
-            name: tool.name,
-            description: tool.description || '',
-            parameters: tool.input_schema || { type: 'object', properties: {} },
-        },
+        name: tool.name,
+        description: tool.description || '',
+        parameters: tool.input_schema || { type: 'object', properties: {} },
     }));
 }
 
