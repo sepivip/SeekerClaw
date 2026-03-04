@@ -156,7 +156,7 @@ object ConfigClaimImporter {
         )
 
         require(appConfig.telegramBotToken.isNotBlank()) { "Config is missing telegramBotToken." }
-        require(appConfig.activeCredential.isNotBlank()) { "Config is missing AI credential." }
+        require(appConfig.activeProviderKey.isNotBlank()) { "Config is missing AI credential." }
 
         return ConfigClaimImport(
             config = appConfig,
