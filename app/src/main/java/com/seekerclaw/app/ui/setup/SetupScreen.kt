@@ -80,6 +80,7 @@ import com.seekerclaw.app.R
 import com.seekerclaw.app.config.AppConfig
 import com.seekerclaw.app.config.ConfigClaimImporter
 import com.seekerclaw.app.config.ConfigManager
+import com.seekerclaw.app.config.CUSTOM_MODEL
 import com.seekerclaw.app.config.availableModels
 import com.seekerclaw.app.qr.QrScannerActivity
 import com.seekerclaw.app.service.OpenClawService
@@ -102,11 +103,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
     var botToken by remember { mutableStateOf(existingConfig?.telegramBotToken ?: "") }
     var ownerId by remember { mutableStateOf(existingConfig?.telegramOwnerId ?: "") }
     var selectedModel by remember {
-        mutableStateOf(
-            existingConfig?.model?.takeIf { model ->
-                availableModels.any { it.id == model }
-            } ?: availableModels[0].id
-        )
+        mutableStateOf(existingConfig?.model ?: availableModels[0].id)
     }
     var agentName by remember { mutableStateOf(existingConfig?.agentName ?: "SeekerClaw") }
     var modelDropdownExpanded by remember { mutableStateOf(false) }
@@ -886,6 +883,8 @@ private fun OptionsStep(
     onBack: () -> Unit,
 ) {
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
+    val isCustomModel = availableModels.none { it.id == selectedModel }
+    var customModelText by remember { mutableStateOf(if (isCustomModel) selectedModel else "") }
 
     Column(modifier = Modifier.fillMaxWidth()) {
         SectionLabel("Configuration")
@@ -909,36 +908,90 @@ private fun OptionsStep(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            ExposedDropdownMenuBox(
-                expanded = modelDropdownExpanded,
-                onExpandedChange = onModelDropdownExpandedChange,
-            ) {
+            if (isCustomModel) {
                 OutlinedTextField(
-                    value = availableModels.first { it.id == selectedModel }.let { "${it.displayName} (${it.description})" },
-                    onValueChange = {},
-                    readOnly = true,
-                    label = { Text("Model", fontSize = 12.sp) },
-                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = modelDropdownExpanded) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .menuAnchor(MenuAnchorType.PrimaryNotEditable),
+                    value = customModelText,
+                    onValueChange = {
+                        customModelText = it
+                        if (it.trim().isNotEmpty()) onModelChange(it.trim())
+                    },
+                    label = { Text("Custom Model ID", fontSize = 12.sp) },
+                    placeholder = {
+                        Text(
+                            "e.g. claude-opus-5",
+                            fontSize = 13.sp,
+                            color = SeekerClawColors.TextDim,
+                        )
+                    },
+                    trailingIcon = {
+                        Icon(
+                            imageVector = Icons.Filled.CheckCircle,
+                            contentDescription = "Switch to preset",
+                            tint = SeekerClawColors.TextDim,
+                            modifier = Modifier.clickable {
+                                onModelChange(availableModels[0].id)
+                                customModelText = ""
+                            },
+                        )
+                    },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
                     colors = fieldColors,
                     shape = shape,
+                    textStyle = androidx.compose.ui.text.TextStyle(
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 14.sp,
+                    ),
                 )
-                ExposedDropdownMenu(
+            } else {
+                ExposedDropdownMenuBox(
                     expanded = modelDropdownExpanded,
-                    onDismissRequest = { onModelDropdownExpandedChange(false) },
+                    onExpandedChange = onModelDropdownExpandedChange,
                 ) {
-                    availableModels.forEach { model ->
+                    OutlinedTextField(
+                        value = availableModels.firstOrNull { it.id == selectedModel }
+                            ?.let { "${it.displayName} (${it.description})" } ?: selectedModel,
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Model", fontSize = 12.sp) },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = modelDropdownExpanded) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .menuAnchor(MenuAnchorType.PrimaryNotEditable),
+                        colors = fieldColors,
+                        shape = shape,
+                    )
+                    ExposedDropdownMenu(
+                        expanded = modelDropdownExpanded,
+                        onDismissRequest = { onModelDropdownExpandedChange(false) },
+                    ) {
+                        availableModels.forEach { model ->
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        "${model.displayName} (${model.description})",
+                                        color = SeekerClawColors.TextPrimary,
+                                    )
+                                },
+                                onClick = {
+                                    onModelChange(model.id)
+                                    onModelDropdownExpandedChange(false)
+                                },
+                            )
+                        }
+                        HorizontalDivider(color = SeekerClawColors.CardBorder)
                         DropdownMenuItem(
                             text = {
                                 Text(
-                                    "${model.displayName} (${model.description})",
-                                    color = SeekerClawColors.TextPrimary,
+                                    "Custom model ID...",
+                                    color = SeekerClawColors.TextDim,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 13.sp,
                                 )
                             },
                             onClick = {
-                                onModelChange(model.id)
+                                onModelChange(CUSTOM_MODEL)
+                                customModelText = ""
                                 onModelDropdownExpandedChange(false)
                             },
                         )
@@ -996,7 +1049,7 @@ private fun OptionsStep(
 
             Button(
                 onClick = onStartAgent,
-                enabled = !isStarting,
+                enabled = !isStarting && selectedModel != CUSTOM_MODEL && selectedModel.isNotBlank(),
                 modifier = Modifier.height(56.dp),
                 shape = shape,
                 colors = ButtonDefaults.buttonColors(

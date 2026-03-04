@@ -1507,7 +1507,7 @@ async function chat(chatId, userMessage, options = {}) {
 
             const body = JSON.stringify({
                 model: MODEL,
-                max_tokens: 4096,
+                max_tokens: 8192,
                 stream: true,
                 system: systemBlocks,
                 tools: rawTools,
@@ -1703,7 +1703,7 @@ async function chat(chatId, userMessage, options = {}) {
 
             const summaryRes = await claudeApiCall(JSON.stringify({
                 model: MODEL,
-                max_tokens: 4096,
+                max_tokens: 8192,
                 system: systemBlocks,
                 messages: summaryMessages
             }), chatId, { turnId, iteration: toolUseCount + 1 });
