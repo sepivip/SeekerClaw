@@ -225,8 +225,8 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Metric | Count |
 |--------|-------|
-| Total commits | 335 |
-| PRs merged | 221+ |
+| Total commits | 337 |
+| PRs merged | 223+ |
 | Tools | 56 (9 Jupiter, 13 Android bridge, web search/fetch, memory, cron, skill_install, etc.) + MCP dynamic |
 | Skills | 35 (20 bundled + 13 workspace + 2 user-created) |
 | Android Bridge endpoints | 18+ |
@@ -267,6 +267,9 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Date | Feature | PR |
 |------|---------|-----|
+| 2026-03-04 | Fix: secrets hardening — 7 surgical security fixes (task-store atomic writes, security.js audit trail, secrets blocklist expansion) | #223 (BAT-305) |
+| 2026-03-04 | Fix: teach agent to trust [Skill just installed.] context prefix | direct |
+| 2026-03-04 | Docs: SAB-AUDIT-v9 report | direct |
 | 2026-03-03 | Chore: bump version to 1.4.3 (code 9) | direct |
 | 2026-03-03 | Docs: SAB-AUDIT-v8 — enrich restart flushing door, strengthen 3-part test | direct |
 | 2026-03-03 | Fix: NO_REPLY bold-markdown stripping + OpenClaw 2026.3.1 sync | direct |
