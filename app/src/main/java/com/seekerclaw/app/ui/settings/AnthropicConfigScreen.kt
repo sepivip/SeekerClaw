@@ -294,7 +294,7 @@ fun AnthropicConfigScreen(onBack: () -> Unit) {
         var selectedModel by remember { mutableStateOf(if (isCurrentCustom) CUSTOM_MODEL else currentModel) }
         var customModelText by remember { mutableStateOf(if (isCurrentCustom) currentModel else "") }
         val isCustomSelected = selectedModel == CUSTOM_MODEL
-        val canSave = !isCustomSelected || customModelText.trim().isNotEmpty()
+        val canSave = !isCustomSelected || (customModelText.trim().isNotEmpty() && customModelText.trim() != CUSTOM_MODEL)
 
         AlertDialog(
             onDismissRequest = { showModelPicker = false },

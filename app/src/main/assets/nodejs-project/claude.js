@@ -805,7 +805,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('## Conversation Limits');
     lines.push('- **History window:** 35 messages per chat. Older messages are dropped from context (but auto-saved to memory).');
     lines.push('- **Tool use per turn:** Up to 25 tool-call rounds per user message. Plan multi-step work to fit within this budget.');
-    lines.push('- **Max output:** 4096 tokens per response. For long content, split across multiple messages or save to a file and share it.');
+    lines.push('- **Max output:** 8192 tokens per response. For long content, split across multiple messages or save to a file and share it.');
     lines.push('- **Conversation reset:** On process restart, conversation history is cleared and any messages sent during downtime are flushed (the user is automatically notified to resend). Memory files persist.');
     lines.push('');
 
