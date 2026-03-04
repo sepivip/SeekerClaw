@@ -303,7 +303,17 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                         scope.launch {
                             val result = when (selectedTab) {
                                 "openai" -> testOpenAIConnection(config?.openaiApiKey ?: "")
-                                else -> testAnthropicConnection(config?.activeCredential ?: "", config?.authType ?: "api_key")
+                                else -> {
+                                    // Use Claude-specific credential, not activeCredential
+                                    // (which could be the OpenAI key when openai is the active provider)
+                                    val authType = config?.authType ?: "api_key"
+                                    val claudeCredential = if (authType == "setup_token") {
+                                        config?.setupToken ?: ""
+                                    } else {
+                                        config?.anthropicApiKey ?: ""
+                                    }
+                                    testAnthropicConnection(claudeCredential, authType)
+                                }
                             }
                             if (result.isSuccess) {
                                 testStatus = "Success"
@@ -436,6 +446,11 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                 TextButton(
                     onClick = {
                         saveField("model", selectedModel)
+                        // Auto-activate the tab's provider when saving its model,
+                        // preventing provider/model mismatch at runtime
+                        if (selectedTab != (config?.provider ?: "claude")) {
+                            saveField("provider", selectedTab)
+                        }
                         Analytics.modelSelected(selectedModel)
                         showModelPicker = false
                     },

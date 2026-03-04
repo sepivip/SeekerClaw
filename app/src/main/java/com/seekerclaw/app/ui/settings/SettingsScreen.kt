@@ -439,7 +439,7 @@ fun SettingsScreen(
             ) {
                 ConfigField(
                     label = "AI Provider",
-                    value = "${config?.provider?.replaceFirstChar { it.uppercase() } ?: "Claude"} \u2022 ${com.seekerclaw.app.config.modelDisplayName(config?.model)}",
+                    value = "${com.seekerclaw.app.config.providerById(config?.provider ?: "claude").displayName} \u2022 ${com.seekerclaw.app.config.modelDisplayName(config?.model)}",
                     onClick = onNavigateToProvider,
                     info = SettingsHelpTexts.PROVIDER,
                 )
