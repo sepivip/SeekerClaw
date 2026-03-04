@@ -12,7 +12,7 @@ object SettingsHelpTexts {
     const val PROVIDER =
         "Which AI provider powers your agent.\n\n" +
         "\u2022 Claude (Anthropic) — default, supports API keys & setup tokens.\n" +
-        "\u2022 OpenAI — GPT-5.2, GPT-5.3 Codex, API key only.\n\n" +
+        "\u2022 OpenAI — latest GPT models including Codex. API key only.\n\n" +
         "Both keys are saved — switch freely without losing credentials."
 
     const val OPENAI_API_KEY =

@@ -179,10 +179,10 @@ function formatRequest(model, maxTokens, instructions, input, tools) {
         body.tools = tools;
     }
 
-    // Codex models are reasoning models — they need the reasoning parameter
-    // to function properly (like o-series). Without it, tool calling degrades.
-    if (model && model.includes('codex')) {
-        body.reasoning = { effort: 'low', summary: 'auto' };
+    // GPT-5 family models support reasoning — Codex/Pro require it for tool calling.
+    // effort:'low' is the lightest setting; 'medium'/'high'/'xhigh' for deeper reasoning.
+    if (model && (model.includes('codex') || model.includes('pro'))) {
+        body.reasoning = { effort: 'medium', summary: 'auto' };
     }
 
     return JSON.stringify(body);
