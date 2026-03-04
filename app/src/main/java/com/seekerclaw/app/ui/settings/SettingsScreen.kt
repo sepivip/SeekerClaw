@@ -1287,7 +1287,7 @@ fun SettingsScreen(
     if (showApplyConfigDialog && pendingConfigImport != null) {
         val imported = pendingConfigImport!!
         val importedConfig = imported.config
-        val maskedCredential = maskSensitive(importedConfig.activeCredential)
+        val maskedCredential = maskSensitive(importedConfig.activeProviderKey)
         val maskedBot = maskSensitive(importedConfig.telegramBotToken)
         val source = Uri.parse(imported.sourceUrl).host ?: imported.sourceUrl
         val autoStartSummary = imported.autoStartOnBoot?.let { if (it) "Enabled" else "Disabled" } ?: "No change"

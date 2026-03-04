@@ -40,11 +40,15 @@ data class AppConfig(
     val autoStartOnBoot: Boolean = true,
     val heartbeatIntervalMinutes: Int = 30,
 ) {
-    /** Returns the credential that should be used based on the current provider/authType. */
+    /** Anthropic/authType-based credential — used by SetupScreen, legacy flows that assume Claude. */
     val activeCredential: String
+        get() = if (authType == "setup_token") setupToken else anthropicApiKey
+
+    /** Returns the API key for the currently selected provider (used by writeConfigJson). */
+    val activeProviderKey: String
         get() = when (provider) {
             "openai" -> openaiApiKey
-            else -> if (authType == "setup_token") setupToken else anthropicApiKey
+            else -> activeCredential
         }
 }
 
@@ -380,7 +384,7 @@ object ConfigManager {
     fun runtimeValidationError(config: AppConfig?): String? {
         if (config == null) return "setup_not_complete"
         if (config.telegramBotToken.isBlank()) return "missing_bot_token"
-        if (config.activeCredential.isBlank()) return "missing_credential"
+        if (config.activeProviderKey.isBlank()) return "missing_credential"
         return null
     }
 
@@ -388,7 +392,7 @@ object ConfigManager {
         if (config == null) return "setup=false"
         return "setup=true provider=${config.provider} authType=${config.authType} botSet=${config.telegramBotToken.isNotBlank()} " +
             "apiSet=${config.anthropicApiKey.isNotBlank()} openaiSet=${config.openaiApiKey.isNotBlank()} " +
-            "setupTokenSet=${config.setupToken.isNotBlank()} activeSet=${config.activeCredential.isNotBlank()} model=${config.model}"
+            "setupTokenSet=${config.setupToken.isNotBlank()} activeSet=${config.activeProviderKey.isNotBlank()} model=${config.model}"
     }
 
     // ==================== Auth Type Detection ====================

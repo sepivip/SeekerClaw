@@ -536,7 +536,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
     }
 }
 
-private suspend fun testAnthropicConnection(credential: String, authType: String): Result<Unit> = withContext(Dispatchers.IO) {
+internal suspend fun testAnthropicConnection(credential: String, authType: String): Result<Unit> = withContext(Dispatchers.IO) {
     runCatching {
         if (credential.isBlank()) error("Credential is empty")
         val url = URL("https://api.anthropic.com/v1/models")

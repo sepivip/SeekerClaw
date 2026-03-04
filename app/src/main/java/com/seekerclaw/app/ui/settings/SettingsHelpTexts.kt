@@ -53,9 +53,9 @@ object SettingsHelpTexts {
 
     const val MODEL =
         "Your agent's brain. Models depend on your provider.\n\n" +
-        "Claude: Opus 4.6 (powerful), Sonnet 4.6 (balanced), Haiku 4.5 (fast).\n" +
-        "OpenAI: GPT-4.1 (flagship), GPT-4.1 Mini (balanced), o4-mini (reasoning).\n\n" +
-        "Pick your fighter \uD83E\uDDE0"
+        "Claude examples: Opus 4.6 (powerful), Sonnet 4.6 (balanced), Haiku 4.5 (fast), plus other variants.\n" +
+        "OpenAI examples: GPT-4.1 (flagship), GPT-4.1 Mini (balanced), o4-mini (reasoning), and more.\n\n" +
+        "Exact options may change over time \u2014 pick your fighter \uD83E\uDDE0"
 
     const val AGENT_NAME =
         "What should we call your agent? " +
