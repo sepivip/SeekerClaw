@@ -70,7 +70,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     var config by remember { mutableStateOf(ConfigManager.loadConfig(context)) }
 
-    val currentProvider = config?.provider ?: "claude"
+    val currentProvider = providerById(config?.provider ?: "claude").id  // clamp to known provider
     var selectedTab by remember { mutableStateOf(currentProvider) }
     var editField by remember { mutableStateOf<String?>(null) }
     var editLabel by remember { mutableStateOf("") }
