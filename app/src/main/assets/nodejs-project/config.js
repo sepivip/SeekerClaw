@@ -100,7 +100,7 @@ function normalizeSecret(val) {
 
 const BOT_TOKEN = normalizeSecret(config.botToken);
 let OWNER_ID = config.ownerId ? String(config.ownerId).trim() : '';
-const PROVIDER = (config.provider || 'claude').trim().toLowerCase();
+const PROVIDER = (typeof config.provider === 'string' && config.provider.trim()) ? config.provider.trim().toLowerCase() : 'claude';
 const ANTHROPIC_KEY = normalizeSecret(config.anthropicApiKey);
 const OPENAI_KEY = normalizeSecret(config.openaiApiKey || '');
 const AUTH_TYPE = config.authType || 'api_key';
