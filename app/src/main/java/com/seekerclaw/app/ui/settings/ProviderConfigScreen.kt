@@ -304,8 +304,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                             val result = when (selectedTab) {
                                 "openai" -> testOpenAIConnection(config?.openaiApiKey ?: "")
                                 else -> {
-                                    // Use Claude-specific credential, not activeCredential
-                                    // (which could be the OpenAI key when openai is the active provider)
+                                    // Use Claude-specific credential derived from authType
                                     val authType = config?.authType ?: "api_key"
                                     val claudeCredential = if (authType == "setup_token") {
                                         config?.setupToken ?: ""
