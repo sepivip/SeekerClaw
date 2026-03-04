@@ -568,6 +568,10 @@ internal suspend fun testAnthropicConnection(credential: String, authType: Strin
                 }
             }
             error("Connection failed ($errorMessage)")
+        } catch (_: java.net.SocketTimeoutException) {
+            error("Connection timed out")
+        } catch (_: java.io.IOException) {
+            error("Network unreachable or timeout")
         } finally { conn.disconnect() }
     }
 }

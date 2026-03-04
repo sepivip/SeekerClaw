@@ -44,7 +44,7 @@ data class AppConfig(
     val activeCredential: String
         get() = if (authType == "setup_token") setupToken else anthropicApiKey
 
-    /** Returns the API key for the currently selected provider (used by writeConfigJson). */
+    /** Returns the API key for the currently selected provider (used by runtime validation, dashboard, UI). */
     val activeProviderKey: String
         get() = when (provider) {
             "openai" -> openaiApiKey

@@ -1085,7 +1085,7 @@ let _usagePollFailCount = 0;
 const USAGE_POLL_MAX_FAILURES = 3;
 
 function startClaudeUsagePolling() {
-    if (AUTH_TYPE !== 'setup_token') return;
+    if (PROVIDER !== 'claude' || AUTH_TYPE !== 'setup_token') return;
     log('Starting Claude usage polling (60s interval)', 'DEBUG');
     pollClaudeUsage();
     _usagePollTimer = setInterval(pollClaudeUsage, 60000);
