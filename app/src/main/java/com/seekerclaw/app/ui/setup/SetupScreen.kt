@@ -212,12 +212,13 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
         isStarting = true
         try {
             val trimmedKey = apiKey.trim()
-            // Preserve existing provider/OpenAI key so "Run Setup Again" doesn't wipe them
+            // Setup flow is Claude-only — force provider back to claude.
+            // OpenAI provider is configured separately in Settings > Provider.
             val existing = ConfigManager.loadConfig(context)
             val config = AppConfig(
                 anthropicApiKey = if (authType == "api_key") trimmedKey else "",
                 openaiApiKey = existing?.openaiApiKey ?: "",
-                provider = existing?.provider ?: "claude",
+                provider = "claude",
                 setupToken = if (authType == "setup_token") trimmedKey else "",
                 authType = authType,
                 telegramBotToken = botToken.trim(),
