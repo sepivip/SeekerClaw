@@ -147,9 +147,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                     }
                     botToken = cfg.telegramBotToken
                     ownerId = cfg.telegramOwnerId
-                    selectedModel = cfg.model.takeIf { m ->
-                        availableModels.any { it.id == m }
-                    } ?: availableModels[0].id
+                    selectedModel = cfg.model.ifBlank { availableModels[0].id }
                     agentName = cfg.agentName
                     isQrImporting = false
                     errorMessage = null
@@ -913,7 +911,12 @@ private fun OptionsStep(
                     value = customModelText,
                     onValueChange = {
                         customModelText = it
-                        if (it.trim().isNotEmpty()) onModelChange(it.trim())
+                        val trimmed = it.trim()
+                        if (trimmed.isNotEmpty()) {
+                            onModelChange(trimmed)
+                        } else {
+                            onModelChange(CUSTOM_MODEL)
+                        }
                     },
                     label = { Text("Custom Model ID", fontSize = 12.sp) },
                     placeholder = {
