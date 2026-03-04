@@ -1173,14 +1173,15 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
 // BAT-246: Diagnostic counters for sanitizer health tracking
 const sanitizerStats = { invocations: 0, totalStripped: 0 };
 
-// BAT-315: Fix orphaned tool calls/results in NEUTRAL format.
-// Neutral format: assistant messages have `toolCalls` array, tool results are `role:'tool'` messages.
+// BAT-315: Fix orphaned tool calls/results in both NEUTRAL and CLAUDE-NATIVE formats.
+// Neutral: assistant.toolCalls[] + role:'tool' messages (OpenAI adapter)
+// Claude-native: assistant.content[tool_use] + user.content[tool_result] (legacy checkpoints)
 function sanitizeConversation(messages, turnId) {
     sanitizerStats.invocations++;
     let stripped = 0;
     const orphanDetails = [];
 
-    // Pass 1: fix assistant messages with toolCalls missing matching tool results
+    // Pass 1a: fix assistant messages with toolCalls (neutral) missing matching tool results
     for (let i = messages.length - 1; i >= 0; i--) {
         const msg = messages[i];
         if (msg.role !== 'assistant' || !msg.toolCalls || msg.toolCalls.length === 0) continue;
@@ -1194,12 +1195,11 @@ function sanitizeConversation(messages, turnId) {
             if (next.role === 'tool' && toolCallIds.has(next.toolCallId)) {
                 matchedIds.add(next.toolCallId);
             } else if (next.role !== 'tool') {
-                break; // Stop at first non-tool message
+                break;
             }
         }
-        if (matchedIds.size === toolCallIds.size) continue; // all matched
+        if (matchedIds.size === toolCallIds.size) continue;
 
-        // Strip orphaned tool calls
         const orphanedIds = new Set([...toolCallIds].filter(id => !matchedIds.has(id)));
         for (const tc of msg.toolCalls) {
             if (orphanedIds.has(tc.id)) {
@@ -1209,29 +1209,59 @@ function sanitizeConversation(messages, turnId) {
         msg.toolCalls = msg.toolCalls.filter(tc => !orphanedIds.has(tc.id));
         stripped += orphanedIds.size;
 
-        // Remove assistant message if it has no text and no remaining tool calls
         if (!msg.content && (!msg.toolCalls || msg.toolCalls.length === 0)) {
             messages.splice(i, 1);
         }
     }
 
-    // Pass 2: fix orphaned tool result messages (role:'tool') missing matching toolCalls in preceding assistant
+    // Pass 1b: fix assistant messages with tool_use blocks (Claude-native) missing matching tool_result
+    for (let i = messages.length - 1; i >= 0; i--) {
+        const msg = messages[i];
+        if (msg.role !== 'assistant' || !Array.isArray(msg.content)) continue;
+        const toolUseBlocks = msg.content.filter(b => b.type === 'tool_use');
+        if (toolUseBlocks.length === 0) continue;
+
+        const toolUseIds = new Set(toolUseBlocks.map(b => b.id));
+        const matchedIds = new Set();
+
+        // Next message should be user with tool_result blocks
+        const next = messages[i + 1];
+        if (next && next.role === 'user' && Array.isArray(next.content)) {
+            for (const b of next.content) {
+                if (b.type === 'tool_result' && toolUseIds.has(b.tool_use_id)) {
+                    matchedIds.add(b.tool_use_id);
+                }
+            }
+        }
+        if (matchedIds.size === toolUseIds.size) continue;
+
+        const orphanedIds = new Set([...toolUseIds].filter(id => !matchedIds.has(id)));
+        for (const b of toolUseBlocks) {
+            if (orphanedIds.has(b.id)) {
+                orphanDetails.push({ type: 'tool_use', id: b.id, tool: b.name, msgIndex: i });
+            }
+        }
+        msg.content = msg.content.filter(b => b.type !== 'tool_use' || !orphanedIds.has(b.id));
+        stripped += orphanedIds.size;
+
+        if (msg.content.length === 0) {
+            messages.splice(i, 1);
+        }
+    }
+
+    // Pass 2a: fix orphaned tool result messages (role:'tool', neutral) missing matching toolCalls
     for (let i = messages.length - 1; i >= 0; i--) {
         const msg = messages[i];
         if (msg.role !== 'tool' || !msg.toolCallId) continue;
 
-        // Find the preceding assistant message that should contain the matching toolCall
-        const prev = messages[i - 1];
         let hasMatch = false;
-
-        // Walk backwards from this tool message to find its assistant parent
         for (let k = i - 1; k >= 0; k--) {
             const candidate = messages[k];
-            if (candidate.role === 'tool') continue; // skip other tool results
+            if (candidate.role === 'tool') continue;
             if (candidate.role === 'assistant' && candidate.toolCalls) {
                 hasMatch = candidate.toolCalls.some(tc => tc.id === msg.toolCallId);
             }
-            break; // stop at first non-tool message
+            break;
         }
 
         if (hasMatch) continue;
@@ -1239,6 +1269,37 @@ function sanitizeConversation(messages, turnId) {
         orphanDetails.push({ type: 'tool_result', id: msg.toolCallId, msgIndex: i });
         messages.splice(i, 1);
         stripped++;
+    }
+
+    // Pass 2b: fix orphaned tool_result blocks (Claude-native) in user messages
+    for (let i = messages.length - 1; i >= 0; i--) {
+        const msg = messages[i];
+        if (msg.role !== 'user' || !Array.isArray(msg.content)) continue;
+        const toolResults = msg.content.filter(b => b.type === 'tool_result');
+        if (toolResults.length === 0) continue;
+
+        // Previous message should be assistant with matching tool_use blocks
+        const prev = messages[i - 1];
+        const prevToolUseIds = new Set();
+        if (prev && prev.role === 'assistant' && Array.isArray(prev.content)) {
+            for (const b of prev.content) {
+                if (b.type === 'tool_use') prevToolUseIds.add(b.id);
+            }
+        }
+
+        let removedCount = 0;
+        msg.content = msg.content.filter(b => {
+            if (b.type !== 'tool_result') return true;
+            if (prevToolUseIds.has(b.tool_use_id)) return true;
+            orphanDetails.push({ type: 'tool_result_block', id: b.tool_use_id, msgIndex: i });
+            removedCount++;
+            return false;
+        });
+        stripped += removedCount;
+
+        if (msg.content.length === 0) {
+            messages.splice(i, 1);
+        }
     }
 
     sanitizerStats.totalStripped += stripped;

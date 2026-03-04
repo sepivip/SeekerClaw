@@ -127,6 +127,16 @@ object ConfigClaimImporter {
             root.optString("agentName"),
             "SeekerClaw",
         ).ifBlank { "SeekerClaw" }
+        val provider = firstNonBlank(
+            cfg.optString("provider"),
+            root.optString("provider"),
+            "claude",
+        ).ifBlank { "claude" }
+        val openaiApiKey = firstNonBlank(
+            integrations?.optString("openaiApiKey"),
+            cfg.optString("openaiApiKey"),
+            root.optString("openaiApiKey"),
+        )
         val braveApiKey = firstNonBlank(
             integrations?.optString("braveApiKey"),
             cfg.optString("braveApiKey"),
@@ -146,6 +156,8 @@ object ConfigClaimImporter {
 
         val appConfig = AppConfig(
             anthropicApiKey = resolvedApiKey.trim(),
+            openaiApiKey = openaiApiKey.trim(),
+            provider = provider,
             setupToken = resolvedSetupToken.trim(),
             authType = authType,
             telegramBotToken = botToken,
