@@ -106,7 +106,7 @@ const PROVIDER = _SUPPORTED_PROVIDERS.has(_rawProvider) ? _rawProvider : 'claude
 const ANTHROPIC_KEY = normalizeSecret(config.anthropicApiKey);
 const OPENAI_KEY = normalizeSecret(config.openaiApiKey || '');
 const AUTH_TYPE = config.authType || 'api_key';
-const MODEL = config.model || (PROVIDER === 'openai' ? 'gpt-4.1' : 'claude-opus-4-6');
+const MODEL = config.model || (PROVIDER === 'openai' ? 'gpt-5.2' : 'claude-opus-4-6');
 const AGENT_NAME = config.agentName || 'SeekerClaw';
 let BRIDGE_TOKEN = normalizeSecret(config.bridgeToken || '');
 const USER_AGENT = 'SeekerClaw/1.0 (Android; +https://seekerclaw.com)';
