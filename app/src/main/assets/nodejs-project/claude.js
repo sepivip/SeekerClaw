@@ -1507,9 +1507,19 @@ async function chat(chatId, userMessage, options = {}) {
                 messages.push(tr);
             }
 
-            // Enforce MAX_HISTORY cap after tool round (trimming mid-loop would break
-            // model context, so we trim after all tool results are added)
-            while (messages.length > MAX_HISTORY) messages.shift();
+            // Enforce MAX_HISTORY cap after tool round — trim from the front but never
+            // orphan a tool-call/result pair (skip past assistant+tool groups)
+            while (messages.length > MAX_HISTORY) {
+                const first = messages[0];
+                messages.shift();
+                // If we removed an assistant with toolCalls, also remove its tool results
+                if (first.role === 'assistant' && first.toolCalls && first.toolCalls.length) {
+                    const ids = new Set(first.toolCalls.map(tc => tc.id));
+                    while (messages.length && messages[0].role === 'tool' && ids.has(messages[0].toolCallId)) {
+                        messages.shift();
+                    }
+                }
+            }
 
             // Status reaction: back to thinking before next Claude API call
             if (options.statusReaction) options.statusReaction.setThinking();

@@ -186,7 +186,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                             val currentModel = config?.model ?: ""
                             val modelsForNew = modelsForProvider(selectedTab)
                             if (modelsForNew.none { it.id == currentModel }) {
-                                saveField("model", modelsForNew[0].id)
+                                saveField("model", modelsForNew.firstOrNull()?.id ?: "")
                             }
                             Toast.makeText(context, "Switched to ${availableProviders.find { it.id == selectedTab }?.displayName}. Restart agent to apply.", Toast.LENGTH_LONG).show()
                         },
@@ -394,7 +394,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
     if (showModelPicker) {
         val models = modelsForProvider(selectedTab)
         var selectedModel by remember {
-            mutableStateOf(models.firstOrNull { it.id == config?.model }?.id ?: models[0].id)
+            mutableStateOf(models.firstOrNull { it.id == config?.model }?.id ?: models.firstOrNull()?.id ?: "")
         }
 
         AlertDialog(
@@ -596,6 +596,10 @@ private suspend fun testOpenAIConnection(apiKey: String): Result<Unit> = withCon
                 else -> "HTTP $status"
             }
             error("Connection failed ($errorMessage)")
+        } catch (_: java.net.SocketTimeoutException) {
+            error("Connection timed out")
+        } catch (_: java.io.IOException) {
+            error("Network unreachable or timeout")
         } finally { conn.disconnect() }
     }
 }
