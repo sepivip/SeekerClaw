@@ -114,11 +114,12 @@ object ConfigClaimImporter {
             root.optString("telegramOwnerId"),
             root.optString("ownerId"),
         ).trim()
-        val provider = firstNonBlank(
+        val rawProvider = firstNonBlank(
             cfg.optString("provider"),
             root.optString("provider"),
             "claude",
-        ).ifBlank { "claude" }
+        ).trim().lowercase()
+        val provider = if (rawProvider == "openai") "openai" else "claude"
         val defaultModel = if (provider == "openai") "gpt-5.2" else "claude-opus-4-6"
         val model = firstNonBlank(
             agent?.optString("model"),
