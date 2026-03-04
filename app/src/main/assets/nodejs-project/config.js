@@ -100,7 +100,9 @@ function normalizeSecret(val) {
 
 const BOT_TOKEN = normalizeSecret(config.botToken);
 let OWNER_ID = config.ownerId ? String(config.ownerId).trim() : '';
-const PROVIDER = (typeof config.provider === 'string' && config.provider.trim()) ? config.provider.trim().toLowerCase() : 'claude';
+const _SUPPORTED_PROVIDERS = new Set(['claude', 'openai']);
+const _rawProvider = (typeof config.provider === 'string' && config.provider.trim()) ? config.provider.trim().toLowerCase() : 'claude';
+const PROVIDER = _SUPPORTED_PROVIDERS.has(_rawProvider) ? _rawProvider : 'claude';
 const ANTHROPIC_KEY = normalizeSecret(config.anthropicApiKey);
 const OPENAI_KEY = normalizeSecret(config.openaiApiKey || '');
 const AUTH_TYPE = config.authType || 'api_key';
@@ -168,7 +170,7 @@ if (!OWNER_ID) {
     log('WARNING: Owner ID not set — first inbound message will claim ownership. ' +
         'This is expected on first run; use the Android setup flow to set or reset the owner.', 'WARN');
 } else {
-    const authLabel = AUTH_TYPE === 'setup_token' ? 'setup-token' : 'api-key';
+    const authLabel = PROVIDER === 'openai' ? 'api-key' : (AUTH_TYPE === 'setup_token' ? 'setup-token' : 'api-key');
     log(`Agent: ${AGENT_NAME} | Provider: ${PROVIDER} | Model: ${MODEL} | Auth: ${authLabel} | Owner: ${OWNER_ID}`, 'DEBUG');
 }
 
