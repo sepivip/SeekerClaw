@@ -32,11 +32,30 @@ function toApiMessages(messages) {
         }
 
         if (msg.role === 'assistant') {
-            // Assistant text → message item
-            if (msg.content) {
+            // Handle Claude-native format: content is array with text/tool_use blocks
+            if (Array.isArray(msg.content)) {
+                const textParts = msg.content
+                    .filter(b => b.type === 'text' && b.text)
+                    .map(b => b.text);
+                if (textParts.length > 0) {
+                    input.push({ role: 'assistant', content: textParts.join('') });
+                }
+                // Convert Claude-native tool_use blocks → function_call items
+                for (const b of msg.content) {
+                    if (b.type === 'tool_use') {
+                        input.push({
+                            type: 'function_call',
+                            call_id: b.id,
+                            name: b.name,
+                            arguments: JSON.stringify(b.input || {}),
+                        });
+                    }
+                }
+            } else if (msg.content) {
+                // Neutral format: content is a string
                 input.push({ role: 'assistant', content: msg.content });
             }
-            // Tool calls → function_call items
+            // Neutral format: tool calls as separate array
             if (msg.toolCalls && msg.toolCalls.length > 0) {
                 for (const tc of msg.toolCalls) {
                     input.push({
@@ -54,20 +73,40 @@ function toApiMessages(messages) {
             if (typeof msg.content === 'string') {
                 input.push({ role: 'user', content: msg.content });
             } else if (Array.isArray(msg.content)) {
-                // Vision or multi-part content
-                const parts = msg.content.map(block => {
-                    if (block.type === 'text') return { type: 'input_text', text: block.text };
-                    if (block.type === 'image') {
-                        const mediaType = block.source?.media_type || 'image/jpeg';
-                        const data = block.source?.data || '';
-                        return { type: 'input_image', image_url: `data:${mediaType};base64,${data}` };
-                    }
-                    if (block.type === 'image_url') {
-                        return { type: 'input_image', image_url: block.image_url?.url || '' };
-                    }
-                    return { type: 'input_text', text: JSON.stringify(block) };
-                });
-                input.push({ role: 'user', content: parts });
+                // Handle Claude-native tool_result blocks in user messages
+                const toolResults = msg.content.filter(b => b.type === 'tool_result');
+                const otherBlocks = msg.content.filter(b => b.type !== 'tool_result');
+
+                // Convert tool_result blocks → function_call_output items
+                for (const tr of toolResults) {
+                    const output = typeof tr.content === 'string'
+                        ? tr.content
+                        : Array.isArray(tr.content)
+                            ? tr.content.filter(b => b.type === 'text').map(b => b.text).join('')
+                            : JSON.stringify(tr.content || '');
+                    input.push({
+                        type: 'function_call_output',
+                        call_id: tr.tool_use_id,
+                        output,
+                    });
+                }
+
+                // Vision or multi-part content (non-tool blocks)
+                if (otherBlocks.length > 0) {
+                    const parts = otherBlocks.map(block => {
+                        if (block.type === 'text') return { type: 'input_text', text: block.text };
+                        if (block.type === 'image') {
+                            const mediaType = block.source?.media_type || 'image/jpeg';
+                            const data = block.source?.data || '';
+                            return { type: 'input_image', image_url: `data:${mediaType};base64,${data}` };
+                        }
+                        if (block.type === 'image_url') {
+                            return { type: 'input_image', image_url: block.image_url?.url || '' };
+                        }
+                        return { type: 'input_text', text: JSON.stringify(block) };
+                    });
+                    input.push({ role: 'user', content: parts });
+                }
             } else {
                 input.push({ role: 'user', content: String(msg.content || '') });
             }
