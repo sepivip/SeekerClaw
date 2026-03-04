@@ -148,10 +148,10 @@ function formatTools(tools) {
 
 /**
  * Build full OpenAI API request body.
- * Note: reasoning models (o1, o3, o4) use max_completion_tokens instead of max_tokens.
+ * Note: reasoning/codex models use max_completion_tokens instead of max_tokens.
  */
 function formatRequest(model, maxTokens, systemPromptMsg, messages, tools) {
-    const isReasoning = /^o\d/.test(model);
+    const useCompletionTokens = /^o\d/.test(model) || /codex/i.test(model);
     const body = {
         model,
         stream: true,
@@ -159,8 +159,8 @@ function formatRequest(model, maxTokens, systemPromptMsg, messages, tools) {
         messages: [systemPromptMsg, ...messages],
     };
 
-    // Reasoning models use max_completion_tokens; standard models use max_tokens
-    if (isReasoning) {
+    // Reasoning & codex models use max_completion_tokens; standard models use max_tokens
+    if (useCompletionTokens) {
         body.max_completion_tokens = maxTokens;
     } else {
         body.max_tokens = maxTokens;
