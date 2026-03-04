@@ -49,6 +49,11 @@ function toApiMessages(messages) {
         }
 
         if (msg.role === 'assistant') {
+            // If content is already a Claude-native array (legacy checkpoint), pass through
+            if (Array.isArray(msg.content)) {
+                out.push({ role: 'assistant', content: msg.content });
+                continue;
+            }
             const content = [];
             if (msg.content) {
                 content.push({ type: 'text', text: msg.content });

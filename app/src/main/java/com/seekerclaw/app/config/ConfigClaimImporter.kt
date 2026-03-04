@@ -114,12 +114,18 @@ object ConfigClaimImporter {
             root.optString("telegramOwnerId"),
             root.optString("ownerId"),
         ).trim()
+        val provider = firstNonBlank(
+            cfg.optString("provider"),
+            root.optString("provider"),
+            "claude",
+        ).ifBlank { "claude" }
+        val defaultModel = if (provider == "openai") "gpt-5.2" else "claude-opus-4-6"
         val model = firstNonBlank(
             agent?.optString("model"),
             cfg.optString("model"),
             root.optString("model"),
-            "claude-opus-4-6",
-        ).ifBlank { "claude-opus-4-6" }
+            defaultModel,
+        ).ifBlank { defaultModel }
         val agentName = firstNonBlank(
             agent?.optString("name"),
             agent?.optString("agentName"),
@@ -127,11 +133,6 @@ object ConfigClaimImporter {
             root.optString("agentName"),
             "SeekerClaw",
         ).ifBlank { "SeekerClaw" }
-        val provider = firstNonBlank(
-            cfg.optString("provider"),
-            root.optString("provider"),
-            "claude",
-        ).ifBlank { "claude" }
         val openaiApiKey = firstNonBlank(
             integrations?.optString("openaiApiKey"),
             cfg.optString("openaiApiKey"),
