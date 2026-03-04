@@ -301,7 +301,11 @@ object ConfigManager {
             return
         }
         val workspaceDir = File(context.filesDir, "workspace").apply { mkdirs() }
-        val credential = escapeJson(config.activeCredential)
+        // Always write the real Anthropic credential into anthropicApiKey (not activeCredential,
+        // which would duplicate the OpenAI key into this field when provider == "openai")
+        val credential = escapeJson(
+            if (config.authType == "setup_token") config.setupToken else config.anthropicApiKey
+        )
         val openaiKeyField = if (config.openaiApiKey.isNotBlank()) {
             """,
             |  "openaiApiKey": "${escapeJson(config.openaiApiKey)}""""

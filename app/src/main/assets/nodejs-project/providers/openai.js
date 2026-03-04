@@ -256,11 +256,21 @@ function classifyNetworkError(err) {
 function parseRateLimitHeaders(headers) {
     if (!headers) return { tokensRemaining: Infinity, tokensReset: '' };
     const remaining = parseInt(headers['x-ratelimit-remaining-tokens'], 10);
-    // OpenAI reset is a duration like "120ms" or "6s", not ISO timestamp
+    // OpenAI reset is a duration like "120ms" or "6s" — convert to absolute ISO timestamp
+    // so claude.js rate-limit pre-check (which uses new Date(tokensReset)) works uniformly
     const resetStr = headers['x-ratelimit-reset-tokens'] || '';
+    let tokensReset = '';
+    if (resetStr) {
+        let ms = 0;
+        const secMatch = resetStr.match(/([\d.]+)s/);
+        const msMatch = resetStr.match(/([\d.]+)ms/);
+        if (secMatch) ms += parseFloat(secMatch[1]) * 1000;
+        if (msMatch) ms += parseFloat(msMatch[1]);
+        if (ms > 0) tokensReset = new Date(Date.now() + ms).toISOString();
+    }
     return {
         tokensRemaining: Number.isFinite(remaining) ? remaining : Infinity,
-        tokensReset: resetStr,
+        tokensReset,
         requests: {
             limit: parseInt(headers['x-ratelimit-limit-requests']) || 0,
             remaining: parseInt(headers['x-ratelimit-remaining-requests']) || 0,
