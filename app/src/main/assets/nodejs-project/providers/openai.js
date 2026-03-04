@@ -155,6 +155,7 @@ function formatTools(tools) {
         name: tool.name,
         description: tool.description || '',
         parameters: tool.input_schema || { type: 'object', properties: {} },
+        strict: false, // Responses API defaults to strict:true which requires additionalProperties:false on all schemas
     }));
 }
 
