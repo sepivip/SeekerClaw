@@ -31,7 +31,7 @@ val availableProviders = listOf(
 
 val openaiModels = listOf(
     ModelInfo("gpt-5.2", "GPT-5.2", "flagship"),
-    ModelInfo("codex-5.3", "Codex 5.3", "code agent"),
+    ModelInfo("gpt-5.3-codex", "GPT-5.3 Codex", "code agent"),
 )
 
 fun modelsForProvider(providerId: String): List<ModelInfo> = when (providerId) {
