@@ -16,19 +16,21 @@ function _escRx(s) { return s.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&'); }
 // Cached dynamic redaction patterns (rebuilt when config changes)
 let _dynamicPatterns = [];
 
-// Rebuild literal-match patterns for secrets without a known prefix (Jupiter, MCP tokens).
+// Rebuild literal-match patterns for secrets without a known prefix.
 // Called at startup and after syncAgentApiKeys() mutates config.
 function rebuildRedactPatterns() {
     const patterns = [];
-    // Jupiter API key (no known prefix — literal match)
-    const jk = config.jupiterApiKey;
-    if (jk && jk.length >= 8) {
-        patterns.push({ rx: new RegExp(_escRx(jk), 'g'), replacement: '***jupiter-key***' });
+    // All dynamic API keys from config (*ApiKey fields — Jupiter, Dune, TMDB, etc.)
+    // Use [REDACTED:...] format so placeholders survive markdown stripping in Telegram fallback
+    for (const key of Object.keys(config)) {
+        if (key.endsWith('ApiKey') && config[key] && typeof config[key] === 'string' && config[key].length >= 8) {
+            patterns.push({ rx: new RegExp(_escRx(config[key]), 'g'), replacement: `[REDACTED:${key}]` });
+        }
     }
     // MCP server auth tokens (literal match per server)
     for (const server of MCP_SERVERS) {
         if (server.authToken && server.authToken.length >= 8) {
-            patterns.push({ rx: new RegExp(_escRx(server.authToken), 'g'), replacement: '***mcp-token***' });
+            patterns.push({ rx: new RegExp(_escRx(server.authToken), 'g'), replacement: '[REDACTED:mcp-token]' });
         }
     }
     _dynamicPatterns = patterns;
@@ -50,9 +52,6 @@ function redactSecrets(msg) {
     msg = msg.replace(/pplx-[a-zA-Z0-9_-]{10,}/g, 'pplx-***');
     // Redact OpenRouter API keys (sk-or-...)
     msg = msg.replace(/sk-or-[a-zA-Z0-9_-]{10,}/g, 'sk-or-***');
-    // Redact OpenAI API keys (sk-proj-..., sk-...)
-    msg = msg.replace(/sk-proj-[a-zA-Z0-9_-]{20,}/g, 'sk-proj-***');
-    msg = msg.replace(/sk-[a-zA-Z0-9_-]{20,}/g, 'sk-***');
     // Redact bridge tokens (UUID format)
     if (BRIDGE_TOKEN) msg = msg.replace(new RegExp(_escRx(BRIDGE_TOKEN), 'g'), '***bridge-token***');
     // Redact Jupiter API key + MCP auth tokens (cached literal patterns)
