@@ -294,12 +294,19 @@ const TOOL_STATUS_MAP = {
 // keys. Conversational keys fill gaps and can be re-saved by the agent.
 // ============================================================================
 
-const _agentKeyMap = { perplexity: 'perplexityApiKey', brave: 'braveApiKey', jupiter: 'jupiterApiKey' };
+// Known mappings for keys that come from Android Settings (config.json).
+// These get priority — agent_settings.json keys never overwrite them.
+const _knownKeyMap = { perplexity: 'perplexityApiKey', brave: 'braveApiKey', jupiter: 'jupiterApiKey' };
 
 // Snapshot which keys came from Android Settings at startup (immutable)
 const _androidKeys = {};
-for (const [, configField] of Object.entries(_agentKeyMap)) {
+for (const [, configField] of Object.entries(_knownKeyMap)) {
     if (config[configField]) _androidKeys[configField] = true;
+}
+
+// Convert service name to config field: "dune" → "duneApiKey", "brave" → "braveApiKey"
+function serviceToConfigField(service) {
+    return _knownKeyMap[service] || `${service}ApiKey`;
 }
 
 function syncAgentApiKeys() {
@@ -308,10 +315,11 @@ function syncAgentApiKeys() {
         if (!fs.existsSync(settingsPath)) return;
         const s = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
         if (!s.apiKeys || typeof s.apiKeys !== 'object') return;
-        for (const [service, configField] of Object.entries(_agentKeyMap)) {
+        // Dynamic: load ALL keys from apiKeys.*, not just known ones
+        for (const [service, agentKey] of Object.entries(s.apiKeys)) {
+            const configField = serviceToConfigField(service);
             // Android Settings keys always win — don't overwrite
             if (_androidKeys[configField]) continue;
-            const agentKey = s.apiKeys[service];
             if (agentKey && typeof agentKey === 'string' && agentKey.trim()) {
                 const normalized = normalizeSecret(agentKey);
                 if (normalized && config[configField] !== normalized) {
