@@ -21,15 +21,16 @@ let _dynamicPatterns = [];
 function rebuildRedactPatterns() {
     const patterns = [];
     // All dynamic API keys from config (*ApiKey fields — Jupiter, Dune, TMDB, etc.)
+    // Use [REDACTED:...] format so placeholders survive markdown stripping in Telegram fallback
     for (const key of Object.keys(config)) {
         if (key.endsWith('ApiKey') && config[key] && typeof config[key] === 'string' && config[key].length >= 8) {
-            patterns.push({ rx: new RegExp(_escRx(config[key]), 'g'), replacement: `***${key}***` });
+            patterns.push({ rx: new RegExp(_escRx(config[key]), 'g'), replacement: `[REDACTED:${key}]` });
         }
     }
     // MCP server auth tokens (literal match per server)
     for (const server of MCP_SERVERS) {
         if (server.authToken && server.authToken.length >= 8) {
-            patterns.push({ rx: new RegExp(_escRx(server.authToken), 'g'), replacement: '***mcp-token***' });
+            patterns.push({ rx: new RegExp(_escRx(server.authToken), 'g'), replacement: '[REDACTED:mcp-token]' });
         }
     }
     _dynamicPatterns = patterns;

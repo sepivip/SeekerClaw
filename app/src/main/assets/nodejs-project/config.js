@@ -307,12 +307,21 @@ for (const key of Object.keys(config)) {
 
 // Normalize service name to lowerCamelCase to align with envToCamelCase in skills.js.
 // "dune" → "dune", "DUNE" → "dune", "dune_analytics" → "duneAnalytics"
+// Preserves internal capitals for already-camelCase inputs: "duneApiKey" → "duneApiKey"
 function normalizeService(service) {
     if (!service) return '';
-    return String(service).trim()
-        .replace(/[^A-Za-z0-9]+/g, ' ').split(' ').filter(Boolean)
-        .map((p, i) => i === 0 ? p.toLowerCase() : p.charAt(0).toUpperCase() + p.slice(1).toLowerCase())
-        .join('');
+    const parts = String(service).trim()
+        .replace(/[^A-Za-z0-9]+/g, ' ').split(' ').filter(Boolean);
+    if (!parts.length) return '';
+    // First token: preserve internal capitals if mixed case (camelCase/PascalCase)
+    const first = parts[0];
+    const hasLower = /[a-z]/.test(first);
+    const hasUpper = /[A-Z]/.test(first);
+    const normalizedFirst = (hasLower && hasUpper)
+        ? first.charAt(0).toLowerCase() + first.slice(1)
+        : first.toLowerCase();
+    const rest = parts.slice(1).map(p => p.charAt(0).toUpperCase() + p.slice(1).toLowerCase());
+    return normalizedFirst + rest.join('');
 }
 
 // Convert service name to config field: "dune" → "duneApiKey", "brave" → "braveApiKey"
@@ -334,6 +343,7 @@ function syncAgentApiKeys() {
         // Dynamic: load ALL keys from apiKeys.*, not just known ones
         for (const [service, agentKey] of Object.entries(s.apiKeys)) {
             const configField = serviceToConfigField(service);
+            if (!configField) continue;
             // Android Settings keys always win — don't overwrite
             if (_androidKeys[configField]) continue;
             if (agentKey && typeof agentKey === 'string' && agentKey.trim()) {
