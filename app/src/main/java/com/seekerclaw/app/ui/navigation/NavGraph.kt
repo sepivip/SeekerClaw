@@ -50,8 +50,7 @@ import kotlinx.serialization.Serializable
 @Serializable object SkillsRoute
 @Serializable object SettingsRoute
 @Serializable object SystemRoute
-@Serializable object AnthropicConfigRoute  // kept for backward compat — redirects to ProviderConfig
-@Serializable object ProviderConfigRoute
+@Serializable object AnthropicConfigRoute
 @Serializable object TelegramConfigRoute
 
 data class BottomNavItem(
@@ -215,22 +214,16 @@ fun SeekerClawNavHost() {
                             }
                         }
                     },
-                    onNavigateToProvider = {
-                        navController.navigate(ProviderConfigRoute)
+                    onNavigateToAnthropic = {
+                        navController.navigate(AnthropicConfigRoute)
                     },
                     onNavigateToTelegram = {
                         navController.navigate(TelegramConfigRoute)
                     }
                 )
             }
-            composable<ProviderConfigRoute> {
-                com.seekerclaw.app.ui.settings.ProviderConfigScreen(
-                    onBack = { navController.popBackStack() }
-                )
-            }
             composable<AnthropicConfigRoute> {
-                // Backward compat — redirect to new provider screen
-                com.seekerclaw.app.ui.settings.ProviderConfigScreen(
+                com.seekerclaw.app.ui.settings.AnthropicConfigScreen(
                     onBack = { navController.popBackStack() }
                 )
             }

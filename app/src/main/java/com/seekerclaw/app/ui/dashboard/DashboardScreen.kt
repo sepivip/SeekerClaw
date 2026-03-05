@@ -92,7 +92,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
     val config = remember(cfgVersion) { ConfigManager.loadConfig(context) }
     val agentName = remember(config) { config?.agentName?.ifBlank { "SeekerClaw" } ?: "SeekerClaw" }
     val hasBotToken = remember(config) { config?.telegramBotToken?.isNotBlank() == true }
-    val hasCredential = remember(config) { config?.activeProviderKey?.isNotBlank() == true }
+    val hasCredential = remember(config) { config?.activeCredential?.isNotBlank() == true }
     val validationError = remember(config) { ConfigManager.runtimeValidationError(config) }
     val latestError = logs.lastOrNull { it.level == LogLevel.ERROR }?.message
 

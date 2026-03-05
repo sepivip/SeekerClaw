@@ -105,7 +105,7 @@ import java.util.Date
 @Composable
 fun SettingsScreen(
     onRunSetupAgain: () -> Unit = {},
-    onNavigateToProvider: () -> Unit = {},
+    onNavigateToAnthropic: () -> Unit = {},
     onNavigateToTelegram: () -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -438,10 +438,10 @@ fun SettingsScreen(
                     .background(SeekerClawColors.Surface, shape),
             ) {
                 ConfigField(
-                    label = "AI Provider",
-                    value = "${com.seekerclaw.app.config.providerById(config?.provider ?: "claude").displayName} \u2022 ${com.seekerclaw.app.config.modelDisplayName(config?.model)}",
-                    onClick = onNavigateToProvider,
-                    info = SettingsHelpTexts.PROVIDER,
+                    label = "Anthropic",
+                    value = "Model, Keys, Connection Test",
+                    onClick = onNavigateToAnthropic,
+                    info = "Configure your Anthropic AI model and credentials.",
                 )
                 ConfigField(
                     label = "Telegram",
@@ -1287,7 +1287,7 @@ fun SettingsScreen(
     if (showApplyConfigDialog && pendingConfigImport != null) {
         val imported = pendingConfigImport!!
         val importedConfig = imported.config
-        val maskedCredential = maskSensitive(importedConfig.activeProviderKey)
+        val maskedCredential = maskSensitive(importedConfig.activeCredential)
         val maskedBot = maskSensitive(importedConfig.telegramBotToken)
         val source = Uri.parse(imported.sourceUrl).host ?: imported.sourceUrl
         val autoStartSummary = imported.autoStartOnBoot?.let { if (it) "Enabled" else "Disabled" } ?: "No change"

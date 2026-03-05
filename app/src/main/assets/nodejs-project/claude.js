@@ -8,7 +8,7 @@ const crypto = require('crypto');
 // ── Imports from other SeekerClaw modules ──────────────────────────────────
 
 const {
-    workDir, MODEL, PROVIDER, ANTHROPIC_KEY, OPENAI_KEY, AUTH_TYPE,
+    workDir, MODEL, ANTHROPIC_KEY, AUTH_TYPE,
     REACTION_GUIDANCE, REACTION_NOTIFICATIONS, MEMORY_DIR,
     CONFIRM_REQUIRED, TOOL_RATE_LIMITS, TOOL_STATUS_MAP,
     API_TIMEOUT_RETRIES, API_TIMEOUT_BACKOFF_MS, API_TIMEOUT_MAX_BACKOFF_MS,
@@ -19,8 +19,7 @@ const {
 
 const { redactSecrets } = require('./security');
 const { telegram, sendTyping, sentMessageCache, SENT_CACHE_TTL, deferStatus } = require('./telegram');
-const { httpStreamingRequest, httpOpenAIStreamingRequest } = require('./web');
-const { getAdapter } = require('./providers');
+const { httpStreamingRequest } = require('./web');
 const { androidBridgeCall } = require('./bridge');
 
 const {
@@ -60,21 +59,26 @@ async function visionAnalyzeImage(imageBase64, prompt, maxTokens = 400) {
     const safePrompt = (prompt || '').trim() || 'Describe what is happening in this image.';
     const cappedMaxTokens = Math.max(128, Math.min(parseInt(maxTokens) || 400, 1024));
 
-    // BAT-315: Provider-agnostic vision — use adapter's formatVision + toApiMessages
-    const adapter = getAdapter(PROVIDER);
-    const visionBlock = adapter.formatVision(imageBase64, 'image/jpeg');
-
-    // Build messages in neutral format, then convert via adapter
-    const neutralMessages = [{
-        role: 'user',
-        content: [
-            { type: 'text', text: safePrompt },
-            visionBlock,
+    const body = JSON.stringify({
+        model: MODEL,
+        max_tokens: cappedMaxTokens,
+        messages: [
+            {
+                role: 'user',
+                content: [
+                    { type: 'text', text: safePrompt },
+                    {
+                        type: 'image',
+                        source: {
+                            type: 'base64',
+                            media_type: 'image/jpeg',
+                            data: imageBase64
+                        }
+                    }
+                ]
+            }
         ]
-    }];
-    const apiMessages = adapter.toApiMessages(neutralMessages);
-    const systemBlocks = adapter.formatSystemPrompt('You are a vision assistant.', '');
-    const body = adapter.formatRequest(MODEL, cappedMaxTokens, systemBlocks, apiMessages, []);
+    });
 
     const res = await claudeApiCall(body, 'vision');
 
@@ -82,10 +86,14 @@ async function visionAnalyzeImage(imageBase64, prompt, maxTokens = 400) {
         return { error: `Vision API error: ${res.data?.error?.message || res.status}` };
     }
 
-    const parsed = adapter.fromApiResponse(res.data);
+    const text = (res.data?.content || [])
+        .filter(c => c.type === 'text')
+        .map(c => c.text)
+        .join('\n')
+        .trim();
 
     return {
-        text: (parsed.text || '').trim() || '(No vision response)',
+        text: text || '(No vision response)',
         usage: res.data?.usage || null
     };
 }
@@ -239,10 +247,9 @@ async function generateSessionSummary(chatId) {
     const conv = conversations.get(chatId);
     if (!conv || conv.length < MIN_MESSAGES_FOR_SUMMARY) return null;
 
-    // Build a condensed view of the conversation (last 20 messages)
+    // Build a condensed view of the conversation (last 35 messages max)
     const messagesToSummarize = conv.slice(-20);
     const summaryInput = messagesToSummarize.map(m => {
-        if (m.role === 'tool') return `tool: [result for ${m.toolCallId}]`;
         const text = typeof m.content === 'string' ? m.content :
             Array.isArray(m.content) ? m.content
                 .filter(c => c.type === 'text')
@@ -250,16 +257,16 @@ async function generateSessionSummary(chatId) {
         return `${m.role}: ${text.slice(0, 500)}`;
     }).join('\n\n');
 
-    // BAT-315: Provider-agnostic summary generation
-    const adapter = getAdapter(PROVIDER);
-    const systemBlocks = adapter.formatSystemPrompt(
-        'You are a session summarizer. Output ONLY the summary, no preamble.', ''
-    );
-    const summaryMessages = adapter.toApiMessages([{
-        role: 'user',
-        content: 'Summarize this conversation in 3-5 bullet points. Focus on: decisions made, tasks completed, new information learned, action items. Skip: greetings, small talk, repeated information. Format: markdown bullets, concise, factual.\n\n' + summaryInput
-    }]);
-    const body = adapter.formatRequest(MODEL, 500, systemBlocks, summaryMessages, []);
+    // Call Claude with a lightweight summary request
+    const body = JSON.stringify({
+        model: MODEL,
+        max_tokens: 500,
+        system: [{ type: 'text', text: 'You are a session summarizer. Output ONLY the summary, no preamble.' }],
+        messages: [{
+            role: 'user',
+            content: 'Summarize this conversation in 3-5 bullet points. Focus on: decisions made, tasks completed, new information learned, action items. Skip: greetings, small talk, repeated information. Format: markdown bullets, concise, factual.\n\n' + summaryInput
+        }]
+    });
 
     const res = await claudeApiCall(body, chatId);
     if (res.status !== 200) {
@@ -267,8 +274,8 @@ async function generateSessionSummary(chatId) {
         return null;
     }
 
-    const parsed = adapter.fromApiResponse(res.data);
-    return parsed.text || null;
+    const text = res.data.content?.find(c => c.type === 'text')?.text;
+    return text || null;
 }
 
 async function saveSessionSummary(chatId, trigger, { force = false, skipIndex = false } = {}) {
@@ -554,7 +561,6 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
 
     // Config Awareness — what settings the agent can introspect (BAT-232, BAT-235, BAT-236)
     lines.push('## Config Awareness');
-    lines.push(`Provider: ${PROVIDER}, Model: ${MODEL}`);
     lines.push('To check current runtime settings, read **agent_settings.json** — it contains heartbeat interval, API keys, and other tunable values.');
     lines.push('API keys for services like Brave, Perplexity, Jupiter are configured in Android Settings for secure persistent storage.');
     lines.push('');
@@ -643,8 +649,8 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('1. Read agent_health_state — check consecutiveFailures and lastError');
     lines.push('2. Auth error (401/403): API key may be invalid — tell user to check Settings');
     lines.push('3. Rate limit (429): slow down — reduce tool calls and response length');
-    lines.push(`4. Billing error (402): tell user to check their billing at ${PROVIDER === 'openai' ? 'platform.openai.com' : 'console.anthropic.com'}`);
-    lines.push(`5. Network error: check connectivity with js_eval using require("https").get("https://${PROVIDER === 'openai' ? 'api.openai.com' : 'api.anthropic.com'}") or shell_exec "curl -s https://${PROVIDER === 'openai' ? 'api.openai.com' : 'api.anthropic.com'}"`);
+    lines.push('4. Billing error (402): tell user to check their Anthropic billing at console.anthropic.com');
+    lines.push('5. Network error: check connectivity with js_eval using require("https").get("https://api.anthropic.com") or shell_exec "curl -s https://api.anthropic.com"');
     lines.push('');
 
     // Project Context - OpenClaw injects SOUL.md and memory here
@@ -869,22 +875,20 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     return { stable: stablePrompt, dynamic: dynamicLines.join('\n') };
 }
 
-// BAT-315: Provider-agnostic usage reporting
-function reportUsage(rawUsage) {
-    if (!rawUsage) return;
-    const adapter = getAdapter(PROVIDER);
-    const usage = adapter.normalizeUsage(rawUsage);
+// Report Claude API usage + cache metrics to Android bridge and logs
+function reportUsage(usage) {
+    if (!usage) return;
     androidBridgeCall('/stats/tokens', {
-        input_tokens: usage.inputTokens,
-        output_tokens: usage.outputTokens,
-        cache_creation_input_tokens: usage.cacheWrite,
-        cache_read_input_tokens: usage.cacheRead,
+        input_tokens: usage.input_tokens || 0,
+        output_tokens: usage.output_tokens || 0,
+        cache_creation_input_tokens: usage.cache_creation_input_tokens || 0,
+        cache_read_input_tokens: usage.cache_read_input_tokens || 0,
     }).catch(() => { });
-    if (usage.cacheRead) {
-        log(`[Cache] hit: ${usage.cacheRead} tokens read from cache`, 'DEBUG');
+    if (usage.cache_read_input_tokens) {
+        log(`[Cache] hit: ${usage.cache_read_input_tokens} tokens read from cache`, 'DEBUG');
     }
-    if (usage.cacheWrite) {
-        log(`[Cache] miss: ${usage.cacheWrite} tokens written to cache`, 'DEBUG');
+    if (usage.cache_creation_input_tokens) {
+        log(`[Cache] miss: ${usage.cache_creation_input_tokens} tokens written to cache`, 'DEBUG');
     }
 }
 
@@ -904,13 +908,81 @@ let _sessionExpiredAt = 0;
 const AUTH_FAIL_THRESHOLD = 3;
 const SESSION_PROBE_INTERVAL_MS = 5 * 60 * 1000; // 5 min cooldown probe
 
-// BAT-315: Error classification delegated to provider adapter
+// Classify API errors into retryable vs fatal with user-friendly messages (BAT-22)
 function classifyApiError(status, data) {
-    return getAdapter(PROVIDER).classifyError(status, data);
+    if (status === 401 || status === 403) {
+        return {
+            type: 'auth', retryable: false,
+            userMessage: '🔑 Can\'t reach the AI — API key might be wrong. Check Settings?'
+        };
+    }
+    if (status === 402) {
+        return {
+            type: 'billing', retryable: false,
+            userMessage: 'Your API account needs attention — check billing at console.anthropic.com'
+        };
+    }
+    if (status === 429) {
+        const msg = data?.error?.message || '';
+        if (/quota|credit/i.test(msg)) {
+            return {
+                type: 'quota', retryable: false,
+                userMessage: 'API usage quota exceeded. Please try again later or upgrade your plan.'
+            };
+        }
+        return {
+            type: 'rate_limit', retryable: true,
+            userMessage: '⏳ Got rate limited. Trying again in a moment...'
+        };
+    }
+    if (status === 529) {
+        return {
+            type: 'overloaded', retryable: true,
+            userMessage: 'Claude API is temporarily overloaded. Please try again in a moment.'
+        };
+    }
+    // Cloudflare errors (520-527)
+    if (status >= 520 && status <= 527) {
+        return {
+            type: 'cloudflare', retryable: true,
+            userMessage: 'Claude API is temporarily unreachable. Retrying...'
+        };
+    }
+    // Other server errors
+    if (status >= 500 && status < 600) {
+        return {
+            type: 'server', retryable: true,
+            userMessage: 'Claude API is temporarily unavailable. Retrying...'
+        };
+    }
+    // BAT-289: Include actual API error reason so users can diagnose without device logs
+    // Sanitize reason to prevent markdown injection in Telegram messages
+    const rawReason = data?.error?.message || '';
+    const reason = rawReason.replace(/[*_`\[\]()~>#+\-=|{}.!]/g, '').slice(0, 200);
+    return {
+        type: 'unknown', retryable: false,
+        userMessage: reason.trim()
+            ? `API error (${status}): ${reason.trim()}`
+            : `Unexpected API error (${status}). Please try again.`
+    };
 }
 
+// BAT-253: Classify network-level errors into user-friendly messages
 function classifyNetworkError(err) {
-    return getAdapter(PROVIDER).classifyNetworkError(err);
+    const raw = err.message || String(err);
+    if (err.code === 'SESSION_EXPIRED') {
+        return { type: 'session_expired', userMessage: 'Your session has expired. Please re-pair with Settings.' };
+    }
+    if (err.timeoutSource === 'transport' || /timeout/i.test(raw)) {
+        return { type: 'timeout', userMessage: 'The AI took too long to respond. Please try again.' };
+    }
+    if (/ENOTFOUND|EAI_AGAIN/i.test(raw)) {
+        return { type: 'dns', userMessage: 'Cannot reach the AI service — check your internet connection.' };
+    }
+    if (/ECONNREFUSED|ECONNRESET|EPIPE/i.test(raw)) {
+        return { type: 'connection', userMessage: 'Connection to the AI service was lost. Please try again.' };
+    }
+    return { type: 'network', userMessage: 'A network error occurred. Please try again.' };
 }
 
 async function claudeApiCall(body, chatId, traceCtx = {}) {
@@ -972,15 +1044,10 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
     }
 
     try {
-        // BAT-315: Provider-agnostic API call — adapter handles endpoint, headers, streaming
-        const adapter = getAdapter(PROVIDER);
-        const apiKey = PROVIDER === 'openai' ? OPENAI_KEY : ANTHROPIC_KEY;
-        const headers = adapter.buildHeaders(apiKey, AUTH_TYPE);
-
-        // Select streaming function based on provider protocol
-        const streamFn = (adapter.streamProtocol === 'openai' || adapter.streamProtocol === 'openai-responses')
-            ? httpOpenAIStreamingRequest
-            : httpStreamingRequest;
+        // Setup tokens (OAuth) use Bearer auth; regular API keys use x-api-key
+        const authHeaders = AUTH_TYPE === 'setup_token'
+            ? { 'Authorization': `Bearer ${ANTHROPIC_KEY}` }
+            : { 'x-api-key': ANTHROPIC_KEY };
 
         let res;
         let retries = 0;
@@ -991,11 +1058,20 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
             let timeoutSource = null;
 
             try {
-                res = await streamFn({
-                    hostname: adapter.endpoint.hostname,
-                    path: adapter.endpoint.path,
+                // BAT-259: Use streaming to eliminate transport timeouts —
+                // SSE events reset the socket idle timer every few seconds.
+                res = await httpStreamingRequest({
+                    hostname: 'api.anthropic.com',
+                    path: '/v1/messages',
                     method: 'POST',
-                    headers,
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'anthropic-version': '2023-06-01',
+                        'anthropic-beta': AUTH_TYPE === 'setup_token'
+                            ? 'prompt-caching-2024-07-31,oauth-2025-04-20'
+                            : 'prompt-caching-2024-07-31',
+                        ...authHeaders,
+                    }
                 }, body);
             } catch (networkErr) {
                 const attemptEnd = Date.now();
@@ -1143,17 +1219,25 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
             }
         }
 
-        // BAT-315: Provider-agnostic rate limit header parsing
+        // Capture rate limit headers and update module-level tracking
         if (res.headers) {
-            const rl = adapter.parseRateLimitHeaders(res.headers);
-            lastRateLimitTokensRemaining = rl.tokensRemaining;
-            lastRateLimitTokensReset = rl.tokensReset;
+            const h = res.headers;
+            const parsedRemaining = parseInt(h['anthropic-ratelimit-tokens-remaining'], 10);
+            lastRateLimitTokensRemaining = Number.isFinite(parsedRemaining) ? parsedRemaining : Infinity;
+            lastRateLimitTokensReset = h['anthropic-ratelimit-tokens-reset'] || '';
             writeClaudeUsageState({
                 type: 'api_key',
                 auth_mode: AUTH_TYPE,
-                provider: PROVIDER,
-                requests: rl.requests || {},
-                tokens: rl.tokens || {},
+                requests: {
+                    limit: parseInt(h['anthropic-ratelimit-requests-limit']) || 0,
+                    remaining: parseInt(h['anthropic-ratelimit-requests-remaining']) || 0,
+                    reset: h['anthropic-ratelimit-requests-reset'] || '',
+                },
+                tokens: {
+                    limit: parseInt(h['anthropic-ratelimit-tokens-limit']) || 0,
+                    remaining: parseInt(h['anthropic-ratelimit-tokens-remaining']) || 0,
+                    reset: h['anthropic-ratelimit-tokens-reset'] || '',
+                },
                 updated_at: localTimestamp(),
             });
         }
@@ -1173,59 +1257,28 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
 // BAT-246: Diagnostic counters for sanitizer health tracking
 const sanitizerStats = { invocations: 0, totalStripped: 0 };
 
-// BAT-315: Fix orphaned tool calls/results in both NEUTRAL and CLAUDE-NATIVE formats.
-// Neutral: assistant.toolCalls[] + role:'tool' messages (OpenAI adapter)
-// Claude-native: assistant.content[tool_use] + user.content[tool_result] (legacy checkpoints)
+// Fix orphaned tool_use/tool_result blocks that cause Claude API 400 errors.
+// This can happen when a tool execution throws or times out — the assistant's
+// tool_use message is already in history but the matching tool_result never arrives.
 function sanitizeConversation(messages, turnId) {
     sanitizerStats.invocations++;
     let stripped = 0;
-    const orphanDetails = [];
+    const orphanDetails = []; // BAT-243: collect details for correlation logging
 
-    // Pass 1a: fix assistant messages with toolCalls (neutral) missing matching tool results
-    for (let i = messages.length - 1; i >= 0; i--) {
-        const msg = messages[i];
-        if (msg.role !== 'assistant' || !msg.toolCalls || msg.toolCalls.length === 0) continue;
-
-        const toolCallIds = new Set(msg.toolCalls.map(tc => tc.id));
-
-        // Collect matched IDs from subsequent tool result messages
-        const matchedIds = new Set();
-        for (let j = i + 1; j < messages.length; j++) {
-            const next = messages[j];
-            if (next.role === 'tool' && toolCallIds.has(next.toolCallId)) {
-                matchedIds.add(next.toolCallId);
-            } else if (next.role !== 'tool') {
-                break;
-            }
-        }
-        if (matchedIds.size === toolCallIds.size) continue;
-
-        const orphanedIds = new Set([...toolCallIds].filter(id => !matchedIds.has(id)));
-        for (const tc of msg.toolCalls) {
-            if (orphanedIds.has(tc.id)) {
-                orphanDetails.push({ type: 'tool_call', id: tc.id, tool: tc.name, msgIndex: i });
-            }
-        }
-        msg.toolCalls = msg.toolCalls.filter(tc => !orphanedIds.has(tc.id));
-        stripped += orphanedIds.size;
-
-        if (!msg.content && (!msg.toolCalls || msg.toolCalls.length === 0)) {
-            messages.splice(i, 1);
-        }
-    }
-
-    // Pass 1b: fix assistant messages with tool_use blocks (Claude-native) missing matching tool_result
+    // Pass 1: fix assistant messages with tool_use blocks missing matching tool_results
     for (let i = messages.length - 1; i >= 0; i--) {
         const msg = messages[i];
         if (msg.role !== 'assistant' || !Array.isArray(msg.content)) continue;
-        const toolUseBlocks = msg.content.filter(b => b.type === 'tool_use');
-        if (toolUseBlocks.length === 0) continue;
 
-        const toolUseIds = new Set(toolUseBlocks.map(b => b.id));
-        const matchedIds = new Set();
+        const toolUseIds = new Set();
+        for (const b of msg.content) {
+            if (b.type === 'tool_use') toolUseIds.add(b.id);
+        }
+        if (toolUseIds.size === 0) continue;
 
-        // Next message should be user with tool_result blocks
+        // Collect matched IDs from the next message
         const next = messages[i + 1];
+        const matchedIds = new Set();
         if (next && next.role === 'user' && Array.isArray(next.content)) {
             for (const b of next.content) {
                 if (b.type === 'tool_result' && toolUseIds.has(b.tool_use_id)) {
@@ -1233,15 +1286,16 @@ function sanitizeConversation(messages, turnId) {
                 }
             }
         }
-        if (matchedIds.size === toolUseIds.size) continue;
+        if (matchedIds.size === toolUseIds.size) continue; // all matched
 
+        // Strip orphaned tool_use blocks
         const orphanedIds = new Set([...toolUseIds].filter(id => !matchedIds.has(id)));
-        for (const b of toolUseBlocks) {
-            if (orphanedIds.has(b.id)) {
+        for (const b of msg.content) {
+            if (b.type === 'tool_use' && orphanedIds.has(b.id)) {
                 orphanDetails.push({ type: 'tool_use', id: b.id, tool: b.name, msgIndex: i });
             }
         }
-        msg.content = msg.content.filter(b => b.type !== 'tool_use' || !orphanedIds.has(b.id));
+        msg.content = msg.content.filter(b => !(b.type === 'tool_use' && orphanedIds.has(b.id)));
         stripped += orphanedIds.size;
 
         if (msg.content.length === 0) {
@@ -1249,53 +1303,35 @@ function sanitizeConversation(messages, turnId) {
         }
     }
 
-    // Pass 2a: fix orphaned tool result messages (role:'tool', neutral) missing matching toolCalls
-    for (let i = messages.length - 1; i >= 0; i--) {
-        const msg = messages[i];
-        if (msg.role !== 'tool' || !msg.toolCallId) continue;
-
-        let hasMatch = false;
-        for (let k = i - 1; k >= 0; k--) {
-            const candidate = messages[k];
-            if (candidate.role === 'tool') continue;
-            if (candidate.role === 'assistant' && candidate.toolCalls) {
-                hasMatch = candidate.toolCalls.some(tc => tc.id === msg.toolCallId);
-            }
-            break;
-        }
-
-        if (hasMatch) continue;
-
-        orphanDetails.push({ type: 'tool_result', id: msg.toolCallId, msgIndex: i });
-        messages.splice(i, 1);
-        stripped++;
-    }
-
-    // Pass 2b: fix orphaned tool_result blocks (Claude-native) in user messages
+    // Pass 2: fix user messages with tool_result blocks missing matching tool_use
     for (let i = messages.length - 1; i >= 0; i--) {
         const msg = messages[i];
         if (msg.role !== 'user' || !Array.isArray(msg.content)) continue;
-        const toolResults = msg.content.filter(b => b.type === 'tool_result');
-        if (toolResults.length === 0) continue;
 
-        // Previous message should be assistant with matching tool_use blocks
+        const resultIds = [];
+        for (const b of msg.content) {
+            if (b.type === 'tool_result') resultIds.push(b.tool_use_id);
+        }
+        if (resultIds.length === 0) continue;
+
+        // Collect tool_use IDs from the previous message
         const prev = messages[i - 1];
-        const prevToolUseIds = new Set();
+        const prevIds = new Set();
         if (prev && prev.role === 'assistant' && Array.isArray(prev.content)) {
             for (const b of prev.content) {
-                if (b.type === 'tool_use') prevToolUseIds.add(b.id);
+                if (b.type === 'tool_use') prevIds.add(b.id);
             }
         }
 
-        let removedCount = 0;
-        msg.content = msg.content.filter(b => {
-            if (b.type !== 'tool_result') return true;
-            if (prevToolUseIds.has(b.tool_use_id)) return true;
-            orphanDetails.push({ type: 'tool_result_block', id: b.tool_use_id, msgIndex: i });
-            removedCount++;
-            return false;
-        });
-        stripped += removedCount;
+        const orphaned = resultIds.filter(id => !prevIds.has(id));
+        if (orphaned.length === 0) continue;
+
+        const orphanedSet = new Set(orphaned);
+        for (const id of orphaned) {
+            orphanDetails.push({ type: 'tool_result', id, msgIndex: i });
+        }
+        msg.content = msg.content.filter(b => !(b.type === 'tool_result' && orphanedSet.has(b.tool_use_id)));
+        stripped += orphaned.length;
 
         if (msg.content.length === 0) {
             messages.splice(i, 1);
@@ -1333,28 +1369,36 @@ function ageToolResults(messages, turnId) {
 
     for (let i = 0; i < recentBoundary; i++) {
         const msg = messages[i];
-        // Neutral format: tool results are {role:'tool', toolCallId, content}
-        if (msg.role !== 'tool') continue;
+        if (msg.role !== 'user' || !Array.isArray(msg.content)) continue;
 
-        const contentLen = typeof msg.content === 'string' ? msg.content.length : 0;
-        if (contentLen <= AGING_SIZE_THRESHOLD) continue;
+        for (let j = 0; j < msg.content.length; j++) {
+            const block = msg.content[j];
+            if (block.type !== 'tool_result') continue;
 
-        // Resolve tool name from preceding assistant message's toolCalls
-        let toolName = 'unknown';
-        for (let k = i - 1; k >= 0; k--) {
-            const prev = messages[k];
-            if (prev.role === 'tool') continue; // skip sibling tool results
-            if (prev.role === 'assistant' && prev.toolCalls) {
-                const match = prev.toolCalls.find(tc => tc.id === msg.toolCallId);
-                if (match) toolName = match.name;
+            let contentLen = 0;
+            if (typeof block.content === 'string') {
+                contentLen = block.content.length;
+            } else if (Array.isArray(block.content)) {
+                contentLen = block.content.reduce((sum, c) =>
+                    sum + (c.type === 'text' ? (c.text || '').length : 0), 0);
             }
-            break;
-        }
+            if (contentLen <= AGING_SIZE_THRESHOLD) continue;
 
-        const placeholder = `[Trimmed: ${toolName} result — ${contentLen} chars]`;
-        bytesSaved += contentLen - placeholder.length;
-        msg.content = placeholder;
-        aged++;
+            // Resolve tool name from preceding assistant message
+            let toolName = 'unknown';
+            if (i > 0) {
+                const prev = messages[i - 1];
+                if (prev && prev.role === 'assistant' && Array.isArray(prev.content)) {
+                    const match = prev.content.find(b => b.type === 'tool_use' && b.id === block.tool_use_id);
+                    if (match) toolName = match.name;
+                }
+            }
+
+            const placeholder = `[Trimmed: ${toolName} result — ${contentLen} chars]`;
+            bytesSaved += contentLen - placeholder.length;
+            block.content = placeholder;
+            aged++;
+        }
     }
 
     if (aged > 0) {
@@ -1420,11 +1464,13 @@ async function chat(chatId, userMessage, options = {}) {
         log(`[Resume] Injected system prompt resume directive for turn ${turnId}${options.originalGoal ? ` goal="${options.originalGoal.slice(0, 80)}"` : ''}`, 'DEBUG');
     }
 
-    // BAT-315: Provider-agnostic system prompt formatting
-    const adapter = getAdapter(PROVIDER);
-    const systemBlocks = adapter.formatSystemPrompt(stablePrompt, dynamicPrompt + resumeBlock);
+    // Two system blocks: large stable block (cached) + small dynamic block (per-request)
+    const systemBlocks = [
+        { type: 'text', text: stablePrompt, cache_control: { type: 'ephemeral' } },
+        { type: 'text', text: dynamicPrompt + resumeBlock },
+    ];
 
-    // Add user message to history (neutral format)
+    // Add user message to history
     addToConversation(chatId, 'user', userMessage);
 
     const messages = getConversation(chatId);
@@ -1448,18 +1494,30 @@ async function chat(chatId, userMessage, options = {}) {
             // BAT-259: Age old tool results to reduce payload bloat
             ageToolResults(messages, turnId);
 
-            // BAT-315: Provider-agnostic tool formatting + request body building
+            // BAT-259: Prompt caching for tools — cache_control on last tool
+            // so Anthropic caches all 56+ tool schemas after the first call.
+            // Shallow-clone last tool to avoid mutating shared TOOLS array.
             const rawTools = _deps.getTools ? _deps.getTools() : [];
-            const formattedTools = adapter.formatTools(rawTools);
+            if (rawTools.length > 0) {
+                rawTools[rawTools.length - 1] = {
+                    ...rawTools[rawTools.length - 1],
+                    cache_control: { type: 'ephemeral' }
+                };
+            }
 
-            // Convert neutral messages to provider API format for the request
-            const apiMessages = adapter.toApiMessages(messages);
-            const body = adapter.formatRequest(MODEL, 4096, systemBlocks, apiMessages, formattedTools);
+            const body = JSON.stringify({
+                model: MODEL,
+                max_tokens: 4096,
+                stream: true,
+                system: systemBlocks,
+                tools: rawTools,
+                messages: messages
+            });
 
             const res = await claudeApiCall(body, chatId, { turnId, iteration: toolUseCount });
 
             if (res.status !== 200) {
-                log(`API error: ${res.status} - ${JSON.stringify(res.data)}`, 'ERROR');
+                log(`Claude API error: ${res.status} - ${JSON.stringify(res.data)}`, 'ERROR');
                 const errClass = classifyApiError(res.status, res.data);
                 const userText = errClass.userMessage || `API error: ${res.status}`;
                 log(`[OutputPath] ${JSON.stringify({
@@ -1471,32 +1529,28 @@ async function chat(chatId, userMessage, options = {}) {
                 throw httpErr;
             }
 
-            // BAT-315: Parse response through adapter into neutral format
-            const parsed = adapter.fromApiResponse(res.data);
-            // Keep raw response for fallback text extraction later
             response = res.data;
-            response._parsed = parsed;
 
+            // Check if we need to handle tool use
+            const toolUses = response.content.filter(c => c.type === 'tool_use');
 
-            if (parsed.toolCalls.length === 0) {
+            if (toolUses.length === 0) {
+                // No tool use, we're done
                 break;
             }
 
             // Execute tools and add results
             toolUseCount++;
 
-            // Add assistant's response to history in neutral format
-            messages.push({
-                role: 'assistant',
-                content: parsed.text || '',
-                toolCalls: parsed.toolCalls,
-            });
+            // Add assistant's response with tool use to history
+            messages.push({ role: 'assistant', content: response.content });
 
             // Execute each tool and collect results
             // BAT-246: Each tool execution is individually guarded — if one tool throws,
-            // the others still run and ALL tool calls get matching tool result entries.
+            // the others still run and ALL tool_use blocks get matching tool_result entries.
+            // This prevents orphaned pairs from partial tool execution failures.
             const toolResults = [];
-            for (const toolUse of parsed.toolCalls) {
+            for (const toolUse of toolUses) {
                 // OpenClaw parity: normalize tool name before ALL gating checks
                 // (prevents whitespace-padded names from bypassing confirmation/rate-limit gates)
                 if (typeof toolUse.name === 'string') toolUse.name = toolUse.name.trim();
@@ -1556,32 +1610,15 @@ async function chat(chatId, userMessage, options = {}) {
                     result = { ok: true, result };
                 }
 
-                // BAT-315: Neutral tool result format
                 toolResults.push({
-                    role: 'tool',
-                    toolCallId: toolUse.id,
-                    content: truncateToolResult(JSON.stringify(result)),
+                    type: 'tool_result',
+                    tool_use_id: toolUse.id,
+                    content: truncateToolResult(JSON.stringify(result))
                 });
             }
 
-            // Add tool results to history in neutral format — one message per result
-            for (const tr of toolResults) {
-                messages.push(tr);
-            }
-
-            // Enforce MAX_HISTORY cap after tool round — trim from the front but never
-            // orphan a tool-call/result pair (skip past assistant+tool groups)
-            while (messages.length > MAX_HISTORY) {
-                const first = messages[0];
-                messages.shift();
-                // If we removed an assistant with toolCalls, also remove its tool results
-                if (first.role === 'assistant' && first.toolCalls && first.toolCalls.length) {
-                    const ids = new Set(first.toolCalls.map(tc => tc.id));
-                    while (messages.length && messages[0].role === 'tool' && ids.has(messages[0].toolCallId)) {
-                        messages.shift();
-                    }
-                }
-            }
+            // Add tool results to history — always pushed, even if some tools errored
+            messages.push({ role: 'user', content: toolResults });
 
             // Status reaction: back to thinking before next Claude API call
             if (options.statusReaction) options.statusReaction.setThinking();
@@ -1604,9 +1641,8 @@ async function chat(chatId, userMessage, options = {}) {
             }
         }
 
-        // Extract text response from parsed result
-        const parsed = response._parsed || adapter.fromApiResponse(response);
-        let textContent = parsed.text ? { text: parsed.text } : null;
+        // Extract text response
+        let textContent = response.content.find(c => c.type === 'text');
 
         // Budget exhaustion explicit handling
         if (toolUseCount >= MAX_TOOL_USES) {
@@ -1659,35 +1695,41 @@ async function chat(chatId, userMessage, options = {}) {
             log('No text in final tool response, requesting summary...', 'DEBUG');
 
             // Add explicit summary prompt — without this, the model may return no text
-            // because the last message is tool results and it may not realize it needs to respond
-            const summaryNeutral = [...messages, {
+            // because the last message is tool_results and it may not realize it needs to respond
+            const summaryMessages = [...messages, {
                 role: 'user',
                 content: '[System: All tool operations are complete. Briefly summarize what was done and the results for the user. You MUST respond with text — do not use tools or return empty.]'
             }];
-            const summaryApiMsgs = adapter.toApiMessages(summaryNeutral);
 
-            const summaryRes = await claudeApiCall(
-                adapter.formatRequest(MODEL, 4096, systemBlocks, summaryApiMsgs, []),
-                chatId, { turnId, iteration: toolUseCount + 1 }
-            );
+            const summaryRes = await claudeApiCall(JSON.stringify({
+                model: MODEL,
+                max_tokens: 4096,
+                system: systemBlocks,
+                messages: summaryMessages
+            }), chatId, { turnId, iteration: toolUseCount + 1 });
 
-            if (summaryRes.status === 200) {
-                const summaryParsed = adapter.fromApiResponse(summaryRes.data);
-                if (summaryParsed.text && summaryParsed.text.trim() !== 'SILENT_REPLY') {
-                    textContent = { text: summaryParsed.text };
-                } else if (summaryParsed.text) {
+            if (summaryRes.status === 200 && summaryRes.data.content) {
+                response = summaryRes.data;
+                textContent = response.content.find(c => c.type === 'text');
+                // Guard: if summary returned SILENT_REPLY token, treat as no text
+                // (model may use it because system prompt teaches SILENT_REPLY — but after tools, silence is wrong)
+                if (textContent && textContent.text.trim() === 'SILENT_REPLY') {
                     log('Summary returned SILENT_REPLY token — falling through to fallback', 'DEBUG');
+                    textContent = null;
                 }
             }
 
             // If summary call STILL produced no text, build a basic summary from tool results
+            // so the user is never left without a response after tool execution
             if (!textContent) {
                 log('Summary call also produced no text — building fallback summary', 'DEBUG');
                 const toolNames = [];
                 for (const msg of messages) {
-                    if (msg.role === 'assistant' && msg.toolCalls) {
-                        for (const tc of msg.toolCalls) {
-                            if (!toolNames.includes(tc.name)) toolNames.push(tc.name);
+                    if (msg.role === 'assistant' && Array.isArray(msg.content)) {
+                        for (const block of msg.content) {
+                            if (block.type === 'tool_use' && !toolNames.includes(block.name)) {
+                                toolNames.push(block.name);
+                            }
                         }
                     }
                 }
@@ -1762,14 +1804,13 @@ async function chat(chatId, userMessage, options = {}) {
  */
 function _extractOriginalGoal(messages) {
     for (const msg of messages) {
-        // Skip tool result messages (neutral format: role='tool')
-        if (msg.role === 'tool') continue;
         if (msg.role !== 'user') continue;
         let text = '';
         if (typeof msg.content === 'string') {
             text = msg.content;
         } else if (Array.isArray(msg.content)) {
-            // Vision messages: extract text from content blocks
+            // Skip tool_result messages
+            if (msg.content.some(b => b.type === 'tool_result')) continue;
             const textBlock = msg.content.find(b => b.type === 'text');
             if (textBlock) text = textBlock.text;
         }

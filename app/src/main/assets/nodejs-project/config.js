@@ -100,13 +100,9 @@ function normalizeSecret(val) {
 
 const BOT_TOKEN = normalizeSecret(config.botToken);
 let OWNER_ID = config.ownerId ? String(config.ownerId).trim() : '';
-const _SUPPORTED_PROVIDERS = new Set(['claude', 'openai']);
-const _rawProvider = (typeof config.provider === 'string' && config.provider.trim()) ? config.provider.trim().toLowerCase() : 'claude';
-const PROVIDER = _SUPPORTED_PROVIDERS.has(_rawProvider) ? _rawProvider : 'claude';
 const ANTHROPIC_KEY = normalizeSecret(config.anthropicApiKey);
-const OPENAI_KEY = normalizeSecret(config.openaiApiKey || '');
 const AUTH_TYPE = config.authType || 'api_key';
-const MODEL = config.model || (PROVIDER === 'openai' ? 'gpt-5.2' : 'claude-opus-4-6');
+const MODEL = config.model || 'claude-opus-4-6';
 const AGENT_NAME = config.agentName || 'SeekerClaw';
 let BRIDGE_TOKEN = normalizeSecret(config.bridgeToken || '');
 const USER_AGENT = 'SeekerClaw/1.0 (Android; +https://seekerclaw.com)';
@@ -156,11 +152,8 @@ const MCP_SERVERS = (config.mcpServers || [])
     })
     .filter((server) => server && typeof server === 'object' && server.url);
 
-// Validate: bot token always required; API key required for active provider only
-const _activeKey = PROVIDER === 'openai' ? OPENAI_KEY : ANTHROPIC_KEY;
-if (!BOT_TOKEN || !_activeKey) {
-    const keyName = PROVIDER === 'openai' ? 'openaiApiKey' : 'anthropicApiKey';
-    log(`ERROR: Missing required config (botToken, ${keyName}) for provider "${PROVIDER}"`, 'ERROR');
+if (!BOT_TOKEN || !ANTHROPIC_KEY) {
+    log('ERROR: Missing required config (botToken, anthropicApiKey)', 'ERROR');
     process.exit(1);
 }
 
@@ -170,8 +163,8 @@ if (!OWNER_ID) {
     log('WARNING: Owner ID not set — first inbound message will claim ownership. ' +
         'This is expected on first run; use the Android setup flow to set or reset the owner.', 'WARN');
 } else {
-    const authLabel = PROVIDER === 'openai' ? 'api-key' : (AUTH_TYPE === 'setup_token' ? 'setup-token' : 'api-key');
-    log(`Agent: ${AGENT_NAME} | Provider: ${PROVIDER} | Model: ${MODEL} | Auth: ${authLabel} | Owner: ${OWNER_ID}`, 'DEBUG');
+    const authLabel = AUTH_TYPE === 'setup_token' ? 'setup-token' : 'api-key';
+    log(`Agent: ${AGENT_NAME} | Model: ${MODEL} | Auth: ${authLabel} | Owner: ${OWNER_ID}`, 'DEBUG');
 }
 
 // ============================================================================
@@ -354,9 +347,7 @@ module.exports = {
 
     // Primary constants
     BOT_TOKEN,
-    PROVIDER,
     ANTHROPIC_KEY,
-    OPENAI_KEY,
     AUTH_TYPE,
     MODEL,
     AGENT_NAME,

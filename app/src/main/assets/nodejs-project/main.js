@@ -8,7 +8,7 @@ const fs = require('fs');
 // ============================================================================
 
 const {
-    ANTHROPIC_KEY, AUTH_TYPE, MODEL, AGENT_NAME, PROVIDER,
+    ANTHROPIC_KEY, AUTH_TYPE, MODEL, AGENT_NAME,
     MCP_SERVERS, REACTION_NOTIFICATIONS,
     MEMORY_DIR,
     localTimestamp, log, setRedactFn,
@@ -1085,7 +1085,7 @@ let _usagePollFailCount = 0;
 const USAGE_POLL_MAX_FAILURES = 3;
 
 function startClaudeUsagePolling() {
-    if (PROVIDER !== 'claude' || AUTH_TYPE !== 'setup_token') return;
+    if (AUTH_TYPE !== 'setup_token') return;
     log('Starting Claude usage polling (60s interval)', 'DEBUG');
     pollClaudeUsage();
     _usagePollTimer = setInterval(pollClaudeUsage, 60000);
@@ -1159,7 +1159,7 @@ telegram('getMe')
             // Condensed startup banner (Phase 4 — single INFO line replaces 10+ verbose startup lines)
             const _skillCount = loadSkills().length;
             const _cronCount = cronService.store?.jobs?.length || 0;
-            log(`${AGENT_NAME} | ${PROVIDER}/${MODEL} | @${result.result.username} | ${_skillCount} skills | ${MCP_SERVERS.length} MCP | ${_cronCount} cron`, 'INFO');
+            log(`${AGENT_NAME} | ${MODEL} | @${result.result.username} | ${_skillCount} skills | ${MCP_SERVERS.length} MCP | ${_cronCount} cron`, 'INFO');
 
             // Initialize SQL.js database before polling (non-fatal if WASM fails)
             await initDatabase();
