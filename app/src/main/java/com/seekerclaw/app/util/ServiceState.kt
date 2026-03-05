@@ -344,7 +344,7 @@ object ServiceState {
 
     private fun readApiUsageFile() {
         val parent = stateFile?.parentFile ?: return
-        val file = File(parent, "workspace/claude_usage_state")
+        val file = File(parent, "workspace/api_usage_state")
         try {
             if (!file.exists()) return
             val json = JSONObject(file.readText())

@@ -395,7 +395,7 @@ function getDbSummary() {
     return summary;
 }
 
-// Write DB summary to file for cross-process UI access (like claude_usage_state)
+// Write DB summary to file for cross-process UI access (like api_usage_state)
 let dbSummaryDirty = false;
 function writeDbSummaryFile() {
     dbSummaryDirty = false;

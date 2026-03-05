@@ -124,7 +124,7 @@ const {
     conversations, getConversation, addToConversation, clearConversation,
     sessionTracking,
     saveSessionSummary, MIN_MESSAGES_FOR_SUMMARY, IDLE_TIMEOUT_MS,
-    writeAgentHealthFile, writeClaudeUsageState,
+    writeAgentHealthFile, writeApiUsageState,
     setChatDeps,
     getActiveTask, clearActiveTask,
 } = require('./claude');
@@ -1105,7 +1105,7 @@ async function pollClaudeUsage() {
 
         if (res.status === 200 && res.data) {
             _usagePollFailCount = 0;
-            writeClaudeUsageState({
+            writeApiUsageState({
                 type: 'oauth',
                 five_hour: {
                     utilization: res.data.five_hour?.utilization || 0,
@@ -1131,7 +1131,7 @@ async function pollClaudeUsage() {
             } else {
                 log(`Claude usage poll: HTTP ${res.status}`, 'DEBUG');
             }
-            writeClaudeUsageState({
+            writeApiUsageState({
                 type: 'oauth',
                 error: `HTTP ${res.status}`,
                 updated_at: localTimestamp(),

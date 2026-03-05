@@ -91,16 +91,16 @@ async function visionAnalyzeImage(imageBase64, prompt, maxTokens = 400) {
 }
 
 // ============================================================================
-// CLAUDE USAGE STATE
+// API USAGE STATE
 // ============================================================================
 
-const CLAUDE_USAGE_FILE = path.join(workDir, 'claude_usage_state');
+const API_USAGE_FILE = path.join(workDir, 'api_usage_state');
 
-function writeClaudeUsageState(data) {
+function writeApiUsageState(data) {
     try {
-        fs.writeFileSync(CLAUDE_USAGE_FILE, JSON.stringify(data));
+        fs.writeFileSync(API_USAGE_FILE, JSON.stringify(data));
     } catch (e) {
-        log(`Failed to write claude usage state: ${e.message}`, 'WARN');
+        log(`Failed to write API usage state: ${e.message}`, 'WARN');
     }
 }
 
@@ -1153,7 +1153,7 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
             const rl = adapter.parseRateLimitHeaders(res.headers);
             lastRateLimitTokensRemaining = rl.tokensRemaining;
             lastRateLimitTokensReset = rl.tokensReset;
-            writeClaudeUsageState({
+            writeApiUsageState({
                 type: 'api_key',
                 auth_mode: AUTH_TYPE,
                 provider: PROVIDER,
@@ -1798,7 +1798,7 @@ module.exports = {
     sessionTracking, saveSessionSummary,
     MIN_MESSAGES_FOR_SUMMARY, IDLE_TIMEOUT_MS,
     // Health
-    writeAgentHealthFile, writeClaudeUsageState,
+    writeAgentHealthFile, writeApiUsageState,
     // Session expiry
     isSessionExpired: () => _sessionExpired,
     resetSessionExpiry: () => {
