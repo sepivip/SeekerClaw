@@ -298,15 +298,26 @@ const TOOL_STATUS_MAP = {
 // These get priority — agent_settings.json keys never overwrite them.
 const _knownKeyMap = { perplexity: 'perplexityApiKey', brave: 'braveApiKey', jupiter: 'jupiterApiKey' };
 
-// Snapshot which keys came from Android Settings at startup (immutable)
+// Snapshot which keys came from Android Settings at startup (immutable).
+// Protect ALL existing *ApiKey fields, not just known ones.
 const _androidKeys = {};
-for (const [, configField] of Object.entries(_knownKeyMap)) {
-    if (config[configField]) _androidKeys[configField] = true;
+for (const key of Object.keys(config)) {
+    if (key.endsWith('ApiKey') && config[key]) _androidKeys[key] = true;
+}
+
+// Normalize service name to lowerCamelCase to align with envToCamelCase in skills.js.
+// "dune" → "dune", "DUNE" → "dune", "dune_analytics" → "duneAnalytics"
+function normalizeService(service) {
+    if (!service) return '';
+    return String(service).trim()
+        .replace(/[^A-Za-z0-9]+/g, ' ').split(' ').filter(Boolean)
+        .map((p, i) => i === 0 ? p.toLowerCase() : p.charAt(0).toUpperCase() + p.slice(1).toLowerCase())
+        .join('');
 }
 
 // Convert service name to config field: "dune" → "duneApiKey", "brave" → "braveApiKey"
 function serviceToConfigField(service) {
-    return _knownKeyMap[service] || `${service}ApiKey`;
+    return _knownKeyMap[service] || `${normalizeService(service)}ApiKey`;
 }
 
 function syncAgentApiKeys() {
