@@ -15,7 +15,7 @@ data class ProviderInfo(
 val availableProviders = listOf(
     ProviderInfo(
         id = "claude",
-        displayName = "Claude",
+        displayName = "Anthropic",
         authTypes = listOf("api_key", "setup_token"),
         keyHint = "sk-ant-api03-…",
         consoleUrl = "https://console.anthropic.com",
