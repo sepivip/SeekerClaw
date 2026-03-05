@@ -37,6 +37,8 @@ data class AppConfig(
     val jupiterApiKey: String = "",
     val autoStartOnBoot: Boolean = true,
     val heartbeatIntervalMinutes: Int = 30,
+    val provider: String = "claude", // "claude" or "openai"
+    val openaiApiKey: String = "",
 ) {
     /** Anthropic/authType-based credential — used by SetupScreen and legacy flows. */
     val activeCredential: String
@@ -73,6 +75,8 @@ object ConfigManager {
     private const val KEY_WALLET_LABEL = "wallet_label"
     private const val KEY_MCP_SERVERS_ENC = "mcp_servers_enc"
     private const val KEY_HEARTBEAT_INTERVAL = "heartbeat_interval"
+    private const val KEY_PROVIDER = "provider"
+    private const val KEY_OPENAI_API_KEY_ENC = "openai_api_key_enc"
 
     private fun prefs(context: Context): SharedPreferences =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -121,6 +125,15 @@ object ConfigManager {
             editor.putString(KEY_JUPITER_API_KEY_ENC, Base64.encodeToString(encJupiter, Base64.NO_WRAP))
         } else {
             editor.remove(KEY_JUPITER_API_KEY_ENC)
+        }
+
+        editor.putString(KEY_PROVIDER, config.provider)
+
+        if (config.openaiApiKey.isNotBlank()) {
+            val encOpenai = KeystoreHelper.encrypt(config.openaiApiKey)
+            editor.putString(KEY_OPENAI_API_KEY_ENC, Base64.encodeToString(encOpenai, Base64.NO_WRAP))
+        } else {
+            editor.remove(KEY_OPENAI_API_KEY_ENC)
         }
 
         val persisted = editor.commit()
@@ -180,6 +193,15 @@ object ConfigManager {
             ""
         }
 
+        val openaiApiKey = try {
+            val enc = p.getString(KEY_OPENAI_API_KEY_ENC, null)
+            if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to decrypt OpenAI API key", e)
+            LogCollector.append("[Config] Failed to decrypt OpenAI API key: ${e.javaClass.simpleName}", LogLevel.ERROR)
+            ""
+        }
+
         return AppConfig(
             anthropicApiKey = apiKey,
             setupToken = setupToken,
@@ -192,6 +214,8 @@ object ConfigManager {
             jupiterApiKey = jupiterApiKey,
             autoStartOnBoot = p.getBoolean(KEY_AUTO_START, true),
             heartbeatIntervalMinutes = p.getInt(KEY_HEARTBEAT_INTERVAL, 30),
+            provider = p.getString(KEY_PROVIDER, "claude") ?: "claude",
+            openaiApiKey = openaiApiKey,
         )
     }
 
@@ -224,6 +248,8 @@ object ConfigManager {
             "heartbeatIntervalMinutes" -> config.copy(
                 heartbeatIntervalMinutes = value.toIntOrNull()?.coerceIn(5, 120) ?: 30
             )
+            "provider" -> config.copy(provider = value)
+            "openaiApiKey" -> config.copy(openaiApiKey = value)
             else -> return
         }
         saveConfig(context, updated)
@@ -272,7 +298,8 @@ object ConfigManager {
             return
         }
         val workspaceDir = File(context.filesDir, "workspace").apply { mkdirs() }
-        val credential = escapeJson(config.activeCredential)
+        // Provider-aware: only write anthropicApiKey when it's the active provider's credential
+        val credential = if (config.provider == "openai") "" else escapeJson(config.activeCredential)
         val braveField = if (config.braveApiKey.isNotBlank()) {
             """,
             |  "braveApiKey": "${escapeJson(config.braveApiKey)}""""
@@ -297,16 +324,21 @@ object ConfigManager {
             """,
             |  "mcpServers": ${arr}"""
         } else ""
+        val openaiField = if (config.openaiApiKey.isNotBlank()) {
+            """,
+            |  "openaiApiKey": "${escapeJson(config.openaiApiKey)}""""
+        } else ""
         val json = """
             |{
             |  "botToken": "${escapeJson(config.telegramBotToken)}",
             |  "ownerId": "${escapeJson(config.telegramOwnerId)}",
             |  "anthropicApiKey": "$credential",
             |  "authType": "${escapeJson(config.authType)}",
+            |  "provider": "${escapeJson(config.provider)}",
             |  "model": "${escapeJson(config.model)}",
             |  "agentName": "${escapeJson(config.agentName)}",
             |  "heartbeatIntervalMinutes": ${config.heartbeatIntervalMinutes},
-            |  "bridgeToken": "${escapeJson(bridgeToken)}"$braveField$jupiterField$mcpField
+            |  "bridgeToken": "${escapeJson(bridgeToken)}"$braveField$jupiterField$openaiField$mcpField
             |}
         """.trimMargin()
         File(workspaceDir, "config.json").writeText(json)
@@ -342,15 +374,19 @@ object ConfigManager {
     fun runtimeValidationError(config: AppConfig?): String? {
         if (config == null) return "setup_not_complete"
         if (config.telegramBotToken.isBlank()) return "missing_bot_token"
-        if (config.activeCredential.isBlank()) return "missing_credential"
+        val hasCredential = when (config.provider) {
+            "openai" -> config.openaiApiKey.isNotBlank()
+            else -> config.activeCredential.isNotBlank()
+        }
+        if (!hasCredential) return "missing_credential"
         return null
     }
 
     fun redactedSnapshot(config: AppConfig?): String {
         if (config == null) return "setup=false"
-        return "setup=true authType=${config.authType} botSet=${config.telegramBotToken.isNotBlank()} " +
+        return "setup=true provider=${config.provider} authType=${config.authType} botSet=${config.telegramBotToken.isNotBlank()} " +
             "apiSet=${config.anthropicApiKey.isNotBlank()} setupTokenSet=${config.setupToken.isNotBlank()} " +
-            "activeSet=${config.activeCredential.isNotBlank()} model=${config.model}"
+            "openaiSet=${config.openaiApiKey.isNotBlank()} activeSet=${config.activeCredential.isNotBlank()} model=${config.model}"
     }
 
     // ==================== Auth Type Detection ====================

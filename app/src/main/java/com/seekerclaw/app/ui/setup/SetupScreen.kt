@@ -217,6 +217,8 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             val existing = ConfigManager.loadConfig(context)
             val config = AppConfig(
                 anthropicApiKey = if (authType == "api_key") trimmedKey else "",
+                openaiApiKey = existing?.openaiApiKey ?: "",
+                provider = "claude",
                 setupToken = if (authType == "setup_token") trimmedKey else "",
                 authType = authType,
                 telegramBotToken = botToken.trim(),

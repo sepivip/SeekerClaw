@@ -208,6 +208,185 @@ function httpStreamingRequest(options, body = null) {
     });
 }
 
+// BAT-315: Streaming HTTP request for OpenAI Responses API — typed SSE events.
+// Responses API uses semantic events: response.output_text.delta, response.completed, etc.
+// Tool call arguments stream via response.function_call_arguments.delta.
+// The response.completed event contains the full authoritative response.
+function httpOpenAIStreamingRequest(options, body = null) {
+    const timeoutMs = options.timeout ?? API_TIMEOUT_MS;
+    const HARD_TIMEOUT_MS = 5 * 60 * 1000;
+
+    return new Promise((resolve, reject) => {
+        let settled = false;
+        const settle = (fn, val) => { if (!settled) { settled = true; fn(val); } };
+
+        let req = null;
+        let hardTimer = null;
+
+        const armHardTimeout = () => {
+            hardTimer = setTimeout(() => {
+                if (req) req.destroy();
+                const err = new Error('Streaming hard timeout (5 min)');
+                err.timeoutSource = 'transport';
+                settle(reject, err);
+            }, HARD_TIMEOUT_MS);
+        };
+
+        try {
+        req = https.request(options, (res) => {
+            const ct = res.headers['content-type'] || '';
+            if (res.statusCode !== 200 || !ct.includes('text/event-stream')) {
+                res.setEncoding('utf8');
+                let data = '';
+                res.on('data', chunk => data += chunk);
+                res.on('end', () => {
+                    clearTimeout(hardTimer);
+                    try {
+                        settle(resolve, { status: res.statusCode, data: JSON.parse(data), headers: res.headers });
+                    } catch (_) {
+                        settle(resolve, { status: res.statusCode, data, headers: res.headers });
+                    }
+                });
+                return;
+            }
+
+            // Responses API SSE accumulators (fallback if stream disconnects)
+            res.setEncoding('utf8');
+            const outputItems = {};  // output_index → item skeleton
+            const textAccum = {};    // "output_index:content_index" → accumulated text
+            const funcArgAccum = {}; // output_index → accumulated arguments string
+            let accumulatedUsage = null;
+            let sseBuffer = '';
+
+            // Build response from accumulated deltas (fallback path)
+            const buildFromAccum = () => {
+                const output = [];
+                const indices = Object.keys(outputItems).map(Number).sort((a, b) => a - b);
+                for (const idx of indices) {
+                    const item = outputItems[idx];
+                    if (item.type === 'message') {
+                        const content = [];
+                        // Collect all text parts for this output index
+                        for (const key of Object.keys(textAccum)) {
+                            if (key.startsWith(`${idx}:`)) {
+                                content.push({ type: 'output_text', text: textAccum[key] });
+                            }
+                        }
+                        output.push({ ...item, content });
+                    } else if (item.type === 'function_call') {
+                        output.push({
+                            ...item,
+                            arguments: funcArgAccum[idx] || item.arguments || '',
+                        });
+                    } else {
+                        output.push(item);
+                    }
+                }
+                return { output, status: 'completed', usage: accumulatedUsage || {} };
+            };
+
+            res.on('data', chunk => {
+                sseBuffer += chunk.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
+                let boundary;
+                while ((boundary = sseBuffer.indexOf('\n\n')) !== -1) {
+                    const raw = sseBuffer.slice(0, boundary);
+                    sseBuffer = sseBuffer.slice(boundary + 2);
+
+                    let eventType = '', eventData = '';
+                    for (const line of raw.split('\n')) {
+                        if (line.startsWith('event:')) eventType = line.slice(6).trim();
+                        else if (line.startsWith('data:')) {
+                            const d = line.slice(5);
+                            eventData += (eventData ? '\n' : '') + (d.startsWith(' ') ? d.slice(1) : d);
+                        }
+                    }
+                    if (!eventData) continue;
+
+                    let parsed;
+                    try { parsed = JSON.parse(eventData); } catch (_) { continue; }
+
+                    switch (eventType) {
+                        case 'response.output_item.added':
+                            if (typeof parsed.output_index === 'number' && parsed.item) {
+                                outputItems[parsed.output_index] = parsed.item;
+                                if (parsed.item.type === 'function_call') {
+                                    funcArgAccum[parsed.output_index] = '';
+                                }
+                            }
+                            break;
+
+                        case 'response.output_text.delta':
+                            if (typeof parsed.output_index === 'number') {
+                                const key = `${parsed.output_index}:${parsed.content_index ?? 0}`;
+                                textAccum[key] = (textAccum[key] || '') + (parsed.delta || '');
+                            }
+                            break;
+
+                        case 'response.function_call_arguments.delta':
+                            if (typeof parsed.output_index === 'number') {
+                                funcArgAccum[parsed.output_index] =
+                                    (funcArgAccum[parsed.output_index] || '') + (parsed.delta || '');
+                            }
+                            break;
+
+                        case 'response.completed':
+                            clearTimeout(hardTimer);
+                            // Authoritative: use the full response object directly
+                            settle(resolve, { status: 200, data: parsed, headers: res.headers });
+                            return;
+
+                        case 'response.incomplete':
+                            clearTimeout(hardTimer);
+                            // Truncated response — use what we have
+                            settle(resolve, { status: 200, data: parsed, headers: res.headers });
+                            return;
+
+                        case 'error':
+                            clearTimeout(hardTimer);
+                            settle(resolve, { status: parsed.code || 500, data: parsed, headers: res.headers });
+                            res.destroy();
+                            return;
+                    }
+
+                    // Track usage from any event that includes it
+                    if (parsed.usage) accumulatedUsage = parsed.usage;
+                }
+            });
+
+            res.on('end', () => {
+                clearTimeout(hardTimer);
+                if (!settled) {
+                    // Stream ended without response.completed — build from accumulated deltas
+                    if (Object.keys(outputItems).length > 0) {
+                        settle(resolve, { status: 200, data: buildFromAccum(), headers: res.headers });
+                    } else {
+                        const err = new Error('Stream ended before response.completed');
+                        err.timeoutSource = 'transport';
+                        settle(reject, err);
+                    }
+                }
+            });
+        });
+
+        armHardTimeout();
+        req.on('error', (err) => { clearTimeout(hardTimer); settle(reject, err); });
+        req.setTimeout(timeoutMs, () => {
+            req.destroy();
+            clearTimeout(hardTimer);
+            const err = new Error('Timeout');
+            err.timeoutSource = 'transport';
+            settle(reject, err);
+        });
+        if (body) req.write(typeof body === 'string' ? body : JSON.stringify(body));
+        req.end();
+        } catch (syncErr) {
+            if (hardTimer) clearTimeout(hardTimer);
+            settle(reject, syncErr);
+        }
+    });
+}
+
 // ============================================================================
 // WEB TOOL UTILITIES
 // ============================================================================
@@ -533,6 +712,7 @@ async function webFetch(urlString, options = {}) {
 module.exports = {
     httpRequest,
     httpStreamingRequest,
+    httpOpenAIStreamingRequest,
     cacheGet,
     cacheSet,
     htmlToMarkdown,
