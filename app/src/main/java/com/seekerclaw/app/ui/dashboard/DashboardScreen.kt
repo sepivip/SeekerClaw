@@ -318,7 +318,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
             val providerName = providerById(config?.provider ?: "claude").displayName
             val bannerText = when (health.lastErrorType) {
                 "auth" -> "API key rejected${health.lastErrorStatus?.let { " ($it)" } ?: ""} \u2014 check Settings"
-                "billing" -> "API billing issue \u2014 check your $providerName console"
+                "billing" -> "API billing issue \u2014 check ${providerById(config?.provider ?: "claude").consoleUrl}"
                 "quota" -> "API quota exceeded \u2014 try again later or upgrade plan"
                 "rate_limit" -> "Rate limited \u2014 retrying automatically"
                 "server", "overloaded" -> "$providerName API temporarily unavailable \u2014 retrying"

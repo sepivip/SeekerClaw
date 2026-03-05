@@ -190,7 +190,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
         if (isStarting) return
         if (apiKey.isBlank()) {
             apiKeyError = "Required"
-            errorMessage = "Anthropic API key is required"
+            errorMessage = "Anthropic credential is required"
             currentStep = 1
             return
         }
@@ -212,8 +212,8 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
         isStarting = true
         try {
             val trimmedKey = apiKey.trim()
-            // Setup flow is Anthropic-only — force provider id to "claude" (the Anthropic provider).
-            // OpenAI provider is configured separately in Settings > Provider.
+            // Setup flow is Anthropic-only — force provider back to the Anthropic provider id ("claude").
+            // OpenAI is configured separately in Settings > Provider.
             val existing = ConfigManager.loadConfig(context)
             val config = AppConfig(
                 anthropicApiKey = if (authType == "api_key") trimmedKey else "",
