@@ -198,10 +198,17 @@ const CHECKPOINT_INTERVAL_MS = 30 * 60 * 1000; // 30 min active chat → checkpo
 const MIN_MESSAGES_FOR_SUMMARY = 3;             // Don't summarize tiny sessions
 
 function getSessionTrack(chatId) {
+    const today = new Date().toISOString().split('T')[0];
     if (!sessionTracking.has(chatId)) {
-        sessionTracking.set(chatId, { lastMessageTime: 0, messageCount: 0, lastSummaryTime: 0, firstMessageTime: 0 });
+        sessionTracking.set(chatId, { lastMessageTime: 0, messageCount: 0, lastSummaryTime: 0, firstMessageTime: 0, date: today });
     }
-    return sessionTracking.get(chatId);
+    const trk = sessionTracking.get(chatId);
+    // Reset daily counter on date rollover
+    if (trk.date !== today) {
+        trk.messageCount = 0;
+        trk.date = today;
+    }
+    return trk;
 }
 
 function getConversation(chatId) {
