@@ -52,6 +52,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.config.modelDisplayName
+import com.seekerclaw.app.config.providerById
 import com.seekerclaw.app.service.OpenClawService
 import com.seekerclaw.app.ui.theme.SeekerClawColors
 import com.seekerclaw.app.util.Analytics
@@ -301,14 +302,15 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
         if (apiUnhealthy && !errorDismissed) {
             val bannerColor = if (health.apiStatus == "error") SeekerClawColors.Error
                 else SeekerClawColors.Warning
+            val providerName = providerById(config?.provider ?: "claude").displayName
             val bannerText = when (health.lastErrorType) {
                 "auth" -> "API key rejected${health.lastErrorStatus?.let { " ($it)" } ?: ""} \u2014 check Settings"
-                "billing" -> "API billing issue \u2014 check console.anthropic.com"
+                "billing" -> "API billing issue \u2014 check your $providerName console"
                 "quota" -> "API quota exceeded \u2014 try again later or upgrade plan"
                 "rate_limit" -> "Rate limited \u2014 retrying automatically"
-                "server", "overloaded" -> "Claude API temporarily unavailable \u2014 retrying"
-                "cloudflare" -> "Claude API unreachable \u2014 retrying"
-                "network" -> "Cannot reach Claude API \u2014 check internet connection"
+                "server", "overloaded" -> "$providerName API temporarily unavailable \u2014 retrying"
+                "cloudflare" -> "$providerName API unreachable \u2014 retrying"
+                "network" -> "Cannot reach $providerName API \u2014 check internet connection"
                 else -> if (health.apiStatus == "stale") "Agent may have stopped responding \u2014 try restarting"
                     else "API error \u2014 check Console for details"
             }
