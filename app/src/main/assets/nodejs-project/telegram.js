@@ -7,6 +7,7 @@ const https = require('https');
 const path = require('path');
 
 const { BOT_TOKEN, log, workDir } = require('./config');
+const { redactSecrets } = require('./security');
 const { httpRequest } = require('./web');
 
 // ============================================================================
@@ -478,6 +479,8 @@ async function sendMessage(chatId, text, replyTo = null, buttons = null) {
     // Clean AI artifacts before sending to user
     text = cleanResponse(text);
     if (!text) return; // Nothing left after cleaning
+    // Redact any leaked secrets (API keys, tokens) from outgoing messages
+    text = redactSecrets(text);
 
     // Telegram max message length is 4096
     const chunks = [];

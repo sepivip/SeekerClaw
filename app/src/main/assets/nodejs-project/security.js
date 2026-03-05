@@ -16,14 +16,15 @@ function _escRx(s) { return s.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&'); }
 // Cached dynamic redaction patterns (rebuilt when config changes)
 let _dynamicPatterns = [];
 
-// Rebuild literal-match patterns for secrets without a known prefix (Jupiter, MCP tokens).
+// Rebuild literal-match patterns for secrets without a known prefix.
 // Called at startup and after syncAgentApiKeys() mutates config.
 function rebuildRedactPatterns() {
     const patterns = [];
-    // Jupiter API key (no known prefix — literal match)
-    const jk = config.jupiterApiKey;
-    if (jk && jk.length >= 8) {
-        patterns.push({ rx: new RegExp(_escRx(jk), 'g'), replacement: '***jupiter-key***' });
+    // All dynamic API keys from config (*ApiKey fields — Jupiter, Dune, TMDB, etc.)
+    for (const key of Object.keys(config)) {
+        if (key.endsWith('ApiKey') && config[key] && typeof config[key] === 'string' && config[key].length >= 8) {
+            patterns.push({ rx: new RegExp(_escRx(config[key]), 'g'), replacement: `***${key}***` });
+        }
     }
     // MCP server auth tokens (literal match per server)
     for (const server of MCP_SERVERS) {
