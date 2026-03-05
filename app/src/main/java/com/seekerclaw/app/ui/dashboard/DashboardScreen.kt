@@ -183,15 +183,24 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
 
     // Recovery banner: show briefly when transitioning from unhealthy → healthy
     var showRecoveryBanner by remember { mutableStateOf(false) }
-    var prevApiUnhealthy by remember { mutableStateOf(false) }
-    LaunchedEffect(apiUnhealthy) {
-        if (!apiUnhealthy && prevApiUnhealthy) {
+    var prevStatus by remember { mutableStateOf<ServiceStatus?>(null) }
+    var prevApiStatus by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(status, health.apiStatus) {
+        val prevRunning = prevStatus == ServiceStatus.RUNNING
+        val wasUnhealthy = prevRunning && prevApiStatus in listOf("error", "degraded", "stale")
+        val isRunning = status == ServiceStatus.RUNNING
+        val isHealthy = isRunning && health.apiStatus == "healthy"
+        val isUnhealthyNow = isRunning && health.apiStatus in listOf("error", "degraded", "stale")
+
+        if (wasUnhealthy && isHealthy) {
             showRecoveryBanner = true
             delay(5000)
             showRecoveryBanner = false
         }
-        if (apiUnhealthy) showRecoveryBanner = false
-        prevApiUnhealthy = apiUnhealthy
+        if (isUnhealthyNow) showRecoveryBanner = false
+
+        prevStatus = status
+        prevApiStatus = health.apiStatus
     }
 
     // Reset dismiss states via side effects (not during composition)

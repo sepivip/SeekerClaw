@@ -1129,7 +1129,7 @@ async function pollClaudeUsage() {
                 _usagePollTimer = null;
                 log(`[Usage] Disabled — API returned ${res.status} (expected for setup tokens without usage scope)`, 'DEBUG');
             } else {
-                log(`Claude usage poll: HTTP ${res.status}`, 'DEBUG');
+                log(`API usage poll: HTTP ${res.status}`, 'DEBUG');
             }
             writeApiUsageState({
                 type: 'oauth',
