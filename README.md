@@ -25,7 +25,6 @@ SeekerClaw embeds a Node.js AI agent inside an Android app, running 24/7 as a fo
   <img src="design/screenshots/04-memory.png" width="130">
   <img src="design/screenshots/05-solana.png" width="130">
   <img src="design/screenshots/06-skills.png" width="130">
-  <img src="design/screenshots/07-explore.png" width="130">
 </div>
 
 ## Features
