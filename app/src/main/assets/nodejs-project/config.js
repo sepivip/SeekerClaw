@@ -347,11 +347,12 @@ function syncAgentApiKeys() {
             if (!configField) continue;
             // Android Settings keys always win — don't overwrite
             if (_androidKeys[configField]) continue;
-            if (agentKey && typeof agentKey === 'string' && agentKey.trim()) {
+            if (agentKey && typeof agentKey === 'string' && agentKey.trim() && agentKey.length <= 512) {
                 const normalized = normalizeSecret(agentKey);
                 if (normalized && config[configField] !== normalized) {
                     config[configField] = normalized;
-                    log(`[Config] Loaded ${service} API key from agent_settings.json`, 'INFO');
+                    // Log configField (sanitized) instead of raw service name to prevent log injection
+                    log(`[Config] Loaded API key → config.${configField} from agent_settings.json`, 'INFO');
                 }
             }
         }
