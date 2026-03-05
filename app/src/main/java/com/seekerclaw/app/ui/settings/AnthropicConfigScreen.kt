@@ -58,12 +58,7 @@ import com.seekerclaw.app.config.availableModels
 import com.seekerclaw.app.util.Analytics
 import com.seekerclaw.app.ui.theme.RethinkSans
 import com.seekerclaw.app.ui.theme.SeekerClawColors
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -445,54 +440,6 @@ fun AnthropicConfigScreen(onBack: () -> Unit) {
             containerColor = SeekerClawColors.Surface,
             shape = shape,
         )
-    }
-}
-
-private suspend fun testAnthropicConnection(credential: String, authType: String): Result<Unit> = withContext(Dispatchers.IO) {
-    runCatching {
-        val url = URL("https://api.anthropic.com/v1/models") // models endpoint requires auth
-        val conn = url.openConnection() as HttpURLConnection
-        conn.requestMethod = "GET"
-        if (authType == "setup_token") {
-            conn.setRequestProperty("Authorization", "Bearer $credential")
-            conn.setRequestProperty("anthropic-beta", "prompt-caching-2024-07-31,oauth-2025-04-20")
-        } else {
-            conn.setRequestProperty("x-api-key", credential)
-            conn.setRequestProperty("anthropic-beta", "prompt-caching-2024-07-31")
-        }
-        conn.setRequestProperty("anthropic-version", "2023-06-01")
-        conn.connectTimeout = 15000
-        conn.readTimeout = 15000
-
-        try {
-            val status = conn.responseCode
-            if (status in 200..299) {
-                return@runCatching
-            } else {
-                var errorMessage = "HTTP $status"
-                if (status == 401 || status == 403) {
-                    errorMessage = "Unauthorized / Invalid credential"
-                } else if (status in 500..599) {
-                    errorMessage = "Anthropic API unavailable"
-                } else {
-                    val errorStream = conn.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
-                    try {
-                        val json = JSONObject(errorStream)
-                        val err = json.optJSONObject("error")
-                        if (err != null && err.has("message")) {
-                            errorMessage += ": ${err.getString("message")}"
-                        }
-                    } catch (e: Exception) {
-                        // Ignore JSON parsing errors
-                    }
-                }
-                error("Connection failed ($errorMessage)")
-            }
-        } catch (e: java.io.IOException) {
-            error("Network unreachable or timeout")
-        } finally {
-            conn.disconnect()
-        }
     }
 }
 

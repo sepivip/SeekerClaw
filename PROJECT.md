@@ -30,7 +30,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 | UI Framework | Jetpack Compose (Material 3) | — |
 | Min SDK | 34 (Android 14) | — |
 | Node.js Runtime | nodejs-mobile (community fork) | Node 18 LTS |
-| AI Provider | Anthropic Claude API | Opus 4.6 default, Sonnet 4.6, Sonnet 4.5, Haiku 4.5 |
+| AI Provider | Anthropic Claude API + OpenAI Responses API | Claude Opus 4.6 default; OpenAI via adapter |
 | Messaging | Telegram Bot API (grammy) | — |
 | Database | SQL.js (WASM SQLite) | 1.12.0 |
 | OpenClaw Parity | OpenClaw gateway (ported) | 2026.3.1 |
@@ -42,6 +42,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 
 ### AI Agent Core
 - **Claude integration** — Opus 4.6 (default), Sonnet 4.6, Sonnet 4.5, Haiku 4.5 selectable. Prompt caching, retry with backoff, rate-limit throttling, user-friendly error messages. OAuth/setup token support for Claude Pro/Max users. Conversational API key setup flow.
+- **Multi-provider architecture** — Provider adapter pattern (claude/openai) with unified internal message format. OpenAI Responses API support (`/v1/responses`) with SSE streaming, function_call items, vision. Provider-agnostic DB logging and usage tracking. Safe defaults — unknown provider falls back to Claude. Credential hygiene — only active provider's key written to config.json.
 - **Multi-turn task execution** — Reliable P2 multi-turn: tool budget management with validation-aware restore, silent turn stop prevention on budget exhaustion, MAX_TOOL_USES=25 for complex tasks
 - **API timeout hardening** — Configurable timeouts (replacing hardcoded 60s), bounded retry with backoff for timeout paths, turn-level tracing instrumentation, sanitized user-visible error messages, 429 retry jitter
 - **Streaming + payload optimization** — Eliminates API transport timeouts via streaming responses, response field whitelisting to prevent payload bloat (_inputJson leak fix), MAX_HISTORY bumped 20→35 for richer context
@@ -225,13 +226,13 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Metric | Count |
 |--------|-------|
-| Total commits | 337 |
-| PRs merged | 223+ |
+| Total commits | 343 |
+| PRs merged | 241+ |
 | Tools | 56 (9 Jupiter, 13 Android bridge, web search/fetch, memory, cron, skill_install, etc.) + MCP dynamic |
 | Skills | 35 (20 bundled + 13 workspace + 2 user-created) |
 | Android Bridge endpoints | 18+ |
 | Telegram commands | 12 |
-| Lines of JS | ~14,200 (main.js + 15 extracted modules) |
+| Lines of JS | ~14,000 (main.js + 15 modules + 3 provider adapters) |
 | Lines of Kotlin | ~13,200 |
 | SQL.js tables | 4 |
 | Themes | 1 (DarkOps only) |
@@ -267,6 +268,7 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Date | Feature | PR |
 |------|---------|-----|
+| 2026-03-05 | Feat: multi-provider architecture — Claude/OpenAI adapter pattern, OpenAI Responses API streaming, provider-agnostic DB logging, credential hygiene (BAT-315) | #241 |
 | 2026-03-04 | Fix: secrets hardening — 7 surgical security fixes (task-store atomic writes, security.js audit trail, secrets blocklist expansion) | #223 (BAT-305) |
 | 2026-03-04 | Fix: teach agent to trust [Skill just installed.] context prefix | direct |
 | 2026-03-04 | Docs: SAB-AUDIT-v9 report | direct |
