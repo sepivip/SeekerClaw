@@ -28,7 +28,7 @@ data class AgentHealth(
     val isStale: Boolean = false,
 )
 
-sealed class ClaudeUsageData {
+sealed class ApiUsageData {
     abstract val updatedAt: Long
     abstract val error: String?
 
@@ -39,7 +39,7 @@ sealed class ClaudeUsageData {
         val sevenDayResetsAt: String,
         override val updatedAt: Long,
         override val error: String? = null,
-    ) : ClaudeUsageData()
+    ) : ApiUsageData()
 
     data class ApiKeyUsage(
         val requestsLimit: Int,
@@ -50,7 +50,7 @@ sealed class ClaudeUsageData {
         val tokensReset: String,
         override val updatedAt: Long,
         override val error: String? = null,
-    ) : ClaudeUsageData()
+    ) : ApiUsageData()
 }
 
 object ServiceState {
@@ -75,8 +75,8 @@ object ServiceState {
     private val _tokensTotal = MutableStateFlow(0L)
     val tokensTotal: StateFlow<Long> = _tokensTotal
 
-    private val _claudeUsage = MutableStateFlow<ClaudeUsageData?>(null)
-    val claudeUsage: StateFlow<ClaudeUsageData?> = _claudeUsage
+    private val _apiUsage = MutableStateFlow<ApiUsageData?>(null)
+    val apiUsage: StateFlow<ApiUsageData?> = _apiUsage
 
     private val _agentHealth = MutableStateFlow(AgentHealth())
     val agentHealth: StateFlow<AgentHealth> = _agentHealth
@@ -211,7 +211,7 @@ object ServiceState {
             while (isActive) {
                 readFromFile()
                 readBridgeToken()
-                readClaudeUsageFile()
+                readApiUsageFile()
                 readAgentHealthFile()
                 delay(1000)
             }
@@ -342,7 +342,7 @@ object ServiceState {
         } catch (_: Exception) {}
     }
 
-    private fun readClaudeUsageFile() {
+    private fun readApiUsageFile() {
         val parent = stateFile?.parentFile ?: return
         val file = File(parent, "workspace/claude_usage_state")
         try {
@@ -359,7 +359,7 @@ object ServiceState {
             val usage = if (type == "oauth") {
                 val fh = json.optJSONObject("five_hour")
                 val sd = json.optJSONObject("seven_day")
-                ClaudeUsageData.OAuthUsage(
+                ApiUsageData.OAuthUsage(
                     fiveHourUtilization = fh?.optDouble("utilization", 0.0)?.toFloat() ?: 0f,
                     fiveHourResetsAt = fh?.optString("resets_at", "") ?: "",
                     sevenDayUtilization = sd?.optDouble("utilization", 0.0)?.toFloat() ?: 0f,
@@ -370,7 +370,7 @@ object ServiceState {
             } else if (type == "api_key") {
                 val req = json.optJSONObject("requests")
                 val tok = json.optJSONObject("tokens")
-                ClaudeUsageData.ApiKeyUsage(
+                ApiUsageData.ApiKeyUsage(
                     requestsLimit = req?.optInt("limit", 0) ?: 0,
                     requestsRemaining = req?.optInt("remaining", 0) ?: 0,
                     requestsReset = req?.optString("reset", "") ?: "",
@@ -384,7 +384,7 @@ object ServiceState {
                 return
             }
 
-            if (_claudeUsage.value != usage) _claudeUsage.value = usage
+            if (_apiUsage.value != usage) _apiUsage.value = usage
         } catch (_: Exception) {}
     }
 }

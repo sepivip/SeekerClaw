@@ -46,7 +46,7 @@ import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.ui.theme.SeekerClawColors
 import com.seekerclaw.app.util.DeviceInfo
 import com.seekerclaw.app.util.DeviceInfoProvider
-import com.seekerclaw.app.util.ClaudeUsageData
+import com.seekerclaw.app.util.ApiUsageData
 import com.seekerclaw.app.util.DbSummary
 import com.seekerclaw.app.util.ServiceState
 import com.seekerclaw.app.util.ServiceStatus
@@ -62,7 +62,7 @@ fun SystemScreen(onBack: () -> Unit) {
     val messagesToday by ServiceState.messagesToday.collectAsState()
     val tokensToday by ServiceState.tokensToday.collectAsState()
     val tokensTotal by ServiceState.tokensTotal.collectAsState()
-    val claudeUsage by ServiceState.claudeUsage.collectAsState()
+    val apiUsage by ServiceState.apiUsage.collectAsState()
 
     val cfgVersion by ConfigManager.configVersion
     val config = remember(cfgVersion) { ConfigManager.loadConfig(context) }
@@ -237,7 +237,7 @@ fun SystemScreen(onBack: () -> Unit) {
         Spacer(modifier = Modifier.height(24.dp))
 
         // ==================== API LIMITS ====================
-        val usage = claudeUsage
+        val usage = apiUsage
         if (usage != null) {
             SectionLabel("API Limits")
 
@@ -248,7 +248,7 @@ fun SystemScreen(onBack: () -> Unit) {
                     .padding(16.dp),
             ) {
                 when (usage) {
-                    is ClaudeUsageData.OAuthUsage -> {
+                    is ApiUsageData.OAuthUsage -> {
                         UsageLimitBar(
                             label = "Session",
                             utilization = usage.fiveHourUtilization,
@@ -261,7 +261,7 @@ fun SystemScreen(onBack: () -> Unit) {
                             resetsAt = usage.sevenDayResetsAt,
                         )
                     }
-                    is ClaudeUsageData.ApiKeyUsage -> {
+                    is ApiUsageData.ApiKeyUsage -> {
                         val reqProgress = if (usage.requestsLimit > 0)
                             (usage.requestsLimit - usage.requestsRemaining).toFloat() / usage.requestsLimit else 0f
                         UsageLimitBar(

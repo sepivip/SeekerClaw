@@ -40,7 +40,7 @@ data class AppConfig(
     val autoStartOnBoot: Boolean = true,
     val heartbeatIntervalMinutes: Int = 30,
 ) {
-    /** Anthropic/authType-based credential — used by SetupScreen, legacy flows that assume Claude. */
+    /** Anthropic/authType-based credential — used by SetupScreen and legacy flows. */
     val activeCredential: String
         get() = if (authType == "setup_token") setupToken else anthropicApiKey
 

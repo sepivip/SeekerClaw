@@ -292,14 +292,14 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                             val result = when (activeProvider) {
                                 "openai" -> testOpenAIConnection(config?.openaiApiKey ?: "")
                                 else -> {
-                                    // Use Claude-specific credential derived from authType
+                                    // Use Anthropic-specific credential derived from authType
                                     val authType = config?.authType ?: "api_key"
-                                    val claudeCredential = if (authType == "setup_token") {
+                                    val anthropicCredential = if (authType == "setup_token") {
                                         config?.setupToken ?: ""
                                     } else {
                                         config?.anthropicApiKey ?: ""
                                     }
-                                    testAnthropicConnection(claudeCredential, authType)
+                                    testAnthropicConnection(anthropicCredential, authType)
                                 }
                             }
                             if (result.isSuccess) {

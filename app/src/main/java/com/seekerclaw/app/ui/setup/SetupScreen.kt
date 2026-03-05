@@ -212,7 +212,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
         isStarting = true
         try {
             val trimmedKey = apiKey.trim()
-            // Setup flow is Claude-only — force provider back to claude.
+            // Setup flow is Anthropic-only — force provider back to claude.
             // OpenAI provider is configured separately in Settings > Provider.
             val existing = ConfigManager.loadConfig(context)
             val config = AppConfig(
@@ -341,7 +341,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                 isQrImporting = isQrImporting,
                 qrError = qrError,
             )
-            1 -> ClaudeApiStep(
+            1 -> AnthropicApiStep(
                 apiKey = apiKey,
                 onApiKeyChange = { newValue ->
                     apiKey = newValue
@@ -585,7 +585,7 @@ private fun WelcomeStep(
 }
 
 @Composable
-private fun ClaudeApiStep(
+private fun AnthropicApiStep(
     apiKey: String,
     onApiKeyChange: (String) -> Unit,
     authType: String,
