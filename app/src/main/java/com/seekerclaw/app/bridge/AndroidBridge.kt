@@ -11,7 +11,6 @@ import android.location.Location
 import android.location.LocationManager
 import android.net.Uri
 import android.os.BatteryManager
-import android.os.Build
 import android.os.Environment
 import android.os.StatFs
 import android.provider.ContactsContract
@@ -24,21 +23,17 @@ import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.util.Analytics
 import com.seekerclaw.app.util.ServiceState
 import fi.iki.elonen.NanoHTTPD
-import org.json.JSONArray
-import org.json.JSONObject
 import java.util.Locale
+import org.json.JSONObject
 
 /**
  * AndroidBridge - HTTP server for Node.js <-> Kotlin IPC
  *
- * Runs on localhost:8765 and provides Android-native capabilities
- * to the Node.js agent via simple HTTP POST requests.
+ * Runs on localhost:8765 and provides Android-native capabilities to the Node.js agent via simple
+ * HTTP POST requests.
  */
-class AndroidBridge(
-    private val context: Context,
-    private val authToken: String,
-    port: Int = 8765
-) : NanoHTTPD("127.0.0.1", port) {
+class AndroidBridge(private val context: Context, private val authToken: String, port: Int = 8765) :
+        NanoHTTPD("127.0.0.1", port) {
 
     companion object {
         private const val TAG = "AndroidBridge"
@@ -50,12 +45,13 @@ class AndroidBridge(
 
     init {
         // Initialize Text-to-Speech
-        tts = TextToSpeech(context) { status ->
-            ttsReady = status == TextToSpeech.SUCCESS
-            if (ttsReady) {
-                tts?.language = Locale.US
-            }
-        }
+        tts =
+                TextToSpeech(context) { status ->
+                    ttsReady = status == TextToSpeech.SUCCESS
+                    if (ttsReady) {
+                        tts?.language = Locale.US
+                    }
+                }
     }
 
     override fun serve(session: IHTTPSession): Response {
@@ -85,11 +81,12 @@ class AndroidBridge(
         }
 
         val postData = body["postData"] ?: "{}"
-        val params = try {
-            JSONObject(postData)
-        } catch (e: Exception) {
-            JSONObject()
-        }
+        val params =
+                try {
+                    JSONObject(postData)
+                } catch (e: Exception) {
+                    JSONObject()
+                }
 
         return try {
             when (uri) {
@@ -128,28 +125,30 @@ class AndroidBridge(
     // ==================== Battery ====================
 
     private fun handleBattery(): Response {
-        val batteryIntent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        val batteryIntent =
+                context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         val level = batteryIntent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
         val scale = batteryIntent?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100
         val percentage = if (scale > 0) (level * 100 / scale) else -1
 
         val status = batteryIntent?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
-        val isCharging = status == BatteryManager.BATTERY_STATUS_CHARGING ||
-                status == BatteryManager.BATTERY_STATUS_FULL
+        val isCharging =
+                status == BatteryManager.BATTERY_STATUS_CHARGING ||
+                        status == BatteryManager.BATTERY_STATUS_FULL
 
         val plugged = batteryIntent?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0
-        val chargeType = when (plugged) {
-            BatteryManager.BATTERY_PLUGGED_AC -> "ac"
-            BatteryManager.BATTERY_PLUGGED_USB -> "usb"
-            BatteryManager.BATTERY_PLUGGED_WIRELESS -> "wireless"
-            else -> "none"
-        }
+        val chargeType =
+                when (plugged) {
+                    BatteryManager.BATTERY_PLUGGED_AC -> "ac"
+                    BatteryManager.BATTERY_PLUGGED_USB -> "usb"
+                    BatteryManager.BATTERY_PLUGGED_WIRELESS -> "wireless"
+                    else -> "none"
+                }
 
-        return jsonResponse(200, mapOf(
-            "level" to percentage,
-            "isCharging" to isCharging,
-            "chargeType" to chargeType
-        ))
+        return jsonResponse(
+                200,
+                mapOf("level" to percentage, "isCharging" to isCharging, "chargeType" to chargeType)
+        )
     }
 
     // ==================== Storage ====================
@@ -164,35 +163,43 @@ class AndroidBridge(
         val availableBytes = availableBlocks * blockSize
         val usedBytes = totalBytes - availableBytes
 
-        return jsonResponse(200, mapOf(
-            "total" to totalBytes,
-            "available" to availableBytes,
-            "used" to usedBytes,
-            "totalFormatted" to formatBytes(totalBytes),
-            "availableFormatted" to formatBytes(availableBytes),
-            "usedFormatted" to formatBytes(usedBytes)
-        ))
+        return jsonResponse(
+                200,
+                mapOf(
+                        "total" to totalBytes,
+                        "available" to availableBytes,
+                        "used" to usedBytes,
+                        "totalFormatted" to formatBytes(totalBytes),
+                        "availableFormatted" to formatBytes(availableBytes),
+                        "usedFormatted" to formatBytes(usedBytes)
+                )
+        )
     }
 
     // ==================== Network ====================
 
     private fun handleNetwork(): Response {
-        val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+        val connectivityManager =
+                context.getSystemService(Context.CONNECTIVITY_SERVICE) as
+                        android.net.ConnectivityManager
         val network = connectivityManager.activeNetwork
         val capabilities = connectivityManager.getNetworkCapabilities(network)
 
         val isConnected = network != null
-        val type = when {
-            capabilities?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) == true -> "wifi"
-            capabilities?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) == true -> "cellular"
-            capabilities?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET) == true -> "ethernet"
-            else -> "none"
-        }
+        val type =
+                when {
+                    capabilities?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) ==
+                            true -> "wifi"
+                    capabilities?.hasTransport(
+                            android.net.NetworkCapabilities.TRANSPORT_CELLULAR
+                    ) == true -> "cellular"
+                    capabilities?.hasTransport(
+                            android.net.NetworkCapabilities.TRANSPORT_ETHERNET
+                    ) == true -> "ethernet"
+                    else -> "none"
+                }
 
-        return jsonResponse(200, mapOf(
-            "isConnected" to isConnected,
-            "type" to type
-        ))
+        return jsonResponse(200, mapOf("isConnected" to isConnected, "type" to type))
     }
 
     // ==================== Clipboard ====================
@@ -200,11 +207,12 @@ class AndroidBridge(
     private fun handleClipboardGet(): Response {
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         val clip = clipboard.primaryClip
-        val text = if (clip != null && clip.itemCount > 0) {
-            clip.getItemAt(0).text?.toString() ?: ""
-        } else {
-            ""
-        }
+        val text =
+                if (clip != null && clip.itemCount > 0) {
+                    clip.getItemAt(0).text?.toString() ?: ""
+                } else {
+                    ""
+                }
         return jsonResponse(200, mapOf("content" to text))
     }
 
@@ -227,16 +235,17 @@ class AndroidBridge(
         val limit = params.optInt("limit", 10)
 
         val contacts = mutableListOf<Map<String, String?>>()
-        val cursor = context.contentResolver.query(
-            ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
-            arrayOf(
-                ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
-                ContactsContract.CommonDataKinds.Phone.NUMBER
-            ),
-            "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} LIKE ?",
-            arrayOf("%$query%"),
-            "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} ASC"
-        )
+        val cursor =
+                context.contentResolver.query(
+                        ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                        arrayOf(
+                                ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+                                ContactsContract.CommonDataKinds.Phone.NUMBER
+                        ),
+                        "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} LIKE ?",
+                        arrayOf("%$query%"),
+                        "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} ASC"
+                )
 
         cursor?.use {
             var count = 0
@@ -264,12 +273,13 @@ class AndroidBridge(
         }
 
         // Use intent to add contact (safer, doesn't require raw insert)
-        val intent = Intent(Intent.ACTION_INSERT).apply {
-            type = ContactsContract.Contacts.CONTENT_TYPE
-            putExtra(ContactsContract.Intents.Insert.NAME, name)
-            putExtra(ContactsContract.Intents.Insert.PHONE, phone)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
+        val intent =
+                Intent(Intent.ACTION_INSERT).apply {
+                    type = ContactsContract.Contacts.CONTENT_TYPE
+                    putExtra(ContactsContract.Intents.Insert.NAME, name)
+                    putExtra(ContactsContract.Intents.Insert.PHONE, phone)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
         context.startActivity(intent)
 
         return jsonResponse(200, mapOf("success" to true, "message" to "Contact add dialog opened"))
@@ -294,7 +304,10 @@ class AndroidBridge(
             // Split long messages
             val parts = smsManager.divideMessage(message)
             smsManager.sendMultipartTextMessage(phone, null, parts, null, null)
-            return jsonResponse(200, mapOf("success" to true, "phone" to phone, "parts" to parts.size))
+            return jsonResponse(
+                    200,
+                    mapOf("success" to true, "phone" to phone, "parts" to parts.size)
+            )
         } catch (e: Exception) {
             return jsonResponse(500, mapOf("error" to "Failed to send SMS: ${e.message}"))
         }
@@ -312,10 +325,11 @@ class AndroidBridge(
             return jsonResponse(400, mapOf("error" to "phone is required"))
         }
 
-        val intent = Intent(Intent.ACTION_CALL).apply {
-            data = Uri.parse("tel:$phone")
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
+        val intent =
+                Intent(Intent.ACTION_CALL).apply {
+                    data = Uri.parse("tel:$phone")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
         context.startActivity(intent)
 
         return jsonResponse(200, mapOf("success" to true, "phone" to phone))
@@ -325,7 +339,10 @@ class AndroidBridge(
 
     private fun handleLocation(): Response {
         if (!hasPermission(Manifest.permission.ACCESS_FINE_LOCATION)) {
-            return jsonResponse(403, mapOf("error" to "ACCESS_FINE_LOCATION permission not granted"))
+            return jsonResponse(
+                    403,
+                    mapOf("error" to "ACCESS_FINE_LOCATION permission not granted")
+            )
         }
 
         val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
@@ -348,14 +365,17 @@ class AndroidBridge(
         }
 
         return if (bestLocation != null) {
-            jsonResponse(200, mapOf(
-                "latitude" to bestLocation.latitude,
-                "longitude" to bestLocation.longitude,
-                "accuracy" to bestLocation.accuracy,
-                "altitude" to bestLocation.altitude,
-                "provider" to bestLocation.provider,
-                "time" to bestLocation.time
-            ))
+            jsonResponse(
+                    200,
+                    mapOf(
+                            "latitude" to bestLocation.latitude,
+                            "longitude" to bestLocation.longitude,
+                            "accuracy" to bestLocation.accuracy,
+                            "altitude" to bestLocation.altitude,
+                            "provider" to bestLocation.provider,
+                            "time" to bestLocation.time
+                    )
+            )
         } else {
             jsonResponse(200, mapOf("error" to "No location available. Enable GPS and try again."))
         }
@@ -391,23 +411,32 @@ class AndroidBridge(
         }
 
         val requestId = java.util.UUID.randomUUID().toString()
-        val lens = params.optString("lens", "back").lowercase().let {
-            if (it == "front") "front" else "back"
-        }
+        val lens =
+                params.optString("lens", "back").lowercase().let {
+                    if (it == "front") "front" else "back"
+                }
 
         try {
-            val intent = Intent(context, CameraCaptureActivity::class.java).apply {
-                putExtra("requestId", requestId)
-                putExtra("lens", lens)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
+            val intent =
+                    Intent(context, CameraCaptureActivity::class.java).apply {
+                        putExtra("requestId", requestId)
+                        putExtra("lens", lens)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
             context.startActivity(intent)
         } catch (e: Exception) {
-            return jsonResponse(500, mapOf("error" to "Failed to start camera capture: ${e.message}"))
+            return jsonResponse(
+                    500,
+                    mapOf("error" to "Failed to start camera capture: ${e.message}")
+            )
         }
 
-        val resultFile = java.io.File(java.io.File(context.filesDir, CameraCaptureActivity.RESULTS_DIR), "$requestId.json")
-        val deadline = System.currentTimeMillis() + 30_000
+        val resultFile =
+                java.io.File(
+                        java.io.File(context.filesDir, CameraCaptureActivity.RESULTS_DIR),
+                        "$requestId.json"
+                )
+        val deadline = System.currentTimeMillis() + 45_000
         while (System.currentTimeMillis() < deadline) {
             if (resultFile.exists()) {
                 val result = JSONObject(resultFile.readText())
@@ -417,12 +446,15 @@ class AndroidBridge(
                 val capturedAt = result.optLong("capturedAt", 0L)
 
                 return if (error.isBlank() && imagePath.isNotBlank()) {
-                    jsonResponse(200, mapOf(
-                        "success" to true,
-                        "path" to imagePath,
-                        "lens" to result.optString("lens", lens),
-                        "capturedAt" to capturedAt
-                    ))
+                    jsonResponse(
+                            200,
+                            mapOf(
+                                    "success" to true,
+                                    "path" to imagePath,
+                                    "lens" to result.optString("lens", lens),
+                                    "capturedAt" to capturedAt
+                            )
+                    )
                 } else {
                     jsonResponse(400, mapOf("error" to error.ifBlank { "Camera capture failed" }))
                 }
@@ -437,13 +469,16 @@ class AndroidBridge(
 
     private fun handleAppsList(): Response {
         val pm = context.packageManager
-        val apps = pm.getInstalledApplications(PackageManager.GET_META_DATA)
-            .filter { pm.getLaunchIntentForPackage(it.packageName) != null }
-            .map { mapOf(
-                "name" to pm.getApplicationLabel(it).toString(),
-                "package" to it.packageName
-            )}
-            .sortedBy { it["name"]?.lowercase() }
+        val apps =
+                pm.getInstalledApplications(PackageManager.GET_META_DATA)
+                        .filter { pm.getLaunchIntentForPackage(it.packageName) != null }
+                        .map {
+                            mapOf(
+                                    "name" to pm.getApplicationLabel(it).toString(),
+                                    "package" to it.packageName
+                            )
+                        }
+                        .sortedBy { it["name"]?.lowercase() }
 
         return jsonResponse(200, mapOf("apps" to apps, "count" to apps.size))
     }
@@ -488,14 +523,16 @@ class AndroidBridge(
 
     private fun handleSolanaAuthorize(): Response {
         val requestId = java.util.UUID.randomUUID().toString()
-        val intent = Intent(context, com.seekerclaw.app.solana.SolanaAuthActivity::class.java).apply {
-            putExtra("action", "authorize")
-            putExtra("requestId", requestId)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
+        val intent =
+                Intent(context, com.seekerclaw.app.solana.SolanaAuthActivity::class.java).apply {
+                    putExtra("action", "authorize")
+                    putExtra("requestId", requestId)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
         context.startActivity(intent)
 
-        val resultFile = java.io.File(java.io.File(context.filesDir, "solana_results"), "$requestId.json")
+        val resultFile =
+                java.io.File(java.io.File(context.filesDir, "solana_results"), "$requestId.json")
         val deadline = System.currentTimeMillis() + 60_000
         while (System.currentTimeMillis() < deadline) {
             if (resultFile.exists()) {
@@ -534,15 +571,17 @@ class AndroidBridge(
         val txBytes = android.util.Base64.decode(txBase64, android.util.Base64.NO_WRAP)
         val requestId = java.util.UUID.randomUUID().toString()
 
-        val intent = Intent(context, com.seekerclaw.app.solana.SolanaAuthActivity::class.java).apply {
-            putExtra("action", "sign")
-            putExtra("requestId", requestId)
-            putExtra("transaction", txBytes)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
+        val intent =
+                Intent(context, com.seekerclaw.app.solana.SolanaAuthActivity::class.java).apply {
+                    putExtra("action", "sign")
+                    putExtra("requestId", requestId)
+                    putExtra("transaction", txBytes)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
         context.startActivity(intent)
 
-        val resultFile = java.io.File(java.io.File(context.filesDir, "solana_results"), "$requestId.json")
+        val resultFile =
+                java.io.File(java.io.File(context.filesDir, "solana_results"), "$requestId.json")
         val deadline = System.currentTimeMillis() + 120_000
         while (System.currentTimeMillis() < deadline) {
             if (resultFile.exists()) {
@@ -554,7 +593,10 @@ class AndroidBridge(
                 return if (sigB64.isNotBlank()) {
                     jsonResponse(200, mapOf("signature" to sigB64, "success" to true))
                 } else {
-                    jsonResponse(400, mapOf("error" to error.ifBlank { "Transaction rejected by user" }))
+                    jsonResponse(
+                            400,
+                            mapOf("error" to error.ifBlank { "Transaction rejected by user" })
+                    )
                 }
             }
             Thread.sleep(300)
@@ -563,9 +605,8 @@ class AndroidBridge(
     }
 
     /**
-     * Sign-only endpoint for Jupiter Ultra flow.
-     * Returns the full signed transaction (base64) without broadcasting.
-     * Jupiter Ultra handles broadcasting via /execute.
+     * Sign-only endpoint for Jupiter Ultra flow. Returns the full signed transaction (base64)
+     * without broadcasting. Jupiter Ultra handles broadcasting via /execute.
      */
     private fun handleSolanaSignOnly(params: JSONObject): Response {
         val txBase64 = params.optString("transaction", "")
@@ -573,22 +614,28 @@ class AndroidBridge(
             return jsonResponse(400, mapOf("error" to "transaction (base64) is required"))
         }
 
-        val txBytes = try {
-            android.util.Base64.decode(txBase64, android.util.Base64.NO_WRAP)
-        } catch (e: IllegalArgumentException) {
-            return jsonResponse(400, mapOf("error" to "transaction is invalid base64"))
-        }
+        val txBytes =
+                try {
+                    android.util.Base64.decode(txBase64, android.util.Base64.NO_WRAP)
+                } catch (e: IllegalArgumentException) {
+                    return jsonResponse(400, mapOf("error" to "transaction is invalid base64"))
+                }
         val requestId = java.util.UUID.randomUUID().toString()
 
-        val intent = Intent(context, com.seekerclaw.app.solana.SolanaAuthActivity::class.java).apply {
-            putExtra("action", "signOnly")
-            putExtra("requestId", requestId)
-            putExtra("transaction", txBytes)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
+        val intent =
+                Intent(context, com.seekerclaw.app.solana.SolanaAuthActivity::class.java).apply {
+                    putExtra("action", "signOnly")
+                    putExtra("requestId", requestId)
+                    putExtra("transaction", txBytes)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
         context.startActivity(intent)
 
-        val resultsDir = java.io.File(context.filesDir, com.seekerclaw.app.solana.SolanaAuthActivity.RESULTS_DIR)
+        val resultsDir =
+                java.io.File(
+                        context.filesDir,
+                        com.seekerclaw.app.solana.SolanaAuthActivity.RESULTS_DIR
+                )
         val resultFile = java.io.File(resultsDir, "$requestId.json")
         val deadline = System.currentTimeMillis() + 120_000
         while (System.currentTimeMillis() < deadline) {
@@ -601,7 +648,10 @@ class AndroidBridge(
                 return if (signedTx.isNotBlank()) {
                     jsonResponse(200, mapOf("signedTransaction" to signedTx, "success" to true))
                 } else {
-                    jsonResponse(400, mapOf("error" to error.ifBlank { "Transaction rejected by user" }))
+                    jsonResponse(
+                            400,
+                            mapOf("error" to error.ifBlank { "Transaction rejected by user" })
+                    )
                 }
             }
             Thread.sleep(300)
@@ -611,7 +661,13 @@ class AndroidBridge(
 
     private fun handleSolanaSend(params: JSONObject): Response {
         // Legacy endpoint — solana_send now builds tx in JS and uses /solana/sign
-        return jsonResponse(400, mapOf("error" to "Use /solana/sign instead. Transaction building is handled by the Node.js agent."))
+        return jsonResponse(
+                400,
+                mapOf(
+                        "error" to
+                                "Use /solana/sign instead. Transaction building is handled by the Node.js agent."
+                )
+        )
     }
 
     // ==================== Config ====================
@@ -655,15 +711,16 @@ class AndroidBridge(
     }
 
     private fun hasPermission(permission: String): Boolean {
-        return ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+        return ContextCompat.checkSelfPermission(context, permission) ==
+                PackageManager.PERMISSION_GRANTED
     }
 
     private fun jsonResponse(status: Int, data: Map<String, Any?>): Response {
         val json = JSONObject(data).toString()
         return newFixedLengthResponse(
-            Response.Status.lookup(status) ?: Response.Status.OK,
-            "application/json",
-            json
+                Response.Status.lookup(status) ?: Response.Status.OK,
+                "application/json",
+                json
         )
     }
 
@@ -671,7 +728,11 @@ class AndroidBridge(
         if (bytes <= 0) return "0 B"
         val units = arrayOf("B", "KB", "MB", "GB", "TB")
         val digitGroups = (Math.log10(bytes.toDouble()) / Math.log10(1024.0)).toInt()
-        return String.format("%.2f %s", bytes / Math.pow(1024.0, digitGroups.toDouble()), units[digitGroups])
+        return String.format(
+                "%.2f %s",
+                bytes / Math.pow(1024.0, digitGroups.toDouble()),
+                units[digitGroups]
+        )
     }
 
     fun shutdown() {

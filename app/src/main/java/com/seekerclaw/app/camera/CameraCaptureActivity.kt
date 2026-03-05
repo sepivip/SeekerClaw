@@ -89,7 +89,8 @@ class CameraCaptureActivity : ComponentActivity() {
                     it.surfaceProvider = previewView.surfaceProvider
                 }
                 val imageCapture = ImageCapture.Builder()
-                    .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+                    .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+                    .setFlashMode(ImageCapture.FLASH_MODE_OFF)
                     .setJpegQuality(80)
                     .build()
                 val cameraSelector = CameraSelector.Builder()
@@ -100,7 +101,11 @@ class CameraCaptureActivity : ComponentActivity() {
                 cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageCapture)
 
                 // Give camera pipeline a moment to warm up before capture.
-                previewView.postDelayed({ capturePhoto(imageCapture) }, 600)
+                // Using a main handler instead of previewView.postDelayed avoids dropping
+                // the runnable if the Activity is started without window attachment.
+                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                    capturePhoto(imageCapture)
+                }, 1000)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to start camera", e)
                 writeResultFile(
@@ -119,11 +124,27 @@ class CameraCaptureActivity : ComponentActivity() {
         val outputFile = File(captureDir, "$requestId.jpg")
 
         val outputOptions = ImageCapture.OutputFileOptions.Builder(outputFile).build()
+        
+        var isCompleted = false
+        val timeoutRunnable = Runnable {
+            if (!isCompleted) {
+                isCompleted = true
+                Log.e(TAG, "Hardware capture timed out internally")
+                writeResultFile(JSONObject().apply { put("error", "Hardware capture timed out internally") })
+                finish()
+            }
+        }
+        val handler = android.os.Handler(android.os.Looper.getMainLooper())
+        handler.postDelayed(timeoutRunnable, 15_000)
+
         imageCapture.takePicture(
             outputOptions,
             ContextCompat.getMainExecutor(this),
             object : ImageCapture.OnImageSavedCallback {
                 override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
+                    if (isCompleted) return
+                    isCompleted = true
+                    handler.removeCallbacks(timeoutRunnable)
                     writeResultFile(
                         JSONObject().apply {
                             put("success", true)
@@ -136,6 +157,9 @@ class CameraCaptureActivity : ComponentActivity() {
                 }
 
                 override fun onError(exception: ImageCaptureException) {
+                    if (isCompleted) return
+                    isCompleted = true
+                    handler.removeCallbacks(timeoutRunnable)
                     Log.e(TAG, "Capture failed", exception)
                     writeResultFile(
                         JSONObject().apply {
