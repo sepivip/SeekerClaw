@@ -1,8 +1,8 @@
 # OpenClaw Version Tracking
 
 > **Purpose:** Track OpenClaw releases and identify changes to port to SeekerClaw.
-> **Current OpenClaw Version:** 2026.3.1 (main 3a08e69a0, 2026-03-03)
-> **Last Sync Review:** 2026-03-03
+> **Current OpenClaw Version:** 2026.3.1 (main 8ac7ce73b, 2026-03-06)
+> **Last Sync Review:** 2026-03-06
 > **Parity Plan:** See `PARITY_PLAN.md`
 
 ---
@@ -82,9 +82,10 @@ These files in OpenClaw directly affect SeekerClaw behavior. Changes here requir
 
 ## Version History & Changes
 
-### 2026.3.1 (Current - 3a08e69a0)
+### 2026.3.1 (Current - 8ac7ce73b)
 - **Release Date:** 2026-03-02
 - **SeekerClaw Sync Status:** Reviewed, 1 fix ported, 1 deferred
+- **Re-synced:** 2026-03-06 (670 new commits since 3a08e69a0 — all SKIP, no portable changes)
 - **835 new commits since last sync (be8a5b9d6)**
 - **Ported:**
   - [x] NO_REPLY bold-markdown stripping — two-pass regex to handle `**SILENT_REPLY` pattern (3 locations in main.js)
