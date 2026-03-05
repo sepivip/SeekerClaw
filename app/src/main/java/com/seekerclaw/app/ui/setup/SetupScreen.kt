@@ -190,7 +190,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
         if (isStarting) return
         if (apiKey.isBlank()) {
             apiKeyError = "Required"
-            errorMessage = "Claude API key is required"
+            errorMessage = "Anthropic API key is required"
             currentStep = 1
             return
         }
@@ -310,7 +310,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             // Step indicator
             SetupStepIndicator(
                 currentStep = currentStep,
-                labels = listOf("Welcome", "Claude", "Telegram", "Options"),
+                labels = listOf("Welcome", "Anthropic", "Telegram", "Options"),
             )
 
             Spacer(modifier = Modifier.height(24.dp))
@@ -467,7 +467,7 @@ private fun WelcomeStep(
         SetupCard {
             RequirementRow(
                 icon = Icons.Default.Key,
-                title = "Claude API Key",
+                title = "Anthropic API Key",
                 subtitle = "From console.anthropic.com, or a Pro/Max token",
             )
             HorizontalDivider(
@@ -907,7 +907,7 @@ private fun OptionsStep(
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "Choose the Claude model that powers your agent.",
+                text = "Choose the model that powers your agent.",
                 fontSize = 12.sp,
                 color = SeekerClawColors.TextDim,
             )

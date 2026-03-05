@@ -567,7 +567,7 @@ object ConfigManager {
         val config = loadConfig(context)
         val agentName = config?.agentName ?: "Unknown"
         val authType = config?.authType ?: "api_key"
-        val authLabel = if (authType == "setup_token") "Claude Pro/Max (setup token)" else "API key"
+        val authLabel = if (authType == "setup_token") "Pro/Max (setup token)" else "API key"
         val aiModel = config?.model ?: "claude-opus-4-6"
 
         // Timestamp

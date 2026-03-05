@@ -236,10 +236,10 @@ fun SystemScreen(onBack: () -> Unit) {
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        // ==================== CLAUDE LIMITS ====================
+        // ==================== API LIMITS ====================
         val usage = claudeUsage
         if (usage != null) {
-            SectionLabel("Claude Limits")
+            SectionLabel("API Limits")
 
             Column(
                 modifier = Modifier
