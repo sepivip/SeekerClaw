@@ -212,7 +212,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
         isStarting = true
         try {
             val trimmedKey = apiKey.trim()
-            // Setup flow is Anthropic-only — force provider back to claude.
+            // Setup flow is Anthropic-only — force provider id to "claude" (the Anthropic provider).
             // OpenAI provider is configured separately in Settings > Provider.
             val existing = ConfigManager.loadConfig(context)
             val config = AppConfig(

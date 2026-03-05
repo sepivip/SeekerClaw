@@ -11,7 +11,7 @@ private const val TAG = "StatsClient"
 /**
  * Shared client for fetching DB summary stats written by the Node.js process.
  * Reads from workspace/db_summary_state file (cross-process file IPC, same
- * pattern as api_usage_state and bridge_token).
+ * pattern as claude_usage_state and bridge_token).
  * Used by DashboardScreen and SystemScreen for API analytics (BAT-32),
  * and by the memory index UI for memory stats (BAT-33).
  */
