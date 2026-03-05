@@ -181,6 +181,19 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
     val apiUnhealthy = status == ServiceStatus.RUNNING &&
         health.apiStatus != "healthy" && health.apiStatus != "unknown"
 
+    // Recovery banner: show briefly when transitioning from unhealthy → healthy
+    var showRecoveryBanner by remember { mutableStateOf(false) }
+    var prevApiUnhealthy by remember { mutableStateOf(false) }
+    LaunchedEffect(apiUnhealthy) {
+        if (!apiUnhealthy && prevApiUnhealthy) {
+            showRecoveryBanner = true
+            delay(5000)
+            showRecoveryBanner = false
+        }
+        if (apiUnhealthy) showRecoveryBanner = false
+        prevApiUnhealthy = apiUnhealthy
+    }
+
     // Reset dismiss states via side effects (not during composition)
     LaunchedEffect(isOnline) { if (isOnline) networkBannerDismissed = false }
     LaunchedEffect(apiUnhealthy) { if (!apiUnhealthy) errorBannerDismissedKey = null }
@@ -345,6 +358,33 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
                         modifier = Modifier.size(16.dp),
                     )
                 }
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+
+        // Recovery banner — brief green confirmation after API recovers
+        if (showRecoveryBanner && status == ServiceStatus.RUNNING) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(SeekerClawColors.Accent.copy(alpha = 0.12f), shape)
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(SeekerClawColors.Accent),
+                )
+                Spacer(modifier = Modifier.width(12.dp))
+                Text(
+                    text = "API connection restored",
+                    fontFamily = RethinkSans,
+                    fontSize = 13.sp,
+                    color = SeekerClawColors.Accent,
+                    modifier = Modifier.weight(1f),
+                )
             }
             Spacer(modifier = Modifier.height(16.dp))
         }

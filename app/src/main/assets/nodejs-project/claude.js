@@ -145,6 +145,7 @@ function updateAgentHealth(newStatus, errorInfo) {
         agentHealth.lastError?.type !== errorInfo.type ||
         agentHealth.lastError?.status !== errorInfo.status
     );
+    const wasUnhealthy = agentHealth.apiStatus === 'error' || agentHealth.apiStatus === 'degraded';
     agentHealth.apiStatus = newStatus;
     if (errorInfo) {
         agentHealth.lastError = errorInfo;
@@ -152,6 +153,10 @@ function updateAgentHealth(newStatus, errorInfo) {
         agentHealth.consecutiveFailures++;
     }
     if (newStatus === 'healthy') {
+        if (wasUnhealthy) {
+            log(`[Health] API recovered after ${agentHealth.consecutiveFailures} failure(s)`, 'INFO');
+        }
+        agentHealth.lastError = null;
         agentHealth.lastSuccessAt = localTimestamp();
         agentHealth.consecutiveFailures = 0;
     }
