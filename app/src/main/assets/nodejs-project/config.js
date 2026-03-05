@@ -317,7 +317,12 @@ function normalizeService(service) {
 
 // Convert service name to config field: "dune" → "duneApiKey", "brave" → "braveApiKey"
 function serviceToConfigField(service) {
-    return _knownKeyMap[service] || `${normalizeService(service)}ApiKey`;
+    if (_knownKeyMap[service]) return _knownKeyMap[service];
+    const normalized = normalizeService(service);
+    if (!normalized) return '';
+    // Avoid double suffix: "DUNE_API_KEY" → "duneApiKey" (not "duneApiKeyApiKey")
+    if (/[Aa]pi[Kk]ey$/.test(normalized)) return normalized;
+    return `${normalized}ApiKey`;
 }
 
 function syncAgentApiKeys() {
