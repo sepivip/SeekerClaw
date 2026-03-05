@@ -330,7 +330,8 @@ function serviceToConfigField(service) {
     const normalized = normalizeService(service);
     if (!normalized) return '';
     // Avoid double suffix: "DUNE_API_KEY" → "duneApiKey" (not "duneApiKeyApiKey")
-    if (/[Aa]pi[Kk]ey$/.test(normalized)) return normalized;
+    // Normalize suffix casing to exactly "ApiKey" so endsWith('ApiKey') checks work
+    if (/[Aa]pi[Kk]ey$/.test(normalized)) return normalized.replace(/[Aa]pi[Kk]ey$/, 'ApiKey');
     return `${normalized}ApiKey`;
 }
 

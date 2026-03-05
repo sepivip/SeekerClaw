@@ -556,6 +556,7 @@ async function sendTyping(chatId) {
 
 async function sendStatusMessage(chatId, text) {
     try {
+        text = redactSecrets(text);
         const result = await telegram('sendMessage', {
             chat_id: chatId,
             text,
