@@ -698,6 +698,7 @@ async function handleMessage(msg) {
 
         // Strip protocol tokens the agent may have mixed into content (BAT-279)
         // Also strip preceding bold-markdown/whitespace before tokens (OpenClaw parity 2026.3.1)
+        if (/\bSILENT_REPLY\b/i.test(response)) log('[Audit] Agent sent SILENT_REPLY', 'DEBUG');
         response = response.trim()
             .replace(/(?:^|\s+|\*+)HEARTBEAT_OK\s*$/gi, '').replace(/\bHEARTBEAT_OK\b/gi, '')
             .replace(/(?:^|\s+|\*+)SILENT_REPLY\s*$/gi, '').replace(/\bSILENT_REPLY\b/gi, '')
@@ -911,6 +912,7 @@ async function autoResumeOnStartup() {
                 try {
                     const response = await chat(chatId, 'continue', { isResume: true, originalGoal: full.originalGoal || null });
                     // Strip protocol tokens (BAT-279, OpenClaw parity 2026.3.1)
+                    if (response && /\bSILENT_REPLY\b/i.test(response)) log('[Audit] AutoResume sent SILENT_REPLY', 'DEBUG');
                     const cleaned = response ? response.trim()
                         .replace(/(?:^|\s+|\*+)HEARTBEAT_OK\s*$/gi, '').replace(/\bHEARTBEAT_OK\b/gi, '')
                         .replace(/(?:^|\s+|\*+)SILENT_REPLY\s*$/gi, '').replace(/\bSILENT_REPLY\b/gi, '')
@@ -1342,6 +1344,7 @@ async function runHeartbeat() {
         try {
             const response = await chat(ownerChatId, HEARTBEAT_PROMPT);
             // Strip protocol tokens the agent may have mixed into content (OpenClaw parity 2026.3.1)
+            if (/\bSILENT_REPLY\b/i.test(response)) log('[Audit] Heartbeat sent SILENT_REPLY', 'DEBUG');
             const cleaned = response.trim()
                 .replace(/(?:^|\s+|\*+)HEARTBEAT_OK\s*$/gi, '').replace(/\bHEARTBEAT_OK\b/gi, '')
                 .replace(/(?:^|\s+|\*+)SILENT_REPLY\s*$/gi, '').replace(/\bSILENT_REPLY\b/gi, '')

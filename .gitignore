@@ -45,6 +45,9 @@ app/libnode/
 *.keystore
 *.pem
 *.p12
+*.p8
+*.bks
+*.cer
 signing.properties
 keystore.properties
 
