@@ -50,7 +50,7 @@
 - **UI:** Jetpack Compose (Material 3, dark theme only)
 - **Theme:** `Theme.SeekerClaw`
 - **Min SDK:** 34 (Android 14)
-- **Node.js Runtime:** nodejs-mobile community fork (https://github.com/niccolobocook/nodejs-mobile) — pin to latest stable release at dev start (Node 18 LTS, ARM64)
+- **Node.js Runtime:** nodejs-mobile (https://github.com/nodejs-mobile/nodejs-mobile) — Node 18 LTS, ARM64
 - **QR Scanning:** CameraX + ZXing/ML Kit
 - **Encryption:** Android Keystore (AES-256-GCM, `userAuthenticationRequired = false`)
 - **Background Service:** Foreground Service with `specialUse` type
@@ -355,7 +355,7 @@ Good: Adding `memory_search` tool with description "Search your SQL.js database 
 
 ## Key Implementation Details
 
-- **nodejs-mobile:** Community fork at https://github.com/niccolobocook/nodejs-mobile — pin to latest stable release at dev start. Adapt their React Native integration guide for pure Kotlin (no React Native).
+- **nodejs-mobile:** https://github.com/nodejs-mobile/nodejs-mobile — Node 18 LTS, ARM64. Adapted from React Native integration guide for pure Kotlin.
 - **nodejs-mobile JNI architecture (IMPORTANT):** Node.js runs as `libnode.so` loaded via `System.loadLibrary("node")` through JNI — there is **NO standalone `node` binary** on the device. Key implications:
   - `process.execPath` typically points to Android's app process launcher (e.g., `/system/bin/app_process` or `/system/bin/app_process64`), **not** a Node.js binary path
   - `process.env.PATH` primarily contains Android system directories (e.g., `/system/bin`, `/vendor/bin`)
