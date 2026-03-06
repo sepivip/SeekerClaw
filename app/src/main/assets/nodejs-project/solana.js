@@ -389,11 +389,12 @@ async function fetchJupiterTokenList() {
     }
 }
 
-// Validate Solana wallet address (base58 format, 43-44 chars for 32-byte Ed25519 keys)
+// Validate Solana wallet address — base58 decode must yield exactly 32 bytes (Ed25519 key)
 function isValidSolanaAddress(address) {
     if (!address || typeof address !== 'string') return false;
-    const base58Regex = /^[1-9A-HJ-NP-Za-km-z]{43,44}$/;
-    return base58Regex.test(address.trim());
+    const trimmed = address.trim();
+    if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(trimmed)) return false;
+    try { return base58Decode(trimmed).length === 32; } catch { return false; }
 }
 
 // Parse input amount to lamports using BigInt for precision safety
