@@ -72,7 +72,7 @@ const {
 
 const {
     setShutdownDeps,
-    initDatabase, indexMemoryFiles,
+    initDatabase, indexMemoryFiles, backfillSessionsFromFiles,
     startDbSummaryInterval, startStatsServer,
 } = require('./database');
 
@@ -1166,6 +1166,7 @@ telegram('getMe')
             // Initialize SQL.js database before polling (non-fatal if WASM fails)
             await initDatabase();
             indexMemoryFiles();
+            backfillSessionsFromFiles(); // BAT-322: one-time migration for existing users
             seedHeartbeatMd();
 
             // Wire shutdown deps now that conversations + saveSessionSummary exist

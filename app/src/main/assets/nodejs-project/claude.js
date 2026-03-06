@@ -29,7 +29,7 @@ const {
 } = require('./memory');
 
 const { findMatchingSkills, loadSkills } = require('./skills');
-const { getDb, markDbSummaryDirty, indexMemoryFiles } = require('./database');
+const { getDb, markDbSummaryDirty, indexMemoryFiles, saveSession, getRecentSessions } = require('./database');
 const { saveCheckpoint, cleanupChatCheckpoints } = require('./task-store');
 
 // ── Injected dependencies (set from main.js at startup) ───────────────────
@@ -322,6 +322,19 @@ async function saveSessionSummary(chatId, trigger, { force = false, skipIndex = 
         fs.writeFileSync(finalPath, header + meta + redactSecrets(summary) + '\n', 'utf8');
 
         log(`[SessionSummary] Saved: ${path.basename(finalPath)} (trigger: ${trigger})`, 'DEBUG');
+
+        // Persist session metadata for temporal context awareness (BAT-322)
+        const sessionStartMs = track.firstMessageTime || (now - (track.messageCount * 60000));
+        const durationMin = Math.max(1, Math.round((now - sessionStartMs) / 60000));
+        saveSession({
+            startedAt: new Date(sessionStartMs).toISOString(),
+            endedAt: new Date(now).toISOString(),
+            durationMin,
+            messageCount: track.messageCount,
+            summaryFile: path.basename(finalPath),
+            trigger,
+            model: MODEL,
+        });
 
         // Re-index memory files so new summary is immediately searchable
         if (!skipIndex) indexMemoryFiles();
@@ -705,6 +718,26 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
         lines.push(`## memory/${date}.md`);
         lines.push('');
         lines.push(dailyMemory.length > 1500 ? dailyMemory.slice(0, 1500) + '\n...(truncated)' : dailyMemory);
+        lines.push('');
+    }
+
+    // Recent Sessions — temporal context awareness (BAT-322)
+    // Gives the agent awareness of when past conversations happened
+    const recentSessions = getRecentSessions(5);
+    if (recentSessions.length > 0) {
+        lines.push('## Recent Sessions');
+        lines.push('Your recent conversation sessions (use this to maintain continuity):');
+        lines.push('');
+        for (const s of recentSessions) {
+            const dur = s.durationMin < 60
+                ? `${s.durationMin}min`
+                : `${Math.floor(s.durationMin / 60)}h${s.durationMin % 60 ? ` ${s.durationMin % 60}m` : ''}`;
+            let line = `- **${s.relativeTime}** (${dur}, ${s.messageCount} msgs)`;
+            if (s.summaryText) line += `: ${s.summaryText}`;
+            lines.push(line);
+        }
+        lines.push('');
+        lines.push('Use this to: pick up where you left off, follow up on mentioned plans, notice time gaps, and maintain conversational continuity. Be natural — don\'t mechanically list previous sessions unless asked.');
         lines.push('');
     }
 
