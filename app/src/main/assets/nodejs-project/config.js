@@ -256,6 +256,8 @@ const SHELL_ALLOWLIST = new Set([
 const CONFIRM_REQUIRED = new Set([
     'android_sms',
     'android_call',
+    'android_camera_capture', // #207: silent photo risk from prompt injection
+    'android_location',       // #207: silent location tracking risk
     'solana_send',           // BAT-255: P0 — wallet-draining risk from prompt injection
     'solana_swap',           // BAT-255: P0 — wallet-draining risk from prompt injection
     'jupiter_trigger_create',
