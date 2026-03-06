@@ -136,6 +136,7 @@ abstract class DownloadNodejsTask : DefaultTask() {
     @TaskAction
     fun run() {
         val url = "https://github.com/nodejs-mobile/nodejs-mobile/releases/download/v18.20.4/nodejs-mobile-v18.20.4-android.zip"
+        val expectedSha256 = "bd7321eaa1a7602fbe0bb87302df2d79d87835cf4363fbdd17c350dbb485c2af"
         val zipFile = project.file("./libnode/nodejs-mobile-v18.20.4-android.zip")
         val extractDir = project.file("./libnode")
 
@@ -161,12 +162,36 @@ abstract class DownloadNodejsTask : DefaultTask() {
             }
             connection.disconnect()
 
+            // H-05: Verify SHA-256 integrity of downloaded binary (#204)
+            val digest = java.security.MessageDigest.getInstance("SHA-256")
+            val actualSha256 = zipFile.inputStream().use { input ->
+                val buf = ByteArray(8192)
+                var n: Int
+                while (input.read(buf).also { n = it } != -1) { digest.update(buf, 0, n) }
+                digest.digest().joinToString("") { "%02x".format(it) }
+            }
+            if (actualSha256 != expectedSha256) {
+                zipFile.delete()
+                throw GradleException(
+                    "SHA-256 mismatch for nodejs-mobile ZIP!\n" +
+                    "  Expected: $expectedSha256\n" +
+                    "  Actual:   $actualSha256\n" +
+                    "Download may be corrupted or tampered with."
+                )
+            }
+            println("SHA-256 verified: $actualSha256")
+
             println("Extracting Node.js to: $extractDir")
             extractDir.mkdirs()
+            val canonicalExtractDir = extractDir.canonicalPath
             ZipInputStream(zipFile.inputStream()).use { zis ->
                 var entry = zis.nextEntry
                 while (entry != null) {
                     val targetFile = File(extractDir, entry.name)
+                    // H-06: Zip Slip guard — reject entries that escape extractDir (#204)
+                    if (!targetFile.canonicalPath.startsWith(canonicalExtractDir)) {
+                        throw GradleException("Zip Slip detected: ${entry.name} escapes $canonicalExtractDir")
+                    }
                     if (entry.isDirectory) {
                         targetFile.mkdirs()
                     } else {
