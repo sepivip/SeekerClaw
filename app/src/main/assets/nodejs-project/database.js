@@ -127,6 +127,7 @@ async function initDatabase() {
             duration_min INTEGER NOT NULL,
             message_count INTEGER NOT NULL,
             summary_file TEXT,
+            summary_excerpt TEXT,
             trigger TEXT,
             model TEXT
         )`);
@@ -301,15 +302,15 @@ function chunkMarkdown(content) {
 
 /**
  * Save a session record after a summary is generated.
- * @param {object} opts - { startedAt, endedAt, durationMin, messageCount, summaryFile, trigger, model }
+ * @param {object} opts - { startedAt, endedAt, durationMin, messageCount, summaryFile, summaryExcerpt, trigger, model }
  */
-function saveSession({ startedAt, endedAt, durationMin, messageCount, summaryFile, trigger, model }) {
+function saveSession({ startedAt, endedAt, durationMin, messageCount, summaryFile, summaryExcerpt, trigger, model }) {
     if (!db) return;
     try {
         db.run(
-            `INSERT INTO sessions (started_at, ended_at, duration_min, message_count, summary_file, trigger, model)
-             VALUES (?, ?, ?, ?, ?, ?, ?)`,
-            [startedAt, endedAt, durationMin, messageCount, summaryFile ?? null, trigger ?? null, model ?? null]
+            `INSERT INTO sessions (started_at, ended_at, duration_min, message_count, summary_file, summary_excerpt, trigger, model)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            [startedAt, endedAt, durationMin, messageCount, summaryFile ?? null, summaryExcerpt ?? null, trigger ?? null, model ?? null]
         );
         saveDatabase();
     } catch (err) {
@@ -326,6 +327,7 @@ function relativeTimeLabel(isoTimestamp) {
     const ts = new Date(isoTimestamp).getTime();
     if (!Number.isFinite(ts)) return 'unknown time';
     const diffMs = Date.now() - ts;
+    if (diffMs < 0) return 'just now'; // future timestamp (clock skew) — clamp
     const diffMin = Math.floor(diffMs / 60000);
     const diffHr = Math.floor(diffMs / 3600000);
     const diffDay = Math.floor(diffMs / 86400000);
@@ -352,44 +354,23 @@ function getRecentSessions(limit = 5) {
     if (!db) return [];
     try {
         const rows = db.exec(
-            `SELECT started_at, ended_at, duration_min, message_count, summary_file, trigger, model
+            `SELECT started_at, ended_at, duration_min, message_count, summary_file, summary_excerpt, trigger, model
              FROM sessions ORDER BY ended_at DESC LIMIT ?`,
             [limit]
         );
         if (!rows.length || !rows[0].values.length) return [];
 
-        return rows[0].values.map(([startedAt, endedAt, durationMin, messageCount, summaryFile, trigger, model]) => {
-            const result = {
-                startedAt,
-                endedAt,
-                durationMin: durationMin ?? 0,
-                messageCount: messageCount ?? 0,
-                summaryFile: summaryFile ?? null,
-                trigger: trigger ?? null,
-                model: model ?? null,
-                relativeTime: relativeTimeLabel(endedAt),
-                summaryText: null,
-            };
-
-            // Load first 3 lines of summary file for one-liner context
-            if (summaryFile) {
-                try {
-                    const fullPath = path.join(MEMORY_DIR, summaryFile);
-                    if (fs.existsSync(fullPath)) {
-                        const content = fs.readFileSync(fullPath, 'utf8');
-                        // Extract bullet points (skip header and metadata lines)
-                        const bullets = content.split('\n')
-                            .filter(l => l.startsWith('- '))
-                            .slice(0, 3)
-                            .map(l => l.slice(2).trim())
-                            .join('. ');
-                        if (bullets) result.summaryText = bullets;
-                    }
-                } catch (_) { /* non-fatal */ }
-            }
-
-            return result;
-        });
+        return rows[0].values.map(([startedAt, endedAt, durationMin, messageCount, summaryFile, summaryExcerpt, trigger, model]) => ({
+            startedAt,
+            endedAt,
+            durationMin: durationMin ?? 0,
+            messageCount: messageCount ?? 0,
+            summaryFile: summaryFile ?? null,
+            trigger: trigger ?? null,
+            model: model ?? null,
+            relativeTime: relativeTimeLabel(endedAt),
+            summaryText: summaryExcerpt ?? null,
+        }));
     } catch (err) {
         log(`[Sessions] Query error (non-fatal): ${err.message}`, 'WARN');
         return [];
@@ -421,8 +402,10 @@ function backfillSessionsFromFiles() {
 
                 // Parse header: "# Session Summary — 2026-03-07T14:32:45+00:00"
                 const headerMatch = content.match(/^# Session Summary\s*[—–-]\s*(.+)$/m);
-                const endedAt = headerMatch ? new Date(headerMatch[1].trim()).toISOString() : null;
-                if (!endedAt || endedAt === 'Invalid Date') continue;
+                if (!headerMatch) continue;
+                const parsedDate = new Date(headerMatch[1].trim());
+                if (!Number.isFinite(parsedDate.getTime())) continue;
+                const endedAt = parsedDate.toISOString();
 
                 // Parse meta: "> Trigger: idle | Exchanges: 12 | Model: claude-sonnet-4-6"
                 const metaMatch = content.match(/^>\s*Trigger:\s*(\w+)\s*\|\s*Exchanges:\s*(\d+)\s*\|\s*Model:\s*(.+)$/m);
@@ -430,14 +413,21 @@ function backfillSessionsFromFiles() {
                 const messageCount = metaMatch ? parseInt(metaMatch[2]) || 0 : 0;
                 const model = metaMatch ? metaMatch[3].trim() : null;
 
+                // Extract bullet points for summary_excerpt
+                const bullets = content.split('\n')
+                    .filter(l => l.startsWith('- '))
+                    .slice(0, 3)
+                    .map(l => l.slice(2).trim())
+                    .join('. ') || null;
+
                 // Estimate duration from message count (rough: ~3min per exchange)
                 const durationMin = Math.max(1, messageCount * 3);
-                const startedAt = new Date(new Date(endedAt).getTime() - durationMin * 60000).toISOString();
+                const startedAt = new Date(parsedDate.getTime() - durationMin * 60000).toISOString();
 
                 db.run(
-                    `INSERT INTO sessions (started_at, ended_at, duration_min, message_count, summary_file, trigger, model)
-                     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-                    [startedAt, endedAt, durationMin, messageCount, file, trigger, model]
+                    `INSERT INTO sessions (started_at, ended_at, duration_min, message_count, summary_file, summary_excerpt, trigger, model)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+                    [startedAt, endedAt, durationMin, messageCount, file, bullets, trigger, model]
                 );
                 backfilled++;
             } catch (_) { /* skip malformed files */ }

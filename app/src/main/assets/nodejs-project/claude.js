@@ -326,12 +326,19 @@ async function saveSessionSummary(chatId, trigger, { force = false, skipIndex = 
         // Persist session metadata for temporal context awareness (BAT-322)
         const sessionStartMs = track.firstMessageTime || (now - (track.messageCount * 60000));
         const durationMin = Math.max(1, Math.round((now - sessionStartMs) / 60000));
+        // Extract bullet points for summary_excerpt (stored in DB, avoids per-turn file I/O)
+        const summaryExcerpt = summary.split('\n')
+            .filter(l => l.startsWith('- '))
+            .slice(0, 3)
+            .map(l => l.slice(2).trim())
+            .join('. ') || null;
         saveSession({
             startedAt: new Date(sessionStartMs).toISOString(),
             endedAt: new Date(now).toISOString(),
             durationMin,
             messageCount: track.messageCount,
             summaryFile: path.basename(finalPath),
+            summaryExcerpt,
             trigger,
             model: MODEL,
         });
@@ -339,8 +346,9 @@ async function saveSessionSummary(chatId, trigger, { force = false, skipIndex = 
         // Re-index memory files so new summary is immediately searchable
         if (!skipIndex) indexMemoryFiles();
 
-        // Reset message counter
+        // Reset session tracking for next session boundary
         track.messageCount = 0;
+        track.firstMessageTime = 0;
     } catch (err) {
         // Keep lastSummaryTime set — prevents rapid retry spam on persistent errors
         log(`[SessionSummary] Error: ${err.message}`, 'ERROR');
