@@ -276,7 +276,12 @@ async function generateSessionSummary(chatId) {
     const res = await claudeApiCall(body, chatId, { background: true });
     if (res.status !== 200) {
         const d = res.data;
-        const reason = d?.error?.message || (typeof d === 'string' ? d.slice(0, 200) : JSON.stringify(d || '').slice(0, 200));
+        let reason;
+        if (d?.error?.message) reason = d.error.message;
+        else if (typeof d === 'string') reason = d.slice(0, 200);
+        else if (d) try { reason = JSON.stringify(d).slice(0, 200); } catch (_) { reason = String(d).slice(0, 200); }
+        else reason = 'No error details';
+        reason = reason.replace(/[\r\n]+/g, ' ').trim();
         log(`[SessionSummary] API ${res.status}: ${reason}`, 'WARN');
         return null;
     }
@@ -1013,11 +1018,13 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
     const { turnId, iteration, background } = traceCtx;
     let payloadSize = 0;
     let toolCount = 0;
-    try {
-        payloadSize = typeof body === 'string' ? body.length : JSON.stringify(body).length;
-        const parsed = typeof body === 'string' ? JSON.parse(body) : body;
-        toolCount = Array.isArray(parsed.tools) ? parsed.tools.length : 0;
-    } catch (_) { /* non-fatal — trace metadata is best-effort */ }
+    if (turnId) {
+        try {
+            payloadSize = typeof body === 'string' ? body.length : JSON.stringify(body).length;
+            const parsed = typeof body === 'string' ? JSON.parse(body) : body;
+            toolCount = Array.isArray(parsed.tools) ? parsed.tools.length : 0;
+        } catch (_) { /* non-fatal — trace metadata is best-effort */ }
+    }
 
     // Keep Telegram "typing..." indicator alive during API call (expires after 5s).
     // Fire immediately (covers gap on 2nd+ API calls in tool-use loop), then every 4s.
