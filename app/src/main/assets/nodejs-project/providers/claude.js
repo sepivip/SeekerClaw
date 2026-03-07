@@ -146,14 +146,15 @@ function formatTools(tools) {
  * Build full Claude API request body.
  */
 function formatRequest(model, maxTokens, systemBlocks, messages, tools) {
-    return JSON.stringify({
+    const body = {
         model,
         max_tokens: maxTokens,
         stream: true,
         system: systemBlocks,
-        tools,
         messages,
-    });
+    };
+    if (tools && tools.length > 0) body.tools = tools;
+    return JSON.stringify(body);
 }
 
 // ── Connection details ──────────────────────────────────────────────────────

@@ -273,9 +273,10 @@ async function generateSessionSummary(chatId) {
     }]);
     const body = adapter.formatRequest(MODEL, 500, systemBlocks, summaryMessages, []);
 
-    const res = await claudeApiCall(body, chatId);
+    const res = await claudeApiCall(body, chatId, { background: true });
     if (res.status !== 200) {
-        log(`[SessionSummary] API error: ${res.status}`, 'ERROR');
+        const reason = res.data?.error?.message || JSON.stringify(res.data?.error || '').slice(0, 200);
+        log(`[SessionSummary] API ${res.status}: ${reason}`, 'WARN');
         return null;
     }
 
@@ -1008,7 +1009,7 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
     let timeoutRetries = 0; // BAT-245: separate counter for transport timeout retries
 
     // BAT-243: Extract trace metadata from body for structured logging
-    const { turnId, iteration } = traceCtx;
+    const { turnId, iteration, background } = traceCtx;
     let payloadSize = 0;
     let toolCount = 0;
     try {
@@ -1079,7 +1080,7 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
                     const jitter = baseBackoff * (0.75 + Math.random() * 0.5);
                     const waitMs = Math.round(jitter);
                     log(`[Retry] Transport timeout, retry ${timeoutRetries + 1}/${API_TIMEOUT_RETRIES}, backoff ${waitMs}ms`, 'WARN');
-                    updateAgentHealth('degraded', { type: 'timeout', status: -1, message: 'Transport timeout — retrying' });
+                    if (!background) updateAgentHealth('degraded', { type: 'timeout', status: -1, message: 'Transport timeout — retrying' });
                     timeoutRetries++;
                     await new Promise(r => setTimeout(r, waitMs));
                     continue;
@@ -1097,7 +1098,7 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
                         );
                     } catch (e) { log(`[Claude] Failed to log network error to DB: ${e.message}`, 'WARN'); }
                 }
-                updateAgentHealth('error', { type: isTimeoutClass ? 'timeout' : 'network', status: -1, message: networkErr.message });
+                if (!background) updateAgentHealth('error', { type: isTimeoutClass ? 'timeout' : 'network', status: -1, message: networkErr.message });
                 throw networkErr;
             }
 
@@ -1128,7 +1129,7 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
                     const jitteredBackoff = Math.round(backoffMs * (0.75 + Math.random() * 0.5));
                     const waitMs = retryAfterMs > 0 ? retryAfterMs : jitteredBackoff;
                     log(`[Retry] Claude API ${res.status} (${errClass.type}), retry ${retries + 1}/${MAX_RETRIES}, base ${backoffMs}ms, waiting ${waitMs}ms`, 'WARN');
-                    updateAgentHealth('degraded', { type: errClass.type, status: res.status, message: errClass.userMessage });
+                    if (!background) updateAgentHealth('degraded', { type: errClass.type, status: res.status, message: errClass.userMessage });
                     retries++;
                     await new Promise(r => setTimeout(r, waitMs));
                     continue;
@@ -1164,7 +1165,7 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
         // Report usage metrics + cache status + health state
         if (res.status === 200) {
             reportUsage(rawUsage);
-            updateAgentHealth('healthy', null);
+            if (!background) updateAgentHealth('healthy', null);
             // Reset auth failure counter on success
             _consecutiveAuthFailures = 0;
             if (_sessionExpired) {
@@ -1174,7 +1175,7 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
             }
         } else {
             const errClass = classifyApiError(res.status, res.data);
-            updateAgentHealth('error', { type: errClass.type, status: res.status, message: errClass.userMessage });
+            if (!background) updateAgentHealth('error', { type: errClass.type, status: res.status, message: errClass.userMessage });
 
             // Track consecutive auth failures for session expiry detection
             if (res.status === 401 || res.status === 403) {
