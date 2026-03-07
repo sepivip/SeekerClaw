@@ -1009,7 +1009,7 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
     const MAX_RETRIES = 3; // HTTP error retries (429, 5xx)
     let timeoutRetries = 0; // BAT-245: separate counter for transport timeout retries
 
-    // BAT-243: Extract trace metadata from body for structured logging
+    // BAT-243: Extract trace metadata from traceCtx and derive payload stats from body for structured logging
     const { turnId, iteration, background } = traceCtx;
     let payloadSize = 0;
     let toolCount = 0;
