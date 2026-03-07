@@ -31,6 +31,7 @@ const {
 const { findMatchingSkills, loadSkills } = require('./skills');
 const { getDb, markDbSummaryDirty, indexMemoryFiles, saveSession, getRecentSessions } = require('./database');
 const { saveCheckpoint, cleanupChatCheckpoints } = require('./task-store');
+const { trackMemoryAccess } = require('./activity');
 
 // ── Injected dependencies (set from main.js at startup) ───────────────────
 // These break circular deps and reference things that still live in main.js
@@ -374,6 +375,13 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     const bootstrap = loadBootstrap();
     const identity = loadIdentity();
     const user = loadUser();
+
+    // BAT-325: Track system prompt file reads for Memory Activity Grid
+    if (soul) trackMemoryAccess('SOUL.md', 'read');
+    if (memory) trackMemoryAccess('MEMORY.md', 'read');
+    if (dailyMemory) trackMemoryAccess(`memory/${localDateStr()}.md`, 'read');
+    if (identity) trackMemoryAccess('IDENTITY.md', 'read');
+    if (user) trackMemoryAccess('USER.md', 'read');
 
     const lines = [];
 

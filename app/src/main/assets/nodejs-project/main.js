@@ -1193,6 +1193,10 @@ telegram('getMe')
             writeAgentHealthFile();
             setInterval(() => writeAgentHealthFile(), 60000);
 
+            // BAT-325: Write initial memory activity state (resets stale file from previous run)
+            const { writeActivityFile, cleanupActivityTimer } = require('./activity');
+            writeActivityFile();
+
             // Flush old updates to avoid re-processing stale messages after restart,
             // and notify owner if any messages arrived while offline.
             try {

@@ -23,10 +23,14 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -48,6 +52,8 @@ import com.seekerclaw.app.util.DeviceInfo
 import com.seekerclaw.app.util.DeviceInfoProvider
 import com.seekerclaw.app.util.ApiUsageData
 import com.seekerclaw.app.util.DbSummary
+import com.seekerclaw.app.util.FileGroupActivity
+import com.seekerclaw.app.util.MemoryActivityData
 import com.seekerclaw.app.util.ServiceState
 import com.seekerclaw.app.util.ServiceStatus
 import com.seekerclaw.app.util.fetchDbSummary
@@ -424,9 +430,180 @@ fun SystemScreen(onBack: () -> Unit) {
                     },
                 )
             }
+
+            // ==================== MEMORY ACTIVITY (BAT-325) ====================
+            Spacer(modifier = Modifier.height(24.dp))
+
+            SectionLabel("Memory Activity")
+
+            MemoryActivityGrid(memoryActivity = ServiceState.memoryActivity.collectAsState().value)
         }
 
         Spacer(modifier = Modifier.height(32.dp))
+    }
+}
+
+// ============================================================================
+// MEMORY ACTIVITY GRID (BAT-325)
+// ============================================================================
+
+private val MemoryDotCyan = Color(0xFF22D3EE)
+private val MemoryDotAmber = Color(0xFFFBBF24)
+
+private data class MemoryGroup(val key: String, val label: String)
+
+private val MEMORY_GROUPS_ROW1 = listOf(
+    MemoryGroup("soul", "SOUL"),
+    MemoryGroup("identity", "ID"),
+    MemoryGroup("user", "USER"),
+    MemoryGroup("memory", "MEM"),
+)
+private val MEMORY_GROUPS_ROW2 = listOf(
+    MemoryGroup("daily", "DAILY"),
+    MemoryGroup("heartbeat", "HB"),
+    MemoryGroup("skills", "SKILL"),
+    MemoryGroup("config", "CFG"),
+)
+
+@Composable
+private fun MemoryActivityGrid(memoryActivity: MemoryActivityData) {
+    val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
+
+    // Tick every 500ms to drive time-based fade animations
+    var tick by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(500)
+            tick = System.currentTimeMillis()
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(SeekerClawColors.Surface, shape)
+            .padding(16.dp),
+    ) {
+        // Row 1
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+        ) {
+            MEMORY_GROUPS_ROW1.forEach { group ->
+                MemoryDot(group, memoryActivity.groups[group.key], tick)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Row 2
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+        ) {
+            MEMORY_GROUPS_ROW2.forEach { group ->
+                MemoryDot(group, memoryActivity.groups[group.key], tick)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(14.dp))
+
+        // Legend
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(1.dp)
+                .background(SeekerClawColors.TextDim.copy(alpha = 0.1f)),
+        )
+        Spacer(modifier = Modifier.height(10.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            LegendDot(MemoryDotCyan, "read")
+            Spacer(modifier = Modifier.width(20.dp))
+            LegendDot(MemoryDotAmber, "write")
+        }
+    }
+}
+
+@Composable
+private fun MemoryDot(group: MemoryGroup, activity: FileGroupActivity?, tick: Long) {
+    val totalAccess = (activity?.readCount ?: 0) + (activity?.writeCount ?: 0)
+
+    // Hybrid dot sizing based on access frequency
+    val targetSize = when {
+        totalAccess == 0 -> 10.dp
+        totalAccess <= 10 -> 12.dp
+        totalAccess <= 50 -> 14.dp
+        totalAccess <= 200 -> 16.dp
+        else -> 18.dp
+    }
+    val animatedSize by animateDpAsState(
+        targetValue = targetSize,
+        animationSpec = tween(durationMillis = 600),
+        label = "dotSize_${group.key}",
+    )
+
+    // Color based on recency: write (amber) > read (cyan) > dim
+    val targetColor = if (activity != null) {
+        val readAge = tick - activity.lastRead
+        val writeAge = tick - activity.lastWrite
+        when {
+            activity.lastWrite > 0 && writeAge < 3000 -> MemoryDotAmber
+            activity.lastRead > 0 && readAge < 3000 -> MemoryDotCyan
+            (activity.lastRead > 0 && readAge < 30000) ||
+                (activity.lastWrite > 0 && writeAge < 30000) ->
+                SeekerClawColors.TextDim.copy(alpha = 0.6f)
+            else -> SeekerClawColors.TextDim.copy(alpha = 0.2f)
+        }
+    } else {
+        SeekerClawColors.TextDim.copy(alpha = 0.2f)
+    }
+    val animatedColor by animateColorAsState(
+        targetValue = targetColor,
+        animationSpec = tween(durationMillis = 800),
+        label = "dotColor_${group.key}",
+    )
+
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.width(56.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(animatedSize)
+                .clip(CircleShape)
+                .background(animatedColor),
+        )
+        Spacer(modifier = Modifier.height(6.dp))
+        Text(
+            text = group.label,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 9.sp,
+            color = SeekerClawColors.TextDim,
+            fontWeight = FontWeight.Medium,
+        )
+    }
+}
+
+@Composable
+private fun LegendDot(color: Color, label: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            modifier = Modifier
+                .size(6.dp)
+                .clip(CircleShape)
+                .background(color),
+        )
+        Spacer(modifier = Modifier.width(4.dp))
+        Text(
+            text = label,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 9.sp,
+            color = SeekerClawColors.TextDim,
+        )
     }
 }
 

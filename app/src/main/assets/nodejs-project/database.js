@@ -11,6 +11,7 @@ const {
 } = require('./config');
 
 const { setDb } = require('./memory');
+const { trackMemoryAccess } = require('./activity');
 
 // ============================================================================
 // DATABASE STATE
@@ -236,7 +237,11 @@ function indexMemoryFiles() {
         db.run(`INSERT OR REPLACE INTO meta (key, value) VALUES ('last_indexed', ?)`,
             [localTimestamp()]);
 
-        if (indexed > 0) saveDatabase();
+        if (indexed > 0) {
+            saveDatabase();
+            trackMemoryAccess('MEMORY.md', 'read');
+            trackMemoryAccess('memory/daily.md', 'read');
+        }
         log(`[Memory] Indexed ${indexed} files, skipped ${skipped} unchanged`, 'DEBUG');
     } catch (err) {
         log(`[Memory] Indexing error (non-fatal): ${err.message}`, 'WARN');
@@ -449,6 +454,8 @@ function backfillSessionsFromFiles() {
 // Registered outside initDatabase so shutdown hooks work even if DB init fails
 async function gracefulShutdown(signal) {
     log(`[Shutdown] ${signal} received, saving session summary...`, 'INFO');
+    // BAT-325: Flush final memory activity state
+    try { require('./activity').cleanupActivityTimer(); } catch (_) {}
     try {
         const { conversations, saveSessionSummary, MIN_MESSAGES_FOR_SUMMARY } = _shutdownDeps;
         if (conversations && saveSessionSummary) {

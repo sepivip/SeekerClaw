@@ -28,6 +28,20 @@ data class AgentHealth(
     val isStale: Boolean = false,
 )
 
+/** Per-group file access stats for Memory Activity Grid (BAT-325). */
+data class FileGroupActivity(
+    val lastRead: Long = 0,
+    val lastWrite: Long = 0,
+    val readCount: Int = 0,
+    val writeCount: Int = 0,
+)
+
+/** Aggregated memory activity from all file groups. */
+data class MemoryActivityData(
+    val groups: Map<String, FileGroupActivity> = emptyMap(),
+    val updatedAt: Long = 0,
+)
+
 sealed class ApiUsageData {
     abstract val updatedAt: Long
     abstract val error: String?
@@ -80,6 +94,9 @@ object ServiceState {
 
     private val _agentHealth = MutableStateFlow(AgentHealth())
     val agentHealth: StateFlow<AgentHealth> = _agentHealth
+
+    private val _memoryActivity = MutableStateFlow(MemoryActivityData())
+    val memoryActivity: StateFlow<MemoryActivityData> = _memoryActivity
 
     // Private lock for health transition logging.
     // Prevents the TOCTOU where overlapping pollingJob coroutines (caused by cooperative
@@ -213,6 +230,7 @@ object ServiceState {
                 readBridgeToken()
                 readApiUsageFile()
                 readAgentHealthFile()
+                readMemoryActivityFile()
                 delay(1000)
             }
         }
@@ -339,6 +357,33 @@ object ServiceState {
                 }
             }
             logEntry?.let { (msg, level) -> LogCollector.append(msg, level) }
+        } catch (_: Exception) {}
+    }
+
+    /** BAT-325: Read memory activity state written by Node.js activity.js */
+    private fun readMemoryActivityFile() {
+        val parent = stateFile?.parentFile ?: return
+        val file = File(parent, "workspace/memory_activity_state")
+        try {
+            if (!file.exists()) return
+            val json = JSONObject(file.readText())
+            val groups = mutableMapOf<String, FileGroupActivity>()
+            val keys = listOf("soul", "identity", "user", "memory", "daily", "heartbeat", "skills", "config")
+            for (key in keys) {
+                val obj = json.optJSONObject(key) ?: continue
+                groups[key] = FileGroupActivity(
+                    lastRead = obj.optLong("lastRead", 0),
+                    lastWrite = obj.optLong("lastWrite", 0),
+                    readCount = obj.optInt("readCount", 0),
+                    writeCount = obj.optInt("writeCount", 0),
+                )
+            }
+            val updatedAt = try {
+                java.time.Instant.parse(json.optString("updatedAt", "")).toEpochMilli()
+            } catch (_: Exception) { 0L }
+
+            val data = MemoryActivityData(groups, updatedAt)
+            if (_memoryActivity.value != data) _memoryActivity.value = data
         } catch (_: Exception) {}
     }
 
