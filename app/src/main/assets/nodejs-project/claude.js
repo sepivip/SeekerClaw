@@ -1021,7 +1021,7 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
     // Keep Telegram "typing..." indicator alive during API call (expires after 5s).
     // Fire immediately (covers gap on 2nd+ API calls in tool-use loop), then every 4s.
     let typingInterval = null;
-    if (chatId && typeof chatId === 'number') {
+    if (chatId && typeof chatId === 'number' && !background) {
         sendTyping(chatId);
         typingInterval = setInterval(() => sendTyping(chatId), 4000);
     }
