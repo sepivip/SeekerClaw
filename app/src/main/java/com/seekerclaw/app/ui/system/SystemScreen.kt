@@ -462,7 +462,7 @@ private val MEMORY_GROUPS_ROW2 = listOf(
     MemoryGroup("daily", "DAILY"),
     MemoryGroup("heartbeat", "HB"),
     MemoryGroup("skills", "SKILL"),
-    MemoryGroup("config", "CFG"),
+    MemoryGroup("settings", "SET"),
 )
 
 @Composable

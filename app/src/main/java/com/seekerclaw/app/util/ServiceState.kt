@@ -368,7 +368,7 @@ object ServiceState {
             if (!file.exists()) return
             val json = JSONObject(file.readText())
             val groups = mutableMapOf<String, FileGroupActivity>()
-            val keys = listOf("soul", "identity", "user", "memory", "daily", "heartbeat", "skills", "config")
+            val keys = listOf("soul", "identity", "user", "memory", "daily", "heartbeat", "skills", "settings")
             for (key in keys) {
                 val obj = json.optJSONObject(key) ?: continue
                 groups[key] = FileGroupActivity(

@@ -26,7 +26,7 @@ function classifyPath(relPath) {
     if (base === 'USER.md') return 'user';
     if (base === 'MEMORY.md') return 'memory';
     if (base === 'HEARTBEAT.md') return 'heartbeat';
-    if (base === 'config.yaml') return 'config';
+    if (base === 'agent_settings.json') return 'settings';
     if (normalized.startsWith('memory/') && base.endsWith('.md')) return 'daily';
     if (normalized.startsWith('skills/') && base.endsWith('.md')) return 'skills';
     return null;
