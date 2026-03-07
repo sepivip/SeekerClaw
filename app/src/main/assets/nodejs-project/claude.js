@@ -275,7 +275,8 @@ async function generateSessionSummary(chatId) {
 
     const res = await claudeApiCall(body, chatId, { background: true });
     if (res.status !== 200) {
-        const reason = res.data?.error?.message || JSON.stringify(res.data?.error || '').slice(0, 200);
+        const d = res.data;
+        const reason = d?.error?.message || (typeof d === 'string' ? d.slice(0, 200) : JSON.stringify(d || '').slice(0, 200));
         log(`[SessionSummary] API ${res.status}: ${reason}`, 'WARN');
         return null;
     }
