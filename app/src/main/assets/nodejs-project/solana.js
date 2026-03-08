@@ -877,6 +877,76 @@ async function jupiterPrice(mintAddresses) {
     return res.data;
 }
 
+// ============================================================================
+// HELIUS DAS (Digital Asset Standard) API — NFT holdings (BAT-319)
+// ============================================================================
+
+async function heliusDasRequest(method, params) {
+    if (!config.heliusApiKey) {
+        return { error: 'Helius API key not configured' };
+    }
+
+    const MAX_ATTEMPTS = 2;
+    const BASE_DELAY_MS = 1500;
+
+    const body = JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method,
+        params,
+    });
+
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        try {
+            const res = await httpRequest({
+                hostname: 'mainnet.helius-rpc.com',
+                path: `/?api-key=${encodeURIComponent(config.heliusApiKey)}`,
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json',
+                },
+            }, body);
+
+            if (res.status === 401) {
+                return { error: 'Invalid Helius API key — check your key at helius.dev' };
+            }
+
+            if (res.status !== 200) {
+                let detail = '';
+                try {
+                    const d = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
+                    detail = d?.error?.message || d?.message || JSON.stringify(d).slice(0, 200);
+                } catch (_) { detail = String(res.data || '').slice(0, 200); }
+                const errMsg = `Helius DAS HTTP ${res.status}${detail ? ': ' + detail : ''}`;
+                const isTransient = res.status >= 500 || res.status === 429;
+                if (!isTransient || attempt === MAX_ATTEMPTS) {
+                    return { error: errMsg };
+                }
+                // Fall through to retry
+            } else {
+                const data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
+                if (data.error) {
+                    return { error: `DAS error: ${data.error.message || JSON.stringify(data.error)}` };
+                }
+                return data.result;
+            }
+        } catch (e) {
+            const errMsg = String(e.message || e).toLowerCase();
+            const isTransient = ['timeout', 'econnreset', 'econnrefused', 'etimedout', 'socket hang up'].some(p => errMsg.includes(p));
+            if (!isTransient || attempt === MAX_ATTEMPTS) {
+                if (attempt > 1) log(`[Helius DAS] ${method} failed after ${attempt} attempts: ${e.message}`, 'WARN');
+                return { error: e.message };
+            }
+        }
+
+        // Transient failure — retry with jitter
+        const delay = BASE_DELAY_MS + Math.random() * 500;
+        log(`[Helius DAS] ${method} transient failure (attempt ${attempt}/${MAX_ATTEMPTS}) — retrying in ${Math.round(delay)}ms`, 'WARN');
+        await new Promise(r => setTimeout(r, delay));
+    }
+}
+
 module.exports = {
     solanaRpc,
     base58Encode,
@@ -895,4 +965,5 @@ module.exports = {
     jupiterTriggerExecute,
     jupiterRecurringExecute,
     jupiterPrice,
+    heliusDasRequest,
 };

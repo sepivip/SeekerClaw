@@ -37,7 +37,7 @@ const {
     verifySwapTransaction, jupiterRequest,
     isValidSolanaAddress, parseInputAmountToLamports,
     ensureWalletAuthorized, getConnectedWalletAddress,
-    refreshJupiterProgramLabels,
+    refreshJupiterProgramLabels, heliusDasRequest,
 } = require('./solana');
 
 const {
@@ -715,6 +715,20 @@ const TOOLS = [
             type: 'object',
             properties: {
                 address: { type: 'string', description: 'Solana wallet address to check (defaults to your connected wallet if not specified)' }
+            },
+            required: []
+        }
+    },
+    {
+        name: 'solana_nft_holdings',
+        description: 'View NFTs (including compressed/cNFTs) held by a Solana wallet (up to 100). Returns collection name, NFT name, asset ID, mint address (non-compressed only), image URL, and whether it is compressed. Requires Helius API key. For floor prices, use a skill with Magic Eden or Tensor APIs.',
+        input_schema: {
+            type: 'object',
+            properties: {
+                address: {
+                    type: 'string',
+                    description: 'Solana wallet public key (base58). If omitted, uses the connected wallet address.'
+                }
             },
             required: []
         }
@@ -3256,6 +3270,76 @@ async function executeTool(name, input, chatId) {
                         valueUsd: `$${(holding.valueUsd || 0).toFixed(2)}`,
                         price: (holding.price !== null && holding.price !== undefined) ? `$${holding.price}` : 'N/A'
                     }))
+                };
+            } catch (e) {
+                return { error: e.message };
+            }
+        }
+
+        case 'solana_nft_holdings': {
+            if (!config.heliusApiKey) {
+                return {
+                    error: 'Helius API key required',
+                    guide: 'Get a free API key at helius.dev (50k requests/day free tier), then add it in SeekerClaw Settings > Solana Wallet > Helius API Key'
+                };
+            }
+
+            let walletAddress = input.address;
+            if (!walletAddress) {
+                try {
+                    walletAddress = getConnectedWalletAddress();
+                } catch (e) {
+                    return { error: e.message };
+                }
+            }
+            if (!isValidSolanaAddress(walletAddress)) {
+                return { error: 'Invalid Solana wallet address', details: `Address "${walletAddress}" is not a valid base58 Solana public key.` };
+            }
+
+            try {
+                const dasResult = await heliusDasRequest('getAssetsByOwner', {
+                    ownerAddress: walletAddress,
+                    page: 1,
+                    limit: 100,
+                    displayOptions: {
+                        showCollectionMetadata: true,
+                        showFungible: false,
+                    }
+                });
+
+                if (dasResult.error) {
+                    return { error: dasResult.error };
+                }
+
+                const NFT_INTERFACES = ['V1_NFT', 'V2_NFT', 'ProgrammableNFT', 'MplCoreAsset'];
+                const allItems = dasResult.items || [];
+                const nfts = allItems.filter(item =>
+                    NFT_INTERFACES.includes(item.interface) ||
+                    (item.compression && item.compression.compressed)
+                );
+
+                const formatted = nfts.slice(0, 100).map(nft => {
+                    const isCompressed = nft.compression?.compressed ?? false;
+                    return {
+                        name: nft.content?.metadata?.name ?? 'Unknown',
+                        collection: nft.grouping?.find(g => g.group_key === 'collection')?.group_value ?? null,
+                        collectionName: nft.content?.metadata?.collection?.name ??
+                                       nft.grouping?.find(g => g.group_key === 'collection')?.collection_metadata?.name ?? null,
+                        assetId: nft.id,
+                        mint: isCompressed ? null : nft.id,
+                        image: nft.content?.links?.image ?? nft.content?.files?.[0]?.uri ?? null,
+                        compressed: isCompressed,
+                    };
+                });
+
+                const total = Number.isFinite(dasResult.total) ? dasResult.total : formatted.length;
+
+                return {
+                    success: true,
+                    wallet: walletAddress,
+                    count: total,
+                    returned: formatted.length,
+                    nfts: formatted,
                 };
             } catch (e) {
                 return { error: e.message };

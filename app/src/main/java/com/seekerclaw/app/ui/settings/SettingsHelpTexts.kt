@@ -127,4 +127,9 @@ object SettingsHelpTexts {
         "Optional. Required for Solana token swaps via Jupiter aggregator. " +
         "Get a free key at portal.jup.ag (free tier: 60 req/min). " +
         "Without this, swap and quote tools will not work."
+
+    const val HELIUS_API_KEY =
+        "Optional. Required for viewing NFT holdings (including compressed NFTs). " +
+        "Get a free key at helius.dev (free tier: 50k requests/day). " +
+        "Without this, the NFT holdings tool will not work."
 }

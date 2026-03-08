@@ -140,6 +140,7 @@ if (config.reactionGuidance && !VALID_REACTION_GUIDANCE.has(config.reactionGuida
 if (config.braveApiKey) config.braveApiKey = normalizeSecret(config.braveApiKey);
 if (config.perplexityApiKey) config.perplexityApiKey = normalizeSecret(config.perplexityApiKey);
 if (config.jupiterApiKey) config.jupiterApiKey = normalizeSecret(config.jupiterApiKey);
+if (config.heliusApiKey) config.heliusApiKey = normalizeSecret(config.heliusApiKey);
 
 // MCP server configs (remote tool servers) — normalize first, then filter invalid
 const MCP_SERVERS = (config.mcpServers || [])
@@ -295,6 +296,7 @@ const TOOL_STATUS_MAP = {
     memory_search:          '🧠 Remembering...',
     android_camera_capture: '📷 Capturing...',
     android_location:       '📍 Getting location...',
+    solana_nft_holdings:    '🖼️ Checking NFTs...',
 };
 
 // ============================================================================
@@ -307,7 +309,7 @@ const TOOL_STATUS_MAP = {
 
 // Known mappings for keys that come from Android Settings (config.json).
 // These get priority — agent_settings.json keys never overwrite them.
-const _knownKeyMap = { perplexity: 'perplexityApiKey', brave: 'braveApiKey', jupiter: 'jupiterApiKey' };
+const _knownKeyMap = { perplexity: 'perplexityApiKey', brave: 'braveApiKey', jupiter: 'jupiterApiKey', helius: 'heliusApiKey' };
 
 // Snapshot which keys came from Android Settings at startup (immutable).
 // Protect ALL existing *ApiKey fields, not just known ones.

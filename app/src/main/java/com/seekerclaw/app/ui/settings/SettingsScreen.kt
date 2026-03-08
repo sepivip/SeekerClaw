@@ -751,8 +751,26 @@ fun SettingsScreen(
                     editLabel = "Jupiter API Key"
                     editValue = config?.jupiterApiKey ?: ""
                 },
-                showDivider = false,
+                showDivider = true,
                 info = SettingsHelpTexts.JUPITER_API_KEY,
+            )
+
+            // Helius API Key (NFT holdings)
+            Spacer(modifier = Modifier.height(20.dp))
+            ConfigField(
+                label = "Helius API Key",
+                value = config?.heliusApiKey?.let { key ->
+                    if (key.isBlank()) "Not set — NFT holdings disabled"
+                    else if (key.length > 12) "${key.take(8)}${"*".repeat(8)}${key.takeLast(4)}"
+                    else "*".repeat(key.length)
+                } ?: "Not set — NFT holdings disabled",
+                onClick = {
+                    editField = "heliusApiKey"
+                    editLabel = "Helius API Key"
+                    editValue = config?.heliusApiKey ?: ""
+                },
+                showDivider = false,
+                info = SettingsHelpTexts.HELIUS_API_KEY,
             )
             }
         }
@@ -1069,7 +1087,7 @@ fun SettingsScreen(
             },
             text = {
                 Column {
-                    if (editField == "braveApiKey" || editField == "jupiterApiKey") {
+                    if (editField == "braveApiKey" || editField == "jupiterApiKey" || editField == "heliusApiKey") {
                         Text(
                             "Changing this requires an agent restart.",
                             fontFamily = RethinkSans,
@@ -1105,8 +1123,8 @@ fun SettingsScreen(
                         if (field == "braveApiKey") {
                             // Allow empty to disable web search
                             saveField(field, trimmed)
-                        } else if (field == "jupiterApiKey") {
-                            // Allow empty to disable swaps
+                        } else if (field == "jupiterApiKey" || field == "heliusApiKey") {
+                            // Allow empty to disable swaps/NFT holdings
                             saveField(field, trimmed)
                         } else if (trimmed.isNotEmpty()) {
                             saveField(field, trimmed)

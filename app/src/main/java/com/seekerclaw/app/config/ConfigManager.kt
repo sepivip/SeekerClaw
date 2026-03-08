@@ -35,6 +35,7 @@ data class AppConfig(
     val agentName: String,
     val braveApiKey: String = "",
     val jupiterApiKey: String = "",
+    val heliusApiKey: String = "",
     val autoStartOnBoot: Boolean = true,
     val heartbeatIntervalMinutes: Int = 30,
     val provider: String = "claude", // "claude" or "openai"
@@ -71,6 +72,7 @@ object ConfigManager {
     private const val KEY_SETUP_TOKEN_ENC = "setup_token_enc"
     private const val KEY_BRAVE_API_KEY_ENC = "brave_api_key_enc"
     private const val KEY_JUPITER_API_KEY_ENC = "jupiter_api_key_enc"
+    private const val KEY_HELIUS_API_KEY_ENC = "helius_api_key_enc"
     private const val KEY_WALLET_ADDRESS = "wallet_address"
     private const val KEY_WALLET_LABEL = "wallet_label"
     private const val KEY_MCP_SERVERS_ENC = "mcp_servers_enc"
@@ -125,6 +127,13 @@ object ConfigManager {
             editor.putString(KEY_JUPITER_API_KEY_ENC, Base64.encodeToString(encJupiter, Base64.NO_WRAP))
         } else {
             editor.remove(KEY_JUPITER_API_KEY_ENC)
+        }
+
+        if (config.heliusApiKey.isNotBlank()) {
+            val encHelius = KeystoreHelper.encrypt(config.heliusApiKey)
+            editor.putString(KEY_HELIUS_API_KEY_ENC, Base64.encodeToString(encHelius, Base64.NO_WRAP))
+        } else {
+            editor.remove(KEY_HELIUS_API_KEY_ENC)
         }
 
         editor.putString(KEY_PROVIDER, config.provider)
@@ -193,6 +202,15 @@ object ConfigManager {
             ""
         }
 
+        val heliusApiKey = try {
+            val enc = p.getString(KEY_HELIUS_API_KEY_ENC, null)
+            if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to decrypt Helius API key", e)
+            LogCollector.append("[Config] Failed to decrypt Helius API key: ${e.javaClass.simpleName}", LogLevel.ERROR)
+            ""
+        }
+
         val openaiApiKey = try {
             val enc = p.getString(KEY_OPENAI_API_KEY_ENC, null)
             if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
@@ -212,6 +230,7 @@ object ConfigManager {
             agentName = p.getString(KEY_AGENT_NAME, "MyAgent") ?: "MyAgent",
             braveApiKey = braveApiKey,
             jupiterApiKey = jupiterApiKey,
+            heliusApiKey = heliusApiKey,
             autoStartOnBoot = p.getBoolean(KEY_AUTO_START, true),
             heartbeatIntervalMinutes = p.getInt(KEY_HEARTBEAT_INTERVAL, 30),
             provider = p.getString(KEY_PROVIDER, "claude") ?: "claude",
@@ -245,6 +264,7 @@ object ConfigManager {
             "authType" -> config.copy(authType = value)
             "braveApiKey" -> config.copy(braveApiKey = value)
             "jupiterApiKey" -> config.copy(jupiterApiKey = value)
+            "heliusApiKey" -> config.copy(heliusApiKey = value)
             "heartbeatIntervalMinutes" -> config.copy(
                 heartbeatIntervalMinutes = value.toIntOrNull()?.coerceIn(5, 120) ?: 30
             )
@@ -308,6 +328,10 @@ object ConfigManager {
             """,
             |  "jupiterApiKey": "${escapeJson(config.jupiterApiKey)}""""
         } else ""
+        val heliusField = if (config.heliusApiKey.isNotBlank()) {
+            """,
+            |  "heliusApiKey": "${escapeJson(config.heliusApiKey)}""""
+        } else ""
         val mcpServers = loadMcpServers(context)
         val mcpField = if (mcpServers.isNotEmpty()) {
             val arr = JSONArray()
@@ -338,7 +362,7 @@ object ConfigManager {
             |  "model": "${escapeJson(config.model)}",
             |  "agentName": "${escapeJson(config.agentName)}",
             |  "heartbeatIntervalMinutes": ${config.heartbeatIntervalMinutes},
-            |  "bridgeToken": "${escapeJson(bridgeToken)}"$braveField$jupiterField$openaiField$mcpField
+            |  "bridgeToken": "${escapeJson(bridgeToken)}"$braveField$jupiterField$heliusField$openaiField$mcpField
             |}
         """.trimMargin()
         File(workspaceDir, "config.json").writeText(json)
