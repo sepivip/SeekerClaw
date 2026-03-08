@@ -24,7 +24,7 @@ const {
 } = require('./memory');
 
 const {
-    cronService, parseTimeExpression, formatDuration,
+    cronService, parseTimeExpression, formatDuration, MIN_AGENT_TURN_INTERVAL_MS,
 } = require('./cron');
 
 const { getDb, indexMemoryFiles } = require('./database');
@@ -112,6 +112,14 @@ function formatConfirmationMessage(toolName, input) {
 
 // Send confirmation message and wait for user reply (Promise-based)
 function requestConfirmation(chatId, toolName, input) {
+    // BAT-326: Cron sessions use synthetic chatIds (e.g. "cron:abc123") that are not
+    // valid Telegram chat IDs. Auto-deny confirmation-gated tools in cron turns with
+    // a clear error rather than sending a Telegram message that will always fail.
+    if (typeof chatId === 'string' && chatId.startsWith('cron:')) {
+        log(`[Confirm] Rejected ${toolName} in cron session ${chatId} — confirmation-gated tools cannot run in scheduled tasks`, 'WARN');
+        return Promise.reject(new Error(`${toolName} requires user confirmation which is not available in scheduled tasks. Confirmation-gated tools (swaps, transfers, etc.) cannot be used in cron agent turns.`));
+    }
+
     const msg = formatConfirmationMessage(toolName, input);
     return new Promise((resolve) => {
         const timer = setTimeout(() => {
@@ -315,13 +323,14 @@ const TOOLS = [
     },
     {
         name: 'cron_create',
-        description: 'Create a scheduled job. Supports one-shot reminders ("in 30 minutes", "tomorrow at 9am") and recurring intervals ("every 2 hours", "every 30 minutes").',
+        description: 'Create a scheduled job. Two kinds: "agentTurn" runs a full AI turn with tools (for tasks needing research, analysis, monitoring — costs API tokens per execution), "reminder" sends raw text to Telegram (for simple alerts — zero cost). Supports one-shot ("in 30 minutes", "tomorrow at 9am") and recurring ("every 2 hours"). Recurring agentTurn jobs require a minimum 15-minute interval.',
         input_schema: {
             type: 'object',
             properties: {
-                name: { type: 'string', description: 'Short name for the job (e.g., "Water plants reminder")' },
-                message: { type: 'string', description: 'The message to deliver when the job fires' },
+                name: { type: 'string', description: 'Short name for the job (e.g., "Daily SOL price check")' },
+                message: { type: 'string', description: 'For agentTurn: the task instruction (you will execute this as an AI turn with full tool access). For reminder: the text to deliver.' },
                 time: { type: 'string', description: 'When to fire: "in 30 minutes", "tomorrow at 9am", "every 2 hours", "at 3pm"' },
+                kind: { type: 'string', enum: ['reminder', 'agentTurn'], description: 'Job type: "agentTurn" runs a full AI turn with tools (default for tasks needing intelligence), "reminder" sends text directly to Telegram (default for simple notifications). Default: "reminder".' },
                 deleteAfterRun: { type: 'boolean', description: 'If true, delete the job after it runs (default: false for one-shot, N/A for recurring)' }
             },
             required: ['message', 'time']
@@ -1375,6 +1384,7 @@ async function executeTool(name, input, chatId) {
                     if (input.job.time) input.time = input.job.time;
                     if (input.job.message) input.message = input.job.message;
                     if (input.job.name) input.name = input.job.name;
+                    if (input.job.kind) input.kind = input.job.kind;
                     if (input.job.deleteAfterRun !== undefined) input.deleteAfterRun = input.job.deleteAfterRun;
                 }
             }
@@ -1396,8 +1406,16 @@ async function executeTool(name, input, chatId) {
                 }
             }
 
+            // Normalize kind to valid values only (BAT-326 review fix)
+            const kind = input.kind === 'agentTurn' ? 'agentTurn' : 'reminder';
+
             let schedule;
             if (isRecurring) {
+                // Enforce minimum interval for agentTurn recurring jobs (BAT-326)
+                if (kind === 'agentTurn' && triggerTime._everyMs < MIN_AGENT_TURN_INTERVAL_MS) {
+                    const minMinutes = Math.ceil(MIN_AGENT_TURN_INTERVAL_MS / 60000);
+                    return { error: `Recurring agentTurn jobs require a minimum interval of ${minMinutes} minutes. agentTurn jobs run a full AI turn (with tools and API calls) on each execution. Use kind="reminder" for shorter intervals.` };
+                }
                 schedule = {
                     kind: 'every',
                     everyMs: triggerTime._everyMs,
@@ -1410,24 +1428,36 @@ async function executeTool(name, input, chatId) {
                 };
             }
 
+            const payload = kind === 'agentTurn'
+                ? { kind: 'agentTurn', message: input.message }
+                : { kind: 'reminder', message: input.message };
+
             const job = cronService.create({
                 name: input.name || input.message.slice(0, 50),
                 description: input.message,
                 schedule,
-                payload: { kind: 'reminder', message: input.message },
+                payload,
                 deleteAfterRun: input.deleteAfterRun || false,
             });
 
-            return {
+            const result = {
                 success: true,
                 id: job.id,
                 name: job.name,
+                kind,
                 message: input.message,
                 type: isRecurring ? 'recurring' : 'one-shot',
                 nextRunAt: job.state.nextRunAtMs ? localTimestamp(new Date(job.state.nextRunAtMs)) : null,
                 nextRunIn: job.state.nextRunAtMs ? formatDuration(job.state.nextRunAtMs - Date.now()) : null,
                 interval: isRecurring ? formatDuration(triggerTime._everyMs) : null,
             };
+
+            // Inform about API token usage for agentTurn jobs
+            if (kind === 'agentTurn') {
+                result.note = 'This job runs a full AI turn on each execution and will consume API tokens.';
+            }
+
+            return result;
         }
 
         case 'cron_list': {
@@ -1438,6 +1468,7 @@ async function executeTool(name, input, chatId) {
                 jobs: jobs.map(j => ({
                     id: j.id,
                     name: j.name,
+                    kind: j.payload?.kind || 'reminder',
                     type: j.schedule.kind,
                     enabled: j.enabled,
                     message: j.payload?.message || j.description,

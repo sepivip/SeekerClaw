@@ -22,6 +22,18 @@ function setSendMessage(fn) {
     _sendMessage = fn || null;
 }
 
+// runAgentTurn is defined in main.js — injected after load via setRunAgentTurn()
+// Signature: async (message, jobId) => string|null (cleaned response or null if silent)
+let _runAgentTurn = null;
+
+function setRunAgentTurn(fn) {
+    if (fn != null && typeof fn !== 'function') {
+        log(`[Cron] WARNING: setRunAgentTurn called with ${typeof fn}, expected function`, 'WARN');
+        return;
+    }
+    _runAgentTurn = fn || null;
+}
+
 // ============================================================================
 // CONSTANTS
 // ============================================================================
@@ -30,7 +42,9 @@ const CRON_STORE_PATH = path.join(workDir, 'cron', 'jobs.json');
 const CRON_RUN_LOG_DIR = path.join(workDir, 'cron', 'runs');
 const MAX_TIMEOUT_MS = 2147483647; // 2^31 - 1 (setTimeout max)
 const MAX_CONCURRENT_RUNS = 1; // Default concurrent job limit (OpenClaw: configurable)
-const JOB_TIMEOUT_MS = 60000; // 60s timeout per job execution
+const JOB_TIMEOUT_MS = 60000; // 60s timeout per reminder execution
+const AGENT_TURN_TIMEOUT_MS = 300000; // 5 min timeout for agentTurn (full AI turn with tools)
+const MIN_AGENT_TURN_INTERVAL_MS = 15 * 60 * 1000; // 15 min minimum for recurring agentTurn jobs
 
 // ============================================================================
 // DURATION FORMATTING
@@ -528,26 +542,27 @@ const cronService = {
         let error = null;
         let delivered = false;
 
+        // Select timeout based on payload kind: agentTurn needs much longer (full AI turn with tools)
+        // Use optional chaining — corrupted jobs.json could have null/missing payload
+        const payloadKind = job.payload?.kind;
+        const effectiveTimeout = payloadKind === 'agentTurn' ? AGENT_TURN_TIMEOUT_MS : JOB_TIMEOUT_MS;
+
         // Timeout race for job execution.
         // Note: OpenClaw uses AbortController-based job timeouts, but here we only
-        // approximate that behavior by racing _sendMessage against a timeout promise;
-        // the underlying _sendMessage call is not actually cancelled, we just stop
-        // awaiting it after JOB_TIMEOUT_MS.
+        // approximate that behavior by racing the execution against a timeout promise;
+        // the underlying call is not actually cancelled, we just stop awaiting it.
         let timeoutId;
         const timeoutPromise = new Promise((_, reject) => {
-            timeoutId = setTimeout(() => reject(new Error(`Job timed out after ${JOB_TIMEOUT_MS}ms`)), JOB_TIMEOUT_MS);
+            timeoutId = setTimeout(() => reject(new Error(`Job timed out after ${effectiveTimeout}ms`)), effectiveTimeout);
             if (timeoutId.unref) timeoutId.unref(); // Don't keep process alive
         });
 
         try {
             // Execute based on payload type
-            if (job.payload.kind === 'reminder') {
+            if (payloadKind === 'reminder') {
                 const ownerId = getOwnerId();
                 const message = `⏰ **Reminder**\n\n${job.payload.message}\n\n_Set ${formatDuration(Date.now() - job.createdAtMs)} ago_`;
                 if (_sendMessage) {
-                    // Note: on timeout, delivered stays false even though _sendMessage
-                    // may still complete in the background. This is a known limitation
-                    // of Promise.race — true cancellation requires AbortSignal plumbing.
                     await Promise.race([_sendMessage(ownerId, message), timeoutPromise]);
                     delivered = true;
                 } else {
@@ -555,11 +570,53 @@ const cronService = {
                     throw new Error('sendMessage not available');
                 }
                 log(`[Cron] Delivered reminder: ${job.id}`, 'DEBUG');
+            } else if (payloadKind === 'agentTurn') {
+                // BAT-326: Run a full AI turn with the cron message as prompt.
+                // Uses isolated session (synthetic chatId) — bypasses chatQueues but still
+                // contends for the global apiCallInFlight mutex in claude.js.
+                if (!_runAgentTurn) {
+                    throw new Error('runAgentTurn not available — agent turn runner not injected');
+                }
+                // Note: this is a soft timeout (Promise.race). The underlying chat() call
+                // continues in the background if it exceeds the timeout. The apiCallInFlight
+                // mutex prevents overlapping API calls. True cancellation would require
+                // AbortController plumbing through chat().
+                // The entire agentTurn+delivery is wrapped in one race so a hanging
+                // Telegram send doesn't exceed the timeout either.
+                await Promise.race([(async () => {
+                    const result = await _runAgentTurn(job.payload.message, job.id);
+                    // result is cleaned response text, or null if SILENT_REPLY/HEARTBEAT_OK
+                    if (result) {
+                        const ownerId = getOwnerId();
+                        if (_sendMessage && ownerId) {
+                            const prefix = job.name ? `**[${job.name}]**\n\n` : '';
+                            await _sendMessage(ownerId, prefix + result);
+                            delivered = true;
+                        } else {
+                            log(`[Cron] WARNING: sendMessage or ownerId missing, cannot deliver agentTurn result for job ${job.id}`, 'ERROR');
+                            throw new Error('sendMessage/ownerId not available for agentTurn delivery');
+                        }
+                    } else {
+                        // SILENT_REPLY / HEARTBEAT_OK: turn ran successfully but nothing to report.
+                        // Don't set delivered=true — no Telegram message was actually sent.
+                        log(`[Cron] Agent turn ${job.id} completed with silent response (no delivery)`, 'DEBUG');
+                    }
+                })(), timeoutPromise]);
+                if (delivered) {
+                    log(`[Cron] Agent turn completed and delivered: ${job.id}`, 'DEBUG');
+                }
             }
         } catch (e) {
             status = 'error';
             error = e.message;
             log(`[Cron] Job error ${job.id}: ${error}`, 'ERROR');
+            // For agentTurn failures, notify the owner so they know the scheduled task failed
+            if (payloadKind === 'agentTurn' && _sendMessage) {
+                const ownerId = getOwnerId();
+                if (ownerId) {
+                    _sendMessage(ownerId, `⚠️ Scheduled task "${job.name}" failed: ${e.message}`).catch(() => {});
+                }
+            }
         } finally {
             clearTimeout(timeoutId);
         }
@@ -624,7 +681,9 @@ const cronService = {
 
 module.exports = {
     setSendMessage,
+    setRunAgentTurn,
     cronService,
     parseTimeExpression,
     formatDuration,
+    MIN_AGENT_TURN_INTERVAL_MS,
 };

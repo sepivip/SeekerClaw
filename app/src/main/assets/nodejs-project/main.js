@@ -63,7 +63,7 @@ const {
 // ============================================================================
 
 const {
-    setSendMessage, cronService,
+    setSendMessage, setRunAgentTurn, cronService,
 } = require('./cron');
 
 // ============================================================================
@@ -1072,6 +1072,10 @@ async function poll() {
 // CRON SERVICE STARTUP
 // ============================================================================
 
+// Wire cron agent turn runner BEFORE starting the service — a job due
+// at startup could fire immediately, and needs the runner injected.
+setRunAgentTurn(runCronAgentTurn);
+
 // Start the cron service (loads persisted jobs, arms timers)
 cronService.start();
 
@@ -1308,6 +1312,51 @@ function getHeartbeatIntervalMs() {
     } catch (_) {}
     return (config.heartbeatIntervalMinutes || 30) * 60 * 1000;
 }
+
+// ============================================================================
+// CRON AGENT TURN (BAT-326)
+// Runs a full AI turn for agentTurn cron jobs using an isolated session.
+// Uses synthetic chatId ("cron:{jobId}") so it doesn't pollute user conversation
+// and bypasses chatQueues (user messages are not queued behind cron turns).
+// Note: cron turns still contend for the global apiCallInFlight mutex in claude.js,
+// so they serialize at the API-call layer with user messages.
+// ============================================================================
+
+async function runCronAgentTurn(message, jobId) {
+    const cronChatId = `cron:${jobId}`;
+
+    // Clear any stale conversation from a prior run of the same job
+    clearConversation(cronChatId);
+
+    try {
+        const prompt = `[cron:${jobId}] ${message}\n\nCurrent time: ${localTimestamp()}`;
+        const response = await chat(cronChatId, prompt);
+
+        // Strip protocol tokens (same pattern as heartbeat probe)
+        const cleaned = response.trim()
+            .replace(/(?:^|\s+|\*+)HEARTBEAT_OK\s*$/gi, '').replace(/\bHEARTBEAT_OK\b/gi, '')
+            .replace(/(?:^|\s+|\*+)SILENT_REPLY\s*$/gi, '').replace(/\bSILENT_REPLY\b/gi, '')
+            .trim();
+
+        if (!cleaned) {
+            log(`[Cron] Agent turn ${jobId} returned silent response`, 'DEBUG');
+            return null;
+        }
+
+        return cleaned;
+    } finally {
+        // Always clean up the isolated session to prevent memory leaks.
+        // conversations and sessionTracking are keyed by chatId — deleting
+        // the synthetic key frees all state for this cron run.
+        conversations.delete(cronChatId);
+        sessionTracking.delete(cronChatId);
+        clearActiveTask(cronChatId);
+    }
+}
+
+// ============================================================================
+// HEARTBEAT PROBE
+// ============================================================================
 
 const HEARTBEAT_PROMPT =
     'Read HEARTBEAT.md if it exists. Follow it strictly. ' +

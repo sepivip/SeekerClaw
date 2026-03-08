@@ -376,12 +376,27 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     const user = loadUser();
 
     const lines = [];
+    const isCronSession = typeof chatId === 'string' && chatId.startsWith('cron:');
+
+    // CRON SESSION MODE (BAT-326) — inject task execution context
+    // Skip bootstrap injection for cron sessions — cron turns should never run the
+    // first-run ritual. If BOOTSTRAP.md exists during a cron turn, ignore it.
+    if (isCronSession) {
+        lines.push('# SCHEDULED TASK EXECUTION');
+        lines.push('You are running an automated scheduled task (cron job) in an isolated session.');
+        lines.push('Complete the task described in the user message efficiently and concisely.');
+        lines.push('Your output will be delivered to the owner via Telegram.');
+        lines.push('Do not greet, do not ask follow-up questions — deliver the result directly.');
+        lines.push('If there is nothing to report, reply with SILENT_REPLY.');
+        lines.push('Confirmation-gated tools (swaps, transfers) are NOT available in scheduled tasks.');
+        lines.push('');
+    }
 
     // BOOTSTRAP MODE - First run ritual takes priority.
     // BOOTSTRAP.md existence is the sole source of truth for "ritual in progress."
     // The agent deletes BOOTSTRAP.md when the ritual is complete.
     // If identity already exists (crash recovery / partial write), inject a resume note.
-    if (bootstrap) {
+    if (bootstrap && !isCronSession) {
         lines.push('# FIRST RUN - BOOTSTRAP MODE');
         lines.push('');
         if (identity) {
@@ -770,6 +785,17 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('  CORRECT (alert): "SOL dropped 15% to $68. Check positions."');
     lines.push('  WRONG (never do this): "SOL is at $80. Nothing urgent.\\n\\nHEARTBEAT_OK"');
     lines.push('Do not infer tasks from prior conversations. Only act on what HEARTBEAT.md explicitly says.');
+    lines.push('');
+
+    // Cron Scheduling section (BAT-326)
+    lines.push('## Scheduled Tasks (Cron)');
+    lines.push('You can create scheduled jobs with cron_create. Two kinds:');
+    lines.push('- **agentTurn**: Runs a full AI turn with tools at the scheduled time (for research, monitoring, analysis). Costs API tokens per execution.');
+    lines.push('- **reminder**: Sends raw text to Telegram (for simple alerts like "take meds"). Zero cost.');
+    lines.push('Use agentTurn when the task needs intelligence (check prices, generate reports, analyze data). Use reminder for simple text notifications.');
+    lines.push('When a message starts with [cron:...], you are executing a scheduled task in an isolated session.');
+    lines.push('Complete the task directly and concisely. Do not greet or ask follow-up questions — deliver results.');
+    lines.push('If nothing needs attention, reply SILENT_REPLY.');
     lines.push('');
 
     // Authorized Senders section - OpenClaw style
