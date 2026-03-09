@@ -444,6 +444,17 @@ function loadSkills() {
                 }
                 const skillPath = path.join(skillDir, 'SKILL.md');
                 if (fs.existsSync(skillPath)) {
+                    // Verify SKILL.md itself doesn't symlink outside skills dir
+                    try {
+                        const realSkillPath = fs.realpathSync(skillPath);
+                        if (!isPathInside(realSkillPath, realSkillsDir)) {
+                            log(`[Skills] Skipping '${entry.name}/SKILL.md': symlink escapes skills directory`, 'WARN');
+                            continue;
+                        }
+                    } catch (e) {
+                        log(`[Skills] Skipping '${entry.name}/SKILL.md': cannot resolve path`, 'WARN');
+                        continue;
+                    }
                     try {
                         const content = fs.readFileSync(skillPath, 'utf8');
                         const skill = parseSkillFile(content, skillDir);

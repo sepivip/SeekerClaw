@@ -475,7 +475,7 @@ function recordSentMessage(chatId, messageId, text) {
     });
 }
 
-const CHUNK_MAX = 4000; // Leave margin for Telegram's 4096 limit
+const CHUNK_MAX = 3500; // Conservative margin — HTML tags (<b>, <pre>, <code>) expand text beyond raw markdown length
 
 /**
  * Split text into Telegram-safe chunks, preferring markdown-friendly break points.

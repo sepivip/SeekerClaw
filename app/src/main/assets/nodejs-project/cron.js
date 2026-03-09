@@ -612,7 +612,6 @@ const cronService = {
         } catch (e) {
             status = 'error';
             error = e.message;
-            log(`[Cron] Job error ${job.id}: ${error}`, 'ERROR');
             // For agentTurn failures, notify the owner so they know the scheduled task failed
             if (payloadKind === 'agentTurn' && _sendMessage) {
                 const ownerId = getOwnerId();
@@ -648,7 +647,7 @@ const cronService = {
         if (status === 'error') {
             job.state.consecutiveErrors = (job.state.consecutiveErrors || 0) + 1;
             const transient = TRANSIENT_ERROR_RE.test(error || '');
-            log(`[Cron] Job ${job.id} error #${job.state.consecutiveErrors} (${transient ? 'transient' : 'permanent'}): ${error}`, 'WARN');
+            log(`[Cron] Job ${job.id} error #${job.state.consecutiveErrors} (${transient ? 'transient' : 'permanent'}): ${error}`, 'ERROR');
         } else {
             job.state.consecutiveErrors = 0;
         }
