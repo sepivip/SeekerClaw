@@ -491,24 +491,24 @@ function chunkMarkdown(text) {
         let breakAt = -1;
 
         // 1. Prefer paragraph boundary (double newline)
-        const paraIdx = remaining.lastIndexOf('\n\n', CHUNK_MAX);
+        const paraIdx = remaining.lastIndexOf('\n\n', CHUNK_MAX - 2);
         if (paraIdx > CHUNK_MAX * 0.3) {
-            breakAt = paraIdx + 2;
+            breakAt = paraIdx + 2; // always <= CHUNK_MAX
         }
 
         // 2. Fallback: single newline
         if (breakAt === -1) {
-            const lineIdx = remaining.lastIndexOf('\n', CHUNK_MAX);
+            const lineIdx = remaining.lastIndexOf('\n', CHUNK_MAX - 1);
             if (lineIdx > CHUNK_MAX * 0.3) {
-                breakAt = lineIdx + 1;
+                breakAt = lineIdx + 1; // always <= CHUNK_MAX
             }
         }
 
         // 3. Fallback: last whitespace (word boundary)
         if (breakAt === -1) {
-            const wsIdx = remaining.lastIndexOf(' ', CHUNK_MAX);
+            const wsIdx = remaining.lastIndexOf(' ', CHUNK_MAX - 1);
             if (wsIdx > CHUNK_MAX * 0.3) {
-                breakAt = wsIdx + 1;
+                breakAt = wsIdx + 1; // always <= CHUNK_MAX
             }
         }
 
