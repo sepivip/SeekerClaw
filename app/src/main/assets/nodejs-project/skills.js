@@ -400,7 +400,7 @@ function validateSkillFormat(skill, filePath) {
 // Defense-in-depth: verify a resolved path is inside the allowed base directory (OpenClaw parity: v2026.3.8)
 function isPathInside(childPath, parentPath) {
     const rel = path.relative(parentPath, childPath);
-    return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+    return rel !== '' && rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel);
 }
 
 let _firstLoadLogged = false;
@@ -444,9 +444,10 @@ function loadSkills() {
                 }
                 const skillPath = path.join(skillDir, 'SKILL.md');
                 if (fs.existsSync(skillPath)) {
-                    // Verify SKILL.md itself doesn't symlink outside skills dir
+                    // Verify SKILL.md itself doesn't symlink outside skills dir (read resolved path to close TOCTOU)
+                    let realSkillPath;
                     try {
-                        const realSkillPath = fs.realpathSync(skillPath);
+                        realSkillPath = fs.realpathSync(skillPath);
                         if (!isPathInside(realSkillPath, realSkillsDir)) {
                             log(`[Skills] Skipping '${entry.name}/SKILL.md': symlink escapes skills directory`, 'WARN');
                             continue;
@@ -456,7 +457,7 @@ function loadSkills() {
                         continue;
                     }
                     try {
-                        const content = fs.readFileSync(skillPath, 'utf8');
+                        const content = fs.readFileSync(realSkillPath, 'utf8');
                         const skill = parseSkillFile(content, skillDir);
                         validateSkillFormat(skill, skillPath);
                         if (skill.name) {
@@ -472,9 +473,10 @@ function loadSkills() {
             } else if (entry.isFile() && entry.name.endsWith('.md')) {
                 // Flat .md skill files (SeekerClaw format)
                 const filePath = path.join(SKILLS_DIR, entry.name);
-                // Symlink escape check
+                // Symlink escape check (read resolved path to close TOCTOU)
+                let realFile;
                 try {
-                    const realFile = fs.realpathSync(filePath);
+                    realFile = fs.realpathSync(filePath);
                     if (!isPathInside(realFile, realSkillsDir)) {
                         log(`[Skills] Skipping '${entry.name}': path escapes skills directory`, 'WARN');
                         continue;
@@ -484,7 +486,7 @@ function loadSkills() {
                     continue;
                 }
                 try {
-                    const content = fs.readFileSync(filePath, 'utf8');
+                    const content = fs.readFileSync(realFile, 'utf8');
                     const skill = parseSkillFile(content, SKILLS_DIR);
                     validateSkillFormat(skill, filePath);
                     if (skill.name) {

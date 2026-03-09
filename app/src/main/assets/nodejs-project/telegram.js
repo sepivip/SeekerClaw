@@ -521,7 +521,7 @@ function chunkMarkdown(text) {
         remaining = remaining.slice(breakAt);
 
         // Handle unclosed code fences: odd count of ``` means one is open
-        const fences = chunk.match(/^```/gm);
+        const fences = chunk.match(/^ {0,3}```/gm);
         if (fences && fences.length % 2 !== 0) {
             chunk += '\n```';
             remaining = '```\n' + remaining;
