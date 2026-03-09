@@ -475,6 +475,68 @@ function recordSentMessage(chatId, messageId, text) {
     });
 }
 
+const CHUNK_MAX = 4000; // Leave margin for Telegram's 4096 limit
+
+/**
+ * Split text into Telegram-safe chunks, preferring markdown-friendly break points.
+ * Handles paragraph breaks, line breaks, word boundaries, and code fence continuity.
+ */
+function chunkMarkdown(text) {
+    if (text.length <= CHUNK_MAX) return [text];
+
+    const chunks = [];
+    let remaining = text;
+
+    while (remaining.length > CHUNK_MAX) {
+        let breakAt = -1;
+
+        // 1. Prefer paragraph boundary (double newline)
+        const paraIdx = remaining.lastIndexOf('\n\n', CHUNK_MAX);
+        if (paraIdx > CHUNK_MAX * 0.3) {
+            breakAt = paraIdx + 2;
+        }
+
+        // 2. Fallback: single newline
+        if (breakAt === -1) {
+            const lineIdx = remaining.lastIndexOf('\n', CHUNK_MAX);
+            if (lineIdx > CHUNK_MAX * 0.3) {
+                breakAt = lineIdx + 1;
+            }
+        }
+
+        // 3. Fallback: last whitespace (word boundary)
+        if (breakAt === -1) {
+            const wsIdx = remaining.lastIndexOf(' ', CHUNK_MAX);
+            if (wsIdx > CHUNK_MAX * 0.3) {
+                breakAt = wsIdx + 1;
+            }
+        }
+
+        // 4. Hard fallback: slice at limit
+        if (breakAt === -1) {
+            breakAt = CHUNK_MAX;
+        }
+
+        let chunk = remaining.slice(0, breakAt);
+        remaining = remaining.slice(breakAt);
+
+        // Handle unclosed code fences: odd count of ``` means one is open
+        const fences = chunk.match(/^```/gm);
+        if (fences && fences.length % 2 !== 0) {
+            chunk += '\n```';
+            remaining = '```\n' + remaining;
+        }
+
+        chunks.push(chunk);
+    }
+
+    if (remaining.length > 0) {
+        chunks.push(remaining);
+    }
+
+    return chunks;
+}
+
 async function sendMessage(chatId, text, replyTo = null, buttons = null) {
     // Clean AI artifacts before sending to user
     text = cleanResponse(text);
@@ -482,13 +544,8 @@ async function sendMessage(chatId, text, replyTo = null, buttons = null) {
     // Redact any leaked secrets (API keys, tokens) from outgoing messages
     text = redactSecrets(text);
 
-    // Telegram max message length is 4096
-    const chunks = [];
-    let remaining = text;
-    while (remaining.length > 0) {
-        chunks.push(remaining.slice(0, 4000));
-        remaining = remaining.slice(4000);
-    }
+    // Telegram max message length is 4096 — use markdown-aware chunking
+    const chunks = chunkMarkdown(text);
 
     for (let i = 0; i < chunks.length; i++) {
         const chunk = chunks[i];

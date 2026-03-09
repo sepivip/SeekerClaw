@@ -46,6 +46,9 @@ const JOB_TIMEOUT_MS = 60000; // 60s timeout per reminder execution
 const AGENT_TURN_TIMEOUT_MS = 300000; // 5 min timeout for agentTurn (full AI turn with tools)
 const MIN_AGENT_TURN_INTERVAL_MS = 15 * 60 * 1000; // 15 min minimum for recurring agentTurn jobs
 
+// Transient error patterns — these errors are expected to resolve on retry (OpenClaw parity: v2026.3.8)
+const TRANSIENT_ERROR_RE = /\b(429|529|503)\b|rate[_ ]limit|too many requests|overloaded|high demand|capacity exceeded|ECONNRESET|ETIMEDOUT|ENOTFOUND|socket hang up|fetch failed|timed?\s*out/i;
+
 // ============================================================================
 // DURATION FORMATTING
 // ============================================================================
@@ -644,6 +647,8 @@ const cronService = {
         // Track consecutive errors for backoff
         if (status === 'error') {
             job.state.consecutiveErrors = (job.state.consecutiveErrors || 0) + 1;
+            const transient = TRANSIENT_ERROR_RE.test(error || '');
+            log(`[Cron] Job ${job.id} error #${job.state.consecutiveErrors} (${transient ? 'transient' : 'permanent'}): ${error}`, 'WARN');
         } else {
             job.state.consecutiveErrors = 0;
         }

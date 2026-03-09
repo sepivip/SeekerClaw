@@ -397,6 +397,12 @@ function validateSkillFormat(skill, filePath) {
     }
 }
 
+// Defense-in-depth: verify a resolved path is inside the allowed base directory (OpenClaw parity: v2026.3.8)
+function isPathInside(childPath, parentPath) {
+    const rel = path.relative(parentPath, childPath);
+    return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
 let _firstLoadLogged = false;
 
 function loadSkills() {
@@ -404,6 +410,15 @@ function loadSkills() {
     const isFirstLoad = !_firstLoadLogged;
 
     if (!fs.existsSync(SKILLS_DIR)) {
+        return skills;
+    }
+
+    // Resolve SKILLS_DIR realpath for symlink escape protection
+    let realSkillsDir;
+    try {
+        realSkillsDir = fs.realpathSync(SKILLS_DIR);
+    } catch (e) {
+        log(`[Skills] Cannot resolve skills directory: ${e.message}`, 'ERROR');
         return skills;
     }
 
@@ -415,11 +430,23 @@ function loadSkills() {
         for (const entry of entries) {
             if (entry.isDirectory()) {
                 // OpenClaw format: directory with SKILL.md inside
-                const skillPath = path.join(SKILLS_DIR, entry.name, 'SKILL.md');
+                const skillDir = path.join(SKILLS_DIR, entry.name);
+                // Symlink escape check
+                try {
+                    const realDir = fs.realpathSync(skillDir);
+                    if (!isPathInside(realDir, realSkillsDir)) {
+                        log(`[Skills] Skipping '${entry.name}': path escapes skills directory`, 'WARN');
+                        continue;
+                    }
+                } catch (e) {
+                    log(`[Skills] Skipping '${entry.name}': cannot resolve path`, 'WARN');
+                    continue;
+                }
+                const skillPath = path.join(skillDir, 'SKILL.md');
                 if (fs.existsSync(skillPath)) {
                     try {
                         const content = fs.readFileSync(skillPath, 'utf8');
-                        const skill = parseSkillFile(content, path.join(SKILLS_DIR, entry.name));
+                        const skill = parseSkillFile(content, skillDir);
                         validateSkillFormat(skill, skillPath);
                         if (skill.name) {
                             skill.filePath = skillPath;
@@ -434,6 +461,17 @@ function loadSkills() {
             } else if (entry.isFile() && entry.name.endsWith('.md')) {
                 // Flat .md skill files (SeekerClaw format)
                 const filePath = path.join(SKILLS_DIR, entry.name);
+                // Symlink escape check
+                try {
+                    const realFile = fs.realpathSync(filePath);
+                    if (!isPathInside(realFile, realSkillsDir)) {
+                        log(`[Skills] Skipping '${entry.name}': path escapes skills directory`, 'WARN');
+                        continue;
+                    }
+                } catch (e) {
+                    log(`[Skills] Skipping '${entry.name}': cannot resolve path`, 'WARN');
+                    continue;
+                }
                 try {
                     const content = fs.readFileSync(filePath, 'utf8');
                     const skill = parseSkillFile(content, SKILLS_DIR);
