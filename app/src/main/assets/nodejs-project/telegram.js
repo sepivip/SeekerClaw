@@ -523,8 +523,13 @@ function chunkMarkdown(text) {
         // Handle unclosed code fences: odd count of ``` means one is open
         const fences = chunk.match(/^ {0,3}```/gm);
         if (fences && fences.length % 2 !== 0) {
-            chunk += '\n```';
-            remaining = '```\n' + remaining;
+            // Don't add artificial fences if remaining already starts with the closing fence
+            if (/^ {0,3}```/.test(remaining)) {
+                // The natural closing fence is at the start of remaining — leave it alone
+            } else {
+                chunk += '\n```';
+                remaining = '```\n' + remaining;
+            }
         }
 
         chunks.push(chunk);

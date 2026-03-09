@@ -428,9 +428,23 @@ function loadSkills() {
         const entries = fs.readdirSync(SKILLS_DIR, { withFileTypes: true });
 
         for (const entry of entries) {
-            if (entry.isDirectory()) {
+            // Symlinks report isSymbolicLink()=true but isDirectory()/isFile()=false in Node 18 Dirent
+            const entryPath = path.join(SKILLS_DIR, entry.name);
+            let isDir = entry.isDirectory();
+            let isFile = entry.isFile();
+            if (entry.isSymbolicLink()) {
+                try {
+                    const stat = fs.statSync(entryPath);
+                    isDir = stat.isDirectory();
+                    isFile = stat.isFile();
+                } catch (e) {
+                    log(`[Skills] Skipping '${entry.name}': broken symlink`, 'WARN');
+                    continue;
+                }
+            }
+            if (isDir) {
                 // OpenClaw format: directory with SKILL.md inside
-                const skillDir = path.join(SKILLS_DIR, entry.name);
+                const skillDir = entryPath;
                 // Symlink escape check
                 try {
                     const realDir = fs.realpathSync(skillDir);
@@ -470,9 +484,9 @@ function loadSkills() {
                         log(`Error loading skill ${entry.name}: ${e.message}`, 'ERROR');
                     }
                 }
-            } else if (entry.isFile() && entry.name.endsWith('.md')) {
+            } else if (isFile && entry.name.endsWith('.md')) {
                 // Flat .md skill files (SeekerClaw format)
-                const filePath = path.join(SKILLS_DIR, entry.name);
+                const filePath = entryPath;
                 // Symlink escape check (read resolved path to close TOCTOU)
                 let realFile;
                 try {
