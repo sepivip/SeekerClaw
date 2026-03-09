@@ -555,10 +555,11 @@ async function sendMessage(chatId, text, replyTo = null, buttons = null) {
         let sent = false;
 
         // Try with HTML first (supports native blockquotes)
+        const htmlText = toTelegramHtml(chunk);
         try {
             const payload = {
                 chat_id: chatId,
-                text: toTelegramHtml(chunk),
+                text: htmlText,
                 reply_to_message_id: replyTo,
                 parse_mode: 'HTML',
             };
@@ -571,7 +572,18 @@ async function sendMessage(chatId, text, replyTo = null, buttons = null) {
                     recordSentMessage(chatId, result.result.message_id, chunk);
                 }
             } else if (result && !result.ok) {
-                log(`HTML format rejected: ${result.description || 'unknown'}`, 'WARN');
+                const desc = result.description || '';
+                // HTML expansion exceeded Telegram's 4096 limit — re-chunk at half size
+                if (desc.includes('too long')) {
+                    const half = Math.floor(chunk.length / 2);
+                    const subChunks = chunkMarkdown(chunk.slice(0, half));
+                    subChunks.push(...chunkMarkdown(chunk.slice(half)));
+                    // Insert sub-chunks after current position so they get sent in order
+                    chunks.splice(i + 1, 0, ...subChunks);
+                    sent = true; // skip plain-text fallback, sub-chunks will be sent next
+                } else {
+                    log(`HTML format rejected: ${desc}`, 'WARN');
+                }
             }
         } catch (e) {
             log(`sendMessage HTML failed: ${e.message}`, 'WARN');

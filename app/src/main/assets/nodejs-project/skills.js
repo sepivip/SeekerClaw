@@ -459,9 +459,9 @@ function loadSkills() {
                     try {
                         const content = fs.readFileSync(realSkillPath, 'utf8');
                         const skill = parseSkillFile(content, skillDir);
-                        validateSkillFormat(skill, skillPath);
+                        validateSkillFormat(skill, realSkillPath);
                         if (skill.name) {
-                            skill.filePath = skillPath;
+                            skill.filePath = realSkillPath;
                             skills.push(skill);
                             dirCount++;
                             if (isFirstLoad) log(`Loaded skill: ${skill.name} (triggers: ${skill.triggers.join(', ')})`, 'DEBUG');
@@ -488,9 +488,9 @@ function loadSkills() {
                 try {
                     const content = fs.readFileSync(realFile, 'utf8');
                     const skill = parseSkillFile(content, SKILLS_DIR);
-                    validateSkillFormat(skill, filePath);
+                    validateSkillFormat(skill, realFile);
                     if (skill.name) {
-                        skill.filePath = filePath;
+                        skill.filePath = realFile;
                         skills.push(skill);
                         fileCount++;
                         if (isFirstLoad) log(`Loaded skill: ${skill.name} (triggers: ${skill.triggers.join(', ')})`, 'DEBUG');
