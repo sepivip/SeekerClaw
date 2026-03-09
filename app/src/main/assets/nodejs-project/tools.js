@@ -182,7 +182,7 @@ const TOOLS = [
     },
     {
         name: 'web_fetch',
-        description: 'Fetch a URL with full HTTP support. Returns markdown (HTML), JSON, or text. Supports custom headers (Bearer auth), methods (POST/PUT/DELETE), and request bodies for authenticated API calls.',
+        description: 'Fetch a URL with full HTTP support. Returns markdown (HTML), JSON, or text (up to 50K chars). Supports custom headers (Bearer auth), methods (POST/PUT/DELETE), and request bodies for authenticated API calls.',
         input_schema: {
             type: 'object',
             properties: {
