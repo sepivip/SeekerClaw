@@ -3,6 +3,26 @@
 All notable changes to SeekerClaw are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.6.0] - 2026-03-10
+
+### Added
+- **NFT Holdings** — view NFTs (including compressed/cNFTs) in any Solana wallet via Helius DAS API (BAT-319)
+- **Cron agent turns** — scheduled jobs can now run full AI turns, not just reminders (BAT-326)
+- **Temporal context** — agent session awareness with conversation summaries for continuity (BAT-322)
+- **OpenClaw 2026.3.8 parity** — 4 upstream features ported (BAT-359)
+
+### Fixed
+- Heartbeat chat pollution suppressed when nothing needs attention
+- Background API calls no longer pollute health status display
+- Tool confirmation gates enforce proper YES/NO flow for dangerous actions
+- Solana address validation strengthened across all wallet tools
+- SHA-256 verification + Zip Slip guard for nodejs-mobile asset extraction
+- SILENT_REPLY now properly logged in audit trail
+
+### Security
+- Gitignore patterns updated to prevent accidental key commits
+- R8/ProGuard hardened for release builds
+
 ## [1.4.1] - 2026-02-25
 
 **First public release.** Everything below shipped across v1.0.0–v1.4.1 (293 commits, 185 PRs).
