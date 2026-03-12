@@ -296,17 +296,6 @@ object ConfigManager {
      * Escape string for safe JSON interpolation.
      * Handles quotes, backslashes, newlines, and control characters.
      */
-    private fun escapeJson(value: String): String {
-        return value
-            .replace("\\", "\\\\")    // Backslash must be first
-            .replace("\"", "\\\"")    // Quotes
-            .replace("\n", "\\n")     // Newline
-            .replace("\r", "\\r")     // Carriage return
-            .replace("\t", "\\t")     // Tab
-            .replace("\u2028", "\\\\u2028")  // Unicode line separator
-            .replace("\u2029", "\\\\u2029")  // Unicode paragraph separator
-    }
-
     /**
      * Write ephemeral config.json to workspace for Node.js to read on startup.
      * Includes per-boot bridge auth token. File is deleted after Node.js reads it.
@@ -318,54 +307,52 @@ object ConfigManager {
             return
         }
         val workspaceDir = File(context.filesDir, "workspace").apply { mkdirs() }
-        // Provider-aware: only write anthropicApiKey when it's the active provider's credential
-        val credential = if (config.provider == "openai") "" else escapeJson(config.activeCredential)
-        val braveField = if (config.braveApiKey.isNotBlank()) {
-            """,
-            |  "braveApiKey": "${escapeJson(config.braveApiKey)}""""
-        } else ""
-        val jupiterField = if (config.jupiterApiKey.isNotBlank()) {
-            """,
-            |  "jupiterApiKey": "${escapeJson(config.jupiterApiKey)}""""
-        } else ""
-        val heliusField = if (config.heliusApiKey.isNotBlank()) {
-            """,
-            |  "heliusApiKey": "${escapeJson(config.heliusApiKey)}""""
-        } else ""
-        val mcpServers = loadMcpServers(context)
-        val mcpField = if (mcpServers.isNotEmpty()) {
-            val arr = JSONArray()
-            for (s in mcpServers) {
-                arr.put(JSONObject().apply {
-                    put("id", s.id)
-                    put("name", s.name)
-                    put("url", s.url)
-                    put("authToken", s.authToken)
-                    put("enabled", s.enabled)
-                    put("rateLimit", s.rateLimit)
-                })
+        
+        // Build JSON using JSONObject to prevent injection
+        val json = JSONObject().apply {
+            put("botToken", config.telegramBotToken)
+            put("ownerId", config.telegramOwnerId)
+            put("anthropicApiKey", if (config.provider == "openai") "" else config.activeCredential)
+            put("authType", config.authType)
+            put("provider", config.provider)
+            put("model", config.model)
+            put("agentName", config.agentName)
+            put("heartbeatIntervalMinutes", config.heartbeatIntervalMinutes)
+            put("bridgeToken", bridgeToken)
+            
+            // Conditionally add optional API keys
+            if (config.braveApiKey.isNotBlank()) {
+                put("braveApiKey", config.braveApiKey)
             }
-            """,
-            |  "mcpServers": ${arr}"""
-        } else ""
-        val openaiField = if (config.openaiApiKey.isNotBlank()) {
-            """,
-            |  "openaiApiKey": "${escapeJson(config.openaiApiKey)}""""
-        } else ""
-        val json = """
-            |{
-            |  "botToken": "${escapeJson(config.telegramBotToken)}",
-            |  "ownerId": "${escapeJson(config.telegramOwnerId)}",
-            |  "anthropicApiKey": "$credential",
-            |  "authType": "${escapeJson(config.authType)}",
-            |  "provider": "${escapeJson(config.provider)}",
-            |  "model": "${escapeJson(config.model)}",
-            |  "agentName": "${escapeJson(config.agentName)}",
-            |  "heartbeatIntervalMinutes": ${config.heartbeatIntervalMinutes},
-            |  "bridgeToken": "${escapeJson(bridgeToken)}"$braveField$jupiterField$heliusField$openaiField$mcpField
-            |}
-        """.trimMargin()
-        File(workspaceDir, "config.json").writeText(json)
+            if (config.jupiterApiKey.isNotBlank()) {
+                put("jupiterApiKey", config.jupiterApiKey)
+            }
+            if (config.heliusApiKey.isNotBlank()) {
+                put("heliusApiKey", config.heliusApiKey)
+            }
+            if (config.openaiApiKey.isNotBlank()) {
+                put("openaiApiKey", config.openaiApiKey)
+            }
+            
+            // Add MCP servers array if not empty
+            val mcpServers = loadMcpServers(context)
+            if (mcpServers.isNotEmpty()) {
+                val arr = JSONArray()
+                for (s in mcpServers) {
+                    arr.put(JSONObject().apply {
+                        put("id", s.id)
+                        put("name", s.name)
+                        put("url", s.url)
+                        put("authToken", s.authToken)
+                        put("enabled", s.enabled)
+                        put("rateLimit", s.rateLimit)
+                    })
+                }
+                put("mcpServers", arr)
+            }
+        }
+        
+        File(workspaceDir, "config.json").writeText(json.toString(2))
     }
 
     fun writeAgentSettingsJson(context: Context) {
@@ -515,7 +502,10 @@ object ConfigManager {
         val address = prefs(context).getString(KEY_WALLET_ADDRESS, null) ?: return
         val label = prefs(context).getString(KEY_WALLET_LABEL, "") ?: ""
         val workspaceDir = File(context.filesDir, "workspace").apply { mkdirs() }
-        val json = """{"publicKey": "$address", "label": "$label"}"""
+        val json = JSONObject().apply {
+            put("publicKey", address)
+            put("label", label)
+        }.toString(2)
         File(workspaceDir, "solana_wallet.json").writeText(json)
     }
 

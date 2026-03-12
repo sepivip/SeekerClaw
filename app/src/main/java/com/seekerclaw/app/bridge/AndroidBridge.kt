@@ -55,6 +55,24 @@ class AndroidBridge(
             if (ttsReady) {
                 tts?.language = Locale.US
             }
+
+    private val rateLimiter = mutableMapOf<String, MutableList<Long>>()
+    private val RATE_LIMITS = mapOf(
+        "/sms" to Pair(5, 60_000L),
+        "/call" to Pair(3, 60_000L),
+        "/camera/capture" to Pair(10, 60_000L),
+        "/contacts/search" to Pair(20, 60_000L),
+    )
+
+    private fun isRateLimited(endpoint: String): Boolean {
+        val limit = RATE_LIMITS[endpoint] ?: return false
+        val now = System.currentTimeMillis()
+        val timestamps = rateLimiter.getOrPut(endpoint) { mutableListOf() }
+        timestamps.removeAll { now - it > limit.second }
+        if (timestamps.size >= limit.first) return true
+        timestamps.add(now)
+        return false
+    }
         }
     }
 
@@ -74,6 +92,11 @@ class AndroidBridge(
         if (token != authToken) {
             Log.w(TAG, "Unauthorized request to $uri (bad/missing token)")
             return jsonResponse(403, mapOf("error" to "Unauthorized"))
+        }
+
+        // Rate limiting
+        if (isRateLimited(uri)) {
+            return jsonResponse(429, mapOf("error" to "Rate limit exceeded for $uri"))
         }
 
         // Parse body
