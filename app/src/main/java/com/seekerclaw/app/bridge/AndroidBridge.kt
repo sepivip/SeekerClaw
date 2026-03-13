@@ -27,6 +27,7 @@ import fi.iki.elonen.NanoHTTPD
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * AndroidBridge - HTTP server for Node.js <-> Kotlin IPC
@@ -47,6 +48,27 @@ class AndroidBridge(
 
     private var tts: TextToSpeech? = null
     private var ttsReady = false
+
+    // Per-endpoint rate limiting (thread-safe for NanoHTTPD's thread pool)
+    private val rateLimiter = ConcurrentHashMap<String, MutableList<Long>>()
+    private val rateLimits = mapOf(
+        "/sms" to Pair(5, 60_000L),
+        "/call" to Pair(3, 60_000L),
+        "/camera/capture" to Pair(10, 60_000L),
+        "/contacts/search" to Pair(20, 60_000L),
+        "/location" to Pair(10, 60_000L),
+    )
+
+    @Synchronized
+    private fun isRateLimited(endpoint: String): Boolean {
+        val limit = rateLimits[endpoint] ?: return false
+        val now = System.currentTimeMillis()
+        val timestamps = rateLimiter.getOrPut(endpoint) { mutableListOf() }
+        timestamps.removeAll { now - it > limit.second }
+        if (timestamps.size >= limit.first) return true
+        timestamps.add(now)
+        return false
+    }
 
     init {
         // Initialize Text-to-Speech
@@ -74,6 +96,11 @@ class AndroidBridge(
         if (token != authToken) {
             Log.w(TAG, "Unauthorized request to $uri (bad/missing token)")
             return jsonResponse(403, mapOf("error" to "Unauthorized"))
+        }
+
+        // Rate limiting for sensitive endpoints
+        if (isRateLimited(uri)) {
+            return jsonResponse(429, mapOf("error" to "Rate limit exceeded for $uri"))
         }
 
         // Parse body
