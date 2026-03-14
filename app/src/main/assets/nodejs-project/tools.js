@@ -3425,6 +3425,9 @@ async function executeTool(name, input, chatId) {
                     for (const btn of row) {
                         if (!btn.text || !btn.callback_data) return { error: 'Each button must have "text" and "callback_data"' };
                         if (Buffer.byteLength(btn.callback_data, 'utf8') > 64) return { error: `callback_data "${btn.callback_data.slice(0, 20)}..." exceeds Telegram 64-byte limit` };
+                        if (btn.style && btn.style !== 'destructive' && btn.style !== 'primary') {
+                            delete btn.style; // Strip invalid style rather than failing
+                        }
                     }
                 }
             }
