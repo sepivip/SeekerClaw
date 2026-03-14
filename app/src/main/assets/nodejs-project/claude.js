@@ -898,9 +898,10 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
 
     // Conversation Limits — hard constraints the agent should know about (BAT-232)
     lines.push('## Conversation Limits');
-    lines.push('- **History window:** 35 messages per chat. Older messages are dropped from context (but auto-saved to memory).');
+    lines.push('- **History window:** 35 messages per chat. Older messages are dropped from context. Sessions are auto-summarized to memory on idle/checkpoint (see Session Memory above), but individual trimmed messages are not preserved. Heavy tool-use conversations are adaptively trimmed earlier to stay within context limits.');
     lines.push('- **Tool use per turn:** Up to 25 tool-call rounds per user message. Plan multi-step work to fit within this budget.');
     lines.push('- **Max output:** 4096 tokens per response. For long content, split across multiple messages or save to a file and share it.');
+    lines.push('- **Context awareness:** Your context usage is monitored. When approaching limits (~90%), older messages are aggressively trimmed. To preserve important context during long tool-use chains, save intermediate results to files rather than keeping them in conversation.');
     lines.push('- **Conversation reset:** On process restart, conversation history is cleared and any messages sent during downtime are flushed (the user is automatically notified to resend). Memory files persist.');
     lines.push('');
 
@@ -1423,6 +1424,143 @@ function sanitizeConversation(messages, turnId) {
 }
 
 // ============================================================================
+// CONTEXT TOKEN ESTIMATION
+// Heuristic token counting for context window awareness. Uses chars/4 approximation
+// (standard for English text + JSON overhead). Not billing-grade, but accurate enough
+// for threshold detection (75%/90% warnings) and adaptive trimming decisions.
+// ============================================================================
+
+// Context window limits per model (input tokens). Conservative — actual limits may be
+// slightly higher, but underestimating is safer than overestimating.
+const MODEL_CONTEXT_LIMITS = {
+    'claude-opus-4-6':     200000,
+    'claude-sonnet-4-6':   200000,
+    'claude-sonnet-4-5':   200000,
+    'claude-haiku-4-5':    200000,
+    'gpt-5.4':             200000,
+    'gpt-5.2':             200000,
+    'gpt-5.3-codex':       200000,
+};
+const DEFAULT_CONTEXT_LIMIT = 128000; // conservative fallback for unknown models
+let _unknownModelWarned = false; // throttle: only warn once per process about unknown model
+
+// Thresholds for logging and adaptive behavior
+const CONTEXT_WARN_THRESHOLD = 0.75;   // log INFO at 75%
+const CONTEXT_DANGER_THRESHOLD = 0.90; // log WARN + aggressive trim at 90%
+const MIN_PRESERVED_MESSAGES = 6;      // floor: always keep at least this many messages
+
+/**
+ * Estimate token count for the full API payload (system + messages + tools).
+ * Uses chars/4 heuristic — fast, zero dependencies, good enough for thresholds.
+ *
+ * @param {object|Array} systemBlocks - System prompt blocks (provider-formatted)
+ * @param {Array} messages - Neutral format messages array
+ * @param {Array} tools - Formatted tool schemas
+ * @param {{ systemChars?: number, toolChars?: number }} [cache] - Pre-computed char counts for system/tools (stable across iterations)
+ * @returns {{ estimatedTokens: number, breakdown: { system: number, messages: number, tools: number } }}
+ */
+function estimateTokens(systemBlocks, messages, tools, cache) {
+    const charCount = (val) => {
+        if (!val) return 0;
+        if (typeof val === 'string') return val.length;
+        try { return JSON.stringify(val).length; } catch (_) { return 0; }
+    };
+
+    // Use cached char counts for system/tools when available (they don't change per iteration)
+    const systemChars = (cache && cache.systemChars != null) ? cache.systemChars : charCount(systemBlocks);
+    let messageChars = 0;
+    for (const m of messages) {
+        messageChars += charCount(m.content);
+        if (m.toolCalls) messageChars += charCount(m.toolCalls);
+        // Structural overhead per message (~30 chars for role, separators, etc.)
+        messageChars += 30;
+    }
+    const toolChars = (cache && cache.toolChars != null) ? cache.toolChars : charCount(tools);
+
+    const toTokens = (chars) => Math.ceil(chars / 4);
+    return {
+        estimatedTokens: toTokens(systemChars + messageChars + toolChars),
+        breakdown: {
+            system: toTokens(systemChars),
+            messages: toTokens(messageChars),
+            tools: toTokens(toolChars),
+        },
+    };
+}
+
+/**
+ * Check context usage and log warnings. Called before each API request in the agentic loop.
+ * @returns {{ usage: number, estimatedTokens: number, limit: number, breakdown: { system: number, messages: number, tools: number } }}
+ */
+function checkContextUsage(systemBlocks, messages, tools, model, turnId, cache) {
+    const knownLimit = MODEL_CONTEXT_LIMITS[model];
+    if (!knownLimit && model && !_unknownModelWarned) {
+        log(`[Context] Unknown model "${model}" — using conservative ${DEFAULT_CONTEXT_LIMIT} token limit`, 'WARN');
+        _unknownModelWarned = true;
+    }
+    const limit = knownLimit || DEFAULT_CONTEXT_LIMIT;
+    const { estimatedTokens, breakdown } = estimateTokens(systemBlocks, messages, tools, cache);
+    const usage = estimatedTokens / limit;
+
+    if (usage >= CONTEXT_DANGER_THRESHOLD) {
+        log(`[Context] DANGER: ~${estimatedTokens} tokens (${Math.round(usage * 100)}% of ${limit} limit) — sys:${breakdown.system} msg:${breakdown.messages} tools:${breakdown.tools} | turnId=${turnId || 'n/a'}`, 'WARN');
+    } else if (usage >= CONTEXT_WARN_THRESHOLD) {
+        log(`[Context] ~${estimatedTokens} tokens (${Math.round(usage * 100)}% of ${limit} limit) — sys:${breakdown.system} msg:${breakdown.messages} tools:${breakdown.tools}`, 'INFO');
+    }
+
+    return { usage, estimatedTokens, limit, breakdown };
+}
+
+/**
+ * Adaptive trimming: when context usage is dangerously high, aggressively
+ * trim old messages beyond what MAX_HISTORY would do. Preserves recent messages
+ * and removes tool-call/result groups atomically (never orphans them).
+ *
+ * @param {Array} messages - Conversation messages (mutated in place)
+ * @param {number} usage - Context usage ratio (0-1)
+ * @param {string} turnId - For logging
+ * @returns {number} Number of messages trimmed
+ */
+function adaptiveTrim(messages, usage, turnId) {
+    if (usage < CONTEXT_DANGER_THRESHOLD) return 0;
+
+    let trimmed = 0;
+
+    // At 90%+ usage, keep only the most recent messages.
+    // Target: reduce to ~70% by trimming from front.
+    // Heuristic: trim (usage - 0.70) / usage fraction of messages.
+    const targetTrimFraction = Math.min(0.5, (usage - 0.70) / usage);
+    const trimTarget = Math.max(1, Math.floor(messages.length * targetTrimFraction));
+
+    while (trimmed < trimTarget && messages.length > MIN_PRESERVED_MESSAGES) {
+        const first = messages[0];
+
+        // Atomic group removal: if this is an assistant with tool calls,
+        // count how many tool results follow it so we can remove them all or none.
+        if (first.role === 'assistant' && first.toolCalls && first.toolCalls.length) {
+            const ids = new Set(first.toolCalls.map(tc => tc.id));
+            let groupSize = 1; // the assistant message itself
+            while (groupSize < messages.length && messages[groupSize].role === 'tool' &&
+                   ids.has(messages[groupSize].toolCallId)) {
+                groupSize++;
+            }
+            // Only remove the group if we'd still have MIN_MESSAGES left
+            if (messages.length - groupSize < MIN_PRESERVED_MESSAGES) break;
+            messages.splice(0, groupSize);
+            trimmed += groupSize;
+        } else {
+            messages.shift();
+            trimmed++;
+        }
+    }
+
+    if (trimmed > 0) {
+        log(`[Context] Adaptive trim: removed ${trimmed} old messages to reduce context usage | turnId=${turnId || 'n/a'}`, 'WARN');
+    }
+    return trimmed;
+}
+
+// ============================================================================
 // TOOL RESULT AGING (BAT-259)
 // Trim old, large tool results to reduce payload bloat during multi-tool turns.
 // A skill_read result (~18KB) sitting in history 10 messages back is dead weight —
@@ -1547,6 +1685,7 @@ async function chat(chatId, userMessage, options = {}) {
     let response;
     let toolUseCount = 0;
     const MAX_TOOL_USES = 25;
+    let _ctxCache = null; // Cached system/tools char counts — reset per chat() call
 
     try { // BAT-253: catch network errors → sanitize before user output
 
@@ -1557,6 +1696,25 @@ async function chat(chatId, userMessage, options = {}) {
             // BAT-315: Provider-agnostic tool formatting + request body building
             const rawTools = _deps.getTools ? _deps.getTools() : [];
             const formattedTools = adapter.formatTools(rawTools);
+
+            // Context token estimation: check usage before API call, adaptively trim if needed.
+            // Cache systemChars for the turn (stable). toolChars recomputed each iteration
+            // because MCP tools can reconnect/change between tool rounds.
+            if (!_ctxCache) {
+                _ctxCache = { systemChars: JSON.stringify(systemBlocks).length };
+            }
+            _ctxCache.toolChars = JSON.stringify(formattedTools).length;
+
+            let ctx = checkContextUsage(systemBlocks, messages, formattedTools, MODEL, turnId, _ctxCache);
+            // Trim-recheck loop: keep trimming until safe or we hit the message floor
+            let trimPasses = 0;
+            while (ctx.usage >= CONTEXT_DANGER_THRESHOLD && messages.length > MIN_PRESERVED_MESSAGES && trimPasses < 3) {
+                adaptiveTrim(messages, ctx.usage, turnId);
+                ctx = checkContextUsage(systemBlocks, messages, formattedTools, MODEL, turnId, _ctxCache);
+                trimPasses++;
+            }
+            // Defensive: re-sanitize after trim to fix any orphaned tool pairs
+            if (trimPasses > 0) sanitizeConversation(messages, turnId);
 
             // Convert neutral messages to provider API format for the request
             const apiMessages = adapter.toApiMessages(messages);
