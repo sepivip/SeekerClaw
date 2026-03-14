@@ -36,8 +36,8 @@ android {
         applicationId = "com.seekerclaw.app"
         minSdk = 34
         targetSdk = 35
-        versionCode = 12
-        versionName = "1.6.0"
+        versionCode = 13
+        versionName = "1.6.1"
 
         // Keep these in sync when updating OpenClaw or nodejs-mobile
         buildConfigField("String", "OPENCLAW_VERSION", "\"2026.3.8\"")

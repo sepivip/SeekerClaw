@@ -3,6 +3,20 @@
 All notable changes to SeekerClaw are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.6.1] - 2026-03-14
+
+### Added
+- **Button styling** — telegram_send buttons support "destructive" (red) and "primary" (blue) colors via Telegram Bot API 9.4 (BAT-439)
+- **Analytics opt-out** — toggle in Settings to disable usage analytics
+
+### Fixed
+- **Session auto-save** — never worked since provider system shipped; empty system prompt block caused Claude API 400 on every attempt (BAT-448)
+- **Vision analysis** — same empty prompt block bug broke image analysis
+- Bridge rate limiting for /contacts/add endpoint
+
+### Security
+- JSON injection fix + bridge rate limiting
+
 ## [1.6.0] - 2026-03-10
 
 ### Added
