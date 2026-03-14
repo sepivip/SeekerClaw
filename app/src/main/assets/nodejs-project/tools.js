@@ -807,7 +807,7 @@ const TOOLS = [
                 text: { type: 'string', description: 'Message text to send (Markdown formatting supported; converted to Telegram HTML). Max 4096 characters — for long responses use the default sendMessage().' },
                 buttons: {
                     type: 'array',
-                    description: 'Optional inline keyboard rows. Each row is an array of button objects with "text" (display label) and "callback_data" (value sent back when tapped, max 64 bytes). Example: [[{"text": "✅ Yes", "callback_data": "yes"}, {"text": "❌ No", "callback_data": "no"}]]',
+                    description: 'Optional inline keyboard rows. Each row is an array of button objects with "text" (display label), "callback_data" (value sent back when tapped, max 64 bytes), and optional "style" ("destructive" for red, "primary" for blue). Example: [[{"text": "✅ Confirm", "callback_data": "yes", "style": "primary"}, {"text": "❌ Cancel", "callback_data": "no"}]]',
                     items: {
                         type: 'array',
                         items: {
