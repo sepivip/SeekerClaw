@@ -114,7 +114,7 @@ function fromApiResponse(raw) {
 // ── System prompt ───────────────────────────────────────────────────────────
 
 /**
- * Format system prompt for Claude API (two-block with prompt caching).
+ * Format system prompt for Claude API (cached stable block + optional dynamic block).
  */
 function formatSystemPrompt(stable, dynamic) {
     const blocks = [
