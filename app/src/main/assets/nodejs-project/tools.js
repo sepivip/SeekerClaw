@@ -814,7 +814,8 @@ const TOOLS = [
                             type: 'object',
                             properties: {
                                 text: { type: 'string' },
-                                callback_data: { type: 'string' }
+                                callback_data: { type: 'string' },
+                                style: { type: 'string', description: 'Button color: "destructive" (red) or "primary" (blue). Omit for default gray.' }
                             },
                             required: ['text', 'callback_data']
                         }
