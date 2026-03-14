@@ -117,10 +117,11 @@ function fromApiResponse(raw) {
  * Format system prompt for Claude API (two-block with prompt caching).
  */
 function formatSystemPrompt(stable, dynamic) {
-    return [
+    const blocks = [
         { type: 'text', text: stable, cache_control: { type: 'ephemeral' } },
-        { type: 'text', text: dynamic },
     ];
+    if (typeof dynamic === 'string' && dynamic.trim()) blocks.push({ type: 'text', text: dynamic });
+    return blocks;
 }
 
 // ── Tool schema formatting ──────────────────────────────────────────────────
