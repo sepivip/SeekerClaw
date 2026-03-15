@@ -8,7 +8,7 @@ const crypto = require('crypto');
 // ── Imports from other SeekerClaw modules ──────────────────────────────────
 
 const {
-    workDir, MODEL, PROVIDER, ANTHROPIC_KEY, OPENAI_KEY, AUTH_TYPE,
+    workDir, MODEL, PROVIDER, ANTHROPIC_KEY, OPENAI_KEY, OPENROUTER_KEY, OPENROUTER_FALLBACK_MODEL, AUTH_TYPE,
     REACTION_GUIDANCE, REACTION_NOTIFICATIONS, MEMORY_DIR,
     CONFIRM_REQUIRED, TOOL_RATE_LIMITS, TOOL_STATUS_MAP,
     API_TIMEOUT_RETRIES, API_TIMEOUT_BACKOFF_MS, API_TIMEOUT_MAX_BACKOFF_MS,
@@ -19,7 +19,7 @@ const {
 
 const { redactSecrets } = require('./security');
 const { telegram, sendTyping, sentMessageCache, SENT_CACHE_TTL, deferStatus } = require('./telegram');
-const { httpStreamingRequest, httpOpenAIStreamingRequest } = require('./web');
+const { httpStreamingRequest, httpOpenAIStreamingRequest, httpChatCompletionsStreamingRequest } = require('./web');
 const { getAdapter } = require('./providers');
 const { androidBridgeCall } = require('./bridge');
 
@@ -878,6 +878,16 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     }
     // Sonnet: no extra instructions (default, balanced)
 
+    // OpenRouter provider info
+    if (PROVIDER === 'openrouter') {
+        lines.push('## Provider');
+        lines.push(`You are running via OpenRouter (model: ${MODEL}).`);
+        if (OPENROUTER_FALLBACK_MODEL) {
+            lines.push(`Fallback model configured: ${OPENROUTER_FALLBACK_MODEL} (auto-switches if primary is down).`);
+        }
+        lines.push('');
+    }
+
     // Runtime limitations (behavioral — device/version info is in PLATFORM.md)
     lines.push('## Runtime Limitations');
     lines.push('- Running inside nodejs-mobile on Android (Node.js runs as libnode.so via JNI, not a standalone binary)');
@@ -1078,13 +1088,17 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
     try {
         // BAT-315: Provider-agnostic API call — adapter handles endpoint, headers, streaming
         const adapter = getAdapter(PROVIDER);
-        const apiKey = PROVIDER === 'openai' ? OPENAI_KEY : ANTHROPIC_KEY;
+        const apiKey = PROVIDER === 'openai' ? OPENAI_KEY
+            : PROVIDER === 'openrouter' ? OPENROUTER_KEY
+            : ANTHROPIC_KEY;
         const headers = adapter.buildHeaders(apiKey, AUTH_TYPE);
 
         // Select streaming function based on provider protocol
-        const streamFn = (adapter.streamProtocol === 'openai' || adapter.streamProtocol === 'openai-responses')
-            ? httpOpenAIStreamingRequest
-            : httpStreamingRequest;
+        const streamFn = adapter.streamProtocol === 'chat-completions'
+            ? httpChatCompletionsStreamingRequest
+            : (adapter.streamProtocol === 'openai' || adapter.streamProtocol === 'openai-responses')
+                ? httpOpenAIStreamingRequest
+                : httpStreamingRequest;
 
         let res;
         let retries = 0;
@@ -1495,7 +1509,13 @@ function estimateTokens(systemBlocks, messages, tools, cache) {
 function checkContextUsage(systemBlocks, messages, tools, model, turnId, cache) {
     const knownLimit = MODEL_CONTEXT_LIMITS[model];
     if (!knownLimit && model && !_unknownModelWarned) {
-        log(`[Context] Unknown model "${model}" — using conservative ${DEFAULT_CONTEXT_LIMIT} token limit`, 'WARN');
+        // OpenRouter has 100+ models — don't warn for unknown models, 128K default is safe.
+        // For Claude/OpenAI, unknown model is unexpected and worth warning about.
+        if (PROVIDER !== 'openrouter') {
+            log(`[Context] Unknown model "${model}" — using conservative ${DEFAULT_CONTEXT_LIMIT} token limit`, 'WARN');
+        } else {
+            log(`[Context] OpenRouter model "${model}" — using ${DEFAULT_CONTEXT_LIMIT} token limit`, 'DEBUG');
+        }
         _unknownModelWarned = true;
     }
     const limit = knownLimit || DEFAULT_CONTEXT_LIMIT;

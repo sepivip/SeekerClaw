@@ -103,14 +103,21 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
 
         // Restore last-used model for new provider, or fall back to first model
         val modelsForNew = modelsForProvider(newProviderId)
-        val savedModel = prefs.getString("lastModel_$newProviderId", null)
-        val restoredModel = if (savedModel != null && modelsForNew.any { it.id == savedModel }) {
-            savedModel
+        if (modelsForNew.isEmpty()) {
+            // Freeform provider (e.g. OpenRouter) — restore last-used or set default
+            val savedModel = prefs.getString("lastModel_$newProviderId", null)
+            val defaultModel = if (newProviderId == "openrouter") "anthropic/claude-sonnet-4-6" else ""
+            saveField("model", savedModel?.takeIf { it.isNotBlank() } ?: defaultModel)
         } else {
-            modelsForNew.firstOrNull()?.id ?: ""
-        }
-        if (modelsForNew.none { it.id == currentModel }) {
-            saveField("model", restoredModel)
+            val savedModel = prefs.getString("lastModel_$newProviderId", null)
+            val restoredModel = if (savedModel != null && modelsForNew.any { it.id == savedModel }) {
+                savedModel
+            } else {
+                modelsForNew.firstOrNull()?.id ?: ""
+            }
+            if (modelsForNew.none { it.id == currentModel }) {
+                saveField("model", restoredModel)
+            }
         }
         Toast.makeText(
             context,
@@ -274,6 +281,40 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                             showDivider = false,
                         )
                     }
+                    "openrouter" -> {
+                        ProviderConfigField(
+                            label = "Model",
+                            value = config?.model?.ifBlank { "Not set" } ?: "Not set",
+                            onClick = {
+                                editField = "model"
+                                editLabel = "Model ID"
+                                editValue = config?.model ?: ""
+                            },
+                            info = "Full model ID from openrouter.ai/models (e.g. anthropic/claude-sonnet-4-6)",
+                        )
+                        ProviderConfigField(
+                            label = "Fallback Model (optional)",
+                            value = config?.openrouterFallbackModel?.ifBlank { "Not set" } ?: "Not set",
+                            onClick = {
+                                editField = "openrouterFallbackModel"
+                                editLabel = "Fallback Model"
+                                editValue = config?.openrouterFallbackModel ?: ""
+                            },
+                            info = "Auto-switches if primary model is down (e.g. google/gemini-2.5-pro)",
+                        )
+                        ProviderConfigField(
+                            label = "API Key",
+                            value = maskKey(config?.openrouterApiKey),
+                            onClick = {
+                                editField = "openrouterApiKey"
+                                editLabel = "OpenRouter API Key"
+                                editValue = config?.openrouterApiKey ?: ""
+                            },
+                            info = "Get your key at openrouter.ai/keys",
+                            isRequired = true,
+                            showDivider = false,
+                        )
+                    }
                 }
             }
 
@@ -303,6 +344,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                         testMessage = ""
                         scope.launch {
                             val result = when (activeProvider) {
+                                "openrouter" -> testOpenRouterConnection(config?.openrouterApiKey ?: "")
                                 "openai" -> testOpenAIConnection(config?.openaiApiKey ?: "")
                                 else -> {
                                     // Use Anthropic-specific credential derived from authType
@@ -370,10 +412,12 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
             onSave = {
                 val field = editField ?: return@ProviderEditDialog
                 val trimmed = editValue.trim()
+                // Optional fields that can be cleared to empty
+                val clearableFields = setOf("openrouterFallbackModel")
                 if (field == "setupToken") {
                     saveField(field, trimmed)
                     if (trimmed.isNotEmpty()) saveField("authType", "setup_token")
-                } else if (trimmed.isNotEmpty()) {
+                } else if (trimmed.isNotEmpty() || field in clearableFields) {
                     if (field == "anthropicApiKey") {
                         val detected = ConfigManager.detectAuthType(trimmed)
                         if (detected == "setup_token") {
@@ -391,8 +435,8 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
         )
     }
 
-    // Model picker dialog — shows models for active provider only
-    if (showModelPicker) {
+    // Model picker dialog — shows models for active provider only (skip for freeform providers)
+    if (showModelPicker && modelsForProvider(activeProvider).isNotEmpty()) {
         val models = modelsForProvider(activeProvider)
         var selectedModel by remember {
             mutableStateOf(models.firstOrNull { it.id == config?.model }?.id ?: models.firstOrNull()?.id ?: "")
@@ -563,6 +607,44 @@ internal suspend fun testAnthropicConnection(credential: String, authType: Strin
                         if (err?.has("message") == true) "HTTP $status: ${err.getString("message")}" else "HTTP $status"
                     } catch (_: Exception) { "HTTP $status" }
                 }
+            }
+            error("Connection failed ($errorMessage)")
+        } catch (_: java.net.SocketTimeoutException) {
+            error("Connection timed out")
+        } catch (_: java.io.IOException) {
+            error("Network unreachable or timeout")
+        } finally { conn.disconnect() }
+    }
+}
+
+private suspend fun testOpenRouterConnection(apiKey: String): Result<Unit> = withContext(Dispatchers.IO) {
+    runCatching {
+        if (apiKey.isBlank()) error("API key is empty")
+        // Use /api/v1/auth/key — validates the key and returns account info.
+        // /api/v1/models is public and returns 200 for any key.
+        val url = URL("https://openrouter.ai/api/v1/auth/key")
+        val conn = url.openConnection() as HttpURLConnection
+        conn.requestMethod = "GET"
+        conn.setRequestProperty("Authorization", "Bearer $apiKey")
+        conn.setRequestProperty("HTTP-Referer", "https://seekerclaw.xyz")
+        conn.setRequestProperty("X-OpenRouter-Title", "SeekerClaw")
+        conn.connectTimeout = 15000
+        conn.readTimeout = 15000
+        try {
+            val status = conn.responseCode
+            if (status in 200..299) return@runCatching
+            val errorBody = try {
+                (conn.errorStream ?: conn.inputStream)?.bufferedReader()?.use { it.readText() } ?: ""
+            } catch (_: Exception) { "" }
+            val apiMessage = try {
+                JSONObject(errorBody).optJSONObject("error")?.optString("message", "") ?: ""
+            } catch (_: Exception) { "" }
+            val errorMessage = when {
+                status == 401 -> apiMessage.ifBlank { "Invalid API key" }
+                status == 402 -> "Insufficient credits — add funds at openrouter.ai/credits"
+                status == 429 -> "Rate limited — try again in a moment"
+                status in 500..599 -> "OpenRouter API unavailable"
+                else -> apiMessage.ifBlank { "HTTP $status" }
             }
             error("Connection failed ($errorMessage)")
         } catch (_: java.net.SocketTimeoutException) {

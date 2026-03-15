@@ -100,13 +100,18 @@ function normalizeSecret(val) {
 
 const BOT_TOKEN = normalizeSecret(config.botToken);
 let OWNER_ID = config.ownerId ? String(config.ownerId).trim() : '';
-const _SUPPORTED_PROVIDERS = new Set(['claude', 'openai']);
+const _SUPPORTED_PROVIDERS = new Set(['claude', 'openai', 'openrouter']);
 const _rawProvider = (typeof config.provider === 'string' && config.provider.trim()) ? config.provider.trim().toLowerCase() : 'claude';
 const PROVIDER = _SUPPORTED_PROVIDERS.has(_rawProvider) ? _rawProvider : 'claude';
 const ANTHROPIC_KEY = normalizeSecret(config.anthropicApiKey);
 const OPENAI_KEY = normalizeSecret(config.openaiApiKey || '');
+const OPENROUTER_KEY = normalizeSecret(config.openrouterApiKey || '');
+const OPENROUTER_FALLBACK_MODEL = (typeof config.openrouterFallbackModel === 'string' ? config.openrouterFallbackModel : '').trim();
 const AUTH_TYPE = config.authType || 'api_key';
-const MODEL = config.model || (PROVIDER === 'openai' ? 'gpt-5.2' : 'claude-opus-4-6');
+const _defaultModel = PROVIDER === 'openai' ? 'gpt-5.2'
+    : PROVIDER === 'openrouter' ? 'anthropic/claude-sonnet-4-6'
+    : 'claude-opus-4-6';
+const MODEL = config.model || _defaultModel;
 const AGENT_NAME = config.agentName || 'SeekerClaw';
 let BRIDGE_TOKEN = normalizeSecret(config.bridgeToken || '');
 const USER_AGENT = 'SeekerClaw/1.0 (Android; +https://seekerclaw.com)';
@@ -158,9 +163,13 @@ const MCP_SERVERS = (config.mcpServers || [])
     .filter((server) => server && typeof server === 'object' && server.url);
 
 // Validate: bot token always required; API key required for active provider only
-const _activeKey = PROVIDER === 'openai' ? OPENAI_KEY : ANTHROPIC_KEY;
+const _activeKey = PROVIDER === 'openai' ? OPENAI_KEY
+    : PROVIDER === 'openrouter' ? OPENROUTER_KEY
+    : ANTHROPIC_KEY;
 if (!BOT_TOKEN || !_activeKey) {
-    const keyName = PROVIDER === 'openai' ? 'openaiApiKey' : 'anthropicApiKey';
+    const keyName = PROVIDER === 'openai' ? 'openaiApiKey'
+        : PROVIDER === 'openrouter' ? 'openrouterApiKey'
+        : 'anthropicApiKey';
     log(`ERROR: Missing required config (botToken, ${keyName}) for provider "${PROVIDER}"`, 'ERROR');
     process.exit(1);
 }
@@ -399,6 +408,8 @@ module.exports = {
     PROVIDER,
     ANTHROPIC_KEY,
     OPENAI_KEY,
+    OPENROUTER_KEY,
+    OPENROUTER_FALLBACK_MODEL,
     AUTH_TYPE,
     MODEL,
     AGENT_NAME,

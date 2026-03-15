@@ -33,5 +33,6 @@ function listProviders() {
 // ── Register built-in providers ─────────────────────────────────────────────
 register(require('./claude'));
 register(require('./openai'));
+register(require('./openrouter'));
 
 module.exports = { getAdapter, listProviders, register };
