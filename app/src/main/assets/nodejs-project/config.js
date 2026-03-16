@@ -107,6 +107,7 @@ const ANTHROPIC_KEY = normalizeSecret(config.anthropicApiKey);
 const OPENAI_KEY = normalizeSecret(config.openaiApiKey || '');
 const OPENROUTER_KEY = normalizeSecret(config.openrouterApiKey || '');
 const OPENROUTER_FALLBACK_MODEL = (typeof config.openrouterFallbackModel === 'string' ? config.openrouterFallbackModel : '').trim();
+const OPENROUTER_CONTEXT_LENGTH = parseInt(config.openrouterContextLength, 10) || 0;
 const AUTH_TYPE = config.authType || 'api_key';
 const _defaultModel = PROVIDER === 'openai' ? 'gpt-5.2'
     : PROVIDER === 'openrouter' ? 'anthropic/claude-sonnet-4-6'
@@ -410,6 +411,7 @@ module.exports = {
     OPENAI_KEY,
     OPENROUTER_KEY,
     OPENROUTER_FALLBACK_MODEL,
+    OPENROUTER_CONTEXT_LENGTH,
     AUTH_TYPE,
     MODEL,
     AGENT_NAME,

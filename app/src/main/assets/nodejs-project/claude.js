@@ -8,7 +8,7 @@ const crypto = require('crypto');
 // ── Imports from other SeekerClaw modules ──────────────────────────────────
 
 const {
-    workDir, MODEL, PROVIDER, ANTHROPIC_KEY, OPENAI_KEY, OPENROUTER_KEY, OPENROUTER_FALLBACK_MODEL, AUTH_TYPE,
+    workDir, MODEL, PROVIDER, ANTHROPIC_KEY, OPENAI_KEY, OPENROUTER_KEY, OPENROUTER_FALLBACK_MODEL, OPENROUTER_CONTEXT_LENGTH, AUTH_TYPE,
     REACTION_GUIDANCE, REACTION_NOTIFICATIONS, MEMORY_DIR,
     CONFIRM_REQUIRED, TOOL_RATE_LIMITS, TOOL_STATUS_MAP,
     API_TIMEOUT_RETRIES, API_TIMEOUT_BACKOFF_MS, API_TIMEOUT_MAX_BACKOFF_MS,
@@ -1507,18 +1507,18 @@ function estimateTokens(systemBlocks, messages, tools, cache) {
  * @returns {{ usage: number, estimatedTokens: number, limit: number, breakdown: { system: number, messages: number, tools: number } }}
  */
 function checkContextUsage(systemBlocks, messages, tools, model, turnId, cache) {
+    // Priority: user-set OpenRouter context > hardcoded model limit > default 128K
+    const userLimit = (PROVIDER === 'openrouter' && OPENROUTER_CONTEXT_LENGTH > 0) ? OPENROUTER_CONTEXT_LENGTH : 0;
     const knownLimit = MODEL_CONTEXT_LIMITS[model];
-    if (!knownLimit && model && !_unknownModelWarned) {
-        // OpenRouter has 100+ models — don't warn for unknown models, 128K default is safe.
-        // For Claude/OpenAI, unknown model is unexpected and worth warning about.
+    if (!userLimit && !knownLimit && model && !_unknownModelWarned) {
         if (PROVIDER !== 'openrouter') {
             log(`[Context] Unknown model "${model}" — using conservative ${DEFAULT_CONTEXT_LIMIT} token limit`, 'WARN');
         } else {
-            log(`[Context] OpenRouter model "${model}" — using ${DEFAULT_CONTEXT_LIMIT} token limit`, 'DEBUG');
+            log(`[Context] OpenRouter model "${model}" — using ${DEFAULT_CONTEXT_LIMIT} default (set context length in Settings for accuracy)`, 'DEBUG');
         }
         _unknownModelWarned = true;
     }
-    const limit = knownLimit || DEFAULT_CONTEXT_LIMIT;
+    const limit = userLimit || knownLimit || DEFAULT_CONTEXT_LIMIT;
     const { estimatedTokens, breakdown } = estimateTokens(systemBlocks, messages, tools, cache);
     const usage = estimatedTokens / limit;
 

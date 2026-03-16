@@ -303,6 +303,16 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                             info = "Auto-switches if primary model is down (e.g. google/gemini-2.5-pro)",
                         )
                         ProviderConfigField(
+                            label = "Context Length (optional)",
+                            value = config?.openrouterContextLength?.ifBlank { "Default (128K)" } ?: "Default (128K)",
+                            onClick = {
+                                editField = "openrouterContextLength"
+                                editLabel = "Context Length"
+                                editValue = config?.openrouterContextLength ?: ""
+                            },
+                            info = "Max tokens for your model. Leave empty for 128K default. Check openrouter.ai/models",
+                        )
+                        ProviderConfigField(
                             label = "API Key",
                             value = maskKey(config?.openrouterApiKey),
                             onClick = {
@@ -413,7 +423,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                 val field = editField ?: return@ProviderEditDialog
                 val trimmed = editValue.trim()
                 // Optional fields that can be cleared to empty
-                val clearableFields = setOf("openrouterFallbackModel")
+                val clearableFields = setOf("openrouterFallbackModel", "openrouterContextLength")
                 if (field == "setupToken") {
                     saveField(field, trimmed)
                     if (trimmed.isNotEmpty()) saveField("authType", "setup_token")
@@ -426,6 +436,20 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                             editField = null
                             return@ProviderEditDialog
                         }
+                    }
+                    // Validate + clamp context length: empty is OK, otherwise 4096..2000000
+                    if (field == "openrouterContextLength" && trimmed.isNotEmpty()) {
+                        val num = trimmed.toLongOrNull()
+                        if (num == null) {
+                            // Non-numeric — clear the field (treat as "use default")
+                            saveField(field, "")
+                            editField = null
+                            return@ProviderEditDialog
+                        }
+                        val clamped = num.coerceIn(4096, 2_000_000)
+                        saveField(field, clamped.toString())
+                        editField = null
+                        return@ProviderEditDialog
                     }
                     saveField(field, trimmed)
                 }
