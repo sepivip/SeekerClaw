@@ -42,7 +42,8 @@ data class AppConfig(
     val openaiApiKey: String = "",
     val openrouterApiKey: String = "",
     val openrouterFallbackModel: String = "",
-    val openrouterContextLength: String = "",
+    val openrouterModelContext: String = "",
+    val openrouterFallbackContext: String = "",
 ) {
     /** Anthropic/authType-based credential — used by SetupScreen and legacy flows. */
     val activeCredential: String
@@ -84,7 +85,8 @@ object ConfigManager {
     private const val KEY_OPENAI_API_KEY_ENC = "openai_api_key_enc"
     private const val KEY_OPENROUTER_API_KEY_ENC = "openrouter_api_key_enc"
     private const val KEY_OPENROUTER_FALLBACK_MODEL = "openrouter_fallback_model"
-        private const val KEY_OPENROUTER_CONTEXT_LENGTH = "openrouter_context_length"
+        private const val KEY_OPENROUTER_MODEL_CONTEXT = "openrouter_model_context"
+        private const val KEY_OPENROUTER_FALLBACK_CONTEXT = "openrouter_fallback_context"
 
     private fun prefs(context: Context): SharedPreferences =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -158,7 +160,8 @@ object ConfigManager {
             editor.remove(KEY_OPENROUTER_API_KEY_ENC)
         }
         editor.putString(KEY_OPENROUTER_FALLBACK_MODEL, config.openrouterFallbackModel)
-        editor.putString(KEY_OPENROUTER_CONTEXT_LENGTH, config.openrouterContextLength)
+        editor.putString(KEY_OPENROUTER_MODEL_CONTEXT, config.openrouterModelContext)
+        editor.putString(KEY_OPENROUTER_FALLBACK_CONTEXT, config.openrouterFallbackContext)
 
         val persisted = editor.commit()
         if (persisted) {
@@ -261,7 +264,8 @@ object ConfigManager {
             openaiApiKey = openaiApiKey,
             openrouterApiKey = openrouterApiKey,
             openrouterFallbackModel = p.getString(KEY_OPENROUTER_FALLBACK_MODEL, "") ?: "",
-            openrouterContextLength = p.getString(KEY_OPENROUTER_CONTEXT_LENGTH, "") ?: "",
+            openrouterModelContext = p.getString(KEY_OPENROUTER_MODEL_CONTEXT, "") ?: "",
+            openrouterFallbackContext = p.getString(KEY_OPENROUTER_FALLBACK_CONTEXT, "") ?: "",
         )
     }
 
@@ -299,7 +303,8 @@ object ConfigManager {
             "openaiApiKey" -> config.copy(openaiApiKey = value)
             "openrouterApiKey" -> config.copy(openrouterApiKey = value)
             "openrouterFallbackModel" -> config.copy(openrouterFallbackModel = value)
-            "openrouterContextLength" -> config.copy(openrouterContextLength = value)
+            "openrouterModelContext" -> config.copy(openrouterModelContext = value)
+            "openrouterFallbackContext" -> config.copy(openrouterFallbackContext = value)
             else -> return
         }
         saveConfig(context, updated)
@@ -350,7 +355,8 @@ object ConfigManager {
             if (config.openaiApiKey.isNotBlank()) put("openaiApiKey", config.openaiApiKey)
             if (config.openrouterApiKey.isNotBlank()) put("openrouterApiKey", config.openrouterApiKey)
             if (config.openrouterFallbackModel.isNotBlank()) put("openrouterFallbackModel", config.openrouterFallbackModel)
-            if (config.openrouterContextLength.isNotBlank()) put("openrouterContextLength", config.openrouterContextLength)
+            if (config.openrouterModelContext.isNotBlank()) put("openrouterModelContext", config.openrouterModelContext)
+            if (config.openrouterFallbackContext.isNotBlank()) put("openrouterFallbackContext", config.openrouterFallbackContext)
             val mcpServers = loadMcpServers(context)
             if (mcpServers.isNotEmpty()) {
                 val arr = JSONArray()

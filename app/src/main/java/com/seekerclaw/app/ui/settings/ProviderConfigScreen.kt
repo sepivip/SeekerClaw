@@ -58,6 +58,10 @@ import com.seekerclaw.app.ui.theme.SeekerClawColors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.ui.text.input.KeyboardType
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
@@ -75,6 +79,10 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
     var editValue by remember { mutableStateOf("") }
     var showModelPicker by remember { mutableStateOf(false) }
     var showAuthTypePicker by remember { mutableStateOf(false) }
+    // OpenRouter model+context edit dialog state
+    var orModelDialog by remember { mutableStateOf<String?>(null) } // "model" or "fallback"
+    var orModelValue by remember { mutableStateOf("") }
+    var orContextValue by remember { mutableStateOf("") }
     var testStatus by remember { mutableStateOf("Idle") }
     var testMessage by remember { mutableStateOf("") }
 
@@ -282,35 +290,29 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                         )
                     }
                     "openrouter" -> {
+                        val modelCtxDisplay = config?.openrouterModelContext?.ifBlank { null }
+                            ?.let { " ($it ctx)" } ?: ""
                         ProviderConfigField(
                             label = "Model",
-                            value = config?.model?.ifBlank { "Not set" } ?: "Not set",
+                            value = (config?.model?.ifBlank { "Not set" } ?: "Not set") + modelCtxDisplay,
                             onClick = {
-                                editField = "model"
-                                editLabel = "Model ID"
-                                editValue = config?.model ?: ""
+                                orModelDialog = "model"
+                                orModelValue = config?.model ?: ""
+                                orContextValue = config?.openrouterModelContext ?: ""
                             },
                             info = "Full model ID from openrouter.ai/models (e.g. anthropic/claude-sonnet-4-6)",
                         )
+                        val fallbackCtxDisplay = config?.openrouterFallbackContext?.ifBlank { null }
+                            ?.let { " ($it ctx)" } ?: ""
                         ProviderConfigField(
                             label = "Fallback Model (optional)",
-                            value = config?.openrouterFallbackModel?.ifBlank { "Not set" } ?: "Not set",
+                            value = (config?.openrouterFallbackModel?.ifBlank { "Not set" } ?: "Not set") + fallbackCtxDisplay,
                             onClick = {
-                                editField = "openrouterFallbackModel"
-                                editLabel = "Fallback Model"
-                                editValue = config?.openrouterFallbackModel ?: ""
+                                orModelDialog = "fallback"
+                                orModelValue = config?.openrouterFallbackModel ?: ""
+                                orContextValue = config?.openrouterFallbackContext ?: ""
                             },
                             info = "Auto-switches if primary model is down (e.g. google/gemini-2.5-pro)",
-                        )
-                        ProviderConfigField(
-                            label = "Context Length (optional)",
-                            value = config?.openrouterContextLength?.ifBlank { "Default (128K)" } ?: "Default (128K)",
-                            onClick = {
-                                editField = "openrouterContextLength"
-                                editLabel = "Context Length"
-                                editValue = config?.openrouterContextLength ?: ""
-                            },
-                            info = "Max tokens for your model. Leave empty for 128K default. Check openrouter.ai/models",
                         )
                         ProviderConfigField(
                             label = "API Key",
@@ -423,7 +425,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                 val field = editField ?: return@ProviderEditDialog
                 val trimmed = editValue.trim()
                 // Optional fields that can be cleared to empty
-                val clearableFields = setOf("openrouterFallbackModel", "openrouterContextLength")
+                val clearableFields = setOf("openrouterFallbackModel")
                 if (field == "setupToken") {
                     saveField(field, trimmed)
                     if (trimmed.isNotEmpty()) saveField("authType", "setup_token")
@@ -437,25 +439,48 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                             return@ProviderEditDialog
                         }
                     }
-                    // Validate + clamp context length: empty is OK, otherwise 4096..2000000
-                    if (field == "openrouterContextLength" && trimmed.isNotEmpty()) {
-                        val num = trimmed.toLongOrNull()
-                        if (num == null) {
-                            // Non-numeric — clear the field (treat as "use default")
-                            saveField(field, "")
-                            editField = null
-                            return@ProviderEditDialog
-                        }
-                        val clamped = num.coerceIn(4096, 2_000_000)
-                        saveField(field, clamped.toString())
-                        editField = null
-                        return@ProviderEditDialog
-                    }
                     saveField(field, trimmed)
                 }
                 editField = null
             },
             onDismiss = { editField = null },
+        )
+    }
+
+    // OpenRouter model + context edit dialog
+    if (orModelDialog != null) {
+        val isModel = orModelDialog == "model"
+        val title = if (isModel) "Edit Model" else "Edit Fallback Model"
+        val modelField = if (isModel) "model" else "openrouterFallbackModel"
+        val contextField = if (isModel) "openrouterModelContext" else "openrouterFallbackContext"
+
+        OpenRouterModelEditDialog(
+            title = title,
+            modelValue = orModelValue,
+            contextValue = orContextValue,
+            onModelChange = { orModelValue = it },
+            onContextChange = { orContextValue = it },
+            isRequired = isModel,
+            onSave = {
+                val trimmedModel = orModelValue.trim()
+                val trimmedCtx = orContextValue.trim()
+                if (trimmedModel.isNotEmpty() || !isModel) {
+                    saveField(modelField, trimmedModel)
+                }
+                // Validate + clamp context: empty is OK, otherwise 4096..2000000
+                if (trimmedCtx.isEmpty()) {
+                    saveField(contextField, "")
+                } else {
+                    val num = trimmedCtx.toLongOrNull()
+                    if (num != null) {
+                        val clamped = num.coerceIn(4096, 2_000_000)
+                        saveField(contextField, clamped.toString())
+                    }
+                    // Non-numeric silently ignored (field stays unchanged)
+                }
+                orModelDialog = null
+            },
+            onDismiss = { orModelDialog = null },
         )
     }
 
@@ -712,4 +737,102 @@ private suspend fun testOpenAIConnection(apiKey: String): Result<Unit> = withCon
             error("Network unreachable or timeout")
         } finally { conn.disconnect() }
     }
+}
+
+@Composable
+fun OpenRouterModelEditDialog(
+    title: String,
+    modelValue: String,
+    contextValue: String,
+    onModelChange: (String) -> Unit,
+    onContextChange: (String) -> Unit,
+    isRequired: Boolean,
+    onSave: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
+    val fieldColors = OutlinedTextFieldDefaults.colors(
+        focusedBorderColor = SeekerClawColors.Primary,
+        unfocusedBorderColor = SeekerClawColors.TextDim.copy(alpha = 0.3f),
+        cursorColor = SeekerClawColors.Primary,
+        focusedTextColor = SeekerClawColors.TextPrimary,
+        unfocusedTextColor = SeekerClawColors.TextPrimary,
+    )
+    val monoStyle = androidx.compose.ui.text.TextStyle(
+        fontFamily = FontFamily.Monospace,
+        fontSize = 14.sp,
+        color = SeekerClawColors.TextPrimary,
+    )
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                title,
+                fontFamily = RethinkSans,
+                fontWeight = FontWeight.Bold,
+                color = SeekerClawColors.TextPrimary,
+            )
+        },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = modelValue,
+                    onValueChange = onModelChange,
+                    label = {
+                        Text(
+                            if (isRequired) "Model ID *" else "Model ID (optional)",
+                            fontFamily = RethinkSans,
+                            fontSize = 12.sp,
+                        )
+                    },
+                    placeholder = { Text("e.g. anthropic/claude-sonnet-4-6", fontSize = 12.sp, color = SeekerClawColors.TextDim) },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    textStyle = monoStyle,
+                    colors = fieldColors,
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = contextValue,
+                    onValueChange = { new -> onContextChange(new.filter { it.isDigit() }) },
+                    label = { Text("Context Length (optional)", fontFamily = RethinkSans, fontSize = 12.sp) },
+                    placeholder = { Text("Default: 128000", fontSize = 12.sp, color = SeekerClawColors.TextDim) },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    textStyle = monoStyle,
+                    colors = fieldColors,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                )
+                Text(
+                    "Max tokens the model supports. Check openrouter.ai/models",
+                    fontFamily = RethinkSans,
+                    fontSize = 11.sp,
+                    color = SeekerClawColors.TextDim,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onSave) {
+                Text(
+                    "Save",
+                    fontFamily = RethinkSans,
+                    fontWeight = FontWeight.Bold,
+                    color = SeekerClawColors.ActionPrimary,
+                )
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(
+                    "Cancel",
+                    fontFamily = RethinkSans,
+                    color = SeekerClawColors.TextDim,
+                )
+            }
+        },
+        containerColor = SeekerClawColors.Surface,
+        shape = shape,
+    )
 }
