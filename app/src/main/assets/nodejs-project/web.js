@@ -342,11 +342,15 @@ function httpOpenAIStreamingRequest(options, body = null) {
                             settle(resolve, { status: 200, data: parsed, headers: res.headers });
                             return;
 
-                        case 'error':
+                        case 'error': {
                             clearTimeout(hardTimer);
-                            settle(resolve, { status: parsed.code || 500, data: parsed, headers: res.headers });
+                            const rawErrCode = parsed.code ?? parsed.status ?? parsed.http_status ?? 500;
+                            const errCode = (typeof rawErrCode === 'number' && Number.isFinite(rawErrCode)) ? rawErrCode
+                                : (Number.isFinite(Number(rawErrCode)) ? Number(rawErrCode) : 500);
+                            settle(resolve, { status: errCode, data: parsed, headers: res.headers });
                             res.destroy();
                             return;
+                        }
                     }
 
                     // Track usage from any event that includes it
@@ -444,7 +448,7 @@ function httpChatCompletionsStreamingRequest(options, body = null) {
                 const accToolCalls = Object.keys(toolCalls)
                     .map(Number).sort((a, b) => a - b)
                     .map(idx => ({
-                        id: toolCalls[idx].id,
+                        id: toolCalls[idx].id || `tc_cc_${idx}`,
                         type: 'function',
                         function: {
                             name: toolCalls[idx].name,
@@ -521,7 +525,7 @@ function httpChatCompletionsStreamingRequest(options, body = null) {
                     for (const tc of delta.tool_calls) {
                         const idx = tc.index ?? 0;
                         if (!toolCalls[idx]) {
-                            toolCalls[idx] = { id: tc.id || '', name: '', arguments: '' };
+                            toolCalls[idx] = { id: tc.id || `tc_cc_${idx}`, name: '', arguments: '' };
                         }
                         if (tc.id) toolCalls[idx].id = tc.id;
                         if (tc.function?.name) toolCalls[idx].name = tc.function.name;

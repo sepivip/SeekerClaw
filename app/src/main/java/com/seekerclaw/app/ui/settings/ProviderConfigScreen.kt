@@ -675,15 +675,15 @@ private suspend fun testOpenRouterConnection(apiKey: String): Result<Unit> = wit
         val conn = url.openConnection() as HttpURLConnection
         conn.requestMethod = "GET"
         conn.setRequestProperty("Authorization", "Bearer $apiKey")
-        conn.setRequestProperty("HTTP-Referer", "https://seekerclaw.xyz")
-        conn.setRequestProperty("X-OpenRouter-Title", "SeekerClaw")
+        conn.setRequestProperty("HTTP-Referer", "https://seekerclaw.com")
+        conn.setRequestProperty("X-Title", "SeekerClaw")
         conn.connectTimeout = 15000
         conn.readTimeout = 15000
         try {
             val status = conn.responseCode
             if (status in 200..299) return@runCatching
             val errorBody = try {
-                (conn.errorStream ?: conn.inputStream)?.bufferedReader()?.use { it.readText() } ?: ""
+                (conn.errorStream ?: conn.inputStream)?.bufferedReader()?.use { r -> r.readText() } ?: ""
             } catch (_: Exception) { "" }
             val apiMessage = try {
                 JSONObject(errorBody).optJSONObject("error")?.optString("message", "") ?: ""

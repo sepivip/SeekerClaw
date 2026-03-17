@@ -120,16 +120,17 @@ function fromApiResponse(raw) {
     const message = choice.message || {};
     const text = message.content || null;
 
-    const toolCalls = (message.tool_calls || []).map(tc => {
+    const toolCalls = (message.tool_calls || []).map((tc, idx) => {
         let input = {};
         try {
-            input = typeof tc.function?.arguments === 'string'
-                ? JSON.parse(tc.function.arguments)
-                : (tc.function?.arguments || {});
+            const rawArgs = tc.function?.arguments;
+            input = typeof rawArgs === 'string'
+                ? JSON.parse(rawArgs)
+                : (rawArgs || {});
         } catch (e) {
             log(`[OpenRouter] Failed to parse tool arguments for ${tc.function?.name}: ${e.message}`, 'WARN');
         }
-        return { id: tc.id, name: tc.function?.name || 'unknown', input };
+        return { id: tc.id || `tc_or_${idx}`, name: tc.function?.name || 'unknown', input };
     });
 
     // Map finish_reason → neutral stopReason
@@ -215,8 +216,8 @@ function buildHeaders(apiKey) {
     return {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${apiKey}`,
-        'HTTP-Referer': 'https://seekerclaw.xyz',
-        'X-OpenRouter-Title': 'SeekerClaw',
+        'HTTP-Referer': 'https://seekerclaw.com',
+        'X-Title': 'SeekerClaw',
     };
 }
 
