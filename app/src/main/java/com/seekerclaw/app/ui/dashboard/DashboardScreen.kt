@@ -509,7 +509,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
                     "degraded" -> "Engine retrying"
                     "error" -> "Engine error"
                     "stale" -> "Engine unresponsive"
-                    else -> "OpenClaw engine"
+                    else -> "Claw Engine"
                 }
                 ServiceStatus.STARTING -> "Starting..."
                 ServiceStatus.STOPPED -> "Offline"

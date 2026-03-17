@@ -58,6 +58,10 @@ import com.seekerclaw.app.ui.theme.SeekerClawColors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.ui.text.input.KeyboardType
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
@@ -75,6 +79,10 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
     var editValue by remember { mutableStateOf("") }
     var showModelPicker by remember { mutableStateOf(false) }
     var showAuthTypePicker by remember { mutableStateOf(false) }
+    // OpenRouter model+context edit dialog state
+    var orModelDialog by remember { mutableStateOf<String?>(null) } // "model" or "fallback"
+    var orModelValue by remember { mutableStateOf("") }
+    var orContextValue by remember { mutableStateOf("") }
     var testStatus by remember { mutableStateOf("Idle") }
     var testMessage by remember { mutableStateOf("") }
 
@@ -103,14 +111,21 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
 
         // Restore last-used model for new provider, or fall back to first model
         val modelsForNew = modelsForProvider(newProviderId)
-        val savedModel = prefs.getString("lastModel_$newProviderId", null)
-        val restoredModel = if (savedModel != null && modelsForNew.any { it.id == savedModel }) {
-            savedModel
+        if (modelsForNew.isEmpty()) {
+            // Freeform provider (e.g. OpenRouter) — restore last-used or set default
+            val savedModel = prefs.getString("lastModel_$newProviderId", null)
+            val defaultModel = if (newProviderId == "openrouter") "anthropic/claude-sonnet-4-6" else ""
+            saveField("model", savedModel?.takeIf { it.isNotBlank() } ?: defaultModel)
         } else {
-            modelsForNew.firstOrNull()?.id ?: ""
-        }
-        if (modelsForNew.none { it.id == currentModel }) {
-            saveField("model", restoredModel)
+            val savedModel = prefs.getString("lastModel_$newProviderId", null)
+            val restoredModel = if (savedModel != null && modelsForNew.any { it.id == savedModel }) {
+                savedModel
+            } else {
+                modelsForNew.firstOrNull()?.id ?: ""
+            }
+            if (modelsForNew.none { it.id == currentModel }) {
+                saveField("model", restoredModel)
+            }
         }
         Toast.makeText(
             context,
@@ -213,7 +228,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
             ) {
                 when (activeProvider) {
                     "claude" -> {
-                        val authTypeLabel = if (config?.authType == "setup_token") "Pro/Max Token" else "API Key"
+                        val authTypeLabel = if (config?.authType == "setup_token") "Pro/Max Setup Token" else "API Key"
                         ProviderConfigField(
                             label = "Model",
                             value = availableModels.find { it.id == config?.model }
@@ -274,6 +289,44 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                             showDivider = false,
                         )
                     }
+                    "openrouter" -> {
+                        val modelCtxDisplay = config?.openrouterModelContext?.ifBlank { null }
+                            ?.let { " ($it ctx)" } ?: ""
+                        ProviderConfigField(
+                            label = "Model",
+                            value = (config?.model?.ifBlank { "Not set" } ?: "Not set") + modelCtxDisplay,
+                            onClick = {
+                                orModelDialog = "model"
+                                orModelValue = config?.model ?: ""
+                                orContextValue = config?.openrouterModelContext ?: ""
+                            },
+                            info = "Full model ID from openrouter.ai/models (e.g. anthropic/claude-sonnet-4-6)",
+                        )
+                        val fallbackCtxDisplay = config?.openrouterFallbackContext?.ifBlank { null }
+                            ?.let { " ($it ctx)" } ?: ""
+                        ProviderConfigField(
+                            label = "Fallback Model (optional)",
+                            value = (config?.openrouterFallbackModel?.ifBlank { "Not set" } ?: "Not set") + fallbackCtxDisplay,
+                            onClick = {
+                                orModelDialog = "fallback"
+                                orModelValue = config?.openrouterFallbackModel ?: ""
+                                orContextValue = config?.openrouterFallbackContext ?: ""
+                            },
+                            info = "Auto-switches if primary model is down (e.g. google/gemini-2.5-pro)",
+                        )
+                        ProviderConfigField(
+                            label = "API Key",
+                            value = maskKey(config?.openrouterApiKey),
+                            onClick = {
+                                editField = "openrouterApiKey"
+                                editLabel = "OpenRouter API Key"
+                                editValue = config?.openrouterApiKey ?: ""
+                            },
+                            info = "Get your key at openrouter.ai/keys",
+                            isRequired = true,
+                            showDivider = false,
+                        )
+                    }
                 }
             }
 
@@ -303,6 +356,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                         testMessage = ""
                         scope.launch {
                             val result = when (activeProvider) {
+                                "openrouter" -> testOpenRouterConnection(config?.openrouterApiKey ?: "")
                                 "openai" -> testOpenAIConnection(config?.openaiApiKey ?: "")
                                 else -> {
                                     // Use Anthropic-specific credential derived from authType
@@ -370,10 +424,12 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
             onSave = {
                 val field = editField ?: return@ProviderEditDialog
                 val trimmed = editValue.trim()
+                // Optional fields that can be cleared to empty
+                val clearableFields = setOf("openrouterFallbackModel")
                 if (field == "setupToken") {
                     saveField(field, trimmed)
                     if (trimmed.isNotEmpty()) saveField("authType", "setup_token")
-                } else if (trimmed.isNotEmpty()) {
+                } else if (trimmed.isNotEmpty() || field in clearableFields) {
                     if (field == "anthropicApiKey") {
                         val detected = ConfigManager.detectAuthType(trimmed)
                         if (detected == "setup_token") {
@@ -391,8 +447,45 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
         )
     }
 
-    // Model picker dialog — shows models for active provider only
-    if (showModelPicker) {
+    // OpenRouter model + context edit dialog
+    if (orModelDialog != null) {
+        val isModel = orModelDialog == "model"
+        val title = if (isModel) "Edit Model" else "Edit Fallback Model"
+        val modelField = if (isModel) "model" else "openrouterFallbackModel"
+        val contextField = if (isModel) "openrouterModelContext" else "openrouterFallbackContext"
+
+        OpenRouterModelEditDialog(
+            title = title,
+            modelValue = orModelValue,
+            contextValue = orContextValue,
+            onModelChange = { orModelValue = it },
+            onContextChange = { orContextValue = it },
+            isRequired = isModel,
+            onSave = {
+                val trimmedModel = orModelValue.trim()
+                val trimmedCtx = orContextValue.trim()
+                if (trimmedModel.isNotEmpty() || !isModel) {
+                    saveField(modelField, trimmedModel)
+                }
+                // Validate + clamp context: empty is OK, otherwise 4096..2000000
+                if (trimmedCtx.isEmpty()) {
+                    saveField(contextField, "")
+                } else {
+                    val num = trimmedCtx.toLongOrNull()
+                    if (num != null) {
+                        val clamped = num.coerceIn(4096, 2_000_000)
+                        saveField(contextField, clamped.toString())
+                    }
+                    // Non-numeric silently ignored (field stays unchanged)
+                }
+                orModelDialog = null
+            },
+            onDismiss = { orModelDialog = null },
+        )
+    }
+
+    // Model picker dialog — shows models for active provider only (skip for freeform providers)
+    if (showModelPicker && modelsForProvider(activeProvider).isNotEmpty()) {
         val models = modelsForProvider(activeProvider)
         var selectedModel by remember {
             mutableStateOf(models.firstOrNull { it.id == config?.model }?.id ?: models.firstOrNull()?.id ?: "")
@@ -467,7 +560,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
 
     // Auth type picker (Claude only)
     if (showAuthTypePicker) {
-        val authOptions = listOf("api_key" to "API Key", "setup_token" to "Pro/Max Token")
+        val authOptions = listOf("api_key" to "API Key", "setup_token" to "Pro/Max Setup Token")
         var selectedAuth by remember { mutableStateOf(config?.authType ?: "api_key") }
 
         AlertDialog(
@@ -573,6 +666,44 @@ internal suspend fun testAnthropicConnection(credential: String, authType: Strin
     }
 }
 
+private suspend fun testOpenRouterConnection(apiKey: String): Result<Unit> = withContext(Dispatchers.IO) {
+    runCatching {
+        if (apiKey.isBlank()) error("API key is empty")
+        // Use /api/v1/auth/key — validates the key and returns account info.
+        // /api/v1/models is public and returns 200 for any key.
+        val url = URL("https://openrouter.ai/api/v1/auth/key")
+        val conn = url.openConnection() as HttpURLConnection
+        conn.requestMethod = "GET"
+        conn.setRequestProperty("Authorization", "Bearer $apiKey")
+        conn.setRequestProperty("HTTP-Referer", "https://seekerclaw.com")
+        conn.setRequestProperty("X-Title", "SeekerClaw")
+        conn.connectTimeout = 15000
+        conn.readTimeout = 15000
+        try {
+            val status = conn.responseCode
+            if (status in 200..299) return@runCatching
+            val errorBody = try {
+                (conn.errorStream ?: conn.inputStream)?.bufferedReader()?.use { r -> r.readText() } ?: ""
+            } catch (_: Exception) { "" }
+            val apiMessage = try {
+                JSONObject(errorBody).optJSONObject("error")?.optString("message", "") ?: ""
+            } catch (_: Exception) { "" }
+            val errorMessage = when {
+                status == 401 -> apiMessage.ifBlank { "Invalid API key" }
+                status == 402 -> "Insufficient credits — add funds at openrouter.ai/credits"
+                status == 429 -> "Rate limited — try again in a moment"
+                status in 500..599 -> "OpenRouter API unavailable"
+                else -> apiMessage.ifBlank { "HTTP $status" }
+            }
+            error("Connection failed ($errorMessage)")
+        } catch (_: java.net.SocketTimeoutException) {
+            error("Connection timed out")
+        } catch (_: java.io.IOException) {
+            error("Network unreachable or timeout")
+        } finally { conn.disconnect() }
+    }
+}
+
 private suspend fun testOpenAIConnection(apiKey: String): Result<Unit> = withContext(Dispatchers.IO) {
     runCatching {
         if (apiKey.isBlank()) error("API key is empty")
@@ -606,4 +737,102 @@ private suspend fun testOpenAIConnection(apiKey: String): Result<Unit> = withCon
             error("Network unreachable or timeout")
         } finally { conn.disconnect() }
     }
+}
+
+@Composable
+fun OpenRouterModelEditDialog(
+    title: String,
+    modelValue: String,
+    contextValue: String,
+    onModelChange: (String) -> Unit,
+    onContextChange: (String) -> Unit,
+    isRequired: Boolean,
+    onSave: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
+    val fieldColors = OutlinedTextFieldDefaults.colors(
+        focusedBorderColor = SeekerClawColors.Primary,
+        unfocusedBorderColor = SeekerClawColors.TextDim.copy(alpha = 0.3f),
+        cursorColor = SeekerClawColors.Primary,
+        focusedTextColor = SeekerClawColors.TextPrimary,
+        unfocusedTextColor = SeekerClawColors.TextPrimary,
+    )
+    val monoStyle = androidx.compose.ui.text.TextStyle(
+        fontFamily = FontFamily.Monospace,
+        fontSize = 14.sp,
+        color = SeekerClawColors.TextPrimary,
+    )
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                title,
+                fontFamily = RethinkSans,
+                fontWeight = FontWeight.Bold,
+                color = SeekerClawColors.TextPrimary,
+            )
+        },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = modelValue,
+                    onValueChange = onModelChange,
+                    label = {
+                        Text(
+                            if (isRequired) "Model ID *" else "Model ID (optional)",
+                            fontFamily = RethinkSans,
+                            fontSize = 12.sp,
+                        )
+                    },
+                    placeholder = { Text("e.g. anthropic/claude-sonnet-4-6", fontSize = 12.sp, color = SeekerClawColors.TextDim) },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    textStyle = monoStyle,
+                    colors = fieldColors,
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = contextValue,
+                    onValueChange = { new -> onContextChange(new.filter { it.isDigit() }) },
+                    label = { Text("Context Length (optional)", fontFamily = RethinkSans, fontSize = 12.sp) },
+                    placeholder = { Text("Default: 128000", fontSize = 12.sp, color = SeekerClawColors.TextDim) },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    textStyle = monoStyle,
+                    colors = fieldColors,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                )
+                Text(
+                    "Max tokens the model supports. Check openrouter.ai/models",
+                    fontFamily = RethinkSans,
+                    fontSize = 11.sp,
+                    color = SeekerClawColors.TextDim,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onSave) {
+                Text(
+                    "Save",
+                    fontFamily = RethinkSans,
+                    fontWeight = FontWeight.Bold,
+                    color = SeekerClawColors.ActionPrimary,
+                )
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(
+                    "Cancel",
+                    fontFamily = RethinkSans,
+                    color = SeekerClawColors.TextDim,
+                )
+            }
+        },
+        containerColor = SeekerClawColors.Surface,
+        shape = shape,
+    )
 }

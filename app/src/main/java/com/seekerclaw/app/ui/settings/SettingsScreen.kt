@@ -333,7 +333,7 @@ fun SettingsScreen(
         showRestartDialog = true
     }
 
-    val authTypeLabel = if (config?.authType == "setup_token") "Pro/Max Token" else "API Key"
+    val authTypeLabel = if (config?.authType == "setup_token") "Pro/Max Setup Token" else "API Key"
     val maskedApiKey = config?.anthropicApiKey?.let { key ->
         if (key.isBlank()) "Not set"
         else if (key.length > 12) "${key.take(8)}${"*".repeat(8)}${key.takeLast(4)}" else "*".repeat(key.length)
@@ -1339,7 +1339,7 @@ fun SettingsScreen(
                 Text(
                     "Schema: v${imported.schemaVersion}\n" +
                         "Source: $source\n" +
-                        "Auth: ${if (importedConfig.authType == "setup_token") "Pro/Max Token" else "API Key"}\n" +
+                        "Auth: ${if (importedConfig.authType == "setup_token") "Pro/Max Setup Token" else "API Key"}\n" +
                         "Credential: $maskedCredential\n" +
                         "Bot Token: $maskedBot\n" +
                         "Owner ID: ${importedConfig.telegramOwnerId.ifBlank { "Auto-detect" }}\n" +

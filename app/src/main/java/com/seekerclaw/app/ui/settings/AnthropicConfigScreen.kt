@@ -83,7 +83,7 @@ fun AnthropicConfigScreen(onBack: () -> Unit) {
         config = ConfigManager.loadConfig(context)
     }
 
-    val authTypeLabel = if (config?.authType == "setup_token") "Pro/Max Token" else "API Key"
+    val authTypeLabel = if (config?.authType == "setup_token") "Pro/Max Setup Token" else "API Key"
     val maskedApiKey = config?.anthropicApiKey?.let { key ->
         if (key.isBlank()) "Not set"
         else if (key.length > 12) "${key.take(8)}${"*".repeat(8)}${key.takeLast(4)}" else "*".repeat(key.length)
@@ -362,7 +362,7 @@ fun AnthropicConfigScreen(onBack: () -> Unit) {
     if (showAuthTypePicker) {
         val authOptions = listOf(
             "api_key" to "API Key",
-            "setup_token" to "Pro/Max Token",
+            "setup_token" to "Pro/Max Setup Token",
         )
         var selectedAuth by remember { mutableStateOf(config?.authType ?: "api_key") }
 

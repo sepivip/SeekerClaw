@@ -38,8 +38,12 @@ data class AppConfig(
     val heliusApiKey: String = "",
     val autoStartOnBoot: Boolean = true,
     val heartbeatIntervalMinutes: Int = 30,
-    val provider: String = "claude", // "claude" or "openai"
+    val provider: String = "claude", // "claude", "openai", or "openrouter"
     val openaiApiKey: String = "",
+    val openrouterApiKey: String = "",
+    val openrouterFallbackModel: String = "",
+    val openrouterModelContext: String = "",
+    val openrouterFallbackContext: String = "",
 ) {
     /** Anthropic/authType-based credential — used by SetupScreen and legacy flows. */
     val activeCredential: String
@@ -79,6 +83,10 @@ object ConfigManager {
     private const val KEY_HEARTBEAT_INTERVAL = "heartbeat_interval"
     private const val KEY_PROVIDER = "provider"
     private const val KEY_OPENAI_API_KEY_ENC = "openai_api_key_enc"
+    private const val KEY_OPENROUTER_API_KEY_ENC = "openrouter_api_key_enc"
+    private const val KEY_OPENROUTER_FALLBACK_MODEL = "openrouter_fallback_model"
+        private const val KEY_OPENROUTER_MODEL_CONTEXT = "openrouter_model_context"
+        private const val KEY_OPENROUTER_FALLBACK_CONTEXT = "openrouter_fallback_context"
 
     private fun prefs(context: Context): SharedPreferences =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -144,6 +152,16 @@ object ConfigManager {
         } else {
             editor.remove(KEY_OPENAI_API_KEY_ENC)
         }
+
+        if (config.openrouterApiKey.isNotBlank()) {
+            val encOpenRouter = KeystoreHelper.encrypt(config.openrouterApiKey)
+            editor.putString(KEY_OPENROUTER_API_KEY_ENC, Base64.encodeToString(encOpenRouter, Base64.NO_WRAP))
+        } else {
+            editor.remove(KEY_OPENROUTER_API_KEY_ENC)
+        }
+        editor.putString(KEY_OPENROUTER_FALLBACK_MODEL, config.openrouterFallbackModel)
+        editor.putString(KEY_OPENROUTER_MODEL_CONTEXT, config.openrouterModelContext)
+        editor.putString(KEY_OPENROUTER_FALLBACK_CONTEXT, config.openrouterFallbackContext)
 
         val persisted = editor.commit()
         if (persisted) {
@@ -220,6 +238,15 @@ object ConfigManager {
             ""
         }
 
+        val openrouterApiKey = try {
+            val enc = p.getString(KEY_OPENROUTER_API_KEY_ENC, null)
+            if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to decrypt OpenRouter API key", e)
+            LogCollector.append("[Config] Failed to decrypt OpenRouter API key: ${e.javaClass.simpleName}", LogLevel.ERROR)
+            ""
+        }
+
         return AppConfig(
             anthropicApiKey = apiKey,
             setupToken = setupToken,
@@ -235,6 +262,10 @@ object ConfigManager {
             heartbeatIntervalMinutes = p.getInt(KEY_HEARTBEAT_INTERVAL, 30),
             provider = p.getString(KEY_PROVIDER, "claude") ?: "claude",
             openaiApiKey = openaiApiKey,
+            openrouterApiKey = openrouterApiKey,
+            openrouterFallbackModel = p.getString(KEY_OPENROUTER_FALLBACK_MODEL, "") ?: "",
+            openrouterModelContext = p.getString(KEY_OPENROUTER_MODEL_CONTEXT, "") ?: "",
+            openrouterFallbackContext = p.getString(KEY_OPENROUTER_FALLBACK_CONTEXT, "") ?: "",
         )
     }
 
@@ -270,6 +301,10 @@ object ConfigManager {
             )
             "provider" -> config.copy(provider = value)
             "openaiApiKey" -> config.copy(openaiApiKey = value)
+            "openrouterApiKey" -> config.copy(openrouterApiKey = value)
+            "openrouterFallbackModel" -> config.copy(openrouterFallbackModel = value)
+            "openrouterModelContext" -> config.copy(openrouterModelContext = value)
+            "openrouterFallbackContext" -> config.copy(openrouterFallbackContext = value)
             else -> return
         }
         saveConfig(context, updated)
@@ -307,7 +342,7 @@ object ConfigManager {
         val json = JSONObject().apply {
             put("botToken", config.telegramBotToken)
             put("ownerId", config.telegramOwnerId)
-            put("anthropicApiKey", if (config.provider == "openai") "" else config.activeCredential)
+            put("anthropicApiKey", if (config.provider in listOf("openai", "openrouter")) "" else config.activeCredential)
             put("authType", config.authType)
             put("provider", config.provider)
             put("model", config.model)
@@ -318,6 +353,10 @@ object ConfigManager {
             if (config.jupiterApiKey.isNotBlank()) put("jupiterApiKey", config.jupiterApiKey)
             if (config.heliusApiKey.isNotBlank()) put("heliusApiKey", config.heliusApiKey)
             if (config.openaiApiKey.isNotBlank()) put("openaiApiKey", config.openaiApiKey)
+            if (config.openrouterApiKey.isNotBlank()) put("openrouterApiKey", config.openrouterApiKey)
+            if (config.openrouterFallbackModel.isNotBlank()) put("openrouterFallbackModel", config.openrouterFallbackModel)
+            if (config.openrouterModelContext.isNotBlank()) put("openrouterModelContext", config.openrouterModelContext)
+            if (config.openrouterFallbackContext.isNotBlank()) put("openrouterFallbackContext", config.openrouterFallbackContext)
             val mcpServers = loadMcpServers(context)
             if (mcpServers.isNotEmpty()) {
                 val arr = JSONArray()
@@ -369,6 +408,7 @@ object ConfigManager {
         if (config.telegramBotToken.isBlank()) return "missing_bot_token"
         val hasCredential = when (config.provider) {
             "openai" -> config.openaiApiKey.isNotBlank()
+            "openrouter" -> config.openrouterApiKey.isNotBlank()
             else -> config.activeCredential.isNotBlank()
         }
         if (!hasCredential) return "missing_credential"
@@ -379,7 +419,8 @@ object ConfigManager {
         if (config == null) return "setup=false"
         return "setup=true provider=${config.provider} authType=${config.authType} botSet=${config.telegramBotToken.isNotBlank()} " +
             "apiSet=${config.anthropicApiKey.isNotBlank()} setupTokenSet=${config.setupToken.isNotBlank()} " +
-            "openaiSet=${config.openaiApiKey.isNotBlank()} activeSet=${config.activeCredential.isNotBlank()} model=${config.model}"
+            "openaiSet=${config.openaiApiKey.isNotBlank()} openrouterSet=${config.openrouterApiKey.isNotBlank()} " +
+            "activeSet=${config.activeCredential.isNotBlank()} model=${config.model}"
     }
 
     // ==================== Auth Type Detection ====================
@@ -556,8 +597,17 @@ object ConfigManager {
         // Config
         val config = loadConfig(context)
         val agentName = config?.agentName ?: "Unknown"
-        val authType = config?.authType ?: "api_key"
-        val authLabel = if (authType == "setup_token") "Pro/Max (setup token)" else "API key"
+        val provider = config?.provider ?: "claude"
+        val providerLabel = when (provider) {
+            "openai" -> "OpenAI"
+            "openrouter" -> "OpenRouter"
+            else -> "Anthropic"
+        }
+        // Auth type is only relevant for Claude (api_key vs setup_token)
+        val authLabel = when (provider) {
+            "claude" -> if (config?.authType == "setup_token") "Pro/Max Setup Token" else "API key"
+            else -> "API key"
+        }
         val aiModel = config?.model ?: "claude-opus-4-6"
 
         // Timestamp
@@ -598,6 +648,7 @@ object ConfigManager {
             appendLine()
             appendLine("## Agent")
             appendLine("- Name: $agentName")
+            appendLine("- Provider: $providerLabel")
             appendLine("- Model: $aiModel")
             appendLine("- Auth: $authLabel")
             appendLine()

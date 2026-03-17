@@ -27,6 +27,13 @@ val availableProviders = listOf(
         keyHint = "sk-proj-…",
         consoleUrl = "https://platform.openai.com/api-keys",
     ),
+    ProviderInfo(
+        id = "openrouter",
+        displayName = "OpenRouter",
+        authTypes = listOf("api_key"),
+        keyHint = "sk-or-v1-…",
+        consoleUrl = "https://openrouter.ai/keys",
+    ),
 )
 
 val openaiModels = listOf(
@@ -37,6 +44,7 @@ val openaiModels = listOf(
 
 fun modelsForProvider(providerId: String): List<ModelInfo> = when (providerId) {
     "openai" -> openaiModels
+    "openrouter" -> emptyList() // Freeform: user types model ID (100+ models)
     else -> availableModels
 }
 

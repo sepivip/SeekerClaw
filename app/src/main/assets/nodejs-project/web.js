@@ -342,11 +342,15 @@ function httpOpenAIStreamingRequest(options, body = null) {
                             settle(resolve, { status: 200, data: parsed, headers: res.headers });
                             return;
 
-                        case 'error':
+                        case 'error': {
                             clearTimeout(hardTimer);
-                            settle(resolve, { status: parsed.code || 500, data: parsed, headers: res.headers });
+                            const rawErrCode = parsed.code ?? parsed.status ?? parsed.http_status ?? 500;
+                            const errCode = (typeof rawErrCode === 'number' && Number.isFinite(rawErrCode)) ? rawErrCode
+                                : (Number.isFinite(Number(rawErrCode)) ? Number(rawErrCode) : 500);
+                            settle(resolve, { status: errCode, data: parsed, headers: res.headers });
                             res.destroy();
                             return;
+                        }
                     }
 
                     // Track usage from any event that includes it
@@ -362,6 +366,214 @@ function httpOpenAIStreamingRequest(options, body = null) {
                         settle(resolve, { status: 200, data: buildFromAccum(), headers: res.headers });
                     } else {
                         const err = new Error('Stream ended before response.completed');
+                        err.timeoutSource = 'transport';
+                        settle(reject, err);
+                    }
+                }
+            });
+        });
+
+        armHardTimeout();
+        req.on('error', (err) => { clearTimeout(hardTimer); settle(reject, err); });
+        req.setTimeout(timeoutMs, () => {
+            req.destroy();
+            clearTimeout(hardTimer);
+            const err = new Error('Timeout');
+            err.timeoutSource = 'transport';
+            settle(reject, err);
+        });
+        if (body) req.write(typeof body === 'string' ? body : JSON.stringify(body));
+        req.end();
+        } catch (syncErr) {
+            if (hardTimer) clearTimeout(hardTimer);
+            settle(reject, syncErr);
+        }
+    });
+}
+
+// BAT-447: Streaming HTTP request for Chat Completions API (OpenRouter, etc.)
+// Simple data-only SSE: no typed event: lines, just data: lines + data: [DONE].
+// OpenRouter sends ": OPENROUTER PROCESSING" keepalive comments (SSE spec: ignore).
+// Tool call deltas stream via delta.tool_calls[i] with index-based accumulation.
+function httpChatCompletionsStreamingRequest(options, body = null) {
+    const timeoutMs = options.timeout ?? API_TIMEOUT_MS;
+    const HARD_TIMEOUT_MS = 5 * 60 * 1000;
+
+    return new Promise((resolve, reject) => {
+        let settled = false;
+        const settle = (fn, val) => { if (!settled) { settled = true; fn(val); } };
+
+        let req = null;
+        let hardTimer = null;
+
+        const armHardTimeout = () => {
+            hardTimer = setTimeout(() => {
+                if (req) req.destroy();
+                const err = new Error('Streaming hard timeout (5 min)');
+                err.timeoutSource = 'transport';
+                settle(reject, err);
+            }, HARD_TIMEOUT_MS);
+        };
+
+        try {
+        req = https.request(options, (res) => {
+            const ct = res.headers['content-type'] || '';
+            if (res.statusCode !== 200 || !ct.includes('text/event-stream')) {
+                // Non-streaming error response
+                res.setEncoding('utf8');
+                let data = '';
+                res.on('data', chunk => data += chunk);
+                res.on('end', () => {
+                    clearTimeout(hardTimer);
+                    try {
+                        settle(resolve, { status: res.statusCode, data: JSON.parse(data), headers: res.headers });
+                    } catch (_) {
+                        settle(resolve, { status: res.statusCode, data, headers: res.headers });
+                    }
+                });
+                return;
+            }
+
+            // Chat Completions SSE accumulators
+            res.setEncoding('utf8');
+            let textContent = '';
+            const toolCalls = {};    // index → { id, name, arguments }
+            let finishReason = null;
+            let usage = null;
+            let actualModel = null;
+            let sseBuffer = '';
+
+            // Build accumulated response in fromApiResponse() shape
+            const buildResponse = () => {
+                const accToolCalls = Object.keys(toolCalls)
+                    .map(Number).sort((a, b) => a - b)
+                    .map(idx => ({
+                        id: toolCalls[idx].id || `tc_cc_${idx}`,
+                        type: 'function',
+                        function: {
+                            name: toolCalls[idx].name,
+                            arguments: toolCalls[idx].arguments,
+                        },
+                    }));
+                return {
+                    choices: [{
+                        message: {
+                            role: 'assistant',
+                            content: textContent || null,
+                            tool_calls: accToolCalls.length > 0 ? accToolCalls : undefined,
+                        },
+                        finish_reason: finishReason || 'stop',
+                    }],
+                    usage: usage || {},
+                    model: actualModel,
+                };
+            };
+
+            // Process a single SSE event (may have multiple data: lines)
+            const processEvent = (raw) => {
+                let eventData = '';
+
+                for (const line of raw.split('\n')) {
+                    // SSE comments (keepalive: ": OPENROUTER PROCESSING") — ignore
+                    if (line.startsWith(':')) continue;
+                    // Accumulate data: lines (SSE spec: multi-line data concatenated with \n)
+                    if (line.startsWith('data:')) {
+                        const d = line.slice(5);
+                        eventData += (eventData ? '\n' : '') + (d.startsWith(' ') ? d.slice(1) : d);
+                    }
+                }
+
+                if (!eventData) return;
+
+                // Stream termination
+                if (eventData.trim() === '[DONE]') {
+                    clearTimeout(hardTimer);
+                    settle(resolve, { status: 200, data: buildResponse(), headers: res.headers });
+                    return;
+                }
+
+                let parsed;
+                try { parsed = JSON.parse(eventData); } catch (_) { return; }
+
+                // Track actual model (may differ from requested if fallback triggered)
+                if (parsed.model) actualModel = parsed.model;
+
+                // In-band error (no choices, just error object)
+                if (parsed.error && !parsed.choices) {
+                    clearTimeout(hardTimer);
+                    const rawCode = parsed.error.code ?? parsed.error.status ?? parsed.error.http_status ?? 500;
+                    const code = (typeof rawCode === 'number' && Number.isFinite(rawCode)) ? rawCode
+                        : (Number.isFinite(Number(rawCode)) ? Number(rawCode) : 500);
+                    settle(resolve, { status: code, data: { error: parsed.error }, headers: res.headers });
+                    res.destroy();
+                    return;
+                }
+
+                const choice = parsed.choices?.[0];
+                if (!choice) {
+                    // Usage-only chunk (some providers send usage separately)
+                    if (parsed.usage) usage = parsed.usage;
+                    return;
+                }
+
+                const delta = choice.delta || {};
+
+                // Text content delta
+                if (delta.content) textContent += delta.content;
+
+                // Tool call deltas — accumulate by index
+                if (delta.tool_calls) {
+                    for (const tc of delta.tool_calls) {
+                        const idx = tc.index ?? 0;
+                        if (!toolCalls[idx]) {
+                            toolCalls[idx] = { id: tc.id || `tc_cc_${idx}`, name: '', arguments: '' };
+                        }
+                        if (tc.id) toolCalls[idx].id = tc.id;
+                        if (tc.function?.name) toolCalls[idx].name = tc.function.name;
+                        if (tc.function?.arguments) toolCalls[idx].arguments += tc.function.arguments;
+                    }
+                }
+
+                // Track finish_reason and usage
+                if (choice.finish_reason) finishReason = choice.finish_reason;
+                if (parsed.usage) usage = parsed.usage;
+
+                // Mid-stream error: finish_reason is "error"
+                if (finishReason === 'error') {
+                    clearTimeout(hardTimer);
+                    const errData = parsed.error || { message: 'Mid-stream error', code: 500 };
+                    const rawErrCode = errData.code ?? errData.status ?? errData.http_status ?? 500;
+                    const errCode = (typeof rawErrCode === 'number' && Number.isFinite(rawErrCode)) ? rawErrCode
+                        : (Number.isFinite(Number(rawErrCode)) ? Number(rawErrCode) : 500);
+                    settle(resolve, { status: errCode, data: { error: errData }, headers: res.headers });
+                    res.destroy();
+                }
+            };
+
+            res.on('data', chunk => {
+                sseBuffer += chunk.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
+                let boundary;
+                while ((boundary = sseBuffer.indexOf('\n\n')) !== -1) {
+                    const raw = sseBuffer.slice(0, boundary);
+                    sseBuffer = sseBuffer.slice(boundary + 2);
+                    if (settled) return;
+                    processEvent(raw);
+                }
+            });
+
+            res.on('end', () => {
+                clearTimeout(hardTimer);
+                if (!settled) {
+                    // Flush any trailing partial event in buffer (missing final \n\n)
+                    if (sseBuffer.trim()) processEvent(sseBuffer);
+                }
+                if (!settled) {
+                    // Stream ended without [DONE] — build from accumulated data
+                    if (textContent || Object.keys(toolCalls).length > 0) {
+                        settle(resolve, { status: 200, data: buildResponse(), headers: res.headers });
+                    } else {
+                        const err = new Error('Stream ended before [DONE]');
                         err.timeoutSource = 'transport';
                         settle(reject, err);
                     }
@@ -713,6 +925,7 @@ module.exports = {
     httpRequest,
     httpStreamingRequest,
     httpOpenAIStreamingRequest,
+    httpChatCompletionsStreamingRequest,
     cacheGet,
     cacheSet,
     htmlToMarkdown,
