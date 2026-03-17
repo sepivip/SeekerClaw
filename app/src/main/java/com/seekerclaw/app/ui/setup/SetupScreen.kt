@@ -613,7 +613,7 @@ private fun AnthropicApiStep(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                listOf("api_key" to "API Key", "setup_token" to "Pro/Max Token").forEach { (type, label) ->
+                listOf("api_key" to "API Key", "setup_token" to "Pro/Max Setup Token").forEach { (type, label) ->
                     val isSelected = authType == type
                     Button(
                         onClick = { onAuthTypeChange(type) },

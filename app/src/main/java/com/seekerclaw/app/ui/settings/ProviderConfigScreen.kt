@@ -228,7 +228,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
             ) {
                 when (activeProvider) {
                     "claude" -> {
-                        val authTypeLabel = if (config?.authType == "setup_token") "Pro/Max Token" else "API Key"
+                        val authTypeLabel = if (config?.authType == "setup_token") "Pro/Max Setup Token" else "API Key"
                         ProviderConfigField(
                             label = "Model",
                             value = availableModels.find { it.id == config?.model }
@@ -560,7 +560,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
 
     // Auth type picker (Claude only)
     if (showAuthTypePicker) {
-        val authOptions = listOf("api_key" to "API Key", "setup_token" to "Pro/Max Token")
+        val authOptions = listOf("api_key" to "API Key", "setup_token" to "Pro/Max Setup Token")
         var selectedAuth by remember { mutableStateOf(config?.authType ?: "api_key") }
 
         AlertDialog(

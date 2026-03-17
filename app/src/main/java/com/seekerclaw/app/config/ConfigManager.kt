@@ -605,7 +605,7 @@ object ConfigManager {
         }
         // Auth type is only relevant for Claude (api_key vs setup_token)
         val authLabel = when (provider) {
-            "claude" -> if (config?.authType == "setup_token") "Pro/Max (setup token)" else "API key"
+            "claude" -> if (config?.authType == "setup_token") "Pro/Max Setup Token" else "API key"
             else -> "API key"
         }
         val aiModel = config?.model ?: "claude-opus-4-6"
