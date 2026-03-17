@@ -252,10 +252,11 @@ function classifyError(status, data) {
         };
     }
     if (status === 404) {
-        return {
-            type: 'model_not_found', retryable: false,
-            userMessage: 'Model not found on OpenRouter. Check the model ID in Settings.'
-        };
+        const msg = data?.error?.message || '';
+        const userMessage = /image|vision|multimodal/i.test(msg)
+            ? 'This model does not support image/vision input. Try a vision-capable model.'
+            : 'Model not found on OpenRouter. Check the model ID in Settings.';
+        return { type: 'model_not_found', retryable: false, userMessage };
     }
     if (status === 408) {
         return {
