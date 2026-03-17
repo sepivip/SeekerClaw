@@ -53,6 +53,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -105,7 +106,7 @@ import java.util.Date
 @Composable
 fun SettingsScreen(
     onRunSetupAgain: () -> Unit = {},
-    onNavigateToAnthropic: () -> Unit = {},
+    onNavigateToAiConfig: () -> Unit = {},
     onNavigateToTelegram: () -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -441,10 +442,10 @@ fun SettingsScreen(
                     .background(SeekerClawColors.Surface, shape),
             ) {
                 ConfigField(
-                    label = "AI Provider",
-                    value = "Anthropic / OpenAI, Model, Keys",
-                    onClick = onNavigateToAnthropic,
-                    info = "Select AI provider (Anthropic or OpenAI), configure model and credentials.",
+                    label = "AI Configuration",
+                    value = "Provider, Model, Keys",
+                    onClick = onNavigateToAiConfig,
+                    info = "Select AI provider, configure model and API credentials.",
                 )
                 ConfigField(
                     label = "Telegram",
@@ -492,8 +493,8 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(28.dp))
 
-        // Preferences
-        CollapsibleSection("Preferences", initiallyExpanded = true) {
+        // Preferences & Permissions
+        CollapsibleSection("Preferences & Permissions", initiallyExpanded = true) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -540,19 +541,6 @@ fun SettingsScreen(
                     },
                     info = SettingsHelpTexts.SERVER_MODE,
                 )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(28.dp))
-
-        // Permissions
-        CollapsibleSection("Permissions", initiallyExpanded = true) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(SeekerClawColors.Surface, shape)
-                    .padding(horizontal = 16.dp),
-            ) {
                 val allPermissionsOff = !hasCameraPermission && !hasLocationPermission &&
                     !hasContactsPermission && !hasSmsPermission && !hasCallPermission
                 if (allPermissionsOff) {
@@ -1762,7 +1750,7 @@ private fun CollapsibleSection(
     initiallyExpanded: Boolean = true,
     content: @Composable () -> Unit,
 ) {
-    var expanded by remember { mutableStateOf(initiallyExpanded) }
+    var expanded by rememberSaveable(key = "section_$title") { mutableStateOf(initiallyExpanded) }
 
     Row(
         modifier = Modifier

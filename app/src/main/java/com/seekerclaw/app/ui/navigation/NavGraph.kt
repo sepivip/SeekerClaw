@@ -215,7 +215,7 @@ fun SeekerClawNavHost() {
                             }
                         }
                     },
-                    onNavigateToAnthropic = {
+                    onNavigateToAiConfig = {
                         navController.navigate(ProviderConfigRoute)
                     },
                     onNavigateToTelegram = {
@@ -223,6 +223,7 @@ fun SeekerClawNavHost() {
                     }
                 )
             }
+            // TODO: AnthropicConfigRoute is unused — remove with AnthropicConfigScreen.kt in cleanup PR
             composable<AnthropicConfigRoute> {
                 com.seekerclaw.app.ui.settings.AnthropicConfigScreen(
                     onBack = { navController.popBackStack() }
