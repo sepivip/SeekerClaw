@@ -30,7 +30,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 | UI Framework | Jetpack Compose (Material 3) | — |
 | Min SDK | 34 (Android 14) | — |
 | Node.js Runtime | nodejs-mobile (community fork) | Node 18 LTS |
-| AI Provider | Anthropic Claude API + OpenAI Responses API | Claude Opus 4.6 default; OpenAI via adapter |
+| AI Provider | Anthropic Claude API + OpenAI Responses API + OpenRouter Chat Completions | Claude Opus 4.6 default; OpenAI + OpenRouter via adapters |
 | Messaging | Telegram Bot API (grammy) | — |
 | Database | SQL.js (WASM SQLite) | 1.12.0 |
 | OpenClaw Parity | OpenClaw gateway (ported) | 2026.3.8 |
@@ -42,7 +42,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 
 ### AI Agent Core
 - **Claude integration** — Opus 4.6 (default), Sonnet 4.6, Sonnet 4.5, Haiku 4.5 selectable. Prompt caching, retry with backoff, rate-limit throttling, user-friendly error messages. OAuth/setup token support for Claude Pro/Max users. Conversational API key setup flow.
-- **Multi-provider architecture** — Provider adapter pattern (claude/openai) with unified internal message format. OpenAI Responses API support (`/v1/responses`) with SSE streaming, function_call items, vision. Provider-agnostic DB logging and usage tracking. Safe defaults — unknown provider falls back to Claude. Credential hygiene — only active provider's key written to config.json.
+- **Multi-provider architecture** — Provider adapter pattern (claude/openai/openrouter) with unified internal message format. OpenAI Responses API support (`/v1/responses`) with SSE streaming, function_call items, vision. OpenRouter Chat Completions adapter with prompt caching, model fallbacks, error classification (401-503), vision support. Provider-agnostic DB logging and usage tracking. Safe defaults — unknown provider falls back to Claude. Credential hygiene — only active provider's key written to config.json.
 - **Multi-turn task execution** — Reliable P2 multi-turn: tool budget management with validation-aware restore, silent turn stop prevention on budget exhaustion, MAX_TOOL_USES=25 for complex tasks
 - **API timeout hardening** — Configurable timeouts (replacing hardcoded 60s), bounded retry with backoff for timeout paths, turn-level tracing instrumentation, sanitized user-visible error messages, 429 retry jitter
 - **Context token estimation + adaptive trimming** — Token-aware conversation management that estimates context size and trims oldest messages to stay within limits, preventing API failures from oversized contexts
@@ -53,7 +53,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 - **SILENT_REPLY protocol** — Agent silently drops messages when it has nothing useful to say
 - **Ephemeral session awareness** — Agent knows context resets on restart
 - **PLATFORM.md auto-generation** — Device state (model, RAM, storage, battery, permissions, wallet) written on every service start
-- **Self-awareness system prompt** — Self-knowledge doors, architecture blocks, self-diagnosis playbook for troubleshooting tool failures and silent responses. Debug log rotation at 5MB with `.old` archive. DIAGNOSTICS.md deep troubleshooting guide. SAB-AUDIT-v5: 100% score (36/36 audit points)
+- **Self-awareness system prompt** — Self-knowledge doors, architecture blocks, self-diagnosis playbook for troubleshooting tool failures and silent responses. Debug log rotation at 5MB with `.old` archive. DIAGNOSTICS.md deep troubleshooting guide. SAB-AUDIT-v13: 100% score (141/141 audit points)
 - **Structured log levels** — DEBUG/INFO/WARN/ERROR pipeline with per-level routing; UI log viewer color-coded by level; LogCollector filters noise from debug output
 - **Skill routing** — Routing blocks prevent conflicting skills from firing together; reply tag first-token rule for reliable `[[reply_to_current]]` detection
 - **Skill requirements gating** — Skills with `requires.bins` or `requires.env` in YAML frontmatter are checked at runtime; unmet requirements are reported and skill is skipped
@@ -227,13 +227,13 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Metric | Count |
 |--------|-------|
-| Total commits | 381 |
-| PRs merged | 259+ |
+| Total commits | 385 |
+| PRs merged | 260+ |
 | Tools | 56 (9 Jupiter, 13 Android bridge, web search/fetch, memory, cron, skill_install, etc.) + MCP dynamic |
 | Skills | 35 (20 bundled + 13 workspace + 2 user-created) |
 | Android Bridge endpoints | 18+ |
 | Telegram commands | 12 |
-| Lines of JS | ~14,800 (main.js + 15 modules + 3 provider adapters) |
+| Lines of JS | ~14,900 (main.js + 15 modules + 3 provider adapters) |
 | Lines of Kotlin | ~14,000 |
 | SQL.js tables | 4 |
 | Themes | 1 (DarkOps only) |
@@ -269,6 +269,7 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Date | Feature | PR |
 |------|---------|-----|
+| 2026-03-17 | Feat: OpenRouter provider — JS adapter + streaming parser, Kotlin UI (BAT-447) | #260 |
 | 2026-03-14 | Feat: context token estimation + adaptive trimming (BAT-449) | #259 |
 | 2026-03-14 | Fix: empty system prompt block breaks session summary + vision (BAT-448) | #258 |
 | 2026-03-13 | Feat: Telegram Bot API 9.4 button styling — destructive/primary colors (BAT-439) | #257 |

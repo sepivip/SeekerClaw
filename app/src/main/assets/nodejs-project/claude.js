@@ -712,8 +712,10 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('1. Read agent_health_state — check consecutiveFailures and lastError');
     lines.push('2. Auth error (401/403): API key may be invalid — tell user to check Settings');
     lines.push('3. Rate limit (429): slow down — reduce tool calls and response length');
-    lines.push(`4. Billing error (402): tell user to check their billing at ${PROVIDER === 'openai' ? 'platform.openai.com' : 'console.anthropic.com'}`);
-    lines.push(`5. Network error: check connectivity with js_eval using require("https").get("https://${PROVIDER === 'openai' ? 'api.openai.com' : 'api.anthropic.com'}") or shell_exec "curl -s https://${PROVIDER === 'openai' ? 'api.openai.com' : 'api.anthropic.com'}"`);
+    const billingUrl = PROVIDER === 'openai' ? 'platform.openai.com' : PROVIDER === 'openrouter' ? 'openrouter.ai/credits' : 'console.anthropic.com';
+    const apiHost = PROVIDER === 'openai' ? 'api.openai.com' : PROVIDER === 'openrouter' ? 'openrouter.ai' : 'api.anthropic.com';
+    lines.push(`4. Billing error (402): tell user to check their billing at ${billingUrl}`);
+    lines.push(`5. Network error: check connectivity with js_eval using require("https").get("https://${apiHost}") or shell_exec "curl -s https://${apiHost}"`);
     lines.push('');
 
     // Project Context - OpenClaw injects SOUL.md and memory here
