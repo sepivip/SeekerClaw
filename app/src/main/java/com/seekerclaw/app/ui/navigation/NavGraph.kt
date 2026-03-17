@@ -215,7 +215,7 @@ fun SeekerClawNavHost() {
                             }
                         }
                     },
-                    onNavigateToAnthropic = {
+                    onNavigateToAiConfig = {
                         navController.navigate(ProviderConfigRoute)
                     },
                     onNavigateToTelegram = {

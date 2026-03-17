@@ -106,7 +106,7 @@ import java.util.Date
 @Composable
 fun SettingsScreen(
     onRunSetupAgain: () -> Unit = {},
-    onNavigateToAnthropic: () -> Unit = {},
+    onNavigateToAiConfig: () -> Unit = {},
     onNavigateToTelegram: () -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -444,7 +444,7 @@ fun SettingsScreen(
                 ConfigField(
                     label = "AI Configuration",
                     value = "Provider, Model, Keys",
-                    onClick = onNavigateToAnthropic,
+                    onClick = onNavigateToAiConfig,
                     info = "Select AI provider, configure model and API credentials.",
                 )
                 ConfigField(
@@ -1750,7 +1750,7 @@ private fun CollapsibleSection(
     initiallyExpanded: Boolean = true,
     content: @Composable () -> Unit,
 ) {
-    var expanded by rememberSaveable { mutableStateOf(initiallyExpanded) }
+    var expanded by rememberSaveable(key = "section_$title") { mutableStateOf(initiallyExpanded) }
 
     Row(
         modifier = Modifier
