@@ -502,7 +502,8 @@ function httpChatCompletionsStreamingRequest(options, body = null) {
                 if (parsed.error && !parsed.choices) {
                     clearTimeout(hardTimer);
                     const rawCode = parsed.error.code ?? parsed.error.status ?? parsed.error.http_status ?? 500;
-                    const code = (typeof rawCode === 'number' && Number.isFinite(rawCode)) ? rawCode : 500;
+                    const code = (typeof rawCode === 'number' && Number.isFinite(rawCode)) ? rawCode
+                        : (Number.isFinite(Number(rawCode)) ? Number(rawCode) : 500);
                     settle(resolve, { status: code, data: { error: parsed.error }, headers: res.headers });
                     res.destroy();
                     return;
@@ -542,7 +543,8 @@ function httpChatCompletionsStreamingRequest(options, body = null) {
                     clearTimeout(hardTimer);
                     const errData = parsed.error || { message: 'Mid-stream error', code: 500 };
                     const rawErrCode = errData.code ?? errData.status ?? errData.http_status ?? 500;
-                    const errCode = (typeof rawErrCode === 'number' && Number.isFinite(rawErrCode)) ? rawErrCode : 500;
+                    const errCode = (typeof rawErrCode === 'number' && Number.isFinite(rawErrCode)) ? rawErrCode
+                        : (Number.isFinite(Number(rawErrCode)) ? Number(rawErrCode) : 500);
                     settle(resolve, { status: errCode, data: { error: errData }, headers: res.headers });
                     res.destroy();
                 }
