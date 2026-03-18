@@ -678,7 +678,7 @@ private fun UsageLimitBar(
         else -> SeekerClawColors.Accent
     }
 
-    Column {
+    Column(modifier = modifier) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
