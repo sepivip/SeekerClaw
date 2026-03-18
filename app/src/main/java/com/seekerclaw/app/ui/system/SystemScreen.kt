@@ -34,7 +34,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import com.seekerclaw.app.ui.theme.RethinkSans
@@ -116,7 +115,7 @@ fun SystemScreen(onBack: () -> Unit) {
             .fillMaxSize()
             .background(SeekerClawColors.Background)
             .verticalScroll(rememberScrollState())
-            .padding(20.dp),
+            .padding(16.dp),
     ) {
         // Back + Title
         Row(
@@ -138,7 +137,7 @@ fun SystemScreen(onBack: () -> Unit) {
             )
         }
 
-        Spacer(modifier = Modifier.height(28.dp))
+        Spacer(modifier = Modifier.height(24.dp))
 
         // ==================== STATUS ====================
         SectionLabel("Status")
@@ -377,14 +376,12 @@ fun SystemScreen(onBack: () -> Unit) {
                 value = "$messagesToday",
                 unit = "messages",
                 modifier = Modifier.weight(1f),
-                accentColor = SeekerClawColors.Accent,
             )
             StatCard(
                 label = "All Time",
                 value = "$messageCount",
                 unit = "messages",
                 modifier = Modifier.weight(1f),
-                accentColor = SeekerClawColors.LogInfo,
             )
         }
 
@@ -399,14 +396,12 @@ fun SystemScreen(onBack: () -> Unit) {
                 value = formatTokens(tokensToday),
                 unit = "tokens",
                 modifier = Modifier.weight(1f),
-                accentColor = SeekerClawColors.Accent,
             )
             StatCard(
                 label = "All Time",
                 value = formatTokens(tokensTotal),
                 unit = "tokens",
                 modifier = Modifier.weight(1f),
-                accentColor = SeekerClawColors.LogInfo,
             )
         }
 
@@ -501,7 +496,7 @@ private fun SectionLabel(text: String) {
         color = SeekerClawColors.TextDim,
         letterSpacing = 1.sp,
     )
-    Spacer(modifier = Modifier.height(10.dp))
+    Spacer(modifier = Modifier.height(8.dp))
 }
 
 @Composable
@@ -533,7 +528,7 @@ private fun InfoRow(
                 color = SeekerClawColors.TextPrimary,
             )
             if (dotColor != null) {
-                Spacer(modifier = Modifier.width(10.dp))
+                Spacer(modifier = Modifier.width(8.dp))
                 Box(
                     modifier = Modifier
                         .size(10.dp)
@@ -559,9 +554,10 @@ private fun ResourceBar(
     value: String,
     progress: Float,
     barColor: androidx.compose.ui.graphics.Color,
+    modifier: Modifier = Modifier,
     suffix: String = "",
 ) {
-    Column {
+    Column(modifier = modifier) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -582,7 +578,7 @@ private fun ResourceBar(
                     color = SeekerClawColors.TextSecondary,
                 )
                 if (suffix.isNotEmpty()) {
-                    Spacer(modifier = Modifier.width(6.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         text = suffix,
                         fontFamily = FontFamily.Monospace,
@@ -592,7 +588,7 @@ private fun ResourceBar(
                 }
             }
         }
-        Spacer(modifier = Modifier.height(6.dp))
+        Spacer(modifier = Modifier.height(8.dp))
         LinearProgressIndicator(
             progress = { progress.coerceIn(0f, 1f) },
             modifier = Modifier
@@ -611,25 +607,12 @@ private fun StatCard(
     value: String,
     unit: String,
     modifier: Modifier = Modifier,
-    accentColor: Color? = null,
 ) {
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
 
     Column(
         modifier = modifier
             .background(SeekerClawColors.Surface, shape)
-            .then(
-                if (accentColor != null) {
-                    Modifier
-                        .clip(shape)
-                        .drawBehind {
-                            drawRect(
-                                color = accentColor,
-                                size = androidx.compose.ui.geometry.Size(4.dp.toPx(), size.height),
-                            )
-                        }
-                } else Modifier
-            )
             .padding(16.dp),
     ) {
         Text(
@@ -683,6 +666,7 @@ private fun formatModelName(model: String): String {
 private fun UsageLimitBar(
     label: String,
     utilization: Float,
+    modifier: Modifier = Modifier,
     resetsAt: String = "",
     detailText: String? = null,
 ) {
@@ -694,7 +678,7 @@ private fun UsageLimitBar(
         else -> SeekerClawColors.Accent
     }
 
-    Column {
+    Column(modifier = modifier) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -716,7 +700,7 @@ private fun UsageLimitBar(
             )
         }
 
-        Spacer(modifier = Modifier.height(6.dp))
+        Spacer(modifier = Modifier.height(8.dp))
 
         LinearProgressIndicator(
             progress = { utilization.coerceIn(0f, 1f) },
