@@ -29,6 +29,8 @@ const {
 
 const { getDb, indexMemoryFiles } = require('./database');
 
+const { trackMemoryAccess } = require('./activity');
+
 const {
     solanaRpc, base58Encode, buildSolTransferTx,
     resolveToken, jupiterQuote, jupiterPrice,
@@ -1098,6 +1100,7 @@ async function executeTool(name, input, chatId) {
                 return { error: 'Path is a directory, use ls tool instead' };
             }
             const content = fs.readFileSync(filePath, 'utf8');
+            trackMemoryAccess(path.relative(workDir, filePath), 'read');
             return {
                 path: input.path,
                 size: stat.size,
@@ -1130,6 +1133,7 @@ async function executeTool(name, input, chatId) {
                 fs.mkdirSync(dir, { recursive: true });
             }
             fs.writeFileSync(filePath, input.content, 'utf8');
+            trackMemoryAccess(path.relative(workDir, filePath), 'write');
 
             // BAT-236: If agent wrote to workspace root agent_settings.json, re-sync API keys
             if (filePath === path.join(workDir, 'agent_settings.json')) {
@@ -1183,6 +1187,7 @@ async function executeTool(name, input, chatId) {
             }
 
             fs.writeFileSync(filePath, content, 'utf8');
+            trackMemoryAccess(path.relative(workDir, filePath), 'write');
 
             // BAT-236: If agent edited workspace root agent_settings.json, re-sync API keys
             if (filePath === path.join(workDir, 'agent_settings.json')) {

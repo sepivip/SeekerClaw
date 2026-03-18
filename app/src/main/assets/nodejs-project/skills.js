@@ -6,6 +6,7 @@ const fs = require('fs');
 const path = require('path');
 
 const { SKILLS_DIR, log, config, SHELL_ALLOWLIST } = require('./config');
+const { trackMemoryAccess } = require('./activity');
 
 // ============================================================================
 // SKILLS SYSTEM
@@ -537,6 +538,9 @@ function loadSkills() {
         }
         _firstLoadLogged = true;
     }
+
+    // BAT-325: Track skills read for Memory Activity Grid
+    if (loaded.length > 0) trackMemoryAccess('skills/SKILL.md', 'read');
 
     return loaded;
 }
