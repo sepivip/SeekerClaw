@@ -68,7 +68,7 @@ x-anthropic-billing-header: cc_version=2.1.78; cc_entrypoint=cli; cch=00000;
 - Must be a **separate text block** in the `system` array (not concatenated)
 - Only needed for `setup_token` auth — standard API keys are unaffected
 - Placed **before** other system prompt blocks, no `cache_control` on this block
-- `cch` value is not validated server-side
+- `cch` value was not validated in our testing
 
 Fix applied in `providers/claude.js` → `formatSystemPrompt()`.
 

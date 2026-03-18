@@ -40,7 +40,7 @@ async function testAuth(label, key, authType) {
     console.log(`\n${'─'.repeat(60)}`);
     console.log(`🔑 Testing: ${label}`);
     console.log(`   Auth type: ${authType}`);
-    console.log(`   Key prefix: ${key.slice(0, 20)}...`);
+    console.log(`   Key prefix: ${key.slice(0, 10)}...`);
     console.log(`   Beta header: ${betaHeaders}`);
 
     try {
@@ -98,7 +98,7 @@ async function main() {
         // Also test WITHOUT the oauth beta header to compare
         console.log(`\n${'─'.repeat(60)}`);
         console.log(`🔑 Testing: Setup Token (WITHOUT oauth beta)`);
-        console.log(`   Key prefix: ${setupToken.slice(0, 20)}...`);
+        console.log(`   Key prefix: ${setupToken.slice(0, 10)}...`);
         try {
             const res = await httpRequest({
                 hostname: 'api.anthropic.com',

@@ -114,7 +114,7 @@ async function main() {
     if (apiKey) {
         console.log(`\n${'─'.repeat(60)}`);
         console.log(`🔑 API Key auth (x-api-key)`);
-        console.log(`   Key: ${apiKey.slice(0, 20)}...`);
+        console.log(`   Key: ${apiKey.slice(0, 10)}...`);
         for (const model of models) {
             await testModel(model, apiKey, 'api_key');
             await new Promise(r => setTimeout(r, 1000));
@@ -125,7 +125,7 @@ async function main() {
     if (setupToken) {
         console.log(`\n${'─'.repeat(60)}`);
         console.log(`🔑 Setup Token auth (Bearer + oauth beta + billing attribution)`);
-        console.log(`   Token: ${setupToken.slice(0, 20)}...`);
+        console.log(`   Token: ${setupToken.slice(0, 10)}...`);
         for (const model of models) {
             await testModel(model, setupToken, 'setup_token');
             await new Promise(r => setTimeout(r, 1000));
