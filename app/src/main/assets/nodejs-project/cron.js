@@ -45,9 +45,11 @@ const MAX_CONCURRENT_RUNS = 1; // Default concurrent job limit (OpenClaw: config
 const JOB_TIMEOUT_MS = 60000; // 60s timeout per reminder execution
 const AGENT_TURN_TIMEOUT_MS = 300000; // 5 min timeout for agentTurn (full AI turn with tools)
 const MIN_AGENT_TURN_INTERVAL_MS = 15 * 60 * 1000; // 15 min minimum for recurring agentTurn jobs
+const MAX_MISSED_JOBS_PER_RESTART = 5;   // Cap immediate catch-up on startup (OpenClaw parity: v2026.3.13)
+const MISSED_JOB_STAGGER_MS = 5000;      // 5s delay between deferred missed jobs
 
-// Transient error patterns — these errors are expected to resolve on retry (OpenClaw parity: v2026.3.8)
-const TRANSIENT_ERROR_RE = /\b(429|529|503)\b|rate[_ ]limit|too many requests|overloaded|high demand|capacity exceeded|ECONNRESET|ETIMEDOUT|ENOTFOUND|socket hang up|fetch failed|timed?\s*out/i;
+// Transient error patterns — these errors are expected to resolve on retry (OpenClaw parity: v2026.3.13)
+const TRANSIENT_ERROR_RE = /\b(429|529|503)\b|rate[_ ]limit|too many requests|tokens per day|overloaded|high demand|capacity exceeded|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|socket hang up|fetch failed|timed?\s*out/i;
 
 // ============================================================================
 // DURATION FORMATTING
@@ -304,6 +306,8 @@ const cronService = {
         this.store = loadCronStore();
         // Recompute next runs and clear zombies
         this._recomputeNextRuns();
+        // Cap and stagger missed jobs to avoid overwhelming the API on restart
+        this._staggerMissedJobs();
         this._armTimer();
         this._started = true;
         log(`[Cron] Service started with ${this.store.jobs.length} jobs`, 'DEBUG');
@@ -425,7 +429,8 @@ const cronService = {
 
     // --- Internal Methods ---
 
-    _recomputeNextRuns() {
+    _recomputeNextRuns(opts) {
+        const recomputeExpired = opts?.recomputeExpired || false;
         const now = Date.now();
 
         for (const job of this.store.jobs) {
@@ -450,21 +455,62 @@ const cronService = {
                 continue;
             }
 
-            const nextRun = computeNextRunAtMs(job.schedule, now);
-
             // Fix 1 (BAT-21): One-shot 'at' jobs whose time has passed but
             // never ran — mark as skipped so they don't re-fire on next restart.
-            if (job.schedule.kind === 'at' && !nextRun && !job.state.lastStatus) {
-                log(`[Cron] Skipping missed one-shot job: ${job.id} "${job.name}"`, 'DEBUG');
-                job.enabled = false;
-                job.state.lastStatus = 'skipped';
-                job.state.nextRunAtMs = undefined;
+            if (job.schedule.kind === 'at') {
+                const nextRun = computeNextRunAtMs(job.schedule, now);
+                if (!nextRun && !job.state.lastStatus) {
+                    log(`[Cron] Skipping missed one-shot job: ${job.id} "${job.name}"`, 'DEBUG');
+                    job.enabled = false;
+                    job.state.lastStatus = 'skipped';
+                    job.state.nextRunAtMs = undefined;
+                    continue;
+                }
+                job.state.nextRunAtMs = nextRun;
                 continue;
             }
 
-            job.state.nextRunAtMs = nextRun;
+            // Recurring jobs: handle missing vs expired nextRunAtMs
+            if (!job.state.nextRunAtMs || !isFinite(job.state.nextRunAtMs)) {
+                // Missing or invalid — always repair
+                job.state.nextRunAtMs = computeNextRunAtMs(job.schedule, now);
+            } else if (recomputeExpired && now >= job.state.nextRunAtMs && !job.state.runningAtMs) {
+                // OpenClaw parity (v2026.3.13): Only advance expired nextRunAtMs
+                // when the slot was already executed, preventing silent skips (#13992).
+                const lastRun = job.state.lastRunAtMs;
+                const alreadyExecutedSlot = typeof lastRun === 'number' && isFinite(lastRun) && lastRun >= job.state.nextRunAtMs;
+                if (alreadyExecutedSlot) {
+                    job.state.nextRunAtMs = computeNextRunAtMs(job.schedule, now);
+                }
+                // else: preserve past-due value so the job can still run
+            }
         }
 
+        saveCronStore(this.store);
+    },
+
+    // OpenClaw parity (v2026.3.13): Cap and stagger missed jobs on startup
+    // to prevent overwhelming the API when many jobs are overdue after a long restart.
+    _staggerMissedJobs() {
+        const now = Date.now();
+        const dueJobs = this.store.jobs.filter(j =>
+            j.enabled &&
+            j.state.nextRunAtMs &&
+            j.state.nextRunAtMs <= now
+        ).sort((a, b) => a.state.nextRunAtMs - b.state.nextRunAtMs);
+
+        if (dueJobs.length <= MAX_MISSED_JOBS_PER_RESTART) return;
+
+        // First MAX_MISSED_JOBS_PER_RESTART run immediately (already due),
+        // stagger the rest by MISSED_JOB_STAGGER_MS intervals
+        const deferred = dueJobs.slice(MAX_MISSED_JOBS_PER_RESTART);
+        let offset = MISSED_JOB_STAGGER_MS;
+        for (const job of deferred) {
+            job.state.nextRunAtMs = now + offset;
+            offset += MISSED_JOB_STAGGER_MS;
+        }
+
+        log(`[Cron] Startup: ${dueJobs.length} missed jobs — running ${MAX_MISSED_JOBS_PER_RESTART} immediately, staggering ${deferred.length} by ${MISSED_JOB_STAGGER_MS}ms`, 'INFO');
         saveCronStore(this.store);
     },
 
@@ -498,7 +544,10 @@ const cronService = {
         try {
             if (!this.store) this.store = loadCronStore();
             await this._runDueJobs();
-            saveCronStore(this.store);
+            // OpenClaw parity (v2026.3.13): recompute with recomputeExpired
+            // to advance slots that were just executed, while preserving
+            // past-due slots that haven't run yet
+            this._recomputeNextRuns({ recomputeExpired: true });
         } catch (e) {
             log(`[Cron] Timer error: ${e.message}`, 'ERROR');
         } finally {

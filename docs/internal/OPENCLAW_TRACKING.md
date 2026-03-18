@@ -1,8 +1,8 @@
 # OpenClaw Version Tracking
 
 > **Purpose:** Track OpenClaw releases and identify changes to port to SeekerClaw.
-> **Current OpenClaw Version:** 2026.3.8 (main f2f561fab, 2026-03-09)
-> **Last Sync Review:** 2026-03-09
+> **Current OpenClaw Version:** 2026.3.13-1 (main 0e9b899ae, 2026-03-18)
+> **Last Sync Review:** 2026-03-18
 > **Parity Plan:** See `PARITY_PLAN.md`
 
 ---
@@ -82,7 +82,27 @@ These files in OpenClaw directly affect SeekerClaw behavior. Changes here requir
 
 ## Version History & Changes
 
-### 2026.3.1 (Current - 8ac7ce73b)
+### 2026.3.13-1 (Current - 0e9b899ae)
+- **Release Date:** 2026-03-18
+- **SeekerClaw Sync Status:** Reviewed, 3 cron improvements ported
+- **4,022 new commits since last sync (3a08e69a0)**
+- **Ported:**
+  - [x] Cron: expanded transient error patterns — added `tokens per day` and `ECONNREFUSED` to `TRANSIENT_ERROR_RE`
+  - [x] Cron: startup missed-job cap + stagger — cap immediate catch-up to 5 jobs, stagger remaining by 5s intervals to prevent gateway overload
+  - [x] Cron: expired slot recompute — only advance expired `nextRunAtMs` when the slot was already executed, preventing silent skips (#13992)
+- **Skipped (not applicable):**
+  - System prompt: ACP sections, session/subagent routing, completion events — server-only
+  - Model selection: provider routing for non-Anthropic (OpenRouter, xAI, Google) — we only use Anthropic
+  - Tool execution: sandbox gating, ACP tool routing — no sandbox
+  - Telegram: `sendMessageDraft` streaming, multi-bot, webhook mode — server-only or API limitation
+  - Draft streaming: protocol changes — deferred until Telegram supports regular DM streaming
+  - Tokens/chunk: channel-specific handling — single-channel
+  - Memory: embedding/vector/SQLite, QMD query expansion — Node 22+
+  - Skills: plugin skills, requirement installation — server-only
+  - Cron: session routing, delivery destinations, isolated agents, command queue, webhook delivery, manual run enqueue — server-only orchestration
+  - Channels: multi-channel, multi-account routing — single-user Telegram only
+
+### 2026.3.1 (8ac7ce73b)
 - **Release Date:** 2026-03-02
 - **SeekerClaw Sync Status:** Reviewed, 1 fix ported, 1 deferred
 - **Re-synced:** 2026-03-06 (670 new commits since 3a08e69a0 — all SKIP, no portable changes)
