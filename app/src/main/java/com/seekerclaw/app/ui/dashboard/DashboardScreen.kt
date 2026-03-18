@@ -253,7 +253,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
             .fillMaxSize()
             .background(SeekerClawColors.Background)
             .verticalScroll(rememberScrollState())
-            .padding(20.dp),
+            .padding(16.dp),
     ) {
         // Header — two-tone logo
         Text(
@@ -295,7 +295,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
                         .clip(CircleShape)
                         .background(SeekerClawColors.Warning),
                 )
-                Spacer(modifier = Modifier.width(10.dp))
+                Spacer(modifier = Modifier.width(8.dp))
                 Text(
                     text = "No internet connection",
                     fontFamily = RethinkSans,
@@ -349,7 +349,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
                         .clip(CircleShape)
                         .background(bannerColor),
                 )
-                Spacer(modifier = Modifier.width(10.dp))
+                Spacer(modifier = Modifier.width(8.dp))
                 Text(
                     text = bannerText,
                     fontFamily = RethinkSans,
@@ -406,7 +406,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
                 .background(SeekerClawColors.Surface, shape)
                 .alpha(if (isRunning) 1f else 0.6f)
                 .clickable { if (configNeeded) onNavigateToSettings() else onNavigateToSystem() }
-                .padding(20.dp),
+                .padding(16.dp),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -439,7 +439,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
             }
 
             if (status == ServiceStatus.ERROR && !latestError.isNullOrBlank()) {
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(8.dp))
                 Text(
                     text = latestError,
                     fontFamily = RethinkSans,
@@ -448,14 +448,14 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
                 )
             }
 
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
             HorizontalDivider(
                 color = SeekerClawColors.TextDim.copy(alpha = 0.2f),
                 thickness = 1.dp,
             )
 
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
             Text(
                 text = "Uptime",
@@ -474,7 +474,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
                 color = SeekerClawColors.TextPrimary,
             )
 
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -486,7 +486,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
             }
         }
 
-        Spacer(modifier = Modifier.height(28.dp))
+        Spacer(modifier = Modifier.height(24.dp))
 
         // Uplinks
         Text(
@@ -498,7 +498,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
             letterSpacing = 1.sp,
         )
 
-        Spacer(modifier = Modifier.height(10.dp))
+        Spacer(modifier = Modifier.height(8.dp))
 
         Column(
             modifier = Modifier.fillMaxWidth(),
@@ -595,7 +595,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
             )
         }
 
-        Spacer(modifier = Modifier.height(28.dp))
+        Spacer(modifier = Modifier.height(24.dp))
 
         // Action button — disabled when config incomplete (unless already running)
         val deployEnabled = isRunning || configReady
@@ -630,7 +630,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
             )
         }
         if (!deployEnabled) {
-            Spacer(modifier = Modifier.height(6.dp))
+            Spacer(modifier = Modifier.height(8.dp))
             Text(
                 text = "Complete setup to deploy",
                 fontFamily = RethinkSans,
@@ -677,7 +677,7 @@ private fun StatMini(label: String, value: String, small: Boolean = false) {
         Text(
             text = label,
             fontFamily = RethinkSans,
-            fontSize = if (small) 9.sp else 10.sp,
+            fontSize = 10.sp,
             fontWeight = FontWeight.Medium,
             color = SeekerClawColors.TextDim,
             letterSpacing = 1.sp,

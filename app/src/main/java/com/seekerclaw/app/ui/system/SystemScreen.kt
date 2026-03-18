@@ -33,7 +33,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import com.seekerclaw.app.ui.theme.RethinkSans
@@ -142,24 +141,10 @@ fun SystemScreen(onBack: () -> Unit) {
         // ==================== STATUS ====================
         SectionLabel("Status")
 
-        val statusAccent = when (status) {
-            ServiceStatus.RUNNING -> SeekerClawColors.Accent
-            ServiceStatus.STARTING -> SeekerClawColors.Warning
-            ServiceStatus.ERROR -> SeekerClawColors.Error
-            ServiceStatus.STOPPED -> SeekerClawColors.TextDim
-        }
-
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(shape)
-                .background(SeekerClawColors.Surface)
-                .drawBehind {
-                    drawRect(
-                        color = statusAccent,
-                        size = androidx.compose.ui.geometry.Size(4.dp.toPx(), size.height),
-                    )
-                }
+                .background(SeekerClawColors.Surface, shape)
                 .padding(16.dp),
         ) {
             InfoRow("Version", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
@@ -307,48 +292,58 @@ fun SystemScreen(onBack: () -> Unit) {
                     .background(SeekerClawColors.Surface, shape)
                     .padding(16.dp),
             ) {
-                when (usage) {
-                    is ApiUsageData.OAuthUsage -> {
-                        UsageLimitBar(
-                            label = "Session",
-                            utilization = usage.fiveHourUtilization,
-                            resetsAt = usage.fiveHourResetsAt,
-                        )
-                        Spacer(modifier = Modifier.height(16.dp))
-                        UsageLimitBar(
-                            label = "Weekly",
-                            utilization = usage.sevenDayUtilization,
-                            resetsAt = usage.sevenDayResetsAt,
-                        )
-                    }
-                    is ApiUsageData.ApiKeyUsage -> {
-                        val reqProgress = if (usage.requestsLimit > 0)
-                            (usage.requestsLimit - usage.requestsRemaining).toFloat() / usage.requestsLimit else 0f
-                        UsageLimitBar(
-                            label = "Requests",
-                            utilization = reqProgress,
-                            detailText = "${usage.requestsRemaining} / ${usage.requestsLimit}",
-                            resetsAt = usage.requestsReset,
-                        )
-                        Spacer(modifier = Modifier.height(16.dp))
-                        val tokProgress = if (usage.tokensLimit > 0)
-                            (usage.tokensLimit - usage.tokensRemaining).toFloat() / usage.tokensLimit else 0f
-                        UsageLimitBar(
-                            label = "Tokens",
-                            utilization = tokProgress,
-                            detailText = "${formatTokens(usage.tokensRemaining)} / ${formatTokens(usage.tokensLimit)}",
-                            resetsAt = usage.tokensReset,
-                        )
+                // Only show bars if we have real data (not error-only)
+                val hasValidData = when (usage) {
+                    is ApiUsageData.OAuthUsage ->
+                        usage.error == null || usage.fiveHourUtilization > 0f || usage.sevenDayUtilization > 0f
+                    is ApiUsageData.ApiKeyUsage ->
+                        usage.error == null || usage.requestsLimit > 0
+                }
+
+                if (hasValidData) {
+                    when (usage) {
+                        is ApiUsageData.OAuthUsage -> {
+                            UsageLimitBar(
+                                label = "Session",
+                                utilization = usage.fiveHourUtilization,
+                                resetsAt = usage.fiveHourResetsAt,
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            UsageLimitBar(
+                                label = "Weekly",
+                                utilization = usage.sevenDayUtilization,
+                                resetsAt = usage.sevenDayResetsAt,
+                            )
+                        }
+                        is ApiUsageData.ApiKeyUsage -> {
+                            val reqProgress = if (usage.requestsLimit > 0)
+                                (usage.requestsLimit - usage.requestsRemaining).toFloat() / usage.requestsLimit else 0f
+                            UsageLimitBar(
+                                label = "Requests",
+                                utilization = reqProgress,
+                                detailText = "${usage.requestsRemaining} / ${usage.requestsLimit}",
+                                resetsAt = usage.requestsReset,
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            val tokProgress = if (usage.tokensLimit > 0)
+                                (usage.tokensLimit - usage.tokensRemaining).toFloat() / usage.tokensLimit else 0f
+                            UsageLimitBar(
+                                label = "Tokens",
+                                utilization = tokProgress,
+                                detailText = "${formatTokens(usage.tokensRemaining)} / ${formatTokens(usage.tokensLimit)}",
+                                resetsAt = usage.tokensReset,
+                            )
+                        }
                     }
                 }
 
                 if (usage.error != null) {
-                    Spacer(modifier = Modifier.height(8.dp))
+                    if (hasValidData) Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "Error: ${usage.error}",
+                        text = if (hasValidData) "Error: ${usage.error}" else "Usage data unavailable (${usage.error})",
                         fontFamily = FontFamily.Monospace,
                         fontSize = 10.sp,
-                        color = SeekerClawColors.Error,
+                        color = if (hasValidData) SeekerClawColors.Error else SeekerClawColors.TextDim,
                     )
                 }
 
