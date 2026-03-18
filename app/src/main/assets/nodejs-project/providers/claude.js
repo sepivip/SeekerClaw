@@ -111,15 +111,25 @@ function fromApiResponse(raw) {
     };
 }
 
+// ── Billing attribution (required for OAuth/setup-token access to non-Haiku models) ─
+
+const CC_BILLING_HEADER = 'x-anthropic-billing-header: cc_version=2.1.78; cc_entrypoint=cli; cch=00000;';
+
 // ── System prompt ───────────────────────────────────────────────────────────
 
 /**
  * Format system prompt for Claude API (cached stable block + optional dynamic block).
+ * @param {string} stable - Stable system prompt text
+ * @param {string} dynamic - Dynamic system prompt text
+ * @param {string} [authType] - Auth type ('api_key' or 'setup_token')
  */
-function formatSystemPrompt(stable, dynamic) {
-    const blocks = [
-        { type: 'text', text: stable, cache_control: { type: 'ephemeral' } },
-    ];
+function formatSystemPrompt(stable, dynamic, authType) {
+    const blocks = [];
+    // Billing attribution — required for OAuth tokens to access Sonnet/Opus
+    if (authType === 'setup_token') {
+        blocks.push({ type: 'text', text: CC_BILLING_HEADER });
+    }
+    blocks.push({ type: 'text', text: stable, cache_control: { type: 'ephemeral' } });
     if (typeof dynamic === 'string' && dynamic.trim()) blocks.push({ type: 'text', text: dynamic });
     return blocks;
 }

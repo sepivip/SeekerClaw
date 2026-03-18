@@ -73,7 +73,7 @@ async function visionAnalyzeImage(imageBase64, prompt, maxTokens = 400) {
         ]
     }];
     const apiMessages = adapter.toApiMessages(neutralMessages);
-    const systemBlocks = adapter.formatSystemPrompt('You are a vision assistant.', '');
+    const systemBlocks = adapter.formatSystemPrompt('You are a vision assistant.', '', AUTH_TYPE);
     const body = adapter.formatRequest(MODEL, cappedMaxTokens, systemBlocks, apiMessages, []);
 
     const res = await claudeApiCall(body, 'vision');
@@ -265,7 +265,7 @@ async function generateSessionSummary(chatId) {
     // BAT-315: Provider-agnostic summary generation
     const adapter = getAdapter(PROVIDER);
     const systemBlocks = adapter.formatSystemPrompt(
-        'You are a session summarizer. Output ONLY the summary, no preamble.', ''
+        'You are a session summarizer. Output ONLY the summary, no preamble.', '', AUTH_TYPE
     );
     const summaryMessages = adapter.toApiMessages([{
         role: 'user',
@@ -1692,7 +1692,7 @@ async function chat(chatId, userMessage, options = {}) {
 
     // BAT-315: Provider-agnostic system prompt formatting
     const adapter = getAdapter(PROVIDER);
-    const systemBlocks = adapter.formatSystemPrompt(stablePrompt, dynamicPrompt + resumeBlock);
+    const systemBlocks = adapter.formatSystemPrompt(stablePrompt, dynamicPrompt + resumeBlock, AUTH_TYPE);
 
     // Add user message to history (neutral format)
     addToConversation(chatId, 'user', userMessage);
