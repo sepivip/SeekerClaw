@@ -68,6 +68,7 @@ openclaw-reference/
 # Environment secrets
 .env
 .env.*
+!.env.example
 
 # Agent/tooling configs
 .agent/
