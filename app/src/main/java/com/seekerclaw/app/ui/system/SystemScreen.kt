@@ -143,10 +143,24 @@ fun SystemScreen(onBack: () -> Unit) {
         // ==================== STATUS ====================
         SectionLabel("Status")
 
+        val statusAccent = when (status) {
+            ServiceStatus.RUNNING -> SeekerClawColors.Accent
+            ServiceStatus.STARTING -> SeekerClawColors.Warning
+            ServiceStatus.ERROR -> SeekerClawColors.Error
+            ServiceStatus.STOPPED -> SeekerClawColors.TextDim
+        }
+
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(SeekerClawColors.Surface, shape)
+                .clip(shape)
+                .background(SeekerClawColors.Surface)
+                .drawBehind {
+                    drawRect(
+                        color = statusAccent,
+                        size = androidx.compose.ui.geometry.Size(4.dp.toPx(), size.height),
+                    )
+                }
                 .padding(16.dp),
         ) {
             InfoRow("Version", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
@@ -227,24 +241,25 @@ fun SystemScreen(onBack: () -> Unit) {
                     color = SeekerClawColors.TextDim,
                 )
             }
-        }
 
-        // App Storage breakdown (below Device section)
-        val appInfo = appStorage
-        if (appInfo != null && appInfo.totalMb > 0.1f) {
-            Spacer(modifier = Modifier.height(8.dp))
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(SeekerClawColors.Surface, shape)
-                    .padding(16.dp),
-            ) {
+            // App Storage breakdown (inside Device card as sub-section)
+            val appInfo = appStorage
+            if (appInfo != null && appInfo.totalMb > 0.1f) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(1.dp)
+                        .background(SeekerClawColors.TextDim.copy(alpha = 0.15f)),
+                )
+                Spacer(modifier = Modifier.height(12.dp))
                 Text(
-                    text = "App Storage",
-                    fontFamily = RethinkSans,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 13.sp,
+                    text = "APP STORAGE",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
                     color = SeekerClawColors.TextDim,
+                    letterSpacing = 1.sp,
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 InfoRow("Workspace", "%.1f MB".format(appInfo.workspaceMb))
@@ -518,10 +533,10 @@ private fun InfoRow(
                 color = SeekerClawColors.TextPrimary,
             )
             if (dotColor != null) {
-                Spacer(modifier = Modifier.width(8.dp))
+                Spacer(modifier = Modifier.width(10.dp))
                 Box(
                     modifier = Modifier
-                        .size(8.dp)
+                        .size(10.dp)
                         .clip(CircleShape)
                         .background(dotColor),
                 )
@@ -533,7 +548,7 @@ private fun InfoRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(1.dp)
-                .background(SeekerClawColors.TextDim.copy(alpha = 0.1f)),
+                .background(SeekerClawColors.TextDim.copy(alpha = 0.15f)),
         )
     }
 }
@@ -582,8 +597,8 @@ private fun ResourceBar(
             progress = { progress.coerceIn(0f, 1f) },
             modifier = Modifier
                 .fillMaxWidth()
-                .height(6.dp)
-                .clip(RoundedCornerShape(3.dp)),
+                .height(8.dp)
+                .clip(RoundedCornerShape(4.dp)),
             color = barColor,
             trackColor = SeekerClawColors.TextDim.copy(alpha = 0.15f),
         )
@@ -626,15 +641,15 @@ private fun StatCard(
         Spacer(modifier = Modifier.height(8.dp))
         Text(
             text = value,
-            fontFamily = FontFamily.Monospace,
-            fontSize = 24.sp,
+            fontFamily = RethinkSans,
+            fontSize = 26.sp,
             fontWeight = FontWeight.Bold,
             color = SeekerClawColors.TextPrimary,
         )
         Spacer(modifier = Modifier.height(2.dp))
         Text(
             text = unit,
-            fontFamily = FontFamily.Monospace,
+            fontFamily = RethinkSans,
             fontSize = 11.sp,
             color = SeekerClawColors.TextDim,
         )
@@ -707,8 +722,8 @@ private fun UsageLimitBar(
             progress = { utilization.coerceIn(0f, 1f) },
             modifier = Modifier
                 .fillMaxWidth()
-                .height(6.dp)
-                .clip(RoundedCornerShape(3.dp)),
+                .height(8.dp)
+                .clip(RoundedCornerShape(4.dp)),
             color = barColor,
             trackColor = SeekerClawColors.TextDim.copy(alpha = 0.15f),
         )
