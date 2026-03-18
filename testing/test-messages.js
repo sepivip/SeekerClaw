@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // test-messages.js — Send a minimal message to Anthropic API per model
-// Replicates EXACTLY what the app sends, including billing attribution for setup tokens
+// Matches the app's auth headers and billing attribution; uses non-streaming + simplified prompts for test clarity
 
 const https = require('https');
 const { loadEnv, getModels, CC_BILLING_HEADER } = require('./lib');
