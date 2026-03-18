@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.BatteryManager
 import android.os.StatFs
+import java.io.File
 
 data class DeviceInfo(
     val batteryLevel: Int,
@@ -14,6 +15,14 @@ data class DeviceInfo(
     val memoryTotalMb: Long,
     val storageUsedGb: Float,
     val storageTotalGb: Float,
+)
+
+data class AppStorageInfo(
+    val workspaceMb: Float,
+    val databaseMb: Float,
+    val logsMb: Float,
+    val runtimeMb: Float,
+    val totalMb: Float,
 )
 
 object DeviceInfoProvider {
@@ -49,6 +58,44 @@ object DeviceInfoProvider {
         val availMb = memInfo.availMem / (1024 * 1024)
         val usedMb = totalMb - availMb
         return Pair(usedMb, totalMb)
+    }
+
+    fun getAppStorageInfo(context: Context): AppStorageInfo {
+        val filesDir = context.filesDir
+        val workspaceDir = File(filesDir, "workspace")
+        val databaseMb = fileSizeMb(File(workspaceDir, "seekerclaw.db"))
+        val nodeDebugLogMb = fileSizeMb(File(workspaceDir, "node_debug.log"))
+        val workspaceMb = dirSizeMb(workspaceDir) - databaseMb - nodeDebugLogMb
+        val logsMb = fileSizeMb(File(filesDir, "service_logs")) + nodeDebugLogMb
+        val runtimeMb = dirSizeMb(File(filesDir, "nodejs-project"))
+        val totalMb = workspaceMb.coerceAtLeast(0f) + databaseMb + logsMb + runtimeMb
+        return AppStorageInfo(
+            workspaceMb = workspaceMb.coerceAtLeast(0f),
+            databaseMb = databaseMb,
+            logsMb = logsMb,
+            runtimeMb = runtimeMb,
+            totalMb = totalMb,
+        )
+    }
+
+    private fun dirSizeMb(dir: File): Float {
+        if (!dir.exists()) return 0f
+        return try {
+            var size = 0L
+            dir.walkTopDown().filter { it.isFile }.forEach { size += it.length() }
+            size / (1024f * 1024f)
+        } catch (_: Exception) {
+            0f
+        }
+    }
+
+    private fun fileSizeMb(file: File): Float {
+        if (!file.exists()) return 0f
+        return try {
+            file.length() / (1024f * 1024f)
+        } catch (_: Exception) {
+            0f
+        }
     }
 
     private fun getStorage(context: Context): Pair<Float, Float> {

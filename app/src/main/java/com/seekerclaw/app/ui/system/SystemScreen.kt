@@ -44,6 +44,7 @@ import androidx.compose.ui.unit.sp
 import com.seekerclaw.app.BuildConfig
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.ui.theme.SeekerClawColors
+import com.seekerclaw.app.util.AppStorageInfo
 import com.seekerclaw.app.util.DeviceInfo
 import com.seekerclaw.app.util.DeviceInfoProvider
 import com.seekerclaw.app.util.ApiUsageData
@@ -51,7 +52,9 @@ import com.seekerclaw.app.util.DbSummary
 import com.seekerclaw.app.util.ServiceState
 import com.seekerclaw.app.util.ServiceStatus
 import com.seekerclaw.app.util.fetchDbSummary
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 
 @Composable
 fun SystemScreen(onBack: () -> Unit) {
@@ -63,6 +66,7 @@ fun SystemScreen(onBack: () -> Unit) {
     val tokensToday by ServiceState.tokensToday.collectAsState()
     val tokensTotal by ServiceState.tokensTotal.collectAsState()
     val apiUsage by ServiceState.apiUsage.collectAsState()
+    val lastActivity by ServiceState.lastActivityTime.collectAsState()
 
     val cfgVersion by ConfigManager.configVersion
     val config = remember(cfgVersion) { ConfigManager.loadConfig(context) }
@@ -73,6 +77,7 @@ fun SystemScreen(onBack: () -> Unit) {
         ?: "Not set"
 
     var deviceInfo by remember { mutableStateOf<DeviceInfo?>(null) }
+    var appStorage by remember { mutableStateOf<AppStorageInfo?>(null) }
     var dbSummary by remember { mutableStateOf<DbSummary?>(null) }
 
     // Refresh device info every 5 seconds
@@ -80,6 +85,15 @@ fun SystemScreen(onBack: () -> Unit) {
         while (true) {
             deviceInfo = DeviceInfoProvider.getDeviceInfo(context)
             delay(5000)
+        }
+    }
+    // App storage: recursive file walk on IO thread, refresh every 60s (not 5s — too expensive)
+    LaunchedEffect(Unit) {
+        while (true) {
+            appStorage = withContext(Dispatchers.IO) {
+                DeviceInfoProvider.getAppStorageInfo(context)
+            }
+            delay(60_000)
         }
     }
     // Fetch DB summary every 30s while running; clear on stop
@@ -182,7 +196,7 @@ fun SystemScreen(onBack: () -> Unit) {
                 )
                 Spacer(modifier = Modifier.height(16.dp))
                 ResourceBar(
-                    label = "Memory",
+                    label = "Device Memory",
                     value = "%.1f / %.1f GB".format(
                         info.memoryUsedMb / 1024f,
                         info.memoryTotalMb / 1024f,
@@ -196,7 +210,7 @@ fun SystemScreen(onBack: () -> Unit) {
                 )
                 Spacer(modifier = Modifier.height(16.dp))
                 ResourceBar(
-                    label = "Storage",
+                    label = "Device Storage",
                     value = "%.1f / %.0f GB".format(info.storageUsedGb, info.storageTotalGb),
                     progress = if (info.storageTotalGb > 0) info.storageUsedGb / info.storageTotalGb else 0f,
                     barColor = when {
@@ -212,6 +226,32 @@ fun SystemScreen(onBack: () -> Unit) {
                     fontSize = 13.sp,
                     color = SeekerClawColors.TextDim,
                 )
+            }
+        }
+
+        // App Storage breakdown (below Device section)
+        val appInfo = appStorage
+        if (appInfo != null && appInfo.totalMb > 0.1f) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(SeekerClawColors.Surface, shape)
+                    .padding(16.dp),
+            ) {
+                Text(
+                    text = "App Storage",
+                    fontFamily = RethinkSans,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 13.sp,
+                    color = SeekerClawColors.TextDim,
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                InfoRow("Workspace", "%.1f MB".format(appInfo.workspaceMb))
+                InfoRow("Database", "%.1f MB".format(appInfo.databaseMb))
+                InfoRow("Logs", "%.1f MB".format(appInfo.logsMb))
+                InfoRow("Runtime", "%.1f MB".format(appInfo.runtimeMb))
+                InfoRow("Total", "%.1f MB".format(appInfo.totalMb), isLast = true)
             }
         }
 
@@ -231,6 +271,12 @@ fun SystemScreen(onBack: () -> Unit) {
                 value = if (status == ServiceStatus.RUNNING) "Connected" else "Disconnected",
                 dotColor = if (status == ServiceStatus.RUNNING) SeekerClawColors.Accent else SeekerClawColors.TextDim,
             )
+            if (status == ServiceStatus.RUNNING && lastActivity > 0L) {
+                InfoRow(
+                    label = "Last message",
+                    value = formatTimeAgo(lastActivity),
+                )
+            }
             InfoRow("Model", modelName, isLast = true)
         }
 
