@@ -96,9 +96,7 @@ const {
 // WEB (extracted to web.js — BAT-196)
 // ============================================================================
 
-const {
-    httpRequest,
-} = require('./web');
+// web.js imports removed — httpRequest was only used by OAuth usage polling (now removed)
 
 // ============================================================================
 // TELEGRAM (extracted to telegram.js — BAT-197)
@@ -1090,6 +1088,7 @@ refreshJupiterProgramLabels();
 // support is added, re-enable by checking AUTH_TYPE === 'oauth'.
 
 function startClaudeUsagePolling() {
+    if (PROVIDER !== 'claude') return; // Only relevant for Anthropic API
     // OAuth usage endpoint not available for setup_token or api_key auth
     // API usage stats are tracked locally via SQL.js (session_status tool)
     log('[Usage] Skipped — OAuth usage polling not available for current auth type', 'DEBUG');
