@@ -17,6 +17,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 - API Limits no longer shows bogus "100% left" when usage data is unavailable (BAT-464)
 - System screen Material Design polish: M3 spacing tokens, removed decorative accent bars (BAT-464)
 - Settings screen: merged Preferences + Permissions sections, renamed to "AI Configuration", collapsible state preserved across tabs (BAT-459)
+- Removed dead OAuth usage polling that caused repeated 429 errors in logs and confused agent into reporting phantom issues (BAT-465)
 
 ## [1.6.1] - 2026-03-14
 
