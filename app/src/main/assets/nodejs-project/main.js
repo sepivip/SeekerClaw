@@ -124,7 +124,7 @@ const {
     conversations, getConversation, addToConversation, clearConversation,
     sessionTracking,
     saveSessionSummary, MIN_MESSAGES_FOR_SUMMARY, IDLE_TIMEOUT_MS,
-    writeAgentHealthFile, writeApiUsageState,
+    writeAgentHealthFile,
     setChatDeps,
     getActiveTask, clearActiveTask,
 } = require('./claude');
@@ -1083,69 +1083,16 @@ cronService.start();
 refreshJupiterProgramLabels();
 
 // ============================================================================
-// CLAUDE USAGE POLLING (setup_token users)
+// CLAUDE USAGE POLLING (OAuth users only)
 // ============================================================================
-
-let _usagePollTimer = null;
-let _usagePollFailCount = 0;
-const USAGE_POLL_MAX_FAILURES = 3;
+// The /api/oauth/usage endpoint requires OAuth tokens — setup_token and api_key
+// auth types don't have access, so polling is disabled for them. When/if OAuth
+// support is added, re-enable by checking AUTH_TYPE === 'oauth'.
 
 function startClaudeUsagePolling() {
-    if (PROVIDER !== 'claude' || AUTH_TYPE !== 'setup_token') return;
-    log('Starting Claude usage polling (60s interval)', 'DEBUG');
-    pollClaudeUsage();
-    _usagePollTimer = setInterval(pollClaudeUsage, 60000);
-}
-
-async function pollClaudeUsage() {
-    try {
-        const res = await httpRequest({
-            hostname: 'api.anthropic.com',
-            path: '/api/oauth/usage',
-            method: 'GET',
-            headers: {
-                'Authorization': `Bearer ${ANTHROPIC_KEY}`,
-                'anthropic-beta': 'oauth-2025-04-20',
-            },
-        });
-
-        if (res.status === 200 && res.data) {
-            _usagePollFailCount = 0;
-            writeApiUsageState({
-                type: 'oauth',
-                five_hour: {
-                    utilization: res.data.five_hour?.utilization || 0,
-                    resets_at: res.data.five_hour?.resets_at || '',
-                },
-                seven_day: {
-                    utilization: res.data.seven_day?.utilization || 0,
-                    resets_at: res.data.seven_day?.resets_at || '',
-                },
-                updated_at: localTimestamp(),
-            });
-        } else {
-            const isAuthError = res.status === 401 || res.status === 403;
-            if (isAuthError) {
-                _usagePollFailCount++;
-            } else {
-                _usagePollFailCount = 0;
-            }
-            if (isAuthError && _usagePollFailCount >= USAGE_POLL_MAX_FAILURES && _usagePollTimer) {
-                clearInterval(_usagePollTimer);
-                _usagePollTimer = null;
-                log(`[Usage] Disabled — API returned ${res.status} (expected for setup tokens without usage scope)`, 'DEBUG');
-            } else {
-                log(`API usage poll: HTTP ${res.status}`, 'DEBUG');
-            }
-            writeApiUsageState({
-                type: 'oauth',
-                error: `HTTP ${res.status}`,
-                updated_at: localTimestamp(),
-            });
-        }
-    } catch (e) {
-        log(`Claude usage poll error: ${e.message}`, 'ERROR');
-    }
+    // OAuth usage endpoint not available for setup_token or api_key auth
+    // API usage stats are tracked locally via SQL.js (session_status tool)
+    log('[Usage] Skipped — OAuth usage polling not available for current auth type', 'DEBUG');
 }
 
 // Database functions (initDatabase, saveDatabase, indexMemoryFiles, gracefulShutdown,
