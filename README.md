@@ -119,6 +119,15 @@ SeekerClaw gives an AI agent real capabilities on your phone — including walle
 
 > **TL;DR:** Treat your agent like a capable but imperfect assistant. Verify important actions, secure your wallet, and don't trust it with more than you can afford to lose.
 
+## Community Contributors
+
+People who shaped SeekerClaw through ideas, feedback, and bug reports.
+
+| | Contributor | Contribution |
+|---|---|---|
+| <img src="https://github.com/DyorAlex.png" width="20"> | [@DyorAlex](https://github.com/DyorAlex) | Proposed OpenRouter support — shipped in v1.7.0 |
+| <img src="https://github.com/DashLabsDev.png" width="20"> | [@DashLabsDev](https://github.com/DashLabsDev) | Dash Labs — code contributor |
+
 ## Links
 
 **Website:** [seekerclaw.xyz](https://seekerclaw.xyz) · **Twitter:** [@SeekerClaw](https://x.com/SeekerClaw) · **Telegram:** [t.me/seekerclaw](https://t.me/seekerclaw)
