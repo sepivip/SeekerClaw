@@ -278,7 +278,7 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 | 2026-03-18 | Fix: setup token billing attribution for Sonnet/Opus access (BAT-460) | #262 |
 | 2026-03-18 | Fix: settings screen UI polish — merged Preferences+Permissions, collapsible state preserved (BAT-459) | #261 |
 | 2026-03-17 | Docs: SAB-AUDIT-v13 — OpenRouter provider door, playbook fix | direct |
-| 2026-03-17 | Feat: OpenRouter provider — JS adapter + streaming parser, Kotlin UI (BAT-447) | #260 |
+| 2026-03-17 | Feat: OpenRouter provider — JS adapter + streaming parser, Kotlin UI (BAT-447, inspired by [@DyorAlex](https://github.com/DyorAlex)) | #260 |
 | 2026-03-14 | Feat: context token estimation + adaptive trimming (BAT-449) | #259 |
 | 2026-03-14 | Fix: empty system prompt block breaks session summary + vision (BAT-448) | #258 |
 | 2026-03-13 | Feat: Telegram Bot API 9.4 button styling — destructive/primary colors (BAT-439) | #257 |
@@ -475,3 +475,12 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 | 2026-02-12 | SQL.js database foundation | #4 (BAT-15) |
 | 2026-02-12 | Anthropic prompt caching | #3 (BAT-14) |
 | 2026-02-12 | Remove duplicate tool descriptions | #2 (BAT-13) |
+
+## Community Contributors
+
+People who shaped SeekerClaw through ideas, feedback, and bug reports — even without code commits.
+
+| Contributor | Contribution | Link |
+|-------------|-------------|------|
+| [@DyorAlex](https://github.com/DyorAlex) | Proposed OpenRouter support — shipped in v1.7.0 | [Issue](https://github.com/sepivip/SeekerClaw/issues) |
+| [@DashLabsDev](https://github.com/DashLabsDev) | Dash Labs — code contributor | GitHub |
