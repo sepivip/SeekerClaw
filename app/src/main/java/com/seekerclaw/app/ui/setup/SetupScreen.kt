@@ -111,10 +111,11 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
     var scannedProvider by remember { mutableStateOf(existingConfig?.provider ?: "claude") }
     var botToken by remember { mutableStateOf(existingConfig?.telegramBotToken ?: "") }
     var ownerId by remember { mutableStateOf(existingConfig?.telegramOwnerId ?: "") }
+    val existingProvider = existingConfig?.provider ?: "claude"
     var selectedModel by remember {
         mutableStateOf(
             existingConfig?.model?.let { model ->
-                val models = modelsForProvider(existingConfig.provider)
+                val models = modelsForProvider(existingProvider)
                 if (models.isEmpty() || models.any { it.id == model }) model
                 else models[0].id
             } ?: availableModels[0].id
@@ -213,6 +214,12 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             currentStep = 1
             return
         }
+        if (scannedProvider != "claude" && apiKey.trim().startsWith("sk-ant-oat")) {
+            apiKeyError = "Setup tokens are only valid for Anthropic"
+            errorMessage = apiKeyError
+            currentStep = 1
+            return
+        }
         val credentialError = ConfigManager.validateCredential(apiKey.trim(), effectiveAuthType)
         if (credentialError != null) {
             apiKeyError = credentialError
@@ -235,6 +242,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             val config = when (scannedProvider) {
                 "openai" -> AppConfig(
                     anthropicApiKey = existing?.anthropicApiKey ?: "",
+                    setupToken = existing?.setupToken ?: "",
                     openaiApiKey = trimmedKey,
                     openrouterApiKey = existing?.openrouterApiKey ?: "",
                     provider = "openai",
@@ -246,6 +254,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                 )
                 "openrouter" -> AppConfig(
                     anthropicApiKey = existing?.anthropicApiKey ?: "",
+                    setupToken = existing?.setupToken ?: "",
                     openaiApiKey = existing?.openaiApiKey ?: "",
                     openrouterApiKey = trimmedKey,
                     provider = "openrouter",
