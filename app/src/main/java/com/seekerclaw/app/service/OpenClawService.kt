@@ -103,6 +103,10 @@ class OpenClawService : Service() {
         val bridgeToken = UUID.randomUUID().toString()
         ServiceState.writeBridgeToken(bridgeToken)
 
+        // Clean up stale config.json from previous crash (H-11 crash recovery)
+        val staleConfig = File(File(filesDir, "workspace"), "config.json")
+        if (staleConfig.exists()) staleConfig.delete()
+
         // Write config from encrypted storage (includes bridge token for Node.js)
         // Note: loadConfig() uses SharedPreferences which may be stale in :node process,
         // but writeConfigJson reads the XML file fresh on first access per process.
