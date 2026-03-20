@@ -118,7 +118,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                 val models = modelsForProvider(existingProvider)
                 if (models.isEmpty() || models.any { it.id == model }) model
                 else models[0].id
-            } ?: availableModels[0].id
+            } ?: modelsForProvider(existingProvider).firstOrNull()?.id ?: availableModels[0].id
         )
     }
     var agentName by remember { mutableStateOf(existingConfig?.agentName ?: "SeekerClaw") }
@@ -969,12 +969,13 @@ private fun OptionsStep(
 
             val setupModels = modelsForProvider(provider)
             if (setupModels.isEmpty()) {
-                // Freeform model (e.g. OpenRouter) — show as read-only text
+                // Freeform model (e.g. OpenRouter) — editable text field
                 OutlinedTextField(
                     value = selectedModel,
-                    onValueChange = {},
-                    readOnly = true,
-                    label = { Text("Model", fontSize = 12.sp) },
+                    onValueChange = onModelChange,
+                    singleLine = true,
+                    label = { Text("Model ID", fontSize = 12.sp) },
+                    placeholder = { Text("e.g. anthropic/claude-sonnet-4-6", fontSize = 14.sp, color = SeekerClawColors.TextDim) },
                     modifier = Modifier.fillMaxWidth(),
                     colors = fieldColors,
                     shape = shape,

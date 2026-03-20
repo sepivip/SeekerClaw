@@ -76,6 +76,16 @@ object ConfigClaimImporter {
             cfg.optString("setupToken"),
             root.optString("setupToken"),
         )
+        val rawOpenaiKey = firstNonBlank(
+            auth?.optString("openaiApiKey"),
+            cfg.optString("openaiApiKey"),
+            root.optString("openaiApiKey"),
+        )
+        val rawOpenrouterKey = firstNonBlank(
+            auth?.optString("openrouterApiKey"),
+            cfg.optString("openrouterApiKey"),
+            root.optString("openrouterApiKey"),
+        )
         val credential = firstNonBlank(
             auth?.optString("credential"),
             cfg.optString("credential"),
@@ -156,8 +166,15 @@ object ConfigClaimImporter {
             readBoolean(root, "keepScreenOn"),
         )
 
-        // Route credential to the correct provider field
-        val trimmedCredential = credential.trim().ifBlank { resolvedApiKey.trim() }
+        // Route credential to the correct provider field.
+        // Check generic credential first, then provider-specific fields, then legacy apiKey.
+        val trimmedCredential = credential.trim()
+            .ifBlank { when (provider) {
+                "openai" -> rawOpenaiKey.trim()
+                "openrouter" -> rawOpenrouterKey.trim()
+                else -> ""
+            } }
+            .ifBlank { resolvedApiKey.trim() }
         val appConfig = when (provider) {
             "openai" -> AppConfig(
                 anthropicApiKey = "",
