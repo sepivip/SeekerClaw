@@ -1,7 +1,5 @@
 package com.seekerclaw.app.ui.settings
 
-import android.content.Context
-import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -75,12 +73,14 @@ fun AnthropicConfigScreen(onBack: () -> Unit) {
 
     var testStatus by remember { mutableStateOf("Idle") } // Idle, Loading, Success, Error
     var testMessage by remember { mutableStateOf("") }
+    var showRestartDialog by remember { mutableStateOf(false) }
 
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
 
-    fun saveField(field: String, value: String) {
+    fun saveField(field: String, value: String, needsRestart: Boolean = false) {
         ConfigManager.updateConfigField(context, field, value)
         config = ConfigManager.loadConfig(context)
+        if (needsRestart) showRestartDialog = true
     }
 
     val authTypeLabel = if (config?.authType == "setup_token") "Pro/Max Setup Token" else "API Key"
@@ -259,7 +259,7 @@ fun AnthropicConfigScreen(onBack: () -> Unit) {
                 val field = editField ?: return@ProviderEditDialog
                 val trimmed = editValue.trim()
                 if (field == "setupToken") {
-                    saveField(field, trimmed)
+                    saveField(field, trimmed, needsRestart = true)
                     if (trimmed.isNotEmpty()) {
                         saveField("authType", "setup_token")
                     }
@@ -267,13 +267,13 @@ fun AnthropicConfigScreen(onBack: () -> Unit) {
                     if (field == "anthropicApiKey") {
                         val detected = ConfigManager.detectAuthType(trimmed)
                         if (detected == "setup_token") {
-                            saveField("setupToken", trimmed)
+                            saveField("setupToken", trimmed, needsRestart = true)
                             saveField("authType", "setup_token")
                             editField = null
                             return@ProviderEditDialog
                         }
                     }
-                    saveField(field, trimmed)
+                    saveField(field, trimmed, needsRestart = true)
                 }
                 editField = null
             },
@@ -332,7 +332,7 @@ fun AnthropicConfigScreen(onBack: () -> Unit) {
             confirmButton = {
                 TextButton(
                     onClick = {
-                        saveField("model", selectedModel)
+                        saveField("model", selectedModel, needsRestart = true)
                         Analytics.modelSelected(selectedModel)
                         showModelPicker = false
                     },
@@ -415,7 +415,7 @@ fun AnthropicConfigScreen(onBack: () -> Unit) {
             confirmButton = {
                 TextButton(
                     onClick = {
-                        saveField("authType", selectedAuth)
+                        saveField("authType", selectedAuth, needsRestart = true)
                         Analytics.authTypeChanged(selectedAuth)
                         showAuthTypePicker = false
                     },
@@ -439,6 +439,14 @@ fun AnthropicConfigScreen(onBack: () -> Unit) {
             },
             containerColor = SeekerClawColors.Surface,
             shape = shape,
+        )
+    }
+
+    // ==================== Restart Prompt ====================
+    if (showRestartDialog) {
+        RestartDialog(
+            context = context,
+            onDismiss = { showRestartDialog = false },
         )
     }
 }

@@ -1156,49 +1156,9 @@ fun SettingsScreen(
 
     // ==================== Restart Prompt ====================
     if (showRestartDialog) {
-        AlertDialog(
-            onDismissRequest = { showRestartDialog = false },
-            title = {
-                Text(
-                    "Config Updated",
-                    fontFamily = RethinkSans,
-                    fontWeight = FontWeight.Bold,
-                    color = SeekerClawColors.TextPrimary,
-                )
-            },
-            text = {
-                Text(
-                    "Restart the agent to apply changes?",
-                    fontFamily = RethinkSans,
-                    fontSize = 14.sp,
-                    color = SeekerClawColors.TextSecondary,
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    OpenClawService.restart(context)
-                    showRestartDialog = false
-                    Toast.makeText(context, "Agent restarting\u2026", Toast.LENGTH_SHORT).show()
-                }) {
-                    Text(
-                        "Restart Now",
-                        fontFamily = RethinkSans,
-                        fontWeight = FontWeight.Bold,
-                        color = SeekerClawColors.Primary,
-                    )
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showRestartDialog = false }) {
-                    Text(
-                        "Later",
-                        fontFamily = RethinkSans,
-                        color = SeekerClawColors.TextDim,
-                    )
-                }
-            },
-            containerColor = SeekerClawColors.Surface,
-            shape = shape,
+        RestartDialog(
+            context = context,
+            onDismiss = { showRestartDialog = false },
         )
     }
 
