@@ -452,8 +452,8 @@ const handlers = {
 
             if (inputToken.decimals === null) return { error: `Cannot determine decimals for input token ${input.inputToken}. Use a known symbol or verified mint.` };
 
-            // Convert human amount to raw (smallest unit)
-            const amountRaw = Math.round(input.amount * Math.pow(10, inputToken.decimals));
+            // Convert human amount to raw (smallest unit) — BigInt-safe path avoids floating-point rounding
+            const amountRaw = parseInputAmountToLamports(numberToDecimalString(input.amount), inputToken.decimals);
             const slippageBps = input.slippageBps || 100;
 
             const quote = await jupiterQuote(inputToken.address, outputToken.address, amountRaw, slippageBps);
@@ -1593,7 +1593,9 @@ const handlers = {
                 });
                 if (tokenRes.status === 200) {
                     const tokenInfo = (typeof tokenRes.data === 'string' ? JSON.parse(tokenRes.data) : tokenRes.data);
-                    const match = tokenInfo.tokens?.[0];
+                    // Tokens v2 API may return a flat array or { tokens: [...] }
+                    const tokenArr = Array.isArray(tokenInfo) ? tokenInfo : (tokenInfo.tokens || []);
+                    const match = tokenArr[0];
                     if (match) {
                         organicScore = match.organicScore ?? null;
                         isSus = match.audit?.isSus ?? null;

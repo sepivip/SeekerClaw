@@ -244,7 +244,7 @@ const handlers = {
             unix: Math.floor(now.getTime() / 1000),
             timezone: tz || 'local',
             dayOfWeek: now.toLocaleDateString('en-US', { weekday: 'long' }),
-            weekNumber: Math.ceil((now - new Date(now.getFullYear(), 0, 1)) / (7 * 24 * 60 * 60 * 1000))
+            weekNumber: Math.floor((now - new Date(now.getFullYear(), 0, 1)) / (7 * 24 * 60 * 60 * 1000)) + 1
         };
     },
 };

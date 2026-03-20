@@ -17,8 +17,6 @@ const {
     recordSentMessage,
 } = require('../telegram');
 
-const { workDir } = require('../config');
-
 const tools = [
     {
         name: 'telegram_react',
