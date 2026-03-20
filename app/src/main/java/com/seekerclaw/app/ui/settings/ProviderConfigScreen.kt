@@ -1,6 +1,5 @@
 package com.seekerclaw.app.ui.settings
 
-import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
@@ -47,7 +46,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.seekerclaw.app.config.ConfigManager
-import com.seekerclaw.app.service.OpenClawService
 import com.seekerclaw.app.config.availableModels
 import com.seekerclaw.app.config.availableProviders
 import com.seekerclaw.app.config.modelsForProvider
@@ -625,49 +623,9 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
 
     // ==================== Restart Prompt ====================
     if (showRestartDialog) {
-        AlertDialog(
-            onDismissRequest = { showRestartDialog = false },
-            title = {
-                Text(
-                    "Config Updated",
-                    fontFamily = RethinkSans,
-                    fontWeight = FontWeight.Bold,
-                    color = SeekerClawColors.TextPrimary,
-                )
-            },
-            text = {
-                Text(
-                    "Restart the agent to apply changes?",
-                    fontFamily = RethinkSans,
-                    fontSize = 14.sp,
-                    color = SeekerClawColors.TextSecondary,
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    OpenClawService.restart(context)
-                    showRestartDialog = false
-                    Toast.makeText(context, "Agent restarting\u2026", Toast.LENGTH_SHORT).show()
-                }) {
-                    Text(
-                        "Restart Now",
-                        fontFamily = RethinkSans,
-                        fontWeight = FontWeight.Bold,
-                        color = SeekerClawColors.Primary,
-                    )
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showRestartDialog = false }) {
-                    Text(
-                        "Later",
-                        fontFamily = RethinkSans,
-                        color = SeekerClawColors.TextDim,
-                    )
-                }
-            },
-            containerColor = SeekerClawColors.Surface,
-            shape = shape,
+        RestartDialog(
+            context = context,
+            onDismiss = { showRestartDialog = false },
         )
     }
 }
