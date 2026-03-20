@@ -59,7 +59,8 @@ const handlers = {
             ? (config.braveApiKey ? 'brave' : 'duckduckgo')
             : rawProvider;
         const safeCount = Math.min(Math.max(Number(input.count) || 5, 1), 10);
-        const safeFreshness = BRAVE_FRESHNESS_VALUES.has(input.freshness) ? input.freshness : '';
+        const rawFreshness = (typeof input.freshness === 'string' ? input.freshness.trim().toLowerCase() : '');
+        const safeFreshness = BRAVE_FRESHNESS_VALUES.has(rawFreshness) ? rawFreshness : '';
         const cacheKey = provider === 'perplexity'
             ? `search:perplexity:${input.query}:${safeFreshness || 'default'}`
             : provider === 'brave'

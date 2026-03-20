@@ -752,7 +752,7 @@ const handlers = {
             // 3. Validate and convert input amount (makingAmount in raw units)
             let makingAmount;
             try {
-                makingAmount = parseInputAmountToLamports(input.inputAmount, inputToken.decimals);
+                makingAmount = parseInputAmountToLamports(numberToDecimalString(input.inputAmount), inputToken.decimals);
             } catch (e) {
                 return { error: 'Invalid input amount', details: e.message };
             }
@@ -766,7 +766,7 @@ const handlers = {
             // Use parseInputAmountToLamports + BigInt to avoid all floating-point precision issues
             let takingAmount;
             try {
-                const makingLamports = parseInputAmountToLamports(input.inputAmount, inputToken.decimals);
+                const makingLamports = parseInputAmountToLamports(numberToDecimalString(input.inputAmount), inputToken.decimals);
                 const makingBig = BigInt(makingLamports);
                 // Convert triggerPrice to a 12-decimal-place integer via string parsing (no FP math)
                 let priceStr;
@@ -1157,7 +1157,7 @@ const handlers = {
             // Use BigInt math to avoid floating-point precision issues
             let totalInAmount;
             try {
-                const perCycleLamports = parseInputAmountToLamports(input.amountPerCycle, inputToken.decimals);
+                const perCycleLamports = parseInputAmountToLamports(numberToDecimalString(input.amountPerCycle), inputToken.decimals);
                 const perCycleBig = BigInt(perCycleLamports);
                 totalInAmount = (perCycleBig * BigInt(numberOfOrders)).toString();
             } catch (e) {
