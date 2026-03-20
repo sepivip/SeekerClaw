@@ -1,6 +1,7 @@
 package com.seekerclaw.app.config
 
 import android.net.Uri
+import com.seekerclaw.app.BuildConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -250,7 +251,7 @@ object ConfigClaimImporter {
         if (uri.scheme.equals("https", ignoreCase = true)) return true
         if (!uri.scheme.equals("http", ignoreCase = true)) return false
         val host = uri.host?.lowercase() ?: return false
-        return host == "localhost" || host == "127.0.0.1" || host == "10.0.2.2"
+        return host == "localhost" || host == "127.0.0.1" || (BuildConfig.DEBUG && host == "10.0.2.2")
     }
 
     private fun httpGet(url: String): Pair<Int, String> {

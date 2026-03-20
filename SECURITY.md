@@ -19,7 +19,7 @@ We will acknowledge your report within 48 hours and aim to provide a fix within 
 SeekerClaw takes security seriously:
 
 - **Encryption at rest:** All sensitive configuration (API keys, tokens) is encrypted using Android Keystore (AES-256-GCM) before being written to disk.
-- **No telemetry:** The app does not collect or transmit user data. Firebase Analytics is optional and disabled by default in open-source builds.
+- **Usage analytics:** Firebase Analytics tracks feature usage, service health, and model selection — no personal data, no messages, no wallet keys. Enabled by default, fully optional — disable in Settings. `setAnalyticsCollectionEnabled(false)` stops all Firebase collection.
 - **HTTPS only:** All external API calls (Claude, Telegram, Solana RPCs, MCP servers) use HTTPS.
 - **Prompt injection defense:** The Node.js agent includes content trust scoring and prompt injection detection for untrusted inputs.
 - **MCP server isolation:** Remote tool descriptions are sanitized, results are marked as untrusted, and rug-pull detection (SHA-256 hash comparison) alerts on unexpected tool changes.

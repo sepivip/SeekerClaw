@@ -132,7 +132,7 @@ seekerclaw/
 ## Screens (4 total)
 
 1. **Setup** (first launch only) — notification permission request (API 33+), QR scan or manual entry of API key, Telegram bot token, owner ID, model, agent name
-2. **Dashboard** (main) — status indicator (green/red/yellow), uptime, start/stop toggle, message stats (all local, no telemetry)
+2. **Dashboard** (main) — status indicator (green/red/yellow), uptime, start/stop toggle, message stats
 3. **Logs** — monospace auto-scrolling view, color-coded (white=info, yellow=warn, red=error)
 4. **Settings** — edit config (masked fields), model dropdown, auto-start toggle, battery optimization, danger zone (reset/clear memory), about
 
@@ -368,7 +368,7 @@ Good: Adding `memory_search` tool with description "Search your SQL.js database 
 - **Logs:** Capture Node.js stdout/stderr via nodejs-mobile event bridge. Ring buffer of last 1000 lines in memory. Write to `logs/openclaw.log` with rotation at 10MB.
 - **Battery:** On first launch after setup, show dialog explaining battery optimization exemption, then call `Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`.
 - **ServiceState:** Singleton with `StateFlow<ServiceStatus>` (STOPPED, STARTING, RUNNING, ERROR), uptime, and message count. UI observes these flows.
-- **Metrics:** All metrics (message count, uptime, response times) tracked locally on-device only. No analytics servers, no telemetry.
+- **Metrics:** Message count, uptime, and response times tracked locally on-device. Usage analytics (Firebase) tracks feature usage, service health, and model selection — no personal data, no messages, no wallet keys. Fully optional — users can disable in Settings.
 
 ## Jupiter / Solana Integration (Live-tested 2026-02-22)
 
