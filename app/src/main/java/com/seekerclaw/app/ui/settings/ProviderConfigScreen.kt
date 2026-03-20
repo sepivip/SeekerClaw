@@ -47,6 +47,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.seekerclaw.app.config.ConfigManager
+import com.seekerclaw.app.service.OpenClawService
 import com.seekerclaw.app.config.availableModels
 import com.seekerclaw.app.config.availableProviders
 import com.seekerclaw.app.config.modelsForProvider
@@ -85,12 +86,14 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
     var orContextValue by remember { mutableStateOf("") }
     var testStatus by remember { mutableStateOf("Idle") }
     var testMessage by remember { mutableStateOf("") }
+    var showRestartDialog by remember { mutableStateOf(false) }
 
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
 
-    fun saveField(field: String, value: String) {
+    fun saveField(field: String, value: String, needsRestart: Boolean = false) {
         ConfigManager.updateConfigField(context, field, value)
         config = ConfigManager.loadConfig(context)
+        if (needsRestart) showRestartDialog = true
     }
 
     fun maskKey(key: String?): String {
@@ -107,7 +110,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
         val prefs = context.getSharedPreferences("seekerclaw_prefs", android.content.Context.MODE_PRIVATE)
         prefs.edit().putString("lastModel_$oldProviderId", currentModel).apply()
 
-        saveField("provider", newProviderId)
+        saveField("provider", newProviderId, needsRestart = true)
 
         // Restore last-used model for new provider, or fall back to first model
         val modelsForNew = modelsForProvider(newProviderId)
@@ -127,11 +130,6 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                 saveField("model", restoredModel)
             }
         }
-        Toast.makeText(
-            context,
-            "Switched to ${providerById(newProviderId).displayName}. Restart agent to apply.",
-            Toast.LENGTH_LONG,
-        ).show()
     }
 
     Scaffold(
@@ -427,19 +425,19 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                 // Optional fields that can be cleared to empty
                 val clearableFields = setOf("openrouterFallbackModel")
                 if (field == "setupToken") {
-                    saveField(field, trimmed)
+                    saveField(field, trimmed, needsRestart = true)
                     if (trimmed.isNotEmpty()) saveField("authType", "setup_token")
                 } else if (trimmed.isNotEmpty() || field in clearableFields) {
                     if (field == "anthropicApiKey") {
                         val detected = ConfigManager.detectAuthType(trimmed)
                         if (detected == "setup_token") {
-                            saveField("setupToken", trimmed)
+                            saveField("setupToken", trimmed, needsRestart = true)
                             saveField("authType", "setup_token")
                             editField = null
                             return@ProviderEditDialog
                         }
                     }
-                    saveField(field, trimmed)
+                    saveField(field, trimmed, needsRestart = true)
                 }
                 editField = null
             },
@@ -465,7 +463,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                 val trimmedModel = orModelValue.trim()
                 val trimmedCtx = orContextValue.trim()
                 if (trimmedModel.isNotEmpty() || !isModel) {
-                    saveField(modelField, trimmedModel)
+                    saveField(modelField, trimmedModel, needsRestart = true)
                 }
                 // Validate + clamp context: empty is OK, otherwise 4096..2000000
                 if (trimmedCtx.isEmpty()) {
@@ -540,7 +538,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
             confirmButton = {
                 TextButton(
                     onClick = {
-                        saveField("model", selectedModel)
+                        saveField("model", selectedModel, needsRestart = true)
                         Analytics.modelSelected(selectedModel)
                         showModelPicker = false
                     },
@@ -607,7 +605,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
             confirmButton = {
                 TextButton(
                     onClick = {
-                        saveField("authType", selectedAuth)
+                        saveField("authType", selectedAuth, needsRestart = true)
                         Analytics.authTypeChanged(selectedAuth)
                         showAuthTypePicker = false
                     },
@@ -618,6 +616,54 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
             dismissButton = {
                 TextButton(onClick = { showAuthTypePicker = false }) {
                     Text("Cancel", fontFamily = RethinkSans, color = SeekerClawColors.TextDim)
+                }
+            },
+            containerColor = SeekerClawColors.Surface,
+            shape = shape,
+        )
+    }
+
+    // ==================== Restart Prompt ====================
+    if (showRestartDialog) {
+        AlertDialog(
+            onDismissRequest = { showRestartDialog = false },
+            title = {
+                Text(
+                    "Config Updated",
+                    fontFamily = RethinkSans,
+                    fontWeight = FontWeight.Bold,
+                    color = SeekerClawColors.TextPrimary,
+                )
+            },
+            text = {
+                Text(
+                    "Restart the agent to apply changes?",
+                    fontFamily = RethinkSans,
+                    fontSize = 14.sp,
+                    color = SeekerClawColors.TextSecondary,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    OpenClawService.restart(context)
+                    showRestartDialog = false
+                    Toast.makeText(context, "Agent restarting\u2026", Toast.LENGTH_SHORT).show()
+                }) {
+                    Text(
+                        "Restart Now",
+                        fontFamily = RethinkSans,
+                        fontWeight = FontWeight.Bold,
+                        color = SeekerClawColors.Primary,
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRestartDialog = false }) {
+                    Text(
+                        "Later",
+                        fontFamily = RethinkSans,
+                        color = SeekerClawColors.TextDim,
+                    )
                 }
             },
             containerColor = SeekerClawColors.Surface,
