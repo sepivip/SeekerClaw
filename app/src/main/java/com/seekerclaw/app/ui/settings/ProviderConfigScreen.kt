@@ -110,7 +110,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
         val prefs = context.getSharedPreferences("seekerclaw_prefs", android.content.Context.MODE_PRIVATE)
         prefs.edit().putString("lastModel_$oldProviderId", currentModel).apply()
 
-        saveField("provider", newProviderId)
+        saveField("provider", newProviderId, needsRestart = true)
 
         // Restore last-used model for new provider, or fall back to first model
         val modelsForNew = modelsForProvider(newProviderId)
@@ -130,7 +130,6 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                 saveField("model", restoredModel)
             }
         }
-        showRestartDialog = true
     }
 
     Scaffold(
