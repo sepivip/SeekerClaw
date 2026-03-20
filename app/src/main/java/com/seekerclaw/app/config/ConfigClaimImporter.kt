@@ -134,6 +134,11 @@ object ConfigClaimImporter {
             root.optString("braveApiKey"),
         )
 
+        val provider = firstNonBlank(
+            cfg.optString("provider"),
+            root.optString("provider"),
+        ).trim().lowercase().ifBlank { "claude" }
+
         val autoStartOnBoot = firstNonNull(
             readBoolean(device, "autoStartOnBoot"),
             readBoolean(cfg, "autoStartOnBoot"),
@@ -145,19 +150,51 @@ object ConfigClaimImporter {
             readBoolean(root, "keepScreenOn"),
         )
 
-        val appConfig = AppConfig(
-            anthropicApiKey = resolvedApiKey.trim(),
-            setupToken = resolvedSetupToken.trim(),
-            authType = authType,
-            telegramBotToken = botToken,
-            telegramOwnerId = ownerId,
-            model = model,
-            agentName = agentName,
-            braveApiKey = braveApiKey.trim(),
-        )
+        // Route credential to the correct provider field
+        val trimmedCredential = credential.trim().ifBlank { resolvedApiKey.trim() }
+        val appConfig = when (provider) {
+            "openai" -> AppConfig(
+                anthropicApiKey = "",
+                openaiApiKey = trimmedCredential,
+                provider = "openai",
+                authType = "api_key",
+                telegramBotToken = botToken,
+                telegramOwnerId = ownerId,
+                model = model,
+                agentName = agentName,
+                braveApiKey = braveApiKey.trim(),
+            )
+            "openrouter" -> AppConfig(
+                anthropicApiKey = "",
+                openrouterApiKey = trimmedCredential,
+                provider = "openrouter",
+                authType = "api_key",
+                telegramBotToken = botToken,
+                telegramOwnerId = ownerId,
+                model = model,
+                agentName = agentName,
+                braveApiKey = braveApiKey.trim(),
+            )
+            else -> AppConfig(
+                anthropicApiKey = resolvedApiKey.trim(),
+                setupToken = resolvedSetupToken.trim(),
+                authType = authType,
+                provider = "claude",
+                telegramBotToken = botToken,
+                telegramOwnerId = ownerId,
+                model = model,
+                agentName = agentName,
+                braveApiKey = braveApiKey.trim(),
+            )
+        }
 
         require(appConfig.telegramBotToken.isNotBlank()) { "Config is missing telegramBotToken." }
-        require(appConfig.activeCredential.isNotBlank()) { "Config is missing AI credential." }
+        val hasCredential = when (appConfig.provider) {
+            "openai" -> appConfig.openaiApiKey.isNotBlank()
+            "openrouter" -> appConfig.openrouterApiKey.isNotBlank()
+            else -> appConfig.activeCredential.isNotBlank()
+        }
+        require(hasCredential) { "Config is missing AI credential." }
 
         return ConfigClaimImport(
             config = appConfig,
