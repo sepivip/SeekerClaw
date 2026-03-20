@@ -241,7 +241,7 @@ function truncateToolResult(text) {
 // SENSITIVE FILE BLOCKLIST (shared by read tool, js_eval, delete tool)
 // ============================================================================
 
-const SECRETS_BLOCKED = new Set(['config.json', 'config.yaml', 'seekerclaw.db']);
+const SECRETS_BLOCKED = new Set(['config.js', 'config.json', 'config.yaml', 'seekerclaw.db']);
 
 // ============================================================================
 // SHELL EXEC ALLOWLIST (shared by tools.js and skills.js requirements gating)

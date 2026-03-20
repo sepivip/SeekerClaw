@@ -762,7 +762,7 @@ const TOOLS = [
     },
     {
         name: 'js_eval',
-        description: 'Execute JavaScript code inside the running Node.js process. Use this instead of shell_exec when you need Node.js APIs or JS computation. Code runs via AsyncFunction in the same process with access to require() for Node.js built-ins (fs, path, http, crypto, etc.) and bundled modules. child_process is blocked for security. Returns the value of the last expression (or resolved Promise value). Objects/arrays are JSON-serialized. Output captured from console.log/warn/error. 30s timeout (cannot abort sync infinite loops — avoid them). Runs on the main event loop so long-running sync operations will block other tasks. Use for: data processing, JSON manipulation, math, date calculations, HTTP requests via http/https, file operations via fs.',
+        description: 'Execute JavaScript code in a sandboxed VM context. Use for math, JSON manipulation, data processing, date calculations, and string operations. Has access to: Math, JSON, Date, RegExp, Buffer, URL, parseInt/parseFloat, encode/decodeURIComponent, setTimeout, and require() for safe Node.js built-ins (fs, path, http, crypto — but NOT child_process, vm, worker_threads, or config files). All output is redacted for secrets. 30s timeout. Use for computation and data processing, NOT for accessing app internals.',
         input_schema: {
             type: 'object',
             properties: {
@@ -3681,11 +3681,15 @@ async function executeTool(name, input, chatId) {
                 }
 
                 // Block absolute paths into workspace or source directory
-                // Resolve to canonical path to prevent bypass via ".." segments or case differences
+                // Resolve both sides via realpathSync to defeat symlink aliases
+                // (Android: /data/user/0/... is a symlink to /data/data/...)
                 if (path.isAbsolute(normalizedMod)) {
-                    const resolvedMod = path.resolve(normalizedMod);
-                    const resolvedWork = path.resolve(workDir);
-                    const resolvedSrc = path.resolve(__dirname);
+                    let resolvedMod = path.resolve(normalizedMod);
+                    try { resolvedMod = fs.realpathSync(resolvedMod); } catch (_) {}
+                    let resolvedWork = path.resolve(workDir);
+                    try { resolvedWork = fs.realpathSync(resolvedWork); } catch (_) {}
+                    let resolvedSrc = path.resolve(__dirname);
+                    try { resolvedSrc = fs.realpathSync(resolvedSrc); } catch (_) {}
                     const inWorkDir = resolvedMod === resolvedWork || resolvedMod.startsWith(resolvedWork + path.sep);
                     const inSourceDir = resolvedMod === resolvedSrc || resolvedMod.startsWith(resolvedSrc + path.sep);
                     if (inWorkDir || inSourceDir) {
@@ -3715,28 +3719,64 @@ async function executeTool(name, input, chatId) {
             try {
                 const vm = require('vm');
 
-                // VM sandbox with codeGeneration:{strings:false} — blocks Function(),
-                // eval(), and direct constructor escapes. Known limitation: host-realm
-                // objects passed into the sandbox (setTimeout, Buffer, etc.) expose
-                // .constructor leading back to the unrestricted host Function. Full
-                // isolation would require worker_threads — deferred to a follow-up task.
+                // Wrap host-realm objects to sever prototype chain back to unrestricted
+                // Function constructor. Without this, sandbox code can escape via:
+                //   setTimeout.constructor.constructor('return process')()
+                // Each wrapper exposes only the callable interface, not .constructor.
+                const wrapFn = (fn) => {
+                    if (typeof fn !== 'function') return fn;
+                    const wrapped = (...args) => fn(...args);
+                    Object.defineProperty(wrapped, 'constructor', { value: undefined, writable: false, configurable: false });
+                    // Null prototype severs Object.getPrototypeOf(wrapped).constructor escape
+                    Object.setPrototypeOf(wrapped, null);
+                    Object.freeze(wrapped);
+                    return wrapped;
+                };
+                const wrapObj = (obj) => {
+                    if (!obj || typeof obj !== 'function') return obj;
+                    // For constructors like Buffer, URL — create a proxy that blocks constructor chain
+                    const handler = {
+                        get(target, prop) {
+                            if (prop === 'constructor' || prop === '__proto__') return undefined;
+                            const val = target[prop];
+                            if (typeof val === 'function') {
+                                const bound = val.bind(target);
+                                Object.setPrototypeOf(bound, null);
+                                Object.defineProperty(bound, 'constructor', { value: undefined, writable: false, configurable: false });
+                                return bound;
+                            }
+                            return val;
+                        },
+                        construct(target, args) { return new target(...args); },
+                        getPrototypeOf() { return null; },
+                    };
+                    return new Proxy(obj, handler);
+                };
+
                 const sandbox = {
                     console: mockConsole,
-                    require: sandboxedRequire,
+                    require: wrapFn(sandboxedRequire),
                     __dirname: workDir,
                     __filename: path.join(workDir, 'eval.js'),
                     process: safeProcess,
                     global: undefined,
                     globalThis: undefined,
-                    // Node.js globals that user code may need
-                    setTimeout, clearTimeout, setInterval, clearInterval,
-                    Buffer, URL, URLSearchParams,
-                    TextEncoder: typeof TextEncoder !== 'undefined' ? TextEncoder : undefined,
-                    TextDecoder: typeof TextDecoder !== 'undefined' ? TextDecoder : undefined,
-                    atob: typeof atob !== 'undefined' ? atob : undefined,
-                    btoa: typeof btoa !== 'undefined' ? btoa : undefined,
-                    AbortController: typeof AbortController !== 'undefined' ? AbortController : undefined,
-                    queueMicrotask,
+                    // Node.js globals — wrapped to sever constructor chain
+                    setTimeout: wrapFn(setTimeout), clearTimeout: wrapFn(clearTimeout),
+                    setInterval: wrapFn(setInterval), clearInterval: wrapFn(clearInterval),
+                    Buffer: wrapObj(Buffer), URL: wrapObj(URL), URLSearchParams: wrapObj(URLSearchParams),
+                    TextEncoder: wrapObj(typeof TextEncoder !== 'undefined' ? TextEncoder : undefined),
+                    TextDecoder: wrapObj(typeof TextDecoder !== 'undefined' ? TextDecoder : undefined),
+                    atob: wrapFn(typeof atob !== 'undefined' ? atob : undefined),
+                    btoa: wrapFn(typeof btoa !== 'undefined' ? btoa : undefined),
+                    AbortController: wrapObj(typeof AbortController !== 'undefined' ? AbortController : undefined),
+                    queueMicrotask: wrapFn(queueMicrotask),
+                    // Safe built-ins (value types — no constructor escape)
+                    JSON, Math, Date, parseInt, parseFloat, isNaN, isFinite,
+                    Number, String, Boolean, Array, Object, RegExp, Map, Set,
+                    Symbol, Promise, Error, TypeError, RangeError, SyntaxError,
+                    encodeURIComponent, decodeURIComponent, encodeURI, decodeURI,
+                    undefined, NaN, Infinity,
                 };
                 const context = vm.createContext(sandbox, {
                     codeGeneration: { strings: false, wasm: false },
@@ -3767,11 +3807,15 @@ async function executeTool(name, input, chatId) {
                     resultStr = String(result).slice(0, 50000);
                 }
 
+                // Redact any secrets that may have leaked through sandbox gaps
+                if (resultStr) resultStr = redactSecrets(resultStr);
+                const safeOutput = output ? redactSecrets(output.slice(0, 50000)) : undefined;
+
                 log(`js_eval OK (${code.length} chars)`, 'DEBUG');
                 return {
                     success: true,
                     result: resultStr,
-                    output: output ? output.slice(0, 50000) : undefined,
+                    output: safeOutput,
                 };
             } catch (err) {
                 clearTimeout(timerId);
@@ -3779,8 +3823,8 @@ async function executeTool(name, input, chatId) {
                 log(`js_eval FAIL: ${err.message.slice(0, 100)}`, 'WARN');
                 return {
                     success: false,
-                    error: err.message.slice(0, 5000),
-                    output: output ? output.slice(0, 50000) : undefined,
+                    error: redactSecrets(err.message.slice(0, 5000)),
+                    output: output ? redactSecrets(output.slice(0, 50000)) : undefined,
                 };
             }
         }
