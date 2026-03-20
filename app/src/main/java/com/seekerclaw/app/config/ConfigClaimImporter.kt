@@ -115,12 +115,11 @@ object ConfigClaimImporter {
             root.optString("telegramOwnerId"),
             root.optString("ownerId"),
         ).trim()
-        val model = firstNonBlank(
+        val rawModel = firstNonBlank(
             agent?.optString("model"),
             cfg.optString("model"),
             root.optString("model"),
-            "claude-opus-4-6",
-        ).ifBlank { "claude-opus-4-6" }
+        )
         val agentName = firstNonBlank(
             agent?.optString("name"),
             agent?.optString("agentName"),
@@ -138,6 +137,13 @@ object ConfigClaimImporter {
             cfg.optString("provider"),
             root.optString("provider"),
         ).trim().lowercase().ifBlank { "claude" }
+
+        val defaultModel = when (provider) {
+            "openai" -> "gpt-5.4"
+            "openrouter" -> "anthropic/claude-sonnet-4-6"
+            else -> "claude-opus-4-6"
+        }
+        val model = rawModel.ifBlank { defaultModel }
 
         val autoStartOnBoot = firstNonNull(
             readBoolean(device, "autoStartOnBoot"),

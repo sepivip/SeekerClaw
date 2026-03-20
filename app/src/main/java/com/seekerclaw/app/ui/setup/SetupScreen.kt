@@ -98,7 +98,15 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
     // Pre-fill from existing config (for "Run Setup Again" flow)
     val existingConfig = remember { ConfigManager.loadConfig(context) }
 
-    var apiKey by remember { mutableStateOf(existingConfig?.activeCredential ?: "") }
+    var apiKey by remember {
+        mutableStateOf(
+            when (existingConfig?.provider) {
+                "openai" -> existingConfig.openaiApiKey
+                "openrouter" -> existingConfig.openrouterApiKey
+                else -> existingConfig?.activeCredential ?: ""
+            }
+        )
+    }
     var authType by remember { mutableStateOf(existingConfig?.authType ?: "api_key") }
     var scannedProvider by remember { mutableStateOf(existingConfig?.provider ?: "claude") }
     var botToken by remember { mutableStateOf(existingConfig?.telegramBotToken ?: "") }
@@ -196,13 +204,16 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
 
     fun saveAndStart() {
         if (isStarting) return
+        // Non-Claude providers only support api_key auth
+        val effectiveAuthType = if (scannedProvider != "claude") "api_key" else authType
+
         if (apiKey.isBlank()) {
             apiKeyError = "Required"
             errorMessage = "AI credential is required"
             currentStep = 1
             return
         }
-        val credentialError = ConfigManager.validateCredential(apiKey.trim(), authType)
+        val credentialError = ConfigManager.validateCredential(apiKey.trim(), effectiveAuthType)
         if (credentialError != null) {
             apiKeyError = credentialError
             errorMessage = credentialError
@@ -225,6 +236,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                 "openai" -> AppConfig(
                     anthropicApiKey = existing?.anthropicApiKey ?: "",
                     openaiApiKey = trimmedKey,
+                    openrouterApiKey = existing?.openrouterApiKey ?: "",
                     provider = "openai",
                     authType = "api_key",
                     telegramBotToken = botToken.trim(),
@@ -234,6 +246,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                 )
                 "openrouter" -> AppConfig(
                     anthropicApiKey = existing?.anthropicApiKey ?: "",
+                    openaiApiKey = existing?.openaiApiKey ?: "",
                     openrouterApiKey = trimmedKey,
                     provider = "openrouter",
                     authType = "api_key",
@@ -243,11 +256,12 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                     agentName = agentName.trim().ifBlank { "SeekerClaw" },
                 )
                 else -> AppConfig(
-                    anthropicApiKey = if (authType == "api_key") trimmedKey else "",
+                    anthropicApiKey = if (effectiveAuthType == "api_key") trimmedKey else "",
                     openaiApiKey = existing?.openaiApiKey ?: "",
+                    openrouterApiKey = existing?.openrouterApiKey ?: "",
                     provider = "claude",
-                    setupToken = if (authType == "setup_token") trimmedKey else "",
-                    authType = authType,
+                    setupToken = if (effectiveAuthType == "setup_token") trimmedKey else "",
+                    authType = effectiveAuthType,
                     telegramBotToken = botToken.trim(),
                     telegramOwnerId = ownerId.trim(),
                     model = selectedModel,
@@ -407,6 +421,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                 isStarting = isStarting,
                 onStartAgent = ::saveAndStart,
                 onBack = { currentStep = 2 },
+                provider = scannedProvider,
             )
             4 -> SetupSuccessStep(
                 agentName = agentName.ifBlank { "SeekerClaw" },
@@ -917,6 +932,7 @@ private fun OptionsStep(
     isStarting: Boolean,
     onStartAgent: () -> Unit,
     onBack: () -> Unit,
+    provider: String = "claude",
 ) {
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
 
@@ -942,7 +958,7 @@ private fun OptionsStep(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            val setupModels = modelsForProvider(scannedProvider)
+            val setupModels = modelsForProvider(provider)
             if (setupModels.isEmpty()) {
                 // Freeform model (e.g. OpenRouter) — show as read-only text
                 OutlinedTextField(
