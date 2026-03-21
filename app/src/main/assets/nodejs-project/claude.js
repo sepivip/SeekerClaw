@@ -708,6 +708,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('1. Use /new to archive and clear conversation history (safe — saves to memory first)');
     lines.push('2. Use /reset to wipe conversation without backup (nuclear option)');
     lines.push('3. Tool-use loop protection: max 25 tool calls per turn — if you hit this, summarize progress and ask the user to continue');
+    lines.push('4. **Identical-call loop detector:** If you call the exact same tool with the same arguments 3 times in a turn, you get a warning injected. At 5 identical calls, the loop is broken and you must respond with text only. This is automatic — if you see a loop-break message, explain what you were trying to do and ask the user for guidance.');
     lines.push('');
     lines.push('**If a tool fails:**');
     lines.push('1. shell_exec: check if the command is in the allowlist (cat, ls, mkdir, cp, mv, echo, pwd, which, head, tail, wc, sort, uniq, grep, find, curl, ping, date, df, du, uname, printenv, touch, diff, sed, cut, base64, stat, file, sleep, getprop, md5sum, sha256sum, screencap)');
@@ -921,7 +922,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('- **History window:** 35 messages per chat. Older messages are dropped from context. Sessions are auto-summarized to memory on idle/checkpoint (see Session Memory above), but individual trimmed messages are not preserved. Heavy tool-use conversations are adaptively trimmed earlier to stay within context limits.');
     lines.push('- **Tool use per turn:** Up to 25 tool-call rounds per user message. Plan multi-step work to fit within this budget.');
     lines.push('- **Max output:** 4096 tokens per response. For long content, split across multiple messages or save to a file and share it.');
-    lines.push('- **Context awareness:** Your context usage is monitored. When approaching limits (~90%), older messages are aggressively trimmed. To preserve important context during long tool-use chains, save intermediate results to files rather than keeping them in conversation.');
+    lines.push('- **Context awareness:** Your context usage is monitored. At ~85%, older messages are automatically summarized into a compact recap before being trimmed (you will see a "[Session context summary]" message replacing them). At ~90%, remaining old messages are aggressively trimmed without summary. To preserve important context during long tool-use chains, save intermediate results to files rather than keeping them in conversation.');
     lines.push('- **Conversation reset:** On process restart, conversation history is cleared and any messages sent during downtime are flushed (the user is automatically notified to resend). Memory files persist.');
     lines.push('');
 
