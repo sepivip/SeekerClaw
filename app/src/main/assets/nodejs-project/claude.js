@@ -31,6 +31,7 @@ const {
 const { findMatchingSkills, loadSkills } = require('./skills');
 const { getDb, markDbSummaryDirty, indexMemoryFiles, saveSession, getRecentSessions } = require('./database');
 const { saveCheckpoint, cleanupChatCheckpoints } = require('./task-store');
+const loopDetector = require('./loop-detector');
 
 // ── Injected dependencies (set from main.js at startup) ───────────────────
 // These break circular deps and reference things that still live in main.js
@@ -1697,6 +1698,9 @@ async function chat(chatId, userMessage, options = {}) {
     // Add user message to history (neutral format)
     addToConversation(chatId, 'user', userMessage);
 
+    // DeerFlow P1: Reset loop detector at the start of each new turn
+    loopDetector.reset(chatId);
+
     const messages = getConversation(chatId);
 
     // P2.4b: Extract original goal from conversation for checkpoint persistence.
@@ -1712,6 +1716,9 @@ async function chat(chatId, userMessage, options = {}) {
     let toolUseCount = 0;
     const MAX_TOOL_USES = 25;
     let _ctxCache = null; // Cached system/tools char counts — reset per chat() call
+    let _loopWarned = false;  // DeerFlow P1: loop detector flags
+    let _loopBroken = false;
+    let _loopFinalIteration = false;
 
     try { // BAT-253: catch network errors → sanitize before user output
 
@@ -1720,7 +1727,8 @@ async function chat(chatId, userMessage, options = {}) {
             ageToolResults(messages, turnId);
 
             // BAT-315: Provider-agnostic tool formatting + request body building
-            const rawTools = _deps.getTools ? _deps.getTools() : [];
+            // DeerFlow P1: Strip tools on loop-break final iteration so model can only respond with text
+            const rawTools = _loopFinalIteration ? [] : (_deps.getTools ? _deps.getTools() : []);
             const formattedTools = adapter.formatTools(rawTools);
 
             // Context token estimation: check usage before API call, adaptively trim if needed.
@@ -1782,11 +1790,23 @@ async function chat(chatId, userMessage, options = {}) {
                 toolCalls: parsed.toolCalls,
             });
 
+            // DeerFlow P1: If this is the final loop-break iteration, ignore any tool calls
+            if (_loopFinalIteration && parsed.toolCalls.length > 0) {
+                log(`[LoopDetector] Final iteration — ignoring ${parsed.toolCalls.length} tool calls from model`, 'WARN');
+                // Clear tool calls from the already-pushed assistant message to prevent orphans
+                const lastMsg = messages[messages.length - 1];
+                if (lastMsg && lastMsg.role === 'assistant') lastMsg.toolCalls = [];
+                parsed.toolCalls = [];
+                _loopFinalIteration = false;
+                break; // Model didn't listen — force exit with text response
+            }
+
             // Execute each tool and collect results
             // BAT-246: Each tool execution is individually guarded — if one tool throws,
             // the others still run and ALL tool calls get matching tool result entries.
             const toolResults = [];
-            for (const toolUse of parsed.toolCalls) {
+            for (let i = 0; i < parsed.toolCalls.length; i++) {
+                const toolUse = parsed.toolCalls[i];
                 // OpenClaw parity: normalize tool name before ALL gating checks
                 // (prevents whitespace-padded names from bypassing confirmation/rate-limit gates)
                 if (typeof toolUse.name === 'string') toolUse.name = toolUse.name.trim();
@@ -1852,11 +1872,54 @@ async function chat(chatId, userMessage, options = {}) {
                     toolCallId: toolUse.id,
                     content: truncateToolResult(JSON.stringify(result)),
                 });
+
+                // DeerFlow P1: Loop detection — track identical tool calls in sliding window
+                const loopResult = loopDetector.recordToolCall(chatId, toolUse.name, toolUse.input);
+                if (loopResult.status === 'warn') {
+                    log(`[LoopDetector] Warning: tool "${toolUse.name}" called ${loopResult.count} times with identical args (hash=${loopResult.hash})`, 'WARN');
+                    _loopWarned = true;
+                } else if (loopResult.status === 'break') {
+                    log(`[LoopDetector] Breaking loop: tool "${toolUse.name}" called ${loopResult.count} times with identical args (hash=${loopResult.hash})`, 'WARN');
+                    // Fill remaining tool calls with error results to avoid orphans
+                    for (let k = i + 1; k < parsed.toolCalls.length; k++) {
+                        toolResults.push({
+                            role: 'tool',
+                            toolCallId: parsed.toolCalls[k].id,
+                            content: JSON.stringify({ error: 'Skipped — tool loop detected.' }),
+                        });
+                    }
+                    _loopBroken = true;
+                    _loopWarned = false; // Suppress warn if it fired earlier in this round
+                    break; // Exit tool execution for-loop
+                }
             }
 
             // Add tool results to history in neutral format — one message per result
             for (const tr of toolResults) {
                 messages.push(tr);
+            }
+
+            // DeerFlow P1: If loop was warned, inject guidance as user message
+            if (_loopWarned) {
+                messages.push({
+                    role: 'user',
+                    content: '[System] You appear to be repeating the same tool call with identical arguments. Try a different approach or respond with what you have.',
+                });
+                _loopWarned = false;
+            }
+
+            // DeerFlow P1: If loop was broken, inject stop message and let model produce final response
+            if (_loopBroken) {
+                log('[LoopDetector] Agentic loop broken — requesting final response', 'WARN');
+                messages.push({
+                    role: 'user',
+                    content: '[System] Tool loop detected and stopped after 5 identical calls. Respond to the user with what you have so far. Do not call any more tools.',
+                });
+                // Don't break — let the while loop iterate once more so the model
+                // sees this message and produces a text response (no tools).
+                // Set _loopFinalIteration so next iteration sends empty tools list.
+                _loopFinalIteration = true;
+                _loopBroken = false;
             }
 
             // Enforce MAX_HISTORY cap after tool round — trim from the front but never

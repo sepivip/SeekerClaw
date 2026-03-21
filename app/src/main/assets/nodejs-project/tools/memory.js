@@ -21,6 +21,29 @@ const { getDb, indexMemoryFiles } = require('../database');
 let formatBytes;
 function _setFormatBytes(fn) { formatBytes = fn; }
 
+// DeerFlow P1: Memory session scrubbing — strip session-specific noise before persisting
+const SCRUB_PATTERNS = [
+    /\b(?:I\s+)?(?:used|called|ran|executed|invoked)\s+(?:the\s+)?\w+(?:_\w+)?\s+tool\b/gi,
+    /\b(?:upload(?:ed)?|sent|received|attached)\s+(?:a\s+)?(?:file|image|photo|document|video|voice)\s+\S+/gi,
+    /\bmessage\s*#?\d{5,}\b/gi,
+    /\/tmp\/\S+/gi,
+];
+
+function scrubSessionContent(content) {
+    if (!content || typeof content !== 'string') return content;
+    let scrubbed = content;
+    let scrubCount = 0;
+    for (const pattern of SCRUB_PATTERNS) {
+        const before = scrubbed;
+        scrubbed = scrubbed.replace(pattern, '');
+        if (scrubbed !== before) scrubCount++;
+    }
+    scrubbed = scrubbed.replace(/\n{3,}/g, '\n\n').trim();
+    if (scrubCount > 0) log(`[MemoryScrub] Scrubbed ${scrubCount} session-specific patterns`, 'DEBUG');
+    if (!scrubbed) return null;
+    return scrubbed;
+}
+
 const tools = [
     {
         name: 'memory_save',
@@ -89,8 +112,13 @@ const tools = [
 
 const handlers = {
     async memory_save(input, chatId) {
+        // DeerFlow P1: Scrub session-specific content before persisting
+        const scrubbed = scrubSessionContent(redactSecrets(input.content));
+        if (!scrubbed) {
+            return { success: true, message: 'Content was entirely session-specific and was not saved. Only save durable facts, preferences, and important details.' };
+        }
         const currentMemory = loadMemory();
-        const newMemory = currentMemory + '\n\n---\n\n' + redactSecrets(input.content);
+        const newMemory = currentMemory + '\n\n---\n\n' + scrubbed;
         saveMemory(newMemory.trim());
         return { success: true, message: 'Memory saved' };
     },
@@ -101,7 +129,12 @@ const handlers = {
     },
 
     async daily_note(input, chatId) {
-        appendDailyMemory(redactSecrets(input.note));
+        // DeerFlow P1: Scrub session-specific content before persisting
+        const scrubbed = scrubSessionContent(redactSecrets(input.note));
+        if (!scrubbed) {
+            return { success: true, message: 'Note was entirely session-specific and was not saved. Only save durable facts and observations.' };
+        }
+        appendDailyMemory(scrubbed);
         return { success: true, message: 'Note added to daily memory' };
     },
 
