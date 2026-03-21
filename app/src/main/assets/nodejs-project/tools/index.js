@@ -70,6 +70,12 @@ function numberToDecimalString(n) {
 
 solanaMod._setNumberToDecimalString(numberToDecimalString);
 memoryMod._setFormatBytes(fileMod.formatBytes);
+// DeerFlow P2: tool_search needs access to ALL tools (static + MCP).
+// Default to static TOOLS; main.js upgrades this after MCP is initialized.
+let _fullToolGetter = () => TOOLS;
+systemMod._setToolRegistry(() => _fullToolGetter());
+
+function setFullToolRegistry(getter) { _fullToolGetter = getter; }
 
 // ── Confirmation UI ──────────────────────────────────────────────────────────
 
@@ -193,5 +199,5 @@ module.exports = {
     formatConfirmationMessage, requestConfirmation,
     pendingConfirmations, lastToolUseTime,
     listFilesRecursive, formatBytes,
-    setMcpExecuteTool,
+    setMcpExecuteTool, setFullToolRegistry,
 };

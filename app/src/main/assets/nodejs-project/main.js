@@ -137,7 +137,7 @@ const {
     TOOLS, executeTool,
     pendingConfirmations, lastToolUseTime,
     requestConfirmation,
-    setMcpExecuteTool,
+    setMcpExecuteTool, setFullToolRegistry,
 } = require('./tools');
 
 // ============================================================================
@@ -1134,6 +1134,9 @@ telegram('getMe')
 
             // Wire MCP routing into tools.js
             setMcpExecuteTool((name, input) => mcpManager.executeTool(name, input));
+
+            // DeerFlow P2: Wire full tool registry (static + MCP) for tool_search
+            setFullToolRegistry(() => [...TOOLS, ...mcpManager.getAllTools()]);
 
             startDbSummaryInterval();
             startStatsServer();

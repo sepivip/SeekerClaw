@@ -483,6 +483,13 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('For long waits, avoid rapid poll loops: use shell_exec with enough timeout or check status on-demand rather than in a tight loop.');
     lines.push('');
 
+    // DeerFlow P2: Tool Discovery guidance for non-Claude providers (deferred loading)
+    if (PROVIDER !== 'claude') {
+        lines.push('## Tool Discovery');
+        lines.push('Not all tools are loaded by default. If you need a tool that\'s not available, use `tool_search` to find and load it first. Common tools (read, write, web_search, web_fetch, datetime) are always available.');
+        lines.push('');
+    }
+
     // Error recovery guidance — how agent should handle tool failures
     lines.push('## Error Recovery');
     lines.push('- If a tool call fails, explain what happened and try an alternative approach.');
@@ -1463,6 +1470,7 @@ let _unknownModelWarned = false; // throttle: only warn once per process about u
 
 // Thresholds for logging and adaptive behavior
 const CONTEXT_WARN_THRESHOLD = 0.75;   // log INFO at 75%
+const CONTEXT_SUMMARIZE_THRESHOLD = 0.85; // DeerFlow P2: Summarize before hitting 90% danger threshold
 const CONTEXT_DANGER_THRESHOLD = 0.90; // log WARN + aggressive trim at 90%
 const MIN_PRESERVED_MESSAGES = 6;      // floor: always keep at least this many messages
 
@@ -1588,6 +1596,139 @@ function adaptiveTrim(messages, usage, turnId) {
 }
 
 // ============================================================================
+// CONTEXT SUMMARIZATION (DeerFlow P2)
+// Before adaptive trim drops messages entirely, summarize them into a compact
+// summary message. Preserves conversation storyline in heavy tool-use sessions.
+// Fires at 85%+ context usage, max once per turn to avoid cascading API calls.
+// ============================================================================
+
+// Per-chatId: has summarization fired this turn? Cleaned at start of each chat() call.
+// SeekerClaw has 1 active owner ID, so this Set has max 1 entry — no leak concern.
+const _summarizedThisTurn = new Set();
+
+/**
+ * DeerFlow P2: Summarize oldest messages before adaptive trim drops them.
+ * Replaces N oldest messages with a single summary message, preserving context.
+ * Only fires once per turn to avoid cascading API calls.
+ */
+async function summarizeOldMessages(messages, chatId, turnId) {
+    if (_summarizedThisTurn.has(chatId)) return false;
+    if (messages.length <= MIN_PRESERVED_MESSAGES + 4) return false; // Not enough to summarize
+
+    // Collect oldest messages for summarization (up to 10), respecting atomic tool groups.
+    // Never split an assistant+toolCalls from its tool results.
+    let summarizeCount = 0;
+    const maxToSummarize = Math.min(10, messages.length - MIN_PRESERVED_MESSAGES);
+    while (summarizeCount < maxToSummarize) {
+        const msg = messages[summarizeCount];
+        if (msg.role === 'assistant' && msg.toolCalls && msg.toolCalls.length) {
+            // Count the assistant + all its tool results as one group
+            const ids = new Set(msg.toolCalls.map(tc => tc.id));
+            let groupSize = 1;
+            while (summarizeCount + groupSize < messages.length &&
+                   messages[summarizeCount + groupSize].role === 'tool' &&
+                   ids.has(messages[summarizeCount + groupSize].toolCallId)) {
+                groupSize++;
+            }
+            // Only include the group if it fits within our budget
+            if (summarizeCount + groupSize > maxToSummarize) break;
+            summarizeCount += groupSize;
+        } else {
+            summarizeCount++;
+        }
+    }
+    if (summarizeCount === 0) return false;
+    const toSummarize = messages.slice(0, summarizeCount);
+
+    // Extract text from message content (handles string, array, and other formats)
+    const extractText = (content) => {
+        if (typeof content === 'string') return content;
+        if (Array.isArray(content)) {
+            return content.map(b => b.text || b.type || '').filter(Boolean).join(' ');
+        }
+        return String(content || '');
+    };
+
+    // Build a compact text representation of messages to summarize
+    const summaryInput = toSummarize.map(m => {
+        if (m.role === 'user') return `User: ${extractText(m.content).slice(0, 500)}`;
+        if (m.role === 'assistant') {
+            const text = extractText(m.content).slice(0, 500);
+            const tools = (m.toolCalls || []).map(tc => tc.name).join(', ');
+            return `Assistant: ${text}${tools ? ` [Tools: ${tools}]` : ''}`;
+        }
+        if (m.role === 'tool') return `Tool: ${extractText(m.content).slice(0, 200)}`;
+        return '';
+    }).filter(Boolean).join('\n');
+
+    if (!summaryInput.trim()) return false;
+
+    // Mark as attempted BEFORE the API call to prevent retries on failure
+    _summarizedThisTurn.add(chatId);
+
+    try {
+        // Build summary request using the same adapter pattern as chat()
+        const adapter = getAdapter(PROVIDER);
+        const apiKey = PROVIDER === 'openai' ? OPENAI_KEY : PROVIDER === 'openrouter' ? OPENROUTER_KEY : ANTHROPIC_KEY;
+        const headers = adapter.buildHeaders(apiKey, AUTH_TYPE);
+
+        const summaryPrompt = [
+            { role: 'user', content: `Summarize this conversation segment in 2-3 sentences. Focus on: what the user asked for, what was decided, what information was gathered. Be concise.\n\n${summaryInput}` }
+        ];
+
+        // Use provider-appropriate system prompt format
+        const summaryInstruction = 'You are a conversation summarizer. Output only the summary, nothing else.';
+        const summarySystem = PROVIDER === 'claude'
+            ? [{ type: 'text', text: summaryInstruction }]
+            : summaryInstruction;
+        const apiMessages = adapter.toApiMessages(summaryPrompt);
+        const body = adapter.formatRequest(MODEL, 256, summarySystem, apiMessages, []);
+
+        // Select streaming function based on provider protocol
+        const streamFn = adapter.streamProtocol === 'chat-completions'
+            ? httpChatCompletionsStreamingRequest
+            : (adapter.streamProtocol === 'openai' || adapter.streamProtocol === 'openai-responses')
+                ? httpOpenAIStreamingRequest
+                : httpStreamingRequest;
+
+        const res = await streamFn({
+            hostname: adapter.endpoint.hostname,
+            path: adapter.endpoint.path,
+            method: 'POST',
+            headers,
+        }, body); // formatRequest() already returns JSON string
+
+        if (!res || res.status !== 200) {
+            log(`[ContextSummary] Summarization API call failed: status=${res?.status || 'none'}`, 'WARN');
+            return false; // Fall back to normal adaptive trim
+        }
+
+        const parsed = adapter.fromApiResponse(res.data);
+        if (!parsed.text) {
+            log(`[ContextSummary] Summarization returned no text`, 'WARN');
+            return false;
+        }
+
+        const summaryText = parsed.text.trim();
+        log(`[ContextSummary] Summarized ${summarizeCount} old messages into ${summaryText.length} chars | turnId=${turnId || 'n/a'}`, 'INFO');
+
+        // Remove the old messages
+        messages.splice(0, summarizeCount);
+
+        // Insert summary as first message
+        messages.unshift({
+            role: 'assistant',
+            content: `[Summary of earlier conversation]\n${summaryText}`,
+        });
+
+        return true;
+    } catch (err) {
+        log(`[ContextSummary] Error during summarization: ${err.message}`, 'WARN');
+        return false; // Fall back to normal adaptive trim
+    }
+}
+
+// ============================================================================
 // TOOL RESULT AGING (BAT-259)
 // Trim old, large tool results to reduce payload bloat during multi-tool turns.
 // A skill_read result (~18KB) sitting in history 10 messages back is dead weight —
@@ -1701,6 +1842,10 @@ async function chat(chatId, userMessage, options = {}) {
     // DeerFlow P1: Reset loop detector at the start of each new turn
     loopDetector.reset(chatId);
 
+    // DeerFlow P2: Reset per-turn state
+    _summarizedThisTurn.delete(chatId);
+    if (global._discoveredToolsByChat) global._discoveredToolsByChat.delete(chatId); // Reset discovered tools
+
     const messages = getConversation(chatId);
 
     // P2.4b: Extract original goal from conversation for checkpoint persistence.
@@ -1728,8 +1873,20 @@ async function chat(chatId, userMessage, options = {}) {
 
             // BAT-315: Provider-agnostic tool formatting + request body building
             // DeerFlow P1: Strip tools on loop-break final iteration so model can only respond with text
+            // DeerFlow P2: Per-provider tool strategy — Claude gets full schemas + caching,
+            // OpenAI/OpenRouter get deferred loading with core tools + tool_search
             const rawTools = _loopFinalIteration ? [] : (_deps.getTools ? _deps.getTools() : []);
-            const formattedTools = adapter.formatTools(rawTools);
+            let toolsToSend;
+            if (PROVIDER === 'claude' || _loopFinalIteration) {
+                // Claude: full schemas + prompt caching (already efficient)
+                toolsToSend = rawTools;
+            } else {
+                // OpenAI/OpenRouter: deferred loading — core tools + discovered tools
+                const ALWAYS_AVAILABLE = new Set(['read', 'write', 'web_search', 'web_fetch', 'datetime', 'tool_search']);
+                const discovered = (global._discoveredToolsByChat && global._discoveredToolsByChat.get(chatId)) || new Set();
+                toolsToSend = rawTools.filter(t => ALWAYS_AVAILABLE.has(t.name) || discovered.has(t.name));
+            }
+            const formattedTools = adapter.formatTools(toolsToSend);
 
             // Context token estimation: check usage before API call, adaptively trim if needed.
             // Cache systemChars for the turn (stable). toolChars recomputed each iteration
@@ -1739,7 +1896,16 @@ async function chat(chatId, userMessage, options = {}) {
             }
             _ctxCache.toolChars = JSON.stringify(formattedTools).length;
 
+            // DeerFlow P2: Summarize old messages before adaptive trim drops them.
+            // Reuse ctx for both summarization check and trim check to avoid duplicate logging.
             let ctx = checkContextUsage(systemBlocks, messages, formattedTools, MODEL, turnId, _ctxCache);
+            if (ctx.usage >= CONTEXT_SUMMARIZE_THRESHOLD && !_summarizedThisTurn.has(chatId)) {
+                const summarized = await summarizeOldMessages(messages, chatId, turnId);
+                if (summarized) {
+                    // Messages changed — recompute context usage
+                    ctx = checkContextUsage(systemBlocks, messages, formattedTools, MODEL, turnId, _ctxCache);
+                }
+            }
             // Trim-recheck loop: keep trimming until safe or we hit the message floor
             let trimPasses = 0;
             while (ctx.usage >= CONTEXT_DANGER_THRESHOLD && messages.length > MIN_PRESERVED_MESSAGES && trimPasses < 3) {

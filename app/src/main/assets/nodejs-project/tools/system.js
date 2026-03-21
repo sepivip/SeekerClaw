@@ -11,6 +11,10 @@ const {
     redactSecrets, safePath,
 } = require('../security');
 
+// DeerFlow P2: Tool registry for tool_search — set from tools/index.js at startup
+let _getTools = null;
+function _setToolRegistry(fn) { _getTools = fn; }
+
 const tools = [
     {
         name: 'shell_exec',
@@ -23,6 +27,17 @@ const tools = [
                 timeout_ms: { type: 'number', description: 'Timeout in milliseconds (default: 30000, max: 30000)' }
             },
             required: ['command']
+        }
+    },
+    {
+        name: 'tool_search',
+        description: 'Search for available tools by keyword. Returns matching tool names with descriptions and full schemas. Use this to discover tools before calling them. Only needed for non-standard tools — common tools (read, write, web_search, web_fetch, datetime) are always available.',
+        input_schema: {
+            type: 'object',
+            properties: {
+                query: { type: 'string', description: 'Search query — tool name, keyword, or description fragment (e.g., "solana swap", "send sms", "cron")' }
+            },
+            required: ['query']
         }
     },
     {
@@ -40,6 +55,58 @@ const tools = [
 ];
 
 const handlers = {
+    async tool_search(input, chatId) {
+        const query = (input.query || '').toLowerCase().trim();
+        if (!query) return { error: 'Query is required' };
+
+        // Get all tools from the full registry
+        const allTools = _getTools ? _getTools() : [];
+
+        // Score each tool by relevance
+        const scored = allTools
+            .map(tool => {
+                const name = (tool.name || '').toLowerCase();
+                const desc = (tool.description || '').toLowerCase();
+                let score = 0;
+
+                // Exact name match
+                if (name === query) score += 100;
+                // Name contains query
+                else if (name.includes(query)) score += 50;
+                // Query words in name or description
+                else {
+                    const words = query.split(/\s+/);
+                    for (const w of words) {
+                        if (name.includes(w)) score += 20;
+                        if (desc.includes(w)) score += 5;
+                    }
+                }
+
+                return { tool, score };
+            })
+            .filter(s => s.score > 0)
+            .sort((a, b) => b.score - a.score)
+            .slice(0, 5);
+
+        if (scored.length === 0) {
+            return { matches: [], message: `No tools found matching "${input.query}". Try broader terms.` };
+        }
+
+        // Return full schemas for matches — these will be injected into next API call
+        const matches = scored.map(s => ({
+            name: s.tool.name,
+            description: s.tool.description,
+            input_schema: s.tool.input_schema,
+        }));
+
+        // Store discovered tools per-chatId for injection into next API call
+        if (!global._discoveredToolsByChat) global._discoveredToolsByChat = new Map();
+        if (!global._discoveredToolsByChat.has(chatId)) global._discoveredToolsByChat.set(chatId, new Set());
+        for (const m of matches) global._discoveredToolsByChat.get(chatId).add(m.name);
+
+        return { matches, message: `Found ${matches.length} tools. You can now call them directly.` };
+    },
+
     async shell_exec(input, chatId) {
         const { exec } = require('child_process');
         const cmd = (input.command || '').trim();
@@ -399,4 +466,4 @@ const handlers = {
     },
 };
 
-module.exports = { tools, handlers };
+module.exports = { tools, handlers, _setToolRegistry };
