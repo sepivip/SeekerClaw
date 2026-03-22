@@ -1354,7 +1354,7 @@ private fun NavButtons(
             colors = ButtonDefaults.buttonColors(
                 containerColor = SeekerClawColors.ActionPrimary,
                 contentColor = Color.White,
-                disabledContainerColor = SeekerClawColors.Surface,
+                disabledContainerColor = SeekerClawColors.BorderSubtle,
                 disabledContentColor = SeekerClawColors.TextDim,
             ),
         ) {
@@ -1382,7 +1382,7 @@ private fun SetupCard(
             .fillMaxWidth()
             .background(SeekerClawColors.Surface, shape)
             .border(1.dp, SeekerClawColors.CardBorder, shape)
-            .padding(20.dp),
+            .padding(16.dp),
         content = content,
     )
 }
