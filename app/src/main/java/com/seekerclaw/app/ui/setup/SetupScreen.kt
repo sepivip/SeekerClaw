@@ -99,6 +99,14 @@ import com.seekerclaw.app.ui.components.SetupStepIndicator
 import com.seekerclaw.app.ui.components.dotMatrix
 import com.seekerclaw.app.ui.theme.SeekerClawColors
 
+private object SetupSteps {
+    const val WELCOME = 0
+    const val PROVIDER = 1
+    const val MODEL = 2
+    const val TELEGRAM = 3
+    const val SUCCESS = 4
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SetupScreen(onSetupComplete: () -> Unit) {
@@ -136,7 +144,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
     var apiKeyError by remember { mutableStateOf<String?>(null) }
     var botTokenError by remember { mutableStateOf<String?>(null) }
 
-    var currentStep by remember { mutableIntStateOf(0) }
+    var currentStep by remember { mutableIntStateOf(SetupSteps.WELCOME) }
     var isQrImporting by remember { mutableStateOf(false) }
     var qrError by remember { mutableStateOf<String?>(null) }
 
@@ -182,7 +190,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                     agentName = cfg.agentName
                     isQrImporting = false
                     errorMessage = null
-                    currentStep = 3 // Jump to Options for review
+                    currentStep = SetupSteps.TELEGRAM // QR fills all fields — jump to final step
                 }
                 .onFailure { err ->
                     isQrImporting = false
@@ -215,26 +223,26 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
         if (apiKey.isBlank()) {
             apiKeyError = "Required"
             errorMessage = "AI credential is required"
-            currentStep = 1
+            currentStep = SetupSteps.PROVIDER
             return
         }
         if (scannedProvider != "claude" && apiKey.trim().startsWith("sk-ant-oat")) {
             apiKeyError = "Setup tokens are only valid for Anthropic"
             errorMessage = apiKeyError
-            currentStep = 1
+            currentStep = SetupSteps.PROVIDER
             return
         }
         val credentialError = ConfigManager.validateCredential(apiKey.trim(), effectiveAuthType)
         if (credentialError != null) {
             apiKeyError = credentialError
             errorMessage = credentialError
-            currentStep = 1
+            currentStep = SetupSteps.PROVIDER
             return
         }
         if (botToken.isBlank()) {
             botTokenError = "Required"
             errorMessage = "Telegram bot token is required"
-            currentStep = 2
+            currentStep = SetupSteps.TELEGRAM
             return
         }
 
@@ -285,7 +293,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             ConfigManager.seedWorkspace(context)
             OpenClawService.start(context)
             ConfigManager.markFirstDeploymentDone(context)
-            currentStep = 4
+            currentStep = SetupSteps.SUCCESS
         } catch (e: Exception) {
             LogCollector.append("[Setup] Failed to start agent: ${e.message}", LogLevel.ERROR)
             isStarting = false
@@ -329,7 +337,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             .verticalScroll(scrollState),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        if (currentStep < 4) {
+        if (currentStep < SetupSteps.SUCCESS) {
             // Header row: logo left, skip right
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -369,14 +377,14 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             // Step indicator
             SetupStepIndicator(
                 currentStep = currentStep,
-                labels = listOf("Welcome", "AI Provider", "Telegram", "Options"),
+                labels = listOf("Welcome", "AI Provider", "Model", "Telegram"),
             )
 
             Spacer(modifier = Modifier.height(24.dp))
         }
 
         // Error message
-        if (errorMessage != null && currentStep < 4) {
+        if (errorMessage != null && currentStep < SetupSteps.SUCCESS) {
             Text(
                 text = errorMessage!!,
                 fontFamily = FontFamily.Monospace,
@@ -391,8 +399,8 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
         }
 
         when (currentStep) {
-            0 -> WelcomeStep(
-                onNext = { currentStep = 1 },
+            SetupSteps.WELCOME -> WelcomeStep(
+                onNext = { currentStep = SetupSteps.PROVIDER },
                 onScanQr = {
                     Analytics.featureUsed("qr_scan_setup")
                     qrScanLauncher.launch(Intent(context, QrScannerActivity::class.java))
@@ -400,7 +408,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                 isQrImporting = isQrImporting,
                 qrError = qrError,
             )
-            1 -> ProviderSetupStep(
+            SetupSteps.PROVIDER -> ProviderSetupStep(
                 provider = scannedProvider,
                 onProviderChange = { newProvider ->
                     scannedProvider = newProvider
@@ -430,20 +438,10 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                 onAuthTypeChange = { authType = it },
                 apiKeyError = apiKeyError,
                 fieldColors = fieldColors,
-                onNext = { currentStep = 2 },
-                onBack = { currentStep = 0 },
+                onNext = { currentStep = SetupSteps.MODEL },
+                onBack = { currentStep = SetupSteps.WELCOME },
             )
-            2 -> TelegramStep(
-                botToken = botToken,
-                onBotTokenChange = { botToken = it; botTokenError = null; errorMessage = null },
-                ownerId = ownerId,
-                onOwnerIdChange = { ownerId = it; errorMessage = null },
-                botTokenError = botTokenError,
-                fieldColors = fieldColors,
-                onNext = { currentStep = 3 },
-                onBack = { currentStep = 1 },
-            )
-            3 -> OptionsStep(
+            SetupSteps.MODEL -> OptionsStep(
                 selectedModel = selectedModel,
                 onModelChange = { selectedModel = it },
                 modelDropdownExpanded = modelDropdownExpanded,
@@ -451,12 +449,22 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                 agentName = agentName,
                 onAgentNameChange = { agentName = it },
                 fieldColors = fieldColors,
-                isStarting = isStarting,
-                onStartAgent = ::saveAndStart,
-                onBack = { currentStep = 2 },
+                onNext = { currentStep = SetupSteps.TELEGRAM },
+                onBack = { currentStep = SetupSteps.PROVIDER },
                 provider = scannedProvider,
             )
-            4 -> SetupSuccessStep(
+            SetupSteps.TELEGRAM -> TelegramStep(
+                botToken = botToken,
+                onBotTokenChange = { botToken = it; botTokenError = null; errorMessage = null },
+                ownerId = ownerId,
+                onOwnerIdChange = { ownerId = it; errorMessage = null },
+                botTokenError = botTokenError,
+                fieldColors = fieldColors,
+                onNext = ::saveAndStart,
+                onBack = { if (!isStarting) currentStep = SetupSteps.MODEL },
+                isStarting = isStarting,
+            )
+            SetupSteps.SUCCESS -> SetupSuccessStep(
                 agentName = agentName.ifBlank { "SeekerClaw" },
                 botToken = botToken,
                 onContinue = onSetupComplete,
@@ -867,6 +875,7 @@ private fun TelegramStep(
     fieldColors: androidx.compose.material3.TextFieldColors,
     onNext: () -> Unit,
     onBack: () -> Unit,
+    isStarting: Boolean = false,
 ) {
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
 
@@ -998,11 +1007,41 @@ private fun TelegramStep(
 
         Spacer(modifier = Modifier.height(28.dp))
 
-        NavButtons(
-            onBack = onBack,
-            onNext = onNext,
-            nextEnabled = botToken.isNotBlank(),
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TextButton(onClick = onBack, enabled = !isStarting) {
+                Text("Back", fontSize = 14.sp, color = if (isStarting) SeekerClawColors.TextDim.copy(alpha = 0.3f) else SeekerClawColors.TextDim)
+            }
+            Button(
+                onClick = onNext,
+                enabled = botToken.isNotBlank() && !isStarting,
+                modifier = Modifier.height(56.dp),
+                shape = shape,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = SeekerClawColors.ActionPrimary,
+                    contentColor = Color.White,
+                    disabledContainerColor = SeekerClawColors.ActionPrimary.copy(alpha = 0.6f),
+                    disabledContentColor = Color.White.copy(alpha = 0.7f),
+                ),
+            ) {
+                if (isStarting) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        color = Color.White,
+                        strokeWidth = 2.dp,
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Starting\u2026", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                } else {
+                    Icon(Icons.Default.PlayArrow, contentDescription = "Start", modifier = Modifier.size(20.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Initialize Agent", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
     }
 }
 
@@ -1016,8 +1055,7 @@ private fun OptionsStep(
     agentName: String,
     onAgentNameChange: (String) -> Unit,
     fieldColors: androidx.compose.material3.TextFieldColors,
-    isStarting: Boolean,
-    onStartAgent: () -> Unit,
+    onNext: () -> Unit,
     onBack: () -> Unit,
     provider: String = "claude",
 ) {
@@ -1132,58 +1170,7 @@ private fun OptionsStep(
 
         Spacer(modifier = Modifier.height(28.dp))
 
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            TextButton(onClick = onBack) {
-                Text(
-                    text = "Back",
-                    fontSize = 14.sp,
-                    color = SeekerClawColors.TextDim,
-                )
-            }
-
-            Button(
-                onClick = onStartAgent,
-                enabled = !isStarting,
-                modifier = Modifier.height(56.dp),
-                shape = shape,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = SeekerClawColors.ActionPrimary,
-                    contentColor = Color.White,
-                    disabledContainerColor = SeekerClawColors.ActionPrimary.copy(alpha = 0.6f),
-                    disabledContentColor = Color.White.copy(alpha = 0.7f),
-                ),
-            ) {
-                if (isStarting) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(20.dp),
-                        color = Color.White,
-                        strokeWidth = 2.dp,
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        "Starting\u2026",
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold,
-                    )
-                } else {
-                    Icon(
-                        Icons.Default.PlayArrow,
-                        contentDescription = "Start",
-                        modifier = Modifier.size(20.dp),
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        "Initialize Agent",
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold,
-                    )
-                }
-            }
-        }
+        NavButtons(onBack = onBack, onNext = onNext, nextEnabled = selectedModel.isNotBlank())
     }
 }
 
