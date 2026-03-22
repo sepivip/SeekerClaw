@@ -335,7 +335,7 @@ fun DashboardScreen(
                     )
                 }
             }
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(24.dp))
         }
 
         // API health error banner (BAT-134) — dismissible, resets via LaunchedEffect
@@ -393,7 +393,7 @@ fun DashboardScreen(
                     )
                 }
             }
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(24.dp))
         }
 
         // Recovery banner — brief green confirmation after API recovers
@@ -425,7 +425,7 @@ fun DashboardScreen(
                     modifier = Modifier.weight(1f),
                 )
             }
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(24.dp))
         }
 
         // Setup needed card — prominent when config is incomplete
@@ -478,7 +478,7 @@ fun DashboardScreen(
                     )
                 }
             }
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(24.dp))
         }
 
         // First-launch guide — show when config is ready but user hasn't deployed yet
@@ -513,7 +513,7 @@ fun DashboardScreen(
                     lineHeight = 18.sp,
                 )
             }
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(24.dp))
         }
 
         // Status card (tappable → System screen, or Settings if config needed)
