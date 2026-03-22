@@ -304,6 +304,7 @@ fun DashboardScreen(
         ) {
             Row(
                 modifier = Modifier
+                    .padding(bottom = 24.dp)
                     .fillMaxWidth()
                     .background(SeekerClawColors.Warning.copy(alpha = 0.15f), shape)
                     .padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 4.dp),
@@ -335,7 +336,6 @@ fun DashboardScreen(
                     )
                 }
             }
-            Spacer(modifier = Modifier.height(24.dp))
         }
 
         // API health error banner (BAT-134) — dismissible, resets via LaunchedEffect
@@ -363,6 +363,7 @@ fun DashboardScreen(
             }
             Row(
                 modifier = Modifier
+                    .padding(bottom = 24.dp)
                     .fillMaxWidth()
                     .background(bannerColor.copy(alpha = 0.12f), shape)
                     .padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 4.dp),
@@ -393,7 +394,6 @@ fun DashboardScreen(
                     )
                 }
             }
-            Spacer(modifier = Modifier.height(24.dp))
         }
 
         // Recovery banner — brief green confirmation after API recovers
@@ -405,6 +405,7 @@ fun DashboardScreen(
         ) {
             Row(
                 modifier = Modifier
+                    .padding(bottom = 24.dp)
                     .fillMaxWidth()
                     .background(SeekerClawColors.Accent.copy(alpha = 0.12f), shape)
                     .padding(horizontal = 16.dp, vertical = 12.dp),
@@ -425,7 +426,6 @@ fun DashboardScreen(
                     modifier = Modifier.weight(1f),
                 )
             }
-            Spacer(modifier = Modifier.height(24.dp))
         }
 
         // Setup needed card — prominent when config is incomplete
@@ -437,6 +437,7 @@ fun DashboardScreen(
         ) {
             Column(
                 modifier = Modifier
+                    .padding(bottom = 24.dp)
                     .fillMaxWidth()
                     .background(SeekerClawColors.Warning.copy(alpha = 0.10f), shape)
                     .border(1.dp, SeekerClawColors.Warning.copy(alpha = 0.3f), shape)
@@ -478,7 +479,6 @@ fun DashboardScreen(
                     )
                 }
             }
-            Spacer(modifier = Modifier.height(24.dp))
         }
 
         // First-launch guide — show when config is ready but user hasn't deployed yet
@@ -492,6 +492,7 @@ fun DashboardScreen(
         ) {
             Column(
                 modifier = Modifier
+                    .padding(bottom = 24.dp)
                     .fillMaxWidth()
                     .background(SeekerClawColors.Accent.copy(alpha = 0.08f), shape)
                     .border(1.dp, SeekerClawColors.Accent.copy(alpha = 0.2f), shape)
@@ -513,7 +514,6 @@ fun DashboardScreen(
                     lineHeight = 18.sp,
                 )
             }
-            Spacer(modifier = Modifier.height(24.dp))
         }
 
         // Status card (tappable → System screen, or Settings if config needed)
