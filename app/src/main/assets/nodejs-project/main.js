@@ -1059,9 +1059,15 @@ async function poll() {
                     dnsWarnLogged = false;
                 }
                 const isTimeout = /timeout|ETIMEDOUT|ESOCKETTIMEDOUT/i.test(error.message);
-                log(`Poll error (${pollErrors}): ${error.message}`, isTimeout ? 'DEBUG' : 'ERROR');
-                const delay = Math.min(1000 * Math.pow(2, pollErrors - 1), 30000);
-                await new Promise(r => setTimeout(r, delay));
+                if (isTimeout) {
+                    // Telegram long-polling timeouts are normal (~every 30s when idle)
+                    // Don't increment pollErrors or trigger backoff
+                    log(`Poll timeout — reconnecting`, 'DEBUG');
+                } else {
+                    log(`Poll error (${pollErrors}): ${error.message}`, 'ERROR');
+                    const delay = Math.min(1000 * Math.pow(2, pollErrors - 1), 30000);
+                    await new Promise(r => setTimeout(r, delay));
+                }
             }
         }
     }
