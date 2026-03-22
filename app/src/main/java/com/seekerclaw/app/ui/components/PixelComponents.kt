@@ -79,7 +79,7 @@ fun SetupStepIndicator(
             // Step column (circle + label)
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.width(stepWidth),
+                modifier = Modifier.weight(1f),
             ) {
                 Box(
                     modifier = Modifier
@@ -134,7 +134,7 @@ fun SetupStepIndicator(
             if (i < totalSteps - 1) {
                 Box(
                     modifier = Modifier
-                        .weight(1f)
+                        .width(16.dp)
                         .padding(top = connectorTopPadding)
                         .height(connectorHeight)
                         .background(
