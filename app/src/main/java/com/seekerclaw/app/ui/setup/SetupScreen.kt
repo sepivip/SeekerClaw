@@ -11,6 +11,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -41,8 +43,11 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.ui.semantics.Role
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.rounded.Check
@@ -81,7 +86,10 @@ import com.seekerclaw.app.R
 import com.seekerclaw.app.config.AppConfig
 import com.seekerclaw.app.config.ConfigClaimImporter
 import com.seekerclaw.app.config.ConfigManager
+import com.seekerclaw.app.config.OPENROUTER_DEFAULT_MODEL
 import com.seekerclaw.app.config.availableModels
+import com.seekerclaw.app.config.availableProviders
+import com.seekerclaw.app.config.providerById
 import com.seekerclaw.app.config.modelsForProvider
 import com.seekerclaw.app.qr.QrScannerActivity
 import com.seekerclaw.app.service.OpenClawService
@@ -392,13 +400,24 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                 isQrImporting = isQrImporting,
                 qrError = qrError,
             )
-            1 -> AnthropicApiStep(
+            1 -> ProviderSetupStep(
+                provider = scannedProvider,
+                onProviderChange = { newProvider ->
+                    scannedProvider = newProvider
+                    apiKey = ""
+                    apiKeyError = null
+                    errorMessage = null
+                    authType = "api_key"
+                    // Reset model to first available for new provider
+                    val models = modelsForProvider(newProvider)
+                    selectedModel = models.firstOrNull()?.id ?: OPENROUTER_DEFAULT_MODEL
+                },
                 apiKey = apiKey,
                 onApiKeyChange = { newValue ->
                     apiKey = newValue
                     apiKeyError = null
                     errorMessage = null
-                    if (newValue.length > 20) {
+                    if (scannedProvider == "claude" && newValue.length > 20) {
                         authType = ConfigManager.detectAuthType(newValue)
                     }
                 },
@@ -638,7 +657,9 @@ private fun WelcomeStep(
 }
 
 @Composable
-private fun AnthropicApiStep(
+private fun ProviderSetupStep(
+    provider: String,
+    onProviderChange: (String) -> Unit,
     apiKey: String,
     onApiKeyChange: (String) -> Unit,
     authType: String,
@@ -649,50 +670,101 @@ private fun AnthropicApiStep(
     onBack: () -> Unit,
 ) {
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
+    val providerInfo = providerById(provider)
     val isToken = authType == "setup_token"
     val uriHandler = LocalUriHandler.current
+    val effectiveAuthType = if (provider != "claude") "api_key" else authType
     val isValid = apiKey.trim().isNotBlank() &&
-        ConfigManager.validateCredential(apiKey.trim(), authType) == null &&
+        ConfigManager.validateCredential(apiKey.trim(), effectiveAuthType) == null &&
         apiKeyError == null
 
     Column(modifier = Modifier.fillMaxWidth()) {
-        SectionLabel("Authentication")
+        // Provider selector
+        SectionLabel("Provider")
 
         Spacer(modifier = Modifier.height(10.dp))
 
         SetupCard {
-            // Auth type toggle
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                listOf("api_key" to "API Key", "setup_token" to "Pro/Max Setup Token").forEach { (type, label) ->
-                    val isSelected = authType == type
-                    Button(
-                        onClick = { onAuthTypeChange(type) },
-                        modifier = Modifier.weight(1f).height(48.dp),
-                        shape = shape,
-                        border = if (!isSelected) BorderStroke(1.dp, SeekerClawColors.CardBorder) else null,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (isSelected) SeekerClawColors.Primary.copy(alpha = 0.15f)
-                                else SeekerClawColors.Background,
-                            contentColor = if (isSelected) SeekerClawColors.Primary
-                                else SeekerClawColors.TextDim,
-                        ),
+            Column(modifier = Modifier.selectableGroup()) {
+                availableProviders.forEachIndexed { index, p ->
+                    val isSelected = p.id == provider
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .selectable(
+                                selected = isSelected,
+                                onClick = { if (!isSelected) onProviderChange(p.id) },
+                                role = Role.RadioButton,
+                            )
+                            .padding(vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text(
-                            text = label,
-                            fontSize = 12.sp,
-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                        RadioButton(
+                            selected = isSelected,
+                            onClick = null,
+                            colors = RadioButtonDefaults.colors(
+                                selectedColor = SeekerClawColors.Primary,
+                                unselectedColor = SeekerClawColors.TextDim,
+                            ),
                         )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = p.displayName,
+                            fontFamily = RethinkSans,
+                            fontSize = 15.sp,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                            color = if (isSelected) SeekerClawColors.TextPrimary else SeekerClawColors.TextDim,
+                        )
+                    }
+                    if (index < availableProviders.size - 1) {
+                        HorizontalDivider(color = SeekerClawColors.CardBorder)
                     }
                 }
             }
+        }
 
-            Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(20.dp))
 
-            // Instructions with clickable link
-            if (isToken) {
+        // Provider-specific credential fields
+        SectionLabel("Credentials")
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        SetupCard {
+            // Auth type toggle — Claude only
+            if (provider == "claude") {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    listOf("api_key" to "API Key", "setup_token" to "Pro/Max Setup Token").forEach { (type, label) ->
+                        val isAuthSelected = authType == type
+                        Button(
+                            onClick = { onAuthTypeChange(type) },
+                            modifier = Modifier.weight(1f).height(48.dp),
+                            shape = shape,
+                            border = if (!isAuthSelected) BorderStroke(1.dp, SeekerClawColors.CardBorder) else null,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (isAuthSelected) SeekerClawColors.Primary.copy(alpha = 0.15f)
+                                    else SeekerClawColors.Background,
+                                contentColor = if (isAuthSelected) SeekerClawColors.Primary
+                                    else SeekerClawColors.TextDim,
+                            ),
+                        ) {
+                            Text(
+                                text = label,
+                                fontSize = 12.sp,
+                                fontWeight = if (isAuthSelected) FontWeight.Bold else FontWeight.Normal,
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+            }
+
+            // Instructions — provider-specific
+            if (provider == "claude" && isToken) {
                 Text(
                     text = "Run in your terminal:",
                     fontSize = 13.sp,
@@ -719,11 +791,11 @@ private fun AnthropicApiStep(
                         color = SeekerClawColors.TextSecondary,
                     )
                     Text(
-                        text = "console.anthropic.com",
+                        text = providerInfo.keysUrl.removePrefix("https://"),
                         fontSize = 13.sp,
                         color = SeekerClawColors.Primary,
                         modifier = Modifier.clickable {
-                            uriHandler.openUri("https://console.anthropic.com/settings/keys")
+                            uriHandler.openUri(providerInfo.keysUrl)
                         },
                     )
                 }
@@ -736,13 +808,13 @@ private fun AnthropicApiStep(
                 onValueChange = onApiKeyChange,
                 label = {
                     Text(
-                        if (isToken) "Setup Token" else "API Key",
+                        if (provider == "claude" && isToken) "Setup Token" else "API Key",
                         fontSize = 12.sp,
                     )
                 },
                 placeholder = {
                     Text(
-                        if (isToken) "sk-ant-oat01-\u2026" else "sk-ant-api03-\u2026",
+                        if (provider == "claude" && isToken) "sk-ant-oat01-\u2026" else providerInfo.keyHint,
                         fontFamily = FontFamily.Monospace,
                         fontSize = 14.sp,
                         color = SeekerClawColors.TextDim,
@@ -1169,18 +1241,20 @@ private fun SetupSuccessStep(
             // Step 1: Find bot on Telegram
             SetupCard {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = "1",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = SeekerClawColors.Accent,
+                    Box(
                         modifier = Modifier
                             .size(28.dp)
-                            .background(SeekerClawColors.Accent.copy(alpha = 0.15f), CircleShape)
-                            .padding(6.dp),
-                        textAlign = TextAlign.Center,
-                    )
+                            .background(SeekerClawColors.Accent.copy(alpha = 0.15f), CircleShape),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = "1",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = SeekerClawColors.Accent,
+                        )
+                    }
                     Spacer(modifier = Modifier.width(12.dp))
                     Column {
                         Text(
@@ -1205,18 +1279,20 @@ private fun SetupSuccessStep(
             // Step 2: Chat
             SetupCard {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = "2",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = SeekerClawColors.Primary,
+                    Box(
                         modifier = Modifier
                             .size(28.dp)
-                            .background(SeekerClawColors.Primary.copy(alpha = 0.15f), CircleShape)
-                            .padding(6.dp),
-                        textAlign = TextAlign.Center,
-                    )
+                            .background(SeekerClawColors.Primary.copy(alpha = 0.15f), CircleShape),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = "2",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = SeekerClawColors.Primary,
+                        )
+                    }
                     Spacer(modifier = Modifier.width(12.dp))
                     Column {
                         Text(

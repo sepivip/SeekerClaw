@@ -10,6 +10,7 @@ data class ProviderInfo(
     val authTypes: List<String>,
     val keyHint: String,
     val consoleUrl: String,
+    val keysUrl: String = consoleUrl,
 )
 
 val availableProviders = listOf(
@@ -19,20 +20,23 @@ val availableProviders = listOf(
         authTypes = listOf("api_key", "setup_token"),
         keyHint = "sk-ant-api03-…",
         consoleUrl = "https://console.anthropic.com",
+        keysUrl = "https://console.anthropic.com/settings/keys",
     ),
     ProviderInfo(
         id = "openai",
         displayName = "OpenAI",
         authTypes = listOf("api_key"),
         keyHint = "sk-proj-…",
-        consoleUrl = "https://platform.openai.com/api-keys",
+        consoleUrl = "https://platform.openai.com",
+        keysUrl = "https://platform.openai.com/api-keys",
     ),
     ProviderInfo(
         id = "openrouter",
         displayName = "OpenRouter",
         authTypes = listOf("api_key"),
         keyHint = "sk-or-v1-…",
-        consoleUrl = "https://openrouter.ai/keys",
+        consoleUrl = "https://openrouter.ai",
+        keysUrl = "https://openrouter.ai/keys",
     ),
 )
 
@@ -41,6 +45,9 @@ val openaiModels = listOf(
     ModelInfo("gpt-5.2", "GPT-5.2", "flagship"),
     ModelInfo("gpt-5.3-codex", "GPT-5.3 Codex", "code agent"),
 )
+
+/** Default model for freeform providers (OpenRouter) where model list is empty. */
+const val OPENROUTER_DEFAULT_MODEL = "anthropic/claude-sonnet-4-6"
 
 fun modelsForProvider(providerId: String): List<ModelInfo> = when (providerId) {
     "openai" -> openaiModels
