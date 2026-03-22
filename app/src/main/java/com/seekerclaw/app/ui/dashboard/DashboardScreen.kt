@@ -26,6 +26,11 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -292,7 +297,11 @@ fun DashboardScreen(
         Spacer(modifier = Modifier.height(if (!isOnline) 16.dp else 24.dp))
 
         // Network offline banner (dismissible, resets via LaunchedEffect when online)
-        if (!isOnline && !networkBannerDismissed) {
+        AnimatedVisibility(
+            visible = !isOnline && !networkBannerDismissed,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically(),
+        ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -332,7 +341,12 @@ fun DashboardScreen(
         // API health error banner (BAT-134) — dismissible, resets via LaunchedEffect
         val errorBannerKey = "${health.apiStatus}:${health.lastErrorType}"
         val errorDismissed = apiUnhealthy && errorBannerDismissedKey == errorBannerKey
-        if (apiUnhealthy && !errorDismissed) {
+        val showErrorBanner = apiUnhealthy && !errorDismissed
+        AnimatedVisibility(
+            visible = showErrorBanner,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically(),
+        ) {
             val bannerColor = if (health.apiStatus == "error") SeekerClawColors.Error
                 else SeekerClawColors.Warning
             val providerName = providerById(config?.provider ?: "claude").displayName
@@ -383,7 +397,12 @@ fun DashboardScreen(
         }
 
         // Recovery banner — brief green confirmation after API recovers
-        if (showRecoveryBanner && status == ServiceStatus.RUNNING) {
+        val showRecovery = showRecoveryBanner && status == ServiceStatus.RUNNING
+        AnimatedVisibility(
+            visible = showRecovery,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically(),
+        ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -410,7 +429,12 @@ fun DashboardScreen(
         }
 
         // Setup needed card — prominent when config is incomplete
-        if (validationError != null && !isRunning) {
+        val showSetupCard = validationError != null && !isRunning
+        AnimatedVisibility(
+            visible = showSetupCard,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically(),
+        ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -461,7 +485,11 @@ fun DashboardScreen(
         val showFirstLaunchGuide = configReady &&
             status == ServiceStatus.STOPPED &&
             !ConfigManager.hasUserEverDeployed(context)
-        if (showFirstLaunchGuide) {
+        AnimatedVisibility(
+            visible = showFirstLaunchGuide,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically(),
+        ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
