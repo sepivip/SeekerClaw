@@ -1058,7 +1058,8 @@ async function poll() {
                     dnsFailCount = 0;
                     dnsWarnLogged = false;
                 }
-                log(`Poll error (${pollErrors}): ${error.message}`, 'ERROR');
+                const isTimeout = /timeout|ETIMEDOUT|ESOCKETTIMEDOUT/i.test(error.message);
+                log(`Poll error (${pollErrors}): ${error.message}`, isTimeout ? 'DEBUG' : 'ERROR');
                 const delay = Math.min(1000 * Math.pow(2, pollErrors - 1), 30000);
                 await new Promise(r => setTimeout(r, delay));
             }
