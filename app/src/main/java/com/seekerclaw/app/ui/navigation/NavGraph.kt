@@ -50,7 +50,6 @@ import kotlinx.serialization.Serializable
 @Serializable object SkillsRoute
 @Serializable object SettingsRoute
 @Serializable object SystemRoute
-@Serializable object AnthropicConfigRoute
 @Serializable object ProviderConfigRoute
 @Serializable object TelegramConfigRoute
 
@@ -62,7 +61,7 @@ data class BottomNavItem(
 
 val bottomNavItems = listOf(
     BottomNavItem("Home", R.drawable.ic_lucide_layout_grid, DashboardRoute),
-    BottomNavItem("Console", R.drawable.ic_lucide_terminal, LogsRoute),
+    BottomNavItem("Logs", R.drawable.ic_lucide_terminal, LogsRoute),
     BottomNavItem("Skills", R.drawable.ic_lucide_layers, SkillsRoute),
     BottomNavItem("Settings", R.drawable.ic_lucide_settings, SettingsRoute),
 )
@@ -80,7 +79,7 @@ fun SeekerClawNavHost() {
             val screenName = when {
                 dest.hasRoute(SetupRoute::class) -> "Setup"
                 dest.hasRoute(DashboardRoute::class) -> "Dashboard"
-                dest.hasRoute(LogsRoute::class) -> "Console"
+                dest.hasRoute(LogsRoute::class) -> "Logs"
                 dest.hasRoute(SkillsRoute::class) -> "Skills"
                 dest.hasRoute(SettingsRoute::class) -> "Settings"
                 dest.hasRoute(SystemRoute::class) -> "System"
@@ -193,6 +192,13 @@ fun SeekerClawNavHost() {
                             restoreState = true
                         }
                     },
+                    onNavigateToSetup = {
+                        navController.navigate(SetupRoute) {
+                            popUpTo(navController.graph.findStartDestination().id) {
+                                inclusive = true
+                            }
+                        }
+                    },
                 )
             }
             composable<SystemRoute> {
@@ -221,12 +227,6 @@ fun SeekerClawNavHost() {
                     onNavigateToTelegram = {
                         navController.navigate(TelegramConfigRoute)
                     }
-                )
-            }
-            // TODO: AnthropicConfigRoute is unused — remove with AnthropicConfigScreen.kt in cleanup PR
-            composable<AnthropicConfigRoute> {
-                com.seekerclaw.app.ui.settings.AnthropicConfigScreen(
-                    onBack = { navController.popBackStack() }
                 )
             }
             composable<ProviderConfigRoute> {

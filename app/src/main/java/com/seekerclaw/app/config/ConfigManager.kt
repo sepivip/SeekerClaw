@@ -85,8 +85,9 @@ object ConfigManager {
     private const val KEY_OPENAI_API_KEY_ENC = "openai_api_key_enc"
     private const val KEY_OPENROUTER_API_KEY_ENC = "openrouter_api_key_enc"
     private const val KEY_OPENROUTER_FALLBACK_MODEL = "openrouter_fallback_model"
-        private const val KEY_OPENROUTER_MODEL_CONTEXT = "openrouter_model_context"
-        private const val KEY_OPENROUTER_FALLBACK_CONTEXT = "openrouter_fallback_context"
+    private const val KEY_OPENROUTER_MODEL_CONTEXT = "openrouter_model_context"
+    private const val KEY_OPENROUTER_FALLBACK_CONTEXT = "openrouter_fallback_context"
+    private const val KEY_FIRST_DEPLOY_DONE = "first_deploy_done"
 
     private fun prefs(context: Context): SharedPreferences =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -97,6 +98,15 @@ object ConfigManager {
     fun markSetupSkipped(context: Context) {
         prefs(context).edit()
             .putBoolean(KEY_SETUP_COMPLETE, true)
+            .apply()
+    }
+
+    fun hasUserEverDeployed(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_FIRST_DEPLOY_DONE, false)
+
+    fun markFirstDeploymentDone(context: Context) {
+        prefs(context).edit()
+            .putBoolean(KEY_FIRST_DEPLOY_DONE, true)
             .apply()
     }
 

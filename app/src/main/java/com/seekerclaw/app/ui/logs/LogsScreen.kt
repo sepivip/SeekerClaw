@@ -123,7 +123,7 @@ fun LogsScreen() {
                 )
                 Spacer(modifier = Modifier.width(10.dp))
                 Text(
-                    text = "Console",
+                    text = "Logs",
                     fontFamily = RethinkSans,
                     fontSize = 20.sp,
                     fontWeight = FontWeight.Bold,

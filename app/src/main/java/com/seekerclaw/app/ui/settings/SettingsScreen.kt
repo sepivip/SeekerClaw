@@ -604,7 +604,7 @@ fun SettingsScreen(
         Spacer(modifier = Modifier.height(28.dp))
 
         // Solana Wallet
-        CollapsibleSection("Solana Wallet", initiallyExpanded = true) {
+        CollapsibleSection("Solana Wallet", initiallyExpanded = false) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -778,7 +778,7 @@ fun SettingsScreen(
         Spacer(modifier = Modifier.height(28.dp))
 
         // MCP Servers (BAT-168)
-        CollapsibleSection("MCP Servers", initiallyExpanded = true) {
+        CollapsibleSection("MCP Servers", initiallyExpanded = false) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -893,7 +893,7 @@ fun SettingsScreen(
         Spacer(modifier = Modifier.height(28.dp))
 
         // Data backup
-        CollapsibleSection("Data", initiallyExpanded = true) {
+        CollapsibleSection("Data", initiallyExpanded = false) {
             Column {
                 OutlinedButton(
                     onClick = {
@@ -982,7 +982,7 @@ fun SettingsScreen(
         Spacer(modifier = Modifier.height(28.dp))
 
         // Run Setup Again
-        CollapsibleSection("Setup", initiallyExpanded = true) {
+        CollapsibleSection("Setup", initiallyExpanded = false) {
             OutlinedButton(
                 onClick = { showRunSetupDialog = true },
                 modifier = Modifier.fillMaxWidth(),
@@ -1003,7 +1003,7 @@ fun SettingsScreen(
         Spacer(modifier = Modifier.height(32.dp))
 
         // Danger zone
-        CollapsibleSection("Danger Zone", initiallyExpanded = true) {
+        CollapsibleSection("Danger Zone", initiallyExpanded = false) {
             Column {
                 Button(
                     onClick = { showResetDialog = true },

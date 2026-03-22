@@ -69,6 +69,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextAlign
 import com.seekerclaw.app.ui.theme.RethinkSans
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -182,11 +183,6 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
         }
     }
 
-    fun skipSetup() {
-        ConfigManager.markSetupSkipped(context)
-        onSetupComplete()
-    }
-
     var hasNotificationPermission by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
@@ -280,6 +276,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             ConfigManager.saveConfig(context, config)
             ConfigManager.seedWorkspace(context)
             OpenClawService.start(context)
+            ConfigManager.markFirstDeploymentDone(context)
             currentStep = 4
         } catch (e: Exception) {
             LogCollector.append("[Setup] Failed to start agent: ${e.message}", LogLevel.ERROR)
@@ -337,12 +334,15 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                     modifier = Modifier.height(36.dp),
                 )
                 Text(
-                    text = "Skip",
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 14.sp,
+                    text = "Set up later",
+                    fontFamily = RethinkSans,
+                    fontSize = 13.sp,
                     color = SeekerClawColors.TextDim,
                     modifier = Modifier
-                        .clickable { skipSetup() }
+                        .clickable {
+                            ConfigManager.markSetupSkipped(context)
+                            onSetupComplete()
+                        }
                         .padding(4.dp),
                 )
             }
@@ -361,7 +361,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             // Step indicator
             SetupStepIndicator(
                 currentStep = currentStep,
-                labels = listOf("Welcome", "Anthropic", "Telegram", "Options"),
+                labels = listOf("Welcome", "AI Provider", "Telegram", "Options"),
             )
 
             Spacer(modifier = Modifier.height(24.dp))
@@ -434,6 +434,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             )
             4 -> SetupSuccessStep(
                 agentName = agentName.ifBlank { "SeekerClaw" },
+                botToken = botToken,
                 onContinue = onSetupComplete,
             )
         }
@@ -519,8 +520,8 @@ private fun WelcomeStep(
         SetupCard {
             RequirementRow(
                 icon = Icons.Default.Key,
-                title = "Anthropic API Key",
-                subtitle = "From console.anthropic.com, or a Pro/Max token",
+                title = "API Credential",
+                subtitle = "From Claude, OpenAI, or OpenRouter",
             )
             HorizontalDivider(
                 color = SeekerClawColors.CardBorder,
@@ -1112,20 +1113,16 @@ private fun OptionsStep(
 @Composable
 private fun SetupSuccessStep(
     agentName: String,
+    botToken: String,
     onContinue: () -> Unit,
 ) {
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
-
-    // Auto-navigate after 2 seconds
-    LaunchedEffect(Unit) {
-        kotlinx.coroutines.delay(2000)
-        onContinue()
-    }
+    val botId = Regex("""^(\d+):""").find(botToken)?.groupValues?.get(1)
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(top = 48.dp),
+            .padding(top = 32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         // Checkmark circle
@@ -1156,22 +1153,106 @@ private fun SetupSuccessStep(
         Spacer(modifier = Modifier.height(8.dp))
 
         Text(
-            text = "$agentName is starting up. Opening dashboard\u2026",
+            text = "$agentName is starting up",
             fontFamily = RethinkSans,
             fontSize = 14.sp,
             color = SeekerClawColors.TextDim,
         )
 
-        Spacer(modifier = Modifier.height(32.dp))
+        Spacer(modifier = Modifier.height(28.dp))
 
-        // Manual continue button (in case user doesn't want to wait)
-        TextButton(onClick = onContinue) {
+        // Guidance cards
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            // Step 1: Find bot on Telegram
+            SetupCard {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "1",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = SeekerClawColors.Accent,
+                        modifier = Modifier
+                            .size(28.dp)
+                            .background(SeekerClawColors.Accent.copy(alpha = 0.15f), CircleShape)
+                            .padding(6.dp),
+                        textAlign = TextAlign.Center,
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column {
+                        Text(
+                            text = "Open Telegram",
+                            fontFamily = RethinkSans,
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 14.sp,
+                            color = SeekerClawColors.TextPrimary,
+                        )
+                        Text(
+                            text = if (!botId.isNullOrBlank())
+                                       "Search for the bot username you set with @BotFather (bot ID: $botId)"
+                                   else "Search for the bot username you created with @BotFather",
+                            fontFamily = RethinkSans,
+                            fontSize = 12.sp,
+                            color = SeekerClawColors.TextDim,
+                        )
+                    }
+                }
+            }
+
+            // Step 2: Chat
+            SetupCard {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "2",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = SeekerClawColors.Primary,
+                        modifier = Modifier
+                            .size(28.dp)
+                            .background(SeekerClawColors.Primary.copy(alpha = 0.15f), CircleShape)
+                            .padding(6.dp),
+                        textAlign = TextAlign.Center,
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column {
+                        Text(
+                            text = "Send your first message",
+                            fontFamily = RethinkSans,
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 14.sp,
+                            color = SeekerClawColors.TextPrimary,
+                        )
+                        Text(
+                            text = "Try: \"Hello, what can you do?\"",
+                            fontFamily = RethinkSans,
+                            fontSize = 12.sp,
+                            color = SeekerClawColors.TextDim,
+                        )
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(28.dp))
+
+        Button(
+            onClick = onContinue,
+            shape = shape,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = SeekerClawColors.ActionPrimary,
+                contentColor = Color.White,
+            ),
+            modifier = Modifier.fillMaxWidth().height(52.dp),
+        ) {
             Text(
                 text = "Go to Dashboard",
                 fontFamily = RethinkSans,
-                fontWeight = FontWeight.Medium,
-                fontSize = 14.sp,
-                color = SeekerClawColors.Primary,
+                fontWeight = FontWeight.Bold,
+                fontSize = 15.sp,
             )
         }
     }

@@ -1,6 +1,7 @@
 package com.seekerclaw.app.ui.dashboard
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -78,7 +79,11 @@ import kotlinx.coroutines.delay
 import java.util.Date
 
 @Composable
-fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: () -> Unit = {}) {
+fun DashboardScreen(
+    onNavigateToSystem: () -> Unit = {},
+    onNavigateToSettings: () -> Unit = {},
+    onNavigateToSetup: () -> Unit = {},
+) {
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
     val status by ServiceState.status.collectAsState()
@@ -93,7 +98,13 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
     val config = remember(cfgVersion) { ConfigManager.loadConfig(context) }
     val agentName = remember(config) { config?.agentName?.ifBlank { "SeekerClaw" } ?: "SeekerClaw" }
     val hasBotToken = remember(config) { config?.telegramBotToken?.isNotBlank() == true }
-    val hasCredential = remember(config) { config?.activeCredential?.isNotBlank() == true }
+    val hasCredential = remember(config) {
+        when (config?.provider) {
+            "openai" -> config?.openaiApiKey?.isNotBlank() == true
+            "openrouter" -> config?.openrouterApiKey?.isNotBlank() == true
+            else -> config?.activeCredential?.isNotBlank() == true
+        }
+    }
     val validationError = remember(config) { ConfigManager.runtimeValidationError(config) }
     val latestError = logs.lastOrNull { it.level == LogLevel.ERROR }?.message
 
@@ -334,7 +345,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
                 "cloudflare" -> "$providerName API unreachable \u2014 retrying"
                 "network" -> "Cannot reach $providerName API \u2014 check internet connection"
                 else -> if (health.apiStatus == "stale") "Agent may have stopped responding \u2014 try restarting"
-                    else "API error \u2014 check Console for details"
+                    else "API error \u2014 check Logs for details"
             }
             Row(
                 modifier = Modifier
@@ -393,6 +404,85 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
                     fontSize = 13.sp,
                     color = SeekerClawColors.Accent,
                     modifier = Modifier.weight(1f),
+                )
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+
+        // Setup needed card — prominent when config is incomplete
+        if (validationError != null && !isRunning) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(SeekerClawColors.Warning.copy(alpha = 0.10f), shape)
+                    .border(1.dp, SeekerClawColors.Warning.copy(alpha = 0.3f), shape)
+                    .padding(16.dp),
+            ) {
+                Text(
+                    text = "Complete Setup",
+                    fontFamily = RethinkSans,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp,
+                    color = SeekerClawColors.Warning,
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = when (validationError) {
+                        "missing_bot_token" -> "Your Telegram bot token is missing"
+                        "missing_credential" -> "Your API credential is missing"
+                        else -> "Your agent needs configuration to start"
+                    },
+                    fontFamily = RethinkSans,
+                    fontSize = 13.sp,
+                    color = SeekerClawColors.TextDim,
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Button(
+                    onClick = onNavigateToSetup,
+                    shape = shape,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = SeekerClawColors.Warning,
+                        contentColor = SeekerClawColors.Background,
+                    ),
+                    modifier = Modifier.fillMaxWidth().height(44.dp),
+                ) {
+                    Text(
+                        text = "Continue Setup",
+                        fontFamily = RethinkSans,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp,
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+
+        // First-launch guide — show when config is ready but user hasn't deployed yet
+        val showFirstLaunchGuide = configReady &&
+            status == ServiceStatus.STOPPED &&
+            !ConfigManager.hasUserEverDeployed(context)
+        if (showFirstLaunchGuide) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(SeekerClawColors.Accent.copy(alpha = 0.08f), shape)
+                    .border(1.dp, SeekerClawColors.Accent.copy(alpha = 0.2f), shape)
+                    .padding(16.dp),
+            ) {
+                Text(
+                    text = "Ready to go!",
+                    fontFamily = RethinkSans,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 15.sp,
+                    color = SeekerClawColors.Accent,
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Tap \"Deploy Agent\" below to start $agentName, then open Telegram to chat with your agent.",
+                    fontFamily = RethinkSans,
+                    fontSize = 13.sp,
+                    color = SeekerClawColors.TextDim,
+                    lineHeight = 18.sp,
                 )
             }
             Spacer(modifier = Modifier.height(16.dp))
@@ -490,7 +580,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
 
         // Uplinks
         Text(
-            text = "Uplinks",
+            text = "Status",
             fontFamily = RethinkSans,
             fontSize = 11.sp,
             fontWeight = FontWeight.Medium,
@@ -579,7 +669,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
             )
             UplinkCard(
                 icon = "//GW",
-                name = "Gateway",
+                name = "Engine",
                 subtitle = gatewaySubtitle,
                 dotColor = gatewayDotColor,
                 shape = shape,
@@ -587,7 +677,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
             )
             UplinkCard(
                 icon = "//AI",
-                name = "AI Model",
+                name = "AI Provider",
                 subtitle = aiSubtitle,
                 dotColor = aiDotColor,
                 shape = shape,
@@ -608,6 +698,7 @@ fun DashboardScreen(onNavigateToSystem: () -> Unit = {}, onNavigateToSettings: (
                 } else {
                     Analytics.serviceStarted(1)
                     OpenClawService.start(context)
+                    ConfigManager.markFirstDeploymentDone(context)
                 }
             },
             enabled = deployEnabled,
