@@ -164,18 +164,11 @@ fun SearchProviderConfigScreen(onBack: () -> Unit) {
             }
 
             // Active provider API key field
-            Spacer(modifier = Modifier.height(28.dp))
+            Spacer(modifier = Modifier.height(24.dp))
             ProviderSectionLabel("${activeProvider.displayName} Settings")
             Spacer(modifier = Modifier.height(10.dp))
 
-            val activeApiKey: String? = when (activeProvider.id) {
-                "brave" -> config?.braveApiKey
-                "perplexity" -> config?.perplexityApiKey
-                "exa" -> config?.exaApiKey
-                "tavily" -> config?.tavilyApiKey
-                "firecrawl" -> config?.firecrawlApiKey
-                else -> config?.braveApiKey
-            }
+            val activeApiKey: String? = config?.activeSearchApiKey
             val isKeyMissing = activeApiKey.isNullOrBlank()
 
             Column(
@@ -208,7 +201,7 @@ fun SearchProviderConfigScreen(onBack: () -> Unit) {
             }
 
             // "Get API Key" link
-            Spacer(modifier = Modifier.height(28.dp))
+            Spacer(modifier = Modifier.height(24.dp))
             ProviderSectionLabel("Resources")
             Spacer(modifier = Modifier.height(10.dp))
 

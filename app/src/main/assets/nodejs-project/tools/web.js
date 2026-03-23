@@ -29,7 +29,7 @@ const tools = [
                     description: 'Search provider. "auto" uses the configured default (config.searchProvider).',
                     default: 'auto',
                 },
-                count: { type: 'number', description: 'Number of results (1-10, default 5)' },
+                count: { type: 'number', description: 'Number of results (1-10, default 5). Applies to Brave, Exa, Tavily, Firecrawl. Perplexity returns a single synthesized answer.' },
             },
             required: ['query']
         }
