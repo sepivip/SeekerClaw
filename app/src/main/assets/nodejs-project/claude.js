@@ -19,7 +19,7 @@ const {
 
 const { redactSecrets } = require('./security');
 const { telegram, sendTyping, sentMessageCache, SENT_CACHE_TTL, deferStatus } = require('./telegram');
-const { httpStreamingRequest, httpOpenAIStreamingRequest, httpChatCompletionsStreamingRequest } = require('./web');
+const { httpStreamingRequest, httpOpenAIStreamingRequest, httpChatCompletionsStreamingRequest } = require('./http');
 const { getAdapter } = require('./providers');
 const { androidBridgeCall } = require('./bridge');
 

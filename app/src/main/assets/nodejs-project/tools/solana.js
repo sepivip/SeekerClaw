@@ -22,7 +22,7 @@ const {
 
 const {
     httpRequest,
-} = require('../web');
+} = require('../http');
 
 // BAT-255: Safe number-to-decimal-string conversion (imported from index.js shared state)
 let numberToDecimalString;

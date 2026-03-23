@@ -7,7 +7,7 @@ const fs = require('fs');
 const path = require('path');
 
 const { config, log, workDir } = require('./config');
-const { httpRequest } = require('./web');
+const { httpRequest } = require('./http');
 const { androidBridgeCall } = require('./bridge');
 
 // ============================================================================

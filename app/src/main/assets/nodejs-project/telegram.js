@@ -8,7 +8,7 @@ const path = require('path');
 
 const { BOT_TOKEN, log, workDir } = require('./config');
 const { redactSecrets } = require('./security');
-const { httpRequest } = require('./web');
+const { httpRequest } = require('./http');
 
 // ============================================================================
 // TELEGRAM API
