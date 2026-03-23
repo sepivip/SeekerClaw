@@ -67,7 +67,7 @@ object SettingsHelpTexts {
         "5–120 minutes. Changes take effect automatically (usually within a minute)."
 
     const val BRAVE_API_KEY =
-        "Optional. Gives your agent Brave Search (better results). " +
+        "Required when Brave is selected as your search provider. " +
         "Free key at brave.com/search/api."
 
     const val SEARCH_PROVIDER =

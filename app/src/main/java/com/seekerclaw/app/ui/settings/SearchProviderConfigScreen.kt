@@ -253,7 +253,7 @@ fun SearchProviderConfigScreen(onBack: () -> Unit) {
             onSave = {
                 val field = editField ?: return@ProviderEditDialog
                 val trimmed = editValue.trim()
-                // Allow empty to disable the provider (key becomes "not set")
+                // Allow empty: this unsets the API key; the provider remains selected but searches will fail until a key is configured
                 saveField(field, trimmed, needsRestart = true)
                 editField = null
             },

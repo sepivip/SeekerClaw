@@ -1,6 +1,6 @@
 // SeekerClaw — solana.js
 // Solana RPC, base58 encoding, transaction building, Jupiter DEX (tokens, quotes, swaps, prices), wallet management.
-// Depends on: config.js, web.js, bridge.js
+// Depends on: config.js, http.js, bridge.js
 
 const https = require('https');
 const fs = require('fs');
