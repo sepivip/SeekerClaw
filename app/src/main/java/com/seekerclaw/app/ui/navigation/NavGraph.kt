@@ -52,6 +52,7 @@ import kotlinx.serialization.Serializable
 @Serializable object SystemRoute
 @Serializable object ProviderConfigRoute
 @Serializable object TelegramConfigRoute
+@Serializable object SearchConfigRoute
 
 data class BottomNavItem(
     val label: String,
@@ -83,6 +84,7 @@ fun SeekerClawNavHost() {
                 dest.hasRoute(SkillsRoute::class) -> "Skills"
                 dest.hasRoute(SettingsRoute::class) -> "Settings"
                 dest.hasRoute(SystemRoute::class) -> "System"
+                dest.hasRoute(SearchConfigRoute::class) -> "SearchProviderConfig"
                 else -> dest.route ?: "Unknown"
             }
             Analytics.logScreenView(screenName)
@@ -226,6 +228,9 @@ fun SeekerClawNavHost() {
                     },
                     onNavigateToTelegram = {
                         navController.navigate(TelegramConfigRoute)
+                    },
+                    onNavigateToSearchConfig = {
+                        navController.navigate(SearchConfigRoute)
                     }
                 )
             }
@@ -236,6 +241,11 @@ fun SeekerClawNavHost() {
             }
             composable<TelegramConfigRoute> {
                 com.seekerclaw.app.ui.settings.TelegramConfigScreen(
+                    onBack = { navController.popBackStack() }
+                )
+            }
+            composable<SearchConfigRoute> {
+                com.seekerclaw.app.ui.settings.SearchProviderConfigScreen(
                     onBack = { navController.popBackStack() }
                 )
             }

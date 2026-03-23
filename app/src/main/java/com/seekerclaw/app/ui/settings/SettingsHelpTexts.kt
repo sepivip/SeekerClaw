@@ -70,6 +70,27 @@ object SettingsHelpTexts {
         "Optional. Gives your agent Brave Search (better results). " +
         "Free key at brave.com/search/api."
 
+    const val SEARCH_PROVIDER =
+        "Select which search engine your agent uses for web_search. " +
+        "Each provider requires its own API key."
+
+    const val PERPLEXITY_API_KEY =
+        "Perplexity offers AI-powered search with answer synthesis and citations. " +
+        "Supports direct API keys (pplx-) or OpenRouter keys (sk-or-). " +
+        "Get a key at perplexity.ai/settings/api."
+
+    const val EXA_API_KEY =
+        "Exa provides AI-native search with semantic understanding. " +
+        "Get a key at dashboard.exa.ai."
+
+    const val TAVILY_API_KEY =
+        "Tavily offers search optimized for AI agents with built-in answer synthesis. " +
+        "Get a key at app.tavily.com."
+
+    const val FIRECRAWL_API_KEY =
+        "Firecrawl combines search with full-page scraping for rich content. " +
+        "Get a key at firecrawl.dev."
+
     // ── Preferences ────────────────────────────────────────────────
 
     const val AUTO_START =

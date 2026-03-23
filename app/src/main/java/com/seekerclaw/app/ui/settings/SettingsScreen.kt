@@ -88,6 +88,7 @@ import com.seekerclaw.app.config.ConfigClaimImporter
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.config.McpServerConfig
 import com.seekerclaw.app.config.availableModels
+import com.seekerclaw.app.config.searchProviderById
 import com.seekerclaw.app.qr.QrScannerActivity
 import com.seekerclaw.app.service.OpenClawService
 import com.seekerclaw.app.solana.SolanaAuthActivity
@@ -107,7 +108,8 @@ import java.util.Date
 fun SettingsScreen(
     onRunSetupAgain: () -> Unit = {},
     onNavigateToAiConfig: () -> Unit = {},
-    onNavigateToTelegram: () -> Unit = {}
+    onNavigateToTelegram: () -> Unit = {},
+    onNavigateToSearchConfig: () -> Unit = {}
 ) {
     val context = LocalContext.current
     var config by remember { mutableStateOf(ConfigManager.loadConfig(context)) }
@@ -474,18 +476,11 @@ fun SettingsScreen(
                     info = SettingsHelpTexts.HEARTBEAT_INTERVAL,
                 )
                 ConfigField(
-                    label = "Brave API Key",
-                    value = config?.braveApiKey?.let { key ->
-                        if (key.isBlank()) "Not set (optional)"
-                        else if (key.length > 12) "${key.take(8)}${"*".repeat(8)}${key.takeLast(4)}"
-                        else "*".repeat(key.length)
-                    } ?: "Not set (optional)",
-                    onClick = {
-                        editField = "braveApiKey"
-                        editLabel = "Brave API Key"
-                        editValue = config?.braveApiKey ?: ""
-                    },
-                    info = SettingsHelpTexts.BRAVE_API_KEY,
+                    label = "Search Provider",
+                    value = searchProviderById(config?.searchProvider ?: "brave").displayName +
+                        if ((config?.activeSearchApiKey ?: "").isBlank()) " (not configured)" else "",
+                    onClick = onNavigateToSearchConfig,
+                    info = SettingsHelpTexts.SEARCH_PROVIDER,
                     showDivider = false,
                 )
             }
@@ -1087,7 +1082,7 @@ fun SettingsScreen(
             },
             text = {
                 Column {
-                    if (editField == "braveApiKey" || editField == "jupiterApiKey" || editField == "heliusApiKey") {
+                    if (editField == "jupiterApiKey" || editField == "heliusApiKey") {
                         Text(
                             "Changing this requires an agent restart.",
                             fontFamily = RethinkSans,
@@ -1120,10 +1115,7 @@ fun SettingsScreen(
                     onClick = {
                         val field = editField ?: return@TextButton
                         val trimmed = editValue.trim()
-                        if (field == "braveApiKey") {
-                            // Allow empty to disable web search
-                            saveField(field, trimmed)
-                        } else if (field == "jupiterApiKey" || field == "heliusApiKey") {
+                        if (field == "jupiterApiKey" || field == "heliusApiKey") {
                             // Allow empty to disable swaps/NFT holdings
                             saveField(field, trimmed)
                         } else if (trimmed.isNotEmpty()) {
