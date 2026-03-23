@@ -148,6 +148,10 @@ if (config.braveApiKey) config.braveApiKey = normalizeSecret(config.braveApiKey)
 if (config.perplexityApiKey) config.perplexityApiKey = normalizeSecret(config.perplexityApiKey);
 if (config.jupiterApiKey) config.jupiterApiKey = normalizeSecret(config.jupiterApiKey);
 if (config.heliusApiKey) config.heliusApiKey = normalizeSecret(config.heliusApiKey);
+if (config.searchProvider) config.searchProvider = String(config.searchProvider).trim().toLowerCase();
+if (config.exaApiKey) config.exaApiKey = normalizeSecret(config.exaApiKey);
+if (config.tavilyApiKey) config.tavilyApiKey = normalizeSecret(config.tavilyApiKey);
+if (config.firecrawlApiKey) config.firecrawlApiKey = normalizeSecret(config.firecrawlApiKey);
 
 // MCP server configs (remote tool servers) — normalize first, then filter invalid
 const MCP_SERVERS = (config.mcpServers || [])
@@ -320,7 +324,7 @@ const TOOL_STATUS_MAP = {
 
 // Known mappings for keys that come from Android Settings (config.json).
 // These get priority — agent_settings.json keys never overwrite them.
-const _knownKeyMap = { perplexity: 'perplexityApiKey', brave: 'braveApiKey', jupiter: 'jupiterApiKey', helius: 'heliusApiKey' };
+const _knownKeyMap = { perplexity: 'perplexityApiKey', brave: 'braveApiKey', exa: 'exaApiKey', tavily: 'tavilyApiKey', firecrawl: 'firecrawlApiKey', jupiter: 'jupiterApiKey', helius: 'heliusApiKey' };
 
 // Snapshot which keys came from Android Settings at startup (immutable).
 // Protect ALL existing *ApiKey fields, not just known ones.

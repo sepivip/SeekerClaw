@@ -149,107 +149,89 @@ async function searchPerplexity(query, freshness) {
     return { provider: 'perplexity', answer: content, citations };
 }
 
-async function searchDDG(query, count = 5) {
-    const safePath = `/html/?q=${encodeURIComponent(query)}`;
-    const res = await httpRequest({
-        hostname: 'html.duckduckgo.com',
-        path: safePath,
-        method: 'GET',
-        headers: {
-            'User-Agent': USER_AGENT,
-            'Accept': 'text/html'
-        }
+async function searchExa(query, count = 5) {
+    if (!config.exaApiKey) throw new Error('Exa API key not configured');
+    const body = JSON.stringify({
+        query,
+        numResults: count,
+        type: 'auto',
+        contents: { text: { maxCharacters: 500 } },
     });
-
-    if (res.status !== 200) {
-        throw new Error(`DuckDuckGo search error (${res.status})`);
-    }
-    const html = typeof res.data === 'string' ? res.data : String(res.data);
-
-    // Parse DDG HTML results — patterns match DDG's current HTML format (double-quoted attributes).
-    // May need updating if DDG changes their markup.
-    const results = [];
-    const resultBlocks = html.split(/<div[^>]*class="(?:result\b|results_links\b)[^"]*"[^>]*>/i);
-    for (let i = 1; i < resultBlocks.length && results.length < count; i++) {
-        const block = resultBlocks[i];
-        // Extract URL from <a class="result__a" href="...">
-        const urlMatch = block.match(/<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>/i);
-        // Extract title text from that same <a> tag
-        const titleMatch = block.match(/<a[^>]*class="result__a"[^>]*>([\s\S]*?)<\/a>/i);
-        // Extract snippet from <a class="result__snippet" ...>
-        const snippetMatch = block.match(/<a[^>]*class="result__snippet"[^>]*>([\s\S]*?)<\/a>/i);
-
-        if (urlMatch && titleMatch) {
-            let url = decodeEntities(urlMatch[1]).trim();
-            // DDG wraps URLs through a redirect — extract actual URL
-            const uddgMatch = url.match(/[?&]uddg=([^&]+)/);
-            if (uddgMatch) url = decodeURIComponent(uddgMatch[1]);
-            const title = stripTags(titleMatch[1]).trim();
-            const snippet = snippetMatch ? stripTags(snippetMatch[1]).trim() : '';
-            if (title && (url.startsWith('http://') || url.startsWith('https://'))) {
-                results.push({ title, url, snippet });
-            }
-        }
-    }
-
-    if (results.length === 0) {
-        // Distinguish parse failure from genuine empty results
-        if (html.length > 500) {
-            log(`[DDG] HTML received (${html.length} chars) but no results parsed — markup may have changed`, 'WARN');
-            return { provider: 'duckduckgo', results: [], message: 'Results could not be parsed — DuckDuckGo markup may have changed' };
-        }
-        return { provider: 'duckduckgo', results: [], message: 'No results found' };
-    }
-    return { provider: 'duckduckgo', results };
+    const res = await httpRequest({
+        hostname: 'api.exa.ai',
+        path: '/search',
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': config.exaApiKey,
+        },
+    }, body);
+    if (res.status !== 200) throw new Error(`Exa search error (${res.status})`);
+    const data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
+    return {
+        provider: 'exa',
+        results: (data.results || []).slice(0, count).map(r => ({
+            title: r.title || '',
+            url: r.url || '',
+            snippet: r.text || '',
+        })),
+    };
 }
 
-// DDG Lite fallback — lite.duckduckgo.com bypasses CAPTCHAs that block html.duckduckgo.com on phone IPs
-async function searchDDGLite(query, count = 5) {
-    const safePath = `/lite?q=${encodeURIComponent(query)}`;
-    const res = await httpRequest({
-        hostname: 'lite.duckduckgo.com',
-        path: safePath,
-        method: 'GET',
-        headers: {
-            'User-Agent': USER_AGENT,
-            'Accept': 'text/html'
-        }
+async function searchTavily(query, count = 5) {
+    if (!config.tavilyApiKey) throw new Error('Tavily API key not configured');
+    const body = JSON.stringify({
+        api_key: config.tavilyApiKey,
+        query,
+        search_depth: 'basic',
+        max_results: count,
+        include_answer: true,
     });
+    const res = await httpRequest({
+        hostname: 'api.tavily.com',
+        path: '/search',
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+    }, body);
+    if (res.status !== 200) throw new Error(`Tavily search error (${res.status})`);
+    const data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
+    return {
+        provider: 'tavily',
+        answer: data.answer || null,
+        results: (data.results || []).slice(0, count).map(r => ({
+            title: r.title || '',
+            url: r.url || '',
+            snippet: r.content || '',
+        })),
+    };
+}
 
-    if (res.status !== 200) {
-        throw new Error(`DuckDuckGo Lite search error (${res.status})`);
-    }
-    const html = typeof res.data === 'string' ? res.data : String(res.data);
-
-    // DDG Lite uses table-based layout — split by result-link anchors and find snippets within each block
-    const results = [];
-    const blocks = html.split(/<a[^>]*class="result-link"/i);
-    for (let i = 1; i < blocks.length && results.length < count; i++) {
-        const block = blocks[i];
-        // Extract URL and title from the result-link anchor
-        const urlMatch = block.match(/href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i);
-        if (!urlMatch) continue;
-        let url = decodeEntities(urlMatch[1]).trim();
-        // DDG Lite also wraps URLs through redirects
-        const uddgMatch = url.match(/[?&]uddg=([^&]+)/);
-        if (uddgMatch) url = decodeURIComponent(uddgMatch[1]);
-        const title = stripTags(urlMatch[2]).trim();
-        // Extract snippet from the same block (co-located, no index alignment needed)
-        const snippetMatch = block.match(/<td[^>]*class="result-snippet"[^>]*>([\s\S]*?)<\/td>/i);
-        const snippet = snippetMatch ? stripTags(snippetMatch[1]).trim() : '';
-        if (title && (url.startsWith('http://') || url.startsWith('https://'))) {
-            results.push({ title, url, snippet });
-        }
-    }
-
-    if (results.length === 0) {
-        if (html.length > 500) {
-            log(`[DDG Lite] HTML received (${html.length} chars) but no results parsed — markup may have changed`, 'WARN');
-            return { provider: 'duckduckgo-lite', results: [], message: 'Results could not be parsed — DuckDuckGo Lite markup may have changed' };
-        }
-        return { provider: 'duckduckgo-lite', results: [], message: 'No results found' };
-    }
-    return { provider: 'duckduckgo-lite', results };
+async function searchFirecrawl(query, count = 5) {
+    if (!config.firecrawlApiKey) throw new Error('Firecrawl API key not configured');
+    const body = JSON.stringify({
+        query,
+        limit: count,
+        scrapeOptions: { formats: ['markdown'] },
+    });
+    const res = await httpRequest({
+        hostname: 'api.firecrawl.dev',
+        path: '/v1/search',
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${config.firecrawlApiKey}`,
+        },
+    }, body);
+    if (res.status !== 200) throw new Error(`Firecrawl search error (${res.status})`);
+    const data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
+    return {
+        provider: 'firecrawl',
+        results: (data.data || []).slice(0, count).map(r => ({
+            title: r.title || r.metadata?.title || '',
+            url: r.url || '',
+            snippet: r.description || (r.markdown || '').slice(0, 500),
+        })),
+    };
 }
 
 // --- Enhanced HTTP fetch with redirects + SSRF protection ---
@@ -332,10 +314,10 @@ module.exports = {
     cacheGet,
     cacheSet,
     htmlToMarkdown,
-    BRAVE_FRESHNESS_VALUES,
     searchBrave,
     searchPerplexity,
-    searchDDG,
-    searchDDGLite,
+    searchExa,
+    searchTavily,
+    searchFirecrawl,
     webFetch,
 };
