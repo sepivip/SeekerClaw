@@ -34,6 +34,11 @@ data class AppConfig(
     val model: String,
     val agentName: String,
     val braveApiKey: String = "",
+    val searchProvider: String = "brave",
+    val perplexityApiKey: String = "",
+    val exaApiKey: String = "",
+    val tavilyApiKey: String = "",
+    val firecrawlApiKey: String = "",
     val jupiterApiKey: String = "",
     val heliusApiKey: String = "",
     val autoStartOnBoot: Boolean = true,
@@ -48,6 +53,16 @@ data class AppConfig(
     /** Anthropic/authType-based credential — used by SetupScreen and legacy flows. */
     val activeCredential: String
         get() = if (authType == "setup_token") setupToken else anthropicApiKey
+
+    /** Resolves the API key for the currently selected search provider. */
+    val activeSearchApiKey: String
+        get() = when (searchProvider) {
+            "perplexity" -> perplexityApiKey
+            "exa" -> exaApiKey
+            "tavily" -> tavilyApiKey
+            "firecrawl" -> firecrawlApiKey
+            else -> braveApiKey
+        }
 }
 
 data class McpServerConfig(
@@ -75,6 +90,11 @@ object ConfigManager {
     private const val KEY_AUTH_TYPE = "auth_type"
     private const val KEY_SETUP_TOKEN_ENC = "setup_token_enc"
     private const val KEY_BRAVE_API_KEY_ENC = "brave_api_key_enc"
+    private const val KEY_SEARCH_PROVIDER = "search_provider"
+    private const val KEY_PERPLEXITY_API_KEY_ENC = "perplexity_api_key_enc"
+    private const val KEY_EXA_API_KEY_ENC = "exa_api_key_enc"
+    private const val KEY_TAVILY_API_KEY_ENC = "tavily_api_key_enc"
+    private const val KEY_FIRECRAWL_API_KEY_ENC = "firecrawl_api_key_enc"
     private const val KEY_JUPITER_API_KEY_ENC = "jupiter_api_key_enc"
     private const val KEY_HELIUS_API_KEY_ENC = "helius_api_key_enc"
     private const val KEY_WALLET_ADDRESS = "wallet_address"
@@ -138,6 +158,36 @@ object ConfigManager {
             editor.putString(KEY_BRAVE_API_KEY_ENC, Base64.encodeToString(encBrave, Base64.NO_WRAP))
         } else {
             editor.remove(KEY_BRAVE_API_KEY_ENC)
+        }
+
+        editor.putString(KEY_SEARCH_PROVIDER, config.searchProvider)
+
+        if (config.perplexityApiKey.isNotBlank()) {
+            val encPerplexity = KeystoreHelper.encrypt(config.perplexityApiKey)
+            editor.putString(KEY_PERPLEXITY_API_KEY_ENC, Base64.encodeToString(encPerplexity, Base64.NO_WRAP))
+        } else {
+            editor.remove(KEY_PERPLEXITY_API_KEY_ENC)
+        }
+
+        if (config.exaApiKey.isNotBlank()) {
+            val encExa = KeystoreHelper.encrypt(config.exaApiKey)
+            editor.putString(KEY_EXA_API_KEY_ENC, Base64.encodeToString(encExa, Base64.NO_WRAP))
+        } else {
+            editor.remove(KEY_EXA_API_KEY_ENC)
+        }
+
+        if (config.tavilyApiKey.isNotBlank()) {
+            val encTavily = KeystoreHelper.encrypt(config.tavilyApiKey)
+            editor.putString(KEY_TAVILY_API_KEY_ENC, Base64.encodeToString(encTavily, Base64.NO_WRAP))
+        } else {
+            editor.remove(KEY_TAVILY_API_KEY_ENC)
+        }
+
+        if (config.firecrawlApiKey.isNotBlank()) {
+            val encFirecrawl = KeystoreHelper.encrypt(config.firecrawlApiKey)
+            editor.putString(KEY_FIRECRAWL_API_KEY_ENC, Base64.encodeToString(encFirecrawl, Base64.NO_WRAP))
+        } else {
+            editor.remove(KEY_FIRECRAWL_API_KEY_ENC)
         }
 
         if (config.jupiterApiKey.isNotBlank()) {
@@ -221,6 +271,42 @@ object ConfigManager {
             ""
         }
 
+        val perplexityApiKey = try {
+            val enc = p.getString(KEY_PERPLEXITY_API_KEY_ENC, null)
+            if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to decrypt Perplexity API key", e)
+            LogCollector.append("[Config] Failed to decrypt Perplexity API key: ${e.javaClass.simpleName}", LogLevel.ERROR)
+            ""
+        }
+
+        val exaApiKey = try {
+            val enc = p.getString(KEY_EXA_API_KEY_ENC, null)
+            if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to decrypt Exa API key", e)
+            LogCollector.append("[Config] Failed to decrypt Exa API key: ${e.javaClass.simpleName}", LogLevel.ERROR)
+            ""
+        }
+
+        val tavilyApiKey = try {
+            val enc = p.getString(KEY_TAVILY_API_KEY_ENC, null)
+            if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to decrypt Tavily API key", e)
+            LogCollector.append("[Config] Failed to decrypt Tavily API key: ${e.javaClass.simpleName}", LogLevel.ERROR)
+            ""
+        }
+
+        val firecrawlApiKey = try {
+            val enc = p.getString(KEY_FIRECRAWL_API_KEY_ENC, null)
+            if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to decrypt Firecrawl API key", e)
+            LogCollector.append("[Config] Failed to decrypt Firecrawl API key: ${e.javaClass.simpleName}", LogLevel.ERROR)
+            ""
+        }
+
         val jupiterApiKey = try {
             val enc = p.getString(KEY_JUPITER_API_KEY_ENC, null)
             if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
@@ -266,6 +352,11 @@ object ConfigManager {
             model = p.getString(KEY_MODEL, "claude-opus-4-6") ?: "claude-opus-4-6",
             agentName = p.getString(KEY_AGENT_NAME, "MyAgent") ?: "MyAgent",
             braveApiKey = braveApiKey,
+            searchProvider = p.getString(KEY_SEARCH_PROVIDER, "brave") ?: "brave",
+            perplexityApiKey = perplexityApiKey,
+            exaApiKey = exaApiKey,
+            tavilyApiKey = tavilyApiKey,
+            firecrawlApiKey = firecrawlApiKey,
             jupiterApiKey = jupiterApiKey,
             heliusApiKey = heliusApiKey,
             autoStartOnBoot = p.getBoolean(KEY_AUTO_START, true),
@@ -304,6 +395,11 @@ object ConfigManager {
             "agentName" -> config.copy(agentName = value)
             "authType" -> config.copy(authType = value)
             "braveApiKey" -> config.copy(braveApiKey = value)
+            "searchProvider" -> config.copy(searchProvider = value)
+            "perplexityApiKey" -> config.copy(perplexityApiKey = value)
+            "exaApiKey" -> config.copy(exaApiKey = value)
+            "tavilyApiKey" -> config.copy(tavilyApiKey = value)
+            "firecrawlApiKey" -> config.copy(firecrawlApiKey = value)
             "jupiterApiKey" -> config.copy(jupiterApiKey = value)
             "heliusApiKey" -> config.copy(heliusApiKey = value)
             "heartbeatIntervalMinutes" -> config.copy(
@@ -360,6 +456,11 @@ object ConfigManager {
             put("heartbeatIntervalMinutes", config.heartbeatIntervalMinutes)
             put("bridgeToken", bridgeToken)
             if (config.braveApiKey.isNotBlank()) put("braveApiKey", config.braveApiKey)
+            put("searchProvider", config.searchProvider)
+            if (config.perplexityApiKey.isNotBlank()) put("perplexityApiKey", config.perplexityApiKey)
+            if (config.exaApiKey.isNotBlank()) put("exaApiKey", config.exaApiKey)
+            if (config.tavilyApiKey.isNotBlank()) put("tavilyApiKey", config.tavilyApiKey)
+            if (config.firecrawlApiKey.isNotBlank()) put("firecrawlApiKey", config.firecrawlApiKey)
             if (config.jupiterApiKey.isNotBlank()) put("jupiterApiKey", config.jupiterApiKey)
             if (config.heliusApiKey.isNotBlank()) put("heliusApiKey", config.heliusApiKey)
             if (config.openaiApiKey.isNotBlank()) put("openaiApiKey", config.openaiApiKey)
