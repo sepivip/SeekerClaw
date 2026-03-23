@@ -8,7 +8,7 @@ SeekerClaw turns a Solana Seeker phone into a 24/7 personal AI agent you control
 
 ## Elevator Pitch
 
-SeekerClaw embeds a full Node.js runtime inside an Android app, running an OpenClaw-compatible AI gateway as a foreground service. Users interact with their agent through Telegram — the app itself is minimal (setup, status, logs, settings). The agent has 56 tools, 35 skills (20 bundled + 13 workspace + 2 user-created), ranked memory search, cron scheduling, Android device control, Solana wallet integration, and web intelligence — all running locally on the phone, 24/7.
+SeekerClaw embeds a full Node.js runtime inside an Android app, running an OpenClaw-compatible AI gateway as a foreground service. Users interact with their agent through Telegram — the app itself is minimal (setup, status, logs, settings). The agent has 71 tools, 35 skills (20 bundled + 13 workspace + 2 user-created), ranked memory search, cron scheduling, Android device control, Solana wallet integration, and web intelligence — all running locally on the phone, 24/7.
 
 ## What It Is
 
@@ -34,7 +34,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 | Messaging | Telegram Bot API (grammy) | — |
 | Database | SQL.js (WASM SQLite) | 1.12.0 |
 | OpenClaw Parity | OpenClaw gateway (ported) | 2026.3.13-1 |
-| Web Search | Brave Search + Perplexity Sonar | — |
+| Web Search | Brave, Perplexity, Exa, Tavily, Firecrawl (single-provider) | — |
 | Wallet | Solana Web3.js + Jupiter API | — |
 | Build | Gradle (Kotlin DSL) | — |
 
@@ -76,7 +76,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 - **Zombie detection** — 2-hour threshold with error backoff
 
 ### Web Intelligence
-- **Web search** — Brave Search (default) + DuckDuckGo Lite (zero-config fallback) + Perplexity Sonar (AI-synthesized answers)
+- **Web search** — 5 providers: Brave Search, Perplexity Sonar, Exa, Tavily, Firecrawl (single-provider selection, no fallback chain)
 - **Web fetch** — HTML-to-markdown, JSON, caching, redirects, custom headers/methods/bodies
 - **15-minute cache** — 100 entries max, FIFO eviction
 
@@ -230,7 +230,7 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 |--------|-------|
 | Total commits | 396 |
 | PRs merged | 267+ |
-| Tools | 56 (9 Jupiter, 13 Android bridge, web search/fetch, memory, cron, skill_install, etc.) + MCP dynamic |
+| Tools | 71 (29 Solana/Jupiter, 13 Android bridge, 6 memory, 5 file, 5 cron, 4 telegram, 4 system, 2 web, 2 skill, 1 session) + MCP dynamic |
 | Skills | 35 (20 bundled + 13 workspace + 2 user-created) |
 | Android Bridge endpoints | 18+ |
 | Telegram commands | 12 |

@@ -68,6 +68,37 @@ grep -i "400\|context.*length\|too many tokens" node_debug.log | tail -5
 
 ---
 
+## Web Search
+
+### Search Provider Not Configured
+**Symptoms:** web_search returns error "... API key not configured" or "Check your API key in Settings > Search Provider."
+**Diagnosis:** The active search provider has no API key set. By default, `searchProvider` is `"brave"` — if the user never added a Brave key, searches will fail.
+**Fix:** Guide the user to Settings > Search Provider. They need to:
+1. Select a provider (Brave, Perplexity, Exa, Tavily, or Firecrawl)
+2. Enter the API key for that provider
+3. Accept the restart prompt
+
+### Search Provider API Error
+**Symptoms:** web_search returns error with HTTP status code (e.g., "Tavily search error (401)").
+**Check:**
+```
+grep -i "WebSearch.*failed\|search error" node_debug.log | tail -5
+```
+**Diagnosis:**
+- 401/403: API key invalid, expired, or revoked
+- 429: Rate limited — wait and retry
+- 500+: Provider service issue — transient, retry later
+**Fix:** For auth errors, guide the user to verify their key in Settings > Search Provider. For rate limits, reduce search frequency. For server errors, suggest trying again later or switching providers.
+
+### Provider-Specific Notes
+- **Brave:** GET-based, key via `X-Subscription-Token` header. Free tier at brave.com/search/api.
+- **Perplexity:** POST-based, returns synthesized answer (not result list). Supports direct keys (`pplx-`) and OpenRouter keys (`sk-or-`).
+- **Exa:** POST-based, semantic search. Key from dashboard.exa.ai.
+- **Tavily:** POST-based, key sent in request body (not header). Key from app.tavily.com.
+- **Firecrawl:** POST-based, returns markdown-enriched results. Key from firecrawl.dev.
+
+---
+
 ## Memory
 
 ### memory_save Fails (Filesystem Full)
