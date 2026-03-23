@@ -10,22 +10,26 @@ const {
 
 const {
     cacheGet, cacheSet,
-    htmlToMarkdown, BRAVE_FRESHNESS_VALUES,
-    searchBrave, searchPerplexity, searchDDG, searchDDGLite,
+    htmlToMarkdown,
+    searchBrave, searchPerplexity, searchExa, searchTavily, searchFirecrawl,
     webFetch,
 } = require('../web');
 
 const tools = [
     {
         name: 'web_search',
-        description: 'Search the web for current information. Works out of the box with DuckDuckGo (no API key). Automatically uses Brave if its API key is configured (better quality). Perplexity Sonar available for AI-synthesized answers with citations.',
+        description: 'Search the web for current information. Uses the search provider configured in Settings. Override with the provider parameter if needed.',
         input_schema: {
             type: 'object',
             properties: {
                 query: { type: 'string', description: 'The search query' },
-                provider: { type: 'string', enum: ['auto', 'brave', 'duckduckgo', 'perplexity'], description: 'Search provider. Default: auto (Brave if key configured, else DuckDuckGo). Use perplexity for complex questions needing synthesized answers.' },
-                count: { type: 'number', description: 'Number of results (brave/duckduckgo, 1-10, default 5)' },
-                freshness: { type: 'string', enum: ['day', 'week', 'month'], description: 'Freshness filter. Brave: filters by discovery time. Perplexity: sets search_recency_filter. Not supported by DuckDuckGo.' }
+                provider: {
+                    type: 'string',
+                    enum: ['auto', 'brave', 'perplexity', 'exa', 'tavily', 'firecrawl'],
+                    description: 'Search provider. "auto" uses the configured default (config.searchProvider).',
+                    default: 'auto',
+                },
+                count: { type: 'number', description: 'Number of results (1-10, default 5)' },
             },
             required: ['query']
         }
@@ -49,84 +53,36 @@ const tools = [
 
 const handlers = {
     async web_search(input, chatId) {
-        const rawProvider = (typeof input.provider === 'string' ? input.provider.toLowerCase() : 'auto');
-        const VALID_PROVIDERS = new Set(['auto', 'brave', 'duckduckgo', 'perplexity']);
-        if (!VALID_PROVIDERS.has(rawProvider)) {
-            return { error: `Unknown search provider "${rawProvider}". Use "auto", "brave", "duckduckgo", or "perplexity".` };
-        }
-        // Resolve 'auto': Brave if key configured, else DuckDuckGo
+        // Resolve provider: explicit override or configured default
+        const rawProvider = (typeof input.provider === 'string' ? input.provider.trim().toLowerCase() : 'auto');
         const provider = rawProvider === 'auto'
-            ? (config.braveApiKey ? 'brave' : 'duckduckgo')
+            ? (config.searchProvider || 'brave')
             : rawProvider;
         const safeCount = Math.min(Math.max(Number(input.count) || 5, 1), 10);
-        const rawFreshness = (typeof input.freshness === 'string' ? input.freshness.trim().toLowerCase() : '');
-        const safeFreshness = BRAVE_FRESHNESS_VALUES.has(rawFreshness) ? rawFreshness : '';
-        const cacheKey = provider === 'perplexity'
-            ? `search:perplexity:${input.query}:${safeFreshness || 'default'}`
-            : provider === 'brave'
-                ? `search:brave:${input.query}:${safeCount}:${safeFreshness}`
-                : `search:duckduckgo:${input.query}:${safeCount}`;
+
+        const cacheKey = `search:${provider}:${input.query}:${safeCount}`;
         const cached = cacheGet(cacheKey);
         if (cached) { log('[WebSearch] Cache hit', 'DEBUG'); return cached; }
 
+        let result;
         try {
-            let result;
-            if (provider === 'perplexity') {
-                result = await searchPerplexity(input.query, safeFreshness);
-            } else if (provider === 'brave') {
-                result = await searchBrave(input.query, safeCount, safeFreshness);
-            } else {
-                result = await searchDDG(input.query, safeCount);
+            switch (provider) {
+                case 'brave':      result = await searchBrave(input.query, safeCount); break;
+                case 'perplexity': result = await searchPerplexity(input.query); break;
+                case 'exa':        result = await searchExa(input.query, safeCount); break;
+                case 'tavily':     result = await searchTavily(input.query, safeCount); break;
+                case 'firecrawl':  result = await searchFirecrawl(input.query, safeCount); break;
+                default:
+                    return { error: `Unknown search provider "${provider}". Configure a provider in Settings > Search Provider.` };
             }
-            // Treat empty DDG results as failure to trigger fallback (CAPTCHA returns 200 but no parseable results)
-            if (result.results && result.results.length === 0 && result.message && provider === 'duckduckgo') {
-                throw new Error(result.message);
-            }
-            const wrappedResult = wrapSearchResults(result, provider);
-            cacheSet(cacheKey, wrappedResult);
-            return wrappedResult;
         } catch (e) {
-            // Fallback chain: perplexity -> brave -> ddg -> ddg-lite, brave -> ddg -> ddg-lite, ddg -> ddg-lite
-            log(`[WebSearch] ${provider} failed (${e.message}), trying fallback`, 'WARN');
-            const fallbacks = [];
-            if (provider === 'perplexity') {
-                if (config.braveApiKey) fallbacks.push('brave');
-                fallbacks.push('duckduckgo');
-                fallbacks.push('duckduckgo-lite');
-            } else if (provider === 'brave') {
-                fallbacks.push('duckduckgo');
-                fallbacks.push('duckduckgo-lite');
-            } else if (provider === 'duckduckgo') {
-                fallbacks.push('duckduckgo-lite');
-            }
-            for (const fb of fallbacks) {
-                try {
-                    log(`[WebSearch] Falling back to ${fb}`, 'DEBUG');
-                    let fallback;
-                    if (fb === 'brave') fallback = await searchBrave(input.query, safeCount, safeFreshness);
-                    else if (fb === 'duckduckgo-lite') fallback = await searchDDGLite(input.query, safeCount);
-                    else fallback = await searchDDG(input.query, safeCount);
-                    // Treat empty DDG results (CAPTCHA) as failure to continue fallback chain
-                    if (fb === 'duckduckgo' && fallback.results && fallback.results.length === 0 && fallback.message) {
-                        throw new Error(fallback.message);
-                    }
-                    const fbCacheKey = fb === 'brave'
-                        ? `search:brave:${input.query}:${safeCount}:${safeFreshness}`
-                        : `search:${fb}:${input.query}:${safeCount}`;
-                    const wrappedFallback = wrapSearchResults(fallback, fb);
-                    cacheSet(fbCacheKey, wrappedFallback);
-                    // Also cache under original key so subsequent queries don't re-hit the failing provider
-                    cacheSet(cacheKey, wrappedFallback);
-                    return wrappedFallback;
-                } catch (fbErr) {
-                    log(`[WebSearch] ${fb} fallback also failed: ${fbErr.message}`, 'ERROR');
-                }
-            }
-            const displayName = { brave: 'Brave', duckduckgo: 'DuckDuckGo', 'duckduckgo-lite': 'DuckDuckGo Lite', perplexity: 'Perplexity' }[provider] || provider;
-            return { error: fallbacks.length > 0
-                ? `Search failed: ${displayName} (${e.message}), fallback providers also failed`
-                : `${displayName} search failed: ${e.message}. No fallback providers available.` };
+            log(`[WebSearch] ${provider} failed: ${e.message}`, 'ERROR');
+            return { error: `Search failed (${provider}): ${e.message}. Check your API key in Settings > Search Provider.` };
         }
+
+        const wrapped = wrapSearchResults(result, provider);
+        cacheSet(cacheKey, wrapped);
+        return wrapped;
     },
 
     async web_fetch(input, chatId) {
