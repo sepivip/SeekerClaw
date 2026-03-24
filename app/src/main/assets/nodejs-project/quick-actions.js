@@ -59,14 +59,15 @@ async function handleQuickCallback(cb, telegramFn) {
     const mappedText = QUICK_ACTIONS[data];
     if (!mappedText) return null;
 
-    // Delete the keyboard message entirely — clean UX wins over status
-    // reactions on a temporary message. Reaction failure is silent and harmless.
+    // Remove inline keyboard but keep the message — the synthetic message
+    // carries this message_id for status reactions during the agent turn.
     const chatId = cb.message?.chat?.id;
     const messageId = cb.message?.message_id;
     if (chatId && messageId) {
-        telegramFn('deleteMessage', {
+        telegramFn('editMessageReplyMarkup', {
             chat_id: chatId,
             message_id: messageId,
+            reply_markup: { inline_keyboard: [] },
         }).catch(() => {});
     }
 
