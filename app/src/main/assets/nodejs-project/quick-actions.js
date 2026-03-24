@@ -57,12 +57,19 @@ async function handleQuickCallback(cb, telegramFn) {
     const chatId = cb.message?.chat?.id;
     const messageId = cb.message?.message_id;
     if (chatId && messageId) {
-        telegramFn('deleteMessage', {
-            chat_id: chatId,
-            message_id: messageId,
-        }).catch(() => {
-            // Silently ignore — message may already be deleted or too old
-        });
+        try {
+            await telegramFn('deleteMessage', {
+                chat_id: chatId,
+                message_id: messageId,
+            });
+        } catch (_) {
+            // Fallback: clear keyboard buttons if delete fails (too old, no permission)
+            telegramFn('editMessageReplyMarkup', {
+                chat_id: chatId,
+                message_id: messageId,
+                reply_markup: { inline_keyboard: [] },
+            }).catch(() => {});
+        }
     }
 
     return mappedText;

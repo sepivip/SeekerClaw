@@ -207,7 +207,7 @@ Send me anything to get started!`;
 
         case '/quick': {
             await handleQuickCommand(chatId, telegram);
-            return ''; // Already sent inline keyboard — no text response needed
+            return { __handled: true }; // Keyboard sent — stop processing
         }
 
         case '/status': {
@@ -567,7 +567,11 @@ async function handleMessage(msg) {
             // Strip @botusername suffix for group chat compatibility (e.g. /status@MyBot → /status)
             const command = commandToken.toLowerCase().replace(/@\w+$/, '');
             const response = await handleCommand(chatId, command, args);
-            if (response?.__skillFallthrough) {
+            if (response?.__handled) {
+                // Command fully handled (e.g. /quick sent inline keyboard) — stop processing
+                await statusReaction.clear();
+                return;
+            } else if (response?.__skillFallthrough) {
                 // /skill <name> matched — rewrite text to trigger word so
                 // findMatchingSkills() picks up the skill via word-boundary match
                 text = response.trigger;
@@ -1012,7 +1016,8 @@ async function poll() {
                             // Quick Actions: route quick:* callbacks through dedicated handler
                             const quickText = await handleQuickCallback(cb, telegram);
                             if (quickText) {
-                                log(`[QuickAction] "${cb.data}" → feeding mapped message`, 'DEBUG');
+                                const safeData = (cb.data || '').replace(/[\r\n\t"\\]/g, ' ').trim();
+                                log(`[QuickAction] "${safeData}" → feeding mapped message`, 'DEBUG');
                                 const syntheticMsg = {
                                     chat: cb.message?.chat || { id: cb.from.id },
                                     from: cb.from,
@@ -1201,6 +1206,7 @@ telegram('getMe')
             // Register slash commands with BotFather for Telegram autocomplete menu (BAT-211)
             telegram('setMyCommands', {
                 commands: [
+                    { command: 'quick', description: 'One-tap preset actions' },
                     { command: 'status', description: 'Bot status, uptime, model' },
                     { command: 'new', description: 'Archive session & start fresh' },
                     { command: 'reset', description: 'Wipe conversation (no backup)' },
@@ -1221,6 +1227,7 @@ telegram('getMe')
                     // OpenClaw parity: degrade on BOT_COMMANDS_TOO_MUCH
                     log('Too many bot commands, retrying with essentials only', 'WARN');
                     telegram('setMyCommands', { commands: [
+                        { command: 'quick', description: 'Quick actions' },
                         { command: 'status', description: 'Bot status' },
                         { command: 'new', description: 'New session' },
                         { command: 'skill', description: 'Run a skill' },
