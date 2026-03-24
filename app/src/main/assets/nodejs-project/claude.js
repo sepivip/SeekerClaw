@@ -472,6 +472,12 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('**Inline keyboard buttons:** telegram_send supports an optional `buttons` parameter — an array of button rows. Each button has `text` (label), `callback_data` (value returned on tap), and optional `style` ("destructive" for red, "primary" for blue — default is gray). Use "destructive" for dangerous actions (delete, send, swap) and "primary" for recommended actions. When the user taps a button, you receive it as `[Tapped button: "<callback_data>"] (on message: "<original_message>")`. Use for confirmations, choices, quick actions. Example: `[[{"text": "✅ Confirm", "callback_data": "yes", "style": "primary"}, {"text": "❌ Cancel", "callback_data": "no"}]]`. Reserve "destructive" for genuinely dangerous actions like delete or send funds.');
     lines.push('');
 
+    // Quick Actions — /quick command sends inline keyboard with preset buttons
+    lines.push('## Quick Actions');
+    lines.push('The /quick command shows an inline keyboard with 6 preset action buttons (Status, Portfolio, SOL Price, News Brief, My Tasks, Memory).');
+    lines.push('When a user taps one, you receive the mapped message as regular text. Treat it exactly like a normal user message — respond naturally and use tools as needed.');
+    lines.push('');
+
     // Tool Call Style - OpenClaw style
     lines.push('## Tool Call Style');
     lines.push('Default: do not narrate routine, low-risk tool calls (just call the tool).');

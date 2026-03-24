@@ -93,6 +93,12 @@ const {
 } = require('./skills');
 
 // ============================================================================
+// QUICK ACTIONS (Telegram inline keyboard — #279)
+// ============================================================================
+
+const { handleQuickCommand, handleQuickCallback } = require('./quick-actions');
+
+// ============================================================================
 // WEB (extracted to web.js — BAT-196)
 // ============================================================================
 
@@ -163,7 +169,7 @@ async function handleCommand(chatId, command, args) {
                 return `Hey, I'm back! ✨
 
 Quick commands if you need them:
-/status · /new · /reset · /skill · /logs · /help
+/quick · /status · /new · /reset · /skill · /logs · /help
 
 Or just talk to me — that works too.`;
             } else {
@@ -183,6 +189,7 @@ Send me anything to get started!`;
             const skillCount = loadSkills().length;
             return `**Commands**
 
+/quick — one-tap preset actions
 /status — bot status, uptime, model
 /new — archive session & start fresh
 /reset — wipe conversation (no backup)
@@ -196,6 +203,11 @@ Send me anything to get started!`;
 /deny — reject pending action
 
 *${skillCount} skill${skillCount !== 1 ? 's' : ''} installed · /help to see this again*`;
+        }
+
+        case '/quick': {
+            await handleQuickCommand(chatId, telegram);
+            return ''; // Already sent inline keyboard — no text response needed
         }
 
         case '/status': {
@@ -997,17 +1009,28 @@ async function poll() {
                         if (!OWNER_ID || cbSenderId !== OWNER_ID) {
                             log(`[Callback] Ignoring callback from ${cbSenderId} (not owner)`, 'WARN');
                         } else {
-                            // Sanitize callback data and original text (strip control chars, quotes)
-                            const buttonData = (cb.data || '').replace(/[\r\n\t"\\]/g, ' ').trim();
-                            const originalText = (cb.message?.text || '').replace(/[\r\n]/g, ' ').slice(0, 200).trim();
-                            log(`[Callback] Button tapped: "${buttonData}" on message: "${originalText.slice(0, 60)}"`, 'DEBUG');
-                            // Inject as a synthetic user message so the agent sees the button tap
-                            const syntheticMsg = {
-                                chat: cb.message?.chat || { id: cb.from.id },
-                                from: cb.from,
-                                text: `[Tapped button: "${buttonData}"] (on message: "${originalText}")`,
-                            };
-                            enqueueMessage(syntheticMsg);
+                            // Quick Actions: route quick:* callbacks through dedicated handler
+                            const quickText = await handleQuickCallback(cb, telegram);
+                            if (quickText) {
+                                log(`[QuickAction] "${cb.data}" → feeding mapped message`, 'DEBUG');
+                                const syntheticMsg = {
+                                    chat: cb.message?.chat || { id: cb.from.id },
+                                    from: cb.from,
+                                    text: quickText,
+                                };
+                                enqueueMessage(syntheticMsg);
+                            } else {
+                                // Generic callback: inject as synthetic user message
+                                const buttonData = (cb.data || '').replace(/[\r\n\t"\\]/g, ' ').trim();
+                                const originalText = (cb.message?.text || '').replace(/[\r\n]/g, ' ').slice(0, 200).trim();
+                                log(`[Callback] Button tapped: "${buttonData}" on message: "${originalText.slice(0, 60)}"`, 'DEBUG');
+                                const syntheticMsg = {
+                                    chat: cb.message?.chat || { id: cb.from.id },
+                                    from: cb.from,
+                                    text: `[Tapped button: "${buttonData}"] (on message: "${originalText}")`,
+                                };
+                                enqueueMessage(syntheticMsg);
+                            }
                         }
                     }
                     if (update.message_reaction && REACTION_NOTIFICATIONS !== 'off') {
