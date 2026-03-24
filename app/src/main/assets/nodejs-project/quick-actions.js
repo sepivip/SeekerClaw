@@ -1,28 +1,33 @@
 // Quick Actions — Telegram preset task buttons (#279)
 // Self-contained module: button map, command handler, callback router.
 
-const QUICK_ACTIONS = {
-    'quick:status':    'Quick status check — battery, storage, uptime, last message time',
-    'quick:portfolio': 'Check my Solana portfolio — balances and total USD value',
-    'quick:sol_price': 'What\'s the current SOL price?',
-    'quick:news':      'Give me a 3-sentence summary of today\'s top crypto/tech news',
-    'quick:tasks':     'List my scheduled tasks and any pending TODOs',
-    'quick:memory':    'What do you remember about me? Summarize key facts.',
-};
-
-const KEYBOARD = {
-    inline_keyboard: [
-        [
-            { text: '🔋 Status',    callback_data: 'quick:status' },
-            { text: '💰 Portfolio', callback_data: 'quick:portfolio' },
-            { text: '📊 SOL Price', callback_data: 'quick:sol_price' },
-        ],
-        [
-            { text: '📰 News Brief', callback_data: 'quick:news' },
-            { text: '⏰ My Tasks',   callback_data: 'quick:tasks' },
-            { text: '🧠 Memory',     callback_data: 'quick:memory' },
-        ],
+// Single source of truth — button definitions drive both the keyboard and the callback map.
+const BUTTONS = [
+    [
+        { text: '🔋 Status',     key: 'quick:status',    message: 'Quick status check — battery, storage, uptime, last message time' },
+        { text: '💰 Portfolio',  key: 'quick:portfolio', message: 'Check my Solana portfolio — balances and total USD value' },
+        { text: '📊 SOL Price',  key: 'quick:sol_price', message: 'What\'s the current SOL price?' },
     ],
+    [
+        { text: '📰 News Brief', key: 'quick:news',   message: 'Give me a 3-sentence summary of today\'s top crypto/tech news' },
+        { text: '⏰ My Tasks',   key: 'quick:tasks',  message: 'List my scheduled tasks and any pending TODOs' },
+        { text: '🧠 Memory',     key: 'quick:memory', message: 'What do you remember about me? Summarize key facts.' },
+    ],
+];
+
+// Derived: callback_data → message lookup
+const QUICK_ACTIONS = {};
+for (const row of BUTTONS) {
+    for (const btn of row) {
+        QUICK_ACTIONS[btn.key] = btn.message;
+    }
+}
+
+// Derived: Telegram inline keyboard
+const KEYBOARD = {
+    inline_keyboard: BUTTONS.map(row =>
+        row.map(btn => ({ text: btn.text, callback_data: btn.key }))
+    ),
 };
 
 /**

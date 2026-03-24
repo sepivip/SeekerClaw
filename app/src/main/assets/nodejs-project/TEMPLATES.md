@@ -24,7 +24,7 @@ Send me anything to get started!
 Hey, I'm back! ✨
 
 Quick commands if you need them:
-/quick · /status · /new · /reset · /soul · /memory · /skills
+/quick · /status · /new · /reset · /skill · /logs · /help
 
 Or just talk to me — that works too.
 ```
