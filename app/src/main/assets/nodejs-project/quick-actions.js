@@ -4,8 +4,8 @@
 const QUICK_ACTIONS = {
     'quick:status':    'Quick status check — battery, storage, uptime, last message time',
     'quick:portfolio': 'Check my Solana portfolio — balances and total USD value',
-    'quick:sol_price': "What's the current SOL price?",
-    'quick:news':      "Give me a 3-sentence summary of today's top crypto/tech news",
+    'quick:sol_price': 'What\'s the current SOL price?',
+    'quick:news':      'Give me a 3-sentence summary of today\'s top crypto/tech news',
     'quick:tasks':     'List my scheduled tasks and any pending TODOs',
     'quick:memory':    'What do you remember about me? Summarize key facts.',
 };
@@ -41,7 +41,8 @@ async function handleQuickCommand(chatId, telegramFn) {
 
 /**
  * Handle a quick action callback query.
- * Deletes the keyboard message, returns the mapped user message text.
+ * Removes the inline keyboard (keeps message for status reactions),
+ * returns the mapped user message text.
  * Returns null if callback_data is not a quick action.
  *
  * @param {object} cb - Telegram callback_query object
@@ -53,23 +54,16 @@ async function handleQuickCallback(cb, telegramFn) {
     const mappedText = QUICK_ACTIONS[data];
     if (!mappedText) return null;
 
-    // Delete the inline keyboard message (clean UX)
+    // Remove inline keyboard but keep the message — the synthetic message
+    // carries this message_id for status reactions during the agent turn.
     const chatId = cb.message?.chat?.id;
     const messageId = cb.message?.message_id;
     if (chatId && messageId) {
-        try {
-            await telegramFn('deleteMessage', {
-                chat_id: chatId,
-                message_id: messageId,
-            });
-        } catch (_) {
-            // Fallback: clear keyboard buttons if delete fails (too old, no permission)
-            telegramFn('editMessageReplyMarkup', {
-                chat_id: chatId,
-                message_id: messageId,
-                reply_markup: { inline_keyboard: [] },
-            }).catch(() => {});
-        }
+        telegramFn('editMessageReplyMarkup', {
+            chat_id: chatId,
+            message_id: messageId,
+            reply_markup: { inline_keyboard: [] },
+        }).catch(() => {});
     }
 
     return mappedText;
