@@ -24,9 +24,18 @@ Send me anything to get started!
 Hey, I'm back! ✨
 
 Quick commands if you need them:
-/status · /new · /reset · /soul · /memory · /skills
+/quick · /status · /new · /reset · /soul · /memory · /skills
 
 Or just talk to me — that works too.
+```
+
+### /quick
+```
+⚡ Quick Actions — tap to run:
+
+[Inline keyboard: 2x3 grid]
+🔋 Status    | 💰 Portfolio | 📊 SOL Price
+📰 News Brief | ⏰ My Tasks  | 🧠 Memory
 ```
 
 ### /status
