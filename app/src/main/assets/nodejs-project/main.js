@@ -1015,26 +1015,29 @@ async function poll() {
                         } else {
                             // Quick Actions: route quick:* callbacks through dedicated handler
                             const quickText = await handleQuickCallback(cb, telegram);
+                            // Synthetic message base — include message_id so reactions
+                            // target the original keyboard message (not undefined).
+                            const cbChat = cb.message?.chat || { id: cb.from.id };
+                            const cbMsgId = cb.message?.message_id;
+
                             if (quickText) {
                                 const safeData = (cb.data || '').replace(/[\r\n\t"\\]/g, ' ').trim();
                                 log(`[QuickAction] "${safeData}" → feeding mapped message`, 'DEBUG');
-                                const syntheticMsg = {
-                                    chat: cb.message?.chat || { id: cb.from.id },
-                                    from: cb.from,
+                                enqueueMessage({
+                                    chat: cbChat, from: cb.from,
+                                    message_id: cbMsgId,
                                     text: quickText,
-                                };
-                                enqueueMessage(syntheticMsg);
+                                });
                             } else {
                                 // Generic callback: inject as synthetic user message
                                 const buttonData = (cb.data || '').replace(/[\r\n\t"\\]/g, ' ').trim();
                                 const originalText = (cb.message?.text || '').replace(/[\r\n]/g, ' ').slice(0, 200).trim();
                                 log(`[Callback] Button tapped: "${buttonData}" on message: "${originalText.slice(0, 60)}"`, 'DEBUG');
-                                const syntheticMsg = {
-                                    chat: cb.message?.chat || { id: cb.from.id },
-                                    from: cb.from,
+                                enqueueMessage({
+                                    chat: cbChat, from: cb.from,
+                                    message_id: cbMsgId,
                                     text: `[Tapped button: "${buttonData}"] (on message: "${originalText}")`,
-                                };
-                                enqueueMessage(syntheticMsg);
+                                });
                             }
                         }
                     }
