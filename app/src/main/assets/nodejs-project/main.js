@@ -93,6 +93,12 @@ const {
 } = require('./skills');
 
 // ============================================================================
+// QUICK ACTIONS (Telegram inline keyboard — #279)
+// ============================================================================
+
+const { handleQuickCommand, handleQuickCallback } = require('./quick-actions');
+
+// ============================================================================
 // WEB (extracted to web.js — BAT-196)
 // ============================================================================
 
@@ -163,7 +169,7 @@ async function handleCommand(chatId, command, args) {
                 return `Hey, I'm back! ✨
 
 Quick commands if you need them:
-/status · /new · /reset · /skill · /logs · /help
+/quick · /status · /new · /reset · /skill · /logs · /help
 
 Or just talk to me — that works too.`;
             } else {
@@ -183,6 +189,7 @@ Send me anything to get started!`;
             const skillCount = loadSkills().length;
             return `**Commands**
 
+/quick — one-tap preset actions
 /status — bot status, uptime, model
 /new — archive session & start fresh
 /reset — wipe conversation (no backup)
@@ -196,6 +203,11 @@ Send me anything to get started!`;
 /deny — reject pending action
 
 *${skillCount} skill${skillCount !== 1 ? 's' : ''} installed · /help to see this again*`;
+        }
+
+        case '/quick': {
+            await handleQuickCommand(chatId, telegram);
+            return { __handled: true }; // Keyboard sent — stop processing
         }
 
         case '/status': {
@@ -555,7 +567,11 @@ async function handleMessage(msg) {
             // Strip @botusername suffix for group chat compatibility (e.g. /status@MyBot → /status)
             const command = commandToken.toLowerCase().replace(/@\w+$/, '');
             const response = await handleCommand(chatId, command, args);
-            if (response?.__skillFallthrough) {
+            if (response?.__handled) {
+                // Command fully handled (e.g. /quick sent inline keyboard) — stop processing
+                await statusReaction.clear();
+                return;
+            } else if (response?.__skillFallthrough) {
                 // /skill <name> matched — rewrite text to trigger word so
                 // findMatchingSkills() picks up the skill via word-boundary match
                 text = response.trigger;
@@ -997,17 +1013,32 @@ async function poll() {
                         if (!OWNER_ID || cbSenderId !== OWNER_ID) {
                             log(`[Callback] Ignoring callback from ${cbSenderId} (not owner)`, 'WARN');
                         } else {
-                            // Sanitize callback data and original text (strip control chars, quotes)
-                            const buttonData = (cb.data || '').replace(/[\r\n\t"\\]/g, ' ').trim();
-                            const originalText = (cb.message?.text || '').replace(/[\r\n]/g, ' ').slice(0, 200).trim();
-                            log(`[Callback] Button tapped: "${buttonData}" on message: "${originalText.slice(0, 60)}"`, 'DEBUG');
-                            // Inject as a synthetic user message so the agent sees the button tap
-                            const syntheticMsg = {
-                                chat: cb.message?.chat || { id: cb.from.id },
-                                from: cb.from,
-                                text: `[Tapped button: "${buttonData}"] (on message: "${originalText}")`,
-                            };
-                            enqueueMessage(syntheticMsg);
+                            // Quick Actions: route quick:* callbacks through dedicated handler
+                            const quickText = await handleQuickCallback(cb, telegram);
+                            // Synthetic message base — include message_id so reactions
+                            // target the original keyboard message (not undefined).
+                            const cbChat = cb.message?.chat || { id: cb.from.id };
+                            const cbMsgId = cb.message?.message_id;
+
+                            if (quickText) {
+                                const safeData = (cb.data || '').replace(/[\r\n\t"\\]/g, ' ').trim();
+                                log(`[QuickAction] "${safeData}" → feeding mapped message`, 'DEBUG');
+                                enqueueMessage({
+                                    chat: cbChat, from: cb.from,
+                                    message_id: cbMsgId,
+                                    text: quickText,
+                                });
+                            } else {
+                                // Generic callback: inject as synthetic user message
+                                const buttonData = (cb.data || '').replace(/[\r\n\t"\\]/g, ' ').trim();
+                                const originalText = (cb.message?.text || '').replace(/[\r\n]/g, ' ').slice(0, 200).trim();
+                                log(`[Callback] Button tapped: "${buttonData}" on message: "${originalText.slice(0, 60)}"`, 'DEBUG');
+                                enqueueMessage({
+                                    chat: cbChat, from: cb.from,
+                                    message_id: cbMsgId,
+                                    text: `[Tapped button: "${buttonData}"] (on message: "${originalText}")`,
+                                });
+                            }
                         }
                     }
                     if (update.message_reaction && REACTION_NOTIFICATIONS !== 'off') {
@@ -1178,6 +1209,7 @@ telegram('getMe')
             // Register slash commands with BotFather for Telegram autocomplete menu (BAT-211)
             telegram('setMyCommands', {
                 commands: [
+                    { command: 'quick', description: 'One-tap preset actions' },
                     { command: 'status', description: 'Bot status, uptime, model' },
                     { command: 'new', description: 'Archive session & start fresh' },
                     { command: 'reset', description: 'Wipe conversation (no backup)' },
@@ -1198,6 +1230,7 @@ telegram('getMe')
                     // OpenClaw parity: degrade on BOT_COMMANDS_TOO_MUCH
                     log('Too many bot commands, retrying with essentials only', 'WARN');
                     telegram('setMyCommands', { commands: [
+                        { command: 'quick', description: 'Quick actions' },
                         { command: 'status', description: 'Bot status' },
                         { command: 'new', description: 'New session' },
                         { command: 'skill', description: 'Run a skill' },
