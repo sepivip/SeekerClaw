@@ -623,9 +623,9 @@ fun SettingsScreen(
                                         text = label,
                                         fontFamily = RethinkSans,
                                         fontSize = 14.sp,
-                                    color = if (isSelected) SeekerClawColors.TextPrimary else SeekerClawColors.TextSecondary,
-                                    modifier = Modifier.padding(start = 8.dp),
-                                )
+                                        color = if (isSelected) SeekerClawColors.TextPrimary else SeekerClawColors.TextSecondary,
+                                        modifier = Modifier.padding(start = 8.dp),
+                                    )
                             }
                         }
                     }

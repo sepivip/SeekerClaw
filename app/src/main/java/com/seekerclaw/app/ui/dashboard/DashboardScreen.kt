@@ -519,8 +519,7 @@ fun DashboardScreen(
         }
 
         // Status card (tappable → System screen, or Settings if config needed)
-        val configNeededText = stringResource(R.string.status_config_needed)
-        val configNeeded = statusText == configNeededText
+        val configNeeded = !configReady
         Column(
             modifier = Modifier
                 .fillMaxWidth()
