@@ -45,6 +45,9 @@ import androidx.compose.ui.unit.sp
 import coil.compose.SubcomposeAsyncImage
 import coil.request.ImageRequest
 import com.seekerclaw.app.config.ConfigManager
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
+import com.seekerclaw.app.R
 import com.seekerclaw.app.ui.theme.RethinkSans
 import com.seekerclaw.app.ui.theme.SeekerClawColors
 import com.seekerclaw.app.util.Analytics
@@ -73,7 +76,7 @@ fun SkillsScreen() {
                 Analytics.featureUsed("skill_exported")
                 Toast.makeText(
                     context,
-                    if (success) "Skill exported" else "Export failed",
+                    if (success) context.getString(R.string.toast_skill_exported) else context.getString(R.string.toast_export_failed),
                     Toast.LENGTH_SHORT,
                 ).show()
             }
@@ -124,7 +127,7 @@ private fun SkillsListContent(
                 Analytics.featureUsed("skills_bulk_exported")
                 Toast.makeText(
                     context,
-                    if (success) "Skills exported" else "Export failed",
+                    if (success) context.getString(R.string.toast_skills_exported) else context.getString(R.string.toast_export_failed),
                     Toast.LENGTH_SHORT,
                 ).show()
             }
@@ -143,13 +146,13 @@ private fun SkillsListContent(
                     reloadTrigger++
                     Toast.makeText(
                         context,
-                        "Imported $count skill${if (count > 1) "s" else ""}",
+                        context.resources.getQuantityString(R.plurals.toast_skills_imported, count, count),
                         Toast.LENGTH_SHORT,
                     ).show()
                 } else {
                     Toast.makeText(
                         context,
-                        if (count == 0) "No skills found in file" else "Import failed",
+                        if (count == 0) context.getString(R.string.toast_no_skills_in_file) else context.getString(R.string.toast_import_failed),
                         Toast.LENGTH_SHORT,
                     ).show()
                 }
@@ -197,21 +200,21 @@ private fun SkillsListContent(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = if (searchQuery.isEmpty()) "Skills (${skills.size})"
-                               else "Skills (${filtered.size} of ${skills.size})",
+                        text = if (searchQuery.isEmpty()) stringResource(R.string.skills_title, skills.size)
+                               else stringResource(R.string.skills_title_filtered, filtered.size, skills.size),
                         fontFamily = RethinkSans,
                         fontSize = 22.sp,
                         fontWeight = FontWeight.Bold,
                         color = SeekerClawColors.TextPrimary,
                     )
                     Text(
-                        text = "Import",
+                        text = stringResource(R.string.button_import),
                         fontFamily = RethinkSans,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Medium,
                         color = SeekerClawColors.Accent,
                         modifier = Modifier
-                            .clickable(onClickLabel = "Import skills") {
+                            .clickable(onClickLabel = stringResource(R.string.skills_cd_import)) {
                                 importSkillsLauncher.launch(arrayOf("application/zip", "text/markdown", "text/plain"))
                             }
                             .padding(4.dp),
@@ -241,8 +244,8 @@ private fun SkillsListContent(
                 if (addedSkills.isNotEmpty()) {
                     item {
                         SectionHeader(
-                            title = "Added (${addedSkills.size})",
-                            actionLabel = "Export All",
+                            title = stringResource(R.string.skills_section_added, addedSkills.size),
+                            actionLabel = stringResource(R.string.button_export_all),
                             onAction = {
                                 val timestamp = android.text.format.DateFormat.format(
                                     "yyyyMMdd", java.util.Date()
@@ -259,7 +262,7 @@ private fun SkillsListContent(
                 // Default skills section
                 if (defaultSkills.isNotEmpty()) {
                     item {
-                        SectionHeader(title = "Default (${defaultSkills.size})")
+                        SectionHeader(title = stringResource(R.string.skills_section_default, defaultSkills.size))
                     }
                     items(defaultSkills, key = { it.filePath }) { skill ->
                         SkillCard(skill = skill, shape = shape, onClick = { onSkillClick(skill) })
@@ -329,7 +332,7 @@ private fun SearchField(
         Box(modifier = Modifier.weight(1f)) {
             if (query.isEmpty()) {
                 Text(
-                    text = "Search skills...",
+                    text = stringResource(R.string.skills_search_placeholder),
                     fontFamily = RethinkSans,
                     fontSize = 14.sp,
                     color = SeekerClawColors.TextDim,
@@ -355,7 +358,7 @@ private fun SearchField(
                 fontFamily = FontFamily.Monospace,
                 fontSize = 14.sp,
                 color = SeekerClawColors.TextDim,
-                modifier = Modifier.clickable(onClickLabel = "Clear search") { onQueryChange("") },
+                modifier = Modifier.clickable(onClickLabel = stringResource(R.string.skills_cd_clear_search)) { onQueryChange("") },
             )
         }
     }
@@ -376,7 +379,7 @@ private fun MarketplaceTeaserCard(shape: RoundedCornerShape) {
                 verticalAlignment = Alignment.Top,
             ) {
                 Text(
-                    text = "Skill Marketplace",
+                    text = stringResource(R.string.skills_marketplace_title),
                     fontFamily = RethinkSans,
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Bold,
@@ -384,7 +387,7 @@ private fun MarketplaceTeaserCard(shape: RoundedCornerShape) {
                     modifier = Modifier.weight(1f),
                 )
                 Text(
-                    text = "COMING SOON",
+                    text = stringResource(R.string.skills_marketplace_badge),
                     fontFamily = RethinkSans,
                     fontSize = 10.sp,
                     fontWeight = FontWeight.Bold,
@@ -399,7 +402,7 @@ private fun MarketplaceTeaserCard(shape: RoundedCornerShape) {
             }
             Spacer(Modifier.height(6.dp))
             Text(
-                text = "Discover and install skills created by the community.",
+                text = stringResource(R.string.skills_marketplace_description),
                 fontFamily = RethinkSans,
                 fontSize = 13.sp,
                 color = SeekerClawColors.TextDim,
@@ -484,7 +487,7 @@ private fun SkillCard(
         modifier = Modifier
             .fillMaxWidth()
             .background(SeekerClawColors.Surface, shape)
-            .clickable(onClickLabel = "View ${skill.name}", onClick = onClick)
+            .clickable(onClickLabel = stringResource(R.string.skills_cd_view, skill.name), onClick = onClick)
             .padding(16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -542,7 +545,7 @@ private fun SkillCard(
                     )
                     Spacer(Modifier.width(6.dp))
                     Text(
-                        text = "${skill.triggers.size} trigger${if (skill.triggers.size > 1) "s" else ""}",
+                        text = pluralStringResource(R.plurals.skills_trigger_count, skill.triggers.size, skill.triggers.size),
                         fontFamily = RethinkSans,
                         fontSize = 11.sp,
                         color = SeekerClawColors.Accent,
@@ -567,8 +570,8 @@ private fun EmptySkillsState(isFiltered: Boolean) {
         )
         Spacer(Modifier.height(16.dp))
         Text(
-            text = if (isFiltered) "No skills match your search"
-            else "No skills installed",
+            text = if (isFiltered) stringResource(R.string.skills_no_search_match_title)
+            else stringResource(R.string.skills_empty_title),
             fontFamily = RethinkSans,
             fontSize = 16.sp,
             fontWeight = FontWeight.Medium,
@@ -576,8 +579,8 @@ private fun EmptySkillsState(isFiltered: Boolean) {
         )
         Spacer(Modifier.height(8.dp))
         Text(
-            text = if (isFiltered) "Try a different search term"
-            else "Send a .md skill file via Telegram to install your first skill.",
+            text = if (isFiltered) stringResource(R.string.skills_no_search_match_hint)
+            else stringResource(R.string.skills_empty_hint),
             fontFamily = RethinkSans,
             fontSize = 13.sp,
             color = SeekerClawColors.TextDim,

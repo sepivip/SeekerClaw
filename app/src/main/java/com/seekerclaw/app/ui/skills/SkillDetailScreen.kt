@@ -28,6 +28,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.res.stringResource
+import com.seekerclaw.app.R
 import com.seekerclaw.app.ui.theme.RethinkSans
 import com.seekerclaw.app.ui.theme.SeekerClawColors
 
@@ -54,22 +56,22 @@ fun SkillDetailScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Text(
-                text = "← Skills",
+                text = stringResource(R.string.skill_back),
                 fontFamily = RethinkSans,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Medium,
                 color = SeekerClawColors.Primary,
-                modifier = Modifier.clickable(onClickLabel = "Back to skills list", onClick = onBack),
+                modifier = Modifier.clickable(onClickLabel = stringResource(R.string.skill_cd_back), onClick = onBack),
             )
             if (onExport != null) {
                 Text(
-                    text = "Export",
+                    text = stringResource(R.string.button_export),
                     fontFamily = RethinkSans,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Medium,
                     color = SeekerClawColors.Accent,
                     modifier = Modifier
-                        .clickable(onClickLabel = "Export skill", onClick = onExport)
+                        .clickable(onClickLabel = stringResource(R.string.skill_cd_export), onClick = onExport)
                         .padding(4.dp),
                 )
             }
@@ -109,9 +111,9 @@ fun SkillDetailScreen(
             }
 
             // Type
-            InfoSection(label = "TYPE", shape = shape) {
+            InfoSection(label = stringResource(R.string.skill_section_type), shape = shape) {
                 Text(
-                    text = if (skill.isDefault) "Default (bundled)" else "Added by user",
+                    text = if (skill.isDefault) stringResource(R.string.skill_type_default) else stringResource(R.string.skill_type_added),
                     fontFamily = RethinkSans,
                     fontSize = 14.sp,
                     color = SeekerClawColors.TextPrimary,
@@ -120,7 +122,7 @@ fun SkillDetailScreen(
 
             // Description
             if (skill.description.isNotEmpty()) {
-                InfoSection(label = "DESCRIPTION", shape = shape) {
+                InfoSection(label = stringResource(R.string.skill_section_description), shape = shape) {
                     Text(
                         text = skill.description,
                         fontFamily = RethinkSans,
@@ -132,10 +134,10 @@ fun SkillDetailScreen(
             }
 
             // Triggers
-            InfoSection(label = "TRIGGERS", shape = shape) {
+            InfoSection(label = stringResource(R.string.skill_section_triggers), shape = shape) {
                 if (skill.triggers.isEmpty()) {
                     Text(
-                        text = "Semantic — AI picks this skill based on description",
+                        text = stringResource(R.string.skill_trigger_semantic),
                         fontFamily = RethinkSans,
                         fontSize = 13.sp,
                         color = SeekerClawColors.TextDim,
@@ -165,7 +167,7 @@ fun SkillDetailScreen(
 
             // Diagnostics
             if (skill.warnings.isNotEmpty()) {
-                InfoSection(label = "DIAGNOSTICS", shape = shape) {
+                InfoSection(label = stringResource(R.string.skill_section_diagnostics), shape = shape) {
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         skill.warnings.forEach { warning ->
                             Row(verticalAlignment = Alignment.Top) {
@@ -189,7 +191,7 @@ fun SkillDetailScreen(
             }
 
             // File path
-            InfoSection(label = "FILE", shape = shape) {
+            InfoSection(label = stringResource(R.string.skill_section_file), shape = shape) {
                 Text(
                     text = skill.filePath,
                     fontFamily = FontFamily.Monospace,

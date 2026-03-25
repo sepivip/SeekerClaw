@@ -217,4 +217,321 @@
     <string name="system_time_days">%1$dd </string>
     <string name="system_time_hours">%1$dh </string>
     <string name="system_time_minutes">%1$dm</string>
+
+    <!-- LogsScreen -->
+    <string name="logs_title">Logs</string>
+    <string name="logs_subtitle">System logs and diagnostics</string>
+    <string name="logs_search_placeholder">Search logs\u2026</string>
+    <string name="logs_empty">No logs yet.</string>
+    <string name="logs_no_search_match">No logs match your search.</string>
+    <string name="logs_no_level_match">No logs for selected levels.</string>
+    <string name="logs_entries_hidden">%1$d entries hidden.</string>
+    <string name="logs_entries_status">%1$d/%2$d entries</string>
+    <string name="logs_entries_filtered">\u00b7 %1$d filtered</string>
+    <string name="logs_auto_scroll">Auto-scroll</string>
+    <string name="logs_show_all">Show all</string>
+    <string name="logs_share_subject" translatable="false">SeekerClaw Logs</string>
+    <string name="logs_share_chooser">Share Logs</string>
+    <string name="logs_cd_share">Share logs</string>
+    <string name="logs_cd_clear">Clear logs</string>
+    <string name="logs_cd_search">Search</string>
+    <string name="logs_cd_clear_search">Clear search</string>
+    <string name="button_clear">Clear</string>
+    <string name="button_cancel">Cancel</string>
+    <string name="filter_debug">Debug</string>
+    <string name="filter_info">Info</string>
+    <string name="filter_warn">Warn</string>
+    <string name="filter_error">Error</string>
+    <string name="dialog_clear_logs_title">Clear Logs</string>
+    <string name="dialog_clear_logs_message">This will delete all log entries. This cannot be undone.</string>
+
+    <!-- SkillsScreen -->
+    <string name="skills_title">Skills (%1$d)</string>
+    <string name="skills_title_filtered">Skills (%1$d of %2$d)</string>
+    <string name="skills_search_placeholder">Search skills...</string>
+    <string name="skills_section_added">Added (%1$d)</string>
+    <string name="skills_section_default">Default (%1$d)</string>
+    <string name="skills_empty_title">No skills installed</string>
+    <string name="skills_empty_hint">Send a .md skill file via Telegram to install your first skill.</string>
+    <string name="skills_no_search_match_title">No skills match your search</string>
+    <string name="skills_no_search_match_hint">Try a different search term</string>
+    <string name="skills_marketplace_title">Skill Marketplace</string>
+    <string name="skills_marketplace_badge">COMING SOON</string>
+    <string name="skills_marketplace_description">Discover and install skills created by the community.</string>
+    <string name="button_import">Import</string>
+    <string name="button_export_all">Export All</string>
+    <string name="button_export">Export</string>
+    <string name="skills_cd_import">Import skills</string>
+    <string name="skills_cd_view">View %1$s</string>
+    <string name="skills_cd_clear_search">Clear search</string>
+    <string name="toast_skill_exported">Skill exported</string>
+    <string name="toast_export_failed">Export failed</string>
+    <string name="toast_skills_exported">Skills exported</string>
+    <string name="toast_import_failed">Import failed</string>
+    <string name="toast_no_skills_in_file">No skills found in file</string>
+    <plurals name="skills_trigger_count">
+        <item quantity="one">%1$d trigger</item>
+        <item quantity="other">%1$d triggers</item>
+    </plurals>
+    <plurals name="toast_skills_imported">
+        <item quantity="one">Imported %1$d skill</item>
+        <item quantity="other">Imported %1$d skills</item>
+    </plurals>
+
+    <!-- SkillDetailScreen -->
+    <string name="skill_back">← Skills</string>
+    <string name="skill_cd_back">Back to skills list</string>
+    <string name="skill_cd_export">Export skill</string>
+    <string name="skill_section_type">TYPE</string>
+    <string name="skill_section_description">DESCRIPTION</string>
+    <string name="skill_section_triggers">TRIGGERS</string>
+    <string name="skill_section_diagnostics">DIAGNOSTICS</string>
+    <string name="skill_section_file">FILE</string>
+    <string name="skill_type_default">Default (bundled)</string>
+    <string name="skill_type_added">Added by user</string>
+    <string name="skill_trigger_semantic">Semantic — AI picks this skill based on description</string>
+
+    <!-- Common buttons (shared across screens) -->
+    <string name="button_save">Save</string>
+    <string name="button_testing">Testing\u2026</string>
+    <string name="button_back">Back</string>
+    <string name="label_not_set">Not set</string>
+    <string name="label_active">Active</string>
+
+    <!-- ProviderConfigScreen -->
+    <string name="provider_title">AI Provider</string>
+    <string name="provider_section_provider">Provider</string>
+    <string name="provider_settings_title">%1$s Settings</string>
+    <string name="provider_label_model">Model</string>
+    <string name="provider_label_auth_type">Auth Type</string>
+    <string name="provider_auth_api_key">API Key</string>
+    <string name="provider_auth_setup_token">Pro/Max Setup Token</string>
+    <string name="provider_label_api_key_active">API Key (active)</string>
+    <string name="provider_label_api_key">API Key</string>
+    <string name="provider_label_setup_token_active">Setup Token (active)</string>
+    <string name="provider_label_setup_token">Setup Token</string>
+    <string name="provider_edit_anthropic_key">Anthropic API Key</string>
+    <string name="provider_edit_setup_token">Setup Token</string>
+    <string name="provider_edit_openai_key">OpenAI API Key</string>
+    <string name="provider_edit_openrouter_key">OpenRouter API Key</string>
+    <string name="provider_connection_test">Connection Test</string>
+    <string name="provider_connection_desc">Verify your credentials are valid and the API is reachable.</string>
+    <string name="provider_connection_success">Connection successful!</string>
+    <string name="provider_connection_failed">Connection failed</string>
+    <string name="provider_button_test">Test Connection</string>
+    <string name="provider_dialog_select_model">Select Model</string>
+    <string name="provider_dialog_auth_type">Auth Type</string>
+    <string name="provider_auth_info">Both credentials are stored. Switching just changes which one is used.</string>
+    <string name="provider_error_credential_empty">Credential is empty</string>
+    <string name="provider_error_unauthorized">Unauthorized / Invalid credential</string>
+    <string name="provider_error_api_unavailable">%1$s API unavailable</string>
+    <string name="provider_error_timeout">Connection timed out</string>
+    <string name="provider_error_network">Network unreachable or timeout</string>
+    <string name="provider_error_connection_failed">Connection failed (%1$s)</string>
+    <string name="provider_error_api_key_empty">API key is empty</string>
+    <string name="provider_error_invalid_api_key">Invalid API key</string>
+    <string name="provider_error_unauthorized_key">Unauthorized / Invalid API key</string>
+    <string name="provider_error_insufficient_credits">Insufficient credits — add funds at openrouter.ai/credits</string>
+    <string name="provider_error_rate_limited">Rate limited — try again in a moment</string>
+    <string name="provider_error_http">HTTP %1$d</string>
+    <string name="provider_error_http_message">HTTP %1$d: %2$s</string>
+
+    <!-- OpenRouter-specific -->
+    <string name="openrouter_model_info">Full model ID from openrouter.ai/models (e.g. anthropic/claude-sonnet-4-6)</string>
+    <string name="openrouter_fallback_label">Fallback Model (optional)</string>
+    <string name="openrouter_fallback_info">Auto-switches if primary model is down (e.g. google/gemini-2.5-pro)</string>
+    <string name="openrouter_key_info">Get your key at openrouter.ai/keys</string>
+    <string name="openrouter_dialog_edit_model">Edit Model</string>
+    <string name="openrouter_dialog_edit_fallback">Edit Fallback Model</string>
+    <string name="openrouter_label_model_id_required">Model ID *</string>
+    <string name="openrouter_label_model_id_optional">Model ID (optional)</string>
+    <string name="openrouter_placeholder_model">e.g. anthropic/claude-sonnet-4-6</string>
+    <string name="openrouter_label_context_length">Context Length (optional)</string>
+    <string name="openrouter_placeholder_context">Default: 128000</string>
+    <string name="openrouter_context_hint">Max tokens the model supports. Check openrouter.ai/models</string>
+
+    <!-- TelegramConfigScreen -->
+    <string name="telegram_title">Telegram Configuration</string>
+    <string name="telegram_label_bot_token">Bot Token</string>
+    <string name="telegram_label_owner_id">Owner ID</string>
+    <string name="telegram_owner_auto_detect">Auto-detect</string>
+    <string name="telegram_connection_desc">Verify your bot token is valid and Telegram is reachable.</string>
+    <string name="telegram_error_token_empty">Bot token is empty.</string>
+    <string name="telegram_bot_connected">Bot connected as @%1$s</string>
+    <string name="telegram_button_test">Test Bot</string>
+
+    <!-- SearchProviderConfigScreen -->
+    <string name="search_title">Search Provider</string>
+    <string name="search_label_api_key">API Key</string>
+    <string name="search_not_configured">Not configured — web search will not work until an API key is set.</string>
+    <string name="search_section_resources">Resources</string>
+    <string name="search_get_api_key">Get API Key →</string>
+    <string name="search_provider_settings">%1$s Settings</string>
+    <string name="search_edit_api_key">%1$s API Key</string>
+
+    <!-- RestartDialog -->
+    <string name="dialog_config_updated">Config Updated</string>
+    <string name="dialog_restart_message">Restart the agent to apply changes?</string>
+    <string name="dialog_restart_now">Restart Now</string>
+    <string name="dialog_restart_later">Later</string>
+    <string name="toast_agent_restarting">Agent restarting\u2026</string>
+
+    <!-- SettingsScreen: screen title -->
+    <string name="settings_title">Settings</string>
+
+    <!-- SettingsScreen: Quick Setup -->
+    <string name="settings_section_quick_setup">Quick Setup</string>
+    <string name="settings_qr_description">Generate a config QR at seekerclaw.xyz and scan it to set up your agent in seconds.</string>
+    <string name="settings_scan_config_qr">Scan Config QR</string>
+    <string name="settings_importing_config">Importing Config\u2026</string>
+
+    <!-- SettingsScreen: Configuration section -->
+    <string name="settings_section_configuration">Configuration</string>
+    <string name="settings_ai_configuration">AI Configuration</string>
+    <string name="settings_ai_configuration_value">Provider, Model, Keys</string>
+    <string name="settings_ai_configuration_info">Select AI provider, configure model and API credentials.</string>
+    <string name="settings_telegram" translatable="false">Telegram</string>
+    <string name="settings_telegram_value">Bot Token, Owner ID, Connection Test</string>
+    <string name="settings_telegram_info">Configure your Telegram bot settings.</string>
+    <string name="settings_agent_name">Agent Name</string>
+    <string name="settings_agent_name_default" translatable="false">SeekerClaw</string>
+    <string name="settings_heartbeat_interval">Heartbeat Interval</string>
+    <string name="settings_heartbeat_value">Every %1$d minutes</string>
+    <string name="settings_heartbeat_edit_label">Heartbeat Interval (minutes, 5\u2013120)</string>
+    <string name="settings_search_provider">Search Provider</string>
+    <string name="settings_not_configured"> (not configured)</string>
+
+    <!-- SettingsScreen: Preferences & Permissions -->
+    <string name="settings_section_prefs_permissions">Preferences &amp; Permissions</string>
+    <string name="settings_auto_start">Auto-start on boot</string>
+    <string name="settings_analytics">Usage analytics</string>
+    <string name="settings_battery_unrestricted">Battery unrestricted</string>
+    <string name="settings_server_mode">Server mode (keep screen awake)</string>
+    <string name="settings_permissions_hint">Enable permissions to unlock device features (camera, GPS, SMS, etc.)</string>
+    <string name="permission_camera">Camera</string>
+    <string name="permission_gps">GPS Location</string>
+    <string name="permission_contacts">Contacts</string>
+    <string name="permission_sms">SMS</string>
+    <string name="permission_phone">Phone Calls</string>
+
+    <!-- SettingsScreen: Solana Wallet -->
+    <string name="settings_section_solana_wallet">Solana Wallet</string>
+    <string name="wallet_address">Address</string>
+    <string name="wallet_copy">Copy</string>
+    <string name="wallet_label" translatable="false">Wallet</string>
+    <string name="wallet_disconnect">Disconnect Wallet</string>
+    <string name="wallet_connecting">Connecting\u2026</string>
+    <string name="wallet_connect">Connect Wallet</string>
+    <string name="wallet_connect_hint">Opens Phantom, Solflare, or Seeker Vault</string>
+    <string name="wallet_jupiter_api_key">Jupiter API Key</string>
+    <string name="wallet_jupiter_not_set">Not set \u2014 swaps disabled</string>
+    <string name="wallet_helius_api_key">Helius API Key</string>
+    <string name="wallet_helius_not_set">Not set \u2014 NFT holdings disabled</string>
+    <string name="wallet_not_set">Not set</string>
+
+    <!-- SettingsScreen: MCP Servers -->
+    <string name="settings_section_mcp_servers">MCP Servers</string>
+    <string name="mcp_no_servers">No servers configured</string>
+    <string name="mcp_add_server">Add MCP Server</string>
+    <string name="mcp_edit_server">Edit MCP Server</string>
+    <string name="mcp_field_name">Name</string>
+    <string name="mcp_field_url">Server URL</string>
+    <string name="mcp_field_url_placeholder" translatable="false">https://mcp.example.com/mcp</string>
+    <string name="mcp_field_auth_token">Auth Token (optional)</string>
+    <string name="mcp_error_invalid_url">Invalid URL. Must start with https:// or http://</string>
+    <string name="mcp_error_auth_requires_https">Auth token requires HTTPS (or localhost)</string>
+    <string name="mcp_cd_edit_server">Edit server</string>
+    <string name="mcp_cd_remove_server">Remove server</string>
+
+    <!-- SettingsScreen: MCP Delete Dialog -->
+    <string name="mcp_dialog_remove_title">Remove Server</string>
+    <string name="mcp_dialog_remove_message">Remove \"%1$s\"? Its tools will no longer be available to your agent.</string>
+
+    <!-- SettingsScreen: Data section -->
+    <string name="settings_section_data">Data</string>
+    <string name="settings_export_memory">Export Memory</string>
+    <string name="settings_import_memory">Import Memory</string>
+    <string name="settings_export_skills">Export Skills</string>
+    <string name="settings_import_skills">Import Skills</string>
+
+    <!-- SettingsScreen: Setup section -->
+    <string name="settings_section_setup">Setup</string>
+    <string name="settings_run_setup_again">Run Setup Again</string>
+
+    <!-- SettingsScreen: Danger Zone -->
+    <string name="settings_section_danger_zone">Danger Zone</string>
+    <string name="settings_reset_config">Reset Config</string>
+    <string name="settings_wipe_memory">Wipe Memory</string>
+    <string name="settings_cd_warning">Warning</string>
+
+    <!-- SettingsScreen: System info -->
+    <string name="settings_section_system">System</string>
+    <string name="settings_version">Version</string>
+    <string name="settings_openclaw" translatable="false">OpenClaw</string>
+    <string name="settings_nodejs" translatable="false">Node.js</string>
+
+    <!-- SettingsScreen: Edit Field Dialog -->
+    <string name="dialog_edit_title">Edit %1$s</string>
+    <string name="dialog_restart_warning">Changing this requires an agent restart.</string>
+
+    <!-- SettingsScreen: Reset Config Dialog -->
+    <string name="dialog_reset_config_message">This will stop the agent, clear all config, and return to setup. This cannot be undone.</string>
+
+    <!-- SettingsScreen: Import Memory Dialog -->
+    <string name="dialog_import_memory_message">This will overwrite personality, memory, and skills with the backup. A safety backup is created automatically before importing.</string>
+
+    <!-- SettingsScreen: Apply Config Dialog -->
+    <string name="dialog_apply_config_title">Apply Imported Config</string>
+    <string name="dialog_apply_config_enabled">Enabled</string>
+    <string name="dialog_apply_config_disabled">Disabled</string>
+    <string name="dialog_apply_config_no_change">No change</string>
+    <string name="dialog_apply_config_auto_detect">Auto-detect</string>
+    <string name="dialog_apply_config_question">Apply this configuration to your device?</string>
+    <string name="dialog_apply_config_auth_setup_token">Pro/Max Setup Token</string>
+    <string name="dialog_apply_config_auth_api_key">API Key</string>
+
+    <!-- SettingsScreen: Run Setup Again Dialog -->
+    <string name="dialog_run_setup_message">This will restart the setup flow. Your current config will be overwritten when you complete setup.</string>
+
+    <!-- SettingsScreen: Clear Memory Dialog -->
+    <string name="dialog_wipe_memory_message">This will delete all memory files. The agent will lose all accumulated knowledge. This cannot be undone.</string>
+    <string name="dialog_wipe_confirm_label">Type WIPE to confirm</string>
+
+    <!-- SettingsScreen: Revoke Permission Dialog -->
+    <string name="dialog_disable_permission_title">Disable %1$s</string>
+    <string name="dialog_disable_permission_message">Android doesn\'t allow apps to revoke their own permissions.\n\nTo disable %1$s, go to:\nSystem Settings \u2192 Apps \u2192 SeekerClaw \u2192 Permissions</string>
+
+    <!-- SettingsScreen: Common buttons (reuse button_save, button_cancel from above) -->
+    <string name="button_confirm">Confirm</string>
+    <string name="button_continue">Continue</string>
+    <string name="button_remove">Remove</string>
+    <string name="button_select_file">Select File</string>
+    <string name="button_apply">Apply</string>
+    <string name="button_got_it">Got it</string>
+    <string name="button_open_settings">Open Settings</string>
+    <string name="button_edit">Edit</string>
+
+    <!-- SettingsScreen: Toast messages -->
+    <string name="toast_memory_exported">Memory exported successfully</string>
+    <string name="toast_memory_imported">Memory imported. Restart agent to apply.</string>
+    <string name="toast_memory_import_failed">Import failed. Ensure the file is a valid SeekerClaw backup.</string>
+    <string name="toast_no_skills_to_export">No added skills to export</string>
+    <string name="toast_no_qr_data">No QR data received</string>
+    <string name="toast_config_import_failed">Config import failed</string>
+    <string name="toast_config_saved_invalid">Imported config could not be applied: %1$s</string>
+    <string name="toast_config_imported">Config imported</string>
+    <string name="toast_address_copied">Address copied</string>
+    <string name="toast_connection_cancelled">Connection cancelled</string>
+    <string name="toast_connection_failed">Connection failed</string>
+
+    <!-- SettingsScreen: Wallet error states -->
+    <string name="wallet_error_config_saved_invalid">Config saved but invalid: %1$s</string>
+
+    <!-- SettingsScreen: CollapsibleSection content descriptions -->
+    <string name="settings_collapse_section">Collapse %1$s</string>
+    <string name="settings_expand_section">Expand %1$s</string>
+
+    <!-- SettingsScreen: ConfigField content descriptions -->
+    <string name="settings_info_about">More info about %1$s</string>
+    <string name="settings_field_required">%1$s, required</string>
 </resources>
