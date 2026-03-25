@@ -36,7 +36,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import com.seekerclaw.app.ui.theme.RethinkSans
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import com.seekerclaw.app.R
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.seekerclaw.app.BuildConfig
@@ -68,11 +70,14 @@ fun SystemScreen(onBack: () -> Unit) {
 
     val cfgVersion by ConfigManager.configVersion
     val config = remember(cfgVersion) { ConfigManager.loadConfig(context) }
-    val agentName = remember(config) { config?.agentName?.ifBlank { "SeekerClaw" } ?: "SeekerClaw" }
+    val defaultAgentName = stringResource(R.string.app_name)
+    val agentName = remember(config, defaultAgentName) { config?.agentName?.ifBlank { defaultAgentName } ?: defaultAgentName }
+    val notSet = stringResource(R.string.system_status_not_set)
     val modelName = config?.model
-        ?.ifBlank { "Not set" }
+        ?.ifBlank { notSet }
         ?.let { formatModelName(it) }
-        ?: "Not set"
+        ?: notSet
+    val resources = LocalContext.current.resources
 
     var deviceInfo by remember { mutableStateOf<DeviceInfo?>(null) }
     var appStorage by remember { mutableStateOf<AppStorageInfo?>(null) }
@@ -123,12 +128,12 @@ fun SystemScreen(onBack: () -> Unit) {
             IconButton(onClick = onBack) {
                 Icon(
                     Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = "Back",
+                    contentDescription = stringResource(R.string.system_back),
                     tint = SeekerClawColors.TextDim,
                 )
             }
             Text(
-                text = "System",
+                text = stringResource(R.string.system_title),
                 fontFamily = RethinkSans,
                 fontSize = 22.sp,
                 fontWeight = FontWeight.Bold,
@@ -139,7 +144,7 @@ fun SystemScreen(onBack: () -> Unit) {
         Spacer(modifier = Modifier.height(24.dp))
 
         // ==================== STATUS ====================
-        SectionLabel("Status")
+        SectionLabel(stringResource(R.string.system_section_status))
 
         Column(
             modifier = Modifier
@@ -147,15 +152,15 @@ fun SystemScreen(onBack: () -> Unit) {
                 .background(SeekerClawColors.Surface, shape)
                 .padding(16.dp),
         ) {
-            InfoRow("Version", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
-            InfoRow("OpenClaw", BuildConfig.OPENCLAW_VERSION)
+            InfoRow(stringResource(R.string.system_label_version), stringResource(R.string.system_version_format, BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE))
+            InfoRow(stringResource(R.string.system_label_openclaw), BuildConfig.OPENCLAW_VERSION)
             InfoRow(
-                label = "Node.js",
+                label = stringResource(R.string.system_label_nodejs),
                 value = "${BuildConfig.NODEJS_VERSION} — ${when (status) {
-                    ServiceStatus.RUNNING -> "Running"
-                    ServiceStatus.STARTING -> "Starting"
-                    ServiceStatus.STOPPED -> "Stopped"
-                    ServiceStatus.ERROR -> "Error"
+                    ServiceStatus.RUNNING -> stringResource(R.string.system_status_running)
+                    ServiceStatus.STARTING -> stringResource(R.string.system_status_starting)
+                    ServiceStatus.STOPPED -> stringResource(R.string.system_status_stopped)
+                    ServiceStatus.ERROR -> stringResource(R.string.system_status_error)
                 }}",
                 dotColor = when (status) {
                     ServiceStatus.RUNNING -> SeekerClawColors.Accent
@@ -164,14 +169,14 @@ fun SystemScreen(onBack: () -> Unit) {
                     ServiceStatus.ERROR -> SeekerClawColors.Error
                 },
             )
-            InfoRow("Agent", agentName)
-            InfoRow("Uptime", formatUptime(uptime), isLast = true)
+            InfoRow(stringResource(R.string.system_label_agent), agentName)
+            InfoRow(stringResource(R.string.system_label_uptime), formatUptime(uptime, resources), isLast = true)
         }
 
         Spacer(modifier = Modifier.height(24.dp))
 
         // ==================== DEVICE ====================
-        SectionLabel("Device")
+        SectionLabel(stringResource(R.string.system_section_device))
 
         Column(
             modifier = Modifier
@@ -182,10 +187,10 @@ fun SystemScreen(onBack: () -> Unit) {
             val info = deviceInfo
             if (info != null) {
                 ResourceBar(
-                    label = "Battery",
+                    label = stringResource(R.string.system_label_battery),
                     value = "${info.batteryLevel}%",
                     progress = info.batteryLevel / 100f,
-                    suffix = if (info.isCharging) "Charging" else "",
+                    suffix = if (info.isCharging) stringResource(R.string.system_status_charging) else "",
                     barColor = when {
                         info.batteryLevel <= 20 -> SeekerClawColors.Error
                         info.batteryLevel <= 40 -> SeekerClawColors.Warning
@@ -194,11 +199,8 @@ fun SystemScreen(onBack: () -> Unit) {
                 )
                 Spacer(modifier = Modifier.height(16.dp))
                 ResourceBar(
-                    label = "Device Memory",
-                    value = "%.1f / %.1f GB".format(
-                        info.memoryUsedMb / 1024f,
-                        info.memoryTotalMb / 1024f,
-                    ),
+                    label = stringResource(R.string.system_label_device_memory),
+                    value = stringResource(R.string.system_storage_gb_used, info.memoryUsedMb / 1024f, info.memoryTotalMb / 1024f),
                     progress = if (info.memoryTotalMb > 0) info.memoryUsedMb.toFloat() / info.memoryTotalMb else 0f,
                     barColor = when {
                         info.memoryTotalMb > 0 && info.memoryUsedMb.toFloat() / info.memoryTotalMb > 0.9f -> SeekerClawColors.Error
@@ -208,8 +210,8 @@ fun SystemScreen(onBack: () -> Unit) {
                 )
                 Spacer(modifier = Modifier.height(16.dp))
                 ResourceBar(
-                    label = "Device Storage",
-                    value = "%.1f / %.0f GB".format(info.storageUsedGb, info.storageTotalGb),
+                    label = stringResource(R.string.system_label_device_storage),
+                    value = stringResource(R.string.system_storage_gb_total, info.storageUsedGb, info.storageTotalGb),
                     progress = if (info.storageTotalGb > 0) info.storageUsedGb / info.storageTotalGb else 0f,
                     barColor = when {
                         info.storageTotalGb > 0 && info.storageUsedGb / info.storageTotalGb > 0.9f -> SeekerClawColors.Error
@@ -219,7 +221,7 @@ fun SystemScreen(onBack: () -> Unit) {
                 )
             } else {
                 Text(
-                    text = "Loading\u2026",
+                    text = stringResource(R.string.system_status_loading),
                     fontFamily = FontFamily.Monospace,
                     fontSize = 13.sp,
                     color = SeekerClawColors.TextDim,
@@ -238,7 +240,7 @@ fun SystemScreen(onBack: () -> Unit) {
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 Text(
-                    text = "APP STORAGE",
+                    text = stringResource(R.string.system_section_app_storage),
                     fontFamily = FontFamily.Monospace,
                     fontSize = 10.sp,
                     fontWeight = FontWeight.Bold,
@@ -246,18 +248,18 @@ fun SystemScreen(onBack: () -> Unit) {
                     letterSpacing = 1.sp,
                 )
                 Spacer(modifier = Modifier.height(8.dp))
-                InfoRow("Workspace", "%.1f MB".format(appInfo.workspaceMb))
-                InfoRow("Database", "%.1f MB".format(appInfo.databaseMb))
-                InfoRow("Logs", "%.1f MB".format(appInfo.logsMb))
-                InfoRow("Runtime", "%.1f MB".format(appInfo.runtimeMb))
-                InfoRow("Total", "%.1f MB".format(appInfo.totalMb), isLast = true)
+                InfoRow(stringResource(R.string.system_label_workspace), stringResource(R.string.system_storage_mb, appInfo.workspaceMb))
+                InfoRow(stringResource(R.string.system_label_database), stringResource(R.string.system_storage_mb, appInfo.databaseMb))
+                InfoRow(stringResource(R.string.system_label_logs), stringResource(R.string.system_storage_mb, appInfo.logsMb))
+                InfoRow(stringResource(R.string.system_label_runtime), stringResource(R.string.system_storage_mb, appInfo.runtimeMb))
+                InfoRow(stringResource(R.string.system_label_total), stringResource(R.string.system_storage_mb, appInfo.totalMb), isLast = true)
             }
         }
 
         Spacer(modifier = Modifier.height(24.dp))
 
         // ==================== CONNECTION ====================
-        SectionLabel("Connection")
+        SectionLabel(stringResource(R.string.system_section_connection))
 
         Column(
             modifier = Modifier
@@ -266,17 +268,17 @@ fun SystemScreen(onBack: () -> Unit) {
                 .padding(16.dp),
         ) {
             InfoRow(
-                label = "Telegram",
-                value = if (status == ServiceStatus.RUNNING) "Connected" else "Disconnected",
+                label = stringResource(R.string.system_label_telegram),
+                value = if (status == ServiceStatus.RUNNING) stringResource(R.string.system_status_connected) else stringResource(R.string.system_status_disconnected),
                 dotColor = if (status == ServiceStatus.RUNNING) SeekerClawColors.Accent else SeekerClawColors.TextDim,
             )
             if (status == ServiceStatus.RUNNING && lastActivity > 0L) {
                 InfoRow(
-                    label = "Last message",
-                    value = formatTimeAgo(lastActivity),
+                    label = stringResource(R.string.system_label_last_message),
+                    value = formatTimeAgo(lastActivity, resources),
                 )
             }
-            InfoRow("Model", modelName, isLast = true)
+            InfoRow(stringResource(R.string.system_label_model), modelName, isLast = true)
         }
 
         Spacer(modifier = Modifier.height(24.dp))
@@ -284,7 +286,7 @@ fun SystemScreen(onBack: () -> Unit) {
         // ==================== API LIMITS ====================
         val usage = apiUsage
         if (usage != null) {
-            SectionLabel("API Limits")
+            SectionLabel(stringResource(R.string.system_section_api_limits))
 
             Column(
                 modifier = Modifier
@@ -304,34 +306,38 @@ fun SystemScreen(onBack: () -> Unit) {
                     when (usage) {
                         is ApiUsageData.OAuthUsage -> {
                             UsageLimitBar(
-                                label = "Session",
+                                label = stringResource(R.string.system_label_session),
                                 utilization = usage.fiveHourUtilization,
                                 resetsAt = usage.fiveHourResetsAt,
+                                resources = resources,
                             )
                             Spacer(modifier = Modifier.height(16.dp))
                             UsageLimitBar(
-                                label = "Weekly",
+                                label = stringResource(R.string.system_label_weekly),
                                 utilization = usage.sevenDayUtilization,
                                 resetsAt = usage.sevenDayResetsAt,
+                                resources = resources,
                             )
                         }
                         is ApiUsageData.ApiKeyUsage -> {
                             val reqProgress = if (usage.requestsLimit > 0)
                                 (usage.requestsLimit - usage.requestsRemaining).toFloat() / usage.requestsLimit else 0f
                             UsageLimitBar(
-                                label = "Requests",
+                                label = stringResource(R.string.system_label_requests),
                                 utilization = reqProgress,
                                 detailText = "${usage.requestsRemaining} / ${usage.requestsLimit}",
                                 resetsAt = usage.requestsReset,
+                                resources = resources,
                             )
                             Spacer(modifier = Modifier.height(16.dp))
                             val tokProgress = if (usage.tokensLimit > 0)
                                 (usage.tokensLimit - usage.tokensRemaining).toFloat() / usage.tokensLimit else 0f
                             UsageLimitBar(
-                                label = "Tokens",
+                                label = stringResource(R.string.system_label_tokens),
                                 utilization = tokProgress,
                                 detailText = "${formatTokens(usage.tokensRemaining)} / ${formatTokens(usage.tokensLimit)}",
                                 resetsAt = usage.tokensReset,
+                                resources = resources,
                             )
                         }
                     }
@@ -340,7 +346,7 @@ fun SystemScreen(onBack: () -> Unit) {
                 if (usage.error != null) {
                     if (hasValidData) Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = if (hasValidData) "Error: ${usage.error}" else "Usage data unavailable (${usage.error})",
+                        text = if (hasValidData) stringResource(R.string.system_limits_error, usage.error ?: "") else stringResource(R.string.system_limits_unavailable, usage.error ?: ""),
                         fontFamily = FontFamily.Monospace,
                         fontSize = 10.sp,
                         color = if (hasValidData) SeekerClawColors.Error else SeekerClawColors.TextDim,
@@ -349,7 +355,7 @@ fun SystemScreen(onBack: () -> Unit) {
 
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "Updated ${formatTimeAgo(usage.updatedAt)}",
+                    text = stringResource(R.string.system_limits_updated, formatTimeAgo(usage.updatedAt, resources)),
                     fontFamily = FontFamily.Monospace,
                     fontSize = 10.sp,
                     color = SeekerClawColors.TextDim,
@@ -360,22 +366,22 @@ fun SystemScreen(onBack: () -> Unit) {
         }
 
         // ==================== USAGE ====================
-        SectionLabel("Usage")
+        SectionLabel(stringResource(R.string.system_section_usage))
 
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             StatCard(
-                label = "Today",
+                label = stringResource(R.string.system_usage_today),
                 value = "$messagesToday",
-                unit = "messages",
+                unit = stringResource(R.string.system_unit_messages),
                 modifier = Modifier.weight(1f),
             )
             StatCard(
-                label = "All Time",
+                label = stringResource(R.string.system_usage_all_time),
                 value = "$messageCount",
-                unit = "messages",
+                unit = stringResource(R.string.system_unit_messages),
                 modifier = Modifier.weight(1f),
             )
         }
@@ -387,15 +393,15 @@ fun SystemScreen(onBack: () -> Unit) {
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             StatCard(
-                label = "Today",
+                label = stringResource(R.string.system_usage_today),
                 value = formatTokens(tokensToday),
-                unit = "tokens",
+                unit = stringResource(R.string.system_unit_tokens),
                 modifier = Modifier.weight(1f),
             )
             StatCard(
-                label = "All Time",
+                label = stringResource(R.string.system_usage_all_time),
                 value = formatTokens(tokensTotal),
-                unit = "tokens",
+                unit = stringResource(R.string.system_unit_tokens),
                 modifier = Modifier.weight(1f),
             )
         }
@@ -405,7 +411,7 @@ fun SystemScreen(onBack: () -> Unit) {
         if (status == ServiceStatus.RUNNING || status == ServiceStatus.STARTING) {
             Spacer(modifier = Modifier.height(24.dp))
 
-            SectionLabel("API Analytics")
+            SectionLabel(stringResource(R.string.system_section_api_analytics))
 
             Column(
                 modifier = Modifier
@@ -413,10 +419,10 @@ fun SystemScreen(onBack: () -> Unit) {
                     .background(SeekerClawColors.Surface, shape)
                     .padding(16.dp),
             ) {
-                InfoRow("Requests", if (stats != null) "${stats.todayRequests} today" else "--")
+                InfoRow(stringResource(R.string.system_label_requests), if (stats != null) stringResource(R.string.system_analytics_requests_today, stats.todayRequests) else stringResource(R.string.system_analytics_no_data))
                 InfoRow(
-                    label = "Avg Latency",
-                    value = if (stats != null && stats.todayAvgLatencyMs > 0) "${stats.todayAvgLatencyMs}ms" else "--",
+                    label = stringResource(R.string.system_label_avg_latency),
+                    value = if (stats != null && stats.todayAvgLatencyMs > 0) stringResource(R.string.system_analytics_latency_ms, stats.todayAvgLatencyMs) else stringResource(R.string.system_analytics_no_data),
                     dotColor = when {
                         stats == null -> SeekerClawColors.TextDim
                         stats.todayAvgLatencyMs > 5000 -> SeekerClawColors.Error
@@ -425,10 +431,10 @@ fun SystemScreen(onBack: () -> Unit) {
                     },
                 )
                 InfoRow(
-                    label = "Error Rate",
+                    label = stringResource(R.string.system_label_error_rate),
                     value = if (stats != null && stats.todayRequests > 0 && stats.todayErrors > 0)
-                        String.format("%.1f%%", stats.todayErrors.toDouble() * 100.0 / stats.todayRequests)
-                    else if (stats != null) "0%" else "--",
+                        stringResource(R.string.system_analytics_error_pct, stats.todayErrors.toDouble() * 100.0 / stats.todayRequests)
+                    else if (stats != null) stringResource(R.string.system_analytics_zero_pct) else stringResource(R.string.system_analytics_no_data),
                     dotColor = when {
                         stats == null -> SeekerClawColors.TextDim
                         stats.todayErrors > 0 -> SeekerClawColors.Warning
@@ -436,14 +442,14 @@ fun SystemScreen(onBack: () -> Unit) {
                     },
                 )
                 InfoRow(
-                    label = "Cache Hits",
-                    value = if (stats != null) "${(stats.todayCacheHitRate * 100).toInt()}%" else "--",
+                    label = stringResource(R.string.system_label_cache_hits),
+                    value = if (stats != null) stringResource(R.string.system_analytics_cache_pct, (stats.todayCacheHitRate * 100).toInt()) else stringResource(R.string.system_analytics_no_data),
                 )
                 InfoRow(
-                    label = "Tokens In/Out",
+                    label = stringResource(R.string.system_label_tokens_in_out),
                     value = if (stats != null)
-                        "${formatTokens(stats.todayInputTokens)} / ${formatTokens(stats.todayOutputTokens)}"
-                    else "--",
+                        stringResource(R.string.system_analytics_tokens_io, formatTokens(stats.todayInputTokens), formatTokens(stats.todayOutputTokens))
+                    else stringResource(R.string.system_analytics_no_data),
                     isLast = true,
                 )
             }
@@ -451,7 +457,7 @@ fun SystemScreen(onBack: () -> Unit) {
             // ==================== MEMORY INDEX (BAT-33) ====================
             Spacer(modifier = Modifier.height(24.dp))
 
-            SectionLabel("Memory Index")
+            SectionLabel(stringResource(R.string.system_section_memory_index))
 
             Column(
                 modifier = Modifier
@@ -459,15 +465,15 @@ fun SystemScreen(onBack: () -> Unit) {
                     .background(SeekerClawColors.Surface, shape)
                     .padding(16.dp),
             ) {
-                InfoRow("Files", if (stats != null) "${stats.memoryFilesIndexed}" else "--")
-                InfoRow("Chunks", if (stats != null) "${stats.memoryChunksCount}" else "--")
+                InfoRow(stringResource(R.string.system_label_files), if (stats != null) "${stats.memoryFilesIndexed}" else stringResource(R.string.system_analytics_no_data))
+                InfoRow(stringResource(R.string.system_label_chunks), if (stats != null) "${stats.memoryChunksCount}" else stringResource(R.string.system_analytics_no_data))
                 val lastIndexedRaw = stats?.memoryLastIndexed
                 val lastIndexedFormatted = remember(lastIndexedRaw) {
-                    if (lastIndexedRaw != null) formatMemoryIndexTime(lastIndexedRaw) else "--"
+                    if (lastIndexedRaw != null) formatMemoryIndexTime(lastIndexedRaw, resources) else resources.getString(R.string.system_analytics_no_data)
                 }
                 InfoRow(
-                    label = "Last Indexed",
-                    value = if (stats != null) lastIndexedFormatted else "--",
+                    label = stringResource(R.string.system_label_last_indexed),
+                    value = if (stats != null) lastIndexedFormatted else stringResource(R.string.system_analytics_no_data),
                     isLast = true,
                     dotColor = when {
                         stats == null || lastIndexedRaw == null -> SeekerClawColors.TextDim
@@ -634,16 +640,16 @@ private fun StatCard(
     }
 }
 
-private fun formatUptime(millis: Long): String {
-    if (millis <= 0) return "0m"
+private fun formatUptime(millis: Long, resources: android.content.res.Resources): String {
+    if (millis <= 0) return resources.getString(R.string.system_time_zero_minutes)
     val seconds = millis / 1000
     val minutes = seconds / 60
     val hours = minutes / 60
     val days = hours / 24
     return buildString {
-        if (days > 0) append("${days}d ")
-        if (hours % 24 > 0) append("${hours % 24}h ")
-        append("${minutes % 60}m")
+        if (days > 0) append(resources.getString(R.string.system_time_days, days))
+        if (hours % 24 > 0) append(resources.getString(R.string.system_time_hours, hours % 24))
+        append(resources.getString(R.string.system_time_minutes, minutes % 60))
     }.trim()
 }
 
@@ -664,6 +670,7 @@ private fun UsageLimitBar(
     modifier: Modifier = Modifier,
     resetsAt: String = "",
     detailText: String? = null,
+    resources: android.content.res.Resources = LocalContext.current.resources,
 ) {
     val percentage = (utilization * 100).toInt()
     val remaining = 100 - percentage
@@ -687,7 +694,7 @@ private fun UsageLimitBar(
                 color = SeekerClawColors.TextPrimary,
             )
             Text(
-                text = "${remaining}% left",
+                text = stringResource(R.string.system_limits_pct_left, remaining),
                 fontFamily = FontFamily.Monospace,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Bold,
@@ -721,7 +728,7 @@ private fun UsageLimitBar(
                 )
                 if (resetsAt.isNotBlank()) {
                     Text(
-                        text = "Resets ${formatResetTime(resetsAt)}",
+                        text = stringResource(R.string.system_limits_resets, formatResetTime(resetsAt, resources)),
                         fontFamily = FontFamily.Monospace,
                         fontSize = 10.sp,
                         color = SeekerClawColors.TextDim,
@@ -732,29 +739,29 @@ private fun UsageLimitBar(
     }
 }
 
-private fun formatResetTime(isoTimestamp: String): String {
+private fun formatResetTime(isoTimestamp: String, resources: android.content.res.Resources): String {
     return try {
         val resetInstant = java.time.Instant.parse(isoTimestamp)
         val now = java.time.Instant.now()
         val diff = java.time.Duration.between(now, resetInstant)
         when {
-            diff.isNegative -> "soon"
-            diff.toHours() > 0 -> "in ${diff.toHours()}h ${diff.toMinutes() % 60}m"
-            diff.toMinutes() > 0 -> "in ${diff.toMinutes()}m"
-            else -> "in <1m"
+            diff.isNegative -> resources.getString(R.string.system_time_soon)
+            diff.toHours() > 0 -> resources.getString(R.string.system_time_in_hours_minutes, diff.toHours(), diff.toMinutes() % 60)
+            diff.toMinutes() > 0 -> resources.getString(R.string.system_time_in_minutes, diff.toMinutes())
+            else -> resources.getString(R.string.system_time_in_less_than_minute)
         }
     } catch (_: Exception) {
         ""
     }
 }
 
-private fun formatTimeAgo(epochMillis: Long): String {
+private fun formatTimeAgo(epochMillis: Long, resources: android.content.res.Resources): String {
     val diff = System.currentTimeMillis() - epochMillis
     return when {
-        diff < 60_000 -> "just now"
-        diff < 3_600_000 -> "${diff / 60_000}m ago"
-        diff < 86_400_000 -> "${diff / 3_600_000}h ago"
-        else -> "${diff / 86_400_000}d ago"
+        diff < 60_000 -> resources.getString(R.string.system_time_just_now)
+        diff < 3_600_000 -> resources.getString(R.string.system_time_minutes_ago, diff / 60_000)
+        diff < 86_400_000 -> resources.getString(R.string.system_time_hours_ago, diff / 3_600_000)
+        else -> resources.getString(R.string.system_time_days_ago, diff / 86_400_000)
     }
 }
 
@@ -767,7 +774,7 @@ private fun formatTokens(count: Long): String {
     }
 }
 
-private fun formatMemoryIndexTime(isoTimestamp: String): String {
+private fun formatMemoryIndexTime(isoTimestamp: String, resources: android.content.res.Resources): String {
     return try {
         // Parse with timezone awareness, converting to local device time
         val zonedDateTime = try {
@@ -781,7 +788,7 @@ private fun formatMemoryIndexTime(isoTimestamp: String): String {
         val localTime = zonedDateTime.toLocalTime()
         val hm = "%02d:%02d".format(localTime.hour, localTime.minute)
         val today = java.time.LocalDate.now(java.time.ZoneId.systemDefault())
-        if (localDate == today) "Today $hm" else "$localDate $hm"
+        if (localDate == today) resources.getString(R.string.system_memory_today_time, hm) else "$localDate $hm"
     } catch (_: Exception) {
         // Fallback: naive string split for non-standard formats
         try {
@@ -791,7 +798,7 @@ private fun formatMemoryIndexTime(isoTimestamp: String): String {
             val timePart = parts[1].substringBefore("+").substringBefore("-")
             val hm = timePart.split(":").take(2).joinToString(":")
             val todayStr = java.time.LocalDate.now().toString()
-            if (datePart == todayStr) "Today $hm" else "$datePart $hm"
+            if (datePart == todayStr) resources.getString(R.string.system_memory_today_time, hm) else "$datePart $hm"
         } catch (_: Exception) {
             isoTimestamp
         }
