@@ -341,7 +341,7 @@ fun SettingsScreen(
         showRestartDialog = true
     }
 
-    val notSetLabel = stringResource(R.string.wallet_not_set)
+    val notSetLabel = stringResource(R.string.label_not_set)
     val authTypeLabel = if (config?.authType == "setup_token") stringResource(R.string.dialog_apply_config_auth_setup_token) else stringResource(R.string.dialog_apply_config_auth_api_key)
     val maskedApiKey = config?.anthropicApiKey?.let { key ->
         if (key.isBlank()) notSetLabel
@@ -554,7 +554,7 @@ fun SettingsScreen(
                 val languageOptions = listOf(
                     "" to stringResource(R.string.language_system_default),
                     "en" to stringResource(R.string.language_english),
-                    "zh-Hans" to stringResource(R.string.language_chinese_simplified),
+                    "zh-CN" to stringResource(R.string.language_chinese_simplified),
                 )
                 var languageExpanded by remember { mutableStateOf(false) }
                 val currentLabel = languageOptions.firstOrNull { it.first == currentLangTag }?.second
