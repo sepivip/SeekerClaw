@@ -1,6 +1,220 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">SeekerClaw</string>
+    <string name="app_name" translatable="false">SeekerClaw</string>
     <string name="notification_channel_name">SeekerClaw Service</string>
     <string name="notification_content">AI agent is running</string>
+
+    <!-- Navigation -->
+    <string name="nav_home">Home</string>
+    <string name="nav_logs">Logs</string>
+    <string name="nav_skills">Skills</string>
+    <string name="nav_settings">Settings</string>
+
+    <!-- Dashboard: Header (brand names, not translatable) -->
+    <string name="brand_seeker" translatable="false">Seeker</string>
+    <string name="brand_claw" translatable="false">C/aw</string>
+    <string name="brand_agent_os" translatable="false">AgentOS</string>
+
+    <!-- Dashboard: Status text -->
+    <string name="status_online">Online</string>
+    <string name="status_offline">Offline</string>
+    <string name="status_starting">Starting\u2026</string>
+    <string name="status_error">Error</string>
+    <string name="status_config_needed">Config Needed</string>
+    <string name="status_rate_limited">Rate Limited</string>
+    <string name="status_api_overloaded">API Overloaded</string>
+    <string name="status_api_unreachable">API Unreachable</string>
+    <string name="status_api_unstable">API Unstable</string>
+    <string name="status_auth_error">Auth Error</string>
+    <string name="status_billing_issue">Billing Issue</string>
+    <string name="status_quota_exceeded">Quota Exceeded</string>
+    <string name="status_network_error">Network Error</string>
+    <string name="status_api_error">API Error</string>
+    <string name="status_agent_unresponsive">Agent Unresponsive</string>
+
+    <!-- Dashboard: Banners -->
+    <string name="banner_no_internet">No internet connection</string>
+    <string name="banner_dismiss_network">Dismiss network alert</string>
+    <string name="banner_dismiss_error">Dismiss error alert</string>
+    <string name="banner_api_restored">API connection restored</string>
+    <string name="banner_auth_rejected">API key rejected%1$s \u2014 check Settings</string>
+    <string name="banner_billing_issue">API billing issue \u2014 check %1$s</string>
+    <string name="banner_quota_exceeded">API quota exceeded \u2014 try again later or upgrade plan</string>
+    <string name="banner_rate_limited">Rate limited \u2014 retrying automatically</string>
+    <string name="banner_server_unavailable">%1$s API temporarily unavailable \u2014 retrying</string>
+    <string name="banner_cloudflare">%1$s API unreachable \u2014 retrying</string>
+    <string name="banner_network_error">Cannot reach %1$s API \u2014 check internet connection</string>
+    <string name="banner_agent_stale">Agent may have stopped responding \u2014 try restarting</string>
+    <string name="banner_api_error_generic">API error \u2014 check Logs for details</string>
+
+    <!-- Dashboard: Setup card -->
+    <string name="card_complete_setup">Complete Setup</string>
+    <string name="card_missing_bot_token">Your Telegram bot token is missing</string>
+    <string name="card_missing_credential">Your API credential is missing</string>
+    <string name="card_needs_configuration">Your agent needs configuration to start</string>
+    <string name="button_continue_setup">Continue Setup</string>
+
+    <!-- Dashboard: First launch guide -->
+    <string name="card_ready_to_go">Ready to go!</string>
+    <string name="card_first_launch_hint">Tap \"Deploy Agent\" below to start %1$s, then open Telegram to chat with your agent.</string>
+
+    <!-- Dashboard: Status card -->
+    <string name="label_uptime">Uptime</string>
+    <string name="label_today">TODAY</string>
+    <string name="label_total">TOTAL</string>
+    <string name="label_last">LAST</string>
+    <string name="label_status">Status</string>
+    <string name="button_settings_nav">Settings &gt;</string>
+    <string name="button_system_nav">System &gt;</string>
+
+    <!-- Dashboard: Action buttons -->
+    <string name="button_deploy_agent">Deploy Agent</string>
+    <string name="button_stop_agent">Stop Agent</string>
+    <string name="hint_complete_setup_to_deploy">Complete setup to deploy</string>
+
+    <!-- Dashboard: API stats -->
+    <string name="stat_api" translatable="false">API</string>
+    <string name="stat_latency" translatable="false">LATENCY</string>
+    <string name="stat_cache" translatable="false">CACHE</string>
+    <string name="stat_api_value">%1$d req</string>
+    <string name="stat_latency_value">%1$dms</string>
+    <string name="stat_cache_value">%1$d%%</string>
+
+    <!-- Dashboard: Uplink names -->
+    <string name="uplink_telegram" translatable="false">Telegram</string>
+    <string name="uplink_engine">Engine</string>
+    <string name="uplink_ai_provider">AI Provider</string>
+
+    <!-- Dashboard: Uplink subtitles — Engine -->
+    <string name="uplink_engine_retrying">Engine retrying</string>
+    <string name="uplink_engine_error">Engine error</string>
+    <string name="uplink_engine_unresponsive">Engine unresponsive</string>
+    <string name="uplink_engine_running">Claw Engine</string>
+    <string name="uplink_engine_starting">Starting...</string>
+    <string name="uplink_engine_offline">Offline</string>
+    <string name="uplink_engine_blocked">Blocked: missing config</string>
+
+    <!-- Dashboard: Uplink subtitles — Telegram -->
+    <string name="uplink_telegram_missing_token">Bot token missing</string>
+    <string name="uplink_telegram_relay">Message relay</string>
+    <string name="uplink_telegram_connecting">Connecting...</string>
+    <string name="uplink_telegram_error">Relay error</string>
+    <string name="uplink_telegram_offline">Offline</string>
+
+    <!-- Dashboard: Uplink subtitles — AI Provider -->
+    <string name="uplink_ai_missing_credential">Credential missing</string>
+    <string name="uplink_ai_retrying">%1$s (retrying)</string>
+    <string name="uplink_ai_auth_expired">Auth expired</string>
+    <string name="uplink_ai_billing">Billing issue</string>
+    <string name="uplink_ai_quota">Quota exceeded</string>
+    <string name="uplink_ai_error">API error</string>
+    <string name="uplink_ai_unresponsive">Unresponsive</string>
+    <string name="uplink_ai_loading">Loading model...</string>
+    <string name="uplink_ai_model_error">Model error</string>
+    <string name="uplink_ai_offline">Offline</string>
+
+    <!-- Dashboard: Uptime format -->
+    <string name="uptime_zero">00h 00m 00s</string>
+    <string name="uptime_no_activity">--:--</string>
+
+    <!-- SystemScreen: screen title & content description -->
+    <string name="system_title">System</string>
+    <string name="system_back">Back</string>
+
+    <!-- SystemScreen: section headers -->
+    <string name="system_section_status">Status</string>
+    <string name="system_section_device">Device</string>
+    <string name="system_section_connection">Connection</string>
+    <string name="system_section_app_storage">APP STORAGE</string>
+    <string name="system_section_api_limits">API Limits</string>
+    <string name="system_section_usage">Usage</string>
+    <string name="system_section_api_analytics">API Analytics</string>
+    <string name="system_section_memory_index">Memory Index</string>
+
+    <!-- SystemScreen: status labels -->
+    <string name="system_label_version">Version</string>
+    <string name="system_label_openclaw" translatable="false">OpenClaw</string>
+    <string name="system_label_nodejs" translatable="false">Node.js</string>
+    <string name="system_label_agent">Agent</string>
+    <string name="system_label_uptime">Uptime</string>
+    <string name="system_label_battery">Battery</string>
+    <string name="system_label_device_memory">Device Memory</string>
+    <string name="system_label_device_storage">Device Storage</string>
+    <string name="system_label_workspace">Workspace</string>
+    <string name="system_label_database">Database</string>
+    <string name="system_label_logs">Logs</string>
+    <string name="system_label_runtime">Runtime</string>
+    <string name="system_label_total">Total</string>
+    <string name="system_label_telegram" translatable="false">Telegram</string>
+    <string name="system_label_last_message">Last message</string>
+    <string name="system_label_model">Model</string>
+    <string name="system_label_requests">Requests</string>
+    <string name="system_label_avg_latency">Avg Latency</string>
+    <string name="system_label_error_rate">Error Rate</string>
+    <string name="system_label_cache_hits">Cache Hits</string>
+    <string name="system_label_tokens_in_out">Tokens In/Out</string>
+    <string name="system_label_files">Files</string>
+    <string name="system_label_chunks">Chunks</string>
+    <string name="system_label_last_indexed">Last Indexed</string>
+    <string name="system_label_session">Session</string>
+    <string name="system_label_weekly">Weekly</string>
+    <string name="system_label_tokens">Tokens</string>
+
+    <!-- SystemScreen: status values -->
+    <string name="system_status_running">Running</string>
+    <string name="system_status_starting">Starting</string>
+    <string name="system_status_stopped">Stopped</string>
+    <string name="system_status_error">Error</string>
+    <string name="system_status_connected">Connected</string>
+    <string name="system_status_disconnected">Disconnected</string>
+    <string name="system_status_charging">Charging</string>
+    <string name="system_status_loading">Loading\u2026</string>
+    <string name="system_status_not_set">Not set</string>
+
+    <!-- SystemScreen: version format -->
+    <string name="system_version_format">%1$s (%2$d)</string>
+
+    <!-- SystemScreen: usage cards -->
+    <string name="system_usage_today">Today</string>
+    <string name="system_usage_all_time">All Time</string>
+    <string name="system_unit_messages">messages</string>
+    <string name="system_unit_tokens">tokens</string>
+
+    <!-- SystemScreen: API analytics -->
+    <string name="system_analytics_requests_today">%1$d today</string>
+    <string name="system_analytics_latency_ms">%1$dms</string>
+    <string name="system_analytics_error_pct">%1$.1f%%</string>
+    <string name="system_analytics_zero_pct">0%%</string>
+    <string name="system_analytics_cache_pct">%1$d%%</string>
+    <string name="system_analytics_tokens_io">%1$s / %2$s</string>
+    <string name="system_analytics_no_data" translatable="false">--</string>
+
+    <!-- SystemScreen: API limits -->
+    <string name="system_limits_pct_left">%1$d%% left</string>
+    <string name="system_limits_resets">Resets %1$s</string>
+    <string name="system_limits_updated">Updated %1$s</string>
+    <string name="system_limits_error">Error: %1$s</string>
+    <string name="system_limits_unavailable">Usage data unavailable (%1$s)</string>
+
+    <!-- SystemScreen: storage format -->
+    <string name="system_storage_mb">%1$.1f MB</string>
+    <string name="system_storage_gb_used">%1$.1f / %2$.1f GB</string>
+    <string name="system_storage_gb_total">%1$.1f / %2$.0f GB</string>
+
+    <!-- SystemScreen: memory index time -->
+    <string name="system_memory_today_time">Today %1$s</string>
+
+    <!-- SystemScreen: time formatting -->
+    <string name="system_time_just_now">just now</string>
+    <string name="system_time_minutes_ago">%1$dm ago</string>
+    <string name="system_time_hours_ago">%1$dh ago</string>
+    <string name="system_time_days_ago">%1$dd ago</string>
+    <string name="system_time_soon">soon</string>
+    <string name="system_time_in_hours_minutes">in %1$dh %2$dm</string>
+    <string name="system_time_in_minutes">in %1$dm</string>
+    <string name="system_time_in_less_than_minute">in &lt;1m</string>
+    <string name="system_time_zero_minutes">0m</string>
+    <string name="system_time_days">%1$dd </string>
+    <string name="system_time_hours">%1$dh </string>
+    <string name="system_time_minutes">%1$dm</string>
 </resources>
