@@ -2153,7 +2153,7 @@ private fun RevokePermissionDialog(
     )
 }
 
-private fun maskSensitive(value: String, notSet: String = "Not set"): String {
+private fun maskSensitive(value: String, notSet: String): String {
     if (value.isBlank()) return notSet
     if (value.length <= 8) return "*".repeat(value.length)
     return "${value.take(6)}${"*".repeat(8)}${value.takeLast(4)}"

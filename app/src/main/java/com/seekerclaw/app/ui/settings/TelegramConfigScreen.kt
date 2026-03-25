@@ -128,7 +128,10 @@ fun TelegramConfigScreen(onBack: () -> Unit) {
                 )
                 ProviderConfigField(
                     label = stringResource(R.string.telegram_label_owner_id),
-                    value = config?.telegramOwnerId?.ifBlank { stringResource(R.string.telegram_owner_auto_detect) } ?: stringResource(R.string.telegram_owner_auto_detect),
+                    value = run {
+                        val autoDetect = stringResource(R.string.telegram_owner_auto_detect)
+                        config?.telegramOwnerId?.ifBlank { autoDetect } ?: autoDetect
+                    },
                     onClick = {
                         editField = "telegramOwnerId"
                         editLabel = context.getString(R.string.telegram_label_owner_id)
