@@ -2,12 +2,15 @@ package com.seekerclaw.app.ui.settings
 
 import android.Manifest
 import android.app.Activity
+import android.app.LocaleManager
+import androidx.compose.material3.HorizontalDivider
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.LocaleList
 import android.os.PowerManager
 import android.provider.Settings
 import android.widget.Toast
@@ -543,6 +546,83 @@ fun SettingsScreen(
                     },
                     info = SettingsHelpTexts.SERVER_MODE,
                 )
+
+                // Language picker — per-app locale (API 33+)
+                val localeManager = context.getSystemService(LocaleManager::class.java)
+                val currentLocales = localeManager.applicationLocales
+                val currentLangTag = if (currentLocales.isEmpty) "" else currentLocales.get(0)?.toLanguageTag() ?: ""
+                val languageOptions = listOf(
+                    "" to stringResource(R.string.language_system_default),
+                    "en" to stringResource(R.string.language_english),
+                    "zh-Hans" to stringResource(R.string.language_chinese_simplified),
+                )
+                var languageExpanded by remember { mutableStateOf(false) }
+                val currentLabel = languageOptions.firstOrNull { it.first == currentLangTag }?.second
+                    ?: languageOptions.firstOrNull { currentLangTag.startsWith(it.first) }?.second
+                    ?: stringResource(R.string.language_system_default)
+
+                HorizontalDivider(color = SeekerClawColors.CardBorder)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { languageExpanded = !languageExpanded }
+                        .padding(vertical = 14.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = stringResource(R.string.settings_language),
+                        fontFamily = RethinkSans,
+                        fontSize = 14.sp,
+                        color = SeekerClawColors.TextPrimary,
+                    )
+                    Text(
+                        text = currentLabel,
+                        fontFamily = RethinkSans,
+                        fontSize = 14.sp,
+                        color = SeekerClawColors.TextSecondary,
+                    )
+                }
+                AnimatedVisibility(visible = languageExpanded) {
+                    Column(modifier = Modifier.padding(bottom = 8.dp)) {
+                        languageOptions.forEach { (tag, label) ->
+                            val isSelected = tag == currentLangTag ||
+                                (tag.isNotEmpty() && currentLangTag.startsWith(tag))
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        val newLocales = if (tag.isEmpty()) {
+                                            LocaleList.getEmptyLocaleList()
+                                        } else {
+                                            LocaleList.forLanguageTags(tag)
+                                        }
+                                        localeManager.applicationLocales = newLocales
+                                        languageExpanded = false
+                                    }
+                                    .padding(vertical = 10.dp, horizontal = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                RadioButton(
+                                    selected = isSelected,
+                                    onClick = null,
+                                    colors = RadioButtonDefaults.colors(
+                                        selectedColor = SeekerClawColors.Accent,
+                                        unselectedColor = SeekerClawColors.TextSecondary,
+                                    ),
+                                )
+                                Text(
+                                    text = label,
+                                    fontFamily = RethinkSans,
+                                    fontSize = 14.sp,
+                                    color = if (isSelected) SeekerClawColors.TextPrimary else SeekerClawColors.TextSecondary,
+                                    modifier = Modifier.padding(start = 8.dp),
+                                )
+                            }
+                        }
+                    }
+                }
+
                 val allPermissionsOff = !hasCameraPermission && !hasLocationPermission &&
                     !hasContactsPermission && !hasSmsPermission && !hasCallPermission
                 if (allPermissionsOff) {

@@ -534,4 +534,10 @@
     <!-- SettingsScreen: ConfigField content descriptions -->
     <string name="settings_info_about">More info about %1$s</string>
     <string name="settings_field_required">%1$s, required</string>
+
+    <!-- Language Picker -->
+    <string name="settings_language">Language</string>
+    <string name="language_system_default">System Default</string>
+    <string name="language_english">English</string>
+    <string name="language_chinese_simplified">中文 (简体)</string>
 </resources>
