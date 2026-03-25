@@ -117,9 +117,11 @@ function requestConfirmation(chatId, toolName, input) {
     // BAT-326: Cron sessions use synthetic chatIds (e.g. "cron:abc123") that are not
     // valid Telegram chat IDs. Auto-deny confirmation-gated tools in cron turns with
     // a clear error rather than sending a Telegram message that will always fail.
-    if (typeof chatId === 'string' && chatId.startsWith('cron:')) {
-        log(`[Confirm] Rejected ${toolName} in cron session ${chatId} — confirmation-gated tools cannot run in scheduled tasks`, 'WARN');
-        return Promise.reject(new Error(`${toolName} requires user confirmation which is not available in scheduled tasks. Confirmation-gated tools (swaps, transfers, etc.) cannot be used in cron agent turns.`));
+    // #298: Heartbeat probes use "__heartbeat__" chatId — same restriction applies.
+    if (typeof chatId === 'string' && (chatId.startsWith('cron:') || chatId === '__heartbeat__')) {
+        const ctx = chatId.startsWith('cron:') ? 'scheduled tasks' : 'heartbeat probes';
+        log(`[Confirm] Rejected ${toolName} in ${ctx} (${chatId}) — confirmation-gated tools not available`, 'WARN');
+        return Promise.reject(new Error(`${toolName} requires user confirmation which is not available in ${ctx}. Confirmation-gated tools (swaps, transfers, etc.) cannot be used here.`));
     }
 
     const msg = formatConfirmationMessage(toolName, input);

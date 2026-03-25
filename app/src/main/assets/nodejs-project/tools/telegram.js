@@ -158,6 +158,10 @@ const handlers = {
         if (!text) return { error: 'text is required' };
         if (text.length > 4096) return { error: 'text exceeds Telegram 4096 character limit' };
         if (!chatId) return { error: 'No active chat' };
+        // #298: Heartbeat/cron use synthetic string chatIds (e.g. "__heartbeat__",
+        // "cron:abc") — not valid Telegram targets. Heartbeat alerts are sent via
+        // sendMessage(ownerChatId) in main.js, not through this tool.
+        if (typeof chatId === 'string' && isNaN(Number(chatId))) return { error: 'telegram_send not available in this context (non-Telegram session)' };
         // Validate buttons structure if provided
         if (input.buttons) {
             if (!Array.isArray(input.buttons)) return { error: 'buttons must be an array of rows' };

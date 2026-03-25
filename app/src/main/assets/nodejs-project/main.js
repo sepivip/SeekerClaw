@@ -1354,6 +1354,7 @@ const HEARTBEAT_PROMPT =
     'Read HEARTBEAT.md if it exists. Follow it strictly. ' +
     'Do not infer or repeat old tasks from prior chats. ' +
     'If nothing needs attention, reply HEARTBEAT_OK.';
+const HEARTBEAT_CHAT_ID = '__heartbeat__';
 let isHeartbeatInFlight = false;
 // Initialize to Date.now() so the first probe waits the full configured interval
 // rather than firing immediately on service start.
@@ -1375,16 +1376,21 @@ async function runHeartbeat() {
     isHeartbeatInFlight = true;
     log('[Heartbeat] Queueing probe...', 'DEBUG');
 
-    // Queue through chatQueues to serialize with user messages.
-    // This prevents concurrent conversation access if a user message
-    // arrives while the probe is in flight (and vice versa).
-    // Note: heartbeat probes add to conversation history by design —
-    // the agent uses that context to avoid repeating prior actions.
+    // Queue through chatQueues on ownerChatId to serialize with user messages.
+    // This prevents concurrent API calls if a user message arrives mid-heartbeat.
+    // Uses a separate HEARTBEAT_CHAT_ID for conversation history so heartbeat
+    // probe/response pairs don't pollute the user's conversation — fixing the
+    // thread-breaking issue where heartbeats between a question and answer made
+    // the agent lose context. Follows the same pattern as cron (cron:jobId).
     const prev = chatQueues.get(ownerChatId) || Promise.resolve();
     const task = prev.then(async () => {
         log('[Heartbeat] Running probe...', 'DEBUG');
         try {
-            const response = await chat(ownerChatId, HEARTBEAT_PROMPT);
+            // Fresh conversation each probe — heartbeat is stateless by design
+            // (reads HEARTBEAT.md for state, not conversation history)
+            clearConversation(HEARTBEAT_CHAT_ID);
+
+            const response = await chat(HEARTBEAT_CHAT_ID, HEARTBEAT_PROMPT);
             // Strip protocol tokens the agent may have mixed into content (OpenClaw parity 2026.3.1)
             if (/\bSILENT_REPLY\b/i.test(response)) log('[Audit] Heartbeat sent SILENT_REPLY', 'DEBUG');
             const cleaned = response.trim()
@@ -1395,6 +1401,10 @@ async function runHeartbeat() {
                 log('[Heartbeat] All clear', 'DEBUG');
             } else {
                 log('[Heartbeat] Agent has alert: ' + cleaned.slice(0, 80), 'INFO');
+                // Inject alert into user conversation so replies thread correctly.
+                // The user sees this alert in Telegram and may reply to it — having
+                // it in conversation history lets the agent connect the dots.
+                addToConversation(ownerChatId, 'assistant', cleaned);
                 await sendMessage(ownerChatId, cleaned);
             }
         } catch (e) {
