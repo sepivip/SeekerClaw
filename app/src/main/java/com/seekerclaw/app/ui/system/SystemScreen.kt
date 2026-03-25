@@ -309,14 +309,14 @@ fun SystemScreen(onBack: () -> Unit) {
                                 label = stringResource(R.string.system_label_session),
                                 utilization = usage.fiveHourUtilization,
                                 resetsAt = usage.fiveHourResetsAt,
-                                resources = resources,
+
                             )
                             Spacer(modifier = Modifier.height(16.dp))
                             UsageLimitBar(
                                 label = stringResource(R.string.system_label_weekly),
                                 utilization = usage.sevenDayUtilization,
                                 resetsAt = usage.sevenDayResetsAt,
-                                resources = resources,
+
                             )
                         }
                         is ApiUsageData.ApiKeyUsage -> {
@@ -327,7 +327,7 @@ fun SystemScreen(onBack: () -> Unit) {
                                 utilization = reqProgress,
                                 detailText = "${usage.requestsRemaining} / ${usage.requestsLimit}",
                                 resetsAt = usage.requestsReset,
-                                resources = resources,
+
                             )
                             Spacer(modifier = Modifier.height(16.dp))
                             val tokProgress = if (usage.tokensLimit > 0)
@@ -337,7 +337,7 @@ fun SystemScreen(onBack: () -> Unit) {
                                 utilization = tokProgress,
                                 detailText = "${formatTokens(usage.tokensRemaining)} / ${formatTokens(usage.tokensLimit)}",
                                 resetsAt = usage.tokensReset,
-                                resources = resources,
+
                             )
                         }
                     }
@@ -670,8 +670,8 @@ private fun UsageLimitBar(
     modifier: Modifier = Modifier,
     resetsAt: String = "",
     detailText: String? = null,
-    resources: android.content.res.Resources = LocalContext.current.resources,
 ) {
+    val resources = LocalContext.current.resources
     val percentage = (utilization * 100).toInt()
     val remaining = 100 - percentage
     val barColor = when {

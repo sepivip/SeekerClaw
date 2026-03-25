@@ -558,7 +558,7 @@ fun SettingsScreen(
                 )
                 var languageExpanded by remember { mutableStateOf(false) }
                 val currentLabel = languageOptions.firstOrNull { it.first == currentLangTag }?.second
-                    ?: languageOptions.firstOrNull { currentLangTag.startsWith(it.first) }?.second
+                    ?: languageOptions.firstOrNull { it.first.isNotEmpty() && currentLangTag.startsWith(it.first) }?.second
                     ?: stringResource(R.string.language_system_default)
 
                 HorizontalDivider(color = SeekerClawColors.CardBorder)
