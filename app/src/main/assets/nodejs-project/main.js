@@ -133,7 +133,7 @@ const {
     getActiveTask, clearActiveTask,
 } = require('./claude');
 
-const { loadCheckpoint, listCheckpoints, saveCheckpoint, deleteCheckpoint } = require('./task-store');
+const { loadCheckpoint, listCheckpoints, saveCheckpoint, deleteCheckpoint, cleanupChatCheckpoints } = require('./task-store');
 
 // ============================================================================
 // TOOLS (extracted to tools.js — BAT-204)
@@ -1410,6 +1410,10 @@ async function runHeartbeat() {
         } catch (e) {
             log(`[Heartbeat] Error: ${e.message}`, 'WARN');
         } finally {
+            // Clean up heartbeat session state — prevent stale checkpoints from
+            // triggering autoResumeOnStartup with a synthetic chatId (#298).
+            clearConversation(HEARTBEAT_CHAT_ID);
+            cleanupChatCheckpoints(HEARTBEAT_CHAT_ID);
             isHeartbeatInFlight = false;
             if (chatQueues.get(ownerChatId) === task) chatQueues.delete(ownerChatId);
         }
