@@ -67,6 +67,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontFamily
 import com.seekerclaw.app.ui.theme.RethinkSans
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -97,6 +98,7 @@ import com.seekerclaw.app.util.Analytics
 import com.seekerclaw.app.util.LogCollector
 import com.seekerclaw.app.util.LogLevel
 import com.seekerclaw.app.BuildConfig
+import com.seekerclaw.app.R
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -213,16 +215,16 @@ fun SettingsScreen(
                     if (resultFile.exists()) {
                         val result = JSONObject(resultFile.readText())
                         val error = result.optString("error", "")
-                        walletError = if (error.isNotBlank()) error else "Connection cancelled"
+                        walletError = if (error.isNotBlank()) error else context.getString(R.string.toast_connection_cancelled)
                         resultFile.delete()
                     } else {
-                        walletError = "Connection cancelled"
+                        walletError = context.getString(R.string.toast_connection_cancelled)
                     }
                 } catch (_: Exception) {
-                    walletError = "Connection failed"
+                    walletError = context.getString(R.string.toast_connection_failed)
                 }
             } else {
-                walletError = "Connection cancelled"
+                walletError = context.getString(R.string.toast_connection_cancelled)
             }
         }
         walletRequestId = null
@@ -235,7 +237,7 @@ fun SettingsScreen(
             val success = ConfigManager.exportMemory(context, uri)
             Toast.makeText(
                 context,
-                if (success) "Memory exported successfully" else "Export failed",
+                if (success) context.getString(R.string.toast_memory_exported) else context.getString(R.string.toast_export_failed),
                 Toast.LENGTH_SHORT
             ).show()
         }
@@ -248,8 +250,8 @@ fun SettingsScreen(
             val success = ConfigManager.importMemory(context, uri)
             Toast.makeText(
                 context,
-                if (success) "Memory imported. Restart agent to apply."
-                else "Import failed. Ensure the file is a valid SeekerClaw backup.",
+                if (success) context.getString(R.string.toast_memory_imported)
+                else context.getString(R.string.toast_memory_import_failed),
                 Toast.LENGTH_LONG
             ).show()
         }
@@ -266,7 +268,7 @@ fun SettingsScreen(
                 Analytics.featureUsed("skills_bulk_exported")
                 Toast.makeText(
                     context,
-                    if (success) "Skills exported" else "No added skills to export",
+                    if (success) context.getString(R.string.toast_skills_exported) else context.getString(R.string.toast_no_skills_to_export),
                     Toast.LENGTH_SHORT,
                 ).show()
             }
@@ -283,13 +285,13 @@ fun SettingsScreen(
                 if (count > 0) {
                     Toast.makeText(
                         context,
-                        "Imported $count skill${if (count > 1) "s" else ""}",
+                        context.resources.getQuantityString(R.plurals.toast_skills_imported, count, count),
                         Toast.LENGTH_SHORT,
                     ).show()
                 } else {
                     Toast.makeText(
                         context,
-                        if (count == 0) "No skills found in file" else "Import failed",
+                        if (count == 0) context.getString(R.string.toast_no_skills_in_file) else context.getString(R.string.toast_import_failed),
                         Toast.LENGTH_SHORT,
                     ).show()
                 }
@@ -310,8 +312,8 @@ fun SettingsScreen(
 
         val qrText = result.data?.getStringExtra(QrScannerActivity.EXTRA_QR_TEXT)
         if (qrText.isNullOrBlank()) {
-            configImportError = "No QR data received"
-            Toast.makeText(context, "No QR data received", Toast.LENGTH_SHORT).show()
+            configImportError = context.getString(R.string.toast_no_qr_data)
+            Toast.makeText(context, context.getString(R.string.toast_no_qr_data), Toast.LENGTH_SHORT).show()
             return@rememberLauncherForActivityResult
         }
 
@@ -324,7 +326,7 @@ fun SettingsScreen(
                 pendingConfigImport = imported
                 showApplyConfigDialog = true
             }.onFailure { err ->
-                configImportError = err.message ?: "Config import failed"
+                configImportError = err.message ?: context.getString(R.string.toast_config_import_failed)
                 Toast.makeText(context, configImportError, Toast.LENGTH_LONG).show()
             }
         }
@@ -336,20 +338,21 @@ fun SettingsScreen(
         showRestartDialog = true
     }
 
-    val authTypeLabel = if (config?.authType == "setup_token") "Pro/Max Setup Token" else "API Key"
+    val notSetLabel = stringResource(R.string.wallet_not_set)
+    val authTypeLabel = if (config?.authType == "setup_token") stringResource(R.string.dialog_apply_config_auth_setup_token) else stringResource(R.string.dialog_apply_config_auth_api_key)
     val maskedApiKey = config?.anthropicApiKey?.let { key ->
-        if (key.isBlank()) "Not set"
+        if (key.isBlank()) notSetLabel
         else if (key.length > 12) "${key.take(8)}${"*".repeat(8)}${key.takeLast(4)}" else "*".repeat(key.length)
-    } ?: "Not set"
+    } ?: notSetLabel
     val maskedSetupToken = config?.setupToken?.let { token ->
-        if (token.isBlank()) "Not set"
+        if (token.isBlank()) notSetLabel
         else if (token.length > 12) "${token.take(8)}${"*".repeat(8)}${token.takeLast(4)}" else "*".repeat(token.length)
-    } ?: "Not set"
+    } ?: notSetLabel
     val maskedBotToken = config?.telegramBotToken?.let { token ->
-        if (token.isBlank()) "Not set"
+        if (token.isBlank()) notSetLabel
         else if (token.length > 10) "${token.take(6)}${"*".repeat(8)}${token.takeLast(4)}"
         else "*".repeat(token.length)
-    } ?: "Not set"
+    } ?: notSetLabel
 
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
 
@@ -361,7 +364,7 @@ fun SettingsScreen(
             .verticalScroll(rememberScrollState()),
     ) {
         Text(
-            text = "Settings",
+            text = stringResource(R.string.settings_title),
             fontFamily = RethinkSans,
             fontSize = 24.sp,
             fontWeight = FontWeight.Bold,
@@ -371,7 +374,7 @@ fun SettingsScreen(
         Spacer(modifier = Modifier.height(28.dp))
 
         // Quick Setup — QR Config Import
-        SectionLabel("Quick Setup")
+        SectionLabel(stringResource(R.string.settings_section_quick_setup))
 
         Spacer(modifier = Modifier.height(10.dp))
 
@@ -382,7 +385,7 @@ fun SettingsScreen(
                 .padding(16.dp),
         ) {
             Text(
-                text = "Generate a config QR at seekerclaw.xyz and scan it to set up your agent in seconds.",
+                text = stringResource(R.string.settings_qr_description),
                 fontFamily = RethinkSans,
                 fontSize = 13.sp,
                 color = SeekerClawColors.TextDim,
@@ -412,10 +415,10 @@ fun SettingsScreen(
                         color = androidx.compose.ui.graphics.Color.White,
                     )
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Importing Config\u2026", fontFamily = RethinkSans, fontSize = 14.sp)
+                    Text(stringResource(R.string.settings_importing_config), fontFamily = RethinkSans, fontSize = 14.sp)
                 } else {
                     Text(
-                        "Scan Config QR",
+                        stringResource(R.string.settings_scan_config_qr),
                         fontFamily = RethinkSans,
                         fontWeight = FontWeight.Bold,
                         fontSize = 14.sp,
@@ -437,48 +440,52 @@ fun SettingsScreen(
         Spacer(modifier = Modifier.height(28.dp))
 
         // Configuration
-        CollapsibleSection("Configuration", initiallyExpanded = true) {
+        CollapsibleSection(stringResource(R.string.settings_section_configuration), initiallyExpanded = true) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(SeekerClawColors.Surface, shape),
             ) {
                 ConfigField(
-                    label = "AI Configuration",
-                    value = "Provider, Model, Keys",
+                    label = stringResource(R.string.settings_ai_configuration),
+                    value = stringResource(R.string.settings_ai_configuration_value),
                     onClick = onNavigateToAiConfig,
-                    info = "Select AI provider, configure model and API credentials.",
+                    info = stringResource(R.string.settings_ai_configuration_info),
                 )
                 ConfigField(
-                    label = "Telegram",
-                    value = "Bot Token, Owner ID, Connection Test",
+                    label = stringResource(R.string.settings_telegram),
+                    value = stringResource(R.string.settings_telegram_value),
                     onClick = onNavigateToTelegram,
-                    info = "Configure your Telegram bot settings.",
+                    info = stringResource(R.string.settings_telegram_info),
                 )
+                val agentNameLabel = stringResource(R.string.settings_agent_name)
+                val agentNameDefault = stringResource(R.string.settings_agent_name_default)
                 ConfigField(
-                    label = "Agent Name",
-                    value = config?.agentName?.ifBlank { "SeekerClaw" } ?: "SeekerClaw",
+                    label = agentNameLabel,
+                    value = config?.agentName?.ifBlank { agentNameDefault } ?: agentNameDefault,
                     onClick = {
                         editField = "agentName"
-                        editLabel = "Agent Name"
+                        editLabel = agentNameLabel
                         editValue = config?.agentName ?: ""
                     },
                     info = SettingsHelpTexts.AGENT_NAME,
                 )
+                val heartbeatLabel = stringResource(R.string.settings_heartbeat_interval)
+                val heartbeatEditLabel = stringResource(R.string.settings_heartbeat_edit_label)
                 ConfigField(
-                    label = "Heartbeat Interval",
-                    value = "Every ${config?.heartbeatIntervalMinutes ?: 30} minutes",
+                    label = heartbeatLabel,
+                    value = stringResource(R.string.settings_heartbeat_value, config?.heartbeatIntervalMinutes ?: 30),
                     onClick = {
                         editField = "heartbeatIntervalMinutes"
-                        editLabel = "Heartbeat Interval (minutes, 5–120)"
+                        editLabel = heartbeatEditLabel
                         editValue = (config?.heartbeatIntervalMinutes ?: 30).toString()
                     },
                     info = SettingsHelpTexts.HEARTBEAT_INTERVAL,
                 )
                 ConfigField(
-                    label = "Search Provider",
+                    label = stringResource(R.string.settings_search_provider),
                     value = searchProviderById(config?.searchProvider ?: "brave").displayName +
-                        if ((config?.activeSearchApiKey ?: "").isBlank()) " (not configured)" else "",
+                        if ((config?.activeSearchApiKey ?: "").isBlank()) stringResource(R.string.settings_not_configured) else "",
                     onClick = onNavigateToSearchConfig,
                     info = SettingsHelpTexts.SEARCH_PROVIDER,
                     showDivider = false,
@@ -489,7 +496,7 @@ fun SettingsScreen(
         Spacer(modifier = Modifier.height(28.dp))
 
         // Preferences & Permissions
-        CollapsibleSection("Preferences & Permissions", initiallyExpanded = true) {
+        CollapsibleSection(stringResource(R.string.settings_section_prefs_permissions), initiallyExpanded = true) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -497,7 +504,7 @@ fun SettingsScreen(
                     .padding(horizontal = 16.dp),
             ) {
                 SettingRow(
-                    label = "Auto-start on boot",
+                    label = stringResource(R.string.settings_auto_start),
                     checked = autoStartOnBoot,
                     onCheckedChange = {
                         autoStartOnBoot = it
@@ -506,7 +513,7 @@ fun SettingsScreen(
                     info = SettingsHelpTexts.AUTO_START,
                 )
                 SettingRow(
-                    label = "Usage analytics",
+                    label = stringResource(R.string.settings_analytics),
                     checked = analyticsEnabled,
                     onCheckedChange = {
                         analyticsEnabled = it
@@ -515,7 +522,7 @@ fun SettingsScreen(
                     info = SettingsHelpTexts.ANALYTICS,
                 )
                 PermissionRow(
-                    label = "Battery unrestricted",
+                    label = stringResource(R.string.settings_battery_unrestricted),
                     granted = batteryOptimizationDisabled,
                     onRequest = {
                         val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
@@ -527,7 +534,7 @@ fun SettingsScreen(
                     info = SettingsHelpTexts.BATTERY_UNRESTRICTED,
                 )
                 SettingRow(
-                    label = "Server mode (keep screen awake)",
+                    label = stringResource(R.string.settings_server_mode),
                     checked = keepScreenOn,
                     onCheckedChange = {
                         keepScreenOn = it
@@ -540,7 +547,7 @@ fun SettingsScreen(
                     !hasContactsPermission && !hasSmsPermission && !hasCallPermission
                 if (allPermissionsOff) {
                     Text(
-                        text = "Enable permissions to unlock device features (camera, GPS, SMS, etc.)",
+                        text = stringResource(R.string.settings_permissions_hint),
                         fontFamily = RethinkSans,
                         fontSize = 12.sp,
                         color = SeekerClawColors.TextSecondary,
@@ -549,7 +556,7 @@ fun SettingsScreen(
                     )
                 }
                 PermissionRow(
-                    label = "Camera",
+                    label = stringResource(R.string.permission_camera),
                     granted = hasCameraPermission,
                     onRequest = {
                         requestPermissionOrOpenSettings(context, Manifest.permission.CAMERA, cameraLauncher)
@@ -558,7 +565,7 @@ fun SettingsScreen(
                     info = SettingsHelpTexts.CAMERA,
                 )
                 PermissionRow(
-                    label = "GPS Location",
+                    label = stringResource(R.string.permission_gps),
                     granted = hasLocationPermission,
                     onRequest = {
                         requestPermissionOrOpenSettings(context, Manifest.permission.ACCESS_FINE_LOCATION, locationLauncher)
@@ -567,7 +574,7 @@ fun SettingsScreen(
                     info = SettingsHelpTexts.GPS_LOCATION,
                 )
                 PermissionRow(
-                    label = "Contacts",
+                    label = stringResource(R.string.permission_contacts),
                     granted = hasContactsPermission,
                     onRequest = {
                         requestPermissionOrOpenSettings(context, Manifest.permission.READ_CONTACTS, contactsLauncher)
@@ -576,7 +583,7 @@ fun SettingsScreen(
                     info = SettingsHelpTexts.CONTACTS,
                 )
                 PermissionRow(
-                    label = "SMS",
+                    label = stringResource(R.string.permission_sms),
                     granted = hasSmsPermission,
                     onRequest = {
                         requestPermissionOrOpenSettings(context, Manifest.permission.SEND_SMS, smsLauncher)
@@ -585,7 +592,7 @@ fun SettingsScreen(
                     info = SettingsHelpTexts.SMS,
                 )
                 PermissionRow(
-                    label = "Phone Calls",
+                    label = stringResource(R.string.permission_phone),
                     granted = hasCallPermission,
                     onRequest = {
                         requestPermissionOrOpenSettings(context, Manifest.permission.CALL_PHONE, callLauncher)
@@ -599,7 +606,7 @@ fun SettingsScreen(
         Spacer(modifier = Modifier.height(28.dp))
 
         // Solana Wallet
-        CollapsibleSection("Solana Wallet", initiallyExpanded = false) {
+        CollapsibleSection(stringResource(R.string.settings_section_solana_wallet), initiallyExpanded = false) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -616,7 +623,7 @@ fun SettingsScreen(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
-                            text = "Address",
+                            text = stringResource(R.string.wallet_address),
                             fontFamily = RethinkSans,
                             fontSize = 13.sp,
                             color = SeekerClawColors.TextDim,
@@ -633,12 +640,12 @@ fun SettingsScreen(
                                     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                                     clipboard.setPrimaryClip(ClipData.newPlainText("wallet address", address))
                                     hapticCopy.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    Toast.makeText(context, "Address copied", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, context.getString(R.string.toast_address_copied), Toast.LENGTH_SHORT).show()
                                 },
                                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
                             ) {
                                 Text(
-                                    text = "Copy",
+                                    text = stringResource(R.string.wallet_copy),
                                     fontSize = 12.sp,
                                     color = SeekerClawColors.TextInteractive,
                                 )
@@ -649,7 +656,7 @@ fun SettingsScreen(
                 val label = ConfigManager.getWalletLabel(context)
                 if (label.isNotBlank()) {
                     Spacer(modifier = Modifier.height(4.dp))
-                    InfoRow("Wallet", label)
+                    InfoRow(stringResource(R.string.wallet_label), label)
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
@@ -666,7 +673,7 @@ fun SettingsScreen(
                         contentColor = SeekerClawColors.Error,
                     ),
                 ) {
-                    Text("Disconnect Wallet", fontFamily = RethinkSans, fontSize = 14.sp)
+                    Text(stringResource(R.string.wallet_disconnect), fontFamily = RethinkSans, fontSize = 14.sp)
                 }
             } else {
                 // Not connected — show Connect button
@@ -716,15 +723,15 @@ fun SettingsScreen(
                             strokeWidth = 2.dp,
                         )
                         Spacer(modifier = Modifier.padding(start = 8.dp))
-                        Text("Connecting\u2026", fontFamily = RethinkSans, fontSize = 14.sp)
+                        Text(stringResource(R.string.wallet_connecting), fontFamily = RethinkSans, fontSize = 14.sp)
                     } else {
-                        Text("Connect Wallet", fontFamily = RethinkSans, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                        Text(stringResource(R.string.wallet_connect), fontFamily = RethinkSans, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                     }
                 }
 
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "Opens Phantom, Solflare, or Seeker Vault",
+                    text = stringResource(R.string.wallet_connect_hint),
                     fontFamily = RethinkSans,
                     fontSize = 11.sp,
                     color = SeekerClawColors.TextDim,
@@ -734,16 +741,18 @@ fun SettingsScreen(
 
             // Jupiter API Key (Solana swaps)
             Spacer(modifier = Modifier.height(20.dp))
+            val jupiterLabel = stringResource(R.string.wallet_jupiter_api_key)
+            val jupiterNotSet = stringResource(R.string.wallet_jupiter_not_set)
             ConfigField(
-                label = "Jupiter API Key",
+                label = jupiterLabel,
                 value = config?.jupiterApiKey?.let { key ->
-                    if (key.isBlank()) "Not set — swaps disabled"
+                    if (key.isBlank()) jupiterNotSet
                     else if (key.length > 12) "${key.take(8)}${"*".repeat(8)}${key.takeLast(4)}"
                     else "*".repeat(key.length)
-                } ?: "Not set — swaps disabled",
+                } ?: jupiterNotSet,
                 onClick = {
                     editField = "jupiterApiKey"
-                    editLabel = "Jupiter API Key"
+                    editLabel = jupiterLabel
                     editValue = config?.jupiterApiKey ?: ""
                 },
                 showDivider = true,
@@ -752,16 +761,18 @@ fun SettingsScreen(
 
             // Helius API Key (NFT holdings)
             Spacer(modifier = Modifier.height(20.dp))
+            val heliusLabel = stringResource(R.string.wallet_helius_api_key)
+            val heliusNotSet = stringResource(R.string.wallet_helius_not_set)
             ConfigField(
-                label = "Helius API Key",
+                label = heliusLabel,
                 value = config?.heliusApiKey?.let { key ->
-                    if (key.isBlank()) "Not set — NFT holdings disabled"
+                    if (key.isBlank()) heliusNotSet
                     else if (key.length > 12) "${key.take(8)}${"*".repeat(8)}${key.takeLast(4)}"
                     else "*".repeat(key.length)
-                } ?: "Not set — NFT holdings disabled",
+                } ?: heliusNotSet,
                 onClick = {
                     editField = "heliusApiKey"
-                    editLabel = "Helius API Key"
+                    editLabel = heliusLabel
                     editValue = config?.heliusApiKey ?: ""
                 },
                 showDivider = false,
@@ -773,7 +784,7 @@ fun SettingsScreen(
         Spacer(modifier = Modifier.height(28.dp))
 
         // MCP Servers (BAT-168)
-        CollapsibleSection("MCP Servers", initiallyExpanded = false) {
+        CollapsibleSection(stringResource(R.string.settings_section_mcp_servers), initiallyExpanded = false) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -791,7 +802,7 @@ fun SettingsScreen(
 
                 if (mcpServers.isEmpty()) {
                     Text(
-                        text = "No servers configured",
+                        text = stringResource(R.string.mcp_no_servers),
                         fontFamily = RethinkSans,
                         fontSize = 13.sp,
                         color = SeekerClawColors.TextDim,
@@ -847,7 +858,7 @@ fun SettingsScreen(
                                 }) {
                                     Icon(
                                         imageVector = Icons.Default.Edit,
-                                        contentDescription = "Edit server",
+                                        contentDescription = stringResource(R.string.mcp_cd_edit_server),
                                         tint = SeekerClawColors.TextDim,
                                     )
                                 }
@@ -857,7 +868,7 @@ fun SettingsScreen(
                                 }) {
                                     Icon(
                                         imageVector = Icons.Default.Delete,
-                                        contentDescription = "Remove server",
+                                        contentDescription = stringResource(R.string.mcp_cd_remove_server),
                                         tint = SeekerClawColors.Error,
                                     )
                                 }
@@ -880,7 +891,7 @@ fun SettingsScreen(
                         contentColor = androidx.compose.ui.graphics.Color.White,
                     ),
                 ) {
-                    Text("Add MCP Server", fontFamily = RethinkSans, fontSize = 14.sp)
+                    Text(stringResource(R.string.mcp_add_server), fontFamily = RethinkSans, fontSize = 14.sp)
                 }
             }
         }
@@ -888,7 +899,7 @@ fun SettingsScreen(
         Spacer(modifier = Modifier.height(28.dp))
 
         // Data backup
-        CollapsibleSection("Data", initiallyExpanded = false) {
+        CollapsibleSection(stringResource(R.string.settings_section_data), initiallyExpanded = false) {
             Column {
                 OutlinedButton(
                     onClick = {
@@ -904,7 +915,7 @@ fun SettingsScreen(
                     ),
                 ) {
                     Text(
-                        "Export Memory",
+                        stringResource(R.string.settings_export_memory),
                         fontFamily = RethinkSans,
                         fontSize = 14.sp,
                     )
@@ -925,7 +936,7 @@ fun SettingsScreen(
                     ),
                 ) {
                     Text(
-                        "Import Memory",
+                        stringResource(R.string.settings_import_memory),
                         fontFamily = RethinkSans,
                         fontSize = 14.sp,
                     )
@@ -946,7 +957,7 @@ fun SettingsScreen(
                     ),
                 ) {
                     Text(
-                        "Export Skills",
+                        stringResource(R.string.settings_export_skills),
                         fontFamily = RethinkSans,
                         fontSize = 14.sp,
                     )
@@ -966,7 +977,7 @@ fun SettingsScreen(
                     ),
                 ) {
                     Text(
-                        "Import Skills",
+                        stringResource(R.string.settings_import_skills),
                         fontFamily = RethinkSans,
                         fontSize = 14.sp,
                     )
@@ -977,7 +988,7 @@ fun SettingsScreen(
         Spacer(modifier = Modifier.height(28.dp))
 
         // Run Setup Again
-        CollapsibleSection("Setup", initiallyExpanded = false) {
+        CollapsibleSection(stringResource(R.string.settings_section_setup), initiallyExpanded = false) {
             OutlinedButton(
                 onClick = { showRunSetupDialog = true },
                 modifier = Modifier.fillMaxWidth(),
@@ -988,7 +999,7 @@ fun SettingsScreen(
                 ),
             ) {
                 Text(
-                    "Run Setup Again",
+                    stringResource(R.string.settings_run_setup_again),
                     fontFamily = RethinkSans,
                     fontSize = 14.sp,
                 )
@@ -998,7 +1009,7 @@ fun SettingsScreen(
         Spacer(modifier = Modifier.height(32.dp))
 
         // Danger zone
-        CollapsibleSection("Danger Zone", initiallyExpanded = false) {
+        CollapsibleSection(stringResource(R.string.settings_section_danger_zone), initiallyExpanded = false) {
             Column {
                 Button(
                     onClick = { showResetDialog = true },
@@ -1010,7 +1021,7 @@ fun SettingsScreen(
                     ),
                 ) {
                     Text(
-                        "Reset Config",
+                        stringResource(R.string.settings_reset_config),
                         fontFamily = RethinkSans,
                         fontWeight = FontWeight.Medium,
                         fontSize = 14.sp,
@@ -1031,13 +1042,13 @@ fun SettingsScreen(
                 ) {
                     Icon(
                         Icons.Default.Warning,
-                        contentDescription = "Warning",
+                        contentDescription = stringResource(R.string.settings_cd_warning),
                         modifier = Modifier.size(16.dp),
                         tint = SeekerClawColors.ActionDangerText,
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        "Wipe Memory",
+                        stringResource(R.string.settings_wipe_memory),
                         fontFamily = RethinkSans,
                         fontWeight = FontWeight.Bold,
                         fontSize = 14.sp,
@@ -1049,7 +1060,7 @@ fun SettingsScreen(
         Spacer(modifier = Modifier.height(32.dp))
 
         // System info
-        SectionLabel("System")
+        SectionLabel(stringResource(R.string.settings_section_system))
 
         Spacer(modifier = Modifier.height(10.dp))
 
@@ -1060,9 +1071,9 @@ fun SettingsScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            InfoRow("Version", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
-            InfoRow("OpenClaw", BuildConfig.OPENCLAW_VERSION)
-            InfoRow("Node.js", BuildConfig.NODEJS_VERSION)
+            InfoRow(stringResource(R.string.settings_version), "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+            InfoRow(stringResource(R.string.settings_openclaw), BuildConfig.OPENCLAW_VERSION)
+            InfoRow(stringResource(R.string.settings_nodejs), BuildConfig.NODEJS_VERSION)
         }
 
         Spacer(modifier = Modifier.height(24.dp))
@@ -1074,7 +1085,7 @@ fun SettingsScreen(
             onDismissRequest = { editField = null },
             title = {
                 Text(
-                    "Edit $editLabel",
+                    stringResource(R.string.dialog_edit_title, editLabel),
                     fontFamily = RethinkSans,
                     fontWeight = FontWeight.Bold,
                     color = SeekerClawColors.TextPrimary,
@@ -1084,7 +1095,7 @@ fun SettingsScreen(
                 Column {
                     if (editField == "jupiterApiKey" || editField == "heliusApiKey") {
                         Text(
-                            "Changing this requires an agent restart.",
+                            stringResource(R.string.dialog_restart_warning),
                             fontFamily = RethinkSans,
                             fontSize = 12.sp,
                             color = SeekerClawColors.Warning,
@@ -1125,7 +1136,7 @@ fun SettingsScreen(
                     },
                 ) {
                     Text(
-                        "Save",
+                        stringResource(R.string.button_save),
                         fontFamily = RethinkSans,
                         fontWeight = FontWeight.Bold,
                         color = SeekerClawColors.ActionPrimary,
@@ -1135,7 +1146,7 @@ fun SettingsScreen(
             dismissButton = {
                 TextButton(onClick = { editField = null }) {
                     Text(
-                        "Cancel",
+                        stringResource(R.string.button_cancel),
                         fontFamily = RethinkSans,
                         color = SeekerClawColors.TextDim,
                     )
@@ -1160,7 +1171,7 @@ fun SettingsScreen(
             onDismissRequest = { showResetDialog = false },
             title = {
                 Text(
-                    "Reset Config",
+                    stringResource(R.string.settings_reset_config),
                     fontFamily = RethinkSans,
                     fontWeight = FontWeight.Bold,
                     color = SeekerClawColors.Error,
@@ -1168,7 +1179,7 @@ fun SettingsScreen(
             },
             text = {
                 Text(
-                    "This will stop the agent, clear all config, and return to setup. This cannot be undone.",
+                    stringResource(R.string.dialog_reset_config_message),
                     fontFamily = RethinkSans,
                     fontSize = 13.sp,
                     color = SeekerClawColors.TextSecondary,
@@ -1184,7 +1195,7 @@ fun SettingsScreen(
                     onRunSetupAgain()
                 }) {
                     Text(
-                        "Confirm",
+                        stringResource(R.string.button_confirm),
                         fontFamily = RethinkSans,
                         fontWeight = FontWeight.Bold,
                         color = SeekerClawColors.Error,
@@ -1194,7 +1205,7 @@ fun SettingsScreen(
             dismissButton = {
                 TextButton(onClick = { showResetDialog = false }) {
                     Text(
-                        "Cancel",
+                        stringResource(R.string.button_cancel),
                         fontFamily = RethinkSans,
                         color = SeekerClawColors.TextDim,
                     )
@@ -1211,7 +1222,7 @@ fun SettingsScreen(
             onDismissRequest = { showImportDialog = false },
             title = {
                 Text(
-                    "Import Memory",
+                    stringResource(R.string.settings_import_memory),
                     fontFamily = RethinkSans,
                     fontWeight = FontWeight.Bold,
                     color = SeekerClawColors.Warning,
@@ -1219,7 +1230,7 @@ fun SettingsScreen(
             },
             text = {
                 Text(
-                    "This will overwrite personality, memory, and skills with the backup. A safety backup is created automatically before importing.",
+                    stringResource(R.string.dialog_import_memory_message),
                     fontFamily = RethinkSans,
                     fontSize = 13.sp,
                     color = SeekerClawColors.TextSecondary,
@@ -1232,7 +1243,7 @@ fun SettingsScreen(
                     importLauncher.launch(arrayOf("application/zip", "application/octet-stream"))
                 }) {
                     Text(
-                        "Select File",
+                        stringResource(R.string.button_select_file),
                         fontFamily = RethinkSans,
                         fontWeight = FontWeight.Bold,
                         color = SeekerClawColors.Warning,
@@ -1242,7 +1253,7 @@ fun SettingsScreen(
             dismissButton = {
                 TextButton(onClick = { showImportDialog = false }) {
                     Text(
-                        "Cancel",
+                        stringResource(R.string.button_cancel),
                         fontFamily = RethinkSans,
                         color = SeekerClawColors.TextDim,
                     )
@@ -1257,11 +1268,14 @@ fun SettingsScreen(
     if (showApplyConfigDialog && pendingConfigImport != null) {
         val imported = pendingConfigImport!!
         val importedConfig = imported.config
-        val maskedCredential = maskSensitive(importedConfig.activeCredential)
-        val maskedBot = maskSensitive(importedConfig.telegramBotToken)
+        val maskedCredential = maskSensitive(importedConfig.activeCredential, notSetLabel)
+        val maskedBot = maskSensitive(importedConfig.telegramBotToken, notSetLabel)
         val source = Uri.parse(imported.sourceUrl).host ?: imported.sourceUrl
-        val autoStartSummary = imported.autoStartOnBoot?.let { if (it) "Enabled" else "Disabled" } ?: "No change"
-        val keepScreenSummary = imported.keepScreenOn?.let { if (it) "Enabled" else "Disabled" } ?: "No change"
+        val enabledStr = stringResource(R.string.dialog_apply_config_enabled)
+        val disabledStr = stringResource(R.string.dialog_apply_config_disabled)
+        val noChangeStr = stringResource(R.string.dialog_apply_config_no_change)
+        val autoStartSummary = imported.autoStartOnBoot?.let { if (it) enabledStr else disabledStr } ?: noChangeStr
+        val keepScreenSummary = imported.keepScreenOn?.let { if (it) enabledStr else disabledStr } ?: noChangeStr
         AlertDialog(
             onDismissRequest = {
                 showApplyConfigDialog = false
@@ -1269,7 +1283,7 @@ fun SettingsScreen(
             },
             title = {
                 Text(
-                    "Apply Imported Config",
+                    stringResource(R.string.dialog_apply_config_title),
                     fontFamily = RethinkSans,
                     fontWeight = FontWeight.Bold,
                     color = SeekerClawColors.Warning,
@@ -1279,15 +1293,15 @@ fun SettingsScreen(
                 Text(
                     "Schema: v${imported.schemaVersion}\n" +
                         "Source: $source\n" +
-                        "Auth: ${if (importedConfig.authType == "setup_token") "Pro/Max Setup Token" else "API Key"}\n" +
+                        "Auth: ${if (importedConfig.authType == "setup_token") context.getString(R.string.dialog_apply_config_auth_setup_token) else context.getString(R.string.dialog_apply_config_auth_api_key)}\n" +
                         "Credential: $maskedCredential\n" +
                         "Bot Token: $maskedBot\n" +
-                        "Owner ID: ${importedConfig.telegramOwnerId.ifBlank { "Auto-detect" }}\n" +
+                        "Owner ID: ${importedConfig.telegramOwnerId.ifBlank { context.getString(R.string.dialog_apply_config_auto_detect) }}\n" +
                         "Model: ${importedConfig.model}\n" +
                         "Agent: ${importedConfig.agentName}\n" +
                         "Auto-start on boot: $autoStartSummary\n" +
                         "Server mode: $keepScreenSummary\n\n" +
-                        "Apply this configuration to your device?",
+                        context.getString(R.string.dialog_apply_config_question),
                     fontFamily = RethinkSans,
                     fontSize = 13.sp,
                     color = SeekerClawColors.TextSecondary,
@@ -1307,10 +1321,10 @@ fun SettingsScreen(
                             "[ConfigImport] Validation failed after save: $saveValidationError",
                             LogLevel.ERROR,
                         )
-                        configImportError = "Config saved but invalid: $saveValidationError"
+                        configImportError = context.getString(R.string.wallet_error_config_saved_invalid, saveValidationError)
                         Toast.makeText(
                             context,
-                            "Imported config could not be applied: $saveValidationError",
+                            context.getString(R.string.toast_config_saved_invalid, saveValidationError),
                             Toast.LENGTH_LONG
                         ).show()
                         showApplyConfigDialog = false
@@ -1330,10 +1344,10 @@ fun SettingsScreen(
                     pendingConfigImport = null
                     configImportError = null
                     showRestartDialog = true
-                    Toast.makeText(context, "Config imported", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, context.getString(R.string.toast_config_imported), Toast.LENGTH_SHORT).show()
                 }) {
                     Text(
-                        "Apply",
+                        stringResource(R.string.button_apply),
                         fontFamily = RethinkSans,
                         fontWeight = FontWeight.Bold,
                         color = SeekerClawColors.Warning,
@@ -1346,7 +1360,7 @@ fun SettingsScreen(
                     pendingConfigImport = null
                 }) {
                     Text(
-                        "Cancel",
+                        stringResource(R.string.button_cancel),
                         fontFamily = RethinkSans,
                         color = SeekerClawColors.TextDim,
                     )
@@ -1363,7 +1377,7 @@ fun SettingsScreen(
             onDismissRequest = { showRunSetupDialog = false },
             title = {
                 Text(
-                    "Run Setup Again",
+                    stringResource(R.string.settings_run_setup_again),
                     fontFamily = RethinkSans,
                     fontWeight = FontWeight.Bold,
                     color = SeekerClawColors.TextPrimary,
@@ -1371,7 +1385,7 @@ fun SettingsScreen(
             },
             text = {
                 Text(
-                    "This will restart the setup flow. Your current config will be overwritten when you complete setup.",
+                    stringResource(R.string.dialog_run_setup_message),
                     fontFamily = RethinkSans,
                     fontSize = 13.sp,
                     color = SeekerClawColors.TextSecondary,
@@ -1386,7 +1400,7 @@ fun SettingsScreen(
                     onRunSetupAgain()
                 }) {
                     Text(
-                        "Continue",
+                        stringResource(R.string.button_continue),
                         fontFamily = RethinkSans,
                         fontWeight = FontWeight.Bold,
                         color = SeekerClawColors.Primary,
@@ -1396,7 +1410,7 @@ fun SettingsScreen(
             dismissButton = {
                 TextButton(onClick = { showRunSetupDialog = false }) {
                     Text(
-                        "Cancel",
+                        stringResource(R.string.button_cancel),
                         fontFamily = RethinkSans,
                         color = SeekerClawColors.TextDim,
                     )
@@ -1419,7 +1433,7 @@ fun SettingsScreen(
             },
             title = {
                 Text(
-                    "Wipe Memory",
+                    stringResource(R.string.settings_wipe_memory),
                     fontFamily = RethinkSans,
                     fontWeight = FontWeight.Bold,
                     color = SeekerClawColors.Error,
@@ -1428,7 +1442,7 @@ fun SettingsScreen(
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(
-                        "This will delete all memory files. The agent will lose all accumulated knowledge. This cannot be undone.",
+                        stringResource(R.string.dialog_wipe_memory_message),
                         fontFamily = RethinkSans,
                         fontSize = 13.sp,
                         color = SeekerClawColors.TextSecondary,
@@ -1439,7 +1453,7 @@ fun SettingsScreen(
                         onValueChange = { wipeConfirmText = it },
                         label = {
                             Text(
-                                "Type WIPE to confirm",
+                                stringResource(R.string.dialog_wipe_confirm_label),
                                 fontFamily = RethinkSans,
                                 fontSize = 13.sp,
                             )
@@ -1469,7 +1483,7 @@ fun SettingsScreen(
                     enabled = wipeConfirmed,
                 ) {
                     Text(
-                        "Confirm",
+                        stringResource(R.string.button_confirm),
                         fontFamily = RethinkSans,
                         fontWeight = FontWeight.Bold,
                         color = if (wipeConfirmed) SeekerClawColors.Error else SeekerClawColors.TextDim,
@@ -1482,7 +1496,7 @@ fun SettingsScreen(
                     wipeConfirmText = ""
                 }) {
                     Text(
-                        "Cancel",
+                        stringResource(R.string.button_cancel),
                         fontFamily = RethinkSans,
                         color = SeekerClawColors.TextDim,
                     )
@@ -1503,7 +1517,7 @@ fun SettingsScreen(
             onDismissRequest = { showMcpDialog = false },
             title = {
                 Text(
-                    if (editingMcpServer != null) "Edit MCP Server" else "Add MCP Server",
+                    if (editingMcpServer != null) stringResource(R.string.mcp_edit_server) else stringResource(R.string.mcp_add_server),
                     fontFamily = RethinkSans,
                     fontWeight = FontWeight.Bold,
                     color = SeekerClawColors.TextPrimary,
@@ -1514,7 +1528,7 @@ fun SettingsScreen(
                     OutlinedTextField(
                         value = mcpName,
                         onValueChange = { mcpName = it },
-                        label = { Text("Name", fontFamily = RethinkSans) },
+                        label = { Text(stringResource(R.string.mcp_field_name), fontFamily = RethinkSans) },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                         colors = OutlinedTextFieldDefaults.colors(
@@ -1531,8 +1545,8 @@ fun SettingsScreen(
                     OutlinedTextField(
                         value = mcpUrl,
                         onValueChange = { mcpUrl = it },
-                        label = { Text("Server URL", fontFamily = RethinkSans) },
-                        placeholder = { Text("https://mcp.example.com/mcp", color = SeekerClawColors.TextDim) },
+                        label = { Text(stringResource(R.string.mcp_field_url), fontFamily = RethinkSans) },
+                        placeholder = { Text(stringResource(R.string.mcp_field_url_placeholder), color = SeekerClawColors.TextDim) },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                         colors = OutlinedTextFieldDefaults.colors(
@@ -1549,7 +1563,7 @@ fun SettingsScreen(
                     OutlinedTextField(
                         value = mcpToken,
                         onValueChange = { mcpToken = it },
-                        label = { Text("Auth Token (optional)", fontFamily = RethinkSans) },
+                        label = { Text(stringResource(R.string.mcp_field_auth_token), fontFamily = RethinkSans) },
                         visualTransformation = PasswordVisualTransformation(),
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
@@ -1576,7 +1590,7 @@ fun SettingsScreen(
                             uri.scheme in listOf("https", "http") && !uri.host.isNullOrBlank()
                         } catch (_: Exception) { false }
                         if (!isValidUrl) {
-                            Toast.makeText(context, "Invalid URL. Must start with https:// or http://", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, context.getString(R.string.mcp_error_invalid_url), Toast.LENGTH_SHORT).show()
                             return@TextButton
                         }
                         // Warn if auth token + plain HTTP (non-localhost)
@@ -1586,7 +1600,7 @@ fun SettingsScreen(
                             val isHttps = uri.scheme == "https"
                             val isLocalhost = uri.host in listOf("localhost", "127.0.0.1", "::1", "[::1]")
                             if (!isHttps && !isLocalhost) {
-                                Toast.makeText(context, "Auth token requires HTTPS (or localhost)", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, context.getString(R.string.mcp_error_auth_requires_https), Toast.LENGTH_SHORT).show()
                                 return@TextButton
                             }
                         }
@@ -1620,7 +1634,7 @@ fun SettingsScreen(
                     enabled = mcpName.isNotBlank() && mcpUrl.isNotBlank(),
                 ) {
                     Text(
-                        "Save",
+                        stringResource(R.string.button_save),
                         fontFamily = RethinkSans,
                         fontWeight = FontWeight.Bold,
                         color = if (mcpName.isNotBlank() && mcpUrl.isNotBlank()) SeekerClawColors.Accent else SeekerClawColors.TextDim,
@@ -1629,7 +1643,7 @@ fun SettingsScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showMcpDialog = false }) {
-                    Text("Cancel", fontFamily = RethinkSans, color = SeekerClawColors.TextDim)
+                    Text(stringResource(R.string.button_cancel), fontFamily = RethinkSans, color = SeekerClawColors.TextDim)
                 }
             },
             containerColor = SeekerClawColors.Surface,
@@ -1643,7 +1657,7 @@ fun SettingsScreen(
             onDismissRequest = { showDeleteMcpDialog = false },
             title = {
                 Text(
-                    "Remove Server",
+                    stringResource(R.string.mcp_dialog_remove_title),
                     fontFamily = RethinkSans,
                     fontWeight = FontWeight.Bold,
                     color = SeekerClawColors.TextPrimary,
@@ -1651,7 +1665,7 @@ fun SettingsScreen(
             },
             text = {
                 Text(
-                    "Remove \"${deletingMcpServer?.name}\"? Its tools will no longer be available to your agent.",
+                    stringResource(R.string.mcp_dialog_remove_message, deletingMcpServer?.name ?: ""),
                     fontFamily = RethinkSans,
                     fontSize = 14.sp,
                     color = SeekerClawColors.TextSecondary,
@@ -1666,7 +1680,7 @@ fun SettingsScreen(
                     showRestartDialog = true
                 }) {
                     Text(
-                        "Remove",
+                        stringResource(R.string.button_remove),
                         fontFamily = RethinkSans,
                         fontWeight = FontWeight.Bold,
                         color = SeekerClawColors.Error,
@@ -1675,7 +1689,7 @@ fun SettingsScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showDeleteMcpDialog = false }) {
-                    Text("Cancel", fontFamily = RethinkSans, color = SeekerClawColors.TextDim)
+                    Text(stringResource(R.string.button_cancel), fontFamily = RethinkSans, color = SeekerClawColors.TextDim)
                 }
             },
             containerColor = SeekerClawColors.Surface,
@@ -1722,7 +1736,7 @@ private fun CollapsibleSection(
         )
         Icon(
             imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-            contentDescription = if (expanded) "Collapse $title" else "Expand $title",
+            contentDescription = if (expanded) stringResource(R.string.settings_collapse_section, title) else stringResource(R.string.settings_expand_section, title),
             tint = SeekerClawColors.TextDim,
             modifier = Modifier.size(20.dp),
         )
@@ -1750,6 +1764,8 @@ private fun ConfigField(
     isRequired: Boolean = false,
 ) {
     var showInfo by remember { mutableStateOf(false) }
+    val requiredDescription = if (isRequired) stringResource(R.string.settings_field_required, label) else ""
+    val infoDescription = if (info != null) stringResource(R.string.settings_info_about, label) else ""
 
     Column(
         modifier = Modifier
@@ -1765,7 +1781,7 @@ private fun ConfigField(
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = if (isRequired) Modifier.semantics(mergeDescendants = true) {
-                    contentDescription = "$label, required"
+                    contentDescription = requiredDescription
                 } else Modifier,
             ) {
                 Text(
@@ -1787,7 +1803,7 @@ private fun ConfigField(
                     ) {
                         Icon(
                             Icons.Outlined.Info,
-                            contentDescription = "More info about $label",
+                            contentDescription = infoDescription,
                             tint = SeekerClawColors.TextDim,
                             modifier = Modifier.size(14.dp),
                         )
@@ -1796,7 +1812,7 @@ private fun ConfigField(
             }
             if (onClick != null) {
                 Text(
-                    text = "Edit",
+                    text = stringResource(R.string.button_edit),
                     fontFamily = RethinkSans,
                     fontSize = 12.sp,
                     color = SeekerClawColors.TextInteractive,
@@ -1832,6 +1848,7 @@ private fun SettingRow(
 ) {
     val haptic = LocalHapticFeedback.current
     var showInfo by remember { mutableStateOf(false) }
+    val infoDescription = if (info != null) stringResource(R.string.settings_info_about, label) else ""
 
     Row(
         modifier = Modifier
@@ -1851,7 +1868,7 @@ private fun SettingRow(
                 IconButton(onClick = { showInfo = true }) {
                     Icon(
                         Icons.Outlined.Info,
-                        contentDescription = "More info about $label",
+                        contentDescription = infoDescription,
                         tint = SeekerClawColors.TextDim,
                         modifier = Modifier.size(14.dp),
                     )
@@ -1911,6 +1928,7 @@ private fun PermissionRow(
     val haptic = LocalHapticFeedback.current
     var showInfo by remember { mutableStateOf(false) }
     var showRevokeDialog by remember { mutableStateOf(false) }
+    val infoDescription = if (info != null) stringResource(R.string.settings_info_about, label) else ""
 
     Row(
         modifier = Modifier
@@ -1930,7 +1948,7 @@ private fun PermissionRow(
                 IconButton(onClick = { showInfo = true }) {
                     Icon(
                         Icons.Outlined.Info,
-                        contentDescription = "More info about $label",
+                        contentDescription = infoDescription,
                         tint = SeekerClawColors.TextDim,
                         modifier = Modifier.size(14.dp),
                     )
@@ -2011,7 +2029,7 @@ private fun RevokePermissionDialog(
         onDismissRequest = onDismiss,
         title = {
             Text(
-                text = "Disable $permissionLabel",
+                text = stringResource(R.string.dialog_disable_permission_title, permissionLabel),
                 fontFamily = RethinkSans,
                 fontWeight = FontWeight.SemiBold,
                 fontSize = 16.sp,
@@ -2020,7 +2038,7 @@ private fun RevokePermissionDialog(
         },
         text = {
             Text(
-                text = "Android doesn't allow apps to revoke their own permissions.\n\nTo disable $permissionLabel, go to:\nSystem Settings \u2192 Apps \u2192 SeekerClaw \u2192 Permissions",
+                text = stringResource(R.string.dialog_disable_permission_message, permissionLabel),
                 fontFamily = RethinkSans,
                 fontSize = 14.sp,
                 color = SeekerClawColors.TextSecondary,
@@ -2033,12 +2051,12 @@ private fun RevokePermissionDialog(
                 colors = ButtonDefaults.buttonColors(containerColor = SeekerClawColors.ActionPrimary),
                 shape = shape,
             ) {
-                Text("Open Settings", fontFamily = RethinkSans, fontWeight = FontWeight.Medium)
+                Text(stringResource(R.string.button_open_settings), fontFamily = RethinkSans, fontWeight = FontWeight.Medium)
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Cancel", fontFamily = RethinkSans, color = SeekerClawColors.TextSecondary)
+                Text(stringResource(R.string.button_cancel), fontFamily = RethinkSans, color = SeekerClawColors.TextSecondary)
             }
         },
         containerColor = SeekerClawColors.Surface,
@@ -2046,8 +2064,8 @@ private fun RevokePermissionDialog(
     )
 }
 
-private fun maskSensitive(value: String): String {
-    if (value.isBlank()) return "Not set"
+private fun maskSensitive(value: String, notSet: String = "Not set"): String {
+    if (value.isBlank()) return notSet
     if (value.length <= 8) return "*".repeat(value.length)
     return "${value.take(6)}${"*".repeat(8)}${value.takeLast(4)}"
 }
@@ -2078,7 +2096,7 @@ private fun InfoDialog(title: String, message: String, onDismiss: () -> Unit) {
         confirmButton = {
             TextButton(onClick = onDismiss) {
                 Text(
-                    "Got it",
+                    stringResource(R.string.button_got_it),
                     fontFamily = RethinkSans,
                     fontWeight = FontWeight.Bold,
                     color = SeekerClawColors.Primary,
