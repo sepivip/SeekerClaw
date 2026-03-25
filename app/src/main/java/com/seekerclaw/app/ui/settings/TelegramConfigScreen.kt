@@ -33,9 +33,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.seekerclaw.app.R
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.ui.theme.RethinkSans
 import com.seekerclaw.app.ui.theme.SeekerClawColors
@@ -67,17 +69,18 @@ fun TelegramConfigScreen(onBack: () -> Unit) {
         config = ConfigManager.loadConfig(context)
     }
 
+    val notSetLabel = stringResource(R.string.label_not_set)
     val maskedBotToken = config?.telegramBotToken?.let { token ->
-        if (token.isBlank()) "Not set"
+        if (token.isBlank()) notSetLabel
         else if (token.length > 20) "${token.take(8)}${"*".repeat(8)}${token.takeLast(4)}" else "*".repeat(token.length)
-    } ?: "Not set"
+    } ?: notSetLabel
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
                     Text(
-                        text = "Telegram Configuration",
+                        text = stringResource(R.string.telegram_title),
                         fontFamily = RethinkSans,
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Bold,
@@ -88,7 +91,7 @@ fun TelegramConfigScreen(onBack: () -> Unit) {
                     IconButton(onClick = onBack) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back",
+                            contentDescription = stringResource(R.string.button_back),
                             tint = SeekerClawColors.TextPrimary
                         )
                     }
@@ -113,22 +116,22 @@ fun TelegramConfigScreen(onBack: () -> Unit) {
                     .background(SeekerClawColors.Surface, shape),
             ) {
                 ProviderConfigField(
-                    label = "Bot Token",
+                    label = stringResource(R.string.telegram_label_bot_token),
                     value = maskedBotToken,
                     onClick = {
                         editField = "telegramBotToken"
-                        editLabel = "Bot Token"
+                        editLabel = context.getString(R.string.telegram_label_bot_token)
                         editValue = config?.telegramBotToken ?: ""
                     },
                     info = SettingsHelpTexts.BOT_TOKEN,
                     isRequired = true,
                 )
                 ProviderConfigField(
-                    label = "Owner ID",
-                    value = config?.telegramOwnerId?.ifBlank { "Auto-detect" } ?: "Auto-detect",
+                    label = stringResource(R.string.telegram_label_owner_id),
+                    value = config?.telegramOwnerId?.ifBlank { stringResource(R.string.telegram_owner_auto_detect) } ?: stringResource(R.string.telegram_owner_auto_detect),
                     onClick = {
                         editField = "telegramOwnerId"
-                        editLabel = "Owner ID"
+                        editLabel = context.getString(R.string.telegram_label_owner_id)
                         editValue = config?.telegramOwnerId ?: ""
                     },
                     info = SettingsHelpTexts.OWNER_ID,
@@ -137,7 +140,7 @@ fun TelegramConfigScreen(onBack: () -> Unit) {
             }
 
             Spacer(modifier = Modifier.height(28.dp))
-            ProviderSectionLabel("Connection Test")
+            ProviderSectionLabel(stringResource(R.string.provider_connection_test))
             Spacer(modifier = Modifier.height(10.dp))
 
             Column(
@@ -147,7 +150,7 @@ fun TelegramConfigScreen(onBack: () -> Unit) {
                     .padding(16.dp),
             ) {
                 Text(
-                    text = "Verify your bot token is valid and Telegram is reachable.",
+                    text = stringResource(R.string.telegram_connection_desc),
                     fontFamily = RethinkSans,
                     fontSize = 13.sp,
                     color = SeekerClawColors.TextDim,
@@ -162,7 +165,7 @@ fun TelegramConfigScreen(onBack: () -> Unit) {
                         val token = config?.telegramBotToken ?: ""
                         if (token.isBlank()) {
                             testStatus = "Error"
-                            testMessage = "Bot token is empty."
+                            testMessage = context.getString(R.string.telegram_error_token_empty)
                             return@Button
                         }
                         
@@ -170,10 +173,10 @@ fun TelegramConfigScreen(onBack: () -> Unit) {
                             val result = testTelegramBot(token)
                             if (result.isSuccess) {
                                 testStatus = "Success"
-                                testMessage = "Bot connected as @${result.getOrNull()}"
+                                testMessage = context.getString(R.string.telegram_bot_connected, result.getOrNull())
                             } else {
                                 testStatus = "Error"
-                                testMessage = result.exceptionOrNull()?.message ?: "Connection failed"
+                                testMessage = result.exceptionOrNull()?.message ?: context.getString(R.string.provider_connection_failed)
                             }
                         }
                     },
@@ -192,9 +195,9 @@ fun TelegramConfigScreen(onBack: () -> Unit) {
                             color = Color.White,
                         )
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Testing...", fontFamily = RethinkSans, fontSize = 14.sp)
+                        Text(stringResource(R.string.button_testing), fontFamily = RethinkSans, fontSize = 14.sp)
                     } else {
-                        Text("Test Bot", fontFamily = RethinkSans, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        Text(stringResource(R.string.telegram_button_test), fontFamily = RethinkSans, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                     }
                 }
 

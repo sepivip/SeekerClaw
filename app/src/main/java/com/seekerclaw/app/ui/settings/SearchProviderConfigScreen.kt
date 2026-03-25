@@ -32,9 +32,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.seekerclaw.app.R
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.config.SearchProviderInfo
 import com.seekerclaw.app.config.availableSearchProviders
@@ -56,8 +58,9 @@ fun SearchProviderConfigScreen(onBack: () -> Unit) {
 
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
 
+    val notSetLabel = stringResource(R.string.label_not_set)
     fun maskKey(key: String?): String {
-        if (key.isNullOrBlank()) return "Not set"
+        if (key.isNullOrBlank()) return notSetLabel
         if (key.length <= 8) return "*".repeat(key.length)
         return "${key.take(6)}${"*".repeat(8)}${key.takeLast(4)}"
     }
@@ -82,7 +85,7 @@ fun SearchProviderConfigScreen(onBack: () -> Unit) {
             TopAppBar(
                 title = {
                     Text(
-                        text = "Search Provider",
+                        text = stringResource(R.string.search_title),
                         fontFamily = RethinkSans,
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Bold,
@@ -93,7 +96,7 @@ fun SearchProviderConfigScreen(onBack: () -> Unit) {
                     IconButton(onClick = onBack) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back",
+                            contentDescription = stringResource(R.string.button_back),
                             tint = SeekerClawColors.TextPrimary,
                         )
                     }
@@ -113,7 +116,7 @@ fun SearchProviderConfigScreen(onBack: () -> Unit) {
                 .verticalScroll(rememberScrollState()),
         ) {
             // Provider selection
-            ProviderSectionLabel("Provider")
+            ProviderSectionLabel(stringResource(R.string.provider_section_provider))
             Spacer(modifier = Modifier.height(10.dp))
 
             Column(
@@ -146,7 +149,7 @@ fun SearchProviderConfigScreen(onBack: () -> Unit) {
                         }
                         if (isActive) {
                             Text(
-                                text = "Active",
+                                text = stringResource(R.string.label_active),
                                 fontFamily = RethinkSans,
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Medium,
@@ -165,7 +168,7 @@ fun SearchProviderConfigScreen(onBack: () -> Unit) {
 
             // Active provider API key field
             Spacer(modifier = Modifier.height(24.dp))
-            ProviderSectionLabel("${activeProvider.displayName} Settings")
+            ProviderSectionLabel(stringResource(R.string.provider_settings_title, activeProvider.displayName))
             Spacer(modifier = Modifier.height(10.dp))
 
             val activeApiKey: String? = config?.activeSearchApiKey
@@ -177,11 +180,11 @@ fun SearchProviderConfigScreen(onBack: () -> Unit) {
                     .background(SeekerClawColors.Surface, shape),
             ) {
                 ProviderConfigField(
-                    label = "API Key",
+                    label = stringResource(R.string.search_label_api_key),
                     value = maskKey(activeApiKey),
                     onClick = {
                         editField = activeProvider.configField
-                        editLabel = "${activeProvider.displayName} API Key"
+                        editLabel = context.getString(R.string.search_edit_api_key, activeProvider.displayName)
                         editValue = activeApiKey ?: ""
                     },
                     info = helpTextForProvider(activeProvider.id),
@@ -193,7 +196,7 @@ fun SearchProviderConfigScreen(onBack: () -> Unit) {
             if (isKeyMissing) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "Not configured — web search will not work until an API key is set.",
+                    text = stringResource(R.string.search_not_configured),
                     fontFamily = RethinkSans,
                     fontSize = 12.sp,
                     color = SeekerClawColors.Error,
@@ -202,7 +205,7 @@ fun SearchProviderConfigScreen(onBack: () -> Unit) {
 
             // "Get API Key" link
             Spacer(modifier = Modifier.height(24.dp))
-            ProviderSectionLabel("Resources")
+            ProviderSectionLabel(stringResource(R.string.search_section_resources))
             Spacer(modifier = Modifier.height(10.dp))
 
             Column(
@@ -219,7 +222,7 @@ fun SearchProviderConfigScreen(onBack: () -> Unit) {
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 Text(
-                    text = "Get API Key →",
+                    text = stringResource(R.string.search_get_api_key),
                     fontFamily = RethinkSans,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Bold,

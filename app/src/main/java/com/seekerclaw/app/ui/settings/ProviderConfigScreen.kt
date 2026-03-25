@@ -41,10 +41,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.seekerclaw.app.R
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.config.availableModels
 import com.seekerclaw.app.config.availableProviders
@@ -94,8 +96,9 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
         if (needsRestart) showRestartDialog = true
     }
 
+    val notSetLabel = stringResource(R.string.label_not_set)
     fun maskKey(key: String?): String {
-        if (key.isNullOrBlank()) return "Not set"
+        if (key.isNullOrBlank()) return notSetLabel
         if (key.length <= 8) return "*".repeat(key.length)
         return "${key.take(6)}${"*".repeat(8)}${key.takeLast(4)}"
     }
@@ -135,7 +138,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
             TopAppBar(
                 title = {
                     Text(
-                        text = "AI Provider",
+                        text = stringResource(R.string.provider_title),
                         fontFamily = RethinkSans,
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Bold,
@@ -146,7 +149,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                     IconButton(onClick = onBack) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back",
+                            contentDescription = stringResource(R.string.button_back),
                             tint = SeekerClawColors.TextPrimary,
                         )
                     }
@@ -166,7 +169,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                 .verticalScroll(rememberScrollState()),
         ) {
             // Provider selection — two rows matching existing field pattern
-            ProviderSectionLabel("Provider")
+            ProviderSectionLabel(stringResource(R.string.provider_section_provider))
             Spacer(modifier = Modifier.height(10.dp))
 
             Column(
@@ -195,7 +198,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                         }
                         if (isActive) {
                             Text(
-                                text = "Active",
+                                text = stringResource(R.string.label_active),
                                 fontFamily = RethinkSans,
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Medium,
@@ -214,7 +217,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
 
             // Active provider fields
             Spacer(modifier = Modifier.height(28.dp))
-            ProviderSectionLabel("${providerById(activeProvider).displayName} Settings")
+            ProviderSectionLabel(stringResource(R.string.provider_settings_title, providerById(activeProvider).displayName))
             Spacer(modifier = Modifier.height(10.dp))
 
             Column(
@@ -224,38 +227,38 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
             ) {
                 when (activeProvider) {
                     "claude" -> {
-                        val authTypeLabel = if (config?.authType == "setup_token") "Pro/Max Setup Token" else "API Key"
+                        val authTypeLabel = if (config?.authType == "setup_token") stringResource(R.string.provider_auth_setup_token) else stringResource(R.string.provider_auth_api_key)
                         ProviderConfigField(
-                            label = "Model",
+                            label = stringResource(R.string.provider_label_model),
                             value = availableModels.find { it.id == config?.model }
                                 ?.let { "${it.displayName} (${it.description})" }
-                                ?: config?.model?.ifBlank { "Not set" } ?: "Not set",
+                                ?: config?.model?.ifBlank { notSetLabel } ?: notSetLabel,
                             onClick = { showModelPicker = true },
                             info = SettingsHelpTexts.MODEL,
                         )
                         ProviderConfigField(
-                            label = "Auth Type",
+                            label = stringResource(R.string.provider_label_auth_type),
                             value = authTypeLabel,
                             onClick = { showAuthTypePicker = true },
                             info = SettingsHelpTexts.AUTH_TYPE,
                         )
                         ProviderConfigField(
-                            label = if (config?.authType == "api_key") "API Key (active)" else "API Key",
+                            label = if (config?.authType == "api_key") stringResource(R.string.provider_label_api_key_active) else stringResource(R.string.provider_label_api_key),
                             value = maskKey(config?.anthropicApiKey),
                             onClick = {
                                 editField = "anthropicApiKey"
-                                editLabel = "Anthropic API Key"
+                                editLabel = context.getString(R.string.provider_edit_anthropic_key)
                                 editValue = config?.anthropicApiKey ?: ""
                             },
                             info = SettingsHelpTexts.API_KEY,
                             isRequired = config?.authType == "api_key",
                         )
                         ProviderConfigField(
-                            label = if (config?.authType == "setup_token") "Setup Token (active)" else "Setup Token",
+                            label = if (config?.authType == "setup_token") stringResource(R.string.provider_label_setup_token_active) else stringResource(R.string.provider_label_setup_token),
                             value = maskKey(config?.setupToken),
                             onClick = {
                                 editField = "setupToken"
-                                editLabel = "Setup Token"
+                                editLabel = context.getString(R.string.provider_edit_setup_token)
                                 editValue = config?.setupToken ?: ""
                             },
                             info = SettingsHelpTexts.SETUP_TOKEN,
@@ -265,19 +268,19 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                     }
                     "openai" -> {
                         ProviderConfigField(
-                            label = "Model",
+                            label = stringResource(R.string.provider_label_model),
                             value = openaiModels.find { it.id == config?.model }
                                 ?.let { "${it.displayName} (${it.description})" }
-                                ?: config?.model?.ifBlank { "Not set" } ?: "Not set",
+                                ?: config?.model?.ifBlank { notSetLabel } ?: notSetLabel,
                             onClick = { showModelPicker = true },
                             info = SettingsHelpTexts.MODEL,
                         )
                         ProviderConfigField(
-                            label = "API Key",
+                            label = stringResource(R.string.provider_label_api_key),
                             value = maskKey(config?.openaiApiKey),
                             onClick = {
                                 editField = "openaiApiKey"
-                                editLabel = "OpenAI API Key"
+                                editLabel = context.getString(R.string.provider_edit_openai_key)
                                 editValue = config?.openaiApiKey ?: ""
                             },
                             info = SettingsHelpTexts.OPENAI_API_KEY,
@@ -289,36 +292,36 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                         val modelCtxDisplay = config?.openrouterModelContext?.ifBlank { null }
                             ?.let { " ($it ctx)" } ?: ""
                         ProviderConfigField(
-                            label = "Model",
-                            value = (config?.model?.ifBlank { "Not set" } ?: "Not set") + modelCtxDisplay,
+                            label = stringResource(R.string.provider_label_model),
+                            value = (config?.model?.ifBlank { notSetLabel } ?: notSetLabel) + modelCtxDisplay,
                             onClick = {
                                 orModelDialog = "model"
                                 orModelValue = config?.model ?: ""
                                 orContextValue = config?.openrouterModelContext ?: ""
                             },
-                            info = "Full model ID from openrouter.ai/models (e.g. anthropic/claude-sonnet-4-6)",
+                            info = stringResource(R.string.openrouter_model_info),
                         )
                         val fallbackCtxDisplay = config?.openrouterFallbackContext?.ifBlank { null }
                             ?.let { " ($it ctx)" } ?: ""
                         ProviderConfigField(
-                            label = "Fallback Model (optional)",
-                            value = (config?.openrouterFallbackModel?.ifBlank { "Not set" } ?: "Not set") + fallbackCtxDisplay,
+                            label = stringResource(R.string.openrouter_fallback_label),
+                            value = (config?.openrouterFallbackModel?.ifBlank { notSetLabel } ?: notSetLabel) + fallbackCtxDisplay,
                             onClick = {
                                 orModelDialog = "fallback"
                                 orModelValue = config?.openrouterFallbackModel ?: ""
                                 orContextValue = config?.openrouterFallbackContext ?: ""
                             },
-                            info = "Auto-switches if primary model is down (e.g. google/gemini-2.5-pro)",
+                            info = stringResource(R.string.openrouter_fallback_info),
                         )
                         ProviderConfigField(
-                            label = "API Key",
+                            label = stringResource(R.string.provider_label_api_key),
                             value = maskKey(config?.openrouterApiKey),
                             onClick = {
                                 editField = "openrouterApiKey"
-                                editLabel = "OpenRouter API Key"
+                                editLabel = context.getString(R.string.provider_edit_openrouter_key)
                                 editValue = config?.openrouterApiKey ?: ""
                             },
-                            info = "Get your key at openrouter.ai/keys",
+                            info = stringResource(R.string.openrouter_key_info),
                             isRequired = true,
                             showDivider = false,
                         )
@@ -328,7 +331,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
 
             // Connection test
             Spacer(modifier = Modifier.height(28.dp))
-            ProviderSectionLabel("Connection Test")
+            ProviderSectionLabel(stringResource(R.string.provider_connection_test))
             Spacer(modifier = Modifier.height(10.dp))
 
             Column(
@@ -338,7 +341,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                     .padding(16.dp),
             ) {
                 Text(
-                    text = "Verify your credentials are valid and the API is reachable.",
+                    text = stringResource(R.string.provider_connection_desc),
                     fontFamily = RethinkSans,
                     fontSize = 13.sp,
                     color = SeekerClawColors.TextDim,
@@ -367,10 +370,10 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                             }
                             if (result.isSuccess) {
                                 testStatus = "Success"
-                                testMessage = "Connection successful!"
+                                testMessage = context.getString(R.string.provider_connection_success)
                             } else {
                                 testStatus = "Error"
-                                testMessage = result.exceptionOrNull()?.message ?: "Connection failed"
+                                testMessage = result.exceptionOrNull()?.message ?: context.getString(R.string.provider_connection_failed)
                             }
                         }
                     },
@@ -389,9 +392,9 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                             color = Color.White,
                         )
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Testing...", fontFamily = RethinkSans, fontSize = 14.sp)
+                        Text(stringResource(R.string.button_testing), fontFamily = RethinkSans, fontSize = 14.sp)
                     } else {
-                        Text("Test Connection", fontFamily = RethinkSans, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        Text(stringResource(R.string.provider_button_test), fontFamily = RethinkSans, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                     }
                 }
 
@@ -446,7 +449,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
     // OpenRouter model + context edit dialog
     if (orModelDialog != null) {
         val isModel = orModelDialog == "model"
-        val title = if (isModel) "Edit Model" else "Edit Fallback Model"
+        val title = if (isModel) stringResource(R.string.openrouter_dialog_edit_model) else stringResource(R.string.openrouter_dialog_edit_fallback)
         val modelField = if (isModel) "model" else "openrouterFallbackModel"
         val contextField = if (isModel) "openrouterModelContext" else "openrouterFallbackContext"
 
@@ -491,7 +494,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
             onDismissRequest = { showModelPicker = false },
             title = {
                 Text(
-                    "Select Model",
+                    stringResource(R.string.provider_dialog_select_model),
                     fontFamily = RethinkSans,
                     fontWeight = FontWeight.Bold,
                     color = SeekerClawColors.TextPrimary,
@@ -541,12 +544,12 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                         showModelPicker = false
                     },
                 ) {
-                    Text("Save", fontFamily = RethinkSans, fontWeight = FontWeight.Bold, color = SeekerClawColors.ActionPrimary)
+                    Text(stringResource(R.string.button_save), fontFamily = RethinkSans, fontWeight = FontWeight.Bold, color = SeekerClawColors.ActionPrimary)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showModelPicker = false }) {
-                    Text("Cancel", fontFamily = RethinkSans, color = SeekerClawColors.TextDim)
+                    Text(stringResource(R.string.button_cancel), fontFamily = RethinkSans, color = SeekerClawColors.TextDim)
                 }
             },
             containerColor = SeekerClawColors.Surface,
@@ -556,13 +559,15 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
 
     // Auth type picker (Claude only)
     if (showAuthTypePicker) {
-        val authOptions = listOf("api_key" to "API Key", "setup_token" to "Pro/Max Setup Token")
+        val apiKeyLabel = stringResource(R.string.provider_auth_api_key)
+        val setupTokenLabel = stringResource(R.string.provider_auth_setup_token)
+        val authOptions = listOf("api_key" to apiKeyLabel, "setup_token" to setupTokenLabel)
         var selectedAuth by remember { mutableStateOf(config?.authType ?: "api_key") }
 
         AlertDialog(
             onDismissRequest = { showAuthTypePicker = false },
             title = {
-                Text("Auth Type", fontFamily = RethinkSans, fontWeight = FontWeight.Bold, color = SeekerClawColors.TextPrimary)
+                Text(stringResource(R.string.provider_dialog_auth_type), fontFamily = RethinkSans, fontWeight = FontWeight.Bold, color = SeekerClawColors.TextPrimary)
             },
             text = {
                 Column {
@@ -593,7 +598,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                     }
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "Both credentials are stored. Switching just changes which one is used.",
+                        text = stringResource(R.string.provider_auth_info),
                         fontFamily = RethinkSans,
                         fontSize = 12.sp,
                         color = SeekerClawColors.TextDim,
@@ -608,12 +613,12 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                         showAuthTypePicker = false
                     },
                 ) {
-                    Text("Save", fontFamily = RethinkSans, fontWeight = FontWeight.Bold, color = SeekerClawColors.ActionPrimary)
+                    Text(stringResource(R.string.button_save), fontFamily = RethinkSans, fontWeight = FontWeight.Bold, color = SeekerClawColors.ActionPrimary)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showAuthTypePicker = false }) {
-                    Text("Cancel", fontFamily = RethinkSans, color = SeekerClawColors.TextDim)
+                    Text(stringResource(R.string.button_cancel), fontFamily = RethinkSans, color = SeekerClawColors.TextDim)
                 }
             },
             containerColor = SeekerClawColors.Surface,
@@ -785,12 +790,12 @@ fun OpenRouterModelEditDialog(
                     onValueChange = onModelChange,
                     label = {
                         Text(
-                            if (isRequired) "Model ID *" else "Model ID (optional)",
+                            if (isRequired) stringResource(R.string.openrouter_label_model_id_required) else stringResource(R.string.openrouter_label_model_id_optional),
                             fontFamily = RethinkSans,
                             fontSize = 12.sp,
                         )
                     },
-                    placeholder = { Text("e.g. anthropic/claude-sonnet-4-6", fontSize = 12.sp, color = SeekerClawColors.TextDim) },
+                    placeholder = { Text(stringResource(R.string.openrouter_placeholder_model), fontSize = 12.sp, color = SeekerClawColors.TextDim) },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                     textStyle = monoStyle,
@@ -800,8 +805,8 @@ fun OpenRouterModelEditDialog(
                 OutlinedTextField(
                     value = contextValue,
                     onValueChange = { new -> onContextChange(new.filter { it.isDigit() }) },
-                    label = { Text("Context Length (optional)", fontFamily = RethinkSans, fontSize = 12.sp) },
-                    placeholder = { Text("Default: 128000", fontSize = 12.sp, color = SeekerClawColors.TextDim) },
+                    label = { Text(stringResource(R.string.openrouter_label_context_length), fontFamily = RethinkSans, fontSize = 12.sp) },
+                    placeholder = { Text(stringResource(R.string.openrouter_placeholder_context), fontSize = 12.sp, color = SeekerClawColors.TextDim) },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                     textStyle = monoStyle,
@@ -809,7 +814,7 @@ fun OpenRouterModelEditDialog(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 )
                 Text(
-                    "Max tokens the model supports. Check openrouter.ai/models",
+                    stringResource(R.string.openrouter_context_hint),
                     fontFamily = RethinkSans,
                     fontSize = 11.sp,
                     color = SeekerClawColors.TextDim,
@@ -820,7 +825,7 @@ fun OpenRouterModelEditDialog(
         confirmButton = {
             TextButton(onClick = onSave) {
                 Text(
-                    "Save",
+                    stringResource(R.string.button_save),
                     fontFamily = RethinkSans,
                     fontWeight = FontWeight.Bold,
                     color = SeekerClawColors.ActionPrimary,
@@ -830,7 +835,7 @@ fun OpenRouterModelEditDialog(
         dismissButton = {
             TextButton(onClick = onDismiss) {
                 Text(
-                    "Cancel",
+                    stringResource(R.string.button_cancel),
                     fontFamily = RethinkSans,
                     color = SeekerClawColors.TextDim,
                 )

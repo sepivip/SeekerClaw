@@ -7,8 +7,10 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
+import com.seekerclaw.app.R
 import com.seekerclaw.app.service.OpenClawService
 import com.seekerclaw.app.ui.theme.RethinkSans
 import com.seekerclaw.app.ui.theme.SeekerClawColors
@@ -22,7 +24,7 @@ fun RestartDialog(
         onDismissRequest = onDismiss,
         title = {
             Text(
-                "Config Updated",
+                stringResource(R.string.dialog_config_updated),
                 fontFamily = RethinkSans,
                 fontWeight = FontWeight.Bold,
                 color = SeekerClawColors.TextPrimary,
@@ -30,7 +32,7 @@ fun RestartDialog(
         },
         text = {
             Text(
-                "Restart the agent to apply changes?",
+                stringResource(R.string.dialog_restart_message),
                 fontFamily = RethinkSans,
                 fontSize = 14.sp,
                 color = SeekerClawColors.TextSecondary,
@@ -40,10 +42,10 @@ fun RestartDialog(
             TextButton(onClick = {
                 OpenClawService.restart(context)
                 onDismiss()
-                Toast.makeText(context, "Agent restarting\u2026", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, context.getString(R.string.toast_agent_restarting), Toast.LENGTH_SHORT).show()
             }) {
                 Text(
-                    "Restart Now",
+                    stringResource(R.string.dialog_restart_now),
                     fontFamily = RethinkSans,
                     fontWeight = FontWeight.Bold,
                     color = SeekerClawColors.Primary,
@@ -53,7 +55,7 @@ fun RestartDialog(
         dismissButton = {
             TextButton(onClick = onDismiss) {
                 Text(
-                    "Later",
+                    stringResource(R.string.dialog_restart_later),
                     fontFamily = RethinkSans,
                     color = SeekerClawColors.TextDim,
                 )
