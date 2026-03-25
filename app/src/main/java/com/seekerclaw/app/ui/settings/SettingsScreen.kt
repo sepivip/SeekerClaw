@@ -26,6 +26,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Column
@@ -548,73 +549,80 @@ fun SettingsScreen(
                 )
 
                 // Language picker — per-app locale (API 33+)
-                val localeManager = context.getSystemService(LocaleManager::class.java)
-                val currentLocales = localeManager.applicationLocales
-                val currentLangTag = if (currentLocales.isEmpty) "" else currentLocales.get(0)?.toLanguageTag() ?: ""
-                val languageOptions = listOf(
-                    "" to stringResource(R.string.language_system_default),
-                    "en" to stringResource(R.string.language_english),
-                    "zh-CN" to stringResource(R.string.language_chinese_simplified),
-                )
-                var languageExpanded by remember { mutableStateOf(false) }
-                val currentLabel = languageOptions.firstOrNull { it.first == currentLangTag }?.second
-                    ?: languageOptions.firstOrNull { it.first.isNotEmpty() && currentLangTag.startsWith(it.first) }?.second
-                    ?: stringResource(R.string.language_system_default)
+                val localeManager = remember { context.getSystemService(LocaleManager::class.java) }
+                if (localeManager != null) {
+                    val currentLocales = localeManager.applicationLocales
+                    val currentLangTag = if (currentLocales.isEmpty) "" else currentLocales.get(0)?.toLanguageTag() ?: ""
+                    val languageOptions = listOf(
+                        "" to stringResource(R.string.language_system_default),
+                        "en" to stringResource(R.string.language_english),
+                        "zh-CN" to stringResource(R.string.language_chinese_simplified),
+                    )
+                    var languageExpanded by remember { mutableStateOf(false) }
+                    val currentLabel = languageOptions.firstOrNull { it.first == currentLangTag }?.second
+                        ?: languageOptions.firstOrNull { it.first.isNotEmpty() && currentLangTag.startsWith(it.first) }?.second
+                        ?: stringResource(R.string.language_system_default)
 
-                HorizontalDivider(color = SeekerClawColors.CardBorder)
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { languageExpanded = !languageExpanded }
-                        .padding(vertical = 14.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = stringResource(R.string.settings_language),
-                        fontFamily = RethinkSans,
-                        fontSize = 14.sp,
-                        color = SeekerClawColors.TextPrimary,
-                    )
-                    Text(
-                        text = currentLabel,
-                        fontFamily = RethinkSans,
-                        fontSize = 14.sp,
-                        color = SeekerClawColors.TextSecondary,
-                    )
-                }
-                AnimatedVisibility(visible = languageExpanded) {
-                    Column(modifier = Modifier.padding(bottom = 8.dp)) {
-                        languageOptions.forEach { (tag, label) ->
-                            val isSelected = tag == currentLangTag ||
-                                (tag.isNotEmpty() && currentLangTag.startsWith(tag))
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        val newLocales = if (tag.isEmpty()) {
-                                            LocaleList.getEmptyLocaleList()
-                                        } else {
-                                            LocaleList.forLanguageTags(tag)
-                                        }
-                                        localeManager.applicationLocales = newLocales
-                                        languageExpanded = false
-                                    }
-                                    .padding(vertical = 10.dp, horizontal = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                RadioButton(
-                                    selected = isSelected,
-                                    onClick = null,
-                                    colors = RadioButtonDefaults.colors(
-                                        selectedColor = SeekerClawColors.Accent,
-                                        unselectedColor = SeekerClawColors.TextSecondary,
-                                    ),
-                                )
-                                Text(
-                                    text = label,
-                                    fontFamily = RethinkSans,
-                                    fontSize = 14.sp,
+                    HorizontalDivider(color = SeekerClawColors.CardBorder)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { languageExpanded = !languageExpanded }
+                            .padding(vertical = 14.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = stringResource(R.string.settings_language),
+                            fontFamily = RethinkSans,
+                            fontSize = 14.sp,
+                            color = SeekerClawColors.TextPrimary,
+                        )
+                        Text(
+                            text = currentLabel,
+                            fontFamily = RethinkSans,
+                            fontSize = 14.sp,
+                            color = SeekerClawColors.TextSecondary,
+                        )
+                    }
+                    AnimatedVisibility(visible = languageExpanded) {
+                        Column(
+                            modifier = Modifier.padding(bottom = 8.dp),
+                        ) {
+                            languageOptions.forEach { (tag, label) ->
+                                val isSelected = tag == currentLangTag ||
+                                    (tag.isNotEmpty() && currentLangTag.startsWith(tag))
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .selectable(
+                                            selected = isSelected,
+                                            role = androidx.compose.ui.semantics.Role.RadioButton,
+                                            onClick = {
+                                                val newLocales = if (tag.isEmpty()) {
+                                                    LocaleList.getEmptyLocaleList()
+                                                } else {
+                                                    LocaleList.forLanguageTags(tag)
+                                                }
+                                                localeManager.applicationLocales = newLocales
+                                                languageExpanded = false
+                                            },
+                                        )
+                                        .padding(vertical = 10.dp, horizontal = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    RadioButton(
+                                        selected = isSelected,
+                                        onClick = null,
+                                        colors = RadioButtonDefaults.colors(
+                                            selectedColor = SeekerClawColors.Accent,
+                                            unselectedColor = SeekerClawColors.TextSecondary,
+                                        ),
+                                    )
+                                    Text(
+                                        text = label,
+                                        fontFamily = RethinkSans,
+                                        fontSize = 14.sp,
                                     color = if (isSelected) SeekerClawColors.TextPrimary else SeekerClawColors.TextSecondary,
                                     modifier = Modifier.padding(start = 8.dp),
                                 )
@@ -622,6 +630,7 @@ fun SettingsScreen(
                         }
                     }
                 }
+                } // localeManager null check
 
                 val allPermissionsOff = !hasCameraPermission && !hasLocationPermission &&
                     !hasContactsPermission && !hasSmsPermission && !hasCallPermission
@@ -1401,7 +1410,7 @@ fun SettingsScreen(
                             "[ConfigImport] Validation failed after save: $saveValidationError",
                             LogLevel.ERROR,
                         )
-                        configImportError = context.getString(R.string.wallet_error_config_saved_invalid, saveValidationError)
+                        configImportError = context.getString(R.string.error_config_saved_invalid, saveValidationError)
                         Toast.makeText(
                             context,
                             context.getString(R.string.toast_config_saved_invalid, saveValidationError),

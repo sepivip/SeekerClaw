@@ -524,8 +524,8 @@
     <string name="toast_connection_cancelled">Connection cancelled</string>
     <string name="toast_connection_failed">Connection failed</string>
 
-    <!-- SettingsScreen: Wallet error states -->
-    <string name="wallet_error_config_saved_invalid">Config saved but invalid: %1$s</string>
+    <!-- SettingsScreen: Config error states -->
+    <string name="error_config_saved_invalid">Config saved but invalid: %1$s</string>
 
     <!-- SettingsScreen: CollapsibleSection content descriptions -->
     <string name="settings_collapse_section">Collapse %1$s</string>
