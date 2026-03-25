@@ -1,8 +1,8 @@
 # OpenClaw Version Tracking
 
 > **Purpose:** Track OpenClaw releases and identify changes to port to SeekerClaw.
-> **Current OpenClaw Version:** 2026.3.13-1 (main 0e9b899ae, 2026-03-18)
-> **Last Sync Review:** 2026-03-18
+> **Current OpenClaw Version:** 2026.3.24 (main b7d70ade3b, 2026-03-25)
+> **Last Sync Review:** 2026-03-25
 > **Parity Plan:** See `PARITY_PLAN.md`
 
 ---
@@ -82,7 +82,28 @@ These files in OpenClaw directly affect SeekerClaw behavior. Changes here requir
 
 ## Version History & Changes
 
-### 2026.3.13-1 (Current - 0e9b899ae)
+### 2026.3.24 (Current - b7d70ade3b)
+- **Release Date:** 2026-03-25
+- **SeekerClaw Sync Status:** Reviewed, nothing to port
+- **1,782 new commits since last sync (0e9b899ae)**
+- **Skipped (not applicable):**
+  - System prompt: memory section extracted to separate file — pure refactor, no wording change
+  - System prompt: heartbeat guard (`if (heartbeatPrompt)`) — SeekerClaw always has heartbeats on, guard would be dead code
+  - System prompt: ClarHub URL update — we don't reference ClarHub
+  - Model selection: xAI normalization, lazy logger, provider fallback refactor, model catalog builder — server-side multi-provider infrastructure
+  - Skills: bundle commands (`loadEnabledClaudeBundleCommands`) — server-only plugin system
+  - Cron: startup persist optimization (skip unnecessary writes) — minor, our startup is simpler
+  - Cron types: `externalContentSource` hook field — plugin system
+  - Memory: global singleton cache, lazy provider init, status-only mode — all Node 22+ / embeddings
+  - Telegram: forum topic routing, photo dimension preflight, outbound 403 error handling, pairing scope, plugin SDK refactoring — all server-only multi-bot/forum features
+  - Changelog v2026.3.24: MS Teams migration, Slack interactive replies, Discord auto threads, Gateway OpenAI compat, Docker containers, Control UI skills — all server/desktop/other-channel
+- **Notable upstream:**
+  - Skills install metadata + one-click install recipes for bundled skills
+  - Control UI skill management (status filters, detail dialogs, API key entry)
+  - Node 22.14+ minimum (down from 22.15), Node 24 recommended
+  - Telegram photo dimension preflight (fall back to document on invalid dimensions)
+
+### 2026.3.13-1 (0e9b899ae)
 - **Release Date:** 2026-03-18
 - **SeekerClaw Sync Status:** Reviewed, 3 cron improvements ported
 - **4,022 new commits since last sync (3a08e69a0)**
