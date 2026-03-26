@@ -508,47 +508,6 @@ fun SettingsScreen(
                     .background(SeekerClawColors.Surface, shape)
                     .padding(horizontal = 16.dp),
             ) {
-                SettingRow(
-                    label = stringResource(R.string.settings_auto_start),
-                    checked = autoStartOnBoot,
-                    onCheckedChange = {
-                        autoStartOnBoot = it
-                        ConfigManager.setAutoStartOnBoot(context, it)
-                    },
-                    info = SettingsHelpTexts.AUTO_START,
-                )
-                SettingRow(
-                    label = stringResource(R.string.settings_analytics),
-                    checked = analyticsEnabled,
-                    onCheckedChange = {
-                        analyticsEnabled = it
-                        Analytics.setEnabled(context, it)
-                    },
-                    info = SettingsHelpTexts.ANALYTICS,
-                )
-                PermissionRow(
-                    label = stringResource(R.string.settings_battery_unrestricted),
-                    granted = batteryOptimizationDisabled,
-                    onRequest = {
-                        val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                            data = Uri.parse("package:${context.packageName}")
-                        }
-                        context.startActivity(intent)
-                    },
-                    onOpenSettings = { openAppSettings(context) },
-                    info = SettingsHelpTexts.BATTERY_UNRESTRICTED,
-                )
-                SettingRow(
-                    label = stringResource(R.string.settings_server_mode),
-                    checked = keepScreenOn,
-                    onCheckedChange = {
-                        keepScreenOn = it
-                        ConfigManager.setKeepScreenOn(context, it)
-                        showRestartDialog = true
-                    },
-                    info = SettingsHelpTexts.SERVER_MODE,
-                )
-
                 // Language picker — per-app locale (API 33+)
                 val localeManager = remember { context.getSystemService(LocaleManager::class.java) }
                 if (localeManager != null) {
@@ -634,6 +593,47 @@ fun SettingsScreen(
                     }
                 }
                 } // localeManager null check
+
+                SettingRow(
+                    label = stringResource(R.string.settings_auto_start),
+                    checked = autoStartOnBoot,
+                    onCheckedChange = {
+                        autoStartOnBoot = it
+                        ConfigManager.setAutoStartOnBoot(context, it)
+                    },
+                    info = SettingsHelpTexts.AUTO_START,
+                )
+                SettingRow(
+                    label = stringResource(R.string.settings_analytics),
+                    checked = analyticsEnabled,
+                    onCheckedChange = {
+                        analyticsEnabled = it
+                        Analytics.setEnabled(context, it)
+                    },
+                    info = SettingsHelpTexts.ANALYTICS,
+                )
+                PermissionRow(
+                    label = stringResource(R.string.settings_battery_unrestricted),
+                    granted = batteryOptimizationDisabled,
+                    onRequest = {
+                        val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                            data = Uri.parse("package:${context.packageName}")
+                        }
+                        context.startActivity(intent)
+                    },
+                    onOpenSettings = { openAppSettings(context) },
+                    info = SettingsHelpTexts.BATTERY_UNRESTRICTED,
+                )
+                SettingRow(
+                    label = stringResource(R.string.settings_server_mode),
+                    checked = keepScreenOn,
+                    onCheckedChange = {
+                        keepScreenOn = it
+                        ConfigManager.setKeepScreenOn(context, it)
+                        showRestartDialog = true
+                    },
+                    info = SettingsHelpTexts.SERVER_MODE,
+                )
 
                 val allPermissionsOff = !hasCameraPermission && !hasLocationPermission &&
                     !hasContactsPermission && !hasSmsPermission && !hasCallPermission
