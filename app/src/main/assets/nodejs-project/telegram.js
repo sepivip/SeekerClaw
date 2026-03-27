@@ -319,7 +319,7 @@ function cleanResponse(text) {
 
     // Repetition detector — catch degenerate model output (reasoning loops)
     // If any line appears 3+ times, keep first 2 and replace rest with a count.
-    // Normalizes whitespace for matching but preserves original formatting.
+    // Matching is case-insensitive with leading/trailing whitespace trimmed.
     cleaned = deduplicateRepeatedLines(cleaned);
 
     return cleaned.trim();
@@ -369,8 +369,9 @@ function deduplicateRepeatedLines(text) {
             result.push(line);
             seen.set(key, seenCount + 1);
         } else if (seenCount === 2) {
-            // Replace 3rd+ with count
-            result.push(`(repeated ${total - 2} more times)`);
+            // Replace 3rd+ with count, preserving leading whitespace/list markers
+            const prefix = line.match(/^(\s*(?:[-*•]\s*)?)/)[1] || '';
+            result.push(`${prefix}(repeated ${total - 2} more times)`);
             seen.set(key, seenCount + 1);
         }
         // seenCount > 2: skip (already added the count message)
