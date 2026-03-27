@@ -39,7 +39,7 @@ SeekerClaw embeds a Node.js AI agent inside an Android app, running 24/7 as a fo
 | :iphone: | **Device Control** | Battery, GPS, camera, SMS, calls, clipboard, TTS |
 | :brain: | **Memory** | Persistent personality, daily notes, ranked keyword search |
 | :alarm_clock: | **Scheduling** | Cron jobs with natural language ("remind me in 30 min") |
-| :globe_with_meridians: | **Web Intel** | Search (Brave / DuckDuckGo / Perplexity), fetch, caching |
+| :globe_with_meridians: | **Web Intel** | Search (Brave / Perplexity / Exa / Tavily / Firecrawl), fetch, caching |
 | :electric_plug: | **Extensible** | 35 skills + custom skills + MCP remote tools |
 
 <details>
@@ -64,7 +64,7 @@ Android App (Kotlin, Jetpack Compose)
  └─ Foreground Service
      └─ Node.js Runtime (nodejs-mobile)
          ├─ claude.js      — AI provider API, system prompt, conversations
-         ├─ tools.js       — 56 tool handlers + confirmations
+         ├─ tools/         — 56 tool handlers across 12 modules
          ├─ task-store.js  — Persistent task checkpoints
          ├─ solana.js      — Jupiter swaps, DCA, limit orders
          ├─ telegram.js    — Bot, formatting, commands
