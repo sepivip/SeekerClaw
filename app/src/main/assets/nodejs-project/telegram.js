@@ -317,7 +317,66 @@ function cleanResponse(text) {
     // Strip [Historical context: ...] markers
     cleaned = cleaned.replace(/\[Historical context:[^\]]*\]\n?/gi, '');
 
+    // Repetition detector — catch degenerate model output (reasoning loops)
+    // If any line appears 3+ times, keep first 2 and replace rest with a count.
+    // Normalizes whitespace for matching but preserves original formatting.
+    cleaned = deduplicateRepeatedLines(cleaned);
+
     return cleaned.trim();
+}
+
+/**
+ * Detect and collapse repeated lines in model output.
+ * Keeps first 2 occurrences of any repeated line, replaces the rest with
+ * "(repeated N more times)" to prevent degenerate output from reaching the user.
+ * Only triggers at 3+ repetitions — normal content passes through unchanged.
+ */
+function deduplicateRepeatedLines(text) {
+    if (!text) return text;
+    const lines = text.split('\n');
+    if (lines.length < 6) return text; // too short to have meaningful repetition
+
+    // Count occurrences of each normalized line
+    const counts = new Map();
+    for (const line of lines) {
+        const key = line.trim().toLowerCase();
+        if (!key) continue; // skip blank lines
+        counts.set(key, (counts.get(key) || 0) + 1);
+    }
+
+    // Check if any line repeats 3+ times
+    let hasRepetition = false;
+    for (const count of counts.values()) {
+        if (count >= 3) { hasRepetition = true; break; }
+    }
+    if (!hasRepetition) return text;
+
+    // Rebuild with deduplication
+    const seen = new Map(); // normalized → times included so far
+    const result = [];
+    for (const line of lines) {
+        const key = line.trim().toLowerCase();
+        if (!key) { result.push(line); continue; } // preserve blank lines
+
+        const total = counts.get(key) || 0;
+        const seenCount = seen.get(key) || 0;
+
+        if (total < 3) {
+            // Not a repeated line — pass through
+            result.push(line);
+        } else if (seenCount < 2) {
+            // Keep first 2 occurrences
+            result.push(line);
+            seen.set(key, seenCount + 1);
+        } else if (seenCount === 2) {
+            // Replace 3rd+ with count
+            result.push(`(repeated ${total - 2} more times)`);
+            seen.set(key, seenCount + 1);
+        }
+        // seenCount > 2: skip (already added the count message)
+    }
+
+    return result.join('\n');
 }
 
 // markdown-it parser — proper AST-based markdown parsing (replaces fragile regex, BAT-291)
