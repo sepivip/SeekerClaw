@@ -17,7 +17,7 @@ function init(d) {
 async function handleCommand(chatId, command, args) {
     switch (command) {
         case '/start': {
-            // Templates defined in docs/internal/TEMPLATES.md — update there first, then sync here
+            // Templates defined in TEMPLATES.md — update there first, then sync here
             const bootstrap = deps.loadBootstrap();
             const identity = deps.loadIdentity();
 
@@ -452,7 +452,7 @@ async function handleMessage(msg) {
             }
         }
 
-        // Regular message - send to Claude (text includes quoted context if replying)
+        // Regular message - send to AI (text includes quoted context if replying)
         statusReaction.setThinking();
         await deps.sendTyping(chatId);
         deps.lastIncomingMessages.set(String(chatId), { messageId: msg.message_id, chatId });
@@ -496,7 +496,7 @@ async function handleMessage(msg) {
                     const relativePath = `media/inbound/${saved.localName}`;
                     const isImage = media.type === 'photo' || (media.mime_type && media.mime_type.startsWith('image/'));
 
-                    // Claude vision-supported image formats
+                    // Vision-supported image formats
                     const VISION_MIMES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
 
                     if (isImage && VISION_MIMES.has(media.mime_type) && saved.size <= deps.MAX_IMAGE_SIZE) {

@@ -46,10 +46,11 @@ main.js (orchestrator)
 
 ## Dependency Injection
 
-Six injection points break circular dependencies:
+Seven injection points break circular dependencies:
 
 | Setter | Target | Wired in | Injects |
 |--------|--------|----------|---------|
+| `init(obj)` | message-handler.js | main.js | `{telegram, ai, tools, memory, cron, ...}` |
 | `setSendMessage(fn)` | cron.js | main.js | `sendMessage` from telegram.js |
 | `setShutdownDeps(obj)` | database.js | main.js | `{conversations, saveSessionSummary, MIN_MESSAGES_FOR_SUMMARY}` |
 | `setChatDeps(obj)` | ai.js | main.js | `{executeTool, getTools, getMcpStatus, requestConfirmation, lastToolUseTime, lastIncomingMessages}` |
@@ -59,7 +60,7 @@ Six injection points break circular dependencies:
 
 ## Error Signaling Convention
 
-### Tool results (tools.js → ai.js → Claude API)
+### Tool results (tools.js → ai.js → provider API)
 
 Tools return **plain objects** with an `error` key on failure:
 
