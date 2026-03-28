@@ -1,4 +1,4 @@
-// claude.js — Claude API, Conversations, Sessions, System Prompt (BAT-203)
+// ai.js — AI Engine, Conversations, Sessions, System Prompt (BAT-203)
 // Extracted from main.js as part of the modular refactor (BAT-192)
 
 const fs = require('fs');

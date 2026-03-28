@@ -16,11 +16,6 @@ const {
     workDir, config, debugLog,
 } = require('./config');
 
-// OWNER_ID is mutable (auto-detect from first message). Keep a local let
-// for all existing code; the one write-site also calls setOwnerId() to keep
-// config.js in sync for future modules that import it.
-let OWNER_ID = getOwnerId();
-
 process.on('uncaughtException', (err) => log('UNCAUGHT: ' + (err.stack || err), 'ERROR'));
 process.on('unhandledRejection', (reason) => log('UNHANDLED: ' + reason, 'ERROR'));
 
@@ -120,7 +115,7 @@ const {
 setSendMessage(sendMessage);
 
 // ============================================================================
-// CLAUDE (extracted to claude.js — BAT-203)
+// AI ENGINE (ai.js — provider-agnostic AI orchestration)
 // ============================================================================
 
 const {
@@ -131,7 +126,7 @@ const {
     writeAgentHealthFile,
     setChatDeps,
     getActiveTask, clearActiveTask,
-} = require('./claude');
+} = require('./ai');
 
 const { loadCheckpoint, listCheckpoints, saveCheckpoint, deleteCheckpoint, cleanupChatCheckpoints } = require('./task-store');
 
@@ -147,649 +142,12 @@ const {
 } = require('./tools');
 
 // ============================================================================
-// COMMAND HANDLERS
+// MESSAGE HANDLER (extracted to message-handler.js — #296)
 // ============================================================================
 
-async function handleCommand(chatId, command, args) {
-    switch (command) {
-        case '/start': {
-            // Templates defined in docs/internal/TEMPLATES.md — update there first, then sync here
-            const bootstrap = loadBootstrap();
-            const identity = loadIdentity();
-
-            // Option B: If BOOTSTRAP.md exists, pass through to agent (ritual mode)
-            if (bootstrap) {
-                return null; // Falls through to agent call with ritual instructions in system prompt
-            }
-
-            // Post-ritual or fallback
-            if (identity) {
-                // Returning user (IDENTITY.md exists)
-                const agentName = identity.split('\n')[0].replace(/^#\s*/, '').trim() || AGENT_NAME;
-                return `Hey, I'm back! ✨
-
-Quick commands if you need them:
-/quick · /status · /new · /reset · /skill · /logs · /help
-
-Or just talk to me — that works too.`;
-            } else {
-                // First-time (no BOOTSTRAP.md, no IDENTITY.md — rare edge case)
-                return `Hey there! 👋
-
-I'm your new AI companion, fresh out of the box and running right here on your phone.
-
-Before we get going, I'd love to figure out who I am — my name, my vibe, how I should talk to you. It only takes a minute.
-
-Send me anything to get started!`;
-            }
-        }
-
-        case '/help':
-        case '/commands': {
-            const skillCount = loadSkills().length;
-            return `**Commands**
-
-/quick — one-tap preset actions
-/status — bot status, uptime, model
-/new — archive session & start fresh
-/reset — wipe conversation (no backup)
-/resume — continue an interrupted task
-/skill — list skills (or \`/skill name\` to run one)
-/soul — view SOUL.md
-/memory — view MEMORY.md
-/logs — last 10 log entries
-/version — app & runtime versions
-/approve — confirm pending action
-/deny — reject pending action
-
-*${skillCount} skill${skillCount !== 1 ? 's' : ''} installed · /help to see this again*`;
-        }
-
-        case '/quick': {
-            await handleQuickCommand(chatId, telegram);
-            return { __handled: true }; // Keyboard sent — stop processing
-        }
-
-        case '/status': {
-            const uptime = Math.floor(process.uptime());
-            const uptimeFormatted = `${Math.floor(uptime / 3600)}h ${Math.floor((uptime % 3600) / 60)}m ${uptime % 60}s`;
-
-            // Get today's message count
-            const today = new Date().toISOString().split('T')[0];
-            const todayCount = sessionTracking.has(chatId) && sessionTracking.get(chatId).date === today
-                ? sessionTracking.get(chatId).messageCount
-                : 0;
-            const totalCount = getConversation(chatId).length;
-
-            // Get memory file count
-            const memoryDir = MEMORY_DIR;
-            let memoryFileCount = 0;
-            try {
-                if (fs.existsSync(memoryDir)) {
-                    memoryFileCount = fs.readdirSync(memoryDir).filter(f => f.endsWith('.md')).length;
-                }
-            } catch (e) { /* ignore */ }
-
-            const skillCount = loadSkills().length;
-            const mem = process.memoryUsage();
-            const heapMB = (mem.heapUsed / 1024 / 1024).toFixed(1);
-            const rssMB = (mem.rss / 1024 / 1024).toFixed(1);
-
-            return `🟢 **Alive and kicking**
-
-⏱️ Uptime: ${uptimeFormatted}
-💬 Messages: ${todayCount} today (${totalCount} in conversation)
-🧠 Memory: ${memoryFileCount} files
-📊 Model: \`${MODEL}\`
-🧩 Skills: ${skillCount}
-💾 RAM: ${heapMB} MB heap / ${rssMB} MB RSS`;
-        }
-
-        case '/reset':
-            clearConversation(chatId);
-            sessionTracking.delete(chatId);
-            return 'Conversation wiped. No backup saved.';
-
-        case '/new': {
-            // Save summary of current session before clearing (BAT-57)
-            const conv = getConversation(chatId);
-            const hadEnough = conv.length >= MIN_MESSAGES_FOR_SUMMARY;
-            if (hadEnough) {
-                await saveSessionSummary(chatId, 'manual', { force: true });
-            }
-            clearConversation(chatId);
-            sessionTracking.delete(chatId);
-            return 'Session archived. Conversation reset.';
-        }
-
-        case '/soul': {
-            const soul = loadSoul();
-            return `*SOUL.md*\n\n${soul.slice(0, 3000)}${soul.length > 3000 ? '\n\n...(truncated)' : ''}`;
-        }
-
-        case '/memory': {
-            const memory = loadMemory();
-            if (!memory) {
-                return 'Long-term memory is empty.';
-            }
-            return `*MEMORY.md*\n\n${memory.slice(0, 3000)}${memory.length > 3000 ? '\n\n...(truncated)' : ''}`;
-        }
-
-        case '/skill':
-        case '/skills': {
-            const skills = loadSkills();
-
-            // /skill <name> — run a specific skill by injecting it into conversation
-            if (args.trim()) {
-                const query = args.trim().toLowerCase();
-                const match = skills.find(s =>
-                    s.name.toLowerCase() === query ||
-                    s.name.toLowerCase().replace(/[^a-z0-9]/g, '') === query.replace(/[^a-z0-9]/g, '') ||
-                    s.triggers.some(t => t.toLowerCase() === query)
-                );
-                if (!match) {
-                    return `No skill matching \`${args.trim()}\`.\n\nUse /skill to list all installed skills.`;
-                }
-                if (match.triggers.length === 0) {
-                    return `Skill **${match.name}** has no triggers defined and can't be run via /skill.\n\nAdd \`triggers:\` to its YAML frontmatter.`;
-                }
-                // Signal handleMessage to rewrite the text to a trigger word so
-                // findMatchingSkills() in claude.js picks up the skill correctly.
-                // (findMatchingSkills uses word-boundary regex on triggers, not skill names.)
-                return { __skillFallthrough: true, trigger: match.triggers[0] };
-            }
-
-            // /skill or /skills with no args — list all
-            if (skills.length === 0) {
-                return `**No skills installed**
-
-Skills are specialized capabilities you can add to your agent.
-
-Create a Markdown file in the \`skills/\` directory:
-• \`skills/your-skill-name/SKILL.md\`
-• \`skills/your-skill-name.md\`
-
-Use YAML frontmatter with \`name\`, \`description\`, and \`triggers\` fields.`;
-            }
-
-            let response = `**Installed Skills (${skills.length})**\n\n`;
-            for (const skill of skills) {
-                const emoji = skill.emoji || '🔧';
-                response += `${emoji} **${skill.name}**`;
-                if (skill.triggers.length > 0) {
-                    response += ` — *${skill.triggers.slice(0, 3).join(', ')}*`;
-                }
-                response += '\n';
-                if (skill.description) {
-                    response += `${skill.description.split('\n')[0]}\n`;
-                }
-            }
-            response += `\nRun a skill: \`/skill name\``;
-            return response;
-        }
-
-        case '/version': {
-            const nodeVer = process.version;
-            const platform = `${process.platform}/${process.arch}`;
-            // Determine agent version from config, env, or package.json (in priority order)
-            let pkgVersion = 'unknown';
-            if (config && config.version) {
-                pkgVersion = config.version;
-            } else if (process.env.AGENT_VERSION) {
-                pkgVersion = process.env.AGENT_VERSION;
-            } else {
-                try {
-                    const pkg = JSON.parse(fs.readFileSync(require('path').join(__dirname, 'package.json'), 'utf8'));
-                    if (pkg.version) pkgVersion = pkg.version;
-                } catch (_) {}
-            }
-            return `**SeekerClaw**
-Agent: \`${AGENT_NAME}\`
-Package: \`${pkgVersion}\`
-Model: \`${MODEL}\`
-Node.js: \`${nodeVer}\`
-Platform: \`${platform}\``;
-        }
-
-        case '/logs': {
-            // Read last 10 log entries from the debug log file (tail-read to avoid blocking)
-            try {
-                if (!fs.existsSync(debugLog)) {
-                    return 'No log file found.';
-                }
-                const TAIL_BYTES = 8192;
-                const stats = fs.statSync(debugLog);
-                const start = Math.max(0, stats.size - TAIL_BYTES);
-                let fd;
-                let content;
-                try {
-                    fd = fs.openSync(debugLog, 'r');
-                    const buf = Buffer.alloc(Math.min(stats.size, TAIL_BYTES));
-                    fs.readSync(fd, buf, 0, buf.length, start);
-                    content = buf.toString('utf8');
-                } finally {
-                    if (fd !== undefined) fs.closeSync(fd);
-                }
-                const lines = content.trim().split('\n').filter(l => l.trim());
-                const last10 = lines.slice(-10);
-                if (last10.length === 0) return 'Log file is empty.';
-                const formatted = last10.map(line => {
-                    // Lines are: LEVEL|message
-                    const sep = line.indexOf('|');
-                    if (sep === -1) return line;
-                    const level = line.slice(0, sep);
-                    const msg = redactSecrets(line.slice(sep + 1)).substring(0, 120);
-                    const icon = level === 'ERROR' ? '🔴' : level === 'WARN' ? '🟡' : '⚪';
-                    return `${icon} ${msg}`;
-                }).join('\n');
-                // Re-apply redaction in case early startup logs predate setRedactFn()
-                return `**Last ${last10.length} log entries**\n\n\`\`\`\n${redactSecrets(formatted)}\n\`\`\``;
-            } catch (e) {
-                return `Failed to read logs: ${e.message}`;
-            }
-        }
-
-        case '/approve': {
-            const pending = pendingConfirmations.get(chatId);
-            if (!pending) {
-                return 'No pending confirmation to approve.';
-            }
-            log(`[Confirm] /approve command for ${pending.toolName} → APPROVED`, 'INFO');
-            pending.resolve(true);
-            pendingConfirmations.delete(chatId);
-            return '✅ Approved.';
-        }
-
-        case '/deny': {
-            const pending = pendingConfirmations.get(chatId);
-            if (!pending) {
-                return 'No pending confirmation to deny.';
-            }
-            log(`[Confirm] /deny command for ${pending.toolName} → REJECTED`, 'INFO');
-            pending.resolve(false);
-            pendingConfirmations.delete(chatId);
-            return '❌ Denied.';
-        }
-
-        case '/resume': {
-            // P2.4 + P2.2: Resume an interrupted task (in-memory or disk checkpoint)
-            // IMPORTANT: Never delete the checkpoint here — let chat() clean up on
-            // successful completion via cleanupChatCheckpoints(chatId).
-            log(`[Resume] /resume invoked for chat ${chatId}`, 'INFO');
-
-            // Path A: in-memory active task (same session, no crash)
-            const task = getActiveTask(chatId);
-            if (task) {
-                log(`[Resume] PATH=memory taskId=${task.taskId} age=${Math.floor((Date.now() - task.startedAt) / 1000)}s reason=${task.reason}`, 'INFO');
-                clearActiveTask(chatId);
-                return { __resumeFallthrough: true };
-            }
-            log(`[Resume] No in-memory task, checking disk checkpoints...`, 'DEBUG');
-
-            // Path B: disk checkpoint (post-restart recovery)
-            const allCheckpoints = listCheckpoints();
-            const checkpoints = allCheckpoints.filter(cp => String(cp.chatId) === String(chatId) && !cp.complete);
-            log(`[Resume] Disk scan: ${allCheckpoints.length} total, ${checkpoints.length} matching chat ${chatId}`, 'INFO');
-
-            if (checkpoints.length === 0) {
-                log(`[Resume] PATH=none — no checkpoint found for chat ${chatId}`, 'INFO');
-                return `No interrupted task to resume.\n\nThis can happen if:\n• The task completed normally\n• The checkpoint expired (>7 days old)`;
-            }
-
-            const cp = checkpoints[0]; // Most recent
-            log(`[Resume] PATH=disk taskId=${cp.taskId} age=${Math.floor((Date.now() - (cp.updatedAt || cp.startedAt)) / 1000)}s reason=${cp.reason}`, 'INFO');
-
-            const full = loadCheckpoint(cp.taskId);
-            if (!full) {
-                log(`[Resume] FAIL: loadCheckpoint returned null for taskId=${cp.taskId}`, 'ERROR');
-                return `Found checkpoint for task ${cp.taskId} but it was corrupt. Please start the task again.`;
-            }
-            log(`[Resume] Loaded taskId=${cp.taskId}: conversationSlice=${Array.isArray(full.conversationSlice) ? full.conversationSlice.length : 'missing'} msgs, goal=${full.originalGoal ? '"' + full.originalGoal.slice(0, 60) + '"' : 'none'}`, 'INFO');
-
-            // Restore conversation from checkpoint
-            if (Array.isArray(full.conversationSlice) && full.conversationSlice.length > 0) {
-                const conv = getConversation(chatId);
-                let restored = full.conversationSlice;
-
-                // Safety net: drop leading orphan tool_results that have no preceding
-                // tool_use. These cause sanitizeConversation to strip them later,
-                // destroying context. (saveCheckpoint should already clean these,
-                // but older checkpoints may not have been cleaned.)
-                while (restored.length > 0) {
-                    const first = restored[0];
-                    if (first.role === 'user' && Array.isArray(first.content)
-                        && first.content.some(b => b.type === 'tool_result')) {
-                        log(`[Resume] Dropped leading orphan tool_result from restored slice`, 'DEBUG');
-                        restored = restored.slice(1);
-                    } else {
-                        break;
-                    }
-                }
-
-                // Ensure the restored slice ends with an assistant message so that
-                // chat() adding the resume instruction maintains valid role alternation.
-                // If it ends with a user message (mid-loop crash), append a synthetic
-                // assistant bridge message.
-                const lastRestored = restored[restored.length - 1];
-                if (lastRestored && lastRestored.role === 'user') {
-                    restored.push({ role: 'assistant', content: 'I was interrupted mid-task. Ready to continue.' });
-                    log(`[Resume] Appended bridge assistant message (last restored was user role)`, 'DEBUG');
-                }
-
-                // Splice into conversation (prepend for priority over any post-restart chat)
-                conv.splice(0, 0, ...restored);
-                log(`[Resume] OK: restored ${restored.length} messages into conversation (total: ${conv.length})`, 'INFO');
-            } else {
-                log(`[Resume] WARN: checkpoint ${cp.taskId} had empty conversation slice`, 'WARN');
-            }
-
-            // Checkpoint stays on disk — chat() will call cleanupChatCheckpoints()
-            // on successful completion.
-            return { __resumeFallthrough: true, originalGoal: full.originalGoal || null };
-        }
-
-        default:
-            return null; // Not a command — falls through to agent
-    }
-}
-
-// ============================================================================
-// MESSAGE HANDLER
-// ============================================================================
-
-async function handleMessage(msg) {
-    const chatId = msg.chat.id;
-    const senderId = String(msg.from?.id);
-    const rawText = (msg.text || msg.caption || '').trim();
-    const media = extractMedia(msg);
-
-    // Skip messages with no text AND no media
-    if (!rawText && !media) return;
-
-    // Extract quoted/replied message context (ported from OpenClaw)
-    // Handles: direct replies, inline quotes, external replies (forwards/cross-group)
-    let text = rawText;
-    const reply = msg.reply_to_message;
-    const externalReply = msg.external_reply;
-    const quoteText = (msg.quote?.text ?? externalReply?.quote?.text ?? '').trim();
-    const replyLike = reply ?? externalReply;
-
-    if (quoteText) {
-        // Inline quote or external reply quote
-        const quotedFrom = reply?.from?.first_name || 'Someone';
-        text = `[Replying to ${quotedFrom}: "${quoteText}"]\n\n${rawText}`;
-    } else if (replyLike) {
-        // Standard reply — extract body from reply/external_reply
-        const replyBody = (replyLike.text ?? replyLike.caption ?? '').trim();
-        if (replyBody) {
-            const quotedFrom = reply?.from?.first_name || 'Someone';
-            text = `[Replying to ${quotedFrom}: "${replyBody}"]\n\n${rawText}`;
-        }
-    }
-
-    // Owner auto-detect: first person to message claims ownership
-    if (!OWNER_ID) {
-        OWNER_ID = senderId;
-        setOwnerId(senderId); // sync to config.js for cross-module access
-        log(`Owner claimed by ${senderId} (auto-detect)`, 'INFO');
-
-        // Persist to Android encrypted storage via bridge (await so write completes before confirming)
-        const saveResult = await androidBridgeCall('/config/save-owner', { ownerId: senderId });
-        if (saveResult.error) {
-            log(`Bridge save-owner failed: ${saveResult.error}`, 'WARN');
-            await sendMessage(chatId, `Owner set to your account (${senderId}), but persistence failed — may reset on restart.`);
-        } else {
-            await sendMessage(chatId, `Owner set to your account (${senderId}). Only you can use this bot.`);
-        }
-    }
-
-    // Only respond to owner
-    if (senderId !== OWNER_ID) {
-        log(`Ignoring message from ${senderId} (not owner)`, 'WARN');
-        return;
-    }
-
-    log(`Message: ${rawText ? rawText.slice(0, 100) + (rawText.length > 100 ? '...' : '') : '(no text)'}${media ? ` [${media.type}]` : ''}${msg.reply_to_message ? ' [reply]' : ''}`, 'DEBUG');
-
-    // Status reactions — lifecycle emoji on the user's message (OpenClaw parity)
-    const statusReaction = createStatusReactionController(chatId, msg.message_id);
-    statusReaction.setQueued();
-
-    try {
-        // P2.4: resume flag — set by /resume handler, passed to chat() as option
-        let isResume = false;
-        let resumeGoal = null;
-
-        // Check for commands (use rawText so /commands work even in replies)
-        if (rawText.startsWith('/')) {
-            const [commandToken, ...argParts] = rawText.split(' ');
-            const args = argParts.join(' ');
-            // Strip @botusername suffix for group chat compatibility (e.g. /status@MyBot → /status)
-            const command = commandToken.toLowerCase().replace(/@\w+$/, '');
-            const response = await handleCommand(chatId, command, args);
-            if (response?.__handled) {
-                // Command fully handled (e.g. /quick sent inline keyboard) — stop processing
-                await statusReaction.clear();
-                return;
-            } else if (response?.__skillFallthrough) {
-                // /skill <name> matched — rewrite text to trigger word so
-                // findMatchingSkills() picks up the skill via word-boundary match
-                text = response.trigger;
-            } else if (response?.__resumeFallthrough) {
-                // P2.4: /resume matched — fall through to chat() with isResume flag.
-                // The resume directive is injected into the system prompt by chat(),
-                // not as a user message (system directives are authoritative).
-                isResume = true;
-                resumeGoal = response.originalGoal || null;
-                text = 'continue';
-            } else if (response) {
-                await sendMessage(chatId, response, msg.message_id);
-                await statusReaction.clear();
-                return;
-            }
-        }
-
-        // Regular message - send to Claude (text includes quoted context if replying)
-        statusReaction.setThinking();
-        await sendTyping(chatId);
-        lastIncomingMessages.set(String(chatId), { messageId: msg.message_id, chatId });
-
-        // Process media attachment if present
-        let userContent = text || '';
-        if (media) {
-            // Sanitize user-controlled metadata before embedding in prompts
-            const safeFileName = (media.file_name || 'file').replace(/[\r\n\0\u2028\u2029\[\]]/g, '_').slice(0, 120);
-            const safeMimeType = (media.mime_type || 'application/octet-stream').replace(/[\r\n\0\u2028\u2029\[\]]/g, '_').slice(0, 60);
-            try {
-                if (!media.file_size) {
-                    log(`Media file_size unknown (0) — size will be enforced during download`, 'DEBUG');
-                }
-                if (media.file_size && media.file_size > MAX_FILE_SIZE) {
-                    const sizeMb = (media.file_size / 1024 / 1024).toFixed(1);
-                    const maxMb = (MAX_FILE_SIZE / 1024 / 1024).toFixed(1);
-                    await sendMessage(chatId, `📦 That file's too big (${sizeMb}MB, max ${maxMb}MB). Can you send a smaller one?`, msg.message_id);
-                    const tooLargeNote = `[File attachment was rejected: too large (${sizeMb}MB).]`;
-                    if (text) {
-                        userContent = `${text}\n\n${tooLargeNote}`;
-                    } else {
-                        await statusReaction.clear();
-                        return;
-                    }
-                } else {
-                    // Retry once for transient network errors
-                    let saved;
-                    const TRANSIENT_ERRORS = /timeout|timed out|aborted|ECONNRESET|ETIMEDOUT|Connection closed/i;
-                    try {
-                        saved = await downloadTelegramFile(media.file_id, media.file_name);
-                    } catch (firstErr) {
-                        if (TRANSIENT_ERRORS.test(firstErr.message)) {
-                            log(`Media download failed (transient: ${firstErr.message}), retrying in 2s...`, 'WARN');
-                            await new Promise(r => setTimeout(r, 2000));
-                            saved = await downloadTelegramFile(media.file_id, media.file_name);
-                        } else {
-                            throw firstErr;
-                        }
-                    }
-                    const relativePath = `media/inbound/${saved.localName}`;
-                    const isImage = media.type === 'photo' || (media.mime_type && media.mime_type.startsWith('image/'));
-
-                    // Claude vision-supported image formats
-                    const VISION_MIMES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
-
-                    if (isImage && VISION_MIMES.has(media.mime_type) && saved.size <= MAX_IMAGE_SIZE) {
-                        // Supported image within vision size limit: send as Claude vision content block
-                        const imageData = await fs.promises.readFile(saved.localPath);
-                        const base64 = imageData.toString('base64');
-                        const caption = text || '';
-                        // Align content block ordering with visionAnalyzeImage: [text, image]
-                        userContent = [
-                            { type: 'text', text: caption
-                                ? `${caption}\n\n[Image saved to ${relativePath} (${saved.size} bytes)]`
-                                : `[User sent an image — saved to ${relativePath} (${saved.size} bytes)]`
-                            },
-                            { type: 'image', source: { type: 'base64', media_type: media.mime_type, data: base64 } }
-                        ];
-                    } else if (isImage) {
-                        // Image not usable for inline vision — save but don't base64-encode
-                        const visionReason = !VISION_MIMES.has(media.mime_type)
-                            ? 'unsupported format for inline vision'
-                            : 'too large for inline vision';
-                        const fileNote = `[Image received: ${safeFileName} (${saved.size} bytes, ${visionReason}) — saved to ${relativePath}. Use the read tool to access it.]`;
-                        userContent = text ? `${text}\n\n${fileNote}` : fileNote;
-                    } else {
-                        // Auto-detect .md skill files: if it has YAML frontmatter, try to install directly
-                        // Use original filename (before 120-char truncation) so long names like
-                        // "my-very-long-skill-name.md" aren't missed when truncated to "...skill-name.m"
-                        const isMdFile = (media.file_name || '').toLowerCase().endsWith('.md') || media.mime_type === 'text/markdown';
-                        let skillAutoInstalled = false;
-                        if (isMdFile) {
-                            try {
-                                const mdContent = fs.readFileSync(saved.localPath, 'utf8');
-                                if (mdContent.startsWith('---')) {
-                                    const installResult = await executeTool('skill_install', { content: mdContent }, chatId);
-                                    if (installResult && installResult.result) {
-                                        log(`Skill auto-installed from attachment: ${installResult.result}`, 'INFO');
-                                        // Set flag BEFORE sendMessage so a Telegram error can't cause a fall-through to chat()
-                                        skillAutoInstalled = true;
-                                        await sendMessage(chatId, installResult.result, msg.message_id);
-                                    } else if (installResult && installResult.error) {
-                                        // Validation failed — tell user why (e.g. missing name, injection blocked)
-                                        await sendMessage(chatId, `Skill install failed: ${redactSecrets(installResult.error)}`, msg.message_id);
-                                        // Fall through to normal file note so the file is still accessible
-                                    }
-                                    // Non-skill or failed — fall through to normal file note
-                                }
-                            } catch (e) {
-                                // sendMessage() logs internally and does not throw — only readFileSync / executeTool can throw here
-                                log(`Skill auto-detect error: ${e.message}`, 'WARN');
-                            }
-                        }
-                        // Routing is OUTSIDE the try so it always runs regardless of install errors
-                        if (skillAutoInstalled) {
-                            if (!text) {
-                                await statusReaction.clear();
-                                return; // No caption — nothing more to do
-                            }
-                            // Caption present — forward to Claude via normal chat flow
-                            userContent = `[Skill just installed. User's message accompanying the file: ${text}]`;
-                        } else {
-                            // Non-image file: tell the agent where it's saved
-                            const fileNote = `[File received: ${safeFileName} (${saved.size} bytes, ${safeMimeType}) — saved to ${relativePath}. Use the read tool to access it.]`;
-                            userContent = text ? `${text}\n\n${fileNote}` : fileNote;
-                        }
-                    }
-                    log(`Media processed: ${media.type} → ${relativePath}`, 'DEBUG');
-                }
-            } catch (e) {
-                log(`Media download failed: ${e.message}`, 'ERROR');
-                const reason = e.message || 'unknown error';
-                const errorNote = `[File attachment could not be downloaded: ${reason}]`;
-                userContent = text ? `${text}\n\n${errorNote}` : errorNote;
-            }
-        }
-
-        let response = await chat(chatId, userContent, { isResume, originalGoal: resumeGoal, statusReaction });
-
-        // Strip protocol tokens the agent may have mixed into content (BAT-279)
-        // Also strip preceding bold-markdown/whitespace before tokens (OpenClaw parity 2026.3.1)
-        if (/\bSILENT_REPLY\b/i.test(response)) log('[Audit] Agent sent SILENT_REPLY', 'DEBUG');
-        response = response.trim()
-            .replace(/(?:^|\s+|\*+)HEARTBEAT_OK\s*$/gi, '').replace(/\bHEARTBEAT_OK\b/gi, '')
-            .replace(/(?:^|\s+|\*+)SILENT_REPLY\s*$/gi, '').replace(/\bSILENT_REPLY\b/gi, '')
-            .trim();
-        if (!response) {
-            log('Agent returned protocol-token-only response, discarding', 'DEBUG');
-            await statusReaction.clear();
-            return;
-        }
-
-        // [[reply_to_current]] - quote reply to the current message
-        let replyToId = null;
-        if (response.startsWith('[[reply_to_current]]')) {
-            response = response.replace('[[reply_to_current]]', '').trim();
-            replyToId = msg.message_id;
-        }
-
-        await sendMessage(chatId, response, replyToId || msg.message_id);
-        await statusReaction.setDone();
-
-        // Report message to Android for stats tracking
-        androidBridgeCall('/stats/message').catch(() => {});
-
-    } catch (error) {
-        log(`Error: ${error.message}`, 'ERROR');
-        await statusReaction.setError();
-        await sendMessage(chatId, `Error: ${redactSecrets(error.message)}`, msg.message_id);
-    }
-}
-
-// ============================================================================
-// REACTION HANDLING
-// ============================================================================
-
-function handleReactionUpdate(reaction) {
-    const chatId = reaction.chat?.id;
-    if (!chatId) return; // Malformed update — no chat info
-
-    const userId = String(reaction.user?.id || '');
-    const msgId = reaction.message_id;
-    // Sanitize untrusted userName to prevent prompt injection (strip control chars, markers)
-    const rawName = reaction.user?.first_name || 'Someone';
-    const userName = rawName.replace(/[\[\]\n\r\u2028\u2029]/g, '').slice(0, 50);
-
-    // Filter by notification mode (skip all in "own" mode if owner not yet detected)
-    if (REACTION_NOTIFICATIONS === 'own' && (!OWNER_ID || userId !== OWNER_ID)) return;
-
-    // Extract the new emoji(s) — Telegram sends the full new reaction list
-    const newEmojis = (reaction.new_reaction || [])
-        .filter(r => r.type === 'emoji')
-        .map(r => r.emoji);
-    const oldEmojis = (reaction.old_reaction || [])
-        .filter(r => r.type === 'emoji')
-        .map(r => r.emoji);
-
-    // Determine what was added vs removed
-    const added = newEmojis.filter(e => !oldEmojis.includes(e));
-    const removed = oldEmojis.filter(e => !newEmojis.includes(e));
-
-    if (added.length === 0 && removed.length === 0) return;
-
-    // Build event description
-    const parts = [];
-    if (added.length > 0) parts.push(`added ${added.join('')}`);
-    if (removed.length > 0) parts.push(`removed ${removed.join('')}`);
-    const eventText = `Telegram reaction ${parts.join(', ')} by ${userName} on message ${msgId}`;
-    log(`Reaction: ${eventText}`, 'DEBUG');
-
-    // Queue through chatQueues to avoid race conditions with concurrent message handling.
-    // Use numeric chatId as key (same as enqueueMessage) so reactions serialize with messages.
-    const prev = chatQueues.get(chatId) || Promise.resolve();
-    const task = prev.then(() => {
-        addToConversation(chatId, 'user', `[system event] ${eventText}`);
-    }).catch(e => log(`Reaction queue error: ${e.message}`, 'ERROR'));
-    chatQueues.set(chatId, task);
-    task.then(() => { if (chatQueues.get(chatId) === task) chatQueues.delete(chatId); });
-}
+const messageHandler = require('./message-handler');
+const { handleCommand, handleMessage, handleReactionUpdate } = messageHandler;
+const initMessageHandler = messageHandler.init;
 
 // ============================================================================
 // POLLING LOOP
@@ -1010,7 +368,7 @@ async function poll() {
                         });
                         // Security: only process callbacks from owner (block if no owner set yet)
                         const cbSenderId = String(cb.from?.id);
-                        if (!OWNER_ID || cbSenderId !== OWNER_ID) {
+                        if (!getOwnerId() || cbSenderId !== getOwnerId()) {
                             log(`[Callback] Ignoring callback from ${cbSenderId} (not owner)`, 'WARN');
                         } else {
                             // Quick Actions: route quick:* callbacks through dedicated handler
@@ -1163,7 +521,7 @@ telegram('getMe')
             // Wire shutdown deps now that conversations + saveSessionSummary exist
             setShutdownDeps({ conversations, saveSessionSummary, MIN_MESSAGES_FOR_SUMMARY });
 
-            // Wire chat deps: inject main.js state into claude.js
+            // Wire chat deps: inject main.js state into ai.js
             setChatDeps({
                 executeTool,
                 getTools: () => [...TOOLS, ...mcpManager.getAllTools()],
@@ -1171,6 +529,30 @@ telegram('getMe')
                 requestConfirmation,
                 lastToolUseTime,
                 lastIncomingMessages,
+            });
+
+            // Wire message handler deps: inject all dependencies into message-handler.js
+            initMessageHandler({
+                AGENT_NAME, MODEL, MEMORY_DIR, REACTION_NOTIFICATIONS,
+                log, debugLog,
+                getOwnerId, setOwnerId,
+                config,
+                redactSecrets,
+                telegram,
+                sendMessage, sendTyping, downloadTelegramFile,
+                extractMedia, createStatusReactionController,
+                MAX_FILE_SIZE, MAX_IMAGE_SIZE,
+                chat, getConversation, addToConversation, clearConversation,
+                saveSessionSummary, MIN_MESSAGES_FOR_SUMMARY,
+                getActiveTask, clearActiveTask,
+                sessionTracking,
+                executeTool, pendingConfirmations, lastToolUseTime,
+                loadBootstrap, loadIdentity, loadSoul, loadMemory,
+                loadSkills,
+                loadCheckpoint, listCheckpoints,
+                handleQuickCommand,
+                androidBridgeCall,
+                chatQueues, lastIncomingMessages,
             });
 
             // Wire MCP routing into tools.js
@@ -1194,7 +576,7 @@ telegram('getMe')
                 if (flush.ok && flush.result.length > 0) {
                     offset = flush.result[flush.result.length - 1].update_id + 1;
                     log(`Flushed old update(s), offset now ${offset}`, 'DEBUG');
-                    const ownerChat = parseInt(OWNER_ID, 10);
+                    const ownerChat = parseInt(getOwnerId(), 10);
                     if (!isNaN(ownerChat)) {
                         telegram('sendMessage', {
                             chat_id: ownerChat,
@@ -1310,7 +692,7 @@ function getHeartbeatIntervalMs() {
 // Runs a full AI turn for agentTurn cron jobs using an isolated session.
 // Uses synthetic chatId ("cron:{jobId}") so it doesn't pollute user conversation
 // and bypasses chatQueues (user messages are not queued behind cron turns).
-// Note: cron turns still contend for the global apiCallInFlight mutex in claude.js,
+// Note: cron turns still contend for the global apiCallInFlight mutex in ai.js,
 // so they serialize at the API-call layer with user messages.
 // ============================================================================
 

@@ -625,7 +625,7 @@ const cronService = {
             } else if (payloadKind === 'agentTurn') {
                 // BAT-326: Run a full AI turn with the cron message as prompt.
                 // Uses isolated session (synthetic chatId) — bypasses chatQueues but still
-                // contends for the global apiCallInFlight mutex in claude.js.
+                // contends for the global apiCallInFlight mutex in ai.js.
                 if (!_runAgentTurn) {
                     throw new Error('runAgentTurn not available — agent turn runner not injected');
                 }

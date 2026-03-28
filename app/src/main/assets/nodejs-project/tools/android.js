@@ -9,7 +9,7 @@ const {
 
 const { androidBridgeCall } = require('../bridge');
 
-const { visionAnalyzeImage } = require('../claude');
+const { visionAnalyzeImage } = require('../ai');
 
 const tools = [
     {
