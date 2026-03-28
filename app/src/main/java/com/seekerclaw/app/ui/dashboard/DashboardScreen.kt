@@ -107,6 +107,7 @@ fun DashboardScreen(
         when (config?.provider) {
             "openai" -> config?.openaiApiKey?.isNotBlank() == true
             "openrouter" -> config?.openrouterApiKey?.isNotBlank() == true
+            "custom" -> config?.customApiKey?.isNotBlank() == true && config.customBaseUrl.isNotBlank()
             else -> config?.activeCredential?.isNotBlank() == true
         }
     }
@@ -872,4 +873,3 @@ private fun formatLastActivity(timestamp: Long, context: Context): String {
     val format = android.text.format.DateFormat.getTimeFormat(context)
     return format.format(Date(timestamp))
 }
-

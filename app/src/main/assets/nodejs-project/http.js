@@ -2,14 +2,19 @@
 // HTTP transport layer: plain requests + SSE streaming for Claude/OpenAI/ChatCompletions APIs.
 // Depends on: config.js
 
+const http = require('http');
 const https = require('https');
 const { API_TIMEOUT_MS } = require('./config');
+
+function getClient(options) {
+    return options?.protocol === 'http:' ? http : https;
+}
 
 // BAT-244: timeout is configurable via options.timeout (ms). Defaults to API_TIMEOUT_MS from config.
 function httpRequest(options, body = null) {
     const timeoutMs = options.timeout ?? API_TIMEOUT_MS;
     return new Promise((resolve, reject) => {
-        const req = https.request(options, (res) => {
+        const req = getClient(options).request(options, (res) => {
             res.setEncoding('utf8'); // Handle multi-byte chars (emoji) split across chunks
             let data = '';
             res.on('data', chunk => data += chunk);
@@ -53,7 +58,7 @@ function httpStreamingRequest(options, body = null) {
         };
 
         try {
-        req = https.request(options, (res) => {
+        req = getClient(options).request(options, (res) => {
             // Non-2xx with non-SSE content-type → fall back to buffered read
             const ct = res.headers['content-type'] || '';
             if (res.statusCode !== 200 || !ct.includes('text/event-stream')) {
@@ -228,7 +233,7 @@ function httpOpenAIStreamingRequest(options, body = null) {
         };
 
         try {
-        req = https.request(options, (res) => {
+        req = getClient(options).request(options, (res) => {
             const ct = res.headers['content-type'] || '';
             if (res.statusCode !== 200 || !ct.includes('text/event-stream')) {
                 res.setEncoding('utf8');
@@ -411,7 +416,7 @@ function httpChatCompletionsStreamingRequest(options, body = null) {
         };
 
         try {
-        req = https.request(options, (res) => {
+        req = getClient(options).request(options, (res) => {
             const ct = res.headers['content-type'] || '';
             if (res.statusCode !== 200 || !ct.includes('text/event-stream')) {
                 // Non-streaming error response

@@ -78,6 +78,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
     var editValue by remember { mutableStateOf("") }
     var showModelPicker by remember { mutableStateOf(false) }
     var showAuthTypePicker by remember { mutableStateOf(false) }
+    var showCustomFormatPicker by remember { mutableStateOf(false) }
     // OpenRouter model+context edit dialog state
     var orModelDialog by remember { mutableStateOf<String?>(null) } // "model" or "fallback"
     var orModelValue by remember { mutableStateOf("") }
@@ -100,6 +101,11 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
         return "${key.take(6)}${"*".repeat(8)}${key.takeLast(4)}"
     }
 
+    fun customFormatLabel(value: String?): String = when (value) {
+        "responses" -> "Responses API"
+        else -> "Chat Completions"
+    }
+
     fun switchProvider(newProviderId: String) {
         val oldProviderId = config?.provider ?: "claude"
         val currentModel = config?.model ?: ""
@@ -115,7 +121,9 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
         if (modelsForNew.isEmpty()) {
             // Freeform provider (e.g. OpenRouter) — restore last-used or set default
             val savedModel = prefs.getString("lastModel_$newProviderId", null)
-            val defaultModel = if (newProviderId == "openrouter") "anthropic/claude-sonnet-4-6" else ""
+            val defaultModel = if (newProviderId == "openrouter") "anthropic/claude-sonnet-4-6"
+            else if (newProviderId == "custom") "gpt-4.1-mini"
+            else ""
             saveField("model", savedModel?.takeIf { it.isNotBlank() } ?: defaultModel)
         } else {
             val savedModel = prefs.getString("lastModel_$newProviderId", null)
@@ -323,6 +331,56 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                             showDivider = false,
                         )
                     }
+                    "custom" -> {
+                        ProviderConfigField(
+                            label = "Model",
+                            value = config?.model?.ifBlank { "Not set" } ?: "Not set",
+                            onClick = {
+                                editField = "model"
+                                editLabel = "Custom Model"
+                                editValue = config?.model ?: ""
+                            },
+                            info = "Model ID expected by your gateway (for example gpt-4.1-mini or claude-3-7-sonnet).",
+                        )
+                        ProviderConfigField(
+                            label = "Endpoint URL",
+                            value = config?.customBaseUrl?.ifBlank { "Not set" } ?: "Not set",
+                            onClick = {
+                                editField = "customBaseUrl"
+                                editLabel = "Custom Endpoint URL"
+                                editValue = config?.customBaseUrl ?: ""
+                            },
+                            info = "Full inference endpoint URL, for example https://your-gateway.example/v1/chat/completions",
+                        )
+                        ProviderConfigField(
+                            label = "API Format",
+                            value = customFormatLabel(config?.customFormat),
+                            onClick = { showCustomFormatPicker = true },
+                            info = "Choose the wire format your gateway expects.",
+                        )
+                        ProviderConfigField(
+                            label = "Extra Headers (JSON)",
+                            value = config?.customHeaders?.ifBlank { "Not set" } ?: "Not set",
+                            onClick = {
+                                editField = "customHeaders"
+                                editLabel = "Custom Headers JSON"
+                                editValue = config?.customHeaders ?: ""
+                            },
+                            info = "Optional JSON object merged into request headers. Example: {\"X-API-Key\":\"...\"}",
+                        )
+                        ProviderConfigField(
+                            label = "API Key",
+                            value = maskKey(config?.customApiKey),
+                            onClick = {
+                                editField = "customApiKey"
+                                editLabel = "Custom API Key"
+                                editValue = config?.customApiKey ?: ""
+                            },
+                            info = "Used as Bearer auth unless Authorization is set in Extra Headers.",
+                            isRequired = true,
+                            showDivider = false,
+                        )
+                    }
                 }
             }
 
@@ -354,6 +412,13 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                             val result = when (activeProvider) {
                                 "openrouter" -> testOpenRouterConnection(config?.openrouterApiKey ?: "")
                                 "openai" -> testOpenAIConnection(config?.openaiApiKey ?: "")
+                                "custom" -> testCustomConnection(
+                                    endpointUrl = config?.customBaseUrl ?: "",
+                                    apiKey = config?.customApiKey ?: "",
+                                    model = config?.model ?: "",
+                                    format = config?.customFormat ?: "chat_completions",
+                                    extraHeaders = config?.customHeaders ?: "",
+                                )
                                 else -> {
                                     // Use Anthropic-specific credential derived from authType
                                     val authType = config?.authType ?: "api_key"
@@ -421,7 +486,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                 val field = editField ?: return@ProviderEditDialog
                 val trimmed = editValue.trim()
                 // Optional fields that can be cleared to empty
-                val clearableFields = setOf("openrouterFallbackModel")
+                val clearableFields = setOf("openrouterFallbackModel", "customHeaders")
                 if (field == "setupToken") {
                     saveField(field, trimmed, needsRestart = true)
                     if (trimmed.isNotEmpty()) saveField("authType", "setup_token")
@@ -621,6 +686,74 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
         )
     }
 
+    if (showCustomFormatPicker) {
+        val formatOptions = listOf(
+            "chat_completions" to "Chat Completions",
+            "responses" to "Responses API",
+        )
+        var selectedFormat by remember { mutableStateOf(config?.customFormat ?: "chat_completions") }
+
+        AlertDialog(
+            onDismissRequest = { showCustomFormatPicker = false },
+            title = {
+                Text("Custom API Format", fontFamily = RethinkSans, fontWeight = FontWeight.Bold, color = SeekerClawColors.TextPrimary)
+            },
+            text = {
+                Column {
+                    formatOptions.forEach { (formatId, label) ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { selectedFormat = formatId }
+                                .padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(
+                                selected = selectedFormat == formatId,
+                                onClick = { selectedFormat = formatId },
+                                colors = RadioButtonDefaults.colors(
+                                    selectedColor = SeekerClawColors.Primary,
+                                    unselectedColor = SeekerClawColors.TextDim,
+                                ),
+                            )
+                            Column(modifier = Modifier.padding(start = 8.dp)) {
+                                Text(
+                                    text = label,
+                                    fontFamily = RethinkSans,
+                                    fontSize = 14.sp,
+                                    color = SeekerClawColors.TextPrimary,
+                                )
+                                Text(
+                                    text = if (formatId == "responses") "/v1/responses-style payloads" else "/v1/chat/completions-style payloads",
+                                    fontFamily = RethinkSans,
+                                    fontSize = 12.sp,
+                                    color = SeekerClawColors.TextDim,
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        saveField("customFormat", selectedFormat, needsRestart = true)
+                        showCustomFormatPicker = false
+                    },
+                ) {
+                    Text("Save", fontFamily = RethinkSans, fontWeight = FontWeight.Bold, color = SeekerClawColors.ActionPrimary)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCustomFormatPicker = false }) {
+                    Text("Cancel", fontFamily = RethinkSans, color = SeekerClawColors.TextDim)
+                }
+            },
+            containerColor = SeekerClawColors.Surface,
+            shape = shape,
+        )
+    }
+
     // ==================== Restart Prompt ====================
     if (showRestartDialog) {
         RestartDialog(
@@ -740,6 +873,82 @@ private suspend fun testOpenAIConnection(apiKey: String): Result<Unit> = withCon
         } catch (_: java.io.IOException) {
             error("Network unreachable or timeout")
         } finally { conn.disconnect() }
+    }
+}
+
+private suspend fun testCustomConnection(
+    endpointUrl: String,
+    apiKey: String,
+    model: String,
+    format: String,
+    extraHeaders: String,
+): Result<Unit> = withContext(Dispatchers.IO) {
+    runCatching {
+        val trimmedUrl = endpointUrl.trim()
+        if (trimmedUrl.isBlank()) error("Endpoint URL is empty")
+        if (apiKey.isBlank()) error("API key is empty")
+        if (model.isBlank()) error("Model is empty")
+
+        val headersJson = extraHeaders.trim().takeIf { it.isNotBlank() }?.let {
+            try {
+                JSONObject(it)
+            } catch (_: Exception) {
+                error("Extra Headers must be valid JSON")
+            }
+        }
+
+        val url = URL(trimmedUrl)
+        val conn = url.openConnection() as HttpURLConnection
+        conn.requestMethod = "POST"
+        conn.doOutput = true
+        conn.setRequestProperty("Content-Type", "application/json")
+        if (headersJson == null || !headersJson.keys().asSequence().any { key -> key.equals("Authorization", ignoreCase = true) }) {
+            conn.setRequestProperty("Authorization", "Bearer $apiKey")
+        }
+        headersJson?.keys()?.forEach { key ->
+            val value = headersJson.opt(key)?.toString()?.trim().orEmpty()
+            if (key.isNotBlank() && value.isNotBlank()) conn.setRequestProperty(key, value)
+        }
+        conn.connectTimeout = 15000
+        conn.readTimeout = 15000
+
+        val payload = if (format == "responses") {
+            JSONObject().apply {
+                put("model", model)
+                put("input", "ping")
+                put("max_output_tokens", 1)
+            }
+        } else {
+            JSONObject().apply {
+                put("model", model)
+                put("max_tokens", 1)
+                put("messages", org.json.JSONArray().put(JSONObject().apply {
+                    put("role", "user")
+                    put("content", "ping")
+                }))
+            }
+        }
+
+        try {
+            conn.outputStream.bufferedWriter().use { it.write(payload.toString()) }
+            val status = conn.responseCode
+            if (status in 200..299) return@runCatching
+
+            val errorBody = try {
+                (conn.errorStream ?: conn.inputStream)?.bufferedReader()?.use { it.readText() } ?: ""
+            } catch (_: Exception) { "" }
+            val apiMessage = try {
+                JSONObject(errorBody).optJSONObject("error")?.optString("message", "") ?: ""
+            } catch (_: Exception) { "" }
+            val errorMessage = apiMessage.ifBlank { "HTTP $status" }
+            error("Connection failed ($errorMessage)")
+        } catch (_: java.net.SocketTimeoutException) {
+            error("Connection timed out")
+        } catch (_: java.io.IOException) {
+            error("Network unreachable or timeout")
+        } finally {
+            conn.disconnect()
+        }
     }
 }
 
