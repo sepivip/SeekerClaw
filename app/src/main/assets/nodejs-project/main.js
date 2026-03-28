@@ -1352,7 +1352,8 @@ async function runCronAgentTurn(message, jobId) {
 
 // OpenClaw parity: short filler text alongside HEARTBEAT_OK is suppressed
 // (e.g. "HEARTBEAT_OK. All systems normal." → treated as ack, not alert).
-// Only text exceeding this threshold is forwarded as a real alert.
+// Only text exceeding this threshold *when HEARTBEAT_OK is present* is treated
+// as a real alert; messages without the token are always forwarded.
 const HEARTBEAT_ACK_MAX_CHARS = 300;
 
 const HEARTBEAT_PROMPT =
