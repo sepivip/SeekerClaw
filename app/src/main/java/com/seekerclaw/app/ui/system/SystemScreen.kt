@@ -843,8 +843,13 @@ private fun MessageActivityHeatmap(dailyActivity: List<DayActivity>) {
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                // Left: total count
-                val sinceText = "%,d msgs in last 6 months".format(totalMessages)
+                // Left: total count (compact: 100K+, 1M+ for large numbers)
+                val countText = when {
+                    totalMessages >= 1_000_000 -> "${totalMessages / 1_000_000}M+"
+                    totalMessages >= 100_000 -> "${totalMessages / 1_000}K+"
+                    else -> "%,d".format(totalMessages)
+                }
+                val sinceText = "$countText msgs in last 6 months"
                 Text(
                     text = sinceText,
                     fontFamily = FontFamily.Monospace,
