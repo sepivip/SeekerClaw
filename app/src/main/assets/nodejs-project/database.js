@@ -477,7 +477,7 @@ process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 // DB SUMMARY & STATS SERVER (BAT-31)
 // ============================================================================
 
-// Daily message counts for heatmap (last 6 months)
+// Daily message counts for heatmap (up to 13 months of history)
 // Note: counts API requests (api_request_log rows) — each user message = 1+ API calls.
 // UI labels this as "messages" which is close enough for activity visualization.
 function getDailyActivity() {
@@ -485,7 +485,7 @@ function getDailyActivity() {
     try {
         // SUBSTR extracts the local date portion directly from ISO timestamps
         // (e.g. "2026-03-28T19:17:24+04:00" → "2026-03-28"), avoiding DATE()
-        // timezone interpretation issues. No time limit — grid grows with history.
+        // timezone interpretation issues. Capped at 13 months to limit query size.
         const rows = db.exec(
             `SELECT SUBSTR(timestamp, 1, 10) AS day, COUNT(*) AS count
              FROM api_request_log
