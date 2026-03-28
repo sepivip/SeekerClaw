@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -32,13 +33,17 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import com.seekerclaw.app.ui.theme.RethinkSans
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -60,6 +65,7 @@ import java.time.format.TextStyle
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 
 private val HeatmapColors = listOf(
@@ -200,8 +206,15 @@ fun SystemScreen(onBack: () -> Unit) {
         // ==================== MESSAGE ACTIVITY ====================
         SectionLabel("Message Activity")
 
+        // Preserve last known activity data even when service stops
+        val lastKnownActivity = remember { mutableStateOf<List<DayActivity>>(emptyList()) }
+        val currentActivity = dbSummary?.dailyActivity ?: emptyList()
+        if (currentActivity.isNotEmpty()) {
+            lastKnownActivity.value = currentActivity
+        }
+
         MessageActivityHeatmap(
-            dailyActivity = dbSummary?.dailyActivity ?: emptyList()
+            dailyActivity = lastKnownActivity.value
         )
 
         Spacer(modifier = Modifier.height(24.dp))
@@ -677,15 +690,11 @@ private fun MessageActivityHeatmap(dailyActivity: List<DayActivity>) {
     val cellShape = RoundedCornerShape(2.dp)
 
     val today = LocalDate.now()
-    // Grid starts from the half-year containing the earliest data (Jan or Jul)
-    // and extends to today. Scroll shows most recent; user can scroll left for history.
-    val earliestDataDate = dailyActivity.firstOrNull()?.let {
-        try { LocalDate.parse(it.day) } catch (_: Exception) { null }
-    } ?: today
-    val halfYearStart = if (earliestDataDate.monthValue <= 6) {
-        LocalDate.of(earliestDataDate.year, 1, 1)
+    // Current half-year anchored to today (Jan-Jun or Jul-Dec)
+    val halfYearStart = if (today.monthValue <= 6) {
+        LocalDate.of(today.year, 1, 1)
     } else {
-        LocalDate.of(earliestDataDate.year, 7, 1)
+        LocalDate.of(today.year, 7, 1)
     }
     val gridStart = halfYearStart.with(DayOfWeek.MONDAY)
 
@@ -726,14 +735,23 @@ private fun MessageActivityHeatmap(dailyActivity: List<DayActivity>) {
     val thresholds = remember(dateCountMap) {
         val nonZero = dateCountMap.values.filter { it > 0 }.sorted()
         if (nonZero.isEmpty()) emptyList()
-        else listOf(
-            nonZero[(nonZero.size * 0.25).toInt().coerceAtMost(nonZero.size - 1)],
-            nonZero[(nonZero.size * 0.50).toInt().coerceAtMost(nonZero.size - 1)],
-            nonZero[(nonZero.size * 0.75).toInt().coerceAtMost(nonZero.size - 1)],
-        )
+        else {
+            val pctThresholds = listOf(
+                nonZero[(nonZero.size * 0.25).toInt().coerceAtMost(nonZero.size - 1)],
+                nonZero[(nonZero.size * 0.50).toInt().coerceAtMost(nonZero.size - 1)],
+                nonZero[(nonZero.size * 0.75).toInt().coerceAtMost(nonZero.size - 1)],
+            )
+            // Fallback: if all thresholds are identical, spread evenly across max
+            if (pctThresholds.distinct().size == 1) {
+                val max = nonZero.last()
+                listOf(max / 4, max / 2, (max * 3) / 4).map { it.coerceAtLeast(1) }
+            } else pctThresholds
+        }
     }
 
-    val totalMessages = remember(dateCountMap) { dateCountMap.values.sum() }
+    val totalMessages = remember(dateCountMap, halfYearStart, halfYearEnd) {
+        dateCountMap.filter { (date, _) -> date in halfYearStart..halfYearEnd }.values.sum()
+    }
 
     // Month labels
     val monthLabels = remember(weeks) {
@@ -753,7 +771,8 @@ private fun MessageActivityHeatmap(dailyActivity: List<DayActivity>) {
         modifier = Modifier
             .fillMaxWidth()
             .background(SeekerClawColors.Surface, shape)
-            .padding(16.dp),
+            .padding(16.dp)
+            .semantics { contentDescription = "Message activity heatmap showing $totalMessages messages" },
     ) {
         if (dailyActivity.isEmpty() || totalMessages == 0) {
             Text(
@@ -764,7 +783,7 @@ private fun MessageActivityHeatmap(dailyActivity: List<DayActivity>) {
             )
         } else {
             // Cell size fits ~26 weeks (6 months) on screen; scrolls for longer history
-            androidx.compose.foundation.layout.BoxWithConstraints(
+            BoxWithConstraints(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 val visibleWeeks = 26 // 6 months ≈ 26 weeks
@@ -775,7 +794,10 @@ private fun MessageActivityHeatmap(dailyActivity: List<DayActivity>) {
                 val numWeeks = weeks.size
                 val scrollState = rememberScrollState()
                 // Auto-scroll to right (most recent) on first render
+                // Wait for layout to complete before scrolling (maxValue is 0 before measurement)
                 LaunchedEffect(numWeeks) {
+                    snapshotFlow { scrollState.maxValue }
+                        .first { it > 0 }
                     scrollState.scrollTo(scrollState.maxValue)
                 }
 
@@ -800,7 +822,7 @@ private fun MessageActivityHeatmap(dailyActivity: List<DayActivity>) {
                                     color = SeekerClawColors.TextDim,
                                     modifier = Modifier.widthIn(min = colWidth),
                                     maxLines = 1,
-                                    overflow = androidx.compose.ui.text.style.TextOverflow.Visible,
+                                    overflow = TextOverflow.Clip,
                                 )
                                 labelIndex++
                             } else {
@@ -850,12 +872,13 @@ private fun MessageActivityHeatmap(dailyActivity: List<DayActivity>) {
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 val countText = when {
-                    totalMessages >= 1_000_000 -> "${totalMessages / 1_000_000}M+"
-                    totalMessages >= 100_000 -> "${totalMessages / 1_000}K+"
+                    totalMessages >= 1_000_000 -> "%.1fM".format(totalMessages / 1_000_000f)
+                    totalMessages >= 10_000 -> "%.0fK".format(totalMessages / 1_000f)
                     else -> "%,d".format(totalMessages)
                 }
+                val rangeLabel = "${halfYearStart.month.getDisplayName(TextStyle.SHORT, Locale.ENGLISH)}-${halfYearEnd.month.getDisplayName(TextStyle.SHORT, Locale.ENGLISH)} ${halfYearStart.year}"
                 Text(
-                    text = "$countText msgs in last 6 months",
+                    text = "$countText msgs \u00B7 $rangeLabel",
                     fontFamily = FontFamily.Monospace,
                     fontSize = 11.sp,
                     color = SeekerClawColors.TextDim,
