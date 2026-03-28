@@ -678,9 +678,13 @@ private fun MessageActivityHeatmap(dailyActivity: List<DayActivity>) {
     val cellShape = RoundedCornerShape(2.dp)
 
     val today = LocalDate.now()
-    val sixMonthsAgo = today.minusMonths(6)
-    // Align start to Monday
-    val startDate = sixMonthsAgo.with(DayOfWeek.MONDAY)
+    // Start from first day of the month containing earliest data
+    val earliestData = dailyActivity.firstOrNull()?.let {
+        try { LocalDate.parse(it.day) } catch (_: Exception) { null }
+    }
+    val rangeStart = earliestData?.withDayOfMonth(1) ?: today.minusMonths(1).withDayOfMonth(1)
+    // Align start to Monday of that week
+    val startDate = rangeStart.with(DayOfWeek.MONDAY)
 
     // Build date -> count map
     val dateCountMap = remember(dailyActivity) {
@@ -752,6 +756,10 @@ private fun MessageActivityHeatmap(dailyActivity: List<DayActivity>) {
         } else {
             // Month labels along the top
             val scrollState = rememberScrollState()
+            // Auto-scroll to most recent (right side) on first render
+            LaunchedEffect(weeks.size) {
+                scrollState.scrollTo(scrollState.maxValue)
+            }
 
             Row(
                 modifier = Modifier

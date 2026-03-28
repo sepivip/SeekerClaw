@@ -485,11 +485,10 @@ function getDailyActivity() {
     try {
         // SUBSTR extracts the local date portion directly from ISO timestamps
         // (e.g. "2026-03-28T19:17:24+04:00" → "2026-03-28"), avoiding DATE()
-        // timezone interpretation issues.
+        // timezone interpretation issues. No time limit — grid grows with history.
         const rows = db.exec(
             `SELECT SUBSTR(timestamp, 1, 10) AS day, COUNT(*) AS count
              FROM api_request_log
-             WHERE timestamp >= date('now', 'localtime', '-6 months')
              GROUP BY SUBSTR(timestamp, 1, 10)
              ORDER BY day ASC`
         );
