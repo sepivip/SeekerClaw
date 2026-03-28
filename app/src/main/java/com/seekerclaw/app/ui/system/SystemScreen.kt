@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -750,7 +749,7 @@ private fun MessageActivityHeatmap(dailyActivity: List<DayActivity>) {
     }
 
     val totalMessages = remember(dateCountMap, halfYearStart, halfYearEnd) {
-        dateCountMap.filter { (date, _) -> date in halfYearStart..halfYearEnd }.values.sum()
+        dateCountMap.filter { (date, _) -> date in halfYearStart..halfYearEnd }.values.sumOf { it.toLong() }
     }
 
     // Month labels
@@ -774,7 +773,7 @@ private fun MessageActivityHeatmap(dailyActivity: List<DayActivity>) {
             .padding(16.dp)
             .semantics { contentDescription = "Message activity heatmap showing $totalMessages messages" },
     ) {
-        if (dailyActivity.isEmpty() || totalMessages == 0) {
+        if (dailyActivity.isEmpty() || totalMessages == 0L) {
             Text(
                 text = "No message data yet",
                 fontFamily = FontFamily.Monospace,
