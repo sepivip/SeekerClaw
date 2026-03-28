@@ -677,13 +677,16 @@ private fun MessageActivityHeatmap(dailyActivity: List<DayActivity>) {
     val cellShape = RoundedCornerShape(2.dp)
 
     val today = LocalDate.now()
-    // 6-month half-year chunks: Jan-Jun or Jul-Dec
-    val halfYearStart = if (today.monthValue <= 6) {
-        LocalDate.of(today.year, 1, 1)
+    // Grid starts from the half-year containing the earliest data (Jan or Jul)
+    // and extends to today. Scroll shows most recent; user can scroll left for history.
+    val earliestDataDate = dailyActivity.firstOrNull()?.let {
+        try { LocalDate.parse(it.day) } catch (_: Exception) { null }
+    } ?: today
+    val halfYearStart = if (earliestDataDate.monthValue <= 6) {
+        LocalDate.of(earliestDataDate.year, 1, 1)
     } else {
-        LocalDate.of(today.year, 7, 1)
+        LocalDate.of(earliestDataDate.year, 7, 1)
     }
-    // Grid starts on Monday of the week containing halfYearStart
     val gridStart = halfYearStart.with(DayOfWeek.MONDAY)
 
     // Build date -> count map
@@ -753,19 +756,32 @@ private fun MessageActivityHeatmap(dailyActivity: List<DayActivity>) {
                 color = SeekerClawColors.TextDim,
             )
         } else {
-            // Use BoxWithConstraints to calculate cell size that fills available width
+            // Cell size fits ~26 weeks (6 months) on screen; scrolls for longer history
             androidx.compose.foundation.layout.BoxWithConstraints(
                 modifier = Modifier.fillMaxWidth()
             ) {
-                val numWeeks = weeks.size
-                // Cell size = (available width - gaps) / number of weeks
+                val visibleWeeks = 26 // 6 months ≈ 26 weeks
                 val availableWidth = maxWidth
-                val totalGaps = cellGap * (numWeeks - 1)
-                val cellSize = ((availableWidth - totalGaps) / numWeeks).coerceIn(6.dp, 16.dp)
+                val totalGaps = cellGap * (visibleWeeks - 1)
+                val cellSize = ((availableWidth - totalGaps) / visibleWeeks).coerceIn(6.dp, 16.dp)
+
+                val numWeeks = weeks.size
+                val scrollState = rememberScrollState()
+                // Auto-scroll to right (most recent) on first render
+                LaunchedEffect(numWeeks) {
+                    scrollState.scrollTo(scrollState.maxValue)
+                }
 
                 Column {
+                    // Month labels + grid in a single scrollable row
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(scrollState),
+                    ) {
+                    Column {
                     // Month labels
-                    Row(modifier = Modifier.fillMaxWidth()) {
+                    Row {
                         var labelIndex = 0
                         for (weekIndex in weeks.indices) {
                             val colWidth = cellSize + if (weekIndex < numWeeks - 1) cellGap else 0.dp
@@ -813,8 +829,10 @@ private fun MessageActivityHeatmap(dailyActivity: List<DayActivity>) {
                             Spacer(modifier = Modifier.height(cellGap))
                         }
                     }
-                }
-            }
+                } // Column (labels + grid)
+                } // Row (horizontalScroll)
+                } // Column (scroll container)
+            } // BoxWithConstraints
 
             Spacer(modifier = Modifier.height(12.dp))
 
