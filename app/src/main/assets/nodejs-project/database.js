@@ -477,8 +477,26 @@ process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 // DB SUMMARY & STATS SERVER (BAT-31)
 // ============================================================================
 
+// Daily message counts for heatmap (last 6 months)
+function getDailyActivity() {
+    if (!db) return [];
+    try {
+        const rows = db.exec(
+            `SELECT DATE(timestamp) AS day, COUNT(*) AS count
+             FROM api_request_log
+             WHERE timestamp >= date('now', '-6 months')
+             GROUP BY DATE(timestamp)
+             ORDER BY day ASC`
+        );
+        if (rows.length === 0 || rows[0].values.length === 0) return [];
+        return rows[0].values.map(([day, count]) => ({ day, count }));
+    } catch (e) {
+        return [];
+    }
+}
+
 function getDbSummary() {
-    const summary = { today: null, month: null, memory: null };
+    const summary = { today: null, month: null, memory: null, dailyActivity: [] };
     if (!db) return summary;
 
     try {
@@ -552,6 +570,7 @@ function getDbSummary() {
         }
     } catch (e) { /* non-fatal */ }
 
+    summary.dailyActivity = getDailyActivity();
     return summary;
 }
 
