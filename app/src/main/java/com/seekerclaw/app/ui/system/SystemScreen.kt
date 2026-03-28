@@ -776,17 +776,20 @@ private fun MessageActivityHeatmap(dailyActivity: List<DayActivity>) {
                     Row {
                         var labelIndex = 0
                         for (weekIndex in weeks.indices) {
+                            val colWidth = cellSize + cellGap
                             if (labelIndex < monthLabels.size && monthLabels[labelIndex].first == weekIndex) {
-                                // Label spans across week columns — no fixed width constraint
                                 Text(
                                     text = monthLabels[labelIndex].second,
                                     fontFamily = FontFamily.Monospace,
                                     fontSize = 9.sp,
                                     color = SeekerClawColors.TextDim,
-                                    modifier = Modifier.padding(end = 2.dp),
+                                    modifier = Modifier.widthIn(min = colWidth),
                                     maxLines = 1,
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Visible,
                                 )
                                 labelIndex++
+                            } else {
+                                Spacer(modifier = Modifier.width(colWidth))
                             }
                         }
                     }
