@@ -483,16 +483,20 @@ process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 function getDailyActivity() {
     if (!db) return [];
     try {
+        // SUBSTR extracts the local date portion directly from ISO timestamps
+        // (e.g. "2026-03-28T19:17:24+04:00" → "2026-03-28"), avoiding DATE()
+        // timezone interpretation issues.
         const rows = db.exec(
-            `SELECT DATE(timestamp) AS day, COUNT(*) AS count
+            `SELECT SUBSTR(timestamp, 1, 10) AS day, COUNT(*) AS count
              FROM api_request_log
              WHERE timestamp >= date('now', 'localtime', '-6 months')
-             GROUP BY DATE(timestamp)
+             GROUP BY SUBSTR(timestamp, 1, 10)
              ORDER BY day ASC`
         );
         if (rows.length === 0 || rows[0].values.length === 0) return [];
         return rows[0].values.map(([day, count]) => ({ day, count }));
     } catch (e) {
+        log('[DB] getDailyActivity error: ' + e.message, 'WARN');
         return [];
     }
 }

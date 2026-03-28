@@ -49,14 +49,16 @@ suspend fun fetchDbSummary(): DbSummary? = withContext(Dispatchers.IO) {
         val memory = if (json.has("memory") && !json.isNull("memory")) json.getJSONObject("memory") else null
 
         val dailyActivityList = mutableListOf<DayActivity>()
-        if (json.has("dailyActivity") && !json.isNull("dailyActivity")) {
-            val arr = json.getJSONArray("dailyActivity")
-            for (i in 0 until arr.length()) {
-                val item = arr.getJSONObject(i)
-                dailyActivityList.add(DayActivity(
-                    day = item.optString("day", ""),
-                    count = item.optInt("count", 0)
-                ))
+        val dailyArr = json.optJSONArray("dailyActivity")
+        if (dailyArr != null) {
+            for (i in 0 until dailyArr.length()) {
+                try {
+                    val item = dailyArr.getJSONObject(i)
+                    dailyActivityList.add(DayActivity(
+                        day = item.optString("day", ""),
+                        count = item.optInt("count", 0)
+                    ))
+                } catch (_: Exception) { /* skip malformed entries */ }
             }
         }
 
