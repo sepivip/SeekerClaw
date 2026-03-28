@@ -2,8 +2,10 @@ package com.seekerclaw.app.ui.system
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -34,9 +36,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import com.seekerclaw.app.ui.theme.RethinkSans
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.seekerclaw.app.BuildConfig
@@ -46,13 +52,37 @@ import com.seekerclaw.app.util.AppStorageInfo
 import com.seekerclaw.app.util.DeviceInfo
 import com.seekerclaw.app.util.DeviceInfoProvider
 import com.seekerclaw.app.util.ApiUsageData
+import com.seekerclaw.app.util.DayActivity
 import com.seekerclaw.app.util.DbSummary
 import com.seekerclaw.app.util.ServiceState
 import com.seekerclaw.app.util.ServiceStatus
 import com.seekerclaw.app.util.fetchDbSummary
+import java.time.DayOfWeek
+import java.time.LocalDate
+import java.time.format.TextStyle
+import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+
+private val HeatmapColors = listOf(
+    Color(0xFF252530),  // Level 0: visible empty cell (subtle but clear grid structure)
+    Color(0xFF3D1117),
+    Color(0xFF6B1D2A),
+    Color(0xFF8B2232),
+    Color(0xFFE41F28),
+)
+
+private fun heatmapColorForCount(count: Int, thresholds: List<Int>): Color {
+    if (count == 0) return HeatmapColors[0]
+    if (thresholds.isEmpty()) return HeatmapColors[4]
+    return when {
+        count <= thresholds.getOrElse(0) { 1 } -> HeatmapColors[1]
+        count <= thresholds.getOrElse(1) { 2 } -> HeatmapColors[2]
+        count <= thresholds.getOrElse(2) { 5 } -> HeatmapColors[3]
+        else -> HeatmapColors[4]
+    }
+}
 
 @Composable
 fun SystemScreen(onBack: () -> Unit) {
@@ -167,6 +197,24 @@ fun SystemScreen(onBack: () -> Unit) {
             InfoRow("Agent", agentName)
             InfoRow("Uptime", formatUptime(uptime), isLast = true)
         }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // ==================== MESSAGE ACTIVITY ====================
+        SectionLabel("Activity")
+
+        // Preserve last known activity data even when service stops
+        val lastKnownActivity = remember { mutableStateOf<List<DayActivity>>(emptyList()) }
+        val currentActivity = dbSummary?.dailyActivity ?: emptyList()
+        LaunchedEffect(currentActivity) {
+            if (currentActivity.isNotEmpty()) {
+                lastKnownActivity.value = currentActivity
+            }
+        }
+
+        MessageActivityHeatmap(
+            dailyActivity = lastKnownActivity.value
+        )
 
         Spacer(modifier = Modifier.height(24.dp))
 
@@ -631,6 +679,239 @@ private fun StatCard(
             fontSize = 11.sp,
             color = SeekerClawColors.TextDim,
         )
+    }
+}
+
+@Composable
+private fun MessageActivityHeatmap(dailyActivity: List<DayActivity>) {
+    val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
+    val cellGap = 3.dp
+    val cellShape = RoundedCornerShape(3.dp)
+
+    val today = LocalDate.now()
+    // Current half-year anchored to today (Jan-Jun or Jul-Dec)
+    val halfYearStart = if (today.monthValue <= 6) {
+        LocalDate.of(today.year, 1, 1)
+    } else {
+        LocalDate.of(today.year, 7, 1)
+    }
+    val gridStart = halfYearStart.with(DayOfWeek.MONDAY)
+
+    // Build date -> count map
+    val dateCountMap = remember(dailyActivity) {
+        dailyActivity.mapNotNull { activity ->
+            try {
+                LocalDate.parse(activity.day) to activity.count
+            } catch (_: Exception) {
+                null
+            }
+        }.toMap()
+    }
+
+    // End of current half-year (Jun 30 or Dec 31) — show full 6 months including future
+    val halfYearEnd = if (halfYearStart.monthValue == 1) {
+        LocalDate.of(halfYearStart.year, 6, 30)
+    } else {
+        LocalDate.of(halfYearStart.year, 12, 31)
+    }
+
+    // Build weeks grid: each week = 7 days (Mon-Sun), null for out-of-range
+    val weeks = remember(gridStart, halfYearStart, halfYearEnd) {
+        val result = mutableListOf<List<LocalDate?>>()
+        var current = gridStart
+        while (current <= halfYearEnd) {
+            val week = (0 until 7).map { dow ->
+                val day = current.plusDays(dow.toLong())
+                if (day > halfYearEnd || day < halfYearStart) null else day
+            }
+            result.add(week)
+            current = current.plusWeeks(1)
+        }
+        result
+    }
+
+    // Percentile thresholds from non-zero counts
+    val thresholds = remember(dateCountMap) {
+        val nonZero = dateCountMap.values.filter { it > 0 }.sorted()
+        if (nonZero.isEmpty()) emptyList()
+        else {
+            val pctThresholds = listOf(
+                nonZero[(nonZero.size * 0.25).toInt().coerceAtMost(nonZero.size - 1)],
+                nonZero[(nonZero.size * 0.50).toInt().coerceAtMost(nonZero.size - 1)],
+                nonZero[(nonZero.size * 0.75).toInt().coerceAtMost(nonZero.size - 1)],
+            )
+            // Fallback: if all thresholds are identical, spread evenly across max
+            if (pctThresholds.distinct().size == 1) {
+                val max = nonZero.last()
+                listOf(max / 4, max / 2, (max * 3) / 4).map { it.coerceAtLeast(1) }
+            } else pctThresholds
+        }
+    }
+
+    val totalMessages = remember(dateCountMap, halfYearStart, halfYearEnd) {
+        dateCountMap.filter { (date, _) -> date in halfYearStart..halfYearEnd }.values.sumOf { it.toLong() }
+    }
+
+    // Month labels
+    val monthLabels = remember(weeks) {
+        val labels = mutableListOf<Pair<Int, String>>()
+        var lastMonth = -1
+        weeks.forEachIndexed { weekIndex, week ->
+            val firstDay = week.firstOrNull { it != null }
+            if (firstDay != null && firstDay.monthValue != lastMonth) {
+                lastMonth = firstDay.monthValue
+                labels.add(weekIndex to firstDay.month.getDisplayName(TextStyle.SHORT, Locale.ENGLISH))
+            }
+        }
+        labels
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(SeekerClawColors.Surface, shape)
+            .padding(16.dp)
+            .semantics { contentDescription = "Message activity heatmap showing $totalMessages messages" },
+    ) {
+        if (dailyActivity.isEmpty() || totalMessages == 0L) {
+            Text(
+                text = "No message data yet",
+                fontFamily = FontFamily.Monospace,
+                fontSize = 11.sp,
+                color = SeekerClawColors.TextDim,
+            )
+        } else {
+            // Cell size fits ~26 weeks (6 months) on screen; scrolls for longer history
+            BoxWithConstraints(
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                val visibleWeeks = 22 // Size cells for ~5 months visible; rest scrolls
+                val availableWidth = maxWidth
+                val totalGaps = cellGap * (visibleWeeks - 1)
+                val cellSize = ((availableWidth - totalGaps) / visibleWeeks).coerceIn(6.dp, 16.dp)
+
+                val numWeeks = weeks.size
+                val scrollState = rememberScrollState()
+                // Left-aligned by default — shows first month of the half-year.
+                // User swipes left to see future months.
+
+                Column {
+                    // Month labels + grid in a single scrollable row
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(scrollState),
+                    ) {
+                    Column {
+                    // Month labels
+                    Row {
+                        var labelIndex = 0
+                        for (weekIndex in weeks.indices) {
+                            val colWidth = cellSize + if (weekIndex < numWeeks - 1) cellGap else 0.dp
+                            if (labelIndex < monthLabels.size && monthLabels[labelIndex].first == weekIndex) {
+                                Box(
+                                    modifier = Modifier.width(colWidth),
+                                    contentAlignment = Alignment.CenterStart,
+                                ) {
+                                    Text(
+                                        text = monthLabels[labelIndex].second,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 9.sp,
+                                        color = SeekerClawColors.TextDim,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Clip,
+                                    )
+                                }
+                                labelIndex++
+                            } else {
+                                Spacer(modifier = Modifier.width(colWidth))
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    // Grid: 7 rows x N weeks
+                    for (dayOfWeek in 0..6) {
+                        Row {
+                            for (weekIndex in weeks.indices) {
+                                val date = weeks[weekIndex].getOrNull(dayOfWeek)
+                                val count = if (date != null) dateCountMap[date] ?: 0 else 0
+                                val color = if (date != null) {
+                                    heatmapColorForCount(count, thresholds)
+                                } else {
+                                    Color.Transparent
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .size(cellSize)
+                                        .background(color, cellShape),
+                                )
+                                if (weekIndex < numWeeks - 1) {
+                                    Spacer(modifier = Modifier.width(cellGap))
+                                }
+                            }
+                        }
+                        if (dayOfWeek < 6) {
+                            Spacer(modifier = Modifier.height(cellGap))
+                        }
+                    }
+                } // Column (labels + grid)
+                } // Row (horizontalScroll)
+                } // Column (scroll container)
+            } // BoxWithConstraints
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Footer
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                val countText = when {
+                    totalMessages >= 1_000_000 -> "%.1fM".format(totalMessages / 1_000_000f)
+                    totalMessages >= 10_000 -> "%.0fK".format(totalMessages / 1_000f)
+                    else -> "%,d".format(totalMessages)
+                }
+                val rangeLabel = "${halfYearStart.month.getDisplayName(TextStyle.SHORT, Locale.ENGLISH)}-${halfYearEnd.month.getDisplayName(TextStyle.SHORT, Locale.ENGLISH)} ${halfYearStart.year}"
+                Text(
+                    text = "$countText requests \u00B7 $rangeLabel",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp,
+                    color = SeekerClawColors.TextDim,
+                )
+
+                // Legend
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "Less",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        color = SeekerClawColors.TextDim,
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    val legendSize = 8.dp
+                    for (i in HeatmapColors.indices) {
+                        Box(
+                            modifier = Modifier
+                                .size(legendSize)
+                                .background(HeatmapColors[i], cellShape),
+                        )
+                        if (i < HeatmapColors.size - 1) {
+                            Spacer(modifier = Modifier.width(2.dp))
+                        }
+                    }
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "More",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        color = SeekerClawColors.TextDim,
+                    )
+                }
+            }
+        }
     }
 }
 
