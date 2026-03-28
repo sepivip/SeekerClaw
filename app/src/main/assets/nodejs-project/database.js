@@ -489,6 +489,7 @@ function getDailyActivity() {
         const rows = db.exec(
             `SELECT SUBSTR(timestamp, 1, 10) AS day, COUNT(*) AS count
              FROM api_request_log
+             WHERE SUBSTR(timestamp, 1, 10) >= date('now', 'localtime', '-13 months')
              GROUP BY SUBSTR(timestamp, 1, 10)
              ORDER BY day ASC`
         );
