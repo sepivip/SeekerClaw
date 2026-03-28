@@ -120,12 +120,16 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             when (existingConfig?.provider) {
                 "openai" -> existingConfig.openaiApiKey
                 "openrouter" -> existingConfig.openrouterApiKey
+                "custom" -> existingConfig.customApiKey
                 else -> existingConfig?.activeCredential ?: ""
             }
         )
     }
     var authType by remember { mutableStateOf(existingConfig?.authType ?: "api_key") }
     var scannedProvider by remember { mutableStateOf(existingConfig?.provider ?: "claude") }
+    var customBaseUrl by remember { mutableStateOf(existingConfig?.customBaseUrl ?: "") }
+    var customHeaders by remember { mutableStateOf(existingConfig?.customHeaders ?: "") }
+    var customFormat by remember { mutableStateOf(existingConfig?.customFormat ?: "chat_completions") }
     var botToken by remember { mutableStateOf(existingConfig?.telegramBotToken ?: "") }
     var ownerId by remember { mutableStateOf(existingConfig?.telegramOwnerId ?: "") }
     val existingProvider = existingConfig?.provider ?: "claude"
@@ -176,8 +180,12 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                     apiKey = when (cfg.provider) {
                         "openai" -> cfg.openaiApiKey
                         "openrouter" -> cfg.openrouterApiKey
+                        "custom" -> cfg.customApiKey
                         else -> if (cfg.authType == "setup_token") cfg.setupToken else cfg.anthropicApiKey
                     }
+                    customBaseUrl = cfg.customBaseUrl
+                    customHeaders = cfg.customHeaders
+                    customFormat = cfg.customFormat
                     botToken = cfg.telegramBotToken
                     ownerId = cfg.telegramOwnerId
                     val providerModels = modelsForProvider(cfg.provider)
@@ -232,6 +240,11 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             currentStep = SetupSteps.PROVIDER
             return
         }
+        if (scannedProvider == "custom" && customBaseUrl.trim().isBlank()) {
+            errorMessage = "Custom endpoint URL is required"
+            currentStep = SetupSteps.PROVIDER
+            return
+        }
         val credentialError = ConfigManager.validateCredential(apiKey.trim(), effectiveAuthType)
         if (credentialError != null) {
             apiKeyError = credentialError
@@ -268,8 +281,28 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                     anthropicApiKey = existing?.anthropicApiKey ?: "",
                     setupToken = existing?.setupToken ?: "",
                     openaiApiKey = existing?.openaiApiKey ?: "",
+                    customApiKey = existing?.customApiKey ?: "",
+                    customBaseUrl = existing?.customBaseUrl ?: "",
+                    customHeaders = existing?.customHeaders ?: "",
+                    customFormat = existing?.customFormat ?: "chat_completions",
                     openrouterApiKey = trimmedKey,
                     provider = "openrouter",
+                    authType = "api_key",
+                    telegramBotToken = botToken.trim(),
+                    telegramOwnerId = ownerId.trim(),
+                    model = selectedModel,
+                    agentName = agentName.trim().ifBlank { "SeekerClaw" },
+                )
+                "custom" -> AppConfig(
+                    anthropicApiKey = existing?.anthropicApiKey ?: "",
+                    setupToken = existing?.setupToken ?: "",
+                    openaiApiKey = existing?.openaiApiKey ?: "",
+                    openrouterApiKey = existing?.openrouterApiKey ?: "",
+                    customApiKey = trimmedKey,
+                    customBaseUrl = customBaseUrl.trim(),
+                    customHeaders = customHeaders.trim(),
+                    customFormat = customFormat,
+                    provider = "custom",
                     authType = "api_key",
                     telegramBotToken = botToken.trim(),
                     telegramOwnerId = ownerId.trim(),
@@ -280,6 +313,10 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                     anthropicApiKey = if (effectiveAuthType == "api_key") trimmedKey else "",
                     openaiApiKey = existing?.openaiApiKey ?: "",
                     openrouterApiKey = existing?.openrouterApiKey ?: "",
+                    customApiKey = existing?.customApiKey ?: "",
+                    customBaseUrl = existing?.customBaseUrl ?: "",
+                    customHeaders = existing?.customHeaders ?: "",
+                    customFormat = existing?.customFormat ?: "chat_completions",
                     provider = "claude",
                     setupToken = if (effectiveAuthType == "setup_token") trimmedKey else "",
                     authType = effectiveAuthType,
@@ -416,8 +453,12 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                     apiKey = when (newProvider) {
                         "openai" -> existingConfig?.openaiApiKey ?: ""
                         "openrouter" -> existingConfig?.openrouterApiKey ?: ""
+                        "custom" -> existingConfig?.customApiKey ?: ""
                         else -> existingConfig?.activeCredential ?: ""
                     }
+                    customBaseUrl = if (newProvider == "custom") existingConfig?.customBaseUrl ?: "" else customBaseUrl
+                    customHeaders = if (newProvider == "custom") existingConfig?.customHeaders ?: "" else customHeaders
+                    customFormat = if (newProvider == "custom") existingConfig?.customFormat ?: "chat_completions" else customFormat
                     apiKeyError = null
                     errorMessage = null
                     authType = if (newProvider == "claude") existingConfig?.authType ?: "api_key" else "api_key"
@@ -426,7 +467,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                     selectedModel = if (newProvider == existingConfig?.provider) {
                         existingConfig.model
                     } else {
-                        models.firstOrNull()?.id ?: OPENROUTER_DEFAULT_MODEL
+                        models.firstOrNull()?.id ?: if (newProvider == "custom") "gpt-4.1-mini" else OPENROUTER_DEFAULT_MODEL
                     }
                 },
                 apiKey = apiKey,
@@ -440,6 +481,12 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                 },
                 authType = authType,
                 onAuthTypeChange = { authType = it },
+                customBaseUrl = customBaseUrl,
+                onCustomBaseUrlChange = { customBaseUrl = it; errorMessage = null },
+                customHeaders = customHeaders,
+                onCustomHeadersChange = { customHeaders = it; errorMessage = null },
+                customFormat = customFormat,
+                onCustomFormatChange = { customFormat = it },
                 apiKeyError = apiKeyError,
                 fieldColors = fieldColors,
                 onNext = { currentStep = SetupSteps.MODEL },
@@ -681,6 +728,12 @@ private fun ProviderSetupStep(
     onApiKeyChange: (String) -> Unit,
     authType: String,
     onAuthTypeChange: (String) -> Unit,
+    customBaseUrl: String,
+    onCustomBaseUrlChange: (String) -> Unit,
+    customHeaders: String,
+    onCustomHeadersChange: (String) -> Unit,
+    customFormat: String,
+    onCustomFormatChange: (String) -> Unit,
     apiKeyError: String?,
     fieldColors: androidx.compose.material3.TextFieldColors,
     onNext: () -> Unit,
@@ -800,6 +853,13 @@ private fun ProviderSetupStep(
                     fontSize = 12.sp,
                     color = SeekerClawColors.TextDim,
                 )
+            } else if (provider == "custom") {
+                Text(
+                    text = "Point SeekerClaw at your gateway's full inference URL. Add optional headers if your middleman needs them.",
+                    fontSize = 13.sp,
+                    color = SeekerClawColors.TextSecondary,
+                    lineHeight = 18.sp,
+                )
             } else {
                 Row {
                     Text(
@@ -819,6 +879,88 @@ private fun ProviderSetupStep(
             }
 
             Spacer(modifier = Modifier.height(16.dp))
+
+            if (provider == "custom") {
+                OutlinedTextField(
+                    value = customBaseUrl,
+                    onValueChange = onCustomBaseUrlChange,
+                    label = { Text("Endpoint URL", fontSize = 12.sp) },
+                    placeholder = {
+                        Text(
+                            "https://your-gateway.example/v1/chat/completions",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 14.sp,
+                            color = SeekerClawColors.TextDim,
+                        )
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    colors = fieldColors,
+                    shape = shape,
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Text(
+                    text = "API Format",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = SeekerClawColors.TextPrimary,
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    listOf(
+                        "chat_completions" to "Chat Completions",
+                        "responses" to "Responses",
+                    ).forEach { (type, label) ->
+                        val selected = customFormat == type
+                        Button(
+                            onClick = { onCustomFormatChange(type) },
+                            modifier = Modifier.weight(1f).height(48.dp),
+                            shape = shape,
+                            border = if (!selected) BorderStroke(1.dp, SeekerClawColors.CardBorder) else null,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (selected) SeekerClawColors.Primary.copy(alpha = 0.15f)
+                                else SeekerClawColors.Background,
+                                contentColor = if (selected) SeekerClawColors.Primary
+                                else SeekerClawColors.TextDim,
+                            ),
+                        ) {
+                            Text(
+                                text = label,
+                                fontSize = 12.sp,
+                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                OutlinedTextField(
+                    value = customHeaders,
+                    onValueChange = onCustomHeadersChange,
+                    label = { Text("Extra Headers JSON (optional)", fontSize = 12.sp) },
+                    placeholder = {
+                        Text(
+                            "{\"X-API-Key\":\"...\"}",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 14.sp,
+                            color = SeekerClawColors.TextDim,
+                        )
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 3,
+                    maxLines = 5,
+                    colors = fieldColors,
+                    shape = shape,
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+            }
 
             OutlinedTextField(
                 value = apiKey,
@@ -864,7 +1006,7 @@ private fun ProviderSetupStep(
         NavButtons(
             onBack = onBack,
             onNext = onNext,
-            nextEnabled = apiKey.isNotBlank(),
+            nextEnabled = if (provider == "custom") apiKey.isNotBlank() && customBaseUrl.isNotBlank() else apiKey.isNotBlank(),
         )
     }
 }
@@ -1432,4 +1574,3 @@ private fun SectionLabel(title: String) {
         modifier = Modifier.fillMaxWidth(),
     )
 }
-

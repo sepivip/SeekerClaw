@@ -86,6 +86,26 @@ object ConfigClaimImporter {
             cfg.optString("openrouterApiKey"),
             root.optString("openrouterApiKey"),
         )
+        val rawCustomKey = firstNonBlank(
+            auth?.optString("customApiKey"),
+            cfg.optString("customApiKey"),
+            root.optString("customApiKey"),
+        )
+        val rawCustomBaseUrl = firstNonBlank(
+            auth?.optString("customBaseUrl"),
+            cfg.optString("customBaseUrl"),
+            root.optString("customBaseUrl"),
+        )
+        val rawCustomHeaders = firstNonBlank(
+            auth?.optString("customHeaders"),
+            cfg.optString("customHeaders"),
+            root.optString("customHeaders"),
+        )
+        val rawCustomFormat = firstNonBlank(
+            auth?.optString("customFormat"),
+            cfg.optString("customFormat"),
+            root.optString("customFormat"),
+        )
         val credential = firstNonBlank(
             auth?.optString("credential"),
             cfg.optString("credential"),
@@ -151,6 +171,7 @@ object ConfigClaimImporter {
         val defaultModel = when (provider) {
             "openai" -> "gpt-5.4"
             "openrouter" -> "anthropic/claude-sonnet-4-6"
+            "custom" -> "gpt-4.1-mini"
             else -> "claude-opus-4-6"
         }
         val model = rawModel.ifBlank { defaultModel }
@@ -172,6 +193,7 @@ object ConfigClaimImporter {
             .ifBlank { when (provider) {
                 "openai" -> rawOpenaiKey.trim()
                 "openrouter" -> rawOpenrouterKey.trim()
+                "custom" -> rawCustomKey.trim()
                 else -> ""
             } }
             .ifBlank { resolvedApiKey.trim() }
@@ -198,6 +220,20 @@ object ConfigClaimImporter {
                 agentName = agentName,
                 braveApiKey = braveApiKey.trim(),
             )
+            "custom" -> AppConfig(
+                anthropicApiKey = "",
+                customApiKey = trimmedCredential,
+                customBaseUrl = rawCustomBaseUrl.trim(),
+                customHeaders = rawCustomHeaders.trim(),
+                customFormat = rawCustomFormat.trim().ifBlank { "chat_completions" },
+                provider = "custom",
+                authType = "api_key",
+                telegramBotToken = botToken,
+                telegramOwnerId = ownerId,
+                model = model,
+                agentName = agentName,
+                braveApiKey = braveApiKey.trim(),
+            )
             else -> AppConfig(
                 anthropicApiKey = resolvedApiKey.trim(),
                 setupToken = resolvedSetupToken.trim(),
@@ -215,6 +251,7 @@ object ConfigClaimImporter {
         val hasCredential = when (appConfig.provider) {
             "openai" -> appConfig.openaiApiKey.isNotBlank()
             "openrouter" -> appConfig.openrouterApiKey.isNotBlank()
+            "custom" -> appConfig.customApiKey.isNotBlank() && appConfig.customBaseUrl.isNotBlank()
             else -> appConfig.activeCredential.isNotBlank()
         }
         require(hasCredential) { "Config is missing AI credential." }
