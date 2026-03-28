@@ -7,8 +7,9 @@ Core CommonJS modules in `nodejs-project/`:
 | Module | Role |
 |--------|------|
 | `main.js` | Entry point, orchestrator, dependency wiring |
+| `message-handler.js` | Command dispatch, message processing, reaction handling (extracted from main.js) |
 | `tools.js` | Tool definitions (`TOOLS` array) and `executeTool()` dispatch |
-| `claude.js` | Claude API (chat, conversations, sessions, health) |
+| `ai.js` | AI engine (chat, conversations, sessions, health) |
 | `solana.js` | Solana RPC, Jupiter DEX, wallet management |
 | `mcp-client.js` | MCP Streamable HTTP client (standalone) |
 | `cron.js` | Cron scheduling, job persistence, time parsing |
@@ -27,8 +28,9 @@ Also present: `sql-wasm.js` (third-party SQL.js WASM bundle, not a SeekerClaw mo
 
 ```
 main.js (orchestrator)
-├── tools.js ← config, security, bridge, memory, cron, database, solana, web, telegram, claude, skills
-├── claude.js ← config, telegram, web, bridge, memory, skills, database
+├── message-handler.js ← telegram, ai, tools, memory, cron
+├── tools.js ← config, security, bridge, memory, cron, database, solana, web, telegram, ai, skills
+├── ai.js ← config, telegram, web, bridge, memory, skills, database
 ├── mcp-client.js (standalone)
 ├── solana.js ← config, web, bridge
 ├── telegram.js ← config, web
@@ -50,14 +52,14 @@ Six injection points break circular dependencies:
 |--------|--------|----------|---------|
 | `setSendMessage(fn)` | cron.js | main.js | `sendMessage` from telegram.js |
 | `setShutdownDeps(obj)` | database.js | main.js | `{conversations, saveSessionSummary, MIN_MESSAGES_FOR_SUMMARY}` |
-| `setChatDeps(obj)` | claude.js | main.js | `{executeTool, getTools, getMcpStatus, requestConfirmation, lastToolUseTime, lastIncomingMessages}` |
+| `setChatDeps(obj)` | ai.js | main.js | `{executeTool, getTools, getMcpStatus, requestConfirmation, lastToolUseTime, lastIncomingMessages}` |
 | `setMcpExecuteTool(fn)` | tools.js | main.js | MCP tool executor from MCPManager |
 | `setRedactFn(fn)` | config.js | main.js | `redactSecrets` from security.js |
 | `setDb(fn)` | memory.js | database.js | DB getter (`() => db`) at module load time |
 
 ## Error Signaling Convention
 
-### Tool results (tools.js → claude.js → Claude API)
+### Tool results (tools.js → ai.js → Claude API)
 
 Tools return **plain objects** with an `error` key on failure:
 
