@@ -683,13 +683,13 @@ private fun MessageActivityHeatmap(dailyActivity: List<DayActivity>) {
 
     // Build date -> count map
     val dateCountMap = remember(dailyActivity) {
-        dailyActivity.associate { activity ->
+        dailyActivity.mapNotNull { activity ->
             try {
                 LocalDate.parse(activity.day) to activity.count
             } catch (_: Exception) {
                 null
             }
-        }.filterKeys { it != null }.mapKeys { it.key!! }
+        }.toMap()
     }
 
     // Build weeks grid: list of weeks, each week = list of 7 days (Mon=0 .. Sun=6)
@@ -740,7 +740,7 @@ private fun MessageActivityHeatmap(dailyActivity: List<DayActivity>) {
             .background(SeekerClawColors.Surface, shape)
             .padding(16.dp),
     ) {
-        if (dailyActivity.isEmpty()) {
+        if (dailyActivity.isEmpty() || totalMessages == 0) {
             // Empty state
             Text(
                 text = "No message data yet",
@@ -777,16 +777,16 @@ private fun MessageActivityHeatmap(dailyActivity: List<DayActivity>) {
                         var labelIndex = 0
                         for (weekIndex in weeks.indices) {
                             if (labelIndex < monthLabels.size && monthLabels[labelIndex].first == weekIndex) {
+                                // Label spans across week columns — no fixed width constraint
                                 Text(
                                     text = monthLabels[labelIndex].second,
                                     fontFamily = FontFamily.Monospace,
                                     fontSize = 9.sp,
                                     color = SeekerClawColors.TextDim,
-                                    modifier = Modifier.width(cellSize + cellGap),
+                                    modifier = Modifier.padding(end = 2.dp),
+                                    maxLines = 1,
                                 )
                                 labelIndex++
-                            } else {
-                                Spacer(modifier = Modifier.width(cellSize + cellGap))
                             }
                         }
                     }

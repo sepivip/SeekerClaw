@@ -478,13 +478,15 @@ process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 // ============================================================================
 
 // Daily message counts for heatmap (last 6 months)
+// Note: counts API requests (api_request_log rows) — each user message = 1+ API calls.
+// UI labels this as "messages" which is close enough for activity visualization.
 function getDailyActivity() {
     if (!db) return [];
     try {
         const rows = db.exec(
             `SELECT DATE(timestamp) AS day, COUNT(*) AS count
              FROM api_request_log
-             WHERE timestamp >= date('now', '-6 months')
+             WHERE timestamp >= date('now', 'localtime', '-6 months')
              GROUP BY DATE(timestamp)
              ORDER BY day ASC`
         );
