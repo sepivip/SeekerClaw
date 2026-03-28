@@ -793,13 +793,8 @@ private fun MessageActivityHeatmap(dailyActivity: List<DayActivity>) {
 
                 val numWeeks = weeks.size
                 val scrollState = rememberScrollState()
-                // Auto-scroll to right (most recent) on first render
-                // Wait for layout to complete before scrolling (maxValue is 0 before measurement)
-                LaunchedEffect(numWeeks) {
-                    snapshotFlow { scrollState.maxValue }
-                        .first { it > 0 }
-                    scrollState.scrollTo(scrollState.maxValue)
-                }
+                // Left-aligned by default — shows first month of the half-year.
+                // User swipes left to see future months.
 
                 Column {
                     // Month labels + grid in a single scrollable row
