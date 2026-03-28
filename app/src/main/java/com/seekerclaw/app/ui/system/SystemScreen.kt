@@ -810,15 +810,19 @@ private fun MessageActivityHeatmap(dailyActivity: List<DayActivity>) {
                         for (weekIndex in weeks.indices) {
                             val colWidth = cellSize + if (weekIndex < numWeeks - 1) cellGap else 0.dp
                             if (labelIndex < monthLabels.size && monthLabels[labelIndex].first == weekIndex) {
-                                Text(
-                                    text = monthLabels[labelIndex].second,
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 9.sp,
-                                    color = SeekerClawColors.TextDim,
-                                    modifier = Modifier.widthIn(min = colWidth),
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Clip,
-                                )
+                                Box(
+                                    modifier = Modifier.width(colWidth),
+                                    contentAlignment = Alignment.CenterStart,
+                                ) {
+                                    Text(
+                                        text = monthLabels[labelIndex].second,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 9.sp,
+                                        color = SeekerClawColors.TextDim,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Clip,
+                                    )
+                                }
                                 labelIndex++
                             } else {
                                 Spacer(modifier = Modifier.width(colWidth))
