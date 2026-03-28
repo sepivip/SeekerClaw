@@ -1,13 +1,19 @@
 // message-handler.js — extracted from main.js (#296)
 // Handles Telegram commands, messages, and reaction updates.
-// Uses init() dependency injection (same pattern as tools/index.js).
+// Uses init() dependency injection — all external dependencies received via init(deps).
 
 const fs = require('fs');
 
 let deps = {};
+let initialized = false;
 
 function init(d) {
     deps = d;
+    initialized = true;
+}
+
+function assertInit() {
+    if (!initialized) throw new Error('message-handler.js: init() must be called before use');
 }
 
 // ============================================================================
@@ -15,6 +21,7 @@ function init(d) {
 // ============================================================================
 
 async function handleCommand(chatId, command, args) {
+    assertInit();
     switch (command) {
         case '/start': {
             // Templates defined in TEMPLATES.md — update there first, then sync here
@@ -29,7 +36,6 @@ async function handleCommand(chatId, command, args) {
             // Post-ritual or fallback
             if (identity) {
                 // Returning user (IDENTITY.md exists)
-                const agentName = identity.split('\n')[0].replace(/^#\s*/, '').trim() || deps.AGENT_NAME;
                 return `Hey, I'm back! ✨
 
 Quick commands if you need them:
@@ -362,6 +368,7 @@ Platform: \`${platform}\``;
 // ============================================================================
 
 async function handleMessage(msg) {
+    assertInit();
     const chatId = msg.chat.id;
     const senderId = String(msg.from?.id);
     const rawText = (msg.text || msg.caption || '').trim();
@@ -611,6 +618,7 @@ async function handleMessage(msg) {
 // ============================================================================
 
 function handleReactionUpdate(reaction) {
+    assertInit();
     const chatId = reaction.chat?.id;
     if (!chatId) return; // Malformed update — no chat info
 
