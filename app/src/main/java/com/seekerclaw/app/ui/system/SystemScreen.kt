@@ -201,7 +201,7 @@ fun SystemScreen(onBack: () -> Unit) {
         Spacer(modifier = Modifier.height(24.dp))
 
         // ==================== MESSAGE ACTIVITY ====================
-        SectionLabel("Message Activity")
+        SectionLabel("Activity")
 
         // Preserve last known activity data even when service stops
         val lastKnownActivity = remember { mutableStateOf<List<DayActivity>>(emptyList()) }
@@ -876,7 +876,7 @@ private fun MessageActivityHeatmap(dailyActivity: List<DayActivity>) {
                 }
                 val rangeLabel = "${halfYearStart.month.getDisplayName(TextStyle.SHORT, Locale.ENGLISH)}-${halfYearEnd.month.getDisplayName(TextStyle.SHORT, Locale.ENGLISH)} ${halfYearStart.year}"
                 Text(
-                    text = "$countText msgs \u00B7 $rangeLabel",
+                    text = "$countText requests \u00B7 $rangeLabel",
                     fontFamily = FontFamily.Monospace,
                     fontSize = 11.sp,
                     color = SeekerClawColors.TextDim,
