@@ -7,7 +7,7 @@ const {
 
 const { getDb } = require('../database');
 
-const { conversations } = require('../claude');
+const { conversations } = require('../ai');
 
 const { loadSkills } = require('../skills');
 
