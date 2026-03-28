@@ -69,7 +69,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 
 private val HeatmapColors = listOf(
-    Color(0xFF1A1A24),
+    Color(0xFF252530),  // Level 0: visible empty cell (subtle but clear grid structure)
     Color(0xFF3D1117),
     Color(0xFF6B1D2A),
     Color(0xFF8B2232),
@@ -686,8 +686,8 @@ private fun StatCard(
 @Composable
 private fun MessageActivityHeatmap(dailyActivity: List<DayActivity>) {
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
-    val cellGap = 2.dp
-    val cellShape = RoundedCornerShape(2.dp)
+    val cellGap = 3.dp
+    val cellShape = RoundedCornerShape(3.dp)
 
     val today = LocalDate.now()
     // Current half-year anchored to today (Jan-Jun or Jul-Dec)
@@ -786,7 +786,7 @@ private fun MessageActivityHeatmap(dailyActivity: List<DayActivity>) {
             BoxWithConstraints(
                 modifier = Modifier.fillMaxWidth()
             ) {
-                val visibleWeeks = 26 // 6 months ≈ 26 weeks
+                val visibleWeeks = 22 // Size cells for ~5 months visible; rest scrolls
                 val availableWidth = maxWidth
                 val totalGaps = cellGap * (visibleWeeks - 1)
                 val cellSize = ((availableWidth - totalGaps) / visibleWeeks).coerceIn(6.dp, 16.dp)
