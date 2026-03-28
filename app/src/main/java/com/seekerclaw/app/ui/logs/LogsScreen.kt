@@ -54,6 +54,8 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import com.seekerclaw.app.ui.theme.SeekerClawColors
+import androidx.compose.ui.res.stringResource
+import com.seekerclaw.app.R
 import com.seekerclaw.app.util.LogCollector
 import com.seekerclaw.app.util.LogLevel
 import java.util.Date
@@ -123,7 +125,7 @@ fun LogsScreen() {
                 )
                 Spacer(modifier = Modifier.width(10.dp))
                 Text(
-                    text = "Logs",
+                    text = stringResource(R.string.logs_title),
                     fontFamily = RethinkSans,
                     fontSize = 20.sp,
                     fontWeight = FontWeight.Bold,
@@ -143,26 +145,26 @@ fun LogsScreen() {
                     val sendIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
                         type = "text/plain"
                         putExtra(android.content.Intent.EXTRA_TEXT, logText)
-                        putExtra(android.content.Intent.EXTRA_SUBJECT, "SeekerClaw Logs")
+                        putExtra(android.content.Intent.EXTRA_SUBJECT, context.getString(R.string.logs_share_subject))
                     }
-                    context.startActivity(android.content.Intent.createChooser(sendIntent, "Share Logs"))
+                    context.startActivity(android.content.Intent.createChooser(sendIntent, context.getString(R.string.logs_share_chooser)))
                 }) {
                     Icon(
                         Icons.Default.Share,
-                        contentDescription = "Share logs",
+                        contentDescription = stringResource(R.string.logs_cd_share),
                         tint = SeekerClawColors.TextDim,
                     )
                 }
                 TextButton(onClick = { showClearDialog = true }) {
                     Icon(
                         Icons.Default.Delete,
-                        contentDescription = "Clear logs",
+                        contentDescription = stringResource(R.string.logs_cd_clear),
                         tint = SeekerClawColors.TextDim,
                         modifier = Modifier.size(18.dp),
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = "Clear",
+                        text = stringResource(R.string.button_clear),
                         fontFamily = RethinkSans,
                         fontSize = 13.sp,
                         color = SeekerClawColors.TextDim,
@@ -172,7 +174,7 @@ fun LogsScreen() {
         }
 
         Text(
-            text = "System logs and diagnostics",
+            text = stringResource(R.string.logs_subtitle),
             fontFamily = RethinkSans,
             fontSize = 13.sp,
             color = SeekerClawColors.TextDim,
@@ -186,7 +188,7 @@ fun LogsScreen() {
             onValueChange = { searchQuery = it },
             placeholder = {
                 Text(
-                    "Search logs\u2026",
+                    stringResource(R.string.logs_search_placeholder),
                     fontFamily = FontFamily.Monospace,
                     fontSize = 13.sp,
                 )
@@ -194,7 +196,7 @@ fun LogsScreen() {
             leadingIcon = {
                 Icon(
                     Icons.Default.Search,
-                    contentDescription = "Search",
+                    contentDescription = stringResource(R.string.logs_cd_search),
                     tint = SeekerClawColors.TextDim,
                     modifier = Modifier.size(18.dp),
                 )
@@ -204,7 +206,7 @@ fun LogsScreen() {
                     IconButton(onClick = { searchQuery = "" }) {
                         Icon(
                             Icons.Default.Close,
-                            contentDescription = "Clear search",
+                            contentDescription = stringResource(R.string.logs_cd_clear_search),
                             tint = SeekerClawColors.TextDim,
                             modifier = Modifier.size(18.dp),
                         )
@@ -251,7 +253,7 @@ fun LogsScreen() {
                             )
                             Spacer(modifier = Modifier.height(8.dp))
                             Text(
-                                text = "No logs yet.",
+                                text = stringResource(R.string.logs_empty),
                                 fontFamily = FontFamily.Monospace,
                                 fontSize = 13.sp,
                                 color = SeekerClawColors.TextDim,
@@ -261,8 +263,8 @@ fun LogsScreen() {
                         // Logs exist but are all filtered out
                         val hasSearchFilter = searchQuery.isNotBlank()
                         val reasonText = when {
-                            hasSearchFilter -> "No logs match your search."
-                            else -> "No logs for selected levels."
+                            hasSearchFilter -> stringResource(R.string.logs_no_search_match)
+                            else -> stringResource(R.string.logs_no_level_match)
                         }
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text(
@@ -279,7 +281,7 @@ fun LogsScreen() {
                             )
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
-                                text = "${logs.size} entries hidden.",
+                                text = stringResource(R.string.logs_entries_hidden, logs.size),
                                 fontFamily = FontFamily.Monospace,
                                 fontSize = 12.sp,
                                 color = SeekerClawColors.TextDim.copy(alpha = 0.6f),
@@ -293,7 +295,7 @@ fun LogsScreen() {
                                 searchQuery = ""
                             }) {
                                 Text(
-                                    text = "Show all",
+                                    text = stringResource(R.string.logs_show_all),
                                     fontFamily = RethinkSans,
                                     fontSize = 13.sp,
                                     fontWeight = FontWeight.Bold,
@@ -339,8 +341,8 @@ fun LogsScreen() {
             Spacer(modifier = Modifier.height(6.dp))
             val hiddenCount = logs.size - filteredLogs.size
             val statusText = buildString {
-                append("${filteredLogs.size}/${logs.size} entries")
-                if (hiddenCount > 0) append(" \u00b7 $hiddenCount filtered")
+                append(context.getString(R.string.logs_entries_status, filteredLogs.size, logs.size))
+                if (hiddenCount > 0) append(" ${context.getString(R.string.logs_entries_filtered, hiddenCount)}")
             }
             Text(
                 text = statusText,
@@ -359,7 +361,7 @@ fun LogsScreen() {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = "Auto-scroll",
+                text = stringResource(R.string.logs_auto_scroll),
                 fontFamily = RethinkSans,
                 fontSize = 14.sp,
                 color = SeekerClawColors.TextSecondary,
@@ -388,7 +390,7 @@ fun LogsScreen() {
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             FilterChip(
-                label = "Debug",
+                label = stringResource(R.string.filter_debug),
                 active = showDebug,
                 activeColor = SeekerClawColors.LogDebug,
                 shape = shape,
@@ -399,7 +401,7 @@ fun LogsScreen() {
                 },
             )
             FilterChip(
-                label = "Info",
+                label = stringResource(R.string.filter_info),
                 active = showInfo,
                 activeColor = SeekerClawColors.LogInfo,
                 shape = shape,
@@ -410,7 +412,7 @@ fun LogsScreen() {
                 },
             )
             FilterChip(
-                label = "Warn",
+                label = stringResource(R.string.filter_warn),
                 active = showWarn,
                 activeColor = SeekerClawColors.Warning,
                 shape = shape,
@@ -421,7 +423,7 @@ fun LogsScreen() {
                 },
             )
             FilterChip(
-                label = "Error",
+                label = stringResource(R.string.filter_error),
                 active = showError,
                 activeColor = SeekerClawColors.Error,
                 shape = shape,
@@ -439,7 +441,7 @@ fun LogsScreen() {
             onDismissRequest = { showClearDialog = false },
             title = {
                 Text(
-                    "Clear Logs",
+                    stringResource(R.string.dialog_clear_logs_title),
                     fontFamily = RethinkSans,
                     fontWeight = FontWeight.Bold,
                     color = SeekerClawColors.TextPrimary,
@@ -447,7 +449,7 @@ fun LogsScreen() {
             },
             text = {
                 Text(
-                    "This will delete all log entries. This cannot be undone.",
+                    stringResource(R.string.dialog_clear_logs_message),
                     fontFamily = RethinkSans,
                     fontSize = 13.sp,
                     color = SeekerClawColors.TextSecondary,
@@ -460,7 +462,7 @@ fun LogsScreen() {
                     showClearDialog = false
                 }) {
                     Text(
-                        "Clear",
+                        stringResource(R.string.button_clear),
                         fontFamily = RethinkSans,
                         fontWeight = FontWeight.Bold,
                         color = SeekerClawColors.Error,
@@ -470,7 +472,7 @@ fun LogsScreen() {
             dismissButton = {
                 TextButton(onClick = { showClearDialog = false }) {
                     Text(
-                        "Cancel",
+                        stringResource(R.string.button_cancel),
                         fontFamily = RethinkSans,
                         color = SeekerClawColors.TextDim,
                     )

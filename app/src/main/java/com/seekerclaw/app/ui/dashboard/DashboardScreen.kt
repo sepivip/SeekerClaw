@@ -56,6 +56,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.res.stringResource
+import com.seekerclaw.app.R
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.config.modelDisplayName
 import com.seekerclaw.app.config.providerById
@@ -237,28 +239,28 @@ fun DashboardScreen(
     val statusText = when (status) {
         ServiceStatus.RUNNING -> when (health.apiStatus) {
             "degraded" -> when (health.lastErrorType) {
-                "rate_limit" -> "Rate Limited"
-                "overloaded" -> "API Overloaded"
-                "cloudflare" -> "API Unreachable"
-                else -> "API Unstable"
+                "rate_limit" -> stringResource(R.string.status_rate_limited)
+                "overloaded" -> stringResource(R.string.status_api_overloaded)
+                "cloudflare" -> stringResource(R.string.status_api_unreachable)
+                else -> stringResource(R.string.status_api_unstable)
             }
             "error" -> when (health.lastErrorType) {
-                "auth" -> "Auth Error"
-                "billing" -> "Billing Issue"
-                "quota" -> "Quota Exceeded"
-                "network" -> "Network Error"
-                else -> "API Error"
+                "auth" -> stringResource(R.string.status_auth_error)
+                "billing" -> stringResource(R.string.status_billing_issue)
+                "quota" -> stringResource(R.string.status_quota_exceeded)
+                "network" -> stringResource(R.string.status_network_error)
+                else -> stringResource(R.string.status_api_error)
             }
-            "stale" -> "Agent Unresponsive"
-            else -> "Online"
+            "stale" -> stringResource(R.string.status_agent_unresponsive)
+            else -> stringResource(R.string.status_online)
         }
-        ServiceStatus.STARTING -> "Starting\u2026"
-        ServiceStatus.STOPPED -> "Offline"
+        ServiceStatus.STARTING -> stringResource(R.string.status_starting)
+        ServiceStatus.STOPPED -> stringResource(R.string.status_offline)
         ServiceStatus.ERROR -> {
             if (validationError == "setup_not_complete" ||
                 validationError == "missing_bot_token" ||
                 validationError == "missing_credential"
-            ) "Config Needed" else "Error"
+            ) stringResource(R.string.status_config_needed) else stringResource(R.string.status_error)
         }
     }
 
@@ -275,10 +277,10 @@ fun DashboardScreen(
         Text(
             text = buildAnnotatedString {
                 withStyle(SpanStyle(color = SeekerClawColors.TextPrimary, fontWeight = FontWeight.ExtraBold)) {
-                    append("Seeker")
+                    append(stringResource(R.string.brand_seeker))
                 }
                 withStyle(SpanStyle(color = SeekerClawColors.Primary, fontWeight = FontWeight.ExtraBold)) {
-                    append("C/aw")
+                    append(stringResource(R.string.brand_claw))
                 }
             },
             fontFamily = RethinkSans,
@@ -288,7 +290,7 @@ fun DashboardScreen(
         Spacer(modifier = Modifier.height(2.dp))
 
         Text(
-            text = "AgentOS",
+            text = stringResource(R.string.brand_agent_os),
             fontFamily = RethinkSans,
             fontSize = 14.sp,
             color = SeekerClawColors.TextDim,
@@ -318,7 +320,7 @@ fun DashboardScreen(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "No internet connection",
+                    text = stringResource(R.string.banner_no_internet),
                     fontFamily = RethinkSans,
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Medium,
@@ -330,7 +332,7 @@ fun DashboardScreen(
                 ) {
                     Icon(
                         Icons.Default.Close,
-                        contentDescription = "Dismiss network alert",
+                        contentDescription = stringResource(R.string.banner_dismiss_network),
                         tint = SeekerClawColors.Warning,
                         modifier = Modifier.size(16.dp),
                     )
@@ -351,15 +353,15 @@ fun DashboardScreen(
                 else SeekerClawColors.Warning
             val providerName = providerById(config?.provider ?: "claude").displayName
             val bannerText = when (health.lastErrorType) {
-                "auth" -> "API key rejected${health.lastErrorStatus?.let { " ($it)" } ?: ""} \u2014 check Settings"
-                "billing" -> "API billing issue \u2014 check ${providerById(config?.provider ?: "claude").consoleUrl}"
-                "quota" -> "API quota exceeded \u2014 try again later or upgrade plan"
-                "rate_limit" -> "Rate limited \u2014 retrying automatically"
-                "server", "overloaded" -> "$providerName API temporarily unavailable \u2014 retrying"
-                "cloudflare" -> "$providerName API unreachable \u2014 retrying"
-                "network" -> "Cannot reach $providerName API \u2014 check internet connection"
-                else -> if (health.apiStatus == "stale") "Agent may have stopped responding \u2014 try restarting"
-                    else "API error \u2014 check Logs for details"
+                "auth" -> stringResource(R.string.banner_auth_rejected, health.lastErrorStatus?.let { " ($it)" } ?: "")
+                "billing" -> stringResource(R.string.banner_billing_issue, providerById(config?.provider ?: "claude").consoleUrl)
+                "quota" -> stringResource(R.string.banner_quota_exceeded)
+                "rate_limit" -> stringResource(R.string.banner_rate_limited)
+                "server", "overloaded" -> stringResource(R.string.banner_server_unavailable, providerName)
+                "cloudflare" -> stringResource(R.string.banner_cloudflare, providerName)
+                "network" -> stringResource(R.string.banner_network_error, providerName)
+                else -> if (health.apiStatus == "stale") stringResource(R.string.banner_agent_stale)
+                    else stringResource(R.string.banner_api_error_generic)
             }
             Row(
                 modifier = Modifier
@@ -388,7 +390,7 @@ fun DashboardScreen(
                 ) {
                     Icon(
                         Icons.Default.Close,
-                        contentDescription = "Dismiss error alert",
+                        contentDescription = stringResource(R.string.banner_dismiss_error),
                         tint = bannerColor,
                         modifier = Modifier.size(16.dp),
                     )
@@ -419,7 +421,7 @@ fun DashboardScreen(
                 )
                 Spacer(modifier = Modifier.width(12.dp))
                 Text(
-                    text = "API connection restored",
+                    text = stringResource(R.string.banner_api_restored),
                     fontFamily = RethinkSans,
                     fontSize = 13.sp,
                     color = SeekerClawColors.Accent,
@@ -444,7 +446,7 @@ fun DashboardScreen(
                     .padding(16.dp),
             ) {
                 Text(
-                    text = "Complete Setup",
+                    text = stringResource(R.string.card_complete_setup),
                     fontFamily = RethinkSans,
                     fontWeight = FontWeight.Bold,
                     fontSize = 16.sp,
@@ -453,9 +455,9 @@ fun DashboardScreen(
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
                     text = when (validationError) {
-                        "missing_bot_token" -> "Your Telegram bot token is missing"
-                        "missing_credential" -> "Your API credential is missing"
-                        else -> "Your agent needs configuration to start"
+                        "missing_bot_token" -> stringResource(R.string.card_missing_bot_token)
+                        "missing_credential" -> stringResource(R.string.card_missing_credential)
+                        else -> stringResource(R.string.card_needs_configuration)
                     },
                     fontFamily = RethinkSans,
                     fontSize = 13.sp,
@@ -472,7 +474,7 @@ fun DashboardScreen(
                     modifier = Modifier.fillMaxWidth().height(44.dp),
                 ) {
                     Text(
-                        text = "Continue Setup",
+                        text = stringResource(R.string.button_continue_setup),
                         fontFamily = RethinkSans,
                         fontWeight = FontWeight.Bold,
                         fontSize = 14.sp,
@@ -499,7 +501,7 @@ fun DashboardScreen(
                     .padding(16.dp),
             ) {
                 Text(
-                    text = "Ready to go!",
+                    text = stringResource(R.string.card_ready_to_go),
                     fontFamily = RethinkSans,
                     fontWeight = FontWeight.Bold,
                     fontSize = 15.sp,
@@ -507,7 +509,7 @@ fun DashboardScreen(
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "Tap \"Deploy Agent\" below to start $agentName, then open Telegram to chat with your agent.",
+                    text = stringResource(R.string.card_first_launch_hint, agentName),
                     fontFamily = RethinkSans,
                     fontSize = 13.sp,
                     color = SeekerClawColors.TextDim,
@@ -517,7 +519,7 @@ fun DashboardScreen(
         }
 
         // Status card (tappable → System screen, or Settings if config needed)
-        val configNeeded = statusText == "Config Needed"
+        val configNeeded = !configReady
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -549,7 +551,7 @@ fun DashboardScreen(
                     )
                 }
                 Text(
-                    text = if (configNeeded) "Settings >" else "System >",
+                    text = if (configNeeded) stringResource(R.string.button_settings_nav) else stringResource(R.string.button_system_nav),
                     fontFamily = RethinkSans,
                     fontSize = 12.sp,
                     color = SeekerClawColors.TextDim,
@@ -576,7 +578,7 @@ fun DashboardScreen(
             Spacer(modifier = Modifier.height(16.dp))
 
             Text(
-                text = "Uptime",
+                text = stringResource(R.string.label_uptime),
                 fontFamily = RethinkSans,
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Medium,
@@ -598,9 +600,9 @@ fun DashboardScreen(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                StatMini(label = "TODAY", value = "$messagesToday")
-                StatMini(label = "TOTAL", value = "$messageCount")
-                StatMini(label = "LAST", value = formatLastActivity(lastActivityTime, context))
+                StatMini(label = stringResource(R.string.label_today), value = "$messagesToday")
+                StatMini(label = stringResource(R.string.label_total), value = "$messageCount")
+                StatMini(label = stringResource(R.string.label_last), value = formatLastActivity(lastActivityTime, context))
             }
         }
 
@@ -608,7 +610,7 @@ fun DashboardScreen(
 
         // Uplinks
         Text(
-            text = "Status",
+            text = stringResource(R.string.label_status),
             fontFamily = RethinkSans,
             fontSize = 11.sp,
             fontWeight = FontWeight.Medium,
@@ -624,16 +626,16 @@ fun DashboardScreen(
         ) {
             val gatewaySubtitle = when (status) {
                 ServiceStatus.RUNNING -> when (health.apiStatus) {
-                    "degraded" -> "Engine retrying"
-                    "error" -> "Engine error"
-                    "stale" -> "Engine unresponsive"
-                    else -> "Claw Engine"
+                    "degraded" -> stringResource(R.string.uplink_engine_retrying)
+                    "error" -> stringResource(R.string.uplink_engine_error)
+                    "stale" -> stringResource(R.string.uplink_engine_unresponsive)
+                    else -> stringResource(R.string.uplink_engine_running)
                 }
-                ServiceStatus.STARTING -> "Starting..."
-                ServiceStatus.STOPPED -> "Offline"
+                ServiceStatus.STARTING -> stringResource(R.string.uplink_engine_starting)
+                ServiceStatus.STOPPED -> stringResource(R.string.uplink_engine_offline)
                 ServiceStatus.ERROR -> {
-                    if (!hasBotToken || !hasCredential) "Blocked: missing config"
-                    else "Engine error"
+                    if (!hasBotToken || !hasCredential) stringResource(R.string.uplink_engine_blocked)
+                    else stringResource(R.string.uplink_engine_error)
                 }
             }
             val gatewayDotColor = when (status) {
@@ -647,11 +649,11 @@ fun DashboardScreen(
                 ServiceStatus.ERROR -> SeekerClawColors.Error
             }
 
-            val telegramSubtitle = if (!hasBotToken) "Bot token missing" else when (status) {
-                ServiceStatus.RUNNING -> "Message relay"
-                ServiceStatus.STARTING -> "Connecting..."
-                ServiceStatus.ERROR -> "Relay error"
-                ServiceStatus.STOPPED -> "Offline"
+            val telegramSubtitle = if (!hasBotToken) stringResource(R.string.uplink_telegram_missing_token) else when (status) {
+                ServiceStatus.RUNNING -> stringResource(R.string.uplink_telegram_relay)
+                ServiceStatus.STARTING -> stringResource(R.string.uplink_telegram_connecting)
+                ServiceStatus.ERROR -> stringResource(R.string.uplink_telegram_error)
+                ServiceStatus.STOPPED -> stringResource(R.string.uplink_telegram_offline)
             }
             val telegramDotColor = if (!hasBotToken) SeekerClawColors.Error else when (status) {
                 ServiceStatus.RUNNING -> SeekerClawColors.Accent
@@ -660,21 +662,21 @@ fun DashboardScreen(
                 ServiceStatus.STOPPED -> SeekerClawColors.TextDim
             }
 
-            val aiSubtitle = if (!hasCredential) "Credential missing" else when (status) {
+            val aiSubtitle = if (!hasCredential) stringResource(R.string.uplink_ai_missing_credential) else when (status) {
                 ServiceStatus.RUNNING -> when (health.apiStatus) {
-                    "degraded" -> "${modelDisplayName(config?.model)} (retrying)"
+                    "degraded" -> stringResource(R.string.uplink_ai_retrying, modelDisplayName(config?.model))
                     "error" -> when (health.lastErrorType) {
-                        "auth" -> "Auth expired"
-                        "billing" -> "Billing issue"
-                        "quota" -> "Quota exceeded"
-                        else -> "API error"
+                        "auth" -> stringResource(R.string.uplink_ai_auth_expired)
+                        "billing" -> stringResource(R.string.uplink_ai_billing)
+                        "quota" -> stringResource(R.string.uplink_ai_quota)
+                        else -> stringResource(R.string.uplink_ai_error)
                     }
-                    "stale" -> "Unresponsive"
+                    "stale" -> stringResource(R.string.uplink_ai_unresponsive)
                     else -> modelDisplayName(config?.model)
                 }
-                ServiceStatus.STARTING -> "Loading model..."
-                ServiceStatus.ERROR -> "Model error"
-                ServiceStatus.STOPPED -> "Offline"
+                ServiceStatus.STARTING -> stringResource(R.string.uplink_ai_loading)
+                ServiceStatus.ERROR -> stringResource(R.string.uplink_ai_model_error)
+                ServiceStatus.STOPPED -> stringResource(R.string.uplink_ai_offline)
             }
             val aiDotColor = if (!hasCredential) SeekerClawColors.Error else when (status) {
                 ServiceStatus.RUNNING -> when (health.apiStatus) {
@@ -689,7 +691,7 @@ fun DashboardScreen(
 
             UplinkCard(
                 icon = "//TG",
-                name = "Telegram",
+                name = stringResource(R.string.uplink_telegram),
                 subtitle = telegramSubtitle,
                 dotColor = telegramDotColor,
                 shape = shape,
@@ -697,7 +699,7 @@ fun DashboardScreen(
             )
             UplinkCard(
                 icon = "//GW",
-                name = "Engine",
+                name = stringResource(R.string.uplink_engine),
                 subtitle = gatewaySubtitle,
                 dotColor = gatewayDotColor,
                 shape = shape,
@@ -705,7 +707,7 @@ fun DashboardScreen(
             )
             UplinkCard(
                 icon = "//AI",
-                name = "AI Provider",
+                name = stringResource(R.string.uplink_ai_provider),
                 subtitle = aiSubtitle,
                 dotColor = aiDotColor,
                 shape = shape,
@@ -742,7 +744,7 @@ fun DashboardScreen(
             ),
         ) {
             Text(
-                text = if (isRunning) "Stop Agent" else "Deploy Agent",
+                text = if (isRunning) stringResource(R.string.button_stop_agent) else stringResource(R.string.button_deploy_agent),
                 fontFamily = RethinkSans,
                 fontWeight = FontWeight.Bold,
                 fontSize = 15.sp,
@@ -751,7 +753,7 @@ fun DashboardScreen(
         if (!deployEnabled) {
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "Complete setup to deploy",
+                text = stringResource(R.string.hint_complete_setup_to_deploy),
                 fontFamily = RethinkSans,
                 fontSize = 12.sp,
                 color = SeekerClawColors.TextDim,
@@ -772,9 +774,9 @@ fun DashboardScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                StatMini(small = true, label = "API", value = "$apiRequests req")
-                StatMini(small = true, label = "LATENCY", value = "${apiAvgLatency}ms")
-                StatMini(small = true, label = "CACHE", value = "${apiCacheHits}%")
+                StatMini(small = true, label = stringResource(R.string.stat_api), value = stringResource(R.string.stat_api_value, apiRequests))
+                StatMini(small = true, label = stringResource(R.string.stat_latency), value = stringResource(R.string.stat_latency_value, apiAvgLatency))
+                StatMini(small = true, label = stringResource(R.string.stat_cache), value = stringResource(R.string.stat_cache_value, apiCacheHits))
             }
         }
 

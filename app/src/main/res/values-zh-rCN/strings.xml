@@ -1,0 +1,271 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- Notification -->
+    <string name="notification_channel_name">SeekerClaw 服务</string>
+    <string name="notification_content">AI 代理正在运行</string>
+
+    <!-- Navigation -->
+    <string name="nav_home">首页</string>
+    <string name="nav_logs">日志</string>
+    <string name="nav_skills">技能</string>
+    <string name="nav_settings">设置</string>
+
+    <!-- Dashboard: Status text -->
+    <string name="status_online">在线</string>
+    <string name="status_offline">离线</string>
+    <string name="status_starting">启动中\u2026</string>
+    <string name="status_error">错误</string>
+    <string name="status_config_needed">需要配置</string>
+    <string name="status_rate_limited">频率限制</string>
+    <string name="status_api_overloaded">API 过载</string>
+    <string name="status_api_unreachable">API 不可达</string>
+    <string name="status_api_unstable">API 不稳定</string>
+    <string name="status_auth_error">认证错误</string>
+    <string name="status_billing_issue">账单问题</string>
+    <string name="status_quota_exceeded">配额已用完</string>
+    <string name="status_network_error">网络错误</string>
+    <string name="status_api_error">API 错误</string>
+    <string name="status_agent_unresponsive">代理无响应</string>
+
+    <!-- Dashboard: Banners -->
+    <string name="banner_no_internet">无网络连接</string>
+    <string name="banner_dismiss_network">关闭网络提醒</string>
+    <string name="banner_dismiss_error">关闭错误提醒</string>
+    <string name="banner_api_restored">API 连接已恢复</string>
+    <string name="banner_auth_rejected">API 密钥被拒绝%1$s \u2014 请检查设置</string>
+    <string name="banner_billing_issue">API 账单问题 \u2014 请检查 %1$s</string>
+    <string name="banner_quota_exceeded">API 配额已用完 \u2014 请稍后重试或升级套餐</string>
+    <string name="banner_rate_limited">频率受限 \u2014 正在自动重试</string>
+    <string name="banner_server_unavailable">%1$s API 暂时不可用 \u2014 正在重试</string>
+    <string name="banner_cloudflare">%1$s API 不可达 \u2014 正在重试</string>
+    <string name="banner_network_error">无法连接 %1$s API \u2014 请检查网络连接</string>
+    <string name="banner_agent_stale">代理可能已停止响应 \u2014 尝试重启</string>
+    <string name="banner_api_error_generic">API 错误 \u2014 请查看日志了解详情</string>
+
+    <!-- Dashboard: Setup card -->
+    <string name="card_complete_setup">完成设置</string>
+    <string name="card_missing_bot_token">缺少 Telegram 机器人令牌</string>
+    <string name="card_missing_credential">缺少 API 凭证</string>
+    <string name="card_needs_configuration">代理需要配置才能启动</string>
+    <string name="button_continue_setup">继续设置</string>
+
+    <!-- Dashboard: First launch guide -->
+    <string name="card_ready_to_go">准备就绪！</string>
+    <string name="card_first_launch_hint">点击下方「部署代理」启动 %1$s，然后打开 Telegram 与代理对话。</string>
+
+    <!-- Dashboard: Status card -->
+    <string name="label_uptime">运行时间</string>
+    <string name="label_today">今日</string>
+    <string name="label_total">总计</string>
+    <string name="label_last">最近</string>
+    <string name="label_status">状态</string>
+    <string name="button_settings_nav">设置 &gt;</string>
+    <string name="button_system_nav">系统 &gt;</string>
+
+    <!-- Dashboard: Action buttons -->
+    <string name="button_deploy_agent">部署代理</string>
+    <string name="button_stop_agent">停止代理</string>
+    <string name="hint_complete_setup_to_deploy">完成设置后可部署</string>
+
+    <!-- Dashboard: API stats -->
+    <string name="stat_api_value">%1$d 次</string>
+    <string name="stat_latency_value">%1$d毫秒</string>
+    <string name="stat_cache_value">%1$d%%</string>
+
+    <!-- Dashboard: Uplink names -->
+    <string name="uplink_engine">引擎</string>
+    <string name="uplink_ai_provider">AI 提供商</string>
+
+    <!-- Dashboard: Uplink subtitles — Engine -->
+    <string name="uplink_engine_retrying">引擎重试中</string>
+    <string name="uplink_engine_error">引擎错误</string>
+    <string name="uplink_engine_unresponsive">引擎无响应</string>
+    <string name="uplink_engine_running">Claw 引擎</string>
+    <string name="uplink_engine_starting">启动中…</string>
+    <string name="uplink_engine_offline">离线</string>
+    <string name="uplink_engine_blocked">已阻止：缺少配置</string>
+
+    <!-- Dashboard: Uplink subtitles — Telegram -->
+    <string name="uplink_telegram_missing_token">缺少机器人令牌</string>
+    <string name="uplink_telegram_relay">消息中继</string>
+    <string name="uplink_telegram_connecting">连接中…</string>
+    <string name="uplink_telegram_error">中继错误</string>
+    <string name="uplink_telegram_offline">离线</string>
+
+    <!-- Dashboard: Uplink subtitles — AI Provider -->
+    <string name="uplink_ai_missing_credential">缺少凭证</string>
+    <string name="uplink_ai_retrying">%1$s（重试中）</string>
+    <string name="uplink_ai_auth_expired">认证已过期</string>
+    <string name="uplink_ai_billing">账单问题</string>
+    <string name="uplink_ai_quota">配额已用完</string>
+    <string name="uplink_ai_error">API 错误</string>
+    <string name="uplink_ai_unresponsive">无响应</string>
+    <string name="uplink_ai_loading">加载模型中…</string>
+    <string name="uplink_ai_model_error">模型错误</string>
+    <string name="uplink_ai_offline">离线</string>
+
+    <!-- Dashboard: Uptime format -->
+    <string name="uptime_zero">00时 00分 00秒</string>
+    <string name="uptime_no_activity">--:--</string>
+
+    <!-- ==================== SETTINGS ==================== -->
+
+    <!-- Settings: screen title -->
+    <string name="settings_title">设置</string>
+
+    <!-- Settings: Quick Setup -->
+    <string name="settings_section_quick_setup">快速设置</string>
+    <string name="settings_qr_description">在 seekerclaw.xyz 生成配置二维码，扫码即可快速设置代理。</string>
+    <string name="settings_scan_config_qr">扫描配置二维码</string>
+    <string name="settings_importing_config">正在导入配置\u2026</string>
+
+    <!-- Settings: Configuration -->
+    <string name="settings_section_configuration">配置</string>
+    <string name="settings_ai_configuration">AI 配置</string>
+    <string name="settings_ai_configuration_value">提供商、模型、密钥</string>
+    <string name="settings_ai_configuration_info">选择 AI 提供商，配置模型和 API 凭证。</string>
+    <string name="settings_telegram_value">机器人令牌、所有者 ID、连接测试</string>
+    <string name="settings_telegram_info">配置您的 Telegram 机器人设置。</string>
+    <string name="settings_agent_name">代理名称</string>
+    <string name="settings_heartbeat_interval">心跳间隔</string>
+    <string name="settings_heartbeat_value">每 %1$d 分钟</string>
+    <string name="settings_heartbeat_edit_label">心跳间隔（分钟，5\u2013120）</string>
+    <string name="settings_search_provider">搜索提供商</string>
+    <string name="settings_not_configured">（未配置）</string>
+
+    <!-- Settings: Preferences & Permissions -->
+    <string name="settings_section_prefs_permissions">偏好设置与权限</string>
+    <string name="settings_auto_start">开机自启</string>
+    <string name="settings_analytics">使用统计</string>
+    <string name="settings_battery_unrestricted">电池无限制</string>
+    <string name="settings_server_mode">服务器模式（保持屏幕常亮）</string>
+    <string name="settings_permissions_hint">启用权限以解锁设备功能（相机、GPS、短信等）</string>
+    <string name="permission_camera">相机</string>
+    <string name="permission_gps">GPS 定位</string>
+    <string name="permission_contacts">通讯录</string>
+    <string name="permission_sms">短信</string>
+    <string name="permission_phone">电话</string>
+
+    <!-- Settings: Language -->
+    <string name="settings_language">语言</string>
+    <string name="language_system_default">跟随系统</string>
+    <string name="language_english">English</string>
+    <string name="language_chinese_simplified">中文（简体）</string>
+
+    <!-- Settings: Solana Wallet -->
+    <string name="settings_section_solana_wallet">Solana 钱包</string>
+    <string name="wallet_address">地址</string>
+    <string name="wallet_copy">复制</string>
+    <string name="wallet_disconnect">断开钱包</string>
+    <string name="wallet_connecting">连接中\u2026</string>
+    <string name="wallet_connect">连接钱包</string>
+    <string name="wallet_connect_hint">打开 Phantom、Solflare 或 Seeker Vault</string>
+    <string name="wallet_jupiter_api_key">Jupiter API 密钥</string>
+    <string name="wallet_jupiter_not_set">未设置 \u2014 交换已禁用</string>
+    <string name="wallet_helius_api_key">Helius API 密钥</string>
+    <string name="wallet_helius_not_set">未设置 \u2014 NFT 持仓已禁用</string>
+    <string name="wallet_not_set">未设置</string>
+
+    <!-- Settings: MCP Servers -->
+    <string name="settings_section_mcp_servers">MCP 服务器</string>
+    <string name="mcp_no_servers">未配置服务器</string>
+    <string name="mcp_add_server">添加 MCP 服务器</string>
+    <string name="mcp_edit_server">编辑 MCP 服务器</string>
+    <string name="mcp_field_name">名称</string>
+    <string name="mcp_field_url">服务器 URL</string>
+    <string name="mcp_field_auth_token">认证令牌（可选）</string>
+    <string name="mcp_error_invalid_url">无效 URL，必须以 https:// 或 http:// 开头</string>
+    <string name="mcp_error_auth_requires_https">认证令牌需要 HTTPS（或 localhost）</string>
+    <string name="mcp_cd_edit_server">编辑服务器</string>
+    <string name="mcp_cd_remove_server">移除服务器</string>
+    <string name="mcp_dialog_remove_title">移除服务器</string>
+    <string name="mcp_dialog_remove_message">移除「%1$s」？该服务器的工具将不再可用。</string>
+
+    <!-- Settings: Data -->
+    <string name="settings_section_data">数据</string>
+    <string name="settings_export_memory">导出记忆</string>
+    <string name="settings_import_memory">导入记忆</string>
+    <string name="settings_export_skills">导出技能</string>
+    <string name="settings_import_skills">导入技能</string>
+
+    <!-- Settings: Setup -->
+    <string name="settings_section_setup">设置向导</string>
+    <string name="settings_run_setup_again">重新运行设置</string>
+
+    <!-- Settings: Danger Zone -->
+    <string name="settings_section_danger_zone">危险区域</string>
+    <string name="settings_reset_config">重置配置</string>
+    <string name="settings_wipe_memory">清除记忆</string>
+    <string name="settings_cd_warning">警告</string>
+
+    <!-- Settings: System info -->
+    <string name="settings_section_system">系统</string>
+    <string name="settings_version">版本</string>
+
+    <!-- Settings: Dialogs -->
+    <string name="dialog_edit_title">编辑 %1$s</string>
+    <string name="dialog_restart_warning">更改此项需要重启代理。</string>
+    <string name="dialog_reset_config_message">这将停止代理、清除所有配置并返回设置向导。此操作不可撤销。</string>
+    <string name="dialog_import_memory_message">这将用备份覆盖人格、记忆和技能。导入前会自动创建安全备份。</string>
+    <string name="dialog_apply_config_title">应用导入的配置</string>
+    <string name="dialog_apply_config_enabled">已启用</string>
+    <string name="dialog_apply_config_disabled">已禁用</string>
+    <string name="dialog_apply_config_no_change">无变更</string>
+    <string name="dialog_apply_config_auto_detect">自动检测</string>
+    <string name="dialog_apply_config_question">将此配置应用到您的设备？</string>
+    <string name="dialog_apply_config_auth_setup_token">Pro/Max 设置令牌</string>
+    <string name="dialog_apply_config_auth_api_key">API 密钥</string>
+    <string name="dialog_run_setup_message">这将重新启动设置流程。完成设置后，当前配置将被覆盖。</string>
+    <string name="dialog_wipe_memory_message">这将删除所有记忆文件。代理将丢失所有积累的知识。此操作不可撤销。</string>
+    <string name="dialog_wipe_confirm_label">输入 WIPE 以确认</string>
+    <string name="dialog_disable_permission_title">禁用 %1$s</string>
+    <string name="dialog_disable_permission_message">Android 不允许应用撤销自身权限。\n\n要禁用 %1$s，请前往：\n系统设置 \u2192 应用 \u2192 SeekerClaw \u2192 权限</string>
+
+    <!-- Settings: Restart Dialog -->
+    <string name="dialog_config_updated">配置已更新</string>
+    <string name="dialog_restart_message">重启代理以应用更改？</string>
+    <string name="dialog_restart_now">立即重启</string>
+    <string name="dialog_restart_later">稍后</string>
+
+    <!-- Common buttons -->
+    <string name="button_save">保存</string>
+    <string name="button_cancel">取消</string>
+    <string name="button_clear">清除</string>
+    <string name="button_confirm">确认</string>
+    <string name="button_continue">继续</string>
+    <string name="button_remove">移除</string>
+    <string name="button_select_file">选择文件</string>
+    <string name="button_apply">应用</string>
+    <string name="button_got_it">知道了</string>
+    <string name="button_open_settings">打开设置</string>
+    <string name="button_edit">编辑</string>
+    <string name="button_testing">测试中\u2026</string>
+    <string name="button_back">返回</string>
+    <string name="label_not_set">未设置</string>
+    <string name="label_active">已启用</string>
+
+    <!-- Common labels -->
+    <string name="settings_collapse_section">收起 %1$s</string>
+    <string name="settings_expand_section">展开 %1$s</string>
+    <string name="settings_info_about">关于 %1$s 的更多信息</string>
+    <string name="settings_field_required">%1$s，必填</string>
+
+    <!-- Toast messages -->
+    <string name="toast_agent_restarting">代理正在重启\u2026</string>
+    <string name="toast_memory_exported">记忆导出成功</string>
+    <string name="toast_memory_imported">记忆已导入。重启代理以应用。</string>
+    <string name="toast_memory_import_failed">导入失败。请确保文件是有效的 SeekerClaw 备份。</string>
+    <string name="toast_export_failed">导出失败</string>
+    <string name="toast_import_failed">导入失败</string>
+    <string name="toast_no_skills_to_export">没有可导出的添加技能</string>
+    <string name="toast_no_qr_data">未收到二维码数据</string>
+    <string name="toast_config_import_failed">配置导入失败</string>
+    <string name="toast_config_saved_invalid">导入的配置无法应用：%1$s</string>
+    <string name="toast_config_imported">配置已导入</string>
+    <string name="toast_address_copied">地址已复制</string>
+    <string name="toast_connection_cancelled">连接已取消</string>
+    <string name="toast_connection_failed">连接失败</string>
+    <string name="error_config_saved_invalid">配置已保存但无效：%1$s</string>
+
+</resources>

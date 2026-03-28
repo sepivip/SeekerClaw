@@ -19,9 +19,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import com.seekerclaw.app.ui.theme.RethinkSans
 import androidx.compose.ui.text.font.FontWeight
+import androidx.annotation.StringRes
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavDestination.Companion.hasRoute
@@ -55,16 +57,16 @@ import kotlinx.serialization.Serializable
 @Serializable object SearchConfigRoute
 
 data class BottomNavItem(
-    val label: String,
+    @StringRes val labelRes: Int,
     val iconRes: Int,
     val route: Any,
 )
 
 val bottomNavItems = listOf(
-    BottomNavItem("Home", R.drawable.ic_lucide_layout_grid, DashboardRoute),
-    BottomNavItem("Logs", R.drawable.ic_lucide_terminal, LogsRoute),
-    BottomNavItem("Skills", R.drawable.ic_lucide_layers, SkillsRoute),
-    BottomNavItem("Settings", R.drawable.ic_lucide_settings, SettingsRoute),
+    BottomNavItem(R.string.nav_home, R.drawable.ic_lucide_layout_grid, DashboardRoute),
+    BottomNavItem(R.string.nav_logs, R.drawable.ic_lucide_terminal, LogsRoute),
+    BottomNavItem(R.string.nav_skills, R.drawable.ic_lucide_layers, SkillsRoute),
+    BottomNavItem(R.string.nav_settings, R.drawable.ic_lucide_settings, SettingsRoute),
 )
 
 @Composable
@@ -136,12 +138,12 @@ fun SeekerClawNavHost() {
                                 icon = {
                                     Icon(
                                         painter = painterResource(item.iconRes),
-                                        contentDescription = item.label,
+                                        contentDescription = stringResource(item.labelRes),
                                     )
                                 },
                                 label = {
                                     Text(
-                                        text = item.label,
+                                        text = stringResource(item.labelRes),
                                         fontFamily = RethinkSans,
                                         fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
                                         fontSize = 11.sp,
