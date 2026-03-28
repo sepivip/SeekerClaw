@@ -58,7 +58,7 @@ suspend fun fetchDbSummary(): DbSummary? = withContext(Dispatchers.IO) {
                         day = item.optString("day", ""),
                         count = item.optInt("count", 0)
                     ))
-                } catch (_: Exception) { /* skip malformed entries */ }
+                } catch (_: org.json.JSONException) { /* skip malformed entries */ }
             }
         }
 
