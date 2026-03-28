@@ -1350,10 +1350,17 @@ async function runCronAgentTurn(message, jobId) {
 // HEARTBEAT PROBE
 // ============================================================================
 
+// OpenClaw parity: short filler text alongside HEARTBEAT_OK is suppressed
+// (e.g. "HEARTBEAT_OK. All systems normal." → treated as ack, not alert).
+// Only text exceeding this threshold *when HEARTBEAT_OK is present* is treated
+// as a real alert; non-empty messages without the token are always forwarded.
+const HEARTBEAT_ACK_MAX_CHARS = 300;
+
 const HEARTBEAT_PROMPT =
     'Read HEARTBEAT.md if it exists. Follow it strictly. ' +
     'Do not infer or repeat old tasks from prior chats. ' +
-    'If nothing needs attention, reply HEARTBEAT_OK.';
+    'If nothing needs attention, reply ONLY the literal token HEARTBEAT_OK — ' +
+    'no status summary, no explanation, just the token.';
 const HEARTBEAT_CHAT_ID = '__heartbeat__';
 let isHeartbeatInFlight = false;
 // Initialize to Date.now() so the first probe waits the full configured interval
@@ -1393,12 +1400,18 @@ async function runHeartbeat() {
             const response = await chat(HEARTBEAT_CHAT_ID, HEARTBEAT_PROMPT);
             // Strip protocol tokens the agent may have mixed into content (OpenClaw parity 2026.3.1)
             if (/\bSILENT_REPLY\b/i.test(response)) log('[Audit] Heartbeat sent SILENT_REPLY', 'DEBUG');
+            const hadToken = /\bHEARTBEAT_OK\b/i.test(response);
             const cleaned = response.trim()
                 .replace(/(?:^|\s+|\*+)HEARTBEAT_OK\s*$/gi, '').replace(/\bHEARTBEAT_OK\b/gi, '')
                 .replace(/(?:^|\s+|\*+)SILENT_REPLY\s*$/gi, '').replace(/\bSILENT_REPLY\b/gi, '')
                 .trim();
-            if (!cleaned) {
-                log('[Heartbeat] All clear', 'DEBUG');
+            // OpenClaw parity: if the agent included HEARTBEAT_OK but also added
+            // short filler text (≤HEARTBEAT_ACK_MAX_CHARS), treat it as an ack, not an alert.
+            // This prevents verbose-but-harmless responses like
+            // "HEARTBEAT_OK. All systems normal." from leaking to the user.
+            const isAck = !cleaned || (hadToken && cleaned.length <= HEARTBEAT_ACK_MAX_CHARS);
+            if (isAck) {
+                log('[Heartbeat] All clear' + (cleaned ? ` (suppressed ${cleaned.length} chars of ack filler)` : ''), 'DEBUG');
             } else {
                 log('[Heartbeat] Agent has alert: ' + cleaned.slice(0, 80), 'INFO');
                 // Inject alert into user conversation so replies thread correctly.
