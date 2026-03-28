@@ -673,20 +673,18 @@ private fun StatCard(
 @Composable
 private fun MessageActivityHeatmap(dailyActivity: List<DayActivity>) {
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
-    val cellSize = 10.dp
     val cellGap = 2.dp
     val cellShape = RoundedCornerShape(2.dp)
 
     val today = LocalDate.now()
     // 6-month half-year chunks: Jan-Jun or Jul-Dec
-    // Current half starts at Jan 1 or Jul 1 of current year
     val halfYearStart = if (today.monthValue <= 6) {
         LocalDate.of(today.year, 1, 1)
     } else {
         LocalDate.of(today.year, 7, 1)
     }
-    // Align start to Monday of that week
-    val startDate = halfYearStart.with(DayOfWeek.MONDAY)
+    // Grid starts on Monday of the week containing halfYearStart
+    val gridStart = halfYearStart.with(DayOfWeek.MONDAY)
 
     // Build date -> count map
     val dateCountMap = remember(dailyActivity) {
@@ -699,19 +697,14 @@ private fun MessageActivityHeatmap(dailyActivity: List<DayActivity>) {
         }.toMap()
     }
 
-    // Build weeks grid: list of weeks, each week = list of 7 days (Mon=0 .. Sun=6)
-    val weeks = remember(startDate, today) {
+    // Build weeks grid: each week = 7 days (Mon-Sun), null for out-of-range
+    val weeks = remember(gridStart, today, halfYearStart) {
         val result = mutableListOf<List<LocalDate?>>()
-        var current = startDate
+        var current = gridStart
         while (current <= today) {
-            val week = mutableListOf<LocalDate?>()
-            for (dow in 0..6) {
+            val week = (0 until 7).map { dow ->
                 val day = current.plusDays(dow.toLong())
-                if (day > today || day < startDate) {
-                    week.add(null)
-                } else {
-                    week.add(day)
-                }
+                if (day > today || day < halfYearStart) null else day
             }
             result.add(week)
             current = current.plusWeeks(1)
@@ -719,26 +712,31 @@ private fun MessageActivityHeatmap(dailyActivity: List<DayActivity>) {
         result
     }
 
-    // Calculate percentile thresholds from non-zero counts
+    // Percentile thresholds from non-zero counts
     val thresholds = remember(dateCountMap) {
         val nonZero = dateCountMap.values.filter { it > 0 }.sorted()
-        if (nonZero.isEmpty()) {
-            emptyList()
-        } else {
-            listOf(
-                nonZero[(nonZero.size * 0.25).toInt().coerceAtMost(nonZero.size - 1)],
-                nonZero[(nonZero.size * 0.50).toInt().coerceAtMost(nonZero.size - 1)],
-                nonZero[(nonZero.size * 0.75).toInt().coerceAtMost(nonZero.size - 1)],
-            )
-        }
+        if (nonZero.isEmpty()) emptyList()
+        else listOf(
+            nonZero[(nonZero.size * 0.25).toInt().coerceAtMost(nonZero.size - 1)],
+            nonZero[(nonZero.size * 0.50).toInt().coerceAtMost(nonZero.size - 1)],
+            nonZero[(nonZero.size * 0.75).toInt().coerceAtMost(nonZero.size - 1)],
+        )
     }
 
-    // Total message count
     val totalMessages = remember(dateCountMap) { dateCountMap.values.sum() }
 
-    // Earliest date with data
-    val earliestDate = remember(dateCountMap) {
-        dateCountMap.keys.minOrNull()
+    // Month labels
+    val monthLabels = remember(weeks) {
+        val labels = mutableListOf<Pair<Int, String>>()
+        var lastMonth = -1
+        weeks.forEachIndexed { weekIndex, week ->
+            val firstDay = week.firstOrNull { it != null }
+            if (firstDay != null && firstDay.monthValue != lastMonth) {
+                lastMonth = firstDay.monthValue
+                labels.add(weekIndex to firstDay.month.getDisplayName(TextStyle.SHORT, Locale.ENGLISH))
+            }
+        }
+        labels
     }
 
     Column(
@@ -748,7 +746,6 @@ private fun MessageActivityHeatmap(dailyActivity: List<DayActivity>) {
             .padding(16.dp),
     ) {
         if (dailyActivity.isEmpty() || totalMessages == 0) {
-            // Empty state
             Text(
                 text = "No message data yet",
                 fontFamily = FontFamily.Monospace,
@@ -756,38 +753,22 @@ private fun MessageActivityHeatmap(dailyActivity: List<DayActivity>) {
                 color = SeekerClawColors.TextDim,
             )
         } else {
-            // Month labels along the top
-            val scrollState = rememberScrollState()
-            // Auto-scroll to most recent (right side) on first render
-            LaunchedEffect(weeks.size) {
-                scrollState.scrollTo(scrollState.maxValue)
-            }
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(scrollState),
+            // Use BoxWithConstraints to calculate cell size that fills available width
+            androidx.compose.foundation.layout.BoxWithConstraints(
+                modifier = Modifier.fillMaxWidth()
             ) {
-                // Build month label positions
-                val monthLabels = remember(weeks) {
-                    val labels = mutableListOf<Pair<Int, String>>()
-                    var lastMonth = -1
-                    weeks.forEachIndexed { weekIndex, week ->
-                        val firstDay = week.firstOrNull { it != null }
-                        if (firstDay != null && firstDay.monthValue != lastMonth) {
-                            lastMonth = firstDay.monthValue
-                            labels.add(weekIndex to firstDay.month.getDisplayName(TextStyle.SHORT, Locale.ENGLISH))
-                        }
-                    }
-                    labels
-                }
+                val numWeeks = weeks.size
+                // Cell size = (available width - gaps) / number of weeks
+                val availableWidth = maxWidth
+                val totalGaps = cellGap * (numWeeks - 1)
+                val cellSize = ((availableWidth - totalGaps) / numWeeks).coerceIn(6.dp, 16.dp)
 
                 Column {
-                    // Month labels row
-                    Row {
+                    // Month labels
+                    Row(modifier = Modifier.fillMaxWidth()) {
                         var labelIndex = 0
                         for (weekIndex in weeks.indices) {
-                            val colWidth = cellSize + cellGap
+                            val colWidth = cellSize + if (weekIndex < numWeeks - 1) cellGap else 0.dp
                             if (labelIndex < monthLabels.size && monthLabels[labelIndex].first == weekIndex) {
                                 Text(
                                     text = monthLabels[labelIndex].second,
@@ -807,7 +788,7 @@ private fun MessageActivityHeatmap(dailyActivity: List<DayActivity>) {
 
                     Spacer(modifier = Modifier.height(4.dp))
 
-                    // Grid: 7 rows x N columns
+                    // Grid: 7 rows x N weeks
                     for (dayOfWeek in 0..6) {
                         Row {
                             for (weekIndex in weeks.indices) {
@@ -823,7 +804,7 @@ private fun MessageActivityHeatmap(dailyActivity: List<DayActivity>) {
                                         .size(cellSize)
                                         .background(color, cellShape),
                                 )
-                                if (weekIndex < weeks.size - 1) {
+                                if (weekIndex < numWeeks - 1) {
                                     Spacer(modifier = Modifier.width(cellGap))
                                 }
                             }
@@ -843,21 +824,19 @@ private fun MessageActivityHeatmap(dailyActivity: List<DayActivity>) {
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                // Left: total count (compact: 100K+, 1M+ for large numbers)
                 val countText = when {
                     totalMessages >= 1_000_000 -> "${totalMessages / 1_000_000}M+"
                     totalMessages >= 100_000 -> "${totalMessages / 1_000}K+"
                     else -> "%,d".format(totalMessages)
                 }
-                val sinceText = "$countText msgs in last 6 months"
                 Text(
-                    text = sinceText,
+                    text = "$countText msgs in last 6 months",
                     fontFamily = FontFamily.Monospace,
                     fontSize = 11.sp,
                     color = SeekerClawColors.TextDim,
                 )
 
-                // Right: legend
+                // Legend
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         text = "Less",
@@ -866,10 +845,11 @@ private fun MessageActivityHeatmap(dailyActivity: List<DayActivity>) {
                         color = SeekerClawColors.TextDim,
                     )
                     Spacer(modifier = Modifier.width(4.dp))
+                    val legendSize = 8.dp
                     for (i in HeatmapColors.indices) {
                         Box(
                             modifier = Modifier
-                                .size(cellSize)
+                                .size(legendSize)
                                 .background(HeatmapColors[i], cellShape),
                         )
                         if (i < HeatmapColors.size - 1) {
