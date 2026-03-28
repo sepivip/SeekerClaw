@@ -25,13 +25,13 @@ setDb(() => db);
 function getDb() { return db; }
 
 // ============================================================================
-// DATABASE INJECTION (shutdown deps live in main.js / claude.js, injected here)
+// DATABASE INJECTION (shutdown deps live in main.js / ai.js, injected here)
 // ============================================================================
 
 let _shutdownDeps = {
-    conversations: null,          // Map — from main.js (will move to claude.js in BAT-203)
-    saveSessionSummary: null,     // async fn — from main.js (will move to claude.js in BAT-203)
-    MIN_MESSAGES_FOR_SUMMARY: 3,  // constant — from main.js (will move to claude.js in BAT-203)
+    conversations: null,          // Map — from main.js (will move to ai.js in BAT-203)
+    saveSessionSummary: null,     // async fn — from main.js (will move to ai.js in BAT-203)
+    MIN_MESSAGES_FOR_SUMMARY: 3,  // constant — from main.js (will move to ai.js in BAT-203)
 };
 
 /**

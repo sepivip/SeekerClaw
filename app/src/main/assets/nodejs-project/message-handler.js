@@ -158,7 +158,7 @@ Send me anything to get started!`;
                     return `Skill **${match.name}** has no triggers defined and can't be run via /skill.\n\nAdd \`triggers:\` to its YAML frontmatter.`;
                 }
                 // Signal handleMessage to rewrite the text to a trigger word so
-                // findMatchingSkills() in claude.js picks up the skill correctly.
+                // findMatchingSkills() in ai.js picks up the skill correctly.
                 // (findMatchingSkills uses word-boundary regex on triggers, not skill names.)
                 return { __skillFallthrough: true, trigger: match.triggers[0] };
             }

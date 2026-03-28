@@ -115,7 +115,7 @@ const {
 setSendMessage(sendMessage);
 
 // ============================================================================
-// AI ENGINE (claude.js → ai.js — provider-agnostic rename)
+// AI ENGINE (ai.js — provider-agnostic AI orchestration)
 // ============================================================================
 
 const {
@@ -521,7 +521,7 @@ telegram('getMe')
             // Wire shutdown deps now that conversations + saveSessionSummary exist
             setShutdownDeps({ conversations, saveSessionSummary, MIN_MESSAGES_FOR_SUMMARY });
 
-            // Wire chat deps: inject main.js state into claude.js
+            // Wire chat deps: inject main.js state into ai.js
             setChatDeps({
                 executeTool,
                 getTools: () => [...TOOLS, ...mcpManager.getAllTools()],
@@ -692,7 +692,7 @@ function getHeartbeatIntervalMs() {
 // Runs a full AI turn for agentTurn cron jobs using an isolated session.
 // Uses synthetic chatId ("cron:{jobId}") so it doesn't pollute user conversation
 // and bypasses chatQueues (user messages are not queued behind cron turns).
-// Note: cron turns still contend for the global apiCallInFlight mutex in claude.js,
+// Note: cron turns still contend for the global apiCallInFlight mutex in ai.js,
 // so they serialize at the API-call layer with user messages.
 // ============================================================================
 
