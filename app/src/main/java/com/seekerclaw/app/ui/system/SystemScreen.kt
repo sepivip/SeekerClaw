@@ -700,14 +700,21 @@ private fun MessageActivityHeatmap(dailyActivity: List<DayActivity>) {
         }.toMap()
     }
 
+    // End of current half-year (Jun 30 or Dec 31) — show full 6 months including future
+    val halfYearEnd = if (halfYearStart.monthValue == 1) {
+        LocalDate.of(halfYearStart.year, 6, 30)
+    } else {
+        LocalDate.of(halfYearStart.year, 12, 31)
+    }
+
     // Build weeks grid: each week = 7 days (Mon-Sun), null for out-of-range
-    val weeks = remember(gridStart, today, halfYearStart) {
+    val weeks = remember(gridStart, halfYearStart, halfYearEnd) {
         val result = mutableListOf<List<LocalDate?>>()
         var current = gridStart
-        while (current <= today) {
+        while (current <= halfYearEnd) {
             val week = (0 until 7).map { dow ->
                 val day = current.plusDays(dow.toLong())
-                if (day > today || day < halfYearStart) null else day
+                if (day > halfYearEnd || day < halfYearStart) null else day
             }
             result.add(week)
             current = current.plusWeeks(1)
