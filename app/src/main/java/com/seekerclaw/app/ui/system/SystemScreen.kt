@@ -678,13 +678,15 @@ private fun MessageActivityHeatmap(dailyActivity: List<DayActivity>) {
     val cellShape = RoundedCornerShape(2.dp)
 
     val today = LocalDate.now()
-    // Start from first day of the month containing earliest data
-    val earliestData = dailyActivity.firstOrNull()?.let {
-        try { LocalDate.parse(it.day) } catch (_: Exception) { null }
+    // 6-month half-year chunks: Jan-Jun or Jul-Dec
+    // Current half starts at Jan 1 or Jul 1 of current year
+    val halfYearStart = if (today.monthValue <= 6) {
+        LocalDate.of(today.year, 1, 1)
+    } else {
+        LocalDate.of(today.year, 7, 1)
     }
-    val rangeStart = earliestData?.withDayOfMonth(1) ?: today.minusMonths(1).withDayOfMonth(1)
     // Align start to Monday of that week
-    val startDate = rangeStart.with(DayOfWeek.MONDAY)
+    val startDate = halfYearStart.with(DayOfWeek.MONDAY)
 
     // Build date -> count map
     val dateCountMap = remember(dailyActivity) {
@@ -841,14 +843,8 @@ private fun MessageActivityHeatmap(dailyActivity: List<DayActivity>) {
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                // Left: total count + earliest date
-                val sinceText = if (earliestDate != null) {
-                    val month = earliestDate.month.getDisplayName(TextStyle.SHORT, Locale.ENGLISH)
-                    val year = earliestDate.year
-                    "%,d messages since $month $year".format(totalMessages)
-                } else {
-                    "%,d messages".format(totalMessages)
-                }
+                // Left: total count
+                val sinceText = "%,d msgs in last 6 months".format(totalMessages)
                 Text(
                     text = sinceText,
                     fontFamily = FontFamily.Monospace,
