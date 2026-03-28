@@ -120,7 +120,7 @@ const {
 setSendMessage(sendMessage);
 
 // ============================================================================
-// CLAUDE (extracted to claude.js — BAT-203)
+// AI ENGINE (claude.js → ai.js — provider-agnostic rename)
 // ============================================================================
 
 const {
@@ -131,7 +131,7 @@ const {
     writeAgentHealthFile,
     setChatDeps,
     getActiveTask, clearActiveTask,
-} = require('./claude');
+} = require('./ai');
 
 const { loadCheckpoint, listCheckpoints, saveCheckpoint, deleteCheckpoint, cleanupChatCheckpoints } = require('./task-store');
 
