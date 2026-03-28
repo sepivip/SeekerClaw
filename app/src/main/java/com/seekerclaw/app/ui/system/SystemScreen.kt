@@ -33,7 +33,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -65,7 +64,6 @@ import java.time.format.TextStyle
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 
 private val HeatmapColors = listOf(
@@ -209,8 +207,10 @@ fun SystemScreen(onBack: () -> Unit) {
         // Preserve last known activity data even when service stops
         val lastKnownActivity = remember { mutableStateOf<List<DayActivity>>(emptyList()) }
         val currentActivity = dbSummary?.dailyActivity ?: emptyList()
-        if (currentActivity.isNotEmpty()) {
-            lastKnownActivity.value = currentActivity
+        LaunchedEffect(currentActivity) {
+            if (currentActivity.isNotEmpty()) {
+                lastKnownActivity.value = currentActivity
+            }
         }
 
         MessageActivityHeatmap(
