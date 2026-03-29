@@ -97,9 +97,11 @@ import com.seekerclaw.app.util.Analytics
 import com.seekerclaw.app.util.LogCollector
 import com.seekerclaw.app.util.LogLevel
 import com.seekerclaw.app.BuildConfig
+import com.seekerclaw.app.ui.components.CardSurface
 import com.seekerclaw.app.ui.components.SectionLabel
 import com.seekerclaw.app.ui.components.ConfigField
 import com.seekerclaw.app.ui.components.InfoDialog
+import com.seekerclaw.app.ui.components.InfoRow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -378,12 +380,7 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(10.dp))
 
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(SeekerClawColors.Surface, shape)
-                .padding(16.dp),
-        ) {
+        CardSurface {
             Text(
                 text = "Generate a config QR at seekerclaw.xyz and scan it to set up your agent in seconds.",
                 fontFamily = RethinkSans,
@@ -603,12 +600,7 @@ fun SettingsScreen(
 
         // Solana Wallet
         CollapsibleSection("Solana Wallet", initiallyExpanded = false) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(SeekerClawColors.Surface, shape)
-                    .padding(16.dp),
-            ) {
+            CardSurface {
                 if (walletAddress != null) {
                     // Connected state — address with copy button
                     val address = walletAddress!!
@@ -777,12 +769,7 @@ fun SettingsScreen(
 
         // MCP Servers (BAT-168)
         CollapsibleSection("MCP Servers", initiallyExpanded = false) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(SeekerClawColors.Surface, shape)
-                    .padding(16.dp),
-            ) {
+            CardSurface {
                 Text(
                     text = SettingsHelpTexts.MCP_SERVERS,
                     fontFamily = RethinkSans,
@@ -1056,16 +1043,12 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(10.dp))
 
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(SeekerClawColors.Surface, shape)
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            InfoRow("Version", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
-            InfoRow("OpenClaw", BuildConfig.OPENCLAW_VERSION)
-            InfoRow("Node.js", BuildConfig.NODEJS_VERSION)
+        CardSurface {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                InfoRow("Version", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+                InfoRow("OpenClaw", BuildConfig.OPENCLAW_VERSION)
+                InfoRow("Node.js", BuildConfig.NODEJS_VERSION)
+            }
         }
 
         Spacer(modifier = Modifier.height(24.dp))
@@ -1785,27 +1768,6 @@ private fun SettingRow(
 
     if (showInfo && info != null) {
         InfoDialog(title = label, message = info, onDismiss = { showInfo = false })
-    }
-}
-
-@Composable
-private fun InfoRow(label: String, value: String) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-    ) {
-        Text(
-            text = label,
-            fontFamily = RethinkSans,
-            fontSize = 13.sp,
-            color = SeekerClawColors.TextDim,
-        )
-        Text(
-            text = value,
-            fontFamily = RethinkSans,
-            fontSize = 13.sp,
-            color = SeekerClawColors.TextSecondary,
-        )
     }
 }
 

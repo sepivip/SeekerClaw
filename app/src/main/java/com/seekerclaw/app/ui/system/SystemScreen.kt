@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -38,6 +37,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.seekerclaw.app.BuildConfig
+import com.seekerclaw.app.ui.components.CardSurface
+import com.seekerclaw.app.ui.components.InfoRow
 import com.seekerclaw.app.ui.components.SeekerClawTopAppBar
 import com.seekerclaw.app.ui.components.SectionLabel
 import com.seekerclaw.app.config.ConfigManager
@@ -108,8 +109,6 @@ fun SystemScreen(onBack: () -> Unit) {
         }
     }
 
-    val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
-
     Scaffold(
         topBar = {
             SeekerClawTopAppBar(title = "System", onBack = onBack)
@@ -128,12 +127,7 @@ fun SystemScreen(onBack: () -> Unit) {
         SectionLabel("Status")
         Spacer(modifier = Modifier.height(8.dp))
 
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(SeekerClawColors.Surface, shape)
-                .padding(16.dp),
-        ) {
+        CardSurface {
             InfoRow("Version", buildString {
                 append("${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
                 if (BuildConfig.DEBUG) append(" · ${BuildConfig.GIT_SHA}")
@@ -164,12 +158,7 @@ fun SystemScreen(onBack: () -> Unit) {
         SectionLabel("Device")
         Spacer(modifier = Modifier.height(8.dp))
 
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(SeekerClawColors.Surface, shape)
-                .padding(16.dp),
-        ) {
+        CardSurface {
             val info = deviceInfo
             if (info != null) {
                 ResourceBar(
@@ -251,12 +240,7 @@ fun SystemScreen(onBack: () -> Unit) {
         SectionLabel("Connection")
         Spacer(modifier = Modifier.height(8.dp))
 
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(SeekerClawColors.Surface, shape)
-                .padding(16.dp),
-        ) {
+        CardSurface {
             InfoRow(
                 label = "Telegram",
                 value = if (status == ServiceStatus.RUNNING) "Connected" else "Disconnected",
@@ -279,12 +263,7 @@ fun SystemScreen(onBack: () -> Unit) {
             SectionLabel("API Limits")
             Spacer(modifier = Modifier.height(8.dp))
 
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(SeekerClawColors.Surface, shape)
-                    .padding(16.dp),
-            ) {
+            CardSurface {
                 // Only show bars if we have real data (not error-only)
                 val hasValidData = when (usage) {
                     is ApiUsageData.OAuthUsage ->
@@ -402,12 +381,7 @@ fun SystemScreen(onBack: () -> Unit) {
             SectionLabel("API Analytics")
             Spacer(modifier = Modifier.height(8.dp))
 
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(SeekerClawColors.Surface, shape)
-                    .padding(16.dp),
-            ) {
+            CardSurface {
                 InfoRow("Requests", if (stats != null) "${stats.todayRequests} today" else "--")
                 InfoRow(
                     label = "Avg Latency",
@@ -449,12 +423,7 @@ fun SystemScreen(onBack: () -> Unit) {
             SectionLabel("Memory Index")
             Spacer(modifier = Modifier.height(8.dp))
 
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(SeekerClawColors.Surface, shape)
-                    .padding(16.dp),
-            ) {
+            CardSurface {
                 InfoRow("Files", if (stats != null) "${stats.memoryFilesIndexed}" else "--")
                 InfoRow("Chunks", if (stats != null) "${stats.memoryChunksCount}" else "--")
                 val lastIndexedRaw = stats?.memoryLastIndexed
@@ -478,55 +447,6 @@ fun SystemScreen(onBack: () -> Unit) {
     } // Scaffold
 }
 
-
-@Composable
-private fun InfoRow(
-    label: String,
-    value: String,
-    dotColor: androidx.compose.ui.graphics.Color? = null,
-    isLast: Boolean = false,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 8.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            text = label,
-            fontFamily = FontFamily.Monospace,
-            fontSize = 13.sp,
-            color = SeekerClawColors.TextSecondary,
-        )
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = value,
-                fontFamily = FontFamily.Monospace,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Medium,
-                color = SeekerClawColors.TextPrimary,
-            )
-            if (dotColor != null) {
-                Spacer(modifier = Modifier.width(8.dp))
-                Box(
-                    modifier = Modifier
-                        .size(10.dp)
-                        .clip(CircleShape)
-                        .background(dotColor),
-                )
-            }
-        }
-    }
-    if (!isLast) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(1.dp)
-                .background(SeekerClawColors.TextDim.copy(alpha = 0.15f)),
-        )
-    }
-}
 
 @Composable
 private fun ResourceBar(
