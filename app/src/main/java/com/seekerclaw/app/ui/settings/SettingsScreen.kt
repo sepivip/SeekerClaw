@@ -644,7 +644,7 @@ fun SettingsScreen(
                 val label = ConfigManager.getWalletLabel(context)
                 if (label.isNotBlank()) {
                     Spacer(modifier = Modifier.height(4.dp))
-                    InfoRow("Wallet", label)
+                    InfoRow("Wallet", label, isLast = true)
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
