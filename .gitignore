@@ -1,6 +1,9 @@
 # Skills
 skills-lock.json
 
+# Superpowers brainstorm sessions
+.superpowers/
+
 # Built application files
 *.apk
 *.aar
