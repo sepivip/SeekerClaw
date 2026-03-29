@@ -147,7 +147,10 @@ fun SystemScreen(onBack: () -> Unit) {
                 .background(SeekerClawColors.Surface, shape)
                 .padding(16.dp),
         ) {
-            InfoRow("Version", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+            InfoRow("Version", buildString {
+                append("${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+                if (BuildConfig.DEBUG) append(" · ${BuildConfig.GIT_SHA}")
+            })
             InfoRow("OpenClaw", BuildConfig.OPENCLAW_VERSION)
             InfoRow(
                 label = "Node.js",
