@@ -54,12 +54,14 @@ fun CardSurface(
     modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit,
 ) {
+    val cardShape = remember { RoundedCornerShape(SeekerClawColors.CornerRadius) }
+
     Column(
         modifier = modifier
             .fillMaxWidth()
             .background(
                 SeekerClawColors.Surface,
-                RoundedCornerShape(SeekerClawColors.CornerRadius),
+                cardShape,
             )
             .padding(16.dp),
         content = content,

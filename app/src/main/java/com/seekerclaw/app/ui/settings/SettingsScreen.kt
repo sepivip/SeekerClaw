@@ -1044,11 +1044,9 @@ fun SettingsScreen(
         Spacer(modifier = Modifier.height(10.dp))
 
         CardSurface {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                InfoRow("Version", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
-                InfoRow("OpenClaw", BuildConfig.OPENCLAW_VERSION)
-                InfoRow("Node.js", BuildConfig.NODEJS_VERSION)
-            }
+            InfoRow("Version", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+            InfoRow("OpenClaw", BuildConfig.OPENCLAW_VERSION)
+            InfoRow("Node.js", BuildConfig.NODEJS_VERSION, isLast = true)
         }
 
         Spacer(modifier = Modifier.height(24.dp))
