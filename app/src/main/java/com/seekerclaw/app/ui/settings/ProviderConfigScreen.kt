@@ -39,6 +39,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.seekerclaw.app.ui.components.CardSurface
 import com.seekerclaw.app.ui.components.SeekerClawTopAppBar
 import com.seekerclaw.app.ui.components.SectionLabel
 import com.seekerclaw.app.ui.components.ConfigField
@@ -306,12 +307,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
             SectionLabel("Connection Test")
             Spacer(modifier = Modifier.height(10.dp))
 
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(SeekerClawColors.Surface, shape)
-                    .padding(16.dp),
-            ) {
+            CardSurface {
                 Text(
                     text = "Verify your credentials are valid and the API is reachable.",
                     fontFamily = RethinkSans,

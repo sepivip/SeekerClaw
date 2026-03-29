@@ -15,12 +15,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -28,6 +26,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.seekerclaw.app.ui.components.CardSurface
 import com.seekerclaw.app.ui.theme.RethinkSans
 import com.seekerclaw.app.ui.theme.SeekerClawColors
 
@@ -37,8 +36,6 @@ fun SkillDetailScreen(
     onBack: () -> Unit,
     onExport: (() -> Unit)? = null,
 ) {
-    val shape = remember { RoundedCornerShape(SeekerClawColors.CornerRadius) }
-
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -109,7 +106,7 @@ fun SkillDetailScreen(
             }
 
             // Type
-            InfoSection(label = "TYPE", shape = shape) {
+            InfoSection(label = "TYPE") {
                 Text(
                     text = if (skill.isDefault) "Default (bundled)" else "Added by user",
                     fontFamily = RethinkSans,
@@ -120,7 +117,7 @@ fun SkillDetailScreen(
 
             // Description
             if (skill.description.isNotEmpty()) {
-                InfoSection(label = "DESCRIPTION", shape = shape) {
+                InfoSection(label = "DESCRIPTION") {
                     Text(
                         text = skill.description,
                         fontFamily = RethinkSans,
@@ -132,7 +129,7 @@ fun SkillDetailScreen(
             }
 
             // Triggers
-            InfoSection(label = "TRIGGERS", shape = shape) {
+            InfoSection(label = "TRIGGERS") {
                 if (skill.triggers.isEmpty()) {
                     Text(
                         text = "Semantic — AI picks this skill based on description",
@@ -165,7 +162,7 @@ fun SkillDetailScreen(
 
             // Diagnostics
             if (skill.warnings.isNotEmpty()) {
-                InfoSection(label = "DIAGNOSTICS", shape = shape) {
+                InfoSection(label = "DIAGNOSTICS") {
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         skill.warnings.forEach { warning ->
                             Row(verticalAlignment = Alignment.Top) {
@@ -189,7 +186,7 @@ fun SkillDetailScreen(
             }
 
             // File path
-            InfoSection(label = "FILE", shape = shape) {
+            InfoSection(label = "FILE") {
                 Text(
                     text = skill.filePath,
                     fontFamily = FontFamily.Monospace,
@@ -205,15 +202,9 @@ fun SkillDetailScreen(
 @Composable
 private fun InfoSection(
     label: String,
-    shape: RoundedCornerShape,
     content: @Composable () -> Unit,
 ) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(SeekerClawColors.Surface, shape)
-            .padding(16.dp),
-    ) {
+    CardSurface {
         Text(
             text = label,
             fontFamily = RethinkSans,

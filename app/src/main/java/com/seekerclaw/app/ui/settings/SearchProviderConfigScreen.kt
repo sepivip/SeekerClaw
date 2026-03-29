@@ -29,6 +29,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.seekerclaw.app.ui.components.CardSurface
 import com.seekerclaw.app.ui.components.SeekerClawTopAppBar
 import com.seekerclaw.app.ui.components.SectionLabel
 import com.seekerclaw.app.ui.components.ConfigField
@@ -180,12 +181,7 @@ fun SearchProviderConfigScreen(onBack: () -> Unit) {
             SectionLabel("Resources")
             Spacer(modifier = Modifier.height(10.dp))
 
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(SeekerClawColors.Surface, shape)
-                    .padding(16.dp),
-            ) {
+            CardSurface {
                 Text(
                     text = helpTextForProvider(activeProvider.id),
                     fontFamily = RethinkSans,
