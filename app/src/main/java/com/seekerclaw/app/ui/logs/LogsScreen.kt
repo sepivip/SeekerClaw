@@ -31,8 +31,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -46,6 +44,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
+import com.seekerclaw.app.ui.components.SeekerClawSwitch
 import com.seekerclaw.app.ui.theme.RethinkSans
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -364,19 +363,12 @@ fun LogsScreen() {
                 fontSize = 14.sp,
                 color = SeekerClawColors.TextSecondary,
             )
-            Switch(
+            SeekerClawSwitch(
                 checked = autoScroll,
                 onCheckedChange = {
                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                     autoScroll = it
                 },
-                colors = SwitchDefaults.colors(
-                    checkedThumbColor = Color.White,
-                    checkedTrackColor = SeekerClawColors.Primary,
-                    uncheckedThumbColor = Color.White,
-                    uncheckedTrackColor = SeekerClawColors.BorderSubtle,
-                    uncheckedBorderColor = Color.Transparent,
-                ),
             )
         }
 

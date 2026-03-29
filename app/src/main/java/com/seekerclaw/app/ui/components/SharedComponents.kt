@@ -19,10 +19,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.AlertDialog
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -245,7 +249,7 @@ fun ConfigField(
     }
     if (showDivider) {
         HorizontalDivider(
-            color = SeekerClawColors.TextDim.copy(alpha = 0.1f),
+            color = SeekerClawColors.CardBorder,
             modifier = Modifier.padding(horizontal = 16.dp),
         )
     }
@@ -253,6 +257,48 @@ fun ConfigField(
     if (showInfo && info != null) {
         InfoDialog(title = label, message = info, onDismiss = { showInfo = false })
     }
+}
+
+/**
+ * Standard Scaffold + TopAppBar wrapper for detail screens (System, Provider, Telegram, Search).
+ * Provides consistent containerColor and top bar styling.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SeekerClawScaffold(
+    title: String,
+    onBack: () -> Unit,
+    content: @Composable (PaddingValues) -> Unit,
+) {
+    Scaffold(
+        topBar = { SeekerClawTopAppBar(title = title, onBack = onBack) },
+        containerColor = SeekerClawColors.Background,
+        content = content,
+    )
+}
+
+/**
+ * Standard Switch with SeekerClaw colors: ActionPrimary (green) when checked,
+ * BorderSubtle when unchecked. All toggles throughout the app should use this.
+ */
+@Composable
+fun SeekerClawSwitch(
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Switch(
+        checked = checked,
+        onCheckedChange = onCheckedChange,
+        modifier = modifier,
+        colors = SwitchDefaults.colors(
+            checkedThumbColor = Color.White,
+            checkedTrackColor = SeekerClawColors.ActionPrimary,
+            uncheckedThumbColor = Color.White,
+            uncheckedTrackColor = SeekerClawColors.BorderSubtle,
+            uncheckedBorderColor = Color.Transparent,
+        ),
+    )
 }
 
 /**
