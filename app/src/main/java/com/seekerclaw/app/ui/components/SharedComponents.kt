@@ -132,7 +132,6 @@ fun ConfigField(
                 if (info != null) {
                     IconButton(
                         onClick = { showInfo = true },
-                        modifier = Modifier.size(20.dp).padding(start = 4.dp)
                     ) {
                         Icon(
                             Icons.Outlined.Info,
