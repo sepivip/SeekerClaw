@@ -126,6 +126,7 @@ fun SystemScreen(onBack: () -> Unit) {
 
         // ==================== STATUS ====================
         SectionLabel("Status")
+        Spacer(modifier = Modifier.height(8.dp))
 
         Column(
             modifier = Modifier
@@ -161,6 +162,7 @@ fun SystemScreen(onBack: () -> Unit) {
 
         // ==================== DEVICE ====================
         SectionLabel("Device")
+        Spacer(modifier = Modifier.height(8.dp))
 
         Column(
             modifier = Modifier
@@ -247,6 +249,7 @@ fun SystemScreen(onBack: () -> Unit) {
 
         // ==================== CONNECTION ====================
         SectionLabel("Connection")
+        Spacer(modifier = Modifier.height(8.dp))
 
         Column(
             modifier = Modifier
@@ -274,6 +277,7 @@ fun SystemScreen(onBack: () -> Unit) {
         val usage = apiUsage
         if (usage != null) {
             SectionLabel("API Limits")
+            Spacer(modifier = Modifier.height(8.dp))
 
             Column(
                 modifier = Modifier
@@ -350,6 +354,7 @@ fun SystemScreen(onBack: () -> Unit) {
 
         // ==================== USAGE ====================
         SectionLabel("Usage")
+        Spacer(modifier = Modifier.height(8.dp))
 
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -395,6 +400,7 @@ fun SystemScreen(onBack: () -> Unit) {
             Spacer(modifier = Modifier.height(24.dp))
 
             SectionLabel("API Analytics")
+            Spacer(modifier = Modifier.height(8.dp))
 
             Column(
                 modifier = Modifier
@@ -441,6 +447,7 @@ fun SystemScreen(onBack: () -> Unit) {
             Spacer(modifier = Modifier.height(24.dp))
 
             SectionLabel("Memory Index")
+            Spacer(modifier = Modifier.height(8.dp))
 
             Column(
                 modifier = Modifier

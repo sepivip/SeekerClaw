@@ -70,7 +70,8 @@ fun SeekerClawTopAppBar(title: String, onBack: () -> Unit) {
 
 /**
  * Section label used across settings, setup, and system screens.
- * RethinkSans, 11sp, Medium weight, TextDim color, 1sp letter spacing, 8dp bottom padding.
+ * RethinkSans, 11sp, Medium weight, TextDim color, 1sp letter spacing.
+ * Callers are responsible for adding their own bottom spacing.
  */
 @Composable
 fun SectionLabel(title: String) {
@@ -82,7 +83,6 @@ fun SectionLabel(title: String) {
         color = SeekerClawColors.TextDim,
         letterSpacing = 1.sp,
     )
-    Spacer(modifier = Modifier.height(8.dp))
 }
 
 /**
