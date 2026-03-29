@@ -16,9 +16,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.ExperimentalMaterial3Api
+import com.seekerclaw.app.ui.components.SeekerClawScaffold
 import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.Scaffold
+
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -39,7 +39,7 @@ import androidx.compose.ui.unit.sp
 import com.seekerclaw.app.BuildConfig
 import com.seekerclaw.app.ui.components.CardSurface
 import com.seekerclaw.app.ui.components.InfoRow
-import com.seekerclaw.app.ui.components.SeekerClawTopAppBar
+
 import com.seekerclaw.app.ui.components.SectionLabel
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.ui.theme.SeekerClawColors
@@ -55,7 +55,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SystemScreen(onBack: () -> Unit) {
     val context = LocalContext.current
@@ -109,12 +108,7 @@ fun SystemScreen(onBack: () -> Unit) {
         }
     }
 
-    Scaffold(
-        topBar = {
-            SeekerClawTopAppBar(title = "System", onBack = onBack)
-        },
-        containerColor = SeekerClawColors.Background,
-    ) { innerPadding ->
+    SeekerClawScaffold(title = "System", onBack = onBack) { innerPadding ->
     Column(
         modifier = Modifier
             .fillMaxSize()

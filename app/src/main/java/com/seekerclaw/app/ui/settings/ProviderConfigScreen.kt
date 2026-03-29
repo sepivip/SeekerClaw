@@ -18,11 +18,11 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
+import com.seekerclaw.app.ui.components.SeekerClawScaffold
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.RadioButtonDefaults
-import androidx.compose.material3.Scaffold
+
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -40,7 +40,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.seekerclaw.app.ui.components.CardSurface
-import com.seekerclaw.app.ui.components.SeekerClawTopAppBar
+
 import com.seekerclaw.app.ui.components.SectionLabel
 import com.seekerclaw.app.ui.components.ConfigField
 import com.seekerclaw.app.config.ConfigManager
@@ -63,7 +63,6 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProviderConfigScreen(onBack: () -> Unit) {
     val context = LocalContext.current
@@ -128,12 +127,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
         }
     }
 
-    Scaffold(
-        topBar = {
-            SeekerClawTopAppBar(title = "AI Provider", onBack = onBack)
-        },
-        containerColor = SeekerClawColors.Background,
-    ) { padding ->
+    SeekerClawScaffold(title = "AI Provider", onBack = onBack) { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -181,7 +175,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                     }
                     if (index < availableProviders.size - 1) {
                         HorizontalDivider(
-                            color = SeekerClawColors.TextDim.copy(alpha = 0.1f),
+                            color = SeekerClawColors.CardBorder,
                             modifier = Modifier.padding(horizontal = 16.dp),
                         )
                     }

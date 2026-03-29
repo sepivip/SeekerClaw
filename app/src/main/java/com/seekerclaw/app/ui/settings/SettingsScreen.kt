@@ -43,8 +43,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.RadioButtonDefaults
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
+import com.seekerclaw.app.ui.components.SeekerClawSwitch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -814,7 +813,7 @@ fun SettingsScreen(
                                 )
                             }
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Switch(
+                                SeekerClawSwitch(
                                     checked = server.enabled,
                                     onCheckedChange = { enabled ->
                                         mcpServers = mcpServers.map {
@@ -823,13 +822,6 @@ fun SettingsScreen(
                                         ConfigManager.saveMcpServers(context, mcpServers)
                                         showRestartDialog = true
                                     },
-                                    colors = SwitchDefaults.colors(
-                                        checkedThumbColor = androidx.compose.ui.graphics.Color.White,
-                                        checkedTrackColor = SeekerClawColors.ActionPrimary,
-                                        uncheckedThumbColor = androidx.compose.ui.graphics.Color.White,
-                                        uncheckedTrackColor = SeekerClawColors.BorderSubtle,
-                                        uncheckedBorderColor = androidx.compose.ui.graphics.Color.Transparent,
-                                    ),
                                 )
                                 IconButton(onClick = {
                                     editingMcpServer = server
@@ -1748,19 +1740,12 @@ private fun SettingRow(
                 }
             }
         }
-        Switch(
+        SeekerClawSwitch(
             checked = checked,
             onCheckedChange = {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 onCheckedChange(it)
             },
-            colors = SwitchDefaults.colors(
-                checkedThumbColor = androidx.compose.ui.graphics.Color.White,
-                checkedTrackColor = SeekerClawColors.ActionPrimary,
-                uncheckedThumbColor = androidx.compose.ui.graphics.Color.White,
-                uncheckedTrackColor = SeekerClawColors.BorderSubtle,
-                uncheckedBorderColor = androidx.compose.ui.graphics.Color.Transparent,
-            ),
         )
     }
 
@@ -1806,7 +1791,7 @@ private fun PermissionRow(
                 }
             }
         }
-        Switch(
+        SeekerClawSwitch(
             checked = granted,
             onCheckedChange = {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -1816,13 +1801,6 @@ private fun PermissionRow(
                     onRequest()
                 }
             },
-            colors = SwitchDefaults.colors(
-                checkedThumbColor = androidx.compose.ui.graphics.Color.White,
-                checkedTrackColor = SeekerClawColors.ActionPrimary,
-                uncheckedThumbColor = androidx.compose.ui.graphics.Color.White,
-                uncheckedTrackColor = SeekerClawColors.BorderSubtle,
-                uncheckedBorderColor = androidx.compose.ui.graphics.Color.Transparent,
-            ),
         )
     }
 

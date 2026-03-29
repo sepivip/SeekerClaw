@@ -15,8 +15,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Scaffold
+import com.seekerclaw.app.ui.components.SeekerClawScaffold
+
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -31,7 +31,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.seekerclaw.app.ui.components.CardSurface
-import com.seekerclaw.app.ui.components.SeekerClawTopAppBar
+
 import com.seekerclaw.app.ui.components.SectionLabel
 import com.seekerclaw.app.ui.components.ConfigField
 import com.seekerclaw.app.config.ConfigManager
@@ -44,7 +44,6 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TelegramConfigScreen(onBack: () -> Unit) {
     val context = LocalContext.current
@@ -70,12 +69,7 @@ fun TelegramConfigScreen(onBack: () -> Unit) {
         else if (token.length > 20) "${token.take(8)}${"*".repeat(8)}${token.takeLast(4)}" else "*".repeat(token.length)
     } ?: "Not set"
 
-    Scaffold(
-        topBar = {
-            SeekerClawTopAppBar(title = "Telegram Configuration", onBack = onBack)
-        },
-        containerColor = SeekerClawColors.Background
-    ) { padding ->
+    SeekerClawScaffold(title = "Telegram Configuration", onBack = onBack) { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()

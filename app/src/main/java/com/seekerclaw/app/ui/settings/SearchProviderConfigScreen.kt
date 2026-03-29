@@ -14,9 +14,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.ExperimentalMaterial3Api
+import com.seekerclaw.app.ui.components.SeekerClawScaffold
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Scaffold
+
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -30,7 +30,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.seekerclaw.app.ui.components.CardSurface
-import com.seekerclaw.app.ui.components.SeekerClawTopAppBar
+
 import com.seekerclaw.app.ui.components.SectionLabel
 import com.seekerclaw.app.ui.components.ConfigField
 import com.seekerclaw.app.config.ConfigManager
@@ -40,7 +40,6 @@ import com.seekerclaw.app.config.searchProviderById
 import com.seekerclaw.app.ui.theme.RethinkSans
 import com.seekerclaw.app.ui.theme.SeekerClawColors
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SearchProviderConfigScreen(onBack: () -> Unit) {
     val context = LocalContext.current
@@ -75,12 +74,7 @@ fun SearchProviderConfigScreen(onBack: () -> Unit) {
         else -> SettingsHelpTexts.BRAVE_API_KEY
     }
 
-    Scaffold(
-        topBar = {
-            SeekerClawTopAppBar(title = "Search Provider", onBack = onBack)
-        },
-        containerColor = SeekerClawColors.Background,
-    ) { padding ->
+    SeekerClawScaffold(title = "Search Provider", onBack = onBack) { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -132,7 +126,7 @@ fun SearchProviderConfigScreen(onBack: () -> Unit) {
                     }
                     if (index < availableSearchProviders.size - 1) {
                         HorizontalDivider(
-                            color = SeekerClawColors.TextDim.copy(alpha = 0.1f),
+                            color = SeekerClawColors.CardBorder,
                             modifier = Modifier.padding(horizontal = 16.dp),
                         )
                     }
