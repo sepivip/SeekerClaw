@@ -22,8 +22,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -35,6 +33,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.seekerclaw.app.ui.components.SeekerClawTopAppBar
+import com.seekerclaw.app.ui.components.SectionLabel
+import com.seekerclaw.app.ui.components.ConfigField
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.config.SearchProviderInfo
 import com.seekerclaw.app.config.availableSearchProviders
@@ -79,29 +80,7 @@ fun SearchProviderConfigScreen(onBack: () -> Unit) {
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        text = "Search Provider",
-                        fontFamily = RethinkSans,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = SeekerClawColors.TextPrimary,
-                    )
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back",
-                            tint = SeekerClawColors.TextPrimary,
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = SeekerClawColors.Background,
-                ),
-            )
+            SeekerClawTopAppBar(title = "Search Provider", onBack = onBack)
         },
         containerColor = SeekerClawColors.Background,
     ) { padding ->
@@ -113,7 +92,7 @@ fun SearchProviderConfigScreen(onBack: () -> Unit) {
                 .verticalScroll(rememberScrollState()),
         ) {
             // Provider selection
-            ProviderSectionLabel("Provider")
+            SectionLabel("Provider")
             Spacer(modifier = Modifier.height(10.dp))
 
             Column(
@@ -165,7 +144,7 @@ fun SearchProviderConfigScreen(onBack: () -> Unit) {
 
             // Active provider API key field
             Spacer(modifier = Modifier.height(24.dp))
-            ProviderSectionLabel("${activeProvider.displayName} Settings")
+            SectionLabel("${activeProvider.displayName} Settings")
             Spacer(modifier = Modifier.height(10.dp))
 
             val activeApiKey: String? = config?.activeSearchApiKey
@@ -176,7 +155,7 @@ fun SearchProviderConfigScreen(onBack: () -> Unit) {
                     .fillMaxWidth()
                     .background(SeekerClawColors.Surface, shape),
             ) {
-                ProviderConfigField(
+                ConfigField(
                     label = "API Key",
                     value = maskKey(activeApiKey),
                     onClick = {
@@ -202,7 +181,7 @@ fun SearchProviderConfigScreen(onBack: () -> Unit) {
 
             // "Get API Key" link
             Spacer(modifier = Modifier.height(24.dp))
-            ProviderSectionLabel("Resources")
+            SectionLabel("Resources")
             Spacer(modifier = Modifier.height(10.dp))
 
             Column(

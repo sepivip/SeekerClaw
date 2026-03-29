@@ -17,16 +17,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -44,6 +38,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.seekerclaw.app.BuildConfig
+import com.seekerclaw.app.ui.components.SeekerClawTopAppBar
+import com.seekerclaw.app.ui.components.SectionLabel
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.ui.theme.SeekerClawColors
 import com.seekerclaw.app.util.AppStorageInfo
@@ -116,29 +112,7 @@ fun SystemScreen(onBack: () -> Unit) {
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        text = "System",
-                        fontFamily = RethinkSans,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = SeekerClawColors.TextPrimary,
-                    )
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back",
-                            tint = SeekerClawColors.TextPrimary,
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = SeekerClawColors.Background,
-                ),
-            )
+            SeekerClawTopAppBar(title = "System", onBack = onBack)
         },
         containerColor = SeekerClawColors.Background,
     ) { innerPadding ->
@@ -497,18 +471,6 @@ fun SystemScreen(onBack: () -> Unit) {
     } // Scaffold
 }
 
-@Composable
-private fun SectionLabel(text: String) {
-    Text(
-        text = text,
-        fontFamily = FontFamily.Monospace,
-        fontSize = 11.sp,
-        fontWeight = FontWeight.Medium,
-        color = SeekerClawColors.TextDim,
-        letterSpacing = 1.sp,
-    )
-    Spacer(modifier = Modifier.height(8.dp))
-}
 
 @Composable
 private fun InfoRow(

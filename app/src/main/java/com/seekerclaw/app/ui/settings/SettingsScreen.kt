@@ -97,6 +97,9 @@ import com.seekerclaw.app.util.Analytics
 import com.seekerclaw.app.util.LogCollector
 import com.seekerclaw.app.util.LogLevel
 import com.seekerclaw.app.BuildConfig
+import com.seekerclaw.app.ui.components.SectionLabel
+import com.seekerclaw.app.ui.components.ConfigField
+import com.seekerclaw.app.ui.components.InfoDialog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -1684,17 +1687,6 @@ fun SettingsScreen(
     }
 }
 
-@Composable
-private fun SectionLabel(title: String) {
-    Text(
-        text = title,
-        fontFamily = RethinkSans,
-        fontSize = 11.sp,
-        fontWeight = FontWeight.Medium,
-        color = SeekerClawColors.TextSecondary,
-        letterSpacing = 1.sp,
-    )
-}
 
 @Composable
 private fun CollapsibleSection(
@@ -1737,89 +1729,6 @@ private fun CollapsibleSection(
             Spacer(modifier = Modifier.height(10.dp))
             content()
         }
-    }
-}
-
-@Composable
-private fun ConfigField(
-    label: String,
-    value: String,
-    onClick: (() -> Unit)? = null,
-    showDivider: Boolean = true,
-    info: String? = null,
-    isRequired: Boolean = false,
-) {
-    var showInfo by remember { mutableStateOf(false) }
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = if (isRequired) Modifier.semantics(mergeDescendants = true) {
-                    contentDescription = "$label, required"
-                } else Modifier,
-            ) {
-                Text(
-                    text = label,
-                    fontFamily = RethinkSans,
-                    fontSize = 12.sp,
-                    color = SeekerClawColors.TextDim,
-                )
-                if (isRequired) {
-                    Text(
-                        text = " *",
-                        fontSize = 12.sp,
-                        color = SeekerClawColors.Error,
-                    )
-                }
-                if (info != null) {
-                    IconButton(
-                        onClick = { showInfo = true },
-                    ) {
-                        Icon(
-                            Icons.Outlined.Info,
-                            contentDescription = "More info about $label",
-                            tint = SeekerClawColors.TextDim,
-                            modifier = Modifier.size(14.dp),
-                        )
-                    }
-                }
-            }
-            if (onClick != null) {
-                Text(
-                    text = "Edit",
-                    fontFamily = RethinkSans,
-                    fontSize = 12.sp,
-                    color = SeekerClawColors.TextInteractive,
-                )
-            }
-        }
-        Spacer(modifier = Modifier.height(2.dp))
-        Text(
-            text = value,
-            fontFamily = RethinkSans,
-            fontSize = 14.sp,
-            color = SeekerClawColors.TextPrimary,
-        )
-    }
-    if (showDivider) {
-        androidx.compose.material3.HorizontalDivider(
-            color = SeekerClawColors.TextDim.copy(alpha = 0.1f),
-            modifier = Modifier.padding(horizontal = 16.dp),
-        )
-    }
-
-    if (showInfo && info != null) {
-        InfoDialog(title = label, message = info, onDismiss = { showInfo = false })
     }
 }
 
@@ -2052,40 +1961,3 @@ private fun maskSensitive(value: String): String {
     return "${value.take(6)}${"*".repeat(8)}${value.takeLast(4)}"
 }
 
-@Composable
-private fun InfoDialog(title: String, message: String, onDismiss: () -> Unit) {
-    val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = {
-            Text(
-                text = title,
-                fontFamily = RethinkSans,
-                fontWeight = FontWeight.Bold,
-                fontSize = 16.sp,
-                color = SeekerClawColors.TextPrimary,
-            )
-        },
-        text = {
-            Text(
-                text = message,
-                fontFamily = RethinkSans,
-                fontSize = 13.sp,
-                color = SeekerClawColors.TextSecondary,
-                lineHeight = 20.sp,
-            )
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text(
-                    "Got it",
-                    fontFamily = RethinkSans,
-                    fontWeight = FontWeight.Bold,
-                    color = SeekerClawColors.Primary,
-                )
-            }
-        },
-        containerColor = SeekerClawColors.Surface,
-        shape = shape,
-    )
-}
