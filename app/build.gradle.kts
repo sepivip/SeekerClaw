@@ -1,7 +1,9 @@
 import java.net.HttpURLConnection
 import java.net.URI
 import java.util.Properties
+import java.util.Date
 import java.security.MessageDigest
+import java.text.SimpleDateFormat
 import java.util.zip.ZipInputStream
 
 plugins {
@@ -42,6 +44,16 @@ android {
         // Keep these in sync when updating OpenClaw or nodejs-mobile
         buildConfigField("String", "OPENCLAW_VERSION", "\"2026.3.24\"")
         buildConfigField("String", "NODEJS_VERSION", "\"18 LTS\"")
+
+        // Git commit SHA (short) — always available, every build knows its source
+        val gitSha = providers.exec {
+            commandLine("git", "rev-parse", "--short", "HEAD")
+        }.standardOutput.asText.get().trim()
+        buildConfigField("String", "GIT_SHA", "\"$gitSha\"")
+
+        // Build timestamp (ISO date)
+        val buildDate = SimpleDateFormat("yyyy-MM-dd").format(Date())
+        buildConfigField("String", "BUILD_DATE", "\"$buildDate\"")
 
         externalNativeBuild {
             cmake {

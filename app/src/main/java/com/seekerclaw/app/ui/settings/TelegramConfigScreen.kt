@@ -12,18 +12,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.Scaffold
+import com.seekerclaw.app.ui.components.SeekerClawScaffold
+
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -36,6 +30,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.seekerclaw.app.ui.components.CardSurface
+
+import com.seekerclaw.app.ui.components.SectionLabel
+import com.seekerclaw.app.ui.components.ConfigField
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.ui.theme.RethinkSans
 import com.seekerclaw.app.ui.theme.SeekerClawColors
@@ -46,7 +44,6 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TelegramConfigScreen(onBack: () -> Unit) {
     val context = LocalContext.current
@@ -72,34 +69,7 @@ fun TelegramConfigScreen(onBack: () -> Unit) {
         else if (token.length > 20) "${token.take(8)}${"*".repeat(8)}${token.takeLast(4)}" else "*".repeat(token.length)
     } ?: "Not set"
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        text = "Telegram Configuration",
-                        fontFamily = RethinkSans,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = SeekerClawColors.TextPrimary
-                    )
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back",
-                            tint = SeekerClawColors.TextPrimary
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = SeekerClawColors.Background
-                )
-            )
-        },
-        containerColor = SeekerClawColors.Background
-    ) { padding ->
+    SeekerClawScaffold(title = "Telegram Configuration", onBack = onBack) { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -112,7 +82,7 @@ fun TelegramConfigScreen(onBack: () -> Unit) {
                     .fillMaxWidth()
                     .background(SeekerClawColors.Surface, shape),
             ) {
-                ProviderConfigField(
+                ConfigField(
                     label = "Bot Token",
                     value = maskedBotToken,
                     onClick = {
@@ -123,7 +93,7 @@ fun TelegramConfigScreen(onBack: () -> Unit) {
                     info = SettingsHelpTexts.BOT_TOKEN,
                     isRequired = true,
                 )
-                ProviderConfigField(
+                ConfigField(
                     label = "Owner ID",
                     value = config?.telegramOwnerId?.ifBlank { "Auto-detect" } ?: "Auto-detect",
                     onClick = {
@@ -137,15 +107,10 @@ fun TelegramConfigScreen(onBack: () -> Unit) {
             }
 
             Spacer(modifier = Modifier.height(28.dp))
-            ProviderSectionLabel("Connection Test")
+            SectionLabel("Connection Test")
             Spacer(modifier = Modifier.height(10.dp))
 
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(SeekerClawColors.Surface, shape)
-                    .padding(16.dp),
-            ) {
+            CardSurface {
                 Text(
                     text = "Verify your bot token is valid and Telegram is reachable.",
                     fontFamily = RethinkSans,

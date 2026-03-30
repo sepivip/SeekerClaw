@@ -14,23 +14,17 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
+import com.seekerclaw.app.ui.components.SeekerClawScaffold
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.RadioButtonDefaults
-import androidx.compose.material3.Scaffold
+
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -45,6 +39,10 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.seekerclaw.app.ui.components.CardSurface
+
+import com.seekerclaw.app.ui.components.SectionLabel
+import com.seekerclaw.app.ui.components.ConfigField
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.config.availableModels
 import com.seekerclaw.app.config.availableProviders
@@ -65,7 +63,6 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProviderConfigScreen(onBack: () -> Unit) {
     val context = LocalContext.current
@@ -138,34 +135,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
         }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        text = "AI Provider",
-                        fontFamily = RethinkSans,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = SeekerClawColors.TextPrimary,
-                    )
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back",
-                            tint = SeekerClawColors.TextPrimary,
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = SeekerClawColors.Background,
-                ),
-            )
-        },
-        containerColor = SeekerClawColors.Background,
-    ) { padding ->
+    SeekerClawScaffold(title = "AI Provider", onBack = onBack) { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -174,7 +144,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                 .verticalScroll(rememberScrollState()),
         ) {
             // Provider selection — two rows matching existing field pattern
-            ProviderSectionLabel("Provider")
+            SectionLabel("Provider")
             Spacer(modifier = Modifier.height(10.dp))
 
             Column(
@@ -213,7 +183,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                     }
                     if (index < availableProviders.size - 1) {
                         HorizontalDivider(
-                            color = SeekerClawColors.TextDim.copy(alpha = 0.1f),
+                            color = SeekerClawColors.CardBorder,
                             modifier = Modifier.padding(horizontal = 16.dp),
                         )
                     }
@@ -222,7 +192,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
 
             // Active provider fields
             Spacer(modifier = Modifier.height(28.dp))
-            ProviderSectionLabel("${providerById(activeProvider).displayName} Settings")
+            SectionLabel("${providerById(activeProvider).displayName} Settings")
             Spacer(modifier = Modifier.height(10.dp))
 
             Column(
@@ -233,7 +203,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                 when (activeProvider) {
                     "claude" -> {
                         val authTypeLabel = if (config?.authType == "setup_token") "Pro/Max Setup Token" else "API Key"
-                        ProviderConfigField(
+                        ConfigField(
                             label = "Model",
                             value = availableModels.find { it.id == config?.model }
                                 ?.let { "${it.displayName} (${it.description})" }
@@ -241,13 +211,13 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                             onClick = { showModelPicker = true },
                             info = SettingsHelpTexts.MODEL,
                         )
-                        ProviderConfigField(
+                        ConfigField(
                             label = "Auth Type",
                             value = authTypeLabel,
                             onClick = { showAuthTypePicker = true },
                             info = SettingsHelpTexts.AUTH_TYPE,
                         )
-                        ProviderConfigField(
+                        ConfigField(
                             label = if (config?.authType == "api_key") "API Key (active)" else "API Key",
                             value = maskKey(config?.anthropicApiKey),
                             onClick = {
@@ -258,7 +228,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                             info = SettingsHelpTexts.API_KEY,
                             isRequired = config?.authType == "api_key",
                         )
-                        ProviderConfigField(
+                        ConfigField(
                             label = if (config?.authType == "setup_token") "Setup Token (active)" else "Setup Token",
                             value = maskKey(config?.setupToken),
                             onClick = {
@@ -272,7 +242,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                         )
                     }
                     "openai" -> {
-                        ProviderConfigField(
+                        ConfigField(
                             label = "Model",
                             value = openaiModels.find { it.id == config?.model }
                                 ?.let { "${it.displayName} (${it.description})" }
@@ -280,7 +250,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                             onClick = { showModelPicker = true },
                             info = SettingsHelpTexts.MODEL,
                         )
-                        ProviderConfigField(
+                        ConfigField(
                             label = "API Key",
                             value = maskKey(config?.openaiApiKey),
                             onClick = {
@@ -296,7 +266,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                     "openrouter" -> {
                         val modelCtxDisplay = config?.openrouterModelContext?.ifBlank { null }
                             ?.let { " ($it ctx)" } ?: ""
-                        ProviderConfigField(
+                        ConfigField(
                             label = "Model",
                             value = (config?.model?.ifBlank { "Not set" } ?: "Not set") + modelCtxDisplay,
                             onClick = {
@@ -308,7 +278,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                         )
                         val fallbackCtxDisplay = config?.openrouterFallbackContext?.ifBlank { null }
                             ?.let { " ($it ctx)" } ?: ""
-                        ProviderConfigField(
+                        ConfigField(
                             label = "Fallback Model (optional)",
                             value = (config?.openrouterFallbackModel?.ifBlank { "Not set" } ?: "Not set") + fallbackCtxDisplay,
                             onClick = {
@@ -318,7 +288,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                             },
                             info = "Auto-switches if primary model is down (e.g. google/gemini-2.5-pro)",
                         )
-                        ProviderConfigField(
+                        ConfigField(
                             label = "API Key",
                             value = maskKey(config?.openrouterApiKey),
                             onClick = {
@@ -386,15 +356,10 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
 
             // Connection test
             Spacer(modifier = Modifier.height(28.dp))
-            ProviderSectionLabel("Connection Test")
+            SectionLabel("Connection Test")
             Spacer(modifier = Modifier.height(10.dp))
 
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(SeekerClawColors.Surface, shape)
-                    .padding(16.dp),
-            ) {
+            CardSurface {
                 Text(
                     text = "Verify your credentials are valid and the API is reachable.",
                     fontFamily = RethinkSans,

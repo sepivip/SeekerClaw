@@ -14,16 +14,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material3.ExperimentalMaterial3Api
+import com.seekerclaw.app.ui.components.SeekerClawScaffold
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.Scaffold
+
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -35,6 +29,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.seekerclaw.app.ui.components.CardSurface
+
+import com.seekerclaw.app.ui.components.SectionLabel
+import com.seekerclaw.app.ui.components.ConfigField
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.config.SearchProviderInfo
 import com.seekerclaw.app.config.availableSearchProviders
@@ -42,7 +40,6 @@ import com.seekerclaw.app.config.searchProviderById
 import com.seekerclaw.app.ui.theme.RethinkSans
 import com.seekerclaw.app.ui.theme.SeekerClawColors
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SearchProviderConfigScreen(onBack: () -> Unit) {
     val context = LocalContext.current
@@ -77,34 +74,7 @@ fun SearchProviderConfigScreen(onBack: () -> Unit) {
         else -> SettingsHelpTexts.BRAVE_API_KEY
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        text = "Search Provider",
-                        fontFamily = RethinkSans,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = SeekerClawColors.TextPrimary,
-                    )
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back",
-                            tint = SeekerClawColors.TextPrimary,
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = SeekerClawColors.Background,
-                ),
-            )
-        },
-        containerColor = SeekerClawColors.Background,
-    ) { padding ->
+    SeekerClawScaffold(title = "Search Provider", onBack = onBack) { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -113,7 +83,7 @@ fun SearchProviderConfigScreen(onBack: () -> Unit) {
                 .verticalScroll(rememberScrollState()),
         ) {
             // Provider selection
-            ProviderSectionLabel("Provider")
+            SectionLabel("Provider")
             Spacer(modifier = Modifier.height(10.dp))
 
             Column(
@@ -156,7 +126,7 @@ fun SearchProviderConfigScreen(onBack: () -> Unit) {
                     }
                     if (index < availableSearchProviders.size - 1) {
                         HorizontalDivider(
-                            color = SeekerClawColors.TextDim.copy(alpha = 0.1f),
+                            color = SeekerClawColors.CardBorder,
                             modifier = Modifier.padding(horizontal = 16.dp),
                         )
                     }
@@ -165,7 +135,7 @@ fun SearchProviderConfigScreen(onBack: () -> Unit) {
 
             // Active provider API key field
             Spacer(modifier = Modifier.height(24.dp))
-            ProviderSectionLabel("${activeProvider.displayName} Settings")
+            SectionLabel("${activeProvider.displayName} Settings")
             Spacer(modifier = Modifier.height(10.dp))
 
             val activeApiKey: String? = config?.activeSearchApiKey
@@ -176,7 +146,7 @@ fun SearchProviderConfigScreen(onBack: () -> Unit) {
                     .fillMaxWidth()
                     .background(SeekerClawColors.Surface, shape),
             ) {
-                ProviderConfigField(
+                ConfigField(
                     label = "API Key",
                     value = maskKey(activeApiKey),
                     onClick = {
@@ -202,15 +172,10 @@ fun SearchProviderConfigScreen(onBack: () -> Unit) {
 
             // "Get API Key" link
             Spacer(modifier = Modifier.height(24.dp))
-            ProviderSectionLabel("Resources")
+            SectionLabel("Resources")
             Spacer(modifier = Modifier.height(10.dp))
 
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(SeekerClawColors.Surface, shape)
-                    .padding(16.dp),
-            ) {
+            CardSurface {
                 Text(
                     text = helpTextForProvider(activeProvider.id),
                     fontFamily = RethinkSans,

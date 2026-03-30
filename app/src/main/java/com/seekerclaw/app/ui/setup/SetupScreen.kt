@@ -3,6 +3,7 @@ package com.seekerclaw.app.ui.setup
 import android.Manifest
 import android.app.Activity
 import android.content.Intent
+import com.seekerclaw.app.ui.components.SectionLabel
 import com.seekerclaw.app.util.LogCollector
 import com.seekerclaw.app.util.LogLevel
 import android.content.pm.PackageManager
@@ -1561,16 +1562,4 @@ private fun RequirementRow(
             )
         }
     }
-}
-
-@Composable
-private fun SectionLabel(title: String) {
-    Text(
-        text = title,
-        fontSize = 11.sp,
-        fontWeight = FontWeight.Medium,
-        color = SeekerClawColors.TextDim,
-        letterSpacing = 1.sp,
-        modifier = Modifier.fillMaxWidth(),
-    )
 }

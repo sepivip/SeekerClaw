@@ -570,7 +570,7 @@ fun DashboardScreen(
             Spacer(modifier = Modifier.height(16.dp))
 
             HorizontalDivider(
-                color = SeekerClawColors.TextDim.copy(alpha = 0.2f),
+                color = SeekerClawColors.CardBorder,
                 thickness = 1.dp,
             )
 

@@ -14,14 +14,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
+import com.seekerclaw.app.ui.components.SeekerClawScaffold
 import androidx.compose.material3.LinearProgressIndicator
+
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -40,6 +37,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.seekerclaw.app.BuildConfig
+import com.seekerclaw.app.ui.components.CardSurface
+import com.seekerclaw.app.ui.components.InfoRow
+
+import com.seekerclaw.app.ui.components.SectionLabel
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.ui.theme.SeekerClawColors
 import com.seekerclaw.app.util.AppStorageInfo
@@ -107,47 +108,24 @@ fun SystemScreen(onBack: () -> Unit) {
         }
     }
 
-    val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
-
+    SeekerClawScaffold(title = "System", onBack = onBack) { innerPadding ->
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(SeekerClawColors.Background)
+            .padding(innerPadding)
             .verticalScroll(rememberScrollState())
-            .padding(16.dp),
+            .padding(horizontal = 16.dp),
     ) {
-        // Back + Title
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconButton(onClick = onBack) {
-                Icon(
-                    Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = "Back",
-                    tint = SeekerClawColors.TextDim,
-                )
-            }
-            Text(
-                text = "System",
-                fontFamily = RethinkSans,
-                fontSize = 22.sp,
-                fontWeight = FontWeight.Bold,
-                color = SeekerClawColors.TextPrimary,
-            )
-        }
-
-        Spacer(modifier = Modifier.height(24.dp))
 
         // ==================== STATUS ====================
         SectionLabel("Status")
+        Spacer(modifier = Modifier.height(8.dp))
 
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(SeekerClawColors.Surface, shape)
-                .padding(16.dp),
-        ) {
-            InfoRow("Version", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+        CardSurface {
+            InfoRow("Version", buildString {
+                append("${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+                if (BuildConfig.DEBUG) append(" · ${BuildConfig.GIT_SHA}")
+            })
             InfoRow("OpenClaw", BuildConfig.OPENCLAW_VERSION)
             InfoRow(
                 label = "Node.js",
@@ -172,13 +150,9 @@ fun SystemScreen(onBack: () -> Unit) {
 
         // ==================== DEVICE ====================
         SectionLabel("Device")
+        Spacer(modifier = Modifier.height(8.dp))
 
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(SeekerClawColors.Surface, shape)
-                .padding(16.dp),
-        ) {
+        CardSurface {
             val info = deviceInfo
             if (info != null) {
                 ResourceBar(
@@ -258,13 +232,9 @@ fun SystemScreen(onBack: () -> Unit) {
 
         // ==================== CONNECTION ====================
         SectionLabel("Connection")
+        Spacer(modifier = Modifier.height(8.dp))
 
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(SeekerClawColors.Surface, shape)
-                .padding(16.dp),
-        ) {
+        CardSurface {
             InfoRow(
                 label = "Telegram",
                 value = if (status == ServiceStatus.RUNNING) "Connected" else "Disconnected",
@@ -285,13 +255,9 @@ fun SystemScreen(onBack: () -> Unit) {
         val usage = apiUsage
         if (usage != null) {
             SectionLabel("API Limits")
+            Spacer(modifier = Modifier.height(8.dp))
 
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(SeekerClawColors.Surface, shape)
-                    .padding(16.dp),
-            ) {
+            CardSurface {
                 // Only show bars if we have real data (not error-only)
                 val hasValidData = when (usage) {
                     is ApiUsageData.OAuthUsage ->
@@ -361,6 +327,7 @@ fun SystemScreen(onBack: () -> Unit) {
 
         // ==================== USAGE ====================
         SectionLabel("Usage")
+        Spacer(modifier = Modifier.height(8.dp))
 
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -406,13 +373,9 @@ fun SystemScreen(onBack: () -> Unit) {
             Spacer(modifier = Modifier.height(24.dp))
 
             SectionLabel("API Analytics")
+            Spacer(modifier = Modifier.height(8.dp))
 
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(SeekerClawColors.Surface, shape)
-                    .padding(16.dp),
-            ) {
+            CardSurface {
                 InfoRow("Requests", if (stats != null) "${stats.todayRequests} today" else "--")
                 InfoRow(
                     label = "Avg Latency",
@@ -452,13 +415,9 @@ fun SystemScreen(onBack: () -> Unit) {
             Spacer(modifier = Modifier.height(24.dp))
 
             SectionLabel("Memory Index")
+            Spacer(modifier = Modifier.height(8.dp))
 
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(SeekerClawColors.Surface, shape)
-                    .padding(16.dp),
-            ) {
+            CardSurface {
                 InfoRow("Files", if (stats != null) "${stats.memoryFilesIndexed}" else "--")
                 InfoRow("Chunks", if (stats != null) "${stats.memoryChunksCount}" else "--")
                 val lastIndexedRaw = stats?.memoryLastIndexed
@@ -479,69 +438,9 @@ fun SystemScreen(onBack: () -> Unit) {
 
         Spacer(modifier = Modifier.height(32.dp))
     }
+    } // Scaffold
 }
 
-@Composable
-private fun SectionLabel(text: String) {
-    Text(
-        text = text,
-        fontFamily = FontFamily.Monospace,
-        fontSize = 11.sp,
-        fontWeight = FontWeight.Medium,
-        color = SeekerClawColors.TextDim,
-        letterSpacing = 1.sp,
-    )
-    Spacer(modifier = Modifier.height(8.dp))
-}
-
-@Composable
-private fun InfoRow(
-    label: String,
-    value: String,
-    dotColor: androidx.compose.ui.graphics.Color? = null,
-    isLast: Boolean = false,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 8.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            text = label,
-            fontFamily = FontFamily.Monospace,
-            fontSize = 13.sp,
-            color = SeekerClawColors.TextSecondary,
-        )
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = value,
-                fontFamily = FontFamily.Monospace,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Medium,
-                color = SeekerClawColors.TextPrimary,
-            )
-            if (dotColor != null) {
-                Spacer(modifier = Modifier.width(8.dp))
-                Box(
-                    modifier = Modifier
-                        .size(10.dp)
-                        .clip(CircleShape)
-                        .background(dotColor),
-                )
-            }
-        }
-    }
-    if (!isLast) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(1.dp)
-                .background(SeekerClawColors.TextDim.copy(alpha = 0.15f)),
-        )
-    }
-}
 
 @Composable
 private fun ResourceBar(

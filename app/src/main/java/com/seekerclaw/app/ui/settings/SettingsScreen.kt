@@ -43,8 +43,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.RadioButtonDefaults
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
+import com.seekerclaw.app.ui.components.SeekerClawSwitch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -97,6 +96,11 @@ import com.seekerclaw.app.util.Analytics
 import com.seekerclaw.app.util.LogCollector
 import com.seekerclaw.app.util.LogLevel
 import com.seekerclaw.app.BuildConfig
+import com.seekerclaw.app.ui.components.CardSurface
+import com.seekerclaw.app.ui.components.SectionLabel
+import com.seekerclaw.app.ui.components.ConfigField
+import com.seekerclaw.app.ui.components.InfoDialog
+import com.seekerclaw.app.ui.components.InfoRow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -375,12 +379,7 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(10.dp))
 
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(SeekerClawColors.Surface, shape)
-                .padding(16.dp),
-        ) {
+        CardSurface {
             Text(
                 text = "Generate a config QR at seekerclaw.xyz and scan it to set up your agent in seconds.",
                 fontFamily = RethinkSans,
@@ -600,12 +599,7 @@ fun SettingsScreen(
 
         // Solana Wallet
         CollapsibleSection("Solana Wallet", initiallyExpanded = false) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(SeekerClawColors.Surface, shape)
-                    .padding(16.dp),
-            ) {
+            CardSurface {
                 if (walletAddress != null) {
                     // Connected state — address with copy button
                     val address = walletAddress!!
@@ -649,7 +643,7 @@ fun SettingsScreen(
                 val label = ConfigManager.getWalletLabel(context)
                 if (label.isNotBlank()) {
                     Spacer(modifier = Modifier.height(4.dp))
-                    InfoRow("Wallet", label)
+                    InfoRow("Wallet", label, isLast = true)
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
@@ -774,12 +768,7 @@ fun SettingsScreen(
 
         // MCP Servers (BAT-168)
         CollapsibleSection("MCP Servers", initiallyExpanded = false) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(SeekerClawColors.Surface, shape)
-                    .padding(16.dp),
-            ) {
+            CardSurface {
                 Text(
                     text = SettingsHelpTexts.MCP_SERVERS,
                     fontFamily = RethinkSans,
@@ -824,7 +813,7 @@ fun SettingsScreen(
                                 )
                             }
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Switch(
+                                SeekerClawSwitch(
                                     checked = server.enabled,
                                     onCheckedChange = { enabled ->
                                         mcpServers = mcpServers.map {
@@ -833,13 +822,6 @@ fun SettingsScreen(
                                         ConfigManager.saveMcpServers(context, mcpServers)
                                         showRestartDialog = true
                                     },
-                                    colors = SwitchDefaults.colors(
-                                        checkedThumbColor = androidx.compose.ui.graphics.Color.White,
-                                        checkedTrackColor = SeekerClawColors.ActionPrimary,
-                                        uncheckedThumbColor = androidx.compose.ui.graphics.Color.White,
-                                        uncheckedTrackColor = SeekerClawColors.BorderSubtle,
-                                        uncheckedBorderColor = androidx.compose.ui.graphics.Color.Transparent,
-                                    ),
                                 )
                                 IconButton(onClick = {
                                     editingMcpServer = server
@@ -1053,16 +1035,10 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(10.dp))
 
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(SeekerClawColors.Surface, shape)
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
+        CardSurface {
             InfoRow("Version", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
             InfoRow("OpenClaw", BuildConfig.OPENCLAW_VERSION)
-            InfoRow("Node.js", BuildConfig.NODEJS_VERSION)
+            InfoRow("Node.js", BuildConfig.NODEJS_VERSION, isLast = true)
         }
 
         Spacer(modifier = Modifier.height(24.dp))
@@ -1684,17 +1660,6 @@ fun SettingsScreen(
     }
 }
 
-@Composable
-private fun SectionLabel(title: String) {
-    Text(
-        text = title,
-        fontFamily = RethinkSans,
-        fontSize = 11.sp,
-        fontWeight = FontWeight.Medium,
-        color = SeekerClawColors.TextSecondary,
-        letterSpacing = 1.sp,
-    )
-}
 
 @Composable
 private fun CollapsibleSection(
@@ -1741,89 +1706,6 @@ private fun CollapsibleSection(
 }
 
 @Composable
-private fun ConfigField(
-    label: String,
-    value: String,
-    onClick: (() -> Unit)? = null,
-    showDivider: Boolean = true,
-    info: String? = null,
-    isRequired: Boolean = false,
-) {
-    var showInfo by remember { mutableStateOf(false) }
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = if (isRequired) Modifier.semantics(mergeDescendants = true) {
-                    contentDescription = "$label, required"
-                } else Modifier,
-            ) {
-                Text(
-                    text = label,
-                    fontFamily = RethinkSans,
-                    fontSize = 12.sp,
-                    color = SeekerClawColors.TextDim,
-                )
-                if (isRequired) {
-                    Text(
-                        text = " *",
-                        fontSize = 12.sp,
-                        color = SeekerClawColors.Error,
-                    )
-                }
-                if (info != null) {
-                    IconButton(
-                        onClick = { showInfo = true },
-                    ) {
-                        Icon(
-                            Icons.Outlined.Info,
-                            contentDescription = "More info about $label",
-                            tint = SeekerClawColors.TextDim,
-                            modifier = Modifier.size(14.dp),
-                        )
-                    }
-                }
-            }
-            if (onClick != null) {
-                Text(
-                    text = "Edit",
-                    fontFamily = RethinkSans,
-                    fontSize = 12.sp,
-                    color = SeekerClawColors.TextInteractive,
-                )
-            }
-        }
-        Spacer(modifier = Modifier.height(2.dp))
-        Text(
-            text = value,
-            fontFamily = RethinkSans,
-            fontSize = 14.sp,
-            color = SeekerClawColors.TextPrimary,
-        )
-    }
-    if (showDivider) {
-        androidx.compose.material3.HorizontalDivider(
-            color = SeekerClawColors.TextDim.copy(alpha = 0.1f),
-            modifier = Modifier.padding(horizontal = 16.dp),
-        )
-    }
-
-    if (showInfo && info != null) {
-        InfoDialog(title = label, message = info, onDismiss = { showInfo = false })
-    }
-}
-
-@Composable
 private fun SettingRow(
     label: String,
     checked: Boolean,
@@ -1858,45 +1740,17 @@ private fun SettingRow(
                 }
             }
         }
-        Switch(
+        SeekerClawSwitch(
             checked = checked,
             onCheckedChange = {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 onCheckedChange(it)
             },
-            colors = SwitchDefaults.colors(
-                checkedThumbColor = androidx.compose.ui.graphics.Color.White,
-                checkedTrackColor = SeekerClawColors.ActionPrimary,
-                uncheckedThumbColor = androidx.compose.ui.graphics.Color.White,
-                uncheckedTrackColor = SeekerClawColors.BorderSubtle,
-                uncheckedBorderColor = androidx.compose.ui.graphics.Color.Transparent,
-            ),
         )
     }
 
     if (showInfo && info != null) {
         InfoDialog(title = label, message = info, onDismiss = { showInfo = false })
-    }
-}
-
-@Composable
-private fun InfoRow(label: String, value: String) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-    ) {
-        Text(
-            text = label,
-            fontFamily = RethinkSans,
-            fontSize = 13.sp,
-            color = SeekerClawColors.TextDim,
-        )
-        Text(
-            text = value,
-            fontFamily = RethinkSans,
-            fontSize = 13.sp,
-            color = SeekerClawColors.TextSecondary,
-        )
     }
 }
 
@@ -1937,7 +1791,7 @@ private fun PermissionRow(
                 }
             }
         }
-        Switch(
+        SeekerClawSwitch(
             checked = granted,
             onCheckedChange = {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -1947,13 +1801,6 @@ private fun PermissionRow(
                     onRequest()
                 }
             },
-            colors = SwitchDefaults.colors(
-                checkedThumbColor = androidx.compose.ui.graphics.Color.White,
-                checkedTrackColor = SeekerClawColors.ActionPrimary,
-                uncheckedThumbColor = androidx.compose.ui.graphics.Color.White,
-                uncheckedTrackColor = SeekerClawColors.BorderSubtle,
-                uncheckedBorderColor = androidx.compose.ui.graphics.Color.Transparent,
-            ),
         )
     }
 
@@ -2052,40 +1899,3 @@ private fun maskSensitive(value: String): String {
     return "${value.take(6)}${"*".repeat(8)}${value.takeLast(4)}"
 }
 
-@Composable
-private fun InfoDialog(title: String, message: String, onDismiss: () -> Unit) {
-    val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = {
-            Text(
-                text = title,
-                fontFamily = RethinkSans,
-                fontWeight = FontWeight.Bold,
-                fontSize = 16.sp,
-                color = SeekerClawColors.TextPrimary,
-            )
-        },
-        text = {
-            Text(
-                text = message,
-                fontFamily = RethinkSans,
-                fontSize = 13.sp,
-                color = SeekerClawColors.TextSecondary,
-                lineHeight = 20.sp,
-            )
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text(
-                    "Got it",
-                    fontFamily = RethinkSans,
-                    fontWeight = FontWeight.Bold,
-                    color = SeekerClawColors.Primary,
-                )
-            }
-        },
-        containerColor = SeekerClawColors.Surface,
-        shape = shape,
-    )
-}
