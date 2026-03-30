@@ -3,32 +3,46 @@
 All notable changes to SeekerClaw are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [1.8.0] - 2026-03-28
+## [1.8.0] - 2026-03-30
 
 ### Added
-- **Search Provider System** — choose from 5 web search providers: Brave, Perplexity, Exa, Tavily, Firecrawl. Configure in Settings with per-provider API keys (BAT-481)
-- **Quick Actions** — `/quick` command shows inline keyboard buttons for common actions like status, new chat, memory check
-- **Multi-provider setup wizard** — redesigned setup flow: pick provider first (Claude, OpenAI, OpenRouter), model second, Telegram last. Number-stepped progress indicator (BAT-478)
-- **Multi-provider QR import** — QR config now supports OpenAI and OpenRouter credentials alongside Claude (BAT-471)
-- **Loop detection** — agent detects repeated tool call patterns (3 warnings, breaks at 5) to prevent runaway loops
-- **Context summarization** — at 85% context usage, oldest messages are summarized instead of dropped, preserving conversation continuity
-- **Memory scrubbing** — tool narration, file upload noise, and temp paths are stripped from memory saves for cleaner long-term recall
-- **Dashboard animations** — status banners use smooth AnimatedVisibility transitions (BAT-479)
+- **Search Provider System** — choose from 5 web search providers: Brave, Perplexity, Exa, Tavily, Firecrawl (BAT-481)
+- **Quick Actions** — `/quick` command with inline keyboard buttons (#295)
+- **Multi-provider setup wizard** — pick provider first, model second, Telegram last (BAT-478)
+- **Multi-provider QR import** — supports OpenAI and OpenRouter credentials (BAT-471)
+- **Loop detection** — detects repeated tool call patterns, 3 warnings then breaks at 5 (BAT-474)
+- **Context summarization** — summarizes oldest messages at 85% context usage instead of dropping them (BAT-475)
+- **Memory scrubbing** — strips tool narration, file uploads, temp paths from memory saves (BAT-474)
+- **Dashboard animations** — smooth AnimatedVisibility for status banners (BAT-479)
+- **Git SHA in debug builds** — System screen shows commit hash for debugging
+- **Shared UI components** — 9 reusable composables: TopAppBar, SectionLabel, CardSurface, InfoRow, ConfigField, InfoDialog, Scaffold, Switch (#306, #307, #308)
+- **UI/UX audit polish** — onboarding flow, terminology, settings consolidation (BAT-476)
+- **Restart prompt** — app prompts restart when provider, model, or API key changes (BAT-468)
 
 ### Fixed
-- **Heartbeat conversation isolation** — heartbeat probes no longer pollute user conversation history, fixing thread-breaking when heartbeats fire between question and answer (#298)
-- **Repetition detector** — catches degenerate model output (repeated characters/patterns) before sending to Telegram (#300)
-- **Setup credential preservation** — switching providers no longer wipes previously entered API keys (BAT-478)
-- **Banner spacing** — dashboard cards properly spaced from status banners (BAT-479)
-- **Step indicator labels** — setup screen labels no longer truncate on narrow screens
+- **Heartbeat status leaks** — port ackMaxChars from OpenClaw, suppress filler text alongside HEARTBEAT_OK (#302)
+- **Heartbeat conversation isolation** — probes no longer pollute user conversation history (#298)
+- **Repetition detector** — catches degenerate model output before Telegram send (#300)
+- **Logs toggle color** — was red, now green matching all other toggles
+- **System screen back arrow** — standardized to M3 TopAppBar
+- **HorizontalDivider colors** — standardized to CardBorder across all screens
+- **Setup credential preservation** — switching providers no longer wipes API keys (BAT-478)
+- **Banner spacing** — dashboard cards properly spaced from banners (BAT-479)
+- **Step indicator labels** — no longer truncate on narrow screens (BAT-478)
+- **Poll timeout logs** — downgraded from ERROR to DEBUG (no longer alarming in logs)
+- **Dead ProGuard rule** — removed unused rule, fixed incorrect GitHub URLs
 
 ### Security
-- **js_eval sandbox** — Function constructor shadows require/process/module, blocks sensitive paths, output redaction for API keys (BAT-466)
-- **Emulator IP gate** — 10.0.2.2 bridge access restricted to DEBUG builds only (BAT-467)
+- **js_eval sandbox** — Function constructor shadows, sensitive path blocking, output redaction (BAT-466)
+- **Emulator IP gate** — 10.0.2.2 restricted to DEBUG builds only (BAT-467)
 
 ### Changed
-- Tools refactored from single 4000-line file into 12 modular files under `tools/` directory (BAT-470)
-- Deferred tool loading disabled — free OpenRouter models leak raw XML instead of proper tool calls
+- `main.js` split into focused modules — `message-handler.js` extracted (#296, #303)
+- `claude.js` renamed to `ai.js` (provider-agnostic naming)
+- Tools refactored into 12 modular files under `tools/` (BAT-470)
+- RestartDialog extracted as shared component (BAT-469)
+- Deferred tool loading disabled — free OpenRouter models leak raw XML (BAT-475)
+- UI components consolidated: ~500 lines removed across 10 files
 
 ## [1.7.0] - 2026-03-19
 
