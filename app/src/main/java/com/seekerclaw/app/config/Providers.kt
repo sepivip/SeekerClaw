@@ -38,6 +38,14 @@ val availableProviders = listOf(
         consoleUrl = "https://openrouter.ai",
         keysUrl = "https://openrouter.ai/keys",
     ),
+    ProviderInfo(
+        id = "custom",
+        displayName = "Custom",
+        authTypes = listOf("api_key"),
+        keyHint = "your-api-key",
+        consoleUrl = "https://seekerclaw.xyz/docs/custom-provider",
+        keysUrl = "https://seekerclaw.xyz/docs/custom-provider",
+    ),
 )
 
 val openaiModels = listOf(
@@ -51,7 +59,7 @@ const val OPENROUTER_DEFAULT_MODEL = "anthropic/claude-sonnet-4-6"
 
 fun modelsForProvider(providerId: String): List<ModelInfo> = when (providerId) {
     "openai" -> openaiModels
-    "openrouter" -> emptyList() // Freeform: user types model ID (100+ models)
+    "openrouter", "custom" -> emptyList() // Freeform: user types model ID
     else -> availableModels
 }
 

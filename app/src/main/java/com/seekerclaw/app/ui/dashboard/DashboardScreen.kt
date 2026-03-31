@@ -107,6 +107,7 @@ fun DashboardScreen(
         when (config?.provider) {
             "openai" -> config?.openaiApiKey?.isNotBlank() == true
             "openrouter" -> config?.openrouterApiKey?.isNotBlank() == true
+            "custom" -> config?.customApiKey?.isNotBlank() == true && config?.customBaseUrl?.isNotBlank() == true
             else -> config?.activeCredential?.isNotBlank() == true
         }
     }

@@ -8,7 +8,7 @@ const crypto = require('crypto');
 // ── Imports from other SeekerClaw modules ──────────────────────────────────
 
 const {
-    workDir, MODEL, PROVIDER, ANTHROPIC_KEY, OPENAI_KEY, OPENROUTER_KEY, OPENROUTER_FALLBACK_MODEL, OPENROUTER_MODEL_CONTEXT, OPENROUTER_FALLBACK_CONTEXT, AUTH_TYPE,
+    workDir, MODEL, PROVIDER, ANTHROPIC_KEY, OPENAI_KEY, OPENROUTER_KEY, CUSTOM_KEY, CUSTOM_BASE_URL, OPENROUTER_FALLBACK_MODEL, OPENROUTER_MODEL_CONTEXT, OPENROUTER_FALLBACK_CONTEXT, AUTH_TYPE,
     REACTION_GUIDANCE, REACTION_NOTIFICATIONS, MEMORY_DIR,
     CONFIRM_REQUIRED, TOOL_RATE_LIMITS, TOOL_STATUS_MAP,
     API_TIMEOUT_RETRIES, API_TIMEOUT_BACKOFF_MS, API_TIMEOUT_MAX_BACKOFF_MS,
@@ -51,6 +51,13 @@ function setChatDeps(deps) {
         if (key in _deps) _deps[key] = deps[key];
         else log(`[claude] setChatDeps: unknown key "${key}"`, 'WARN');
     }
+}
+
+function getProviderApiKey() {
+    return PROVIDER === 'openai' ? OPENAI_KEY
+        : PROVIDER === 'openrouter' ? OPENROUTER_KEY
+        : PROVIDER === 'custom' ? CUSTOM_KEY
+        : ANTHROPIC_KEY;
 }
 
 // ============================================================================
@@ -727,10 +734,17 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('1. Read agent_health_state — check consecutiveFailures and lastError');
     lines.push('2. Auth error (401/403): API key may be invalid — tell user to check Settings');
     lines.push('3. Rate limit (429): slow down — reduce tool calls and response length');
-    const billingUrl = PROVIDER === 'openai' ? 'platform.openai.com' : PROVIDER === 'openrouter' ? 'openrouter.ai/credits' : 'console.anthropic.com';
-    const apiHost = PROVIDER === 'openai' ? 'api.openai.com' : PROVIDER === 'openrouter' ? 'openrouter.ai' : 'api.anthropic.com';
+    const billingUrl = PROVIDER === 'openai' ? 'platform.openai.com'
+        : PROVIDER === 'openrouter' ? 'openrouter.ai/credits'
+        : PROVIDER === 'custom' ? (CUSTOM_BASE_URL || 'your custom endpoint')
+        : 'console.anthropic.com';
+    const apiHost = PROVIDER === 'openai' ? 'api.openai.com'
+        : PROVIDER === 'openrouter' ? 'openrouter.ai'
+        : PROVIDER === 'custom' ? (getAdapter(PROVIDER).getEndpoint().hostname || 'custom endpoint')
+        : 'api.anthropic.com';
     lines.push(`4. Billing error (402): tell user to check their billing at ${billingUrl}`);
-    lines.push(`5. Network error: check connectivity with js_eval using require("https").get("https://${apiHost}") or shell_exec "curl -s https://${apiHost}"`);
+    const apiScheme = PROVIDER === 'custom' ? (getAdapter(PROVIDER).getEndpoint().protocol === 'http:' ? 'http' : 'https') : 'https';
+    lines.push(`5. Network error: check connectivity with js_eval using require("${apiScheme}").get("${apiScheme}://${apiHost}") or shell_exec "curl -s ${apiScheme}://${apiHost}"`);
     lines.push('');
 
     // Project Context - OpenClaw injects SOUL.md and memory here
@@ -902,6 +916,11 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
         if (OPENROUTER_FALLBACK_MODEL) {
             lines.push(`Fallback model configured: ${OPENROUTER_FALLBACK_MODEL} (auto-switches if primary is down).`);
         }
+        lines.push('');
+    } else if (PROVIDER === 'custom') {
+        lines.push('## Provider');
+        lines.push(`You are running via a custom AI endpoint (model: ${MODEL}).`);
+        if (CUSTOM_BASE_URL) lines.push(`Custom endpoint: ${CUSTOM_BASE_URL}`);
         lines.push('');
     }
 
@@ -1105,9 +1124,8 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
     try {
         // BAT-315: Provider-agnostic API call — adapter handles endpoint, headers, streaming
         const adapter = getAdapter(PROVIDER);
-        const apiKey = PROVIDER === 'openai' ? OPENAI_KEY
-            : PROVIDER === 'openrouter' ? OPENROUTER_KEY
-            : ANTHROPIC_KEY;
+        const endpoint = adapter.getEndpoint ? adapter.getEndpoint() : adapter.endpoint;
+        const apiKey = getProviderApiKey();
         const headers = adapter.buildHeaders(apiKey, AUTH_TYPE);
 
         // Select streaming function based on provider protocol
@@ -1127,8 +1145,10 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
 
             try {
                 res = await streamFn({
-                    hostname: adapter.endpoint.hostname,
-                    path: adapter.endpoint.path,
+                    protocol: endpoint.protocol,
+                    hostname: endpoint.hostname,
+                    port: endpoint.port,
+                    path: endpoint.path,
                     method: 'POST',
                     headers,
                 }, body);
@@ -1676,7 +1696,8 @@ async function summarizeOldMessages(messages, chatId, turnId) {
     try {
         // Build summary request using the same adapter pattern as chat()
         const adapter = getAdapter(PROVIDER);
-        const apiKey = PROVIDER === 'openai' ? OPENAI_KEY : PROVIDER === 'openrouter' ? OPENROUTER_KEY : ANTHROPIC_KEY;
+        const endpoint = adapter.getEndpoint ? adapter.getEndpoint() : adapter.endpoint;
+        const apiKey = getProviderApiKey();
         const headers = adapter.buildHeaders(apiKey, AUTH_TYPE);
 
         const summaryPrompt = [
@@ -1699,8 +1720,10 @@ async function summarizeOldMessages(messages, chatId, turnId) {
                 : httpStreamingRequest;
 
         const res = await streamFn({
-            hostname: adapter.endpoint.hostname,
-            path: adapter.endpoint.path,
+            protocol: endpoint.protocol,
+            hostname: endpoint.hostname,
+            port: endpoint.port,
+            path: endpoint.path,
             method: 'POST',
             headers,
         }, body); // formatRequest() already returns JSON string

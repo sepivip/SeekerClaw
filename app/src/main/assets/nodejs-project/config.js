@@ -100,18 +100,23 @@ function normalizeSecret(val) {
 
 const BOT_TOKEN = normalizeSecret(config.botToken);
 let OWNER_ID = config.ownerId ? String(config.ownerId).trim() : '';
-const _SUPPORTED_PROVIDERS = new Set(['claude', 'openai', 'openrouter']);
+const _SUPPORTED_PROVIDERS = new Set(['claude', 'openai', 'openrouter', 'custom']);
 const _rawProvider = (typeof config.provider === 'string' && config.provider.trim()) ? config.provider.trim().toLowerCase() : 'claude';
 const PROVIDER = _SUPPORTED_PROVIDERS.has(_rawProvider) ? _rawProvider : 'claude';
 const ANTHROPIC_KEY = normalizeSecret(config.anthropicApiKey);
 const OPENAI_KEY = normalizeSecret(config.openaiApiKey || '');
 const OPENROUTER_KEY = normalizeSecret(config.openrouterApiKey || '');
+const CUSTOM_KEY = normalizeSecret(config.customApiKey || '');
+const CUSTOM_BASE_URL = (typeof config.customBaseUrl === 'string' ? config.customBaseUrl : '').trim();
+const CUSTOM_HEADERS_RAW = (typeof config.customHeaders === 'string' ? config.customHeaders : '').trim();
+const CUSTOM_FORMAT = (typeof config.customFormat === 'string' ? config.customFormat : 'chat_completions').trim().toLowerCase();
 const OPENROUTER_FALLBACK_MODEL = (typeof config.openrouterFallbackModel === 'string' ? config.openrouterFallbackModel : '').trim();
 const OPENROUTER_MODEL_CONTEXT = parseInt(config.openrouterModelContext, 10) || 0;
 const OPENROUTER_FALLBACK_CONTEXT = parseInt(config.openrouterFallbackContext, 10) || 0;
 const AUTH_TYPE = config.authType || 'api_key';
 const _defaultModel = PROVIDER === 'openai' ? 'gpt-5.2'
     : PROVIDER === 'openrouter' ? 'anthropic/claude-sonnet-4-6'
+    : PROVIDER === 'custom' ? ''
     : 'claude-opus-4-6';
 const MODEL = config.model || _defaultModel;
 const AGENT_NAME = config.agentName || 'SeekerClaw';
@@ -171,12 +176,24 @@ const MCP_SERVERS = (config.mcpServers || [])
 // Validate: bot token always required; API key required for active provider only
 const _activeKey = PROVIDER === 'openai' ? OPENAI_KEY
     : PROVIDER === 'openrouter' ? OPENROUTER_KEY
+    : PROVIDER === 'custom' ? CUSTOM_KEY
     : ANTHROPIC_KEY;
 if (!BOT_TOKEN || !_activeKey) {
     const keyName = PROVIDER === 'openai' ? 'openaiApiKey'
         : PROVIDER === 'openrouter' ? 'openrouterApiKey'
+        : PROVIDER === 'custom' ? 'customApiKey'
         : 'anthropicApiKey';
     log(`ERROR: Missing required config (botToken, ${keyName}) for provider "${PROVIDER}"`, 'ERROR');
+    process.exit(1);
+}
+
+if (PROVIDER === 'custom' && !CUSTOM_BASE_URL) {
+    log('ERROR: Missing required config (customBaseUrl) for provider "custom"', 'ERROR');
+    process.exit(1);
+}
+
+if (PROVIDER === 'custom' && !MODEL) {
+    log('ERROR: Missing required config (model) for provider "custom"', 'ERROR');
     process.exit(1);
 }
 
@@ -186,8 +203,58 @@ if (!OWNER_ID) {
     log('WARNING: Owner ID not set — first inbound message will claim ownership. ' +
         'This is expected on first run; use the Android setup flow to set or reset the owner.', 'WARN');
 } else {
-    const authLabel = PROVIDER === 'openai' ? 'api-key' : (AUTH_TYPE === 'setup_token' ? 'setup-token' : 'api-key');
+    const authLabel = PROVIDER === 'claude' ? (AUTH_TYPE === 'setup_token' ? 'setup-token' : 'api-key') : 'api-key';
     log(`Agent: ${AGENT_NAME} | Provider: ${PROVIDER} | Model: ${MODEL} | Auth: ${authLabel} | Owner: ${OWNER_ID}`, 'DEBUG');
+}
+
+function parseCustomHeaders(raw) {
+    if (!raw) return {};
+    try {
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+        const out = {};
+        for (const [key, value] of Object.entries(parsed)) {
+            const headerKey = String(key || '').trim();
+            if (!headerKey || headerKey === '__proto__' || headerKey === 'constructor' || headerKey === 'prototype') continue;
+            if (value == null) continue;
+            out[headerKey] = String(value);
+        }
+        return out;
+    } catch (e) {
+        log(`[Config] Failed to parse customHeaders JSON: ${e.message}`, 'WARN');
+        return {};
+    }
+}
+
+function parseCustomEndpoint(raw) {
+    const fallback = { protocol: 'https:', hostname: '', port: undefined, path: '/v1/chat/completions' };
+    if (!raw) return fallback;
+    try {
+        const url = new URL(raw);
+        if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+            log(`[Config] Unsupported protocol "${url.protocol}" in customBaseUrl — only http: and https: are allowed`, 'WARN');
+            return fallback;
+        }
+        let urlPath = url.pathname || '/';
+        if (urlPath.endsWith('/') && urlPath.length > 1) urlPath = urlPath.slice(0, -1);
+        if (url.search) urlPath += url.search;
+        return {
+            protocol: url.protocol || 'https:',
+            hostname: url.hostname || '',
+            port: url.port ? Number(url.port) : undefined,
+            path: urlPath,
+        };
+    } catch (e) {
+        log(`[Config] Invalid customBaseUrl "${raw}": ${e.message}`, 'WARN');
+        return fallback;
+    }
+}
+
+const CUSTOM_HEADERS = parseCustomHeaders(CUSTOM_HEADERS_RAW);
+const CUSTOM_ENDPOINT = parseCustomEndpoint(CUSTOM_BASE_URL);
+if (PROVIDER === 'custom' && CUSTOM_BASE_URL && !CUSTOM_ENDPOINT.hostname) {
+    log(`ERROR: customBaseUrl "${CUSTOM_BASE_URL}" is not a valid URL (no hostname)`, 'ERROR');
+    process.exit(1);
 }
 
 // ============================================================================
@@ -415,6 +482,11 @@ module.exports = {
     ANTHROPIC_KEY,
     OPENAI_KEY,
     OPENROUTER_KEY,
+    CUSTOM_KEY,
+    CUSTOM_BASE_URL,
+    CUSTOM_HEADERS,
+    CUSTOM_FORMAT,
+    CUSTOM_ENDPOINT,
     OPENROUTER_FALLBACK_MODEL,
     OPENROUTER_MODEL_CONTEXT,
     OPENROUTER_FALLBACK_CONTEXT,

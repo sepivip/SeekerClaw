@@ -49,6 +49,10 @@ data class AppConfig(
     val openrouterFallbackModel: String = "",
     val openrouterModelContext: String = "",
     val openrouterFallbackContext: String = "",
+    val customApiKey: String = "",
+    val customBaseUrl: String = "",
+    val customHeaders: String = "",
+    val customFormat: String = "chat_completions",
 ) {
     /** Anthropic/authType-based credential — used by SetupScreen and legacy flows. */
     val activeCredential: String
@@ -107,6 +111,10 @@ object ConfigManager {
     private const val KEY_OPENROUTER_FALLBACK_MODEL = "openrouter_fallback_model"
     private const val KEY_OPENROUTER_MODEL_CONTEXT = "openrouter_model_context"
     private const val KEY_OPENROUTER_FALLBACK_CONTEXT = "openrouter_fallback_context"
+    private const val KEY_CUSTOM_API_KEY_ENC = "custom_api_key_enc"
+    private const val KEY_CUSTOM_BASE_URL = "custom_base_url"
+    private const val KEY_CUSTOM_HEADERS_ENC = "custom_headers_enc"
+    private const val KEY_CUSTOM_FORMAT = "custom_format"
     private const val KEY_FIRST_DEPLOY_DONE = "first_deploy_done"
 
     private fun prefs(context: Context): SharedPreferences =
@@ -222,6 +230,21 @@ object ConfigManager {
         editor.putString(KEY_OPENROUTER_FALLBACK_MODEL, config.openrouterFallbackModel)
         editor.putString(KEY_OPENROUTER_MODEL_CONTEXT, config.openrouterModelContext)
         editor.putString(KEY_OPENROUTER_FALLBACK_CONTEXT, config.openrouterFallbackContext)
+
+        if (config.customApiKey.isNotBlank()) {
+            val encCustom = KeystoreHelper.encrypt(config.customApiKey)
+            editor.putString(KEY_CUSTOM_API_KEY_ENC, Base64.encodeToString(encCustom, Base64.NO_WRAP))
+        } else {
+            editor.remove(KEY_CUSTOM_API_KEY_ENC)
+        }
+        editor.putString(KEY_CUSTOM_BASE_URL, config.customBaseUrl)
+        if (config.customHeaders.isNotBlank()) {
+            val encHeaders = KeystoreHelper.encrypt(config.customHeaders)
+            editor.putString(KEY_CUSTOM_HEADERS_ENC, Base64.encodeToString(encHeaders, Base64.NO_WRAP))
+        } else {
+            editor.remove(KEY_CUSTOM_HEADERS_ENC)
+        }
+        editor.putString(KEY_CUSTOM_FORMAT, config.customFormat)
 
         val persisted = editor.commit()
         if (persisted) {
@@ -343,6 +366,23 @@ object ConfigManager {
             ""
         }
 
+        val customApiKey = try {
+            val enc = p.getString(KEY_CUSTOM_API_KEY_ENC, null)
+            if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to decrypt custom API key", e)
+            LogCollector.append("[Config] Failed to decrypt custom API key: ${e.javaClass.simpleName}", LogLevel.ERROR)
+            ""
+        }
+
+        val customHeaders = try {
+            val enc = p.getString(KEY_CUSTOM_HEADERS_ENC, null)
+            if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to decrypt custom headers", e)
+            ""
+        }
+
         return AppConfig(
             anthropicApiKey = apiKey,
             setupToken = setupToken,
@@ -367,6 +407,10 @@ object ConfigManager {
             openrouterFallbackModel = p.getString(KEY_OPENROUTER_FALLBACK_MODEL, "") ?: "",
             openrouterModelContext = p.getString(KEY_OPENROUTER_MODEL_CONTEXT, "") ?: "",
             openrouterFallbackContext = p.getString(KEY_OPENROUTER_FALLBACK_CONTEXT, "") ?: "",
+            customApiKey = customApiKey,
+            customBaseUrl = p.getString(KEY_CUSTOM_BASE_URL, "") ?: "",
+            customHeaders = customHeaders,
+            customFormat = p.getString(KEY_CUSTOM_FORMAT, "chat_completions") ?: "chat_completions",
         )
     }
 
@@ -411,6 +455,10 @@ object ConfigManager {
             "openrouterFallbackModel" -> config.copy(openrouterFallbackModel = value)
             "openrouterModelContext" -> config.copy(openrouterModelContext = value)
             "openrouterFallbackContext" -> config.copy(openrouterFallbackContext = value)
+            "customApiKey" -> config.copy(customApiKey = value)
+            "customBaseUrl" -> config.copy(customBaseUrl = value)
+            "customHeaders" -> config.copy(customHeaders = value)
+            "customFormat" -> config.copy(customFormat = value)
             else -> return
         }
         saveConfig(context, updated)
@@ -448,7 +496,7 @@ object ConfigManager {
         val json = JSONObject().apply {
             put("botToken", config.telegramBotToken)
             put("ownerId", config.telegramOwnerId)
-            put("anthropicApiKey", if (config.provider in listOf("openai", "openrouter")) "" else config.activeCredential)
+            put("anthropicApiKey", if (config.provider in listOf("openai", "openrouter", "custom")) "" else config.activeCredential)
             put("authType", config.authType)
             put("provider", config.provider)
             put("model", config.model)
@@ -468,6 +516,10 @@ object ConfigManager {
             if (config.openrouterFallbackModel.isNotBlank()) put("openrouterFallbackModel", config.openrouterFallbackModel)
             if (config.openrouterModelContext.isNotBlank()) put("openrouterModelContext", config.openrouterModelContext)
             if (config.openrouterFallbackContext.isNotBlank()) put("openrouterFallbackContext", config.openrouterFallbackContext)
+            if (config.customApiKey.isNotBlank()) put("customApiKey", config.customApiKey)
+            if (config.customBaseUrl.isNotBlank()) put("customBaseUrl", config.customBaseUrl)
+            if (config.customHeaders.isNotBlank()) put("customHeaders", config.customHeaders)
+            if (config.customFormat.isNotBlank()) put("customFormat", config.customFormat)
             val mcpServers = loadMcpServers(context)
             if (mcpServers.isNotEmpty()) {
                 val arr = JSONArray()
@@ -520,9 +572,11 @@ object ConfigManager {
         val hasCredential = when (config.provider) {
             "openai" -> config.openaiApiKey.isNotBlank()
             "openrouter" -> config.openrouterApiKey.isNotBlank()
+            "custom" -> config.customApiKey.isNotBlank() && config.customBaseUrl.isNotBlank()
             else -> config.activeCredential.isNotBlank()
         }
         if (!hasCredential) return "missing_credential"
+        if (config.provider == "custom" && config.model.isBlank()) return "missing_model"
         return null
     }
 
@@ -531,6 +585,7 @@ object ConfigManager {
         return "setup=true provider=${config.provider} authType=${config.authType} botSet=${config.telegramBotToken.isNotBlank()} " +
             "apiSet=${config.anthropicApiKey.isNotBlank()} setupTokenSet=${config.setupToken.isNotBlank()} " +
             "openaiSet=${config.openaiApiKey.isNotBlank()} openrouterSet=${config.openrouterApiKey.isNotBlank()} " +
+            "customSet=${config.customApiKey.isNotBlank()} " +
             "activeSet=${config.activeCredential.isNotBlank()} model=${config.model}"
     }
 
@@ -712,6 +767,7 @@ object ConfigManager {
         val providerLabel = when (provider) {
             "openai" -> "OpenAI"
             "openrouter" -> "OpenRouter"
+            "custom" -> "Custom"
             else -> "Anthropic"
         }
         // Auth type is only relevant for Claude (api_key vs setup_token)
