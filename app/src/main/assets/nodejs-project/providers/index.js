@@ -34,5 +34,6 @@ function listProviders() {
 register(require('./claude'));
 register(require('./openai'));
 register(require('./openrouter'));
+register(require('./custom'));
 
 module.exports = { getAdapter, listProviders, register };
