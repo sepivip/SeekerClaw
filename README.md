@@ -131,6 +131,7 @@ Thanks to all contributors:
 <a href="https://github.com/DashLabsDev"><img src="https://github.com/DashLabsDev.png" width="50" height="50" alt="DashLabsDev" title="DashLabsDev — code contributor"></a>
 <a href="https://github.com/DyorAlex"><img src="https://github.com/DyorAlex.png" width="50" height="50" alt="DyorAlex" title="DyorAlex — proposed OpenRouter support"></a>
 <a href="https://github.com/LevanIlashvili"><img src="https://github.com/LevanIlashvili.png" width="50" height="50" alt="LevanIlashvili" title="LevanIlashvili — security audit"></a>
+<a href="https://github.com/Tofu-killer"><img src="https://github.com/Tofu-killer.png" width="50" height="50" alt="Tofu-killer" title="Tofu-killer — proposed Custom Provider support"></a>
 
 ## Links
 

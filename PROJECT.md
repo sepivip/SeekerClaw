@@ -492,3 +492,4 @@ People who shaped SeekerClaw through ideas, feedback, and bug reports — even w
 |-------------|-------------|------|
 | [@DyorAlex](https://github.com/DyorAlex) | Proposed OpenRouter support — shipped in v1.7.0 | [Issue](https://github.com/sepivip/SeekerClaw/issues) |
 | [@DashLabsDev](https://github.com/DashLabsDev) | Dash Labs — code contributor | GitHub |
+| [@Tofu-killer](https://github.com/Tofu-killer) | Proposed and prototyped Custom Provider support — shipped in v1.8.x | [PR #305](https://github.com/sepivip/SeekerClaw/pull/305) |
