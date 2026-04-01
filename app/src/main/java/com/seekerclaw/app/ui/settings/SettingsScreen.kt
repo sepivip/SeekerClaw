@@ -113,7 +113,8 @@ fun SettingsScreen(
     onRunSetupAgain: () -> Unit = {},
     onNavigateToAiConfig: () -> Unit = {},
     onNavigateToTelegram: () -> Unit = {},
-    onNavigateToSearchConfig: () -> Unit = {}
+    onNavigateToSearchConfig: () -> Unit = {},
+    onNavigateToDiscordConfig: () -> Unit = {},
 ) {
     val context = LocalContext.current
     var config by remember { mutableStateOf(ConfigManager.loadConfig(context)) }
@@ -480,6 +481,12 @@ fun SettingsScreen(
                         if ((config?.activeSearchApiKey ?: "").isBlank()) " (not configured)" else "",
                     onClick = onNavigateToSearchConfig,
                     info = SettingsHelpTexts.SEARCH_PROVIDER,
+                )
+                ConfigField(
+                    label = "Discord",
+                    value = if (config?.channel == "discord") "Active" else "Not configured",
+                    onClick = onNavigateToDiscordConfig,
+                    info = SettingsHelpTexts.DISCORD_CHANNEL,
                     showDivider = false,
                 )
             }

@@ -2,6 +2,7 @@
 // Telegram Bot API: messaging, file uploads/downloads, HTML formatting.
 // Depends on: config.js, http.js
 
+const crypto = require('crypto');
 const fs = require('fs');
 const https = require('https');
 const path = require('path');
@@ -35,7 +36,6 @@ async function telegram(method, body = null) {
  * @returns {Promise<Object>} Telegram API response
  */
 async function telegramSendFile(method, params, fieldName, filePath, fileName, fileSize) {
-    const crypto = require('crypto');
     const boundary = '----TgFile' + crypto.randomBytes(16).toString('hex');
 
     // Sanitize header values: strip CR/LF/null/Unicode line separators and escape quotes
@@ -292,6 +292,100 @@ async function downloadTelegramFile(fileId, fileName) {
 
     log(`File saved: ${localName} (${totalBytes} bytes)`, 'DEBUG');
     return { localPath, localName, size: totalBytes };
+}
+
+/**
+ * Download a file from a direct URL (for non-Telegram channels like Discord).
+ * Saves to the same media/inbound/ directory as Telegram downloads.
+ * Uses streaming to handle binary files correctly and enforces size limits.
+ */
+async function downloadFileByUrl(url, fileName, maxSize) {
+    const MAX_SIZE = maxSize || MAX_FILE_SIZE;
+    const safeName = (fileName || `file_${Date.now()}`).replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120);
+    const uniqueName = `${Date.now()}_${crypto.randomBytes(4).toString('hex')}_${safeName}`;
+    const mediaDir = path.join(workDir, 'media', 'inbound');
+    if (!fs.existsSync(mediaDir)) fs.mkdirSync(mediaDir, { recursive: true });
+    const localPath = path.join(mediaDir, uniqueName);
+
+    const parsedUrl = new URL(url);
+
+    // Protocol validation: HTTPS only (Discord CDN is always HTTPS)
+    if (parsedUrl.protocol !== 'https:') {
+        throw new Error('Unsupported URL protocol: ' + parsedUrl.protocol + ' (only https: allowed)');
+    }
+
+    // SSRF guard: block private/local/reserved addresses by hostname string.
+    // Known limitation: DNS rebinding attacks are not prevented here because we check
+    // the hostname string before DNS resolution. Full protection would require async DNS
+    // lookup and IP validation, which adds latency and complexity.
+    // Accepted trade-off: Discord CDN URLs come from cdn.discordapp.com (validated by
+    // the Discord API) — this hostname check is a first-pass defense against obvious
+    // SSRF attempts (localhost, RFC1918, link-local). Prompt-injection-sourced URLs
+    // arriving through normal message flow are a lower risk given the owner-only gate.
+    if (/^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|0\.|localhost|\[::1\]|\[fe80:)/i.test(parsedUrl.hostname)) {
+        throw new Error('Blocked: private/local address');
+    }
+
+    return new Promise((resolve, reject) => {
+        let settled = false;
+        const done = (fn, val) => {
+            if (settled) return;
+            settled = true;
+            fn(val);
+        };
+
+        const req = https.request({
+            hostname: parsedUrl.hostname,
+            port: parsedUrl.port || 443,
+            path: parsedUrl.pathname + parsedUrl.search,
+            method: 'GET',
+            headers: { 'User-Agent': 'SeekerClaw/1.0' },
+            timeout: 30000,
+        }, (res) => {
+            if (res.statusCode < 200 || res.statusCode >= 300) {
+                res.resume(); // drain
+                done(reject, new Error(`Download failed: HTTP ${res.statusCode}`));
+                return;
+            }
+
+            const fileStream = fs.createWriteStream(localPath);
+            let totalBytes = 0;
+
+            res.on('data', (chunk) => {
+                totalBytes += chunk.length;
+                if (totalBytes > MAX_SIZE) {
+                    res.destroy();
+                    fileStream.destroy();
+                    try { fs.unlinkSync(localPath); } catch (_) {}
+                    done(reject, new Error(`File too large (>${Math.round(MAX_SIZE / 1024 / 1024)}MB)`));
+                }
+            });
+
+            res.on('error', (err) => {
+                fileStream.destroy();
+                try { fs.unlinkSync(localPath); } catch (_) {}
+                done(reject, err);
+            });
+
+            res.pipe(fileStream);
+
+            fileStream.on('finish', () => {
+                done(resolve, { localPath, localName: uniqueName, size: totalBytes });
+            });
+
+            fileStream.on('error', (err) => {
+                try { fs.unlinkSync(localPath); } catch (_) {}
+                done(reject, err);
+            });
+        });
+
+        req.on('error', (err) => done(reject, err));
+        req.on('timeout', () => {
+            req.destroy();
+            done(reject, new Error('Download timed out'));
+        });
+        req.end();
+    });
 }
 
 // ============================================================================
@@ -896,6 +990,7 @@ module.exports = {
     MAX_IMAGE_SIZE,
     extractMedia,
     downloadTelegramFile,
+    downloadFileByUrl,
     cleanResponse,
     toTelegramHtml,
     stripMarkdown,

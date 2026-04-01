@@ -1,8 +1,15 @@
 // tools/index.js — Tool registry + executeTool() dispatcher (BAT-470)
 // Merges all domain modules, builds handler dispatch map, routes tool calls.
 
-const { log } = require('../config');
-const { telegram } = require('../telegram');
+const { log, CHANNEL } = require('../config');
+// Confirmation messages use Telegram sendMessage. On non-Telegram channels the
+// stub logs a warning and the confirmation is auto-denied (see requestConfirmation).
+const _telegramSendMessage = CHANNEL === 'telegram'
+    ? require('../telegram').telegram
+    : (method, params) => {
+        log(`[Confirm] Confirmation not supported on channel "${CHANNEL}" — stub called (method: ${method}, chat: ${params && params.chat_id})`, 'WARN');
+        return Promise.resolve({ ok: false, description: 'confirmation not supported on this channel' });
+    };
 
 // ── Domain modules ───────────────────────────────────────────────────────────
 
@@ -14,7 +21,7 @@ const cronMod     = require('./cron');
 const sessionMod  = require('./session');
 const androidMod  = require('./android');
 const solanaMod   = require('./solana');
-const telegramMod = require('./telegram');
+const telegramMod = CHANNEL === 'telegram' ? require('./telegram') : null;
 const systemMod   = require('./system');
 
 // ── Merged TOOLS array ───────────────────────────────────────────────────────
@@ -28,7 +35,7 @@ const TOOLS = [
     ...sessionMod.tools,
     ...androidMod.tools,
     ...solanaMod.tools,
-    ...telegramMod.tools,
+    ...(telegramMod ? telegramMod.tools : []),
     ...systemMod.tools,
 ];
 
@@ -43,7 +50,7 @@ const handlerMap = Object.assign({},
     sessionMod.handlers,
     androidMod.handlers,
     solanaMod.handlers,
-    telegramMod.handlers,
+    ...(telegramMod ? [telegramMod.handlers] : []),
     systemMod.handlers,
 );
 
@@ -142,7 +149,7 @@ function requestConfirmation(chatId, toolName, input) {
             toolName,
         });
         log(`[Confirm] Awaiting confirmation for ${toolName} in chat ${chatId}`, 'DEBUG');
-        telegram('sendMessage', {
+        _telegramSendMessage('sendMessage', {
             chat_id: chatId,
             text: msg,
             parse_mode: 'HTML',

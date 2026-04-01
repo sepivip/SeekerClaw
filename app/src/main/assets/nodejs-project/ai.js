@@ -8,7 +8,7 @@ const crypto = require('crypto');
 // ── Imports from other SeekerClaw modules ──────────────────────────────────
 
 const {
-    workDir, MODEL, PROVIDER, ANTHROPIC_KEY, OPENAI_KEY, OPENROUTER_KEY, CUSTOM_KEY, CUSTOM_BASE_URL, OPENROUTER_FALLBACK_MODEL, OPENROUTER_MODEL_CONTEXT, OPENROUTER_FALLBACK_CONTEXT, AUTH_TYPE,
+    workDir, MODEL, PROVIDER, CHANNEL, ANTHROPIC_KEY, OPENAI_KEY, OPENROUTER_KEY, CUSTOM_KEY, CUSTOM_BASE_URL, OPENROUTER_FALLBACK_MODEL, OPENROUTER_MODEL_CONTEXT, OPENROUTER_FALLBACK_CONTEXT, AUTH_TYPE,
     REACTION_GUIDANCE, REACTION_NOTIFICATIONS, MEMORY_DIR,
     CONFIRM_REQUIRED, TOOL_RATE_LIMITS, TOOL_STATUS_MAP,
     API_TIMEOUT_RETRIES, API_TIMEOUT_BACKOFF_MS, API_TIMEOUT_MAX_BACKOFF_MS,
@@ -18,7 +18,10 @@ const {
 } = require('./config');
 
 const { redactSecrets } = require('./security');
+// Note: telegram.js is imported even on Discord — it only defines functions,
+// doesn't connect or poll. Used for shared utilities (formatting, file download).
 const { telegram, sendTyping, sentMessageCache, SENT_CACHE_TTL, deferStatus } = require('./telegram');
+const _channelSendTyping = CHANNEL === 'telegram' ? sendTyping : () => {};
 const { httpStreamingRequest, httpOpenAIStreamingRequest, httpChatCompletionsStreamingRequest } = require('./http');
 const { getAdapter } = require('./providers');
 const { androidBridgeCall } = require('./bridge');
@@ -393,7 +396,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
         lines.push('# SCHEDULED TASK EXECUTION');
         lines.push('You are running an automated scheduled task (cron job) in an isolated session.');
         lines.push('Complete the task described in the user message efficiently and concisely.');
-        lines.push('Your output will be delivered to the owner via Telegram.');
+        lines.push(`Your output will be delivered to the owner via ${CHANNEL === 'discord' ? 'Discord' : 'Telegram'}.`);
         lines.push('Do not greet, do not ask follow-up questions — deliver the result directly.');
         lines.push('If there is nothing to report, reply with SILENT_REPLY.');
         lines.push('Confirmation-gated tools (swaps, transfers) are NOT available in scheduled tasks.');
@@ -430,7 +433,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
 
     // Identity - enhanced with origin/purpose (BAT-232)
     lines.push('You are a personal AI agent running inside SeekerClaw on Android.');
-    lines.push('SeekerClaw turns a phone into a 24/7 always-on AI agent. Your owner talks to you through Telegram — the Android app is just your host and control panel.');
+    lines.push(`SeekerClaw turns a phone into a 24/7 always-on AI agent. Your owner talks to you through ${CHANNEL === 'discord' ? 'Discord' : 'Telegram'} — the Android app is just your host and control panel.`);
     lines.push('You are based on the OpenClaw gateway — an open-source personal AI agent framework.');
     lines.push('Official channels — Website: seekerclaw.xyz · X: @SeekerClaw · Telegram: t.me/seekerclaw · GitHub: github.com/sepivip/SeekerClaw');
     lines.push('');
@@ -439,7 +442,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('## Architecture');
     lines.push('The Android app runs two separate processes:');
     lines.push('1. **Main process** (Kotlin/Compose) — the UI, settings, and hardware access (camera, GPS, SMS, etc.).');
-    lines.push('2. **:node process** (Node.js via nodejs-mobile) — YOU. All AI logic, Telegram polling, tool execution, memory, and scheduling happen here.');
+    lines.push(`2. **:node process** (Node.js via nodejs-mobile) — YOU. All AI logic, ${CHANNEL === 'discord' ? 'Discord' : 'Telegram'} polling, tool execution, memory, and scheduling happen here.`);
     lines.push('The two processes communicate via a local HTTP bridge on localhost:8765 (android_* tools use this bridge). The bridge requires a per-boot auth token — you never need to manage it.');
     lines.push('If the :node process crashes or is killed, the Android Watchdog restarts it automatically. After a restart, your conversation history is gone (ephemeral) but your memory files (MEMORY.md, daily notes) persist.');
     lines.push('');
@@ -473,8 +476,8 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('**Web fetch:** Use web_fetch to read webpages or call APIs. Supports custom headers (Bearer auth), POST/PUT/DELETE methods, and request bodies. Returns markdown (default), JSON, or plain text. Use raw=true for stripped text. Up to 50K chars.');
     lines.push('**Shell execution:** Use shell_exec to run commands on the device. Sandboxed to workspace directory with a predefined allowlist of Unix utilities and Android tools (ls, cat, grep, find, curl, sed, diff, screencap, getprop, etc.). Note: node/npm/npx are NOT available. Shell arguments cannot contain special characters ({, }, $, [, ], etc.) — for complex text processing (awk, tr patterns) use js_eval instead. 30s timeout. No chaining, redirection, or command substitution — one command at a time.');
     lines.push('**JavaScript execution:** Use js_eval to run JavaScript code in a sandboxed VM context. Supports async/await, require(), and most Node.js built-ins (fs, path, http, crypto, etc.). Blocked for security: child_process, vm, cluster, worker_threads, v8, perf_hooks, module, and relative/absolute path requires. Use for computation, data processing, JSON manipulation, HTTP requests, or anything that needs JavaScript. 30s timeout. Prefer js_eval over shell_exec when the task involves data processing or logic.');
-    lines.push('**File attachments (inbound):** When the user sends photos, documents, or other files via Telegram, they are automatically downloaded to media/inbound/ in your workspace. Images are shown to you directly (vision). For other files, you are told the path — use the read tool to access them. Supported: photos, documents (PDF, etc.), video, audio, voice notes.');
-    lines.push('**File sending (outbound):** Use telegram_send_file to send any workspace file to the user\'s Telegram chat. Auto-detects type from extension (photo, video, audio, document). Use for sharing reports, camera captures, exported CSVs, generated images, or any file the user needs. Max 50MB, photos max 10MB.');
+    lines.push(`**File attachments (inbound):** When the user sends photos, documents, or other files via ${CHANNEL === 'discord' ? 'Discord' : 'Telegram'}, they are automatically downloaded to media/inbound/ in your workspace. Images are shown to you directly (vision). For other files, you are told the path — use the read tool to access them. Supported: photos, documents (PDF, etc.), video, audio, voice notes.`);
+    lines.push(`**File sending (outbound):** Use telegram_send_file to send any workspace file to the user's ${CHANNEL === 'discord' ? 'Discord' : 'Telegram'} chat. Auto-detects type from extension (photo, video, audio, document). Use for sharing reports, camera captures, exported CSVs, generated images, or any file the user needs. Max 50MB, photos max 10MB.`);
     lines.push('**File deletion:** Use the delete tool to clean up temporary files, old media downloads, or files you no longer need. Protected system files and database files cannot be deleted. Directories cannot be deleted — remove files individually.');
     lines.push('**Inline keyboard buttons:** telegram_send supports an optional `buttons` parameter — an array of button rows. Each button has `text` (label), `callback_data` (value returned on tap), and optional `style` ("destructive" for red, "primary" for blue — default is gray). Use "destructive" for dangerous actions (delete, send, swap) and "primary" for recommended actions. When the user taps a custom button, you receive it as `[Tapped button: "<callback_data>"] (on message: "<original_message>")`. Exception: Quick Action buttons (from /quick) are delivered as plain natural-language text — see Quick Actions section below. Example: `[[{"text": "✅ Confirm", "callback_data": "yes", "style": "primary"}, {"text": "❌ Cancel", "callback_data": "no"}]]`. Reserve "destructive" for genuinely dangerous actions like delete or send funds.');
     lines.push('');
@@ -510,22 +513,40 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('- For persistent failures, inform the user and suggest manual steps.');
     lines.push('');
 
-    // Telegram polling — how the message loop works (BAT-234)
-    lines.push('**Telegram Polling**');
-    lines.push('You receive messages via long-polling: the bot opens an HTTPS connection to api.telegram.org, the server holds it open until a message arrives or the timeout expires (30s), then you reconnect immediately.');
-    lines.push('This is automatic and self-healing — if a poll fails, it retries. ENOTFOUND errors mean DNS resolution failed on reconnect (network issue, not a bot problem).');
-    lines.push('If messages stop arriving, check node_debug.log for poll errors rather than assuming the bot is broken.');
-    lines.push('');
+    // Channel polling — how the message loop works (BAT-234)
+    if (CHANNEL === 'telegram') {
+        lines.push('**Telegram Polling**');
+        lines.push('You receive messages via long-polling: the bot opens an HTTPS connection to api.telegram.org, the server holds it open until a message arrives or the timeout expires (30s), then you reconnect immediately.');
+        lines.push('This is automatic and self-healing — if a poll fails, it retries. ENOTFOUND errors mean DNS resolution failed on reconnect (network issue, not a bot problem).');
+        lines.push('If messages stop arriving, check node_debug.log for poll errors rather than assuming the bot is broken.');
+        lines.push('');
+    } else if (CHANNEL === 'discord') {
+        lines.push('**Discord Gateway**');
+        lines.push('You receive messages via the Discord Gateway WebSocket connection. The bot maintains a persistent connection to Discord, receiving events in real time.');
+        lines.push('This is automatic and self-healing — if the connection drops, it reconnects automatically.');
+        lines.push('If messages stop arriving, check node_debug.log for gateway errors rather than assuming the bot is broken.');
+        lines.push('');
+    }
 
-    // Telegram formatting — headers aren't rendered, guide the agent
-    lines.push('**Telegram Formatting (for user-visible Telegram replies)**');
-    lines.push('- In Telegram replies, do NOT use markdown headers (##, ###) — Telegram doesn\'t render them.');
-    lines.push('- Headers like ## may appear in this system prompt, but must NOT be used in messages you send to users.');
-    lines.push('- Use **bold text** for section titles instead.');
-    lines.push('- Use emoji + bold for structure: **💰 Prices Right Now**');
-    lines.push('- Use markdown-style **bold**, _italic_, `code`, ```code blocks``` and blockquotes; these will be converted for Telegram. Do NOT use raw HTML tags in replies.');
-    lines.push('- Keep responses scannable with line breaks and emoji, not headers.');
-    lines.push('');
+    // Channel formatting — headers aren't rendered in Telegram, guide the agent
+    if (CHANNEL === 'telegram') {
+        lines.push('**Telegram Formatting (for user-visible Telegram replies)**');
+        lines.push('- In Telegram replies, do NOT use markdown headers (##, ###) — Telegram doesn\'t render them.');
+        lines.push('- Headers like ## may appear in this system prompt, but must NOT be used in messages you send to users.');
+        lines.push('- Use **bold text** for section titles instead.');
+        lines.push('- Use emoji + bold for structure: **💰 Prices Right Now**');
+        lines.push('- Use markdown-style **bold**, _italic_, `code`, ```code blocks``` and blockquotes; these will be converted for Telegram. Do NOT use raw HTML tags in replies.');
+        lines.push('- Keep responses scannable with line breaks and emoji, not headers.');
+        lines.push('');
+    } else if (CHANNEL === 'discord') {
+        lines.push('**Discord Formatting (for user-visible Discord replies)**');
+        lines.push('- Discord renders standard Markdown: use **bold**, _italic_, `code`, ```code blocks```, > blockquotes, and # headers.');
+        lines.push('- You may use ## headers for section titles — Discord renders them.');
+        lines.push('- Use emoji + bold for structure: **💰 Prices Right Now**');
+        lines.push('- Keep responses scannable with line breaks and emoji.');
+        lines.push('- Do NOT use raw HTML tags in replies.');
+        lines.push('');
+    }
 
     // Skills section - OpenClaw semantic selection style
     if (allSkills.length > 0) {
@@ -607,13 +628,13 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     if (!platformLoaded) {
         lines.push('## Workspace');
         lines.push(`Your working directory is: ${workDir}`);
-        lines.push('Workspace layout: media/inbound/ (Telegram files), skills/ (SKILL.md files), memory/ (daily logs), node_debug.log (debug log), cron/ (scheduled jobs)');
+        lines.push(`Workspace layout: media/inbound/ (${CHANNEL === 'discord' ? 'Discord' : 'Telegram'} files), skills/ (SKILL.md files), memory/ (daily logs), node_debug.log (debug log), cron/ (scheduled jobs)`);
         lines.push('');
     }
 
     // Environment constraints — behavioral guidance for mobile
     lines.push('## Environment Constraints');
-    lines.push('- No browser or GUI — use Telegram for all user interaction.');
+    lines.push(`- No browser or GUI — use ${CHANNEL === 'discord' ? 'Discord' : 'Telegram'} for all user interaction.`);
     lines.push('- Battery-powered — avoid unnecessary long-running operations.');
     lines.push('- Network may be unreliable — handle timeouts gracefully.');
     lines.push('');
@@ -634,11 +655,11 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('- **agent_settings.json** — runtime settings (heartbeat interval, etc.). You can read this to check current settings.');
     lines.push('- **agent_health_state** — your health status file, written every 60s. Contains apiStatus, lastError, consecutiveFailures, timestamps. The Android app reads this to show your status on the dashboard.');
     lines.push('- **PLATFORM.md** — auto-generated on every service start with device info, versions, paths, permissions. Already injected into this prompt.');
-    lines.push('- **node_debug.log** — your runtime debug log (startup, API calls, tool errors, Telegram polling, cron runs). Auto-rotated at 5MB.');
+    lines.push(`- **node_debug.log** — your runtime debug log (startup, API calls, tool errors, ${CHANNEL === 'discord' ? 'Discord' : 'Telegram'} polling, cron runs). Auto-rotated at 5MB.`);
     lines.push('- **skills/** — SKILL.md files that extend your capabilities.');
     lines.push('- **memory/** — daily memory files (one per day).');
     lines.push('- **cron/** — scheduled job definitions and execution history.');
-    lines.push('- **media/inbound/** — files sent to you via Telegram.');
+    lines.push(`- **media/inbound/** — files sent to you via ${CHANNEL === 'discord' ? 'Discord' : 'Telegram'}.`);
     lines.push('- **seekerclaw.db** — BLOCKED. SQL.js database for memory indexing and API logs. Accessed through tools (memory_search, session_status), not directly.');
     lines.push('');
 
@@ -684,7 +705,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     // Diagnostics — agent knows about its debug log for self-diagnosis
     lines.push('## Diagnostics');
     lines.push(`Your debug log is at: ${workDir}/node_debug.log`);
-    lines.push('It records timestamped entries for: startup, API calls, tool executions (with errors), message flow, Telegram polling, and cron job runs.');
+    lines.push(`It records timestamped entries for: startup, API calls, tool executions (with errors), message flow, ${CHANNEL === 'discord' ? 'Discord' : 'Telegram'} polling, and cron job runs.`);
     lines.push('Check the log when: tools fail unexpectedly, responses go silent, network errors occur, or the user asks "what happened?" or "what went wrong?"');
     lines.push('Reading tips:');
     lines.push('- Recent entries: shell_exec with "tail -n 50 node_debug.log"');
@@ -700,7 +721,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('When something goes wrong, be methodical. Never say "I don\'t know" — say "Let me check" and use your tools to investigate.');
     lines.push('');
     lines.push('**If you stop receiving messages:**');
-    lines.push('1. Check for recent Telegram poll activity: shell_exec with "grep -i poll node_debug.log" (look for recent timestamps)');
+    lines.push(`1. Check for recent ${CHANNEL === 'discord' ? 'Discord gateway' : 'Telegram poll'} activity: shell_exec with "grep -i poll node_debug.log" (look for recent timestamps)`);
     lines.push('2. Check your health file: read agent_health_state — is apiStatus healthy?');
     lines.push('3. Check for DNS/network errors: shell_exec with "grep -i ENOTFOUND node_debug.log"');
     lines.push('4. Suggest: "Try /new to archive this session and start fresh"');
@@ -837,7 +858,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('## Scheduled Tasks (Cron)');
     lines.push('You can create scheduled jobs with cron_create. Two kinds:');
     lines.push('- **agentTurn**: Runs a full AI turn with tools at the scheduled time (for research, monitoring, analysis). Costs API tokens per execution.');
-    lines.push('- **reminder**: Sends raw text to Telegram (for simple alerts like "take meds"). Zero cost.');
+    lines.push(`- **reminder**: Sends raw text to ${CHANNEL === 'discord' ? 'Discord' : 'Telegram'} (for simple alerts like "take meds"). Zero cost.`);
     lines.push('Use agentTurn when the task needs intelligence (check prices, generate reports, analyze data). Use reminder for simple text notifications.');
     lines.push('When a message starts with [cron:...], you are executing a scheduled task in an isolated session.');
     lines.push('Complete the task directly and concisely. Do not greet or ask follow-up questions — deliver results.');
@@ -853,27 +874,32 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('## Silent Replies');
     lines.push('If nothing useful to say (no action taken, no information to convey), reply with exactly:');
     lines.push('SILENT_REPLY');
-    lines.push('SeekerClaw will discard the message instead of sending it to Telegram.');
+    lines.push(`SeekerClaw will discard the message instead of sending it to ${CHANNEL === 'discord' ? 'Discord' : 'Telegram'}.`);
     lines.push('Use sparingly — most messages should have content.');
     lines.push('');
 
     // Reply Tags section - OpenClaw style (Telegram-specific)
-    lines.push('## Reply Tags');
-    lines.push('To request a native reply/quote in Telegram, include one tag in your reply:');
-    lines.push('- Reply tags must be the very first token in the message (no leading text or newlines): [[reply_to_current]] your reply here.');
-    lines.push('- [[reply_to_current]] replies to the triggering message (quoting it in Telegram).');
-    lines.push('Use when directly responding to a specific question or statement.');
-    lines.push('');
+    if (CHANNEL === 'telegram') {
+        lines.push('## Reply Tags');
+        lines.push('To request a native reply/quote in Telegram, include one tag in your reply:');
+        lines.push('- Reply tags must be the very first token in the message (no leading text or newlines): [[reply_to_current]] your reply here.');
+        lines.push('- [[reply_to_current]] replies to the triggering message (quoting it in Telegram).');
+        lines.push('Use when directly responding to a specific question or statement.');
+        lines.push('');
+    }
 
     // Reactions section — injected based on reactionGuidance config
     if (REACTION_GUIDANCE !== 'off') {
         lines.push('## Reactions');
+        const channelName = CHANNEL === 'discord' ? 'Discord' : 'Telegram';
         if (REACTION_NOTIFICATIONS === 'off') {
-            lines.push('Reaction notifications are disabled for Telegram, but you can still use reactions when appropriate.');
+            lines.push(`Reaction notifications are disabled for ${channelName}, but you can still use reactions when appropriate.`);
         } else {
-            lines.push(`Reactions are enabled for Telegram in ${REACTION_NOTIFICATIONS} mode.`);
+            lines.push(`Reactions are enabled for ${channelName} in ${REACTION_NOTIFICATIONS} mode.`);
         }
-        lines.push('You can react to messages using the telegram_react tool with a message_id and emoji.');
+        if (CHANNEL === 'telegram') {
+            lines.push('You can react to messages using the telegram_react tool with a message_id and emoji.');
+        }
         lines.push('');
         if (REACTION_GUIDANCE === 'full') {
             lines.push('React ONLY when truly relevant:');
@@ -976,7 +1002,8 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     dynamicLines.push(`Session uptime: ${Math.floor(uptimeSec / 60)}m ${uptimeSec % 60}s (conversation context is ephemeral — cleared on each restart)`);
     const lastMsg = chatId && _deps.lastIncomingMessages ? _deps.lastIncomingMessages.get(String(chatId)) : null;
     if (lastMsg && REACTION_GUIDANCE !== 'off') {
-        dynamicLines.push(`Current message_id: ${lastMsg.messageId}, chat_id: ${lastMsg.chatId} (use with telegram_react or telegram_send_file)`);
+        const toolHint = CHANNEL === 'telegram' ? ' (use with telegram_react or telegram_send_file)' : '';
+        dynamicLines.push(`Current message_id: ${lastMsg.messageId}, chat_id: ${lastMsg.chatId}${toolHint}`);
     }
     // Inject last 3 sent message IDs so Claude can delete its own messages reliably
     const sentCache = chatId ? sentMessageCache.get(String(chatId)) : null;
@@ -1114,12 +1141,13 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
         } catch (_) { /* non-fatal — trace metadata is best-effort */ }
     }
 
-    // Keep Telegram "typing..." indicator alive during API call (expires after 5s).
+    // Keep typing indicator alive during API call (expires after 5s).
     // Fire immediately (covers gap on 2nd+ API calls in tool-use loop), then every 4s.
+    // Accepts both numeric (Telegram) and string (Discord) chatIds.
     let typingInterval = null;
-    if (chatId && typeof chatId === 'number' && !background) {
-        sendTyping(chatId);
-        typingInterval = setInterval(() => sendTyping(chatId), 4000);
+    if (chatId && !background) {
+        _channelSendTyping(chatId);
+        typingInterval = setInterval(() => _channelSendTyping(chatId), 4000);
     }
 
     try {

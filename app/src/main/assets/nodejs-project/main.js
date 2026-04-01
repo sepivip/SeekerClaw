@@ -8,7 +8,7 @@ const fs = require('fs');
 // ============================================================================
 
 const {
-    ANTHROPIC_KEY, AUTH_TYPE, MODEL, AGENT_NAME, PROVIDER,
+    ANTHROPIC_KEY, AUTH_TYPE, MODEL, AGENT_NAME, PROVIDER, CHANNEL,
     MCP_SERVERS, REACTION_NOTIFICATIONS,
     MEMORY_DIR,
     localTimestamp, log, setRedactFn,
@@ -100,18 +100,43 @@ const { handleQuickCommand, handleQuickCallback } = require('./quick-actions');
 // web.js imports removed — httpRequest was only used by OAuth usage polling (now removed)
 
 // ============================================================================
-// TELEGRAM (extracted to telegram.js — BAT-197)
+// CHANNEL — Telegram or Discord (BAT-483)
 // ============================================================================
 
-const {
-    telegram,
-    MAX_FILE_SIZE, MAX_IMAGE_SIZE,
-    extractMedia, downloadTelegramFile,
-    sendMessage, sendTyping,
-    createStatusReactionController,
-} = require('./telegram');
+let telegram, MAX_FILE_SIZE, MAX_IMAGE_SIZE, extractMedia, downloadTelegramFile;
+let downloadFileByUrl, sendMessage, sendTyping, createStatusReactionController;
 
-// Wire sendMessage into cron.js so reminders can be delivered via Telegram
+if (CHANNEL === 'telegram') {
+    const tg = require('./telegram');
+    telegram = tg.telegram;
+    MAX_FILE_SIZE = tg.MAX_FILE_SIZE;
+    MAX_IMAGE_SIZE = tg.MAX_IMAGE_SIZE;
+    extractMedia = tg.extractMedia;
+    downloadTelegramFile = tg.downloadTelegramFile;
+    downloadFileByUrl = tg.downloadFileByUrl;
+    sendMessage = tg.sendMessage;
+    sendTyping = tg.sendTyping;
+    createStatusReactionController = tg.createStatusReactionController;
+} else if (CHANNEL === 'discord') {
+    const dc = require('./discord');
+    sendMessage = dc.sendMessage;
+    sendTyping = dc.sendTyping;
+    // Use telegram.js's downloadFileByUrl — it works for any URL and supports a maxSize param
+    const { downloadFileByUrl: _dlByUrl } = require('./telegram');
+    downloadFileByUrl = (url, fileName) => _dlByUrl(url, fileName, MAX_FILE_SIZE);
+    // Stubs for Telegram-only APIs (not used on Discord path)
+    telegram = () => Promise.resolve({ ok: false, description: 'Not available on Discord' });
+    MAX_FILE_SIZE = 25 * 1024 * 1024; // Discord max 25MB
+    MAX_IMAGE_SIZE = 25 * 1024 * 1024;
+    extractMedia = () => null;
+    downloadTelegramFile = () => Promise.resolve(null);
+    createStatusReactionController = () => ({
+        setQueued: () => {}, setThinking: () => {},
+        setDone: async () => {}, setError: async () => {}, clear: async () => {},
+    });
+}
+
+// Wire sendMessage into cron.js so reminders can be delivered
 setSendMessage(sendMessage);
 
 // ============================================================================
@@ -169,7 +194,7 @@ const lastIncomingMessages = new Map(); // chatId -> { messageId, chatId }
 const chatQueues = new Map(); // chatId -> Promise chain
 
 function enqueueMessage(msg) {
-    const chatId = msg.chat.id;
+    const chatId = msg.chatId ?? msg.chat?.id;
     const prev = chatQueues.get(chatId) || Promise.resolve();
     const next = prev.then(() => handleMessage(msg)).catch(e =>
         log(`Message handler error: ${e.message}`, 'ERROR')
@@ -308,6 +333,43 @@ async function autoResumeOnStartup() {
     }
 }
 
+/**
+ * Convert raw Telegram message into channel-agnostic normalized shape.
+ * Note: the confirmation interception in poll() also reads raw Telegram fields
+ * (chat.id, text) but those are pre-enqueue checks, not passed to handleMessage.
+ */
+function normalizeTelegramMessage(msg) {
+    const media = extractMedia(msg);
+    let normalizedMedia = null;
+    if (media) {
+        normalizedMedia = { ...media, url: null, downloadMethod: 'telegram_file_id' };
+    }
+
+    const reply = msg.reply_to_message;
+    const externalReply = msg.external_reply;
+    const quoteText = (msg.quote?.text ?? externalReply?.quote?.text ?? '').trim() || null;
+    const replyLike = reply ?? externalReply;
+    let replyTo = null;
+    if (replyLike) {
+        replyTo = {
+            text: (replyLike.text ?? replyLike.caption ?? '').trim(),
+            authorName: reply?.from?.first_name || 'Someone',
+        };
+    }
+
+    return {
+        chatId: msg.chat.id,
+        senderId: String(msg.from?.id),
+        text: (msg.text || '').trim(),
+        caption: (msg.caption || '').trim(),
+        messageId: msg.message_id,
+        media: normalizedMedia,
+        replyTo,
+        quoteText,
+        raw: msg,
+    };
+}
+
 let _prolongedOutageLogged = false; // OpenClaw parity: log once per outage cycle
 
 async function poll() {
@@ -357,7 +419,7 @@ async function poll() {
                                 sendMessage(msgChatId, `⏳ Reply YES or NO (or /approve / /deny) to confirm ${pending.toolName} first.`).catch(() => {});
                             }
                         } else {
-                            enqueueMessage(update.message);
+                            enqueueMessage(normalizeTelegramMessage(update.message));
                         }
                     }
                     if (update.callback_query) {
@@ -382,9 +444,15 @@ async function poll() {
                                 const safeData = (cb.data || '').replace(/[\r\n\t"\\]/g, ' ').trim();
                                 log(`[QuickAction] "${safeData}" → feeding mapped message`, 'DEBUG');
                                 enqueueMessage({
-                                    chat: cbChat, from: cb.from,
-                                    message_id: cbMsgId,
-                                    text: quickText,
+                                    chatId: cbChat.id,
+                                    senderId: String(cb.from.id),
+                                    text: (quickText || '').trim(),
+                                    caption: '',
+                                    messageId: cbMsgId,
+                                    media: null,
+                                    replyTo: null,
+                                    quoteText: null,
+                                    raw: cb.message || {},
                                 });
                             } else {
                                 // Generic callback: inject as synthetic user message
@@ -392,9 +460,15 @@ async function poll() {
                                 const originalText = (cb.message?.text || '').replace(/[\r\n]/g, ' ').slice(0, 200).trim();
                                 log(`[Callback] Button tapped: "${buttonData}" on message: "${originalText.slice(0, 60)}"`, 'DEBUG');
                                 enqueueMessage({
-                                    chat: cbChat, from: cb.from,
-                                    message_id: cbMsgId,
+                                    chatId: cbChat.id,
+                                    senderId: String(cb.from.id),
                                     text: `[Tapped button: "${buttonData}"] (on message: "${originalText}")`,
+                                    caption: '',
+                                    messageId: cbMsgId,
+                                    media: null,
+                                    replyTo: null,
+                                    quoteText: null,
+                                    raw: cb.message || {},
                                 });
                             }
                         }
@@ -501,6 +575,7 @@ function startClaudeUsagePolling() {
 // STARTUP
 // ============================================================================
 
+if (CHANNEL === 'telegram') {
 log('Connecting to Telegram...', 'INFO');
 telegram('getMe')
     .then(async result => {
@@ -539,8 +614,9 @@ telegram('getMe')
                 config,
                 redactSecrets,
                 telegram,
-                sendMessage, sendTyping, downloadTelegramFile,
-                extractMedia, createStatusReactionController,
+                sendMessage, sendTyping, downloadTelegramFile, downloadFileByUrl,
+                extractMedia,
+                createStatusReactionController,
                 MAX_FILE_SIZE, MAX_IMAGE_SIZE,
                 chat, getConversation, addToConversation, clearConversation,
                 saveSessionSummary, MIN_MESSAGES_FOR_SUMMARY,
@@ -664,6 +740,121 @@ telegram('getMe')
         log(`ERROR: ${err.message}`, 'ERROR');
         process.exit(1);
     });
+} else if (CHANNEL === 'discord') {
+    const discord = require('./discord');
+
+    // Condensed startup banner
+    const _skillCount = loadSkills().length;
+    const _cronCount = cronService.store?.jobs?.length || 0;
+    log(`${AGENT_NAME} | ${PROVIDER}/${MODEL} | Discord | ${_skillCount} skills | ${MCP_SERVERS.length} MCP | ${_cronCount} cron`, 'INFO');
+
+    // Initialize SQL.js database (non-fatal if WASM fails)
+    initDatabase().then(() => {
+        indexMemoryFiles();
+        backfillSessionsFromFiles();
+        seedHeartbeatMd();
+
+        // Wire shutdown deps
+        setShutdownDeps({ conversations, saveSessionSummary, MIN_MESSAGES_FOR_SUMMARY });
+
+        // Wire chat deps: inject main.js state into ai.js
+        setChatDeps({
+            executeTool,
+            getTools: () => [...TOOLS, ...mcpManager.getAllTools()],
+            getMcpStatus: () => mcpManager.getStatus(),
+            requestConfirmation,
+            lastToolUseTime,
+            lastIncomingMessages,
+        });
+
+        // Wire message handler deps
+        initMessageHandler({
+            AGENT_NAME, MODEL, MEMORY_DIR, REACTION_NOTIFICATIONS,
+            log, debugLog,
+            getOwnerId, setOwnerId,
+            config,
+            redactSecrets,
+            telegram,
+            sendMessage, sendTyping, downloadTelegramFile, downloadFileByUrl,
+            extractMedia,
+            createStatusReactionController: () => ({
+                setQueued: () => {}, setThinking: () => {},
+                setDone: async () => {}, setError: async () => {}, clear: async () => {},
+            }),
+            MAX_FILE_SIZE, MAX_IMAGE_SIZE,
+            chat, getConversation, addToConversation, clearConversation,
+            saveSessionSummary, MIN_MESSAGES_FOR_SUMMARY,
+            getActiveTask, clearActiveTask,
+            sessionTracking,
+            executeTool, pendingConfirmations, lastToolUseTime,
+            loadBootstrap, loadIdentity, loadSoul, loadMemory,
+            loadSkills,
+            loadCheckpoint, listCheckpoints,
+            handleQuickCommand,
+            androidBridgeCall,
+            chatQueues, lastIncomingMessages,
+        });
+
+        // Wire MCP routing into tools.js
+        setMcpExecuteTool((name, input) => mcpManager.executeTool(name, input));
+        setFullToolRegistry(() => [...TOOLS, ...mcpManager.getAllTools()]);
+
+        startDbSummaryInterval();
+        startStatsServer();
+
+        // Agent health heartbeat
+        writeAgentHealthFile();
+        setInterval(() => writeAgentHealthFile(), 60000);
+
+        // Start Discord gateway — messages flow through enqueueMessage
+        discord.start((normalized) => {
+            enqueueMessage(normalized);
+        });
+
+        // Notify owner we're online (if owner ID is known)
+        const ownerId = getOwnerId();
+        if (ownerId) {
+            // Discord DM channel needs to be opened first — send via the channel from first message
+            // The "back online" notification will happen naturally when the owner sends a message
+        }
+
+        startClaudeUsagePolling();
+
+        // Auto-resume checkpoints after 3s
+        setTimeout(() => autoResumeOnStartup(), 3000);
+
+        // Initialize MCP servers in background
+        if (MCP_SERVERS.length > 0) {
+            mcpManager.initializeAll(MCP_SERVERS).then((mcpResults) => {
+                const ok = mcpResults.filter(r => r.status === 'connected');
+                const fail = mcpResults.filter(r => r.status === 'failed');
+                if (ok.length > 0) log(`[MCP] ${ok.length} server(s) connected, ${ok.reduce((s, r) => s + r.tools, 0)} tools available`, 'INFO');
+                if (fail.length > 0) log(`[MCP] ${fail.length} server(s) failed to connect`, 'WARN');
+            }).catch((e) => {
+                log(`[MCP] Initialization error: ${e.message}`, 'ERROR');
+            });
+        }
+
+        // Idle session summary timer
+        setInterval(() => {
+            const now = Date.now();
+            sessionTracking.forEach((track, chatId) => {
+                if (track.lastMessageTime > 0 && now - track.lastMessageTime > IDLE_TIMEOUT_MS) {
+                    track.lastMessageTime = 0;
+                    const conv = conversations.get(chatId);
+                    if (conv && conv.length >= MIN_MESSAGES_FOR_SUMMARY) {
+                        saveSessionSummary(chatId, 'idle').catch(e => log(`[SessionSummary] ${e.message}`, 'DEBUG'));
+                    }
+                }
+            });
+        }, 60000);
+
+        log('[Discord] Discord channel fully initialized', 'INFO');
+    }).catch(err => {
+        log(`[Discord] Startup error: ${err.message}`, 'ERROR');
+        process.exit(1);
+    });
+}
 
 // Runtime status log (uptime/memory debug, every 5 min)
 setInterval(() => {

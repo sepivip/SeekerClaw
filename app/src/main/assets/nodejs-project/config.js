@@ -110,6 +110,14 @@ const CUSTOM_KEY = normalizeSecret(config.customApiKey || '');
 const CUSTOM_BASE_URL = (typeof config.customBaseUrl === 'string' ? config.customBaseUrl : '').trim();
 const CUSTOM_HEADERS_RAW = (typeof config.customHeaders === 'string' ? config.customHeaders : '').trim();
 const CUSTOM_FORMAT = (typeof config.customFormat === 'string' ? config.customFormat : 'chat_completions').trim().toLowerCase();
+const CHANNEL = (typeof config.channel === 'string' ? config.channel : 'telegram').trim().toLowerCase();
+const VALID_CHANNELS = new Set(['telegram', 'discord']);
+if (!VALID_CHANNELS.has(CHANNEL)) {
+    log(`ERROR: Unknown channel "${CHANNEL}" — must be "telegram" or "discord"`, 'ERROR');
+    process.exit(1);
+}
+const DISCORD_TOKEN = normalizeSecret(config.discordBotToken || '');
+const DISCORD_OWNER_ID = config.discordOwnerId ? String(config.discordOwnerId).trim() : '';
 const OPENROUTER_FALLBACK_MODEL = (typeof config.openrouterFallbackModel === 'string' ? config.openrouterFallbackModel : '').trim();
 const OPENROUTER_MODEL_CONTEXT = parseInt(config.openrouterModelContext, 10) || 0;
 const OPENROUTER_FALLBACK_CONTEXT = parseInt(config.openrouterFallbackContext, 10) || 0;
@@ -173,17 +181,25 @@ const MCP_SERVERS = (config.mcpServers || [])
     })
     .filter((server) => server && typeof server === 'object' && server.url);
 
-// Validate: bot token always required; API key required for active provider only
+// Validate: channel token required per channel; API key required for active provider only
 const _activeKey = PROVIDER === 'openai' ? OPENAI_KEY
     : PROVIDER === 'openrouter' ? OPENROUTER_KEY
     : PROVIDER === 'custom' ? CUSTOM_KEY
     : ANTHROPIC_KEY;
-if (!BOT_TOKEN || !_activeKey) {
+if (CHANNEL === 'telegram' && !BOT_TOKEN) {
+    log('ERROR: Missing required config (botToken) for Telegram channel', 'ERROR');
+    process.exit(1);
+}
+if (CHANNEL === 'discord' && !DISCORD_TOKEN) {
+    log('ERROR: Missing required config (discordBotToken) for Discord channel', 'ERROR');
+    process.exit(1);
+}
+if (!_activeKey) {
     const keyName = PROVIDER === 'openai' ? 'openaiApiKey'
         : PROVIDER === 'openrouter' ? 'openrouterApiKey'
         : PROVIDER === 'custom' ? 'customApiKey'
         : 'anthropicApiKey';
-    log(`ERROR: Missing required config (botToken, ${keyName}) for provider "${PROVIDER}"`, 'ERROR');
+    log(`ERROR: Missing required config (${keyName}) for provider "${PROVIDER}"`, 'ERROR');
     process.exit(1);
 }
 
@@ -478,6 +494,9 @@ module.exports = {
 
     // Primary constants
     BOT_TOKEN,
+    CHANNEL,
+    DISCORD_TOKEN,
+    DISCORD_OWNER_ID,
     PROVIDER,
     ANTHROPIC_KEY,
     OPENAI_KEY,

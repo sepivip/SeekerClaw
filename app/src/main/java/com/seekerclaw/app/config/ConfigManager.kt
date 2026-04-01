@@ -53,6 +53,9 @@ data class AppConfig(
     val customBaseUrl: String = "",
     val customHeaders: String = "",
     val customFormat: String = "chat_completions",
+    val channel: String = "telegram",
+    val discordBotToken: String = "",
+    val discordOwnerId: String = "",
 ) {
     /** Anthropic/authType-based credential — used by SetupScreen and legacy flows. */
     val activeCredential: String
@@ -115,6 +118,9 @@ object ConfigManager {
     private const val KEY_CUSTOM_BASE_URL = "custom_base_url"
     private const val KEY_CUSTOM_HEADERS_ENC = "custom_headers_enc"
     private const val KEY_CUSTOM_FORMAT = "custom_format"
+    private const val KEY_CHANNEL = "channel"
+    private const val KEY_DISCORD_BOT_TOKEN_ENC = "discord_bot_token_enc"
+    private const val KEY_DISCORD_OWNER_ID = "discord_owner_id"
     private const val KEY_FIRST_DEPLOY_DONE = "first_deploy_done"
 
     private fun prefs(context: Context): SharedPreferences =
@@ -245,6 +251,15 @@ object ConfigManager {
             editor.remove(KEY_CUSTOM_HEADERS_ENC)
         }
         editor.putString(KEY_CUSTOM_FORMAT, config.customFormat)
+
+        editor.putString(KEY_CHANNEL, config.channel)
+        if (config.discordBotToken.isNotBlank()) {
+            val encDiscord = KeystoreHelper.encrypt(config.discordBotToken)
+            editor.putString(KEY_DISCORD_BOT_TOKEN_ENC, Base64.encodeToString(encDiscord, Base64.NO_WRAP))
+        } else {
+            editor.remove(KEY_DISCORD_BOT_TOKEN_ENC)
+        }
+        editor.putString(KEY_DISCORD_OWNER_ID, config.discordOwnerId)
 
         val persisted = editor.commit()
         if (persisted) {
@@ -383,6 +398,15 @@ object ConfigManager {
             ""
         }
 
+        val discordBotToken = try {
+            val enc = p.getString(KEY_DISCORD_BOT_TOKEN_ENC, null)
+            if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to decrypt Discord bot token", e)
+            LogCollector.append("[Config] Failed to decrypt Discord bot token: ${e.javaClass.simpleName}", LogLevel.ERROR)
+            ""
+        }
+
         return AppConfig(
             anthropicApiKey = apiKey,
             setupToken = setupToken,
@@ -411,6 +435,9 @@ object ConfigManager {
             customBaseUrl = p.getString(KEY_CUSTOM_BASE_URL, "") ?: "",
             customHeaders = customHeaders,
             customFormat = p.getString(KEY_CUSTOM_FORMAT, "chat_completions") ?: "chat_completions",
+            channel = p.getString(KEY_CHANNEL, "telegram") ?: "telegram",
+            discordBotToken = discordBotToken,
+            discordOwnerId = p.getString(KEY_DISCORD_OWNER_ID, "") ?: "",
         )
     }
 
@@ -459,6 +486,9 @@ object ConfigManager {
             "customBaseUrl" -> config.copy(customBaseUrl = value)
             "customHeaders" -> config.copy(customHeaders = value)
             "customFormat" -> config.copy(customFormat = value)
+            "channel" -> config.copy(channel = value)
+            "discordBotToken" -> config.copy(discordBotToken = value)
+            "discordOwnerId" -> config.copy(discordOwnerId = value)
             else -> return
         }
         saveConfig(context, updated)
@@ -520,6 +550,9 @@ object ConfigManager {
             if (config.customBaseUrl.isNotBlank()) put("customBaseUrl", config.customBaseUrl)
             if (config.customHeaders.isNotBlank()) put("customHeaders", config.customHeaders)
             if (config.customFormat.isNotBlank()) put("customFormat", config.customFormat)
+            put("channel", config.channel)
+            if (config.discordBotToken.isNotBlank()) put("discordBotToken", config.discordBotToken)
+            if (config.discordOwnerId.isNotBlank()) put("discordOwnerId", config.discordOwnerId)
             val mcpServers = loadMcpServers(context)
             if (mcpServers.isNotEmpty()) {
                 val arr = JSONArray()
@@ -568,7 +601,8 @@ object ConfigManager {
 
     fun runtimeValidationError(config: AppConfig?): String? {
         if (config == null) return "setup_not_complete"
-        if (config.telegramBotToken.isBlank()) return "missing_bot_token"
+        if (config.channel == "telegram" && config.telegramBotToken.isBlank()) return "missing_bot_token"
+        if (config.channel == "discord" && config.discordBotToken.isBlank()) return "missing_discord_token"
         val hasCredential = when (config.provider) {
             "openai" -> config.openaiApiKey.isNotBlank()
             "openrouter" -> config.openrouterApiKey.isNotBlank()
@@ -586,7 +620,8 @@ object ConfigManager {
             "apiSet=${config.anthropicApiKey.isNotBlank()} setupTokenSet=${config.setupToken.isNotBlank()} " +
             "openaiSet=${config.openaiApiKey.isNotBlank()} openrouterSet=${config.openrouterApiKey.isNotBlank()} " +
             "customSet=${config.customApiKey.isNotBlank()} " +
-            "activeSet=${config.activeCredential.isNotBlank()} model=${config.model}"
+            "activeSet=${config.activeCredential.isNotBlank()} model=${config.model} " +
+            "channel=${config.channel} discordSet=${config.discordBotToken.isNotBlank()}"
     }
 
     // ==================== Auth Type Detection ====================
