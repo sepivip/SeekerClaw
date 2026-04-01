@@ -18,7 +18,7 @@
 
 ---
 
-SeekerClaw embeds a Node.js AI agent inside an Android app, running 24/7 as a foreground service. You interact through Telegram — ask questions, control your phone, trade crypto, schedule tasks. **56 tools, 35 skills, Solana wallet, multi-provider AI (Claude + OpenAI + OpenRouter)**, all running locally on your device. Built for the Solana Seeker, runs on any Android 14+ phone.
+SeekerClaw embeds a Node.js AI agent inside an Android app, running 24/7 as a foreground service. You interact through Telegram — ask questions, control your phone, trade crypto, schedule tasks. **71 tools, 35+ skills, Solana wallet, multi-provider AI (Claude + OpenAI + OpenRouter + any OpenAI-compatible gateway)**, all running locally on your device. Built for the Solana Seeker, runs on any Android 14+ phone.
 
 <div align="center">
   <img src="design/screenshots/01-first-launch.png" width="130">
@@ -33,7 +33,7 @@ SeekerClaw embeds a Node.js AI agent inside an Android app, running 24/7 as a fo
 
 | | Feature | What it does |
 |---|---|---|
-| :robot: | **AI Engine** | Claude, OpenAI, or OpenRouter (multi-provider) with multi-turn tool use |
+| :robot: | **AI Engine** | Claude, OpenAI, OpenRouter, or any OpenAI-compatible gateway (Custom) with multi-turn tool use |
 | :speech_balloon: | **Telegram** | Full bot — reactions, file sharing, inline keyboards, 12 commands |
 | :link: | **Solana Wallet** | Swaps, limit orders, DCA, transfers via Jupiter + MWA |
 | :iphone: | **Device Control** | Battery, GPS, camera, SMS, calls, clipboard, TTS |
@@ -50,7 +50,7 @@ SeekerClaw embeds a Node.js AI agent inside an Android app, running 24/7 as a fo
 ```mermaid
 graph LR
     You["You (Telegram)"] -->|messages| Agent["SeekerClaw Agent"]
-    Agent -->|reasoning| AI["AI Provider (Claude / OpenAI / OpenRouter)"]
+    Agent -->|reasoning| AI["AI Provider (Claude / OpenAI / OpenRouter / Custom)"]
     Agent -->|swaps, balance| Solana["Solana / Jupiter"]
     Agent -->|device access| Bridge["Android Bridge"]
     Agent -->|search, fetch| Web["Web APIs"]
@@ -63,21 +63,24 @@ graph LR
 Android App (Kotlin, Jetpack Compose)
  └─ Foreground Service
      └─ Node.js Runtime (nodejs-mobile)
-         ├─ claude.js      — AI provider API, system prompt, conversations
-         ├─ tools/         — 56 tool handlers across 12 modules
-         ├─ task-store.js  — Persistent task checkpoints
-         ├─ solana.js      — Jupiter swaps, DCA, limit orders
-         ├─ telegram.js    — Bot, formatting, commands
-         ├─ memory.js      — Persistent memory + ranked search
-         ├─ skills.js      — Skill loading + semantic routing
-         ├─ cron.js        — Job scheduling + natural language parsing
-         ├─ mcp-client.js  — MCP Streamable HTTP client
-         ├─ web.js         — Search + fetch + caching
-         ├─ database.js    — SQL.js analytics
-         ├─ security.js    — Prompt injection defense
-         ├─ bridge.js      — Android Bridge HTTP client
-         ├─ config.js      — Config loading + validation
-         └─ main.js        — Orchestrator + heartbeat
+         ├─ ai.js             — AI provider API, system prompt, conversations
+         ├─ message-handler.js — Inbound message routing, commands, auto-resume
+         ├─ providers/        — Claude, OpenAI, OpenRouter, Custom adapters
+         ├─ tools/            — 71 tool handlers across 12 modules
+         ├─ http.js           — HTTP/HTTPS transport, SSE streaming
+         ├─ task-store.js     — Persistent task checkpoints
+         ├─ solana.js         — Jupiter swaps, DCA, limit orders
+         ├─ telegram.js       — Bot, formatting, commands, repetition detector
+         ├─ memory.js         — Persistent memory + ranked search
+         ├─ skills.js         — Skill loading + semantic routing
+         ├─ cron.js           — Job scheduling + natural language parsing
+         ├─ mcp-client.js     — MCP Streamable HTTP client
+         ├─ web.js            — Search providers + fetch + caching
+         ├─ database.js       — SQL.js analytics
+         ├─ security.js       — Prompt injection defense
+         ├─ bridge.js         — Android Bridge HTTP client
+         ├─ config.js         — Config loading + validation
+         └─ main.js           — Orchestrator + heartbeat
 ```
 
 </details>
@@ -93,7 +96,7 @@ cd SeekerClaw
 adb install app/build/outputs/apk/dappStore/debug/app-dappStore-debug.apk
 ```
 
-Open the app → pick your AI provider (Claude, OpenAI, or OpenRouter) → enter your API key + [Telegram bot token](https://t.me/BotFather) + choose a model + name your agent — or generate a QR code at [seekerclaw.xyz/setup](https://seekerclaw.xyz/setup) and scan it. Done.
+Open the app → pick your AI provider (Claude, OpenAI, or OpenRouter) → enter your API key + [Telegram bot token](https://t.me/BotFather) + choose a model + name your agent — or generate a QR code at [seekerclaw.xyz/setup](https://seekerclaw.xyz/setup) and scan it. Done. For custom gateways (DeepSeek, Ollama, LiteLLM, etc.), configure in Settings after setup.
 
 > **Step-by-step setup guide:** [How to set up SeekerClaw](https://x.com/SeekerClaw/status/2029197829068005849)
 
