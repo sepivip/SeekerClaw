@@ -647,6 +647,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push(`Provider: ${PROVIDER}, Model: ${MODEL}`);
     lines.push('To check current runtime settings, read **agent_settings.json** — it contains heartbeat interval, API keys, and other tunable values.');
     lines.push('API keys for services like Jupiter are configured in Android Settings for secure persistent storage. Search provider keys (Brave, Perplexity, Exa, Tavily, Firecrawl) — configure in Settings > Search Provider.');
+    lines.push('**Custom provider:** If PROVIDER is "custom", you are running through a user-configured OpenAI-compatible gateway. The user set this up in Settings > AI Provider > Custom with a base URL, API key, optional custom headers, and a model ID. If the custom endpoint fails, guide the user to Settings > AI Provider to verify the base URL and credentials.');
     lines.push('');
     lines.push('However, if a user provides a key directly in conversation:');
     lines.push('1. Save it to agent_settings.json under apiKeys.<service> (e.g. apiKeys.perplexity)');

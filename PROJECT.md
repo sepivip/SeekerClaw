@@ -30,7 +30,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 | UI Framework | Jetpack Compose (Material 3) | — |
 | Min SDK | 34 (Android 14) | — |
 | Node.js Runtime | nodejs-mobile (community fork) | Node 18 LTS |
-| AI Provider | Anthropic Claude API + OpenAI Responses API + OpenRouter Chat Completions | Claude Opus 4.6 default; OpenAI + OpenRouter via adapters |
+| AI Provider | Anthropic Claude API + OpenAI Responses API + OpenRouter Chat Completions + Custom (any OpenAI-compatible gateway) | Claude Opus 4.6 default; OpenAI + OpenRouter + Custom via adapters |
 | Messaging | Telegram Bot API (grammy) | — |
 | Database | SQL.js (WASM SQLite) | 1.12.0 |
 | OpenClaw Parity | OpenClaw gateway (ported) | 2026.3.24 |
@@ -42,7 +42,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 
 ### AI Agent Core
 - **Claude integration** — Opus 4.6 (default), Sonnet 4.6, Sonnet 4.5, Haiku 4.5 selectable. Prompt caching, retry with backoff, rate-limit throttling, user-friendly error messages. OAuth/setup token support for Claude Pro/Max users. Conversational API key setup flow.
-- **Multi-provider architecture** — Provider adapter pattern (claude/openai/openrouter) with unified internal message format. OpenAI Responses API support (`/v1/responses`) with SSE streaming, function_call items, vision. OpenRouter Chat Completions adapter with prompt caching, model fallbacks, error classification (401-503), vision support. Provider-agnostic DB logging and usage tracking. Safe defaults — unknown provider falls back to Claude. Credential hygiene — only active provider's key written to config.json.
+- **Multi-provider architecture** — Provider adapter pattern (claude/openai/openrouter/custom) with unified internal message format. OpenAI Responses API support (`/v1/responses`) with SSE streaming, function_call items, vision. OpenRouter Chat Completions adapter with prompt caching, model fallbacks, error classification (401-503), vision support. Custom provider for any OpenAI-compatible gateway — user-configurable base URL, API key, custom headers, and Chat Completions or Responses API format. Provider-agnostic DB logging and usage tracking. Safe defaults — unknown provider falls back to Claude. Credential hygiene — only active provider's key written to config.json.
 - **Multi-turn task execution** — Reliable P2 multi-turn: tool budget management with validation-aware restore, silent turn stop prevention on budget exhaustion, MAX_TOOL_USES=25 for complex tasks
 - **API timeout hardening** — Configurable timeouts (replacing hardcoded 60s), bounded retry with backoff for timeout paths, turn-level tracing instrumentation, sanitized user-visible error messages, 429 retry jitter
 - **Context token estimation + adaptive trimming** — Token-aware conversation management that estimates context size and trims oldest messages to stay within limits, preventing API failures from oversized contexts
@@ -206,7 +206,7 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 │   - Dashboard                  - Node.js Runtime   │
 │   - Setup                        - OpenClaw Gateway │
 │   - Logs                         - AI Agent         │
-│   - Settings                     - 56 Tools         │
+│   - Settings                     - 71 Tools         │
 │                                  - SQL.js DB        │
 │  Boot Receiver ──> Auto-start                      │
 │  Watchdog ──> 30s health check                     │
@@ -230,14 +230,14 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Metric | Count |
 |--------|-------|
-| Total commits | 396 |
-| PRs merged | 267+ |
+| Total commits | 480+ |
+| PRs merged | 309+ |
 | Tools | 71 (29 Solana/Jupiter, 13 Android bridge, 6 memory, 5 file, 5 cron, 4 telegram, 4 system, 2 web, 2 skill, 1 session) + MCP dynamic |
 | Skills | 35 (20 bundled + 13 workspace + 2 user-created) |
 | Android Bridge endpoints | 18+ |
 | Telegram commands | 12 |
-| Lines of JS | ~14,900 (main.js + 15 modules + 3 provider adapters) |
-| Lines of Kotlin | ~14,000 |
+| Lines of JS | ~16,400 (main.js + message-handler.js + ai.js + 16 modules + 4 provider adapters) |
+| Lines of Kotlin | ~15,000 |
 | SQL.js tables | 4 |
 | Themes | 1 (DarkOps only) |
 
@@ -272,6 +272,12 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Date | Feature | PR |
 |------|---------|-----|
+| 2026-03-31 | Docs: SAB-AUDIT-v16 — custom provider door, diagnostics, stats update | direct |
+| 2026-03-30 | Feat: Custom AI Provider — connect any OpenAI-compatible gateway (BAT-482) | #309 |
+| 2026-03-30 | Refactor: shared UI components — CardSurface, InfoRow, Scaffold, Switch (Phases B1/B2/C) | #306-308 |
+| 2026-03-29 | Feat: Repetition detector in telegram.js | #300 |
+| 2026-03-28 | Feat: main.js split — main.js + message-handler.js, claude.js renamed to ai.js | #303 |
+| 2026-03-27 | Feat: Git SHA + build date in debug builds | direct |
 | 2026-03-25 | Feat: Quick Actions — /quick command with inline keyboard (#279) | #295 |
 | 2026-03-25 | Docs: SAB-AUDIT-v15 — search provider door, web search diagnostics, tool count | direct |
 | 2026-03-24 | Feat: Search Provider System — remove DDG, add Exa/Tavily/Firecrawl (BAT-481) | #294 |

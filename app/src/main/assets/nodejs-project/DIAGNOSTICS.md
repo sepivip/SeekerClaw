@@ -27,7 +27,7 @@ grep -i "429\|Too Many Requests\|rate.limit" node_debug.log | tail -10
 
 ---
 
-## LLM API (Claude / OpenAI / OpenRouter)
+## LLM API (Claude / OpenAI / OpenRouter / Custom)
 
 ### Transport Timeout (Stream Drops)
 **Symptoms:** Responses cut off mid-stream, `[Trace]` entries in logs showing high latency, user sees partial or no response.
@@ -53,6 +53,24 @@ grep -i "400\|context.*length\|too many tokens" node_debug.log | tail -5
 1. Use `/new` to archive and clear conversation history
 2. If a specific tool result was too large, note that tool results are auto-truncated at ~120KB but the conversation can still accumulate
 3. MAX_HISTORY (35 messages) should prevent this in normal use — if it happens, it's likely a single very large message or tool result
+
+### Custom Provider — Connection or Format Errors
+**Symptoms:** All API calls fail immediately. Logs show connection refused, SSL errors, or unexpected response format (e.g., "Unexpected token" JSON parse errors).
+**Check:**
+```
+grep -i "custom provider\|ECONNREFUSED\|UNABLE_TO_VERIFY\|Unexpected token" node_debug.log | tail -10
+```
+**Diagnosis:** The user configured a custom OpenAI-compatible endpoint in Settings > AI Provider > Custom. Common issues:
+- **Wrong base URL:** URL must include the path up to (but not including) `/v1/chat/completions` — e.g., `https://my-gateway.example.com` not `https://my-gateway.example.com/v1/chat/completions`
+- **Self-signed SSL:** If the endpoint uses a self-signed certificate, Node.js rejects it by default (`UNABLE_TO_VERIFY_LEAF_SIGNATURE`)
+- **Auth header mismatch:** Some gateways use custom auth headers instead of `Authorization: Bearer`. The user can set custom headers in Settings.
+- **Unsupported format:** Custom provider defaults to Chat Completions (`/v1/chat/completions`). If the gateway only supports OpenAI Responses API, the user must set format to `responses` in Settings.
+- **Model ID mismatch:** The model string must exactly match what the custom gateway expects.
+**Fix:**
+1. Verify the base URL is reachable: `curl -s <base_url>/v1/models` (or equivalent health endpoint)
+2. Check auth: API key and/or custom headers must match what the gateway expects
+3. Guide the user to Settings > AI Provider > Custom to review URL, key, headers, format, and model ID
+4. For SSL issues: suggest the user switch to an endpoint with a valid certificate, or use HTTP (if local/trusted)
 
 ---
 
