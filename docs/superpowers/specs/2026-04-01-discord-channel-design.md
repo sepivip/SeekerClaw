@@ -86,7 +86,7 @@ Exports (same interface as telegram.js):
 Gateway protocol:
 1. Connect via vendored `ws` to `wss://gateway.discord.gg/?v=10&encoding=json`
 2. Receive Hello (opcode 10) → start heartbeat at server interval
-3. Send Identify (opcode 2) with token + intents: `DIRECT_MESSAGES (1<<12)` + `MESSAGE_CONTENT (1<<15)`
+3. Send Identify (opcode 2) with token + intents: `DIRECT_MESSAGES (1<<12)` + `MESSAGE_CONTENT (1<<15)` + `DIRECT_MESSAGE_REACTIONS (1<<13)`
 4. Listen for `MESSAGE_CREATE` events → filter: DM only, not from bot, owner check
 5. Owner auto-detect: first DM sender becomes owner (same as Telegram), saved via Bridge
 6. On disconnect: session resume (opcode 6) with `session_id` + `seq`
@@ -150,13 +150,24 @@ Vendored `ws@8.20.0`. Single file, pure JS, MIT license. Audited for security (n
 Inbound `MESSAGE_CREATE` event normalized to match Telegram message shape:
 ```javascript
 {
-    chatId: msg.channel_id,      // Discord DM channel ID
-    senderId: msg.author.id,     // Discord user ID
-    text: msg.content,           // Message text
-    media: null,                 // v1: text only, media later
-    replyTo: null,               // v1: no reply threading
+    chatId: msg.channel_id,         // Discord DM channel ID
+    senderId: msg.author.id,        // Discord user ID
+    text: msg.content,              // Message text
+    media: msg.attachments[0] ? {   // First attachment (image, file, etc.)
+        type: detectMediaType(msg.attachments[0].content_type),
+        url: msg.attachments[0].url,
+        filename: msg.attachments[0].filename,
+        size: msg.attachments[0].size,
+    } : null,
+    replyTo: msg.message_reference?.message_id || null,
 }
 ```
+
+**Media support:** Discord attachments are direct URLs — download via `httpRequest` (no bot token needed, URLs are CDN-signed). Supports images, documents, audio, video.
+
+**Reactions:** Subscribe to `MESSAGE_REACTION_ADD` gateway intent. Normalize to same format as Telegram reactions for `message-handler.js`.
+
+**Sending media:** REST `POST /channels/{id}/messages` with `multipart/form-data` for file uploads, or embed URLs for images.
 
 ### Edge Cases
 
@@ -183,8 +194,7 @@ Inbound `MESSAGE_CREATE` event normalized to match Telegram message shape:
 ### Future (not in scope)
 
 - Guild/group chat support
-- Discord media (images, files)
-- Discord reactions
 - Discord slash commands
 - Both channels active simultaneously
 - `discord_send` tool
+- Voice channels
