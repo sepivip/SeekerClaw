@@ -18,13 +18,19 @@ Add Discord as an alternative messaging channel to Telegram. User picks one acti
 - Zero impact on existing Telegram-only users
 - Safe for 5,000+ users
 
-## Two-PR Approach
+## Four-PR Approach
 
-**PR 1 (refactor):** Make `main.js` channel-pluggable. Extract the `sendMessage`/`sendTyping` coupling so main.js gets channel functions from config, not hardcoded `require('./telegram')`. Test on device — Telegram works exactly the same. Merge.
+Each PR is testable and mergeable independently. Each must pass Copilot review + device test before merge.
 
-**PR 2 (feature):** Add `discord.js`, vendored `ws`, Kotlin UI. Plug Discord into the channel interface from PR 1. Purely additive — no changes to Telegram code. Test on device. Merge.
+**PR 1 — Message shape normalization:** Refactor `message-handler.js` to work with a normalized `{ chatId, senderId, text, media, replyTo, messageId }` shape instead of raw Telegram objects. Telegram adapter in `main.js` converts `msg.chat.id` → `chatId`, `msg.from.id` → `senderId`, etc. Extract media pipeline to support both Telegram file_id downloads and direct URL downloads (Discord). Test: Telegram still works identically.
 
-PR 2 depends on PR 1.
+**PR 2 — Channel startup abstraction:** Extract polling loop + startup sequence (getMe, flush updates, register commands, "back online" message) into `telegram.js` `start(onMessage)`. Make `BOT_TOKEN` optional in config.js (required only when `channel === 'telegram'`). Add conditional tool registration — `telegram_*` tools only loaded when Telegram is active. Add `CHANNEL` config constant. Test: Telegram still works identically.
+
+**PR 3 — System prompt + delivery abstraction:** Make system prompt channel-aware (~25 Telegram references → dynamic). Cron/heartbeat delivery uses channel-agnostic `sendMessage`. Owner ID handling works for both Telegram (numeric) and Discord (snowflake string). Status reaction controller gracefully no-ops on non-Telegram channels. Test: Telegram still works identically.
+
+**PR 4 — Discord channel:** Add `discord.js` (gateway protocol + REST sends), vendored `ws` (191 KB), Kotlin UI (DiscordConfigScreen, channel selector in Settings). Purely additive — zero changes to Telegram code. Test: both channels work.
+
+PR 2 depends on PR 1. PR 3 depends on PR 2. PR 4 depends on PR 3.
 
 ## Config Fields (3 new)
 
