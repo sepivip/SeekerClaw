@@ -449,12 +449,20 @@ fun SettingsScreen(
                     onClick = onNavigateToAiConfig,
                     info = "Select AI provider, configure model and API credentials.",
                 )
+                SectionLabel("Channel")
                 ConfigField(
                     label = "Telegram",
-                    value = "Bot Token, Owner ID, Connection Test",
+                    value = if (config?.channel != "discord") "Active" else "Bot Token, Owner ID",
                     onClick = onNavigateToTelegram,
                     info = "Configure your Telegram bot settings.",
                 )
+                ConfigField(
+                    label = "Discord",
+                    value = if (config?.channel == "discord") "Active" else "Not configured",
+                    onClick = onNavigateToDiscordConfig,
+                    info = SettingsHelpTexts.DISCORD_CHANNEL,
+                )
+                SectionLabel("Agent")
                 ConfigField(
                     label = "Agent Name",
                     value = config?.agentName?.ifBlank { "SeekerClaw" } ?: "SeekerClaw",
@@ -481,12 +489,6 @@ fun SettingsScreen(
                         if ((config?.activeSearchApiKey ?: "").isBlank()) " (not configured)" else "",
                     onClick = onNavigateToSearchConfig,
                     info = SettingsHelpTexts.SEARCH_PROVIDER,
-                )
-                ConfigField(
-                    label = "Discord",
-                    value = if (config?.channel == "discord") "Active" else "Not configured",
-                    onClick = onNavigateToDiscordConfig,
-                    info = SettingsHelpTexts.DISCORD_CHANNEL,
                     showDivider = false,
                 )
             }
