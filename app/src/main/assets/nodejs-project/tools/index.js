@@ -145,8 +145,8 @@ function requestConfirmation(chatId, toolName, input) {
         });
         log(`[Confirm] Awaiting confirmation for ${toolName} in chat ${chatId}`, 'DEBUG');
         channel.sendMessage(chatId, msg).then((result) => {
-            if (result && result.ok === false) {
-                log(`[Confirm] Channel rejected confirmation message: ${JSON.stringify(result).slice(0, 200)}`, 'WARN');
+            if (result && result.error) {
+                log(`[Confirm] Channel rejected confirmation message: ${result.error}`, 'WARN');
                 pendingConfirmations.delete(chatId);
                 clearTimeout(timer);
                 resolve(false);
