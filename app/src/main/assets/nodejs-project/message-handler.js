@@ -507,7 +507,22 @@ async function handleMessage(normalized) {
                     // Vision-supported image formats
                     const VISION_MIMES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
 
-                    if (isImage && VISION_MIMES.has(media.mime_type) && saved.size <= deps.MAX_IMAGE_SIZE) {
+                    // Detect actual MIME type from file magic bytes (Discord often misreports content_type)
+                    let actualMime = media.mime_type;
+                    if (isImage && saved.localPath) {
+                        try {
+                            const header = Buffer.alloc(8);
+                            const fd = fs.openSync(saved.localPath, 'r');
+                            fs.readSync(fd, header, 0, 8, 0);
+                            fs.closeSync(fd);
+                            if (header[0] === 0x89 && header[1] === 0x50 && header[2] === 0x4E && header[3] === 0x47) actualMime = 'image/png';
+                            else if (header[0] === 0xFF && header[1] === 0xD8) actualMime = 'image/jpeg';
+                            else if (header[0] === 0x47 && header[1] === 0x49 && header[2] === 0x46) actualMime = 'image/gif';
+                            else if (header[0] === 0x52 && header[1] === 0x49 && header[2] === 0x46 && header[3] === 0x46) actualMime = 'image/webp';
+                        } catch (_) { /* keep reported mime */ }
+                    }
+
+                    if (isImage && VISION_MIMES.has(actualMime) && saved.size <= deps.MAX_IMAGE_SIZE) {
                         // Supported image within vision size limit: send as Claude vision content block (base64)
                         const imageData = await fs.promises.readFile(saved.localPath);
                         const base64 = imageData.toString('base64');
@@ -517,9 +532,9 @@ async function handleMessage(normalized) {
                                 ? `${caption}\n\n[Image saved to ${relativePath} (${saved.size} bytes)]`
                                 : `[User sent an image — saved to ${relativePath} (${saved.size} bytes)]`
                             },
-                            { type: 'image', source: { type: 'base64', media_type: media.mime_type, data: base64 } }
+                            { type: 'image', source: { type: 'base64', media_type: actualMime, data: base64 } }
                         ];
-                    } else if (isImage && VISION_MIMES.has(media.mime_type) && media.url) {
+                    } else if (isImage && VISION_MIMES.has(actualMime) && media.url) {
                         // Image too large for base64 but has a URL (Discord) — use URL source
                         const caption = text || '';
                         userContent = [
