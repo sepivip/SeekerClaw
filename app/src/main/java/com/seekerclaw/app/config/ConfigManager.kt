@@ -559,12 +559,12 @@ object ConfigManager {
             val file = File(context.filesDir, "workspace/owner_ids")
             if (file.exists()) {
                 val json = JSONObject(file.readText())
-                val id = json.optString(channel, "")
-                if (id.isNotBlank()) return id
+                // File is source of truth — return whatever is there (even empty = cleared)
+                if (json.has(channel)) return json.optString(channel, "")
             }
         } catch (_: Exception) {}
 
-        // Fallback to SharedPreferences
+        // Fallback to SharedPreferences only if file doesn't exist yet (migration)
         val key = if (channel == "discord") KEY_DISCORD_OWNER_ID else KEY_OWNER_ID
         return prefs(context).getString(key, "") ?: ""
     }
