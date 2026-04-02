@@ -112,9 +112,8 @@ import java.util.Date
 fun SettingsScreen(
     onRunSetupAgain: () -> Unit = {},
     onNavigateToAiConfig: () -> Unit = {},
-    onNavigateToTelegram: () -> Unit = {},
+    onNavigateToChannelConfig: () -> Unit = {},
     onNavigateToSearchConfig: () -> Unit = {},
-    onNavigateToDiscordConfig: () -> Unit = {},
 ) {
     val context = LocalContext.current
     var config by remember { mutableStateOf(ConfigManager.loadConfig(context)) }
@@ -449,20 +448,12 @@ fun SettingsScreen(
                     onClick = onNavigateToAiConfig,
                     info = "Select AI provider, configure model and API credentials.",
                 )
-                SectionLabel("Channel")
                 ConfigField(
-                    label = "Telegram",
-                    value = if (config?.channel != "discord") "Active" else "Bot Token, Owner ID",
-                    onClick = onNavigateToTelegram,
-                    info = "Configure your Telegram bot settings.",
+                    label = "Channel",
+                    value = if (config?.channel == "discord") "Discord" else "Telegram",
+                    onClick = onNavigateToChannelConfig,
+                    info = "Select messaging channel and configure bot credentials.",
                 )
-                ConfigField(
-                    label = "Discord",
-                    value = if (config?.channel == "discord") "Active" else "Not configured",
-                    onClick = onNavigateToDiscordConfig,
-                    info = SettingsHelpTexts.DISCORD_CHANNEL,
-                )
-                SectionLabel("Agent")
                 ConfigField(
                     label = "Agent Name",
                     value = config?.agentName?.ifBlank { "SeekerClaw" } ?: "SeekerClaw",

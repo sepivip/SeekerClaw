@@ -198,7 +198,7 @@ fun TelegramConfigScreen(onBack: () -> Unit) {
     }
 }
 
-private suspend fun testTelegramBot(token: String): Result<String> = withContext(Dispatchers.IO) {
+internal suspend fun testTelegramBot(token: String): Result<String> = withContext(Dispatchers.IO) {
     runCatching {
         // Safe to use token in URL since we catch all exceptions and only return parsed logic
         val url = URL("https://api.telegram.org/bot$token/getMe")
