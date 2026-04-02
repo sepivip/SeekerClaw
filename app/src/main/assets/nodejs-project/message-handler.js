@@ -508,17 +508,26 @@ async function handleMessage(normalized) {
                     const VISION_MIMES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
 
                     if (isImage && VISION_MIMES.has(media.mime_type) && saved.size <= deps.MAX_IMAGE_SIZE) {
-                        // Supported image within vision size limit: send as Claude vision content block
+                        // Supported image within vision size limit: send as Claude vision content block (base64)
                         const imageData = await fs.promises.readFile(saved.localPath);
                         const base64 = imageData.toString('base64');
                         const caption = text || '';
-                        // Align content block ordering with visionAnalyzeImage: [text, image]
                         userContent = [
                             { type: 'text', text: caption
                                 ? `${caption}\n\n[Image saved to ${relativePath} (${saved.size} bytes)]`
                                 : `[User sent an image — saved to ${relativePath} (${saved.size} bytes)]`
                             },
                             { type: 'image', source: { type: 'base64', media_type: media.mime_type, data: base64 } }
+                        ];
+                    } else if (isImage && VISION_MIMES.has(media.mime_type) && media.url) {
+                        // Image too large for base64 but has a URL (Discord) — use URL source
+                        const caption = text || '';
+                        userContent = [
+                            { type: 'text', text: caption
+                                ? `${caption}\n\n[Image saved to ${relativePath} (${saved.size} bytes)]`
+                                : `[User sent an image — saved to ${relativePath} (${saved.size} bytes)]`
+                            },
+                            { type: 'image', source: { type: 'url', url: media.url } }
                         ];
                     } else if (isImage) {
                         // Image not usable for inline vision — save but don't base64-encode
