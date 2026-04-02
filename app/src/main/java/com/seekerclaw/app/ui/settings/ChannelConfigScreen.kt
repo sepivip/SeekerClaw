@@ -56,16 +56,25 @@ private val channelOptions = listOf(
 fun ChannelConfigScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val configVer by ConfigManager.configVersion
-    var config by remember(configVer) { mutableStateOf(ConfigManager.loadConfig(context)) }
 
-    // Cross-process refresh: poll config every 2s so owner ID auto-detect
-    // appears in real-time (bridge saves from :node process).
+    // Poll owner IDs directly from file every 2s (cross-process safe).
+    // This is the ONLY source of truth for owner IDs — not config object.
+    var telegramOwnerId by remember { mutableStateOf(ConfigManager.loadOwnerIdFromFile(context, "telegram")) }
+    var discordOwnerId by remember { mutableStateOf(ConfigManager.loadOwnerIdFromFile(context, "discord")) }
+    var config by remember { mutableStateOf(ConfigManager.loadConfig(context)) }
+
     LaunchedEffect(Unit) {
         while (true) {
             kotlinx.coroutines.delay(2000)
-            config = ConfigManager.loadConfig(context)
+            telegramOwnerId = ConfigManager.loadOwnerIdFromFile(context, "telegram")
+            discordOwnerId = ConfigManager.loadOwnerIdFromFile(context, "discord")
         }
+    }
+
+    // Reload full config on in-process changes (local edits)
+    val configVer by ConfigManager.configVersion
+    LaunchedEffect(configVer) {
+        config = ConfigManager.loadConfig(context)
     }
 
     var editField by remember { mutableStateOf<String?>(null) }
@@ -181,11 +190,11 @@ fun ChannelConfigScreen(onBack: () -> Unit) {
                         )
                         ConfigField(
                             label = "Owner ID",
-                            value = config?.telegramOwnerId?.ifBlank { "Auto-detect" } ?: "Auto-detect",
+                            value = telegramOwnerId.ifBlank { "Auto-detect" },
                             onClick = {
                                 editField = "telegramOwnerId"
                                 editLabel = "Owner ID"
-                                editValue = config?.telegramOwnerId ?: ""
+                                editValue = telegramOwnerId
                             },
                             info = SettingsHelpTexts.OWNER_ID,
                             showDivider = false,
@@ -268,7 +277,6 @@ fun ChannelConfigScreen(onBack: () -> Unit) {
                     Spacer(modifier = Modifier.height(10.dp))
 
                     val discordToken = config?.discordBotToken
-                    val discordOwnerId = config?.discordOwnerId ?: ""
                     val isTokenMissing = discordToken.isNullOrBlank()
 
                     Column(
