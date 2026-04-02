@@ -80,43 +80,38 @@ function setFullToolRegistry(getter) { _fullToolGetter = getter; }
 // ── Confirmation UI ──────────────────────────────────────────────────────────
 
 // Format a human-readable confirmation message for the user.
-// Channel-aware: Telegram gets HTML, Discord gets Markdown — each renders natively.
+// Uses Markdown — Telegram's toTelegramHtml() converts **bold** to <b>bold</b>,
+// Discord renders **bold** natively. One format, both channels work.
 function formatConfirmationMessage(toolName, input) {
     const esc = (s) => {
         let v = String(s ?? '');
         if (v.length > 200) v = v.slice(0, 197) + '...';
-        // Escape HTML entities for Telegram
-        if (CHANNEL === 'telegram') v = v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
         return v;
     };
-    const bold = (s) => CHANNEL === 'telegram' ? `<b>${s}</b>` : `**${s}**`;
-    const code = (s) => CHANNEL === 'telegram' ? `<code>${s}</code>` : `\`${s}\``;
-    const italic = (s) => CHANNEL === 'telegram' ? `<i>${s}</i>` : `_${s}_`;
-
     let details;
     switch (toolName) {
         case 'android_sms':
-            details = `📱 ${bold('Send SMS')}\n  To: ${code(esc(input.phone))}\n  Message: "${esc(input.message)}"`;
+            details = `📱 **Send SMS**\n  To: \`${esc(input.phone)}\`\n  Message: "${esc(input.message)}"`;
             break;
         case 'android_call':
-            details = `📞 ${bold('Make Phone Call')}\n  To: ${code(esc(input.phone))}`;
+            details = `📞 **Make Phone Call**\n  To: \`${esc(input.phone)}\``;
             break;
         case 'solana_send':
-            details = `💸 ${bold('Send SOL')}\n  To: ${code(esc(input.to))}\n  Amount: ${esc(input.amount)} SOL`;
+            details = `💸 **Send SOL**\n  To: \`${esc(input.to)}\`\n  Amount: ${esc(input.amount)} SOL`;
             break;
         case 'solana_swap':
-            details = `🔄 ${bold('Swap Tokens')}\n  Sell: ${esc(input.amount)} ${esc(input.inputToken)}\n  Buy: ${esc(input.outputToken)}`;
+            details = `🔄 **Swap Tokens**\n  Sell: ${esc(input.amount)} ${esc(input.inputToken)}\n  Buy: ${esc(input.outputToken)}`;
             break;
         case 'jupiter_trigger_create':
-            details = `📊 ${bold('Create Trigger Order')}\n  Sell: ${esc(input.inputAmount)} ${esc(input.inputToken)}\n  For: ${esc(input.outputToken)}\n  Trigger price: ${esc(input.triggerPrice)}`;
+            details = `📊 **Create Trigger Order**\n  Sell: ${esc(input.inputAmount)} ${esc(input.inputToken)}\n  For: ${esc(input.outputToken)}\n  Trigger price: ${esc(input.triggerPrice)}`;
             break;
         case 'jupiter_dca_create':
-            details = `🔄 ${bold('Create DCA Order')}\n  ${esc(input.amountPerCycle)} ${esc(input.inputToken)} → ${esc(input.outputToken)}\n  Every: ${esc(input.cycleInterval)}\n  Cycles: ${input.totalCycles != null ? esc(String(input.totalCycles)) : '30 (default)'}\n  Total deposit: ${esc(input.amountPerCycle * (input.totalCycles || 30))} ${esc(input.inputToken)}`;
+            details = `🔄 **Create DCA Order**\n  ${esc(input.amountPerCycle)} ${esc(input.inputToken)} → ${esc(input.outputToken)}\n  Every: ${esc(input.cycleInterval)}\n  Cycles: ${input.totalCycles != null ? esc(String(input.totalCycles)) : '30 (default)'}\n  Total deposit: ${esc(input.amountPerCycle * (input.totalCycles || 30))} ${esc(input.inputToken)}`;
             break;
         default:
-            details = bold(esc(toolName));
+            details = `**${esc(toolName)}**`;
     }
-    return `⚠️ ${bold('Action requires confirmation:')}\n\n${details}\n\nReply ${bold('YES')} to proceed or anything else to cancel.\n${italic('(Auto-cancels in 60s)')}`;
+    return `⚠️ **Action requires confirmation:**\n\n${details}\n\nReply **YES** to proceed or anything else to cancel.\n_(Auto-cancels in 60s)_`;
 }
 
 // Send confirmation message and wait for user reply (Promise-based)
