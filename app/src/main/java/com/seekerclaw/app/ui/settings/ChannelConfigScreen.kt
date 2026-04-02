@@ -42,7 +42,9 @@ import com.seekerclaw.app.ui.components.SectionLabel
 import com.seekerclaw.app.ui.components.SeekerClawScaffold
 import com.seekerclaw.app.ui.theme.RethinkSans
 import com.seekerclaw.app.ui.theme.SeekerClawColors
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private val channelOptions = listOf(
     "telegram" to "Telegram",
@@ -297,6 +299,65 @@ fun ChannelConfigScreen(onBack: () -> Unit) {
                         )
                     }
 
+                    // Connection Test
+                    if (!isTokenMissing) {
+                        Spacer(modifier = Modifier.height(24.dp))
+                        SectionLabel("Connection Test")
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        var discordTestStatus by remember { mutableStateOf("") }
+                        var discordTestMessage by remember { mutableStateOf("") }
+                        var discordTesting by remember { mutableStateOf(false) }
+
+                        CardSurface {
+                            Button(
+                                onClick = {
+                                    discordTesting = true
+                                    discordTestStatus = ""
+                                    scope.launch {
+                                        val result = testDiscordBot(discordToken!!)
+                                        discordTesting = false
+                                        result.onSuccess {
+                                            discordTestStatus = "Success"
+                                            discordTestMessage = "✅ Connected as @$it"
+                                        }.onFailure {
+                                            discordTestStatus = "Error"
+                                            discordTestMessage = "❌ ${it.message}"
+                                        }
+                                    }
+                                },
+                                enabled = !discordTesting,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = SeekerClawColors.Surface,
+                                    contentColor = Color.White,
+                                ),
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                if (discordTesting) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        strokeWidth = 2.dp,
+                                        color = Color.White,
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Testing...", fontFamily = RethinkSans, fontSize = 14.sp)
+                                } else {
+                                    Text("Test Bot", fontFamily = RethinkSans, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                }
+                            }
+
+                            if (discordTestStatus == "Success" || discordTestStatus == "Error") {
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Text(
+                                    text = discordTestMessage,
+                                    fontFamily = RethinkSans,
+                                    fontSize = 13.sp,
+                                    color = if (discordTestStatus == "Success") SeekerClawColors.ActionPrimary else SeekerClawColors.Error,
+                                )
+                            }
+                        }
+                    }
+
                     Spacer(modifier = Modifier.height(24.dp))
                     SectionLabel("Resources")
                     Spacer(modifier = Modifier.height(10.dp))
@@ -360,5 +421,48 @@ fun ChannelConfigScreen(onBack: () -> Unit) {
             context = context,
             onDismiss = { showRestartDialog = false },
         )
+    }
+}
+
+/**
+ * Test Discord bot token by calling GET /users/@me.
+ * Returns the bot's username on success.
+ */
+internal suspend fun testDiscordBot(token: String): Result<String> = withContext(Dispatchers.IO) {
+    runCatching {
+        val url = java.net.URL("https://discord.com/api/v10/users/@me")
+        val conn = url.openConnection() as java.net.HttpURLConnection
+        conn.requestMethod = "GET"
+        conn.setRequestProperty("Authorization", "Bot $token")
+        conn.setRequestProperty("User-Agent", "SeekerClaw (https://seekerclaw.xyz, 1.0)")
+        conn.connectTimeout = 15000
+        conn.readTimeout = 15000
+
+        try {
+            val status = conn.responseCode
+            val stream = if (status in 200..299) conn.inputStream else conn.errorStream
+            val responseText = stream?.bufferedReader()?.use { it.readText() } ?: ""
+
+            if (status in 200..299) {
+                val json = org.json.JSONObject(responseText)
+                val username = json.optString("username", "")
+                if (username.isNotBlank()) {
+                    return@runCatching username
+                } else {
+                    error("No username in response")
+                }
+            } else {
+                var errorMessage = "HTTP $status"
+                try {
+                    val json = org.json.JSONObject(responseText)
+                    if (json.has("message")) {
+                        errorMessage += ": ${json.getString("message")}"
+                    }
+                } catch (_: Exception) {}
+                error(errorMessage)
+            }
+        } finally {
+            conn.disconnect()
+        }
     }
 }
