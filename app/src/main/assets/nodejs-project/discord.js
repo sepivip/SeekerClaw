@@ -29,7 +29,6 @@ let seq = null;
 let sessionId = null;
 let resumeGatewayUrl = null;
 let onMessageCallback = null;
-let onReactionCallback = null;
 let reconnectAttempts = 0;
 let stopped = false; // True after stop() — prevents reconnect
 let reconnectTimer = null; // Track reconnect timer for cleanup (S-NEW-4)
@@ -274,6 +273,15 @@ function send(payload) {
 const DISCORD_API_HOST = 'discord.com';
 const API_BASE = '/api/v10';
 
+function restHeaders(contentType) {
+    const h = {
+        'Authorization': `Bot ${DISCORD_TOKEN}`,
+        'User-Agent': 'SeekerClaw (https://seekerclaw.xyz, 1.0)',
+    };
+    if (contentType) h['Content-Type'] = contentType;
+    return h;
+}
+
 /**
  * Send a message to a Discord channel. Signature matches Telegram sendMessage(chatId, text, replyTo).
  * Discord max message length is 2000 chars — automatically chunks longer text.
@@ -309,34 +317,21 @@ async function sendMessage(channelId, text, replyToId = null, _buttons = null) {
             body.message_reference = { message_id: String(replyToId) };
         }
         try {
-            const res = await httpRequest({
+            const reqOpts = {
                 hostname: DISCORD_API_HOST,
                 path: `${API_BASE}/channels/${channelId}/messages`,
                 method: 'POST',
-                headers: {
-                    'Authorization': `Bot ${DISCORD_TOKEN}`,
-                    'Content-Type': 'application/json',
-                    'User-Agent': 'SeekerClaw (https://seekerclaw.xyz, 1.0)',
-                },
+                headers: restHeaders('application/json'),
                 timeout: 15000,
-            }, JSON.stringify(body));
+            };
+            const res = await httpRequest(reqOpts, JSON.stringify(body));
 
             if (res.status === 429) {
                 // Rate limited — wait and retry once
                 const retryAfter = (typeof res.data?.retry_after === 'number' ? res.data.retry_after : 1);
                 log(`[Discord] Rate limited — waiting ${retryAfter}s`, 'WARN');
                 await new Promise(r => setTimeout(r, retryAfter * 1000));
-                const retryRes = await httpRequest({
-                    hostname: DISCORD_API_HOST,
-                    path: `${API_BASE}/channels/${channelId}/messages`,
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bot ${DISCORD_TOKEN}`,
-                        'Content-Type': 'application/json',
-                        'User-Agent': 'SeekerClaw (https://seekerclaw.xyz, 1.0)',
-                    },
-                    timeout: 15000,
-                }, JSON.stringify(body));
+                const retryRes = await httpRequest(reqOpts, JSON.stringify(body));
                 if (retryRes.status >= 400) {
                     log(`[Discord] Send retry failed: ${retryRes.status}`, 'ERROR');
                 } else if (retryRes.data?.id) {
@@ -366,11 +361,7 @@ async function sendTyping(channelId) {
             hostname: DISCORD_API_HOST,
             path: `${API_BASE}/channels/${channelId}/typing`,
             method: 'POST',
-            headers: {
-                'Authorization': `Bot ${DISCORD_TOKEN}`,
-                'Content-Type': 'application/json',
-                'User-Agent': 'SeekerClaw (https://seekerclaw.xyz, 1.0)',
-            },
+            headers: restHeaders('application/json'),
             timeout: 5000,
         });
     } catch (_) {
@@ -391,7 +382,6 @@ function start(onMessage, onReaction) {
     }
     stopped = false;
     onMessageCallback = onMessage;
-    onReactionCallback = onReaction || null;
     connect();
 
     // Proactive DM channel open — needed for heartbeat/cron to send before first user message
@@ -401,11 +391,7 @@ function start(onMessage, onReaction) {
             hostname: DISCORD_API_HOST,
             path: `${API_BASE}/users/@me/channels`,
             method: 'POST',
-            headers: {
-                'Authorization': `Bot ${DISCORD_TOKEN}`,
-                'Content-Type': 'application/json',
-                'User-Agent': 'SeekerClaw (https://seekerclaw.xyz, 1.0)',
-            },
+            headers: restHeaders('application/json'),
             timeout: 10000,
         }, body).then(res => {
             if (res.data?.id) {
@@ -482,10 +468,8 @@ async function sendFile(chatId, filePath, caption) {
             path: `${API_BASE}/channels/${chatId}/messages`,
             method: 'POST',
             headers: {
-                'Authorization': `Bot ${DISCORD_TOKEN}`,
-                'Content-Type': `multipart/form-data; boundary=${boundary}`,
+                ...restHeaders(`multipart/form-data; boundary=${boundary}`),
                 'Content-Length': body.length,
-                'User-Agent': 'SeekerClaw (https://seekerclaw.xyz, 1.0)',
             },
             timeout: 30000,
         }, (res) => {
@@ -530,11 +514,7 @@ async function editMessage(chatId, messageId, text, _replyMarkup) {
             hostname: DISCORD_API_HOST,
             path: `${API_BASE}/channels/${chatId}/messages/${messageId}`,
             method: 'PATCH',
-            headers: {
-                'Authorization': `Bot ${DISCORD_TOKEN}`,
-                'Content-Type': 'application/json',
-                'User-Agent': 'SeekerClaw (https://seekerclaw.xyz, 1.0)',
-            },
+            headers: restHeaders('application/json'),
             timeout: 10000,
         }, JSON.stringify(body));
         if (res.status >= 400) {
@@ -556,10 +536,7 @@ async function deleteMsg(chatId, messageId) {
             hostname: DISCORD_API_HOST,
             path: `${API_BASE}/channels/${chatId}/messages/${messageId}`,
             method: 'DELETE',
-            headers: {
-                'Authorization': `Bot ${DISCORD_TOKEN}`,
-                'User-Agent': 'SeekerClaw (https://seekerclaw.xyz, 1.0)',
-            },
+            headers: restHeaders(),
             timeout: 10000,
         });
         if (res.status >= 400) {

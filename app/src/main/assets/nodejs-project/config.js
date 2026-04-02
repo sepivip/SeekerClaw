@@ -99,10 +99,16 @@ function normalizeSecret(val) {
 // ============================================================================
 
 const BOT_TOKEN = normalizeSecret(config.botToken);
+const VALID_CHANNELS = new Set(['telegram', 'discord']);
+if (!VALID_CHANNELS.has(CHANNEL)) {
+    log(`ERROR: Unknown channel "${CHANNEL}" — must be "telegram" or "discord"`, 'ERROR');
+    process.exit(1);
+}
+const DISCORD_TOKEN = normalizeSecret(config.discordBotToken || '');
+const DISCORD_OWNER_ID = config.discordOwnerId ? String(config.discordOwnerId).trim() : '';
 // Owner ID is channel-specific: Telegram uses ownerId, Discord uses discordOwnerId.
 // This prevents the Telegram owner ID from blocking Discord auto-detect (and vice versa).
-const CHANNEL_PRE = (typeof config.channel === 'string' ? config.channel : 'telegram').trim().toLowerCase();
-let OWNER_ID = CHANNEL_PRE === 'discord'
+let OWNER_ID = CHANNEL === 'discord'
     ? (config.discordOwnerId ? String(config.discordOwnerId).trim() : '')
     : (config.ownerId ? String(config.ownerId).trim() : '');
 const _SUPPORTED_PROVIDERS = new Set(['claude', 'openai', 'openrouter', 'custom']);
@@ -115,14 +121,6 @@ const CUSTOM_KEY = normalizeSecret(config.customApiKey || '');
 const CUSTOM_BASE_URL = (typeof config.customBaseUrl === 'string' ? config.customBaseUrl : '').trim();
 const CUSTOM_HEADERS_RAW = (typeof config.customHeaders === 'string' ? config.customHeaders : '').trim();
 const CUSTOM_FORMAT = (typeof config.customFormat === 'string' ? config.customFormat : 'chat_completions').trim().toLowerCase();
-const CHANNEL = (typeof config.channel === 'string' ? config.channel : 'telegram').trim().toLowerCase();
-const VALID_CHANNELS = new Set(['telegram', 'discord']);
-if (!VALID_CHANNELS.has(CHANNEL)) {
-    log(`ERROR: Unknown channel "${CHANNEL}" — must be "telegram" or "discord"`, 'ERROR');
-    process.exit(1);
-}
-const DISCORD_TOKEN = normalizeSecret(config.discordBotToken || '');
-const DISCORD_OWNER_ID = config.discordOwnerId ? String(config.discordOwnerId).trim() : '';
 const OPENROUTER_FALLBACK_MODEL = (typeof config.openrouterFallbackModel === 'string' ? config.openrouterFallbackModel : '').trim();
 const OPENROUTER_MODEL_CONTEXT = parseInt(config.openrouterModelContext, 10) || 0;
 const OPENROUTER_FALLBACK_CONTEXT = parseInt(config.openrouterFallbackContext, 10) || 0;

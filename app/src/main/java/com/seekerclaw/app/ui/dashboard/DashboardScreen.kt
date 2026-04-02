@@ -102,7 +102,10 @@ fun DashboardScreen(
     val cfgVersion by ConfigManager.configVersion
     val config = remember(cfgVersion) { ConfigManager.loadConfig(context) }
     val agentName = remember(config) { config?.agentName?.ifBlank { "SeekerClaw" } ?: "SeekerClaw" }
-    val hasBotToken = remember(config) { config?.telegramBotToken?.isNotBlank() == true }
+    val hasBotToken = remember(config) {
+        if (config?.channel == "discord") config?.discordBotToken?.isNotBlank() == true
+        else config?.telegramBotToken?.isNotBlank() == true
+    }
     val hasCredential = remember(config) {
         when (config?.provider) {
             "openai" -> config?.openaiApiKey?.isNotBlank() == true
@@ -510,7 +513,7 @@ fun DashboardScreen(
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "Tap \"Deploy Agent\" below to start $agentName, then open Telegram to chat with your agent.",
+                    text = "Tap \"Deploy Agent\" below to start $agentName, then open ${if (config?.channel == "discord") "Discord" else "Telegram"} to chat with your agent.",
                     fontFamily = RethinkSans,
                     fontSize = 13.sp,
                     color = SeekerClawColors.TextDim,
@@ -650,13 +653,13 @@ fun DashboardScreen(
                 ServiceStatus.ERROR -> SeekerClawColors.Error
             }
 
-            val telegramSubtitle = if (!hasBotToken) "Bot token missing" else when (status) {
+            val channelSubtitle = if (!hasBotToken) "Bot token missing" else when (status) {
                 ServiceStatus.RUNNING -> "Message relay"
                 ServiceStatus.STARTING -> "Connecting..."
                 ServiceStatus.ERROR -> "Relay error"
                 ServiceStatus.STOPPED -> "Offline"
             }
-            val telegramDotColor = if (!hasBotToken) SeekerClawColors.Error else when (status) {
+            val channelDotColor = if (!hasBotToken) SeekerClawColors.Error else when (status) {
                 ServiceStatus.RUNNING -> SeekerClawColors.Accent
                 ServiceStatus.STARTING -> SeekerClawColors.Warning
                 ServiceStatus.ERROR -> SeekerClawColors.Error
@@ -694,8 +697,8 @@ fun DashboardScreen(
             UplinkCard(
                 icon = if (isDiscord) "//DC" else "//TG",
                 name = if (isDiscord) "Discord" else "Telegram",
-                subtitle = telegramSubtitle,
-                dotColor = telegramDotColor,
+                subtitle = channelSubtitle,
+                dotColor = channelDotColor,
                 shape = shape,
                 dotAlpha = if (isRunning) pulseAlpha else 1f,
             )
