@@ -496,7 +496,10 @@ object ConfigManager {
     }
 
     fun saveOwnerId(context: Context, ownerId: String): Boolean {
-        val persisted = prefs(context).edit().putString(KEY_OWNER_ID, ownerId).commit()
+        // Save to the correct field based on active channel
+        val channel = prefs(context).getString(KEY_CHANNEL, "telegram") ?: "telegram"
+        val key = if (channel == "discord") KEY_DISCORD_OWNER_ID else KEY_OWNER_ID
+        val persisted = prefs(context).edit().putString(key, ownerId).commit()
         if (persisted) {
             configVersion.intValue++
         } else {
