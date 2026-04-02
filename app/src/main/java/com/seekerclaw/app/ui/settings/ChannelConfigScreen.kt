@@ -299,7 +299,7 @@ fun ChannelConfigScreen(onBack: () -> Unit) {
                         )
                     }
 
-                    // Connection Test
+                    // Connection Test (same pattern as Telegram)
                     if (!isTokenMissing) {
                         Spacer(modifier = Modifier.height(24.dp))
                         SectionLabel("Connection Test")
@@ -307,33 +307,42 @@ fun ChannelConfigScreen(onBack: () -> Unit) {
 
                         var discordTestStatus by remember { mutableStateOf("") }
                         var discordTestMessage by remember { mutableStateOf("") }
-                        var discordTesting by remember { mutableStateOf(false) }
 
                         CardSurface {
+                            Text(
+                                text = "Verify your bot token is valid and Discord is reachable.",
+                                fontFamily = RethinkSans,
+                                fontSize = 13.sp,
+                                color = SeekerClawColors.TextDim,
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+
                             Button(
                                 onClick = {
-                                    discordTesting = true
-                                    discordTestStatus = ""
+                                    if (discordTestStatus == "Loading") return@Button
+                                    discordTestStatus = "Loading"
+                                    discordTestMessage = ""
+
                                     scope.launch {
                                         val result = testDiscordBot(discordToken!!)
-                                        discordTesting = false
-                                        result.onSuccess {
+                                        if (result.isSuccess) {
                                             discordTestStatus = "Success"
-                                            discordTestMessage = "✅ Connected as @$it"
-                                        }.onFailure {
+                                            discordTestMessage = "Bot connected as @${result.getOrNull()}"
+                                        } else {
                                             discordTestStatus = "Error"
-                                            discordTestMessage = "❌ ${it.message}"
+                                            discordTestMessage = result.exceptionOrNull()?.message ?: "Connection failed"
                                         }
                                     }
                                 },
-                                enabled = !discordTesting,
+                                enabled = discordTestStatus != "Loading",
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = shape,
                                 colors = ButtonDefaults.buttonColors(
-                                    containerColor = SeekerClawColors.Surface,
+                                    containerColor = SeekerClawColors.ActionPrimary,
                                     contentColor = Color.White,
                                 ),
-                                modifier = Modifier.fillMaxWidth(),
                             ) {
-                                if (discordTesting) {
+                                if (discordTestStatus == "Loading") {
                                     CircularProgressIndicator(
                                         modifier = Modifier.size(16.dp),
                                         strokeWidth = 2.dp,
