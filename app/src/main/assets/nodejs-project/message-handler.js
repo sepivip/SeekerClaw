@@ -409,25 +409,8 @@ async function handleMessage(normalized) {
         return;
     }
 
-    // Intercept confirmation replies (YES/NO) before normal message handling.
-    // This must be in handleMessage (not the poll loop) so it works for ALL channels.
-    const pending = deps.pendingConfirmations.get(chatId);
-    if (pending && combinedText && !media) {
-        const upper = combinedText.toUpperCase().trim();
-        const normalized = combinedText.toLowerCase().replace(/@\w+$/, '');
-        const isApprove = upper === 'YES' || normalized === '/approve';
-        const isDeny = upper === 'NO' || normalized === '/deny';
-        if (isApprove || isDeny) {
-            deps.log(`[Confirm] User replied "${combinedText}" for ${pending.toolName} → ${isApprove ? 'APPROVED' : 'REJECTED'}`, 'INFO');
-            pending.resolve(isApprove);
-            deps.pendingConfirmations.delete(chatId);
-            return; // Don't process as normal message
-        } else {
-            // Don't pass other messages to AI during pending confirmation
-            await deps.sendMessage(chatId, `⏳ Reply YES or NO to confirm ${pending.toolName} first.`);
-            return;
-        }
-    }
+    // Note: confirmation YES/NO interception is in enqueueMessage() (main.js),
+    // not here — must happen BEFORE queuing to prevent deadlock.
 
     deps.log(`Message: ${combinedText ? combinedText.slice(0, 100) + (combinedText.length > 100 ? '...' : '') : '(no text)'}${media ? ` [${media.type}]` : ''}${replyTo ? ' [reply]' : ''}`, 'DEBUG');
 

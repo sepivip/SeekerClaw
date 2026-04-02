@@ -195,6 +195,28 @@ const chatQueues = new Map(); // chatId -> Promise chain
 
 function enqueueMessage(msg) {
     const chatId = msg.chatId ?? msg.chat?.id;
+    const text = (msg.text || msg.caption || '').trim();
+    const hasMedia = !!(msg.media);
+
+    // Intercept confirmation replies BEFORE queuing — prevents deadlock.
+    // The tool call holding the queue is waiting for confirmation to resolve.
+    // If we queue the YES reply, it waits behind the tool call → deadlock.
+    const pending = pendingConfirmations.get(chatId);
+    if (pending && text && !hasMedia) {
+        const upper = text.toUpperCase().trim();
+        const isApprove = upper === 'YES' || text.toLowerCase() === '/approve';
+        const isDeny = upper === 'NO' || text.toLowerCase() === '/deny';
+        if (isApprove || isDeny) {
+            log(`[Confirm] User replied "${text}" for ${pending.toolName} → ${isApprove ? 'APPROVED' : 'REJECTED'}`, 'INFO');
+            pending.resolve(isApprove);
+            pendingConfirmations.delete(chatId);
+            return; // Don't enqueue — confirmation resolved
+        } else {
+            channel.sendMessage(chatId, `⏳ Reply YES or NO to confirm ${pending.toolName} first.`).catch(() => {});
+            return; // Don't enqueue other messages during pending confirmation
+        }
+    }
+
     const prev = chatQueues.get(chatId) || Promise.resolve();
     const next = prev.then(() => handleMessage(msg)).catch(e =>
         log(`Message handler error: ${e.message}`, 'ERROR')
