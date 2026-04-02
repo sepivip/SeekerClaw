@@ -43,7 +43,8 @@ import com.seekerclaw.app.ui.theme.SeekerClawColors
 @Composable
 fun SearchProviderConfigScreen(onBack: () -> Unit) {
     val context = LocalContext.current
-    var config by remember { mutableStateOf(ConfigManager.loadConfig(context)) }
+    val configVer by ConfigManager.configVersion
+    var config by remember(configVer) { mutableStateOf(ConfigManager.loadConfig(context)) }
 
     val activeProvider: SearchProviderInfo = searchProviderById(config?.searchProvider ?: "brave")
     var editField by remember { mutableStateOf<String?>(null) }

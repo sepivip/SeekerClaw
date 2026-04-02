@@ -67,7 +67,8 @@ import java.net.URL
 fun ProviderConfigScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var config by remember { mutableStateOf(ConfigManager.loadConfig(context)) }
+    val configVer by ConfigManager.configVersion
+    var config by remember(configVer) { mutableStateOf(ConfigManager.loadConfig(context)) }
 
     val activeProvider = providerById(config?.provider ?: "claude").id
     var editField by remember { mutableStateOf<String?>(null) }

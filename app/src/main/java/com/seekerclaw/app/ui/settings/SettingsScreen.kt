@@ -116,7 +116,9 @@ fun SettingsScreen(
     onNavigateToSearchConfig: () -> Unit = {},
 ) {
     val context = LocalContext.current
-    var config by remember { mutableStateOf(ConfigManager.loadConfig(context)) }
+    // Observe configVersion so UI refreshes when bridge saves owner ID (auto-detect)
+    val configVer by ConfigManager.configVersion
+    var config by remember(configVer) { mutableStateOf(ConfigManager.loadConfig(context)) }
 
     var autoStartOnBoot by remember {
         mutableStateOf(ConfigManager.getAutoStartOnBoot(context))
