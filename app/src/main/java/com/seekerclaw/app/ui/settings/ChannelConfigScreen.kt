@@ -428,7 +428,7 @@ fun ChannelConfigScreen(onBack: () -> Unit) {
                 val trimmed = editValue.trim()
                 if (trimmed.isNotEmpty()) {
                     saveField(field, trimmed)
-                } else if (field == "telegramOwnerId") {
+                } else if (field == "telegramOwnerId" || field == "discordOwnerId") {
                     // Allow clearing Owner ID to fallback to Auto-detect
                     saveField(field, trimmed)
                 }
