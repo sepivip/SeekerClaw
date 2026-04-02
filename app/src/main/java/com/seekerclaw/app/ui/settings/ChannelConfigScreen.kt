@@ -292,7 +292,7 @@ fun ChannelConfigScreen(onBack: () -> Unit) {
                         )
                         ConfigField(
                             label = "Owner ID",
-                            value = discordOwnerId.ifBlank { "Not set (optional)" },
+                            value = discordOwnerId.ifBlank { "Auto-detect" },
                             onClick = {
                                 editField = "discordOwnerId"
                                 editLabel = "Discord Owner ID"

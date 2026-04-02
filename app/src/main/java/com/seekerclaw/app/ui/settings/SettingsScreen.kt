@@ -163,6 +163,8 @@ fun SettingsScreen(
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
+                // Reload config (cross-process: bridge may have saved owner ID)
+                config = ConfigManager.loadConfig(context)
                 batteryOptimizationDisabled = powerManager.isIgnoringBatteryOptimizations(context.packageName)
                 hasLocationPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
                 hasCameraPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
