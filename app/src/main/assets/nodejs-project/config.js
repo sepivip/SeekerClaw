@@ -99,7 +99,12 @@ function normalizeSecret(val) {
 // ============================================================================
 
 const BOT_TOKEN = normalizeSecret(config.botToken);
-let OWNER_ID = config.ownerId ? String(config.ownerId).trim() : '';
+// Owner ID is channel-specific: Telegram uses ownerId, Discord uses discordOwnerId.
+// This prevents the Telegram owner ID from blocking Discord auto-detect (and vice versa).
+const CHANNEL_PRE = (typeof config.channel === 'string' ? config.channel : 'telegram').trim().toLowerCase();
+let OWNER_ID = CHANNEL_PRE === 'discord'
+    ? (config.discordOwnerId ? String(config.discordOwnerId).trim() : '')
+    : (config.ownerId ? String(config.ownerId).trim() : '');
 const _SUPPORTED_PROVIDERS = new Set(['claude', 'openai', 'openrouter', 'custom']);
 const _rawProvider = (typeof config.provider === 'string' && config.provider.trim()) ? config.provider.trim().toLowerCase() : 'claude';
 const PROVIDER = _SUPPORTED_PROVIDERS.has(_rawProvider) ? _rawProvider : 'claude';
