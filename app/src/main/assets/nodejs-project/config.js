@@ -99,6 +99,7 @@ function normalizeSecret(val) {
 // ============================================================================
 
 const BOT_TOKEN = normalizeSecret(config.botToken);
+const CHANNEL = (typeof config.channel === 'string' ? config.channel : 'telegram').trim().toLowerCase();
 const VALID_CHANNELS = new Set(['telegram', 'discord']);
 if (!VALID_CHANNELS.has(CHANNEL)) {
     log(`ERROR: Unknown channel "${CHANNEL}" — must be "telegram" or "discord"`, 'ERROR');
