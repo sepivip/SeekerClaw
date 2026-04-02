@@ -690,9 +690,10 @@ fun DashboardScreen(
                 ServiceStatus.STOPPED -> SeekerClawColors.TextDim
             }
 
+            val isDiscord = config?.channel == "discord"
             UplinkCard(
-                icon = "//TG",
-                name = "Telegram",
+                icon = if (isDiscord) "//DC" else "//TG",
+                name = if (isDiscord) "Discord" else "Telegram",
                 subtitle = telegramSubtitle,
                 dotColor = telegramDotColor,
                 shape = shape,
