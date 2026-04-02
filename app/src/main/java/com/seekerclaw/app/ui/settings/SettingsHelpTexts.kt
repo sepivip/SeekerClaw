@@ -152,7 +152,7 @@ object SettingsHelpTexts {
     const val DISCORD_CHANNEL =
         "Choose which messaging platform your agent uses.\n\n" +
         "\u2022 Telegram — the default. Requires a Telegram bot token.\n" +
-        "\u2022 Discord — use a Discord bot instead. Requires a Discord bot token and server setup.\n\n" +
+        "\u2022 Discord — DM-only bot. Requires a Discord bot token with Direct Messages and Message Content intents enabled.\n\n" +
         "Switching channels requires an agent restart."
 
     const val DISCORD_BOT_TOKEN =

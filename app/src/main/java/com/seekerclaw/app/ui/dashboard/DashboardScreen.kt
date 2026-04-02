@@ -258,6 +258,7 @@ fun DashboardScreen(
         ServiceStatus.ERROR -> {
             if (validationError == "setup_not_complete" ||
                 validationError == "missing_bot_token" ||
+                validationError == "missing_discord_token" ||
                 validationError == "missing_credential"
             ) "Config Needed" else "Error"
         }
@@ -455,6 +456,7 @@ fun DashboardScreen(
                 Text(
                     text = when (validationError) {
                         "missing_bot_token" -> "Your Telegram bot token is missing"
+                        "missing_discord_token" -> "Your Discord bot token is missing"
                         "missing_credential" -> "Your API credential is missing"
                         else -> "Your agent needs configuration to start"
                     },

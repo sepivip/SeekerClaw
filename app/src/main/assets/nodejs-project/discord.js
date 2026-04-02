@@ -386,8 +386,8 @@ function start(onMessage, onReaction) {
         return;
     }
     if (!WebSocket) {
-        log('[Discord] Cannot start — ws package not installed', 'ERROR');
-        return;
+        log('[Discord] FATAL — ws package not installed, cannot start Discord channel', 'ERROR');
+        throw new Error('Discord channel requires the ws package but it is not installed');
     }
     stopped = false;
     onMessageCallback = onMessage;
