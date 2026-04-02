@@ -58,17 +58,13 @@ fun ChannelConfigScreen(onBack: () -> Unit) {
     val configVer by ConfigManager.configVersion
     var config by remember(configVer) { mutableStateOf(ConfigManager.loadConfig(context)) }
 
-    // Cross-process refresh: bridge saves owner ID in :node process,
-    // but configVersion is in-memory (main process). Poll on resume.
-    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
-    androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
-        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
-            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
-                config = ConfigManager.loadConfig(context)
-            }
+    // Cross-process refresh: poll config every 2s so owner ID auto-detect
+    // appears in real-time (bridge saves from :node process).
+    LaunchedEffect(Unit) {
+        while (true) {
+            kotlinx.coroutines.delay(2000)
+            config = ConfigManager.loadConfig(context)
         }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     var editField by remember { mutableStateOf<String?>(null) }
