@@ -435,12 +435,88 @@ function stop() {
 // ── Channel Interface Stubs (BAT-483) ──────────────────────────────────────
 
 /**
- * Send a file to a Discord channel. Not supported in v1 — Discord file uploads
- * require multipart/form-data which our httpRequest helper doesn't support yet.
+ * Send a file to a Discord channel via multipart/form-data upload.
+ * Discord API: POST /channels/{id}/messages with file attachment.
  */
 async function sendFile(chatId, filePath, caption) {
-    log('[Discord] File sending not supported in v1', 'WARN');
-    return { error: 'File sending not supported on Discord (v1)' };
+    const fs = require('fs');
+    const path = require('path');
+    const https = require('https');
+
+    if (!fs.existsSync(filePath)) {
+        return { error: 'File not found: ' + filePath };
+    }
+
+    const fileName = path.basename(filePath);
+    const fileData = fs.readFileSync(filePath);
+    const boundary = '----SeekerClaw' + Date.now();
+
+    // Build multipart body
+    const parts = [];
+
+    // JSON payload with caption
+    if (caption) {
+        parts.push(
+            `--${boundary}\r\n`,
+            `Content-Disposition: form-data; name="payload_json"\r\n`,
+            `Content-Type: application/json\r\n\r\n`,
+            JSON.stringify({ content: caption }),
+            `\r\n`
+        );
+    }
+
+    // File attachment
+    parts.push(
+        `--${boundary}\r\n`,
+        `Content-Disposition: form-data; name="files[0]"; filename="${fileName}"\r\n`,
+        `Content-Type: application/octet-stream\r\n\r\n`
+    );
+
+    const header = Buffer.from(parts.join(''));
+    const footer = Buffer.from(`\r\n--${boundary}--\r\n`);
+    const body = Buffer.concat([header, fileData, footer]);
+
+    return new Promise((resolve) => {
+        const req = https.request({
+            hostname: DISCORD_API_HOST,
+            path: `${API_BASE}/channels/${chatId}/messages`,
+            method: 'POST',
+            headers: {
+                'Authorization': `Bot ${DISCORD_TOKEN}`,
+                'Content-Type': `multipart/form-data; boundary=${boundary}`,
+                'Content-Length': body.length,
+                'User-Agent': 'SeekerClaw (https://seekerclaw.xyz, 1.0)',
+            },
+            timeout: 30000,
+        }, (res) => {
+            let data = '';
+            res.on('data', chunk => data += chunk);
+            res.on('end', () => {
+                try {
+                    const parsed = JSON.parse(data);
+                    if (res.statusCode >= 400) {
+                        log(`[Discord] sendFile failed: ${res.statusCode} ${data.slice(0, 200)}`, 'ERROR');
+                        resolve({ error: `Discord API error: ${res.statusCode}` });
+                    } else {
+                        log(`[Discord] File sent: ${fileName} (${fileData.length} bytes)`, 'INFO');
+                        resolve({ messageId: parsed.id });
+                    }
+                } catch (_) {
+                    resolve({ error: 'Failed to parse Discord response' });
+                }
+            });
+        });
+        req.on('error', (e) => {
+            log(`[Discord] sendFile error: ${e.message}`, 'ERROR');
+            resolve({ error: e.message });
+        });
+        req.on('timeout', () => {
+            req.destroy();
+            resolve({ error: 'File upload timed out' });
+        });
+        req.write(body);
+        req.end();
+    });
 }
 
 /**

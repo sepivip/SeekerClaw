@@ -342,6 +342,14 @@ async function downloadFileByUrl(url, fileName, maxSize) {
             headers: { 'User-Agent': 'SeekerClaw/1.0' },
             timeout: 30000,
         }, (res) => {
+            // Follow redirects (Discord CDN can 301/302)
+            if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+                res.resume(); // drain
+                downloadFileByUrl(res.headers.location, fileName, maxSize)
+                    .then(r => done(resolve, r))
+                    .catch(e => done(reject, e));
+                return;
+            }
             if (res.statusCode < 200 || res.statusCode >= 300) {
                 res.resume(); // drain
                 done(reject, new Error(`Download failed: HTTP ${res.statusCode}`));
