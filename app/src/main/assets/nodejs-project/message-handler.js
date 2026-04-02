@@ -394,7 +394,8 @@ async function handleMessage(normalized) {
         deps.log(`Owner claimed by ${senderId} (auto-detect)`, 'INFO');
 
         // Persist to Android encrypted storage via bridge (await so write completes before confirming)
-        const saveResult = await deps.androidBridgeCall('/config/save-owner', { ownerId: senderId });
+        const { CHANNEL } = require('./config');
+        const saveResult = await deps.androidBridgeCall('/config/save-owner', { ownerId: senderId, channel: CHANNEL });
         if (saveResult.error) {
             deps.log(`Bridge save-owner failed: ${saveResult.error}`, 'WARN');
             await deps.sendMessage(chatId, `Owner set to your account (${senderId}), but persistence failed — may reset on restart.`);
