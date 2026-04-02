@@ -58,7 +58,7 @@ const {
 // ============================================================================
 
 const {
-    setSendMessage, setRunAgentTurn, cronService,
+    setSendMessage, setGetOwnerChatId, setRunAgentTurn, cronService,
 } = require('./cron');
 
 // ============================================================================
@@ -136,8 +136,9 @@ const sendMessage = (chatId, text, replyTo, buttons) => channel.sendMessage(chat
 const sendTyping = (chatId) => channel.sendTyping(chatId);
 const createStatusReactionController = (chatId, msgId) => channel.createStatusReactionController(chatId, msgId);
 
-// Wire sendMessage into cron.js so reminders can be delivered
+// Wire sendMessage + ownerChatId into cron.js so reminders can be delivered
 setSendMessage((chatId, text) => channel.sendMessage(chatId, text));
+setGetOwnerChatId(() => channel.getOwnerChatId());
 
 // ============================================================================
 // AI ENGINE (ai.js — provider-agnostic AI orchestration)

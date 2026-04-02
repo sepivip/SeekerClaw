@@ -11,8 +11,10 @@ const { workDir, log, localTimestamp, getOwnerId } = require('./config');
 // DEPENDENCY INJECTION
 // ============================================================================
 
-// sendMessage is defined in telegram.js — injected after load via setSendMessage()
+// sendMessage is defined in channel.js — injected after load via setSendMessage()
 let _sendMessage = null;
+// getOwnerChatId returns the channel-specific chat ID for the owner (DM channel on Discord)
+let _getOwnerChatId = null;
 
 function setSendMessage(fn) {
     if (fn != null && typeof fn !== 'function') {
@@ -20,6 +22,10 @@ function setSendMessage(fn) {
         return;
     }
     _sendMessage = fn || null;
+}
+
+function setGetOwnerChatId(fn) {
+    _getOwnerChatId = fn || null;
 }
 
 // runAgentTurn is defined in main.js — injected after load via setRunAgentTurn()
@@ -612,10 +618,10 @@ const cronService = {
         try {
             // Execute based on payload type
             if (payloadKind === 'reminder') {
-                const ownerId = getOwnerId();
+                const ownerChatId = _getOwnerChatId ? _getOwnerChatId() : getOwnerId();
                 const message = `⏰ **Reminder**\n\n${job.payload.message}\n\n_Set ${formatDuration(Date.now() - job.createdAtMs)} ago_`;
                 if (_sendMessage) {
-                    await Promise.race([_sendMessage(ownerId, message), timeoutPromise]);
+                    await Promise.race([_sendMessage(ownerChatId, message), timeoutPromise]);
                     delivered = true;
                 } else {
                     log(`[Cron] WARNING: sendMessage not injected, cannot deliver reminder for job ${job.id}`, 'ERROR');
@@ -639,14 +645,14 @@ const cronService = {
                     const result = await _runAgentTurn(job.payload.message, job.id);
                     // result is cleaned response text, or null if SILENT_REPLY/HEARTBEAT_OK
                     if (result) {
-                        const ownerId = getOwnerId();
-                        if (_sendMessage && ownerId) {
+                        const ownerChatId = _getOwnerChatId ? _getOwnerChatId() : getOwnerId();
+                        if (_sendMessage && ownerChatId) {
                             const prefix = job.name ? `**[${job.name}]**\n\n` : '';
-                            await _sendMessage(ownerId, prefix + result);
+                            await _sendMessage(ownerChatId, prefix + result);
                             delivered = true;
                         } else {
-                            log(`[Cron] WARNING: sendMessage or ownerId missing, cannot deliver agentTurn result for job ${job.id}`, 'ERROR');
-                            throw new Error('sendMessage/ownerId not available for agentTurn delivery');
+                            log(`[Cron] WARNING: sendMessage or ownerChatId missing, cannot deliver agentTurn result for job ${job.id}`, 'ERROR');
+                            throw new Error('sendMessage/ownerChatId not available for agentTurn delivery');
                         }
                     } else {
                         // SILENT_REPLY / HEARTBEAT_OK: turn ran successfully but nothing to report.
@@ -663,9 +669,9 @@ const cronService = {
             error = e.message;
             // For agentTurn failures, notify the owner so they know the scheduled task failed
             if (payloadKind === 'agentTurn' && _sendMessage) {
-                const ownerId = getOwnerId();
-                if (ownerId) {
-                    _sendMessage(ownerId, `⚠️ Scheduled task "${job.name}" failed: ${e.message}`).catch(() => {});
+                const ownerChatId = _getOwnerChatId ? _getOwnerChatId() : getOwnerId();
+                if (ownerChatId) {
+                    _sendMessage(ownerChatId, `⚠️ Scheduled task "${job.name}" failed: ${e.message}`).catch(() => {});
                 }
             }
         } finally {
@@ -734,6 +740,7 @@ const cronService = {
 
 module.exports = {
     setSendMessage,
+    setGetOwnerChatId,
     setRunAgentTurn,
     cronService,
     parseTimeExpression,
