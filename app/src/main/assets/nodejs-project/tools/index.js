@@ -2,14 +2,7 @@
 // Merges all domain modules, builds handler dispatch map, routes tool calls.
 
 const { log, CHANNEL } = require('../config');
-// Confirmation messages use Telegram sendMessage. On non-Telegram channels the
-// stub logs a warning and the confirmation is auto-denied (see requestConfirmation).
-const _telegramSendMessage = CHANNEL === 'telegram'
-    ? require('../telegram').telegram
-    : (method, params) => {
-        log(`[Confirm] Confirmation not supported on channel "${CHANNEL}" — stub called (method: ${method}, chat: ${params && params.chat_id})`, 'WARN');
-        return Promise.resolve({ ok: false, description: 'confirmation not supported on this channel' });
-    };
+const channel = require('../channel');
 
 // ── Domain modules ───────────────────────────────────────────────────────────
 
@@ -149,14 +142,9 @@ function requestConfirmation(chatId, toolName, input) {
             toolName,
         });
         log(`[Confirm] Awaiting confirmation for ${toolName} in chat ${chatId}`, 'DEBUG');
-        _telegramSendMessage('sendMessage', {
-            chat_id: chatId,
-            text: msg,
-            parse_mode: 'HTML',
-            disable_notification: false,
-        }).then((result) => {
+        channel.sendMessage(chatId, msg).then((result) => {
             if (result && result.ok === false) {
-                log(`[Confirm] Telegram rejected confirmation message: ${JSON.stringify(result).slice(0, 200)}`, 'WARN');
+                log(`[Confirm] Channel rejected confirmation message: ${JSON.stringify(result).slice(0, 200)}`, 'WARN');
                 pendingConfirmations.delete(chatId);
                 clearTimeout(timer);
                 resolve(false);

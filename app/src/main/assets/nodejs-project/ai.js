@@ -18,10 +18,12 @@ const {
 } = require('./config');
 
 const { redactSecrets } = require('./security');
-// Note: telegram.js is imported even on Discord — it only defines functions,
-// doesn't connect or poll. Used for shared utilities (formatting, file download).
-const { telegram, sendTyping, sentMessageCache, SENT_CACHE_TTL, deferStatus } = require('./telegram');
-const _channelSendTyping = CHANNEL === 'telegram' ? sendTyping : () => {};
+// Channel abstraction — routes to telegram.js or discord.js based on config
+const channel = require('./channel');
+// sentMessageCache stays imported from telegram.js — it's the shared data store
+const { sentMessageCache, SENT_CACHE_TTL } = require('./telegram');
+// deferStatus is Telegram-specific (inline status messages); no-op on other channels
+const deferStatus = CHANNEL === 'telegram' ? require('./telegram').deferStatus : () => ({ cleanup: async () => {} });
 const { httpStreamingRequest, httpOpenAIStreamingRequest, httpChatCompletionsStreamingRequest } = require('./http');
 const { getAdapter } = require('./providers');
 const { androidBridgeCall } = require('./bridge');
@@ -460,7 +462,11 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('Tools are provided via the tools API. Call tools exactly as listed by name.');
     lines.push('For visual checks ("what do you see", "check my dog"), call android_camera_check.');
     lines.push('To list or launch installed apps, use android_apps_list and android_apps_launch.');
-    lines.push('**Screenshots:** Use `screencap -p screenshot.png` via shell_exec, then telegram_send_file to send it. Captures whatever is currently on screen.');
+    if (CHANNEL === 'telegram') {
+        lines.push('**Screenshots:** Use `screencap -p screenshot.png` via shell_exec, then telegram_send_file to send it. Captures whatever is currently on screen.');
+    } else {
+        lines.push('**Screenshots:** Use `screencap -p screenshot.png` via shell_exec to capture what is currently on screen.');
+    }
     lines.push('**Swap workflow:** Always use solana_quote first to show the user what they\'ll get, then solana_swap to execute. Never swap without confirming the quote with the user first.');
     lines.push('**Jupiter Advanced Features (requires API key):**');
     lines.push('- **Limit Orders** (jupiter_trigger_create/list/cancel): Set buy/sell orders that execute when price hits target. Perfect for "buy SOL if it drops to $80" or "sell when it hits $100". Token-2022 tokens NOT supported.');
@@ -477,7 +483,11 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('**Shell execution:** Use shell_exec to run commands on the device. Sandboxed to workspace directory with a predefined allowlist of Unix utilities and Android tools (ls, cat, grep, find, curl, sed, diff, screencap, getprop, etc.). Note: node/npm/npx are NOT available. Shell arguments cannot contain special characters ({, }, $, [, ], etc.) — for complex text processing (awk, tr patterns) use js_eval instead. 30s timeout. No chaining, redirection, or command substitution — one command at a time.');
     lines.push('**JavaScript execution:** Use js_eval to run JavaScript code in a sandboxed VM context. Supports async/await, require(), and most Node.js built-ins (fs, path, http, crypto, etc.). Blocked for security: child_process, vm, cluster, worker_threads, v8, perf_hooks, module, and relative/absolute path requires. Use for computation, data processing, JSON manipulation, HTTP requests, or anything that needs JavaScript. 30s timeout. Prefer js_eval over shell_exec when the task involves data processing or logic.');
     lines.push(`**File attachments (inbound):** When the user sends photos, documents, or other files via ${CHANNEL === 'discord' ? 'Discord' : 'Telegram'}, they are automatically downloaded to media/inbound/ in your workspace. Images are shown to you directly (vision). For other files, you are told the path — use the read tool to access them. Supported: photos, documents (PDF, etc.), video, audio, voice notes.`);
-    lines.push(`**File sending (outbound):** Use telegram_send_file to send any workspace file to the user's ${CHANNEL === 'discord' ? 'Discord' : 'Telegram'} chat. Auto-detects type from extension (photo, video, audio, document). Use for sharing reports, camera captures, exported CSVs, generated images, or any file the user needs. Max 50MB, photos max 10MB.`);
+    if (CHANNEL === 'telegram') {
+        lines.push(`**File sending (outbound):** Use telegram_send_file to send any workspace file to the user's Telegram chat. Auto-detects type from extension (photo, video, audio, document). Use for sharing reports, camera captures, exported CSVs, generated images, or any file the user needs. Max 50MB, photos max 10MB.`);
+    } else {
+        lines.push(`**File sending (outbound):** Use the file sending tool to send any workspace file to the user's ${CHANNEL} chat. Use for sharing reports, camera captures, exported CSVs, generated images, or any file the user needs.`);
+    }
     lines.push('**File deletion:** Use the delete tool to clean up temporary files, old media downloads, or files you no longer need. Protected system files and database files cannot be deleted. Directories cannot be deleted — remove files individually.');
     lines.push('**Inline keyboard buttons:** telegram_send supports an optional `buttons` parameter — an array of button rows. Each button has `text` (label), `callback_data` (value returned on tap), and optional `style` ("destructive" for red, "primary" for blue — default is gray). Use "destructive" for dangerous actions (delete, send, swap) and "primary" for recommended actions. When the user taps a custom button, you receive it as `[Tapped button: "<callback_data>"] (on message: "<original_message>")`. Exception: Quick Action buttons (from /quick) are delivered as plain natural-language text — see Quick Actions section below. Example: `[[{"text": "✅ Confirm", "callback_data": "yes", "style": "primary"}, {"text": "❌ Cancel", "callback_data": "no"}]]`. Reserve "destructive" for genuinely dangerous actions like delete or send funds.');
     lines.push('');
@@ -1014,7 +1024,9 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
             .sort((a, b) => b[1].timestamp - a[1].timestamp)
             .slice(0, 3);
         if (recent.length > 0) {
-            dynamicLines.push(`Recent Sent Messages (use message_id with telegram_delete, never guess):`);
+            dynamicLines.push(CHANNEL === 'telegram'
+                ? `Recent Sent Messages (use message_id with telegram_delete, never guess):`
+                : `Recent Sent Messages:`);
             for (const [msgId, entry] of recent) {
                 dynamicLines.push(`  message_id ${msgId}: ${JSON.stringify(entry.preview)}`);
             }
@@ -1146,8 +1158,8 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
     // Accepts both numeric (Telegram) and string (Discord) chatIds.
     let typingInterval = null;
     if (chatId && !background) {
-        _channelSendTyping(chatId);
-        typingInterval = setInterval(() => _channelSendTyping(chatId), 4000);
+        channel.sendTyping(chatId);
+        typingInterval = setInterval(() => channel.sendTyping(chatId), 4000);
     }
 
     try {
@@ -1316,13 +1328,8 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
                     // Notify owner via Telegram (fire-and-forget)
                     if (!_sessionExpiryNotified) {
                         _sessionExpiryNotified = true;
-                        const ownerId = getOwnerId();
-                        if (ownerId) {
-                            telegram('sendMessage', {
-                                chat_id: Number(ownerId),
-                                text: '\u26a0\ufe0f Your session has expired. Please re-pair your device to continue.',
-                            }).catch(e => log(`[Session] Failed to notify owner: ${e.message}`, 'WARN'));
-                        }
+                        channel.sendMessage(channel.getOwnerChatId(), '\u26a0\ufe0f Your session has expired. Please re-pair your device to continue.')
+                            .catch(e => log(`[Session] Failed to notify owner: ${e.message}`, 'WARN'));
                     }
                 }
             } else {
