@@ -7,7 +7,7 @@ const fs = require('fs');
 const https = require('https');
 const path = require('path');
 
-const { BOT_TOKEN, log, workDir } = require('./config');
+const { BOT_TOKEN, log, workDir, getOwnerId } = require('./config');
 const { redactSecrets } = require('./security');
 const { httpRequest } = require('./http');
 
@@ -705,6 +705,7 @@ async function sendMessage(chatId, text, replyTo = null, buttons = null) {
 
     // Telegram max message length is 4096 — use markdown-aware chunking
     const chunks = chunkMarkdown(text);
+    let lastMessageId = null;
 
     for (let i = 0; i < chunks.length; i++) {
         const chunk = chunks[i];
@@ -728,6 +729,7 @@ async function sendMessage(chatId, text, replyTo = null, buttons = null) {
             if (result && result.ok) {
                 sent = true;
                 if (result.result && result.result.message_id) {
+                    lastMessageId = result.result.message_id;
                     recordSentMessage(chatId, result.result.message_id, chunk);
                 }
             } else if (result && !result.ok) {
@@ -759,6 +761,7 @@ async function sendMessage(chatId, text, replyTo = null, buttons = null) {
                 if (replyMarkup) payload.reply_markup = replyMarkup;
                 const result = await telegram('sendMessage', payload);
                 if (result && result.ok && result.result && result.result.message_id) {
+                    lastMessageId = result.result.message_id;
                     recordSentMessage(chatId, result.result.message_id, chunk);
                 }
             } catch (e) {
@@ -766,6 +769,9 @@ async function sendMessage(chatId, text, replyTo = null, buttons = null) {
             }
         }
     }
+
+    // Return { messageId } of the last successfully sent chunk (channel interface contract)
+    if (lastMessageId != null) return { messageId: lastMessageId };
 }
 
 // OpenClaw parity: backoff on 401/403 to avoid hammering Telegram with invalid token
@@ -979,6 +985,89 @@ function createStatusReactionController(chatId, messageId) {
 }
 
 // ============================================================================
+// CHANNEL INTERFACE — start, stop, sendFile, editMessage, deleteMessage,
+//                     getOwnerChatId (BAT-483)
+// ============================================================================
+
+let _onMessage = null;
+let _onReaction = null;
+let _stopped = false;
+
+/**
+ * Store callbacks for the channel interface. The Telegram poll loop stays in
+ * main.js — start() just stores the callbacks and returns.
+ */
+function start(onMessage, onReaction) {
+    _onMessage = onMessage;
+    _onReaction = onReaction;
+    _stopped = false;
+}
+
+function stop() {
+    _stopped = true;
+}
+
+/**
+ * Send a file to a Telegram chat using the existing multipart upload helpers.
+ * Returns { messageId } on success or { error } on failure.
+ */
+async function sendFile(chatId, filePath, caption) {
+    if (!fs.existsSync(filePath)) return { error: 'File not found' };
+    try {
+        const ext = path.extname(filePath).toLowerCase();
+        const fileName = path.basename(filePath);
+        const stat = fs.statSync(filePath);
+        const { method, field } = detectTelegramFileType(ext);
+        const params = { chat_id: chatId };
+        if (caption) params.caption = caption;
+        const result = await telegramSendFile(method, params, field, filePath, fileName, stat.size);
+        if (result && result.ok && result.result) {
+            return { messageId: result.result.message_id };
+        }
+        return { error: result?.description || 'Send failed' };
+    } catch (e) {
+        log(`sendFile error: ${e.message}`, 'ERROR');
+        return { error: e.message };
+    }
+}
+
+/**
+ * Edit a message in a Telegram chat (text or reply markup).
+ */
+async function editMessage(chatId, messageId, text, replyMarkup) {
+    if (text !== undefined && text !== null) {
+        return telegram('editMessageText', {
+            chat_id: chatId,
+            message_id: messageId,
+            text,
+            parse_mode: 'HTML',
+        });
+    }
+    if (replyMarkup !== undefined) {
+        return telegram('editMessageReplyMarkup', {
+            chat_id: chatId,
+            message_id: messageId,
+            reply_markup: typeof replyMarkup === 'string' ? replyMarkup : JSON.stringify(replyMarkup),
+        });
+    }
+}
+
+/**
+ * Delete a message in a Telegram chat.
+ */
+async function deleteMsg(chatId, messageId) {
+    return telegram('deleteMessage', { chat_id: chatId, message_id: messageId });
+}
+
+/**
+ * Get the owner's chat ID as a string.
+ */
+function getOwnerChatId() {
+    const ownerId = getOwnerId();
+    return ownerId ? String(ownerId) : null;
+}
+
+// ============================================================================
 // EXPORTS
 // ============================================================================
 
@@ -1002,4 +1091,11 @@ module.exports = {
     deferStatus,
     createStatusReactionController,
     STATUS_EMOJIS,
+    // Channel interface (BAT-483)
+    start,
+    stop,
+    sendFile,
+    editMessage,
+    deleteMessage: deleteMsg,
+    getOwnerChatId,
 };

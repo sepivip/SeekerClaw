@@ -103,8 +103,13 @@ const { handleQuickCommand, handleQuickCallback } = require('./quick-actions');
 // CHANNEL — Telegram or Discord (BAT-483)
 // ============================================================================
 
+const channel = require('./channel');
+channel.init();
+
+// Channel-specific imports: Telegram needs media normalization for the poll loop;
+// Discord uses url-based downloads via telegram.js's downloadFileByUrl helper.
 let telegram, MAX_FILE_SIZE, MAX_IMAGE_SIZE, extractMedia, downloadTelegramFile;
-let downloadFileByUrl, sendMessage, sendTyping, createStatusReactionController;
+let downloadFileByUrl;
 
 if (CHANNEL === 'telegram') {
     const tg = require('./telegram');
@@ -114,30 +119,25 @@ if (CHANNEL === 'telegram') {
     extractMedia = tg.extractMedia;
     downloadTelegramFile = tg.downloadTelegramFile;
     downloadFileByUrl = tg.downloadFileByUrl;
-    sendMessage = tg.sendMessage;
-    sendTyping = tg.sendTyping;
-    createStatusReactionController = tg.createStatusReactionController;
 } else if (CHANNEL === 'discord') {
-    const dc = require('./discord');
-    sendMessage = dc.sendMessage;
-    sendTyping = dc.sendTyping;
     // Use telegram.js's downloadFileByUrl — it works for any URL and supports a maxSize param
     const { downloadFileByUrl: _dlByUrl } = require('./telegram');
+    MAX_FILE_SIZE = 25 * 1024 * 1024; // Discord max 25MB
+    MAX_IMAGE_SIZE = 25 * 1024 * 1024;
     downloadFileByUrl = (url, fileName) => _dlByUrl(url, fileName, MAX_FILE_SIZE);
     // Stubs for Telegram-only APIs (not used on Discord path)
     telegram = () => Promise.resolve({ ok: false, description: 'Not available on Discord' });
-    MAX_FILE_SIZE = 25 * 1024 * 1024; // Discord max 25MB
-    MAX_IMAGE_SIZE = 25 * 1024 * 1024;
     extractMedia = () => null;
     downloadTelegramFile = () => Promise.resolve(null);
-    createStatusReactionController = () => ({
-        setQueued: () => {}, setThinking: () => {},
-        setDone: async () => {}, setError: async () => {}, clear: async () => {},
-    });
 }
 
+// Convenience aliases — route through channel.js for channel-agnostic callers
+const sendMessage = (chatId, text, replyTo, buttons) => channel.sendMessage(chatId, text, replyTo);
+const sendTyping = (chatId) => channel.sendTyping(chatId);
+const createStatusReactionController = (chatId, msgId) => channel.createStatusReactionController(chatId, msgId);
+
 // Wire sendMessage into cron.js so reminders can be delivered
-setSendMessage(sendMessage);
+setSendMessage((chatId, text) => channel.sendMessage(chatId, text));
 
 // ============================================================================
 // AI ENGINE (ai.js — provider-agnostic AI orchestration)
@@ -741,8 +741,6 @@ telegram('getMe')
         process.exit(1);
     });
 } else if (CHANNEL === 'discord') {
-    const discord = require('./discord');
-
     // Condensed startup banner
     const _skillCount = loadSkills().length;
     const _cronCount = cronService.store?.jobs?.length || 0;
@@ -777,10 +775,7 @@ telegram('getMe')
             telegram,
             sendMessage, sendTyping, downloadTelegramFile, downloadFileByUrl,
             extractMedia,
-            createStatusReactionController: () => ({
-                setQueued: () => {}, setThinking: () => {},
-                setDone: async () => {}, setError: async () => {}, clear: async () => {},
-            }),
+            createStatusReactionController,
             MAX_FILE_SIZE, MAX_IMAGE_SIZE,
             chat, getConversation, addToConversation, clearConversation,
             saveSessionSummary, MIN_MESSAGES_FOR_SUMMARY,
@@ -807,16 +802,20 @@ telegram('getMe')
         setInterval(() => writeAgentHealthFile(), 60000);
 
         // Start Discord gateway — messages flow through enqueueMessage
-        discord.start((normalized) => {
+        channel.start((normalized) => {
             enqueueMessage(normalized);
         });
 
-        // Notify owner we're online (if owner ID is known)
-        const ownerId = getOwnerId();
-        if (ownerId) {
-            // Discord DM channel needs to be opened first — send via the channel from first message
-            // The "back online" notification will happen naturally when the owner sends a message
-        }
+        // Notify owner we're online (if DM channel is available from proactive open)
+        // Delayed slightly to let the DM channel open complete
+        setTimeout(() => {
+            const dmChatId = channel.getOwnerChatId();
+            if (dmChatId) {
+                channel.sendMessage(dmChatId, 'Back online — resend anything important.').catch(e =>
+                    log(`[Discord] Back-online notify failed: ${e.message}`, 'WARN')
+                );
+            }
+        }, 3000);
 
         startClaudeUsagePolling();
 
@@ -855,6 +854,11 @@ telegram('getMe')
         process.exit(1);
     });
 }
+
+// Graceful shutdown: stop the channel (close WebSocket for Discord, no-op for Telegram)
+// Runs before database.js's gracefulShutdown which handles session summaries + DB save.
+process.on('SIGTERM', () => { try { channel.stop(); } catch (_) {} });
+process.on('SIGINT', () => { try { channel.stop(); } catch (_) {} });
 
 // Runtime status log (uptime/memory debug, every 5 min)
 setInterval(() => {
@@ -941,11 +945,13 @@ let isHeartbeatInFlight = false;
 let lastHeartbeatAt = Date.now();
 
 async function runHeartbeat() {
-    const ownerIdStr = getOwnerId();
-    if (!ownerIdStr) return; // agent not set up yet
+    const rawOwnerChatId = channel.getOwnerChatId();
+    if (!rawOwnerChatId) return; // agent not set up yet (or DM channel not opened for Discord)
 
-    const ownerChatId = parseInt(ownerIdStr, 10);
-    if (isNaN(ownerChatId)) return;
+    // For chatQueues serialization, use the same key type as the poll loop:
+    // Telegram uses numeric chatIds (msg.chat.id), Discord uses string channel IDs.
+    const ownerChatId = CHANNEL === 'telegram' ? parseInt(rawOwnerChatId, 10) : rawOwnerChatId;
+    if (CHANNEL === 'telegram' && isNaN(ownerChatId)) return;
 
     // Prevent double-queuing if a heartbeat is already queued or running.
     if (isHeartbeatInFlight) {

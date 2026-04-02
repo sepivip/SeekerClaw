@@ -3,9 +3,8 @@
 // Channel interface: start(callback), stop(), sendMessage(chatId, text, replyTo?), sendTyping(chatId)
 // Depends on: config.js, http.js, bridge.js
 
-const { DISCORD_TOKEN, DISCORD_OWNER_ID, log, getOwnerId, setOwnerId } = require('./config');
+const { DISCORD_TOKEN, DISCORD_OWNER_ID, log } = require('./config');
 const { httpRequest } = require('./http');
-const { androidBridgeCall } = require('./bridge');
 const { redactSecrets } = require('./security');
 
 let WebSocket;
@@ -30,8 +29,11 @@ let seq = null;
 let sessionId = null;
 let resumeGatewayUrl = null;
 let onMessageCallback = null;
+let onReactionCallback = null;
 let reconnectAttempts = 0;
 let stopped = false; // True after stop() — prevents reconnect
+let reconnectTimer = null; // Track reconnect timer for cleanup (S-NEW-4)
+let ownerDmChannelId = null; // Cached DM channel ID for proactive messaging
 const MAX_RECONNECT_DELAY = 30000;
 
 // ── Gateway Connection ──────────────────────────────────────────────────────
@@ -171,17 +173,10 @@ function handleMessageCreate(msg) {
     const senderId = msg.author?.id;
     if (!senderId) return;
 
-    // Owner gate: auto-detect or check
-    const ownerId = getOwnerId() || DISCORD_OWNER_ID;
-    if (!ownerId) {
-        // First DM claims ownership (same pattern as Telegram auto-detect)
-        setOwnerId(senderId);
-        log(`[Discord] Owner claimed by ${senderId} (auto-detect)`, 'INFO');
-        androidBridgeCall('/config/save-owner', { ownerId: senderId }).catch(() => {});
-    } else if (senderId !== ownerId) {
-        log(`[Discord] Ignoring message from non-owner ${senderId}`, 'DEBUG');
-        return;
-    }
+    // Cache DM channel ID for proactive messaging (heartbeat, cron)
+    if (!ownerDmChannelId) ownerDmChannelId = msg.channel_id;
+
+    // Owner gating is handled in message-handler.js (I-NEW-2: removed duplicate gate)
 
     // Normalize to channel-agnostic shape (PR 1 contract)
     const attachment = msg.attachments?.[0];
@@ -263,7 +258,7 @@ function scheduleReconnect() {
     reconnectAttempts++;
     const delay = Math.min(1000 * Math.pow(2, reconnectAttempts - 1), MAX_RECONNECT_DELAY);
     log(`[Discord] Reconnecting in ${Math.round(delay / 1000)}s (attempt ${reconnectAttempts})`, 'INFO');
-    setTimeout(() => connect(), delay);
+    reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(); }, delay);
 }
 
 // ── Gateway Send ────────────────────────────────────────────────────────────
@@ -302,8 +297,11 @@ async function sendMessage(channelId, text, replyToId = null, _buttons = null) {
         let cutoff = remaining.lastIndexOf('\n', 2000);
         if (cutoff < 200) cutoff = 2000; // No good break point — hard cut
         chunks.push(remaining.slice(0, cutoff));
-        remaining = remaining.slice(cutoff);
+        // Skip the newline at the break point (I-7 fix) — hard cuts don't skip
+        remaining = remaining.slice(cutoff === 2000 ? cutoff : cutoff + 1);
     }
+
+    let lastMessageId = null;
 
     for (let i = 0; i < chunks.length; i++) {
         const body = { content: chunks[i] };
@@ -341,14 +339,21 @@ async function sendMessage(channelId, text, replyToId = null, _buttons = null) {
                 }, JSON.stringify(body));
                 if (retryRes.status >= 400) {
                     log(`[Discord] Send retry failed: ${retryRes.status}`, 'ERROR');
+                } else if (retryRes.data?.id) {
+                    lastMessageId = retryRes.data.id;
                 }
             } else if (res.status >= 400) {
                 log(`[Discord] Send failed: ${res.status} ${JSON.stringify(res.data).slice(0, 200)}`, 'ERROR');
+            } else if (res.data?.id) {
+                lastMessageId = res.data.id;
             }
         } catch (e) {
             log(`[Discord] Send error: ${e.message}`, 'ERROR');
         }
     }
+
+    // Return { messageId } of the last successfully sent chunk (channel interface contract)
+    if (lastMessageId != null) return { messageId: lastMessageId };
 }
 
 /**
@@ -375,7 +380,7 @@ async function sendTyping(channelId) {
 
 // ── Public Interface ────────────────────────────────────────────────────────
 
-function start(callback) {
+function start(onMessage, onReaction) {
     if (!DISCORD_TOKEN) {
         log('[Discord] No bot token configured — Discord disabled', 'WARN');
         return;
@@ -385,14 +390,41 @@ function start(callback) {
         return;
     }
     stopped = false;
-    onMessageCallback = callback;
+    onMessageCallback = onMessage;
+    onReactionCallback = onReaction || null;
     connect();
+
+    // Proactive DM channel open — needed for heartbeat/cron to send before first user message
+    if (DISCORD_OWNER_ID) {
+        const body = JSON.stringify({ recipient_id: DISCORD_OWNER_ID });
+        httpRequest({
+            hostname: DISCORD_API_HOST,
+            path: `${API_BASE}/users/@me/channels`,
+            method: 'POST',
+            headers: {
+                'Authorization': `Bot ${DISCORD_TOKEN}`,
+                'Content-Type': 'application/json',
+                'User-Agent': 'SeekerClaw (https://seekerclaw.xyz, 1.0)',
+            },
+            timeout: 10000,
+        }, body).then(res => {
+            if (res.data?.id) {
+                ownerDmChannelId = res.data.id;
+                log(`[Discord] DM channel opened: ${ownerDmChannelId}`, 'DEBUG');
+            }
+        }).catch(e => {
+            log(`[Discord] DM channel open failed: ${e.message}`, 'WARN');
+        });
+    }
+
     log('[Discord] Channel started', 'INFO');
 }
 
 function stop() {
     stopped = true;
     stopHeartbeat();
+    // Clear reconnect timer to prevent ghost reconnects (S-NEW-4)
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
     if (ws) {
         ws.close(1000, 'Shutdown');
         ws = null;
@@ -400,9 +432,100 @@ function stop() {
     log('[Discord] Channel stopped', 'INFO');
 }
 
+// ── Channel Interface Stubs (BAT-483) ──────────────────────────────────────
+
+/**
+ * Send a file to a Discord channel. Not supported in v1 — Discord file uploads
+ * require multipart/form-data which our httpRequest helper doesn't support yet.
+ */
+async function sendFile(chatId, filePath, caption) {
+    log('[Discord] File sending not supported in v1', 'WARN');
+    return { error: 'File sending not supported on Discord (v1)' };
+}
+
+/**
+ * Edit a message in a Discord channel.
+ */
+async function editMessage(chatId, messageId, text, _replyMarkup) {
+    const body = {};
+    if (text !== undefined && text !== null) body.content = text;
+    try {
+        const res = await httpRequest({
+            hostname: DISCORD_API_HOST,
+            path: `${API_BASE}/channels/${chatId}/messages/${messageId}`,
+            method: 'PATCH',
+            headers: {
+                'Authorization': `Bot ${DISCORD_TOKEN}`,
+                'Content-Type': 'application/json',
+                'User-Agent': 'SeekerClaw (https://seekerclaw.xyz, 1.0)',
+            },
+            timeout: 10000,
+        }, JSON.stringify(body));
+        if (res.status >= 400) {
+            log(`[Discord] Edit failed: ${res.status}`, 'ERROR');
+        }
+        return res.data;
+    } catch (e) {
+        log(`[Discord] Edit error: ${e.message}`, 'ERROR');
+        return null;
+    }
+}
+
+/**
+ * Delete a message in a Discord channel.
+ */
+async function deleteMsg(chatId, messageId) {
+    try {
+        const res = await httpRequest({
+            hostname: DISCORD_API_HOST,
+            path: `${API_BASE}/channels/${chatId}/messages/${messageId}`,
+            method: 'DELETE',
+            headers: {
+                'Authorization': `Bot ${DISCORD_TOKEN}`,
+                'User-Agent': 'SeekerClaw (https://seekerclaw.xyz, 1.0)',
+            },
+            timeout: 10000,
+        });
+        if (res.status >= 400) {
+            log(`[Discord] Delete failed: ${res.status}`, 'ERROR');
+        }
+    } catch (e) {
+        log(`[Discord] Delete error: ${e.message}`, 'ERROR');
+    }
+}
+
+/**
+ * Get the DM channel ID for proactive messaging (heartbeat, cron).
+ * Returns the cached DM channel ID opened at start() or from first message.
+ */
+function getOwnerChatId() {
+    return ownerDmChannelId;
+}
+
+/**
+ * Create a no-op status reaction controller for Discord (v1).
+ * Discord doesn't support message reactions via the same UX pattern.
+ */
+function createStatusReactionController(_chatId, _messageId) {
+    return {
+        setQueued: () => {},
+        setThinking: () => {},
+        setTool: () => {},
+        setDone: async () => {},
+        setError: async () => {},
+        clear: async () => {},
+    };
+}
+
 module.exports = {
     start,
     stop,
     sendMessage,
     sendTyping,
+    // Channel interface (BAT-483)
+    sendFile,
+    editMessage,
+    deleteMessage: deleteMsg,
+    getOwnerChatId,
+    createStatusReactionController,
 };
