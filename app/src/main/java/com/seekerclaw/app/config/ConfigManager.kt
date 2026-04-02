@@ -412,7 +412,7 @@ object ConfigManager {
             setupToken = setupToken,
             authType = p.getString(KEY_AUTH_TYPE, "api_key") ?: "api_key",
             telegramBotToken = botToken,
-            telegramOwnerId = p.getString(KEY_OWNER_ID, "") ?: "",
+            telegramOwnerId = loadOwnerIdFromFile(context, "telegram"),
             model = p.getString(KEY_MODEL, "claude-opus-4-6") ?: "claude-opus-4-6",
             agentName = p.getString(KEY_AGENT_NAME, "MyAgent") ?: "MyAgent",
             braveApiKey = braveApiKey,
@@ -437,7 +437,7 @@ object ConfigManager {
             customFormat = p.getString(KEY_CUSTOM_FORMAT, "chat_completions") ?: "chat_completions",
             channel = p.getString(KEY_CHANNEL, "telegram") ?: "telegram",
             discordBotToken = discordBotToken,
-            discordOwnerId = p.getString(KEY_DISCORD_OWNER_ID, "") ?: "",
+            discordOwnerId = loadOwnerIdFromFile(context, "discord"),
         )
     }
 
@@ -461,7 +461,10 @@ object ConfigManager {
             "anthropicApiKey" -> config.copy(anthropicApiKey = value)
             "setupToken" -> config.copy(setupToken = value)
             "telegramBotToken" -> config.copy(telegramBotToken = value)
-            "telegramOwnerId" -> config.copy(telegramOwnerId = value)
+            "telegramOwnerId" -> {
+                saveOwnerIdToFile(context, value, "telegram")
+                config.copy(telegramOwnerId = value)
+            }
             "model" -> config.copy(model = value)
             "agentName" -> config.copy(agentName = value)
             "authType" -> config.copy(authType = value)
@@ -488,7 +491,10 @@ object ConfigManager {
             "customFormat" -> config.copy(customFormat = value)
             "channel" -> config.copy(channel = value)
             "discordBotToken" -> config.copy(discordBotToken = value)
-            "discordOwnerId" -> config.copy(discordOwnerId = value)
+            "discordOwnerId" -> {
+                saveOwnerIdToFile(context, value, "discord")
+                config.copy(discordOwnerId = value)
+            }
             else -> return
         }
         saveConfig(context, updated)
@@ -501,14 +507,66 @@ object ConfigManager {
     }
 
     fun saveOwnerIdForChannel(context: Context, ownerId: String, channel: String): Boolean {
-        val key = if (channel == "discord") KEY_DISCORD_OWNER_ID else KEY_OWNER_ID
-        val persisted = prefs(context).edit().putString(key, ownerId).commit()
-        if (persisted) {
+        return saveOwnerIdToFile(context, ownerId, channel)
+    }
+
+    /**
+     * Save owner ID to file-based IPC (cross-process safe).
+     * File: workspace/owner_ids (JSON: {"telegram": "123", "discord": "456"})
+     *
+     * SharedPreferences has per-process caching that causes cross-process writes
+     * to be silently overwritten. This file-based approach uses atomic writes
+     * (.tmp + rename) — the same pattern as ServiceState.
+     */
+    fun saveOwnerIdToFile(context: Context, ownerId: String, channel: String): Boolean {
+        try {
+            val filesDir = context.filesDir
+            val workspaceDir = File(filesDir, "workspace").apply { mkdirs() }
+            val file = File(workspaceDir, "owner_ids")
+
+            // Read existing data
+            val existing = if (file.exists()) {
+                try { JSONObject(file.readText()) } catch (_: Exception) { JSONObject() }
+            } else JSONObject()
+
+            // Update the channel's owner ID
+            existing.put(channel, ownerId)
+
+            // Atomic write: write to .tmp, then rename
+            val tmp = File(workspaceDir, "owner_ids.tmp")
+            tmp.writeText(existing.toString())
+            tmp.renameTo(file)
+
+            // Also update SharedPreferences for backward compatibility
+            val key = if (channel == "discord") KEY_DISCORD_OWNER_ID else KEY_OWNER_ID
+            prefs(context).edit().putString(key, ownerId).apply()
             configVersion.intValue++
-        } else {
-            LogCollector.append("[Config] Failed to persist owner ID for $channel (commit=false)", LogLevel.ERROR)
+
+            LogCollector.append("[Config] Owner ID saved to file for channel=$channel")
+            return true
+        } catch (e: Exception) {
+            LogCollector.append("[Config] Failed to save owner ID to file: ${e.message}", LogLevel.ERROR)
+            return false
         }
-        return persisted
+    }
+
+    /**
+     * Load owner ID from file-based IPC (cross-process safe).
+     * Falls back to SharedPreferences if file doesn't exist (migration for existing users).
+     */
+    fun loadOwnerIdFromFile(context: Context, channel: String): String {
+        try {
+            val file = File(context.filesDir, "workspace/owner_ids")
+            if (file.exists()) {
+                val json = JSONObject(file.readText())
+                val id = json.optString(channel, "")
+                if (id.isNotBlank()) return id
+            }
+        } catch (_: Exception) {}
+
+        // Fallback to SharedPreferences
+        val key = if (channel == "discord") KEY_DISCORD_OWNER_ID else KEY_OWNER_ID
+        return prefs(context).getString(key, "") ?: ""
     }
 
     fun clearConfig(context: Context) {
