@@ -32,6 +32,19 @@ grep -i "429\|Too Many Requests\|rate.limit" node_debug.log | tail -10
 **Diagnosis:** Telegram rate limits: ~30 messages/second to different chats, ~20 messages/minute to same chat, ~1 message/second for same chat. Bulk sending or rapid tool status updates can trigger this.
 **Fix:** Reduce message frequency. Batch status updates into single messages. If persistent, wait 30-60 seconds before retrying. This is transient — no config change needed.
 
+### Network Prolonged Outage
+**Symptoms:** No messages arrive for extended periods. Logs show many consecutive poll or WebSocket failures.
+**Check:**
+```
+grep -i "Prolonged outage\|consecutive.*poll\|consecutive.*fail" node_debug.log | tail -10
+```
+**Diagnosis:** After 20+ consecutive poll failures (Telegram) or sustained WebSocket disconnects (Discord), the system logs a "Prolonged outage" warning. This indicates persistent network loss — not a bot or API issue.
+**Fix:**
+1. Check device network: WiFi connected? Mobile data active?
+2. Check DNS: `grep -i ENOTFOUND node_debug.log | tail -5`
+3. The polling/WebSocket system auto-recovers when network returns — no manual intervention needed
+4. If the user reports this: "Your phone lost network connectivity for a while. Messages during the outage may have been missed. Check your WiFi/mobile data connection."
+
 ---
 
 ## Discord
@@ -96,7 +109,7 @@ grep -i "400\|context.*length\|too many tokens" node_debug.log | tail -5
 **Diagnosis:** The conversation + system prompt exceeded the model's context window. This can happen with very long tool results or accumulated conversation history.
 **Fix:**
 1. Use `/new` to archive and clear conversation history
-2. If a specific tool result was too large, note that tool results are auto-truncated at ~120KB but the conversation can still accumulate
+2. If a specific tool result was too large, note that tool results are auto-truncated at ~50K characters (HARD_MAX_TOOL_RESULT_CHARS) but the conversation can still accumulate
 3. MAX_HISTORY (35 messages) should prevent this in normal use — if it happens, it's likely a single very large message or tool result
 
 ### Custom Provider — Connection or Format Errors
@@ -121,7 +134,7 @@ grep -i "custom provider\|ECONNREFUSED\|UNABLE_TO_VERIFY\|Unexpected token" node
 
 ## Tools
 
-### Tool Result Truncation (>120KB)
+### Tool Result Truncation (>50K chars)
 **Symptoms:** Tool results seem incomplete or cut off. No error message — truncation is silent.
 **How it works:** Any tool result exceeding ~50K characters (HARD_MAX_TOOL_RESULT_CHARS in config.js) is silently truncated with a `...(truncated)` suffix. The agent receives the truncated version without explicit notification.
 **Check:** If a tool result seems incomplete:
@@ -177,6 +190,19 @@ df -h
 2. Clean up: delete old files in `media/inbound/` (downloaded Telegram files accumulate)
 3. Check `node_debug.log.old` size — large debug logs consume space
 4. Tell user: "Your device storage is nearly full. Clear some space in the SeekerClaw app or your phone's storage settings."
+
+### memory_search Returns Nothing
+**Symptoms:** memory_search returns empty results even when the user insists they discussed something before.
+**Diagnosis:** Several possible causes:
+- **Memory not yet indexed:** On startup, memory files are indexed into SQL.js chunks. If the agent just restarted, indexing may not be complete.
+- **Keywords too specific:** The search uses keyword matching with recency weighting. Try broader terms or synonyms.
+- **Memory was never saved:** The conversation may not have been saved to a memory file (e.g., agent crashed before auto-save, or user used /reset instead of /new).
+- **Database corruption:** If SQL.js failed to initialize (check startup logs for `[DB] Failed to initialize`), search falls back to file-based grep which is less capable.
+**Fix:**
+1. Try broader search terms or related keywords
+2. Check if the memory file exists: `ls memory/` and `read MEMORY.md`
+3. If the DB didn't initialize: restart the agent (DB re-initializes on startup)
+4. Tell the user: "I searched my memory but couldn't find that. Could you remind me of the key details?"
 
 ---
 
