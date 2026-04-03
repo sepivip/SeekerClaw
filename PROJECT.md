@@ -184,20 +184,20 @@ _None currently._
 | High | Vector embeddings for semantic memory | Needs native bindings or WASM solution |
 | Medium | FTS5 full-text search | SQL.js supports it, needs implementation |
 | Medium | dApp Store listing | Pipeline exists, needs submission |
-| Low | Multi-channel (Discord, WhatsApp) | Requires channel abstraction |
+| Low | Multi-channel (WhatsApp, Slack) | Channel abstraction exists; add new channel modules |
 | Low | Multi-agent coordination | Future architecture |
 | Low | Community skill marketplace | Skill distribution |
 
 ## Architecture
 
 ```
-User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone)
-                                                           |
-                                                     Claude API (HTTPS)
-                                                           |
-                                                     Android Bridge (localhost:8765)
-                                                           |
-                                                     Android APIs (battery, GPS, SMS, camera, wallet...)
+User (Telegram/Discord) <--HTTPS/WSS--> Channel API <--polling/WS--> Node.js Gateway (on phone)
+                                                                          |
+                                                                    Claude API (HTTPS)
+                                                                          |
+                                                                    Android Bridge (localhost:8765)
+                                                                          |
+                                                                    Android APIs (battery, GPS, SMS, camera, wallet...)
 
 ┌──────────────────────────────────────────────────┐
 │              Android App (SeekerClaw)             │
@@ -222,7 +222,7 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 - **OEM battery killers** — Xiaomi MIUI, Samsung OneUI may aggressively kill the background service; Seeker's stock Android avoids this
 - **No browser/screen/canvas skills** — Can't be ported from OpenClaw (requires desktop environment)
 - **Ephemeral context** — Conversation history resets on Node.js restart (mitigated by session summaries)
-- **Single channel** — Telegram only (no Discord, WhatsApp, etc.)
+- **Two channels** — Telegram and Discord supported; WhatsApp and others not yet implemented
 - **dApp Store live** — Available on Solana dApp Store (v1.4.3)
 - **No light theme** — Dark only (DarkOps single theme)
 
@@ -230,14 +230,15 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Metric | Count |
 |--------|-------|
-| Total commits | 480+ |
-| PRs merged | 309+ |
+| Total commits | 490+ |
+| PRs merged | 310+ |
 | Tools | 71 (29 Solana/Jupiter, 13 Android bridge, 6 memory, 5 file, 5 cron, 4 telegram, 4 system, 2 web, 2 skill, 1 session) + MCP dynamic |
 | Skills | 35 (20 bundled + 13 workspace + 2 user-created) |
 | Android Bridge endpoints | 18+ |
 | Telegram commands | 12 |
-| Lines of JS | ~16,400 (main.js + message-handler.js + ai.js + 16 modules + 4 provider adapters) |
-| Lines of Kotlin | ~15,000 |
+| Channels | 2 (Telegram + Discord) |
+| Lines of JS | ~17,800 (main.js + message-handler.js + ai.js + 18 modules + 4 provider adapters) |
+| Lines of Kotlin | ~15,000+ (45 files) |
 | SQL.js tables | 4 |
 | Themes | 1 (DarkOps only) |
 
@@ -272,6 +273,8 @@ User (Telegram) <--HTTPS--> Telegram API <--polling--> Node.js Gateway (on phone
 
 | Date | Feature | PR |
 |------|---------|-----|
+| 2026-04-03 | Docs: SAB-AUDIT-v17 — Discord channel door, diagnostics, channel-aware architecture | direct |
+| 2026-04-02 | Feat: Discord channel support — Gateway v10 WebSocket, channel abstraction layer, vendored ws@8.18.0 (BAT-483) | #310 |
 | 2026-03-31 | Docs: SAB-AUDIT-v16 — custom provider door, diagnostics, stats update | direct |
 | 2026-03-30 | Feat: Custom AI Provider — connect any OpenAI-compatible gateway (BAT-482) | #309 |
 | 2026-03-30 | Refactor: shared UI components — CardSurface, InfoRow, Scaffold, Switch (Phases B1/B2/C) | #306-308 |

@@ -5,6 +5,13 @@
 
 ---
 
+## Channel Connection
+
+### Which Channel Am I On?
+The agent runs on one of two channels, configured by the `CHANNEL` setting (`telegram` or `discord`). The `channel.js` abstraction routes all messaging calls to the active channel module. Check `CHANNEL` in config to determine which channel-specific diagnostics apply.
+
+---
+
 ## Telegram
 
 ### Bot Token Invalid/Revoked
@@ -24,6 +31,44 @@ grep -i "429\|Too Many Requests\|rate.limit" node_debug.log | tail -10
 ```
 **Diagnosis:** Telegram rate limits: ~30 messages/second to different chats, ~20 messages/minute to same chat, ~1 message/second for same chat. Bulk sending or rapid tool status updates can trigger this.
 **Fix:** Reduce message frequency. Batch status updates into single messages. If persistent, wait 30-60 seconds before retrying. This is transient — no config change needed.
+
+---
+
+## Discord
+
+### Bot Token Invalid or Missing Intents
+**Symptoms:** Bot never connects, logs show 4004 (Authentication failed) or 4014 (Disallowed intents).
+**Check:**
+```
+grep -i "4004\|4014\|Authentication\|Disallowed intent\|DISCORD" node_debug.log | tail -10
+```
+**Diagnosis:**
+- **4004 Authentication failed:** The Discord bot token is invalid, revoked, or malformed.
+- **4014 Disallowed intents:** The bot requires Message Content Intent enabled in Discord Developer Portal (discord.com/developers → Bot → Privileged Gateway Intents).
+**Fix:**
+- For invalid token: "Go to discord.com/developers, select your application, copy the bot token, and update it in SeekerClaw Settings > Discord Token." Requires restart.
+- For missing intents: "Enable 'Message Content Intent' in Discord Developer Portal > Bot > Privileged Gateway Intents, then restart SeekerClaw."
+
+### WebSocket Disconnect / Reconnection
+**Symptoms:** Messages stop arriving, then resume after a delay. Logs show "Gateway disconnected" or "Reconnecting".
+**Check:**
+```
+grep -i "gateway.*disconnect\|reconnect\|resume\|heartbeat.*ack" node_debug.log | tail -10
+```
+**Diagnosis:** Discord Gateway uses WebSocket with heartbeat/ACK keepalive. If the server doesn't ACK a heartbeat, the client reconnects automatically. This is normal and self-healing. Frequent disconnects indicate network instability.
+**Fix:** Transient — no action needed. If persistent:
+1. Check network stability (WiFi vs mobile data)
+2. Check logs for repeated close codes (4000=unknown error, 4007=invalid seq, 4009=session timed out — all trigger automatic reconnect)
+3. The bot resumes the session when possible (no message loss), or starts a new session if resume fails
+
+### Discord Rate Limited (429)
+**Symptoms:** Messages delayed, 429 responses in logs.
+**Check:**
+```
+grep -i "429\|rate.limit\|Retry-After" node_debug.log | tail -10
+```
+**Diagnosis:** Discord rate limits: 5 messages/5s per channel, 50 requests/second global. Bulk sending or rapid tool status updates can trigger this.
+**Fix:** Reduce message frequency. The Discord client automatically waits for Retry-After headers. If persistent, batch status updates into single messages.
 
 ---
 
@@ -78,7 +123,7 @@ grep -i "custom provider\|ECONNREFUSED\|UNABLE_TO_VERIFY\|Unexpected token" node
 
 ### Tool Result Truncation (>120KB)
 **Symptoms:** Tool results seem incomplete or cut off. No error message — truncation is silent.
-**How it works:** Any tool result exceeding ~120KB (configurable via `maxToolResultSize` in config.js) is silently truncated with a `...(truncated)` suffix. The agent receives the truncated version without explicit notification.
+**How it works:** Any tool result exceeding ~50K characters (HARD_MAX_TOOL_RESULT_CHARS in config.js) is silently truncated with a `...(truncated)` suffix. The agent receives the truncated version without explicit notification.
 **Check:** If a tool result seems incomplete:
 1. Check if the original output would have been large (e.g., `web_fetch` on a huge page, `shell_exec` with lots of output)
 2. Re-run with more targeted parameters (e.g., `grep` instead of `cat`, smaller page ranges)
