@@ -97,3 +97,4 @@ compile_out.txt
 
 # Developer-specific MCP config
 .mcp.json
+node_debug.log

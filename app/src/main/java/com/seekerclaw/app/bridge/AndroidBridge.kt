@@ -649,7 +649,13 @@ class AndroidBridge(
         if (ownerId.isBlank()) {
             return jsonResponse(400, mapOf("error" to "ownerId is required"))
         }
-        val persisted = ConfigManager.saveOwnerId(context, ownerId)
+        // Node.js tells us which channel this owner belongs to — no guessing
+        val channel = params.optString("channel", "")
+        val persisted = if (channel.isNotBlank()) {
+            ConfigManager.saveOwnerIdForChannel(context, ownerId, channel)
+        } else {
+            ConfigManager.saveOwnerId(context, ownerId)
+        }
         return if (persisted) {
             jsonResponse(200, mapOf("success" to true))
         } else {

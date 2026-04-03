@@ -3,6 +3,7 @@
 // Uses init() dependency injection — all external dependencies received via init(deps).
 
 const fs = require('fs');
+const { CHANNEL } = require('./config');
 
 let deps = {};
 let initialized = false;
@@ -76,6 +77,10 @@ Send me anything to get started!`;
         }
 
         case '/quick': {
+            if (CHANNEL === 'discord') {
+                // Discord does not support Telegram inline keyboards — return a plain text menu
+                return `**Quick Actions**\n\nType any of these to run:\n• Status check — battery, storage, uptime\n• Check my Solana portfolio\n• What's the current SOL price?\n• Today's top crypto/tech news\n• List my scheduled tasks\n• What do you remember about me?`;
+            }
             await deps.handleQuickCommand(chatId, deps.telegram);
             return { __handled: true }; // Keyboard sent — stop processing
         }
@@ -367,35 +372,20 @@ Platform: \`${platform}\``;
 // MESSAGE HANDLER
 // ============================================================================
 
-async function handleMessage(msg) {
+async function handleMessage(normalized) {
     assertInit();
-    const chatId = msg.chat.id;
-    const senderId = String(msg.from?.id);
-    const rawText = (msg.text || msg.caption || '').trim();
-    const media = deps.extractMedia(msg);
+    const { chatId, senderId, text: rawText, caption, messageId, media, replyTo, quoteText } = normalized;
+    const combinedText = (rawText || caption || '').trim();
+    if (!combinedText && !media) return;
 
-    // Skip messages with no text AND no media
-    if (!rawText && !media) return;
-
-    // Extract quoted/replied message context (ported from OpenClaw)
-    // Handles: direct replies, inline quotes, external replies (forwards/cross-group)
-    let text = rawText;
-    const reply = msg.reply_to_message;
-    const externalReply = msg.external_reply;
-    const quoteText = (msg.quote?.text ?? externalReply?.quote?.text ?? '').trim();
-    const replyLike = reply ?? externalReply;
-
+    // Build text with reply context (channel-agnostic)
+    let text = combinedText;
     if (quoteText) {
-        // Inline quote or external reply quote
-        const quotedFrom = reply?.from?.first_name || 'Someone';
-        text = `[Replying to ${quotedFrom}: "${quoteText}"]\n\n${rawText}`;
-    } else if (replyLike) {
-        // Standard reply — extract body from reply/external_reply
-        const replyBody = (replyLike.text ?? replyLike.caption ?? '').trim();
-        if (replyBody) {
-            const quotedFrom = reply?.from?.first_name || 'Someone';
-            text = `[Replying to ${quotedFrom}: "${replyBody}"]\n\n${rawText}`;
-        }
+        const quotedFrom = replyTo?.authorName || 'Someone';
+        text = `[Replying to ${quotedFrom}: "${quoteText}"]\n\n${combinedText}`;
+    } else if (replyTo?.text) {
+        const quotedFrom = replyTo.authorName || 'Someone';
+        text = `[Replying to ${quotedFrom}: "${replyTo.text}"]\n\n${combinedText}`;
     }
 
     // Owner auto-detect: first person to message claims ownership
@@ -404,7 +394,8 @@ async function handleMessage(msg) {
         deps.log(`Owner claimed by ${senderId} (auto-detect)`, 'INFO');
 
         // Persist to Android encrypted storage via bridge (await so write completes before confirming)
-        const saveResult = await deps.androidBridgeCall('/config/save-owner', { ownerId: senderId });
+        const { CHANNEL } = require('./config');
+        const saveResult = await deps.androidBridgeCall('/config/save-owner', { ownerId: senderId, channel: CHANNEL });
         if (saveResult.error) {
             deps.log(`Bridge save-owner failed: ${saveResult.error}`, 'WARN');
             await deps.sendMessage(chatId, `Owner set to your account (${senderId}), but persistence failed — may reset on restart.`);
@@ -419,10 +410,13 @@ async function handleMessage(msg) {
         return;
     }
 
-    deps.log(`Message: ${rawText ? rawText.slice(0, 100) + (rawText.length > 100 ? '...' : '') : '(no text)'}${media ? ` [${media.type}]` : ''}${msg.reply_to_message ? ' [reply]' : ''}`, 'DEBUG');
+    // Note: confirmation YES/NO interception is in enqueueMessage() (main.js),
+    // not here — must happen BEFORE queuing to prevent deadlock.
+
+    deps.log(`Message: ${combinedText ? combinedText.slice(0, 100) + (combinedText.length > 100 ? '...' : '') : '(no text)'}${media ? ` [${media.type}]` : ''}${replyTo ? ' [reply]' : ''}`, 'DEBUG');
 
     // Status reactions — lifecycle emoji on the user's message (OpenClaw parity)
-    const statusReaction = deps.createStatusReactionController(chatId, msg.message_id);
+    const statusReaction = deps.createStatusReactionController(chatId, messageId);
     statusReaction.setQueued();
 
     try {
@@ -430,9 +424,9 @@ async function handleMessage(msg) {
         let isResume = false;
         let resumeGoal = null;
 
-        // Check for commands (use rawText so /commands work even in replies)
-        if (rawText.startsWith('/')) {
-            const [commandToken, ...argParts] = rawText.split(' ');
+        // Check for commands (use combinedText so /commands work even in replies)
+        if (combinedText.startsWith('/')) {
+            const [commandToken, ...argParts] = combinedText.split(' ');
             const args = argParts.join(' ');
             // Strip @botusername suffix for group chat compatibility (e.g. /status@MyBot → /status)
             const command = commandToken.toLowerCase().replace(/@\w+$/, '');
@@ -453,7 +447,7 @@ async function handleMessage(msg) {
                 resumeGoal = response.originalGoal || null;
                 text = 'continue';
             } else if (response) {
-                await deps.sendMessage(chatId, response, msg.message_id);
+                await deps.sendMessage(chatId, response, messageId);
                 await statusReaction.clear();
                 return;
             }
@@ -462,7 +456,7 @@ async function handleMessage(msg) {
         // Regular message - send to AI (text includes quoted context if replying)
         statusReaction.setThinking();
         await deps.sendTyping(chatId);
-        deps.lastIncomingMessages.set(String(chatId), { messageId: msg.message_id, chatId });
+        deps.lastIncomingMessages.set(String(chatId), { messageId, chatId });
 
         // Process media attachment if present
         let userContent = text || '';
@@ -477,7 +471,7 @@ async function handleMessage(msg) {
                 if (media.file_size && media.file_size > deps.MAX_FILE_SIZE) {
                     const sizeMb = (media.file_size / 1024 / 1024).toFixed(1);
                     const maxMb = (deps.MAX_FILE_SIZE / 1024 / 1024).toFixed(1);
-                    await deps.sendMessage(chatId, `📦 That file's too big (${sizeMb}MB, max ${maxMb}MB). Can you send a smaller one?`, msg.message_id);
+                    await deps.sendMessage(chatId, `📦 That file's too big (${sizeMb}MB, max ${maxMb}MB). Can you send a smaller one?`, messageId);
                     const tooLargeNote = `[File attachment was rejected: too large (${sizeMb}MB).]`;
                     if (text) {
                         userContent = `${text}\n\n${tooLargeNote}`;
@@ -489,13 +483,20 @@ async function handleMessage(msg) {
                     // Retry once for transient network errors
                     let saved;
                     const TRANSIENT_ERRORS = /timeout|timed out|aborted|ECONNRESET|ETIMEDOUT|Connection closed/i;
+                    // Both downloadFileByUrl (telegram.js) and downloadTelegramFile (telegram.js)
+                    // return the same shape: { localPath, localName, size }.
+                    // downloadFileByUrl is used for Discord attachments (media.downloadMethod === 'url');
+                    // downloadTelegramFile is used for Telegram file_id-based downloads.
+                    const downloadFn = media.downloadMethod === 'url' && deps.downloadFileByUrl
+                        ? () => deps.downloadFileByUrl(media.url, media.file_name)
+                        : () => deps.downloadTelegramFile(media.file_id, media.file_name);
                     try {
-                        saved = await deps.downloadTelegramFile(media.file_id, media.file_name);
+                        saved = await downloadFn();
                     } catch (firstErr) {
                         if (TRANSIENT_ERRORS.test(firstErr.message)) {
                             deps.log(`Media download failed (transient: ${firstErr.message}), retrying in 2s...`, 'WARN');
                             await new Promise(r => setTimeout(r, 2000));
-                            saved = await deps.downloadTelegramFile(media.file_id, media.file_name);
+                            saved = await downloadFn();
                         } else {
                             throw firstErr;
                         }
@@ -506,18 +507,42 @@ async function handleMessage(msg) {
                     // Vision-supported image formats
                     const VISION_MIMES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
 
-                    if (isImage && VISION_MIMES.has(media.mime_type) && saved.size <= deps.MAX_IMAGE_SIZE) {
-                        // Supported image within vision size limit: send as Claude vision content block
+                    // Detect actual MIME type from file magic bytes (Discord often misreports content_type)
+                    let actualMime = media.mime_type;
+                    if (isImage && saved.localPath) {
+                        try {
+                            const header = Buffer.alloc(8);
+                            const fd = fs.openSync(saved.localPath, 'r');
+                            fs.readSync(fd, header, 0, 8, 0);
+                            fs.closeSync(fd);
+                            if (header[0] === 0x89 && header[1] === 0x50 && header[2] === 0x4E && header[3] === 0x47) actualMime = 'image/png';
+                            else if (header[0] === 0xFF && header[1] === 0xD8) actualMime = 'image/jpeg';
+                            else if (header[0] === 0x47 && header[1] === 0x49 && header[2] === 0x46) actualMime = 'image/gif';
+                            else if (header[0] === 0x52 && header[1] === 0x49 && header[2] === 0x46 && header[3] === 0x46) actualMime = 'image/webp';
+                        } catch (_) { /* keep reported mime */ }
+                    }
+
+                    if (isImage && VISION_MIMES.has(actualMime) && saved.size <= deps.MAX_IMAGE_SIZE) {
+                        // Supported image within vision size limit: send as Claude vision content block (base64)
                         const imageData = await fs.promises.readFile(saved.localPath);
                         const base64 = imageData.toString('base64');
                         const caption = text || '';
-                        // Align content block ordering with visionAnalyzeImage: [text, image]
                         userContent = [
                             { type: 'text', text: caption
                                 ? `${caption}\n\n[Image saved to ${relativePath} (${saved.size} bytes)]`
                                 : `[User sent an image — saved to ${relativePath} (${saved.size} bytes)]`
                             },
-                            { type: 'image', source: { type: 'base64', media_type: media.mime_type, data: base64 } }
+                            { type: 'image', source: { type: 'base64', media_type: actualMime, data: base64 } }
+                        ];
+                    } else if (isImage && VISION_MIMES.has(actualMime) && media.url) {
+                        // Image too large for base64 but has a URL (Discord) — use URL source
+                        const caption = text || '';
+                        userContent = [
+                            { type: 'text', text: caption
+                                ? `${caption}\n\n[Image saved to ${relativePath} (${saved.size} bytes)]`
+                                : `[User sent an image — saved to ${relativePath} (${saved.size} bytes)]`
+                            },
+                            { type: 'image', source: { type: 'url', url: media.url } }
                         ];
                     } else if (isImage) {
                         // Image not usable for inline vision — save but don't base64-encode
@@ -541,10 +566,10 @@ async function handleMessage(msg) {
                                         deps.log(`Skill auto-installed from attachment: ${installResult.result}`, 'INFO');
                                         // Set flag BEFORE sendMessage so a Telegram error can't cause a fall-through to chat()
                                         skillAutoInstalled = true;
-                                        await deps.sendMessage(chatId, installResult.result, msg.message_id);
+                                        await deps.sendMessage(chatId, installResult.result, messageId);
                                     } else if (installResult && installResult.error) {
                                         // Validation failed — tell user why (e.g. missing name, injection blocked)
-                                        await deps.sendMessage(chatId, `Skill install failed: ${deps.redactSecrets(installResult.error)}`, msg.message_id);
+                                        await deps.sendMessage(chatId, `Skill install failed: ${deps.redactSecrets(installResult.error)}`, messageId);
                                         // Fall through to normal file note so the file is still accessible
                                     }
                                     // Non-skill or failed — fall through to normal file note
@@ -597,10 +622,10 @@ async function handleMessage(msg) {
         let replyToId = null;
         if (response.startsWith('[[reply_to_current]]')) {
             response = response.replace('[[reply_to_current]]', '').trim();
-            replyToId = msg.message_id;
+            replyToId = messageId;
         }
 
-        await deps.sendMessage(chatId, response, replyToId || msg.message_id);
+        await deps.sendMessage(chatId, response, replyToId || messageId);
         await statusReaction.setDone();
 
         // Report message to Android for stats tracking
@@ -609,7 +634,7 @@ async function handleMessage(msg) {
     } catch (error) {
         deps.log(`Error: ${error.message}`, 'ERROR');
         await statusReaction.setError();
-        await deps.sendMessage(chatId, `Error: ${deps.redactSecrets(error.message)}`, msg.message_id);
+        await deps.sendMessage(chatId, `Error: ${deps.redactSecrets(error.message)}`, messageId);
     }
 }
 

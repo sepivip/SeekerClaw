@@ -51,8 +51,10 @@ import kotlinx.serialization.Serializable
 @Serializable object SettingsRoute
 @Serializable object SystemRoute
 @Serializable object ProviderConfigRoute
+@Serializable object ChannelConfigRoute
 @Serializable object TelegramConfigRoute
 @Serializable object SearchConfigRoute
+@Serializable object DiscordConfigRoute
 
 data class BottomNavItem(
     val label: String,
@@ -84,7 +86,9 @@ fun SeekerClawNavHost() {
                 dest.hasRoute(SkillsRoute::class) -> "Skills"
                 dest.hasRoute(SettingsRoute::class) -> "Settings"
                 dest.hasRoute(SystemRoute::class) -> "System"
+                dest.hasRoute(ChannelConfigRoute::class) -> "ChannelConfig"
                 dest.hasRoute(SearchConfigRoute::class) -> "SearchProviderConfig"
+                dest.hasRoute(DiscordConfigRoute::class) -> "DiscordConfig"
                 else -> dest.route ?: "Unknown"
             }
             Analytics.logScreenView(screenName)
@@ -226,16 +230,21 @@ fun SeekerClawNavHost() {
                     onNavigateToAiConfig = {
                         navController.navigate(ProviderConfigRoute)
                     },
-                    onNavigateToTelegram = {
-                        navController.navigate(TelegramConfigRoute)
+                    onNavigateToChannelConfig = {
+                        navController.navigate(ChannelConfigRoute)
                     },
                     onNavigateToSearchConfig = {
                         navController.navigate(SearchConfigRoute)
-                    }
+                    },
                 )
             }
             composable<ProviderConfigRoute> {
                 com.seekerclaw.app.ui.settings.ProviderConfigScreen(
+                    onBack = { navController.popBackStack() }
+                )
+            }
+            composable<ChannelConfigRoute> {
+                com.seekerclaw.app.ui.settings.ChannelConfigScreen(
                     onBack = { navController.popBackStack() }
                 )
             }
@@ -246,6 +255,11 @@ fun SeekerClawNavHost() {
             }
             composable<SearchConfigRoute> {
                 com.seekerclaw.app.ui.settings.SearchProviderConfigScreen(
+                    onBack = { navController.popBackStack() }
+                )
+            }
+            composable<DiscordConfigRoute> {
+                com.seekerclaw.app.ui.settings.DiscordConfigScreen(
                     onBack = { navController.popBackStack() }
                 )
             }

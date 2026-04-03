@@ -105,7 +105,7 @@ const tools = [
     },
     {
         name: 'android_camera_capture',
-        description: 'Capture a photo from the device camera. Requires CAMERA permission. Returns a workspace-relative path (media/inbound/) that can be used directly with telegram_send_file.',
+        description: 'Capture a photo from the device camera. Requires CAMERA permission. Returns a workspace-relative path (media/inbound/) that can be used directly with send_file.',
         input_schema: {
             type: 'object',
             properties: {

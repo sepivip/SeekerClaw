@@ -112,11 +112,13 @@ import java.util.Date
 fun SettingsScreen(
     onRunSetupAgain: () -> Unit = {},
     onNavigateToAiConfig: () -> Unit = {},
-    onNavigateToTelegram: () -> Unit = {},
-    onNavigateToSearchConfig: () -> Unit = {}
+    onNavigateToChannelConfig: () -> Unit = {},
+    onNavigateToSearchConfig: () -> Unit = {},
 ) {
     val context = LocalContext.current
-    var config by remember { mutableStateOf(ConfigManager.loadConfig(context)) }
+    // Observe configVersion so UI refreshes when bridge saves owner ID (auto-detect)
+    val configVer by ConfigManager.configVersion
+    var config by remember(configVer) { mutableStateOf(ConfigManager.loadConfig(context)) }
 
     var autoStartOnBoot by remember {
         mutableStateOf(ConfigManager.getAutoStartOnBoot(context))
@@ -161,6 +163,8 @@ fun SettingsScreen(
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
+                // Reload config (cross-process: bridge may have saved owner ID)
+                config = ConfigManager.loadConfig(context)
                 batteryOptimizationDisabled = powerManager.isIgnoringBatteryOptimizations(context.packageName)
                 hasLocationPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
                 hasCameraPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
@@ -449,10 +453,10 @@ fun SettingsScreen(
                     info = "Select AI provider, configure model and API credentials.",
                 )
                 ConfigField(
-                    label = "Telegram",
-                    value = "Bot Token, Owner ID, Connection Test",
-                    onClick = onNavigateToTelegram,
-                    info = "Configure your Telegram bot settings.",
+                    label = "Channel",
+                    value = if (config?.channel == "discord") "Discord" else "Telegram",
+                    onClick = onNavigateToChannelConfig,
+                    info = "Select messaging channel and configure bot credentials.",
                 )
                 ConfigField(
                     label = "Agent Name",

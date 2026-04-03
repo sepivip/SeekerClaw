@@ -147,6 +147,24 @@ object SettingsHelpTexts {
         "Remote only — your phone just makes HTTP calls. " +
         "Restart the agent after adding or changing servers."
 
+    // ── Discord ────────────────────────────────────────────────────
+
+    const val DISCORD_CHANNEL =
+        "Choose which messaging platform your agent uses.\n\n" +
+        "\u2022 Telegram — the default. Requires a Telegram bot token.\n" +
+        "\u2022 Discord — DM-only bot. Requires a Discord bot token with Direct Messages and Message Content intents enabled.\n\n" +
+        "Switching channels requires an agent restart."
+
+    const val DISCORD_BOT_TOKEN =
+        "Your Discord bot token. " +
+        "Create one at discord.com/developers/applications \u2192 New Application \u2192 Bot \u2192 Reset Token. " +
+        "Required when Discord is the active channel."
+
+    const val DISCORD_OWNER_ID =
+        "Your Discord user ID (a number, not your @username). " +
+        "Enable Developer Mode in Discord Settings \u2192 Advanced, then right-click your profile and copy ID. " +
+        "Only this user can give the agent instructions."
+
     // ── Solana Wallet ──────────────────────────────────────────────
 
     const val JUPITER_API_KEY =

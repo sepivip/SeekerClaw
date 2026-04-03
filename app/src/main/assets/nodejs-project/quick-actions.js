@@ -1,5 +1,8 @@
 // Quick Actions — Telegram preset task buttons (#279)
 // Self-contained module: button map, command handler, callback router.
+// Gated on CHANNEL === 'telegram' — Discord v1 does not support inline keyboards.
+
+const { CHANNEL } = require('./config');
 
 // Single source of truth — button definitions drive both the keyboard and the callback map.
 const BUTTONS = [
@@ -37,6 +40,7 @@ const KEYBOARD = {
  * @returns {Promise<void>}
  */
 async function handleQuickCommand(chatId, telegramFn) {
+    if (CHANNEL !== 'telegram') return null;
     await telegramFn('sendMessage', {
         chat_id: chatId,
         text: '⚡ Quick Actions — tap to run:',
@@ -55,6 +59,7 @@ async function handleQuickCommand(chatId, telegramFn) {
  * @returns {Promise<string|null>} mapped message text, or null if not a quick action
  */
 async function handleQuickCallback(cb, telegramFn) {
+    if (CHANNEL !== 'telegram') return null;
     const data = (cb.data || '').trim();
     const mappedText = QUICK_ACTIONS[data];
     if (!mappedText) return null;

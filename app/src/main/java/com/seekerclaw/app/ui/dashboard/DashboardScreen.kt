@@ -102,7 +102,10 @@ fun DashboardScreen(
     val cfgVersion by ConfigManager.configVersion
     val config = remember(cfgVersion) { ConfigManager.loadConfig(context) }
     val agentName = remember(config) { config?.agentName?.ifBlank { "SeekerClaw" } ?: "SeekerClaw" }
-    val hasBotToken = remember(config) { config?.telegramBotToken?.isNotBlank() == true }
+    val hasBotToken = remember(config) {
+        if (config?.channel == "discord") config?.discordBotToken?.isNotBlank() == true
+        else config?.telegramBotToken?.isNotBlank() == true
+    }
     val hasCredential = remember(config) {
         when (config?.provider) {
             "openai" -> config?.openaiApiKey?.isNotBlank() == true
@@ -258,6 +261,7 @@ fun DashboardScreen(
         ServiceStatus.ERROR -> {
             if (validationError == "setup_not_complete" ||
                 validationError == "missing_bot_token" ||
+                validationError == "missing_discord_token" ||
                 validationError == "missing_credential"
             ) "Config Needed" else "Error"
         }
@@ -455,6 +459,7 @@ fun DashboardScreen(
                 Text(
                     text = when (validationError) {
                         "missing_bot_token" -> "Your Telegram bot token is missing"
+                        "missing_discord_token" -> "Your Discord bot token is missing"
                         "missing_credential" -> "Your API credential is missing"
                         else -> "Your agent needs configuration to start"
                     },
@@ -508,7 +513,7 @@ fun DashboardScreen(
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "Tap \"Deploy Agent\" below to start $agentName, then open Telegram to chat with your agent.",
+                    text = "Tap \"Deploy Agent\" below to start $agentName, then open ${if (config?.channel == "discord") "Discord" else "Telegram"} to chat with your agent.",
                     fontFamily = RethinkSans,
                     fontSize = 13.sp,
                     color = SeekerClawColors.TextDim,
@@ -648,13 +653,13 @@ fun DashboardScreen(
                 ServiceStatus.ERROR -> SeekerClawColors.Error
             }
 
-            val telegramSubtitle = if (!hasBotToken) "Bot token missing" else when (status) {
+            val channelSubtitle = if (!hasBotToken) "Bot token missing" else when (status) {
                 ServiceStatus.RUNNING -> "Message relay"
                 ServiceStatus.STARTING -> "Connecting..."
                 ServiceStatus.ERROR -> "Relay error"
                 ServiceStatus.STOPPED -> "Offline"
             }
-            val telegramDotColor = if (!hasBotToken) SeekerClawColors.Error else when (status) {
+            val channelDotColor = if (!hasBotToken) SeekerClawColors.Error else when (status) {
                 ServiceStatus.RUNNING -> SeekerClawColors.Accent
                 ServiceStatus.STARTING -> SeekerClawColors.Warning
                 ServiceStatus.ERROR -> SeekerClawColors.Error
@@ -688,11 +693,12 @@ fun DashboardScreen(
                 ServiceStatus.STOPPED -> SeekerClawColors.TextDim
             }
 
+            val isDiscord = config?.channel == "discord"
             UplinkCard(
-                icon = "//TG",
-                name = "Telegram",
-                subtitle = telegramSubtitle,
-                dotColor = telegramDotColor,
+                icon = if (isDiscord) "//DC" else "//TG",
+                name = if (isDiscord) "Discord" else "Telegram",
+                subtitle = channelSubtitle,
+                dotColor = channelDotColor,
                 shape = shape,
                 dotAlpha = if (isRunning) pulseAlpha else 1f,
             )

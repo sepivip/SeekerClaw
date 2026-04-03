@@ -2,11 +2,12 @@
 // Telegram Bot API: messaging, file uploads/downloads, HTML formatting.
 // Depends on: config.js, http.js
 
+const crypto = require('crypto');
 const fs = require('fs');
 const https = require('https');
 const path = require('path');
 
-const { BOT_TOKEN, log, workDir } = require('./config');
+const { BOT_TOKEN, log, workDir, getOwnerId } = require('./config');
 const { redactSecrets } = require('./security');
 const { httpRequest } = require('./http');
 
@@ -35,7 +36,6 @@ async function telegram(method, body = null) {
  * @returns {Promise<Object>} Telegram API response
  */
 async function telegramSendFile(method, params, fieldName, filePath, fileName, fileSize) {
-    const crypto = require('crypto');
     const boundary = '----TgFile' + crypto.randomBytes(16).toString('hex');
 
     // Sanitize header values: strip CR/LF/null/Unicode line separators and escape quotes
@@ -292,6 +292,108 @@ async function downloadTelegramFile(fileId, fileName) {
 
     log(`File saved: ${localName} (${totalBytes} bytes)`, 'DEBUG');
     return { localPath, localName, size: totalBytes };
+}
+
+/**
+ * Download a file from a direct URL (for non-Telegram channels like Discord).
+ * Saves to the same media/inbound/ directory as Telegram downloads.
+ * Uses streaming to handle binary files correctly and enforces size limits.
+ */
+async function downloadFileByUrl(url, fileName, maxSize) {
+    const MAX_SIZE = maxSize || MAX_FILE_SIZE;
+    const safeName = (fileName || `file_${Date.now()}`).replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120);
+    const uniqueName = `${Date.now()}_${crypto.randomBytes(4).toString('hex')}_${safeName}`;
+    const mediaDir = path.join(workDir, 'media', 'inbound');
+    if (!fs.existsSync(mediaDir)) fs.mkdirSync(mediaDir, { recursive: true });
+    const localPath = path.join(mediaDir, uniqueName);
+
+    const parsedUrl = new URL(url);
+
+    // Protocol validation: HTTPS only (Discord CDN is always HTTPS)
+    if (parsedUrl.protocol !== 'https:') {
+        throw new Error('Unsupported URL protocol: ' + parsedUrl.protocol + ' (only https: allowed)');
+    }
+
+    // SSRF guard: block private/local/reserved addresses by hostname string.
+    // Known limitation: DNS rebinding attacks are not prevented here because we check
+    // the hostname string before DNS resolution. Full protection would require async DNS
+    // lookup and IP validation, which adds latency and complexity.
+    // Accepted trade-off: Discord CDN URLs come from cdn.discordapp.com (validated by
+    // the Discord API) — this hostname check is a first-pass defense against obvious
+    // SSRF attempts (localhost, RFC1918, link-local). Prompt-injection-sourced URLs
+    // arriving through normal message flow are a lower risk given the owner-only gate.
+    if (/^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|0\.|localhost|\[::1\]|\[fe80:)/i.test(parsedUrl.hostname)) {
+        throw new Error('Blocked: private/local address');
+    }
+
+    return new Promise((resolve, reject) => {
+        let settled = false;
+        const done = (fn, val) => {
+            if (settled) return;
+            settled = true;
+            fn(val);
+        };
+
+        const req = https.request({
+            hostname: parsedUrl.hostname,
+            port: parsedUrl.port || 443,
+            path: parsedUrl.pathname + parsedUrl.search,
+            method: 'GET',
+            headers: { 'User-Agent': 'SeekerClaw/1.0' },
+            timeout: 30000,
+        }, (res) => {
+            // Follow redirects (Discord CDN can 301/302)
+            if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+                res.resume(); // drain
+                downloadFileByUrl(res.headers.location, fileName, maxSize)
+                    .then(r => done(resolve, r))
+                    .catch(e => done(reject, e));
+                return;
+            }
+            if (res.statusCode < 200 || res.statusCode >= 300) {
+                res.resume(); // drain
+                done(reject, new Error(`Download failed: HTTP ${res.statusCode}`));
+                return;
+            }
+
+            const fileStream = fs.createWriteStream(localPath);
+            let totalBytes = 0;
+
+            res.on('data', (chunk) => {
+                totalBytes += chunk.length;
+                if (totalBytes > MAX_SIZE) {
+                    res.destroy();
+                    fileStream.destroy();
+                    try { fs.unlinkSync(localPath); } catch (_) {}
+                    done(reject, new Error(`File too large (>${Math.round(MAX_SIZE / 1024 / 1024)}MB)`));
+                }
+            });
+
+            res.on('error', (err) => {
+                fileStream.destroy();
+                try { fs.unlinkSync(localPath); } catch (_) {}
+                done(reject, err);
+            });
+
+            res.pipe(fileStream);
+
+            fileStream.on('finish', () => {
+                done(resolve, { localPath, localName: uniqueName, size: totalBytes });
+            });
+
+            fileStream.on('error', (err) => {
+                try { fs.unlinkSync(localPath); } catch (_) {}
+                done(reject, err);
+            });
+        });
+
+        req.on('error', (err) => done(reject, err));
+        req.on('timeout', () => {
+            req.destroy();
+            done(reject, new Error('Download timed out'));
+        });
+        req.end();
+    });
 }
 
 // ============================================================================
@@ -611,6 +713,7 @@ async function sendMessage(chatId, text, replyTo = null, buttons = null) {
 
     // Telegram max message length is 4096 — use markdown-aware chunking
     const chunks = chunkMarkdown(text);
+    let lastMessageId = null;
 
     for (let i = 0; i < chunks.length; i++) {
         const chunk = chunks[i];
@@ -634,6 +737,7 @@ async function sendMessage(chatId, text, replyTo = null, buttons = null) {
             if (result && result.ok) {
                 sent = true;
                 if (result.result && result.result.message_id) {
+                    lastMessageId = result.result.message_id;
                     recordSentMessage(chatId, result.result.message_id, chunk);
                 }
             } else if (result && !result.ok) {
@@ -665,6 +769,7 @@ async function sendMessage(chatId, text, replyTo = null, buttons = null) {
                 if (replyMarkup) payload.reply_markup = replyMarkup;
                 const result = await telegram('sendMessage', payload);
                 if (result && result.ok && result.result && result.result.message_id) {
+                    lastMessageId = result.result.message_id;
                     recordSentMessage(chatId, result.result.message_id, chunk);
                 }
             } catch (e) {
@@ -672,6 +777,9 @@ async function sendMessage(chatId, text, replyTo = null, buttons = null) {
             }
         }
     }
+
+    // Return { messageId } of the last successfully sent chunk (channel interface contract)
+    if (lastMessageId != null) return { messageId: lastMessageId };
 }
 
 // OpenClaw parity: backoff on 401/403 to avoid hammering Telegram with invalid token
@@ -885,6 +993,89 @@ function createStatusReactionController(chatId, messageId) {
 }
 
 // ============================================================================
+// CHANNEL INTERFACE — start, stop, sendFile, editMessage, deleteMessage,
+//                     getOwnerChatId (BAT-483)
+// ============================================================================
+
+let _onMessage = null;
+let _onReaction = null;
+let _stopped = false;
+
+/**
+ * Store callbacks for the channel interface. The Telegram poll loop stays in
+ * main.js — start() just stores the callbacks and returns.
+ */
+function start(onMessage, onReaction) {
+    _onMessage = onMessage;
+    _onReaction = onReaction;
+    _stopped = false;
+}
+
+function stop() {
+    _stopped = true;
+}
+
+/**
+ * Send a file to a Telegram chat using the existing multipart upload helpers.
+ * Returns { messageId } on success or { error } on failure.
+ */
+async function sendFile(chatId, filePath, caption) {
+    if (!fs.existsSync(filePath)) return { error: 'File not found' };
+    try {
+        const ext = path.extname(filePath).toLowerCase();
+        const fileName = path.basename(filePath);
+        const stat = fs.statSync(filePath);
+        const { method, field } = detectTelegramFileType(ext);
+        const params = { chat_id: chatId };
+        if (caption) params.caption = caption;
+        const result = await telegramSendFile(method, params, field, filePath, fileName, stat.size);
+        if (result && result.ok && result.result) {
+            return { messageId: result.result.message_id };
+        }
+        return { error: result?.description || 'Send failed' };
+    } catch (e) {
+        log(`sendFile error: ${e.message}`, 'ERROR');
+        return { error: e.message };
+    }
+}
+
+/**
+ * Edit a message in a Telegram chat (text or reply markup).
+ */
+async function editMessage(chatId, messageId, text, replyMarkup) {
+    if (text !== undefined && text !== null) {
+        return telegram('editMessageText', {
+            chat_id: chatId,
+            message_id: messageId,
+            text,
+            parse_mode: 'HTML',
+        });
+    }
+    if (replyMarkup !== undefined) {
+        return telegram('editMessageReplyMarkup', {
+            chat_id: chatId,
+            message_id: messageId,
+            reply_markup: typeof replyMarkup === 'string' ? replyMarkup : JSON.stringify(replyMarkup),
+        });
+    }
+}
+
+/**
+ * Delete a message in a Telegram chat.
+ */
+async function deleteMsg(chatId, messageId) {
+    return telegram('deleteMessage', { chat_id: chatId, message_id: messageId });
+}
+
+/**
+ * Get the owner's chat ID as a string.
+ */
+function getOwnerChatId() {
+    const ownerId = getOwnerId();
+    return ownerId ? String(ownerId) : null;
+}
+
+// ============================================================================
 // EXPORTS
 // ============================================================================
 
@@ -896,6 +1087,7 @@ module.exports = {
     MAX_IMAGE_SIZE,
     extractMedia,
     downloadTelegramFile,
+    downloadFileByUrl,
     cleanResponse,
     toTelegramHtml,
     stripMarkdown,
@@ -907,4 +1099,11 @@ module.exports = {
     deferStatus,
     createStatusReactionController,
     STATUS_EMOJIS,
+    // Channel interface (BAT-483)
+    start,
+    stop,
+    sendFile,
+    editMessage,
+    deleteMessage: deleteMsg,
+    getOwnerChatId,
 };

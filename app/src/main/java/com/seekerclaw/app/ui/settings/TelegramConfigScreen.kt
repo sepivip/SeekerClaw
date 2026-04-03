@@ -48,7 +48,8 @@ import java.net.URL
 fun TelegramConfigScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var config by remember { mutableStateOf(ConfigManager.loadConfig(context)) }
+    val configVer by ConfigManager.configVersion
+    var config by remember(configVer) { mutableStateOf(ConfigManager.loadConfig(context)) }
 
     var editField by remember { mutableStateOf<String?>(null) }
     var editLabel by remember { mutableStateOf("") }
@@ -198,7 +199,7 @@ fun TelegramConfigScreen(onBack: () -> Unit) {
     }
 }
 
-private suspend fun testTelegramBot(token: String): Result<String> = withContext(Dispatchers.IO) {
+internal suspend fun testTelegramBot(token: String): Result<String> = withContext(Dispatchers.IO) {
     runCatching {
         // Safe to use token in URL since we catch all exceptions and only return parsed logic
         val url = URL("https://api.telegram.org/bot$token/getMe")

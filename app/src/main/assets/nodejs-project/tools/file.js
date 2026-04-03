@@ -4,9 +4,11 @@ const fs = require('fs');
 const path = require('path');
 
 const {
-    workDir, log, config, SECRETS_BLOCKED,
+    workDir, log, config, CHANNEL, SECRETS_BLOCKED,
     syncAgentApiKeys,
 } = require('../config');
+
+const channel = require('../channel');
 
 const {
     redactSecrets, rebuildRedactPatterns, safePath, detectSuspiciousPatterns,
@@ -99,6 +101,19 @@ const tools = [
                 path: { type: 'string', description: 'File path relative to workspace (e.g., "media/inbound/old_photo.jpg", "temp/script.js")' }
             },
             required: ['path']
+        }
+    },
+    {
+        name: 'send_file',
+        description: `Send a workspace file to the user via ${CHANNEL === 'discord' ? 'Discord DM' : 'Telegram chat'}. Auto-detects type from extension. Use for sharing reports, camera captures, exported CSVs, generated images, or any file the user needs. Max ${CHANNEL === 'discord' ? '25MB (Discord limit)' : '50MB (Telegram limit), photos max 10MB'}.`,
+        input_schema: {
+            type: 'object',
+            properties: {
+                path: { type: 'string', description: 'File path relative to workspace (e.g., "media/inbound/photo.jpg", "report.csv")' },
+                chat_id: { type: 'string', description: 'The chat/channel ID to send to (from conversation context)' },
+                caption: { type: 'string', description: 'Optional caption/message to send with the file' }
+            },
+            required: ['path', 'chat_id']
         }
     }
 ];
@@ -316,6 +331,44 @@ const handlers = {
         } catch (err) {
             log(`Error deleting file: ${err && err.message ? err.message : String(err)}`, 'ERROR');
             return { error: `Failed to delete file: ${err && err.message ? err.message : String(err)}` };
+        }
+    },
+
+    async send_file(input, chatId) {
+        if (!input.path) return { error: 'path is required' };
+        if (!input.chat_id) return { error: 'chat_id is required' };
+
+        const filePath = safePath(input.path);
+        if (!filePath) return { error: 'Access denied: path outside workspace' };
+        if (!fs.existsSync(filePath)) return { error: `File not found: ${input.path}` };
+
+        let stat;
+        try { stat = fs.statSync(filePath); } catch (e) { return { error: `Cannot stat file: ${e.message}` }; }
+        if (stat.isDirectory()) return { error: 'Cannot send a directory. Specify a file path.' };
+        if (stat.size === 0) return { error: 'Cannot send empty file (0 bytes)' };
+
+        // Channel-specific size limits
+        const maxSize = CHANNEL === 'discord' ? 25 * 1024 * 1024 : 50 * 1024 * 1024;
+        if (stat.size > maxSize) {
+            const maxMb = (maxSize / 1024 / 1024).toFixed(0);
+            return { error: `File too large (${(stat.size / 1024 / 1024).toFixed(1)}MB, max ${maxMb}MB)` };
+        }
+
+        try {
+            const caption = input.caption ? String(input.caption).slice(0, 1024) : undefined;
+            const safLogName = path.basename(filePath).replace(/[\r\n\0\u2028\u2029]/g, '_');
+            log(`[SendFile] ${safLogName} (${(stat.size / 1024).toFixed(1)}KB) → chat ${input.chat_id}`, 'DEBUG');
+
+            const result = await channel.sendFile(input.chat_id, filePath, caption);
+            if (result && result.error) {
+                log(`[SendFile] Failed: ${result.error}`, 'WARN');
+                return { error: result.error };
+            }
+            log(`[SendFile] Sent successfully`, 'DEBUG');
+            return { success: true, file: input.path, size: stat.size, messageId: result?.messageId ?? null };
+        } catch (e) {
+            log(`[SendFile] Error: ${e && e.message ? e.message : String(e)}`, 'ERROR');
+            return { error: e && e.message ? e.message : String(e) };
         }
     },
 };

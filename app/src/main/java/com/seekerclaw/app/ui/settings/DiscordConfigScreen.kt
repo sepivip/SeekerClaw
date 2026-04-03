@@ -14,9 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import com.seekerclaw.app.ui.components.SeekerClawScaffold
 import androidx.compose.material3.HorizontalDivider
-
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -29,30 +27,32 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.seekerclaw.app.ui.components.CardSurface
-
-import com.seekerclaw.app.ui.components.SectionLabel
-import com.seekerclaw.app.ui.components.ConfigField
 import com.seekerclaw.app.config.ConfigManager
-import com.seekerclaw.app.config.SearchProviderInfo
-import com.seekerclaw.app.config.availableSearchProviders
-import com.seekerclaw.app.config.searchProviderById
+import com.seekerclaw.app.ui.components.CardSurface
+import com.seekerclaw.app.ui.components.ConfigField
+import com.seekerclaw.app.ui.components.SectionLabel
+import com.seekerclaw.app.ui.components.SeekerClawScaffold
 import com.seekerclaw.app.ui.theme.RethinkSans
 import com.seekerclaw.app.ui.theme.SeekerClawColors
 
+private val channels = listOf(
+    "telegram" to "Telegram",
+    "discord" to "Discord",
+)
+
 @Composable
-fun SearchProviderConfigScreen(onBack: () -> Unit) {
+fun DiscordConfigScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val configVer by ConfigManager.configVersion
     var config by remember(configVer) { mutableStateOf(ConfigManager.loadConfig(context)) }
 
-    val activeProvider: SearchProviderInfo = searchProviderById(config?.searchProvider ?: "brave")
     var editField by remember { mutableStateOf<String?>(null) }
     var editLabel by remember { mutableStateOf("") }
     var editValue by remember { mutableStateOf("") }
     var showRestartDialog by remember { mutableStateOf(false) }
 
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
+    val activeChannel = config?.channel ?: "telegram"
 
     fun maskKey(key: String?): String {
         if (key.isNullOrBlank()) return "Not set"
@@ -60,22 +60,13 @@ fun SearchProviderConfigScreen(onBack: () -> Unit) {
         return "${key.take(6)}${"*".repeat(8)}${key.takeLast(4)}"
     }
 
-    fun saveField(field: String, value: String, needsRestart: Boolean = false) {
+    fun saveField(field: String, value: String) {
         ConfigManager.updateConfigField(context, field, value)
         config = ConfigManager.loadConfig(context)
-        if (needsRestart) showRestartDialog = true
+        showRestartDialog = true
     }
 
-    fun helpTextForProvider(providerId: String): String = when (providerId) {
-        "brave" -> SettingsHelpTexts.BRAVE_API_KEY
-        "perplexity" -> SettingsHelpTexts.PERPLEXITY_API_KEY
-        "exa" -> SettingsHelpTexts.EXA_API_KEY
-        "tavily" -> SettingsHelpTexts.TAVILY_API_KEY
-        "firecrawl" -> SettingsHelpTexts.FIRECRAWL_API_KEY
-        else -> SettingsHelpTexts.BRAVE_API_KEY
-    }
-
-    SeekerClawScaffold(title = "Search Provider", onBack = onBack) { padding ->
+    SeekerClawScaffold(title = "Messaging Channel", onBack = onBack) { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -83,8 +74,8 @@ fun SearchProviderConfigScreen(onBack: () -> Unit) {
                 .padding(horizontal = 20.dp, vertical = 8.dp)
                 .verticalScroll(rememberScrollState()),
         ) {
-            // Provider selection
-            SectionLabel("Provider")
+            // Channel selector
+            SectionLabel("Channel")
             Spacer(modifier = Modifier.height(10.dp))
 
             Column(
@@ -92,14 +83,14 @@ fun SearchProviderConfigScreen(onBack: () -> Unit) {
                     .fillMaxWidth()
                     .background(SeekerClawColors.Surface, shape),
             ) {
-                availableSearchProviders.forEachIndexed { index, provider ->
-                    val isActive = provider.id == activeProvider.id
+                channels.forEachIndexed { index, (id, label) ->
+                    val isActive = id == activeChannel
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable {
                                 if (!isActive) {
-                                    saveField("searchProvider", provider.id, needsRestart = true)
+                                    saveField("channel", id)
                                 }
                             }
                             .padding(horizontal = 16.dp, vertical = 14.dp),
@@ -108,7 +99,7 @@ fun SearchProviderConfigScreen(onBack: () -> Unit) {
                     ) {
                         Column {
                             Text(
-                                text = provider.displayName,
+                                text = label,
                                 fontFamily = RethinkSans,
                                 fontSize = 14.sp,
                                 fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
@@ -125,7 +116,7 @@ fun SearchProviderConfigScreen(onBack: () -> Unit) {
                             )
                         }
                     }
-                    if (index < availableSearchProviders.size - 1) {
+                    if (index < channels.size - 1) {
                         HorizontalDivider(
                             color = SeekerClawColors.CardBorder,
                             modifier = Modifier.padding(horizontal = 16.dp),
@@ -134,68 +125,83 @@ fun SearchProviderConfigScreen(onBack: () -> Unit) {
                 }
             }
 
-            // Active provider API key field
-            Spacer(modifier = Modifier.height(24.dp))
-            SectionLabel("${activeProvider.displayName} Settings")
-            Spacer(modifier = Modifier.height(10.dp))
+            // Discord credentials — only shown when Discord is selected
+            if (activeChannel == "discord") {
+                Spacer(modifier = Modifier.height(24.dp))
+                SectionLabel("Discord Settings")
+                Spacer(modifier = Modifier.height(10.dp))
 
-            val activeApiKey: String? = config?.activeSearchApiKey
-            val isKeyMissing = activeApiKey.isNullOrBlank()
+                val discordToken = config?.discordBotToken
+                val discordOwnerId = config?.discordOwnerId ?: ""
+                val isTokenMissing = discordToken.isNullOrBlank()
 
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(SeekerClawColors.Surface, shape),
-            ) {
-                ConfigField(
-                    label = "API Key",
-                    value = maskKey(activeApiKey),
-                    onClick = {
-                        editField = activeProvider.configField
-                        editLabel = "${activeProvider.displayName} API Key"
-                        editValue = activeApiKey ?: ""
-                    },
-                    info = helpTextForProvider(activeProvider.id),
-                    isRequired = isKeyMissing,
-                    showDivider = false,
-                )
-            }
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(SeekerClawColors.Surface, shape),
+                ) {
+                    ConfigField(
+                        label = "Bot Token",
+                        value = maskKey(discordToken),
+                        onClick = {
+                            editField = "discordBotToken"
+                            editLabel = "Discord Bot Token"
+                            editValue = discordToken ?: ""
+                        },
+                        info = SettingsHelpTexts.DISCORD_BOT_TOKEN,
+                        isRequired = isTokenMissing,
+                    )
+                    ConfigField(
+                        label = "Owner ID",
+                        value = discordOwnerId.ifBlank { "Not set (optional)" },
+                        onClick = {
+                            editField = "discordOwnerId"
+                            editLabel = "Discord Owner ID"
+                            editValue = discordOwnerId
+                        },
+                        info = SettingsHelpTexts.DISCORD_OWNER_ID,
+                        showDivider = false,
+                    )
+                }
 
-            if (isKeyMissing) {
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = "Not configured — web search will not work until an API key is set.",
-                    fontFamily = RethinkSans,
-                    fontSize = 12.sp,
-                    color = SeekerClawColors.Error,
-                )
-            }
+                if (isTokenMissing) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Bot token required — Discord channel will not work without it.",
+                        fontFamily = RethinkSans,
+                        fontSize = 12.sp,
+                        color = SeekerClawColors.Error,
+                    )
+                }
 
-            // "Get API Key" link
-            Spacer(modifier = Modifier.height(24.dp))
-            SectionLabel("Resources")
-            Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(24.dp))
+                SectionLabel("Resources")
+                Spacer(modifier = Modifier.height(10.dp))
 
-            CardSurface {
-                Text(
-                    text = helpTextForProvider(activeProvider.id),
-                    fontFamily = RethinkSans,
-                    fontSize = 13.sp,
-                    color = SeekerClawColors.TextDim,
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                Text(
-                    text = "Get API Key →",
-                    fontFamily = RethinkSans,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = SeekerClawColors.TextInteractive,
-                    modifier = Modifier.clickable {
-                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(activeProvider.consoleUrl))
-                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        context.startActivity(intent)
-                    },
-                )
+                CardSurface {
+                    Text(
+                        text = SettingsHelpTexts.DISCORD_BOT_TOKEN,
+                        fontFamily = RethinkSans,
+                        fontSize = 13.sp,
+                        color = SeekerClawColors.TextDim,
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = "Discord Developer Portal \u2192",
+                        fontFamily = RethinkSans,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = SeekerClawColors.TextInteractive,
+                        modifier = Modifier.clickable {
+                            val intent = Intent(
+                                Intent.ACTION_VIEW,
+                                Uri.parse("https://discord.com/developers/applications"),
+                            )
+                            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            context.startActivity(intent)
+                        },
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(20.dp))
@@ -211,9 +217,7 @@ fun SearchProviderConfigScreen(onBack: () -> Unit) {
             onValueChange = { editValue = it },
             onSave = {
                 val field = editField ?: return@ProviderEditDialog
-                val trimmed = editValue.trim()
-                // Allow empty: this unsets the API key; the provider remains selected but searches will fail until a key is configured
-                saveField(field, trimmed, needsRestart = true)
+                saveField(field, editValue.trim())
                 editField = null
             },
             onDismiss = { editField = null },
