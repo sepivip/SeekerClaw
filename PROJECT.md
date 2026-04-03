@@ -8,7 +8,7 @@ SeekerClaw turns a Solana Seeker phone into a 24/7 personal AI agent you control
 
 ## Elevator Pitch
 
-SeekerClaw embeds a full Node.js runtime inside an Android app, running an OpenClaw-compatible AI gateway as a foreground service. Users interact with their agent through Telegram — the app itself is minimal (setup, status, logs, settings). The agent has 71 tools, 35 skills (20 bundled + 13 workspace + 2 user-created), ranked memory search, cron scheduling, Android device control, Solana wallet integration, and web intelligence — all running locally on the phone, 24/7.
+SeekerClaw embeds a full Node.js runtime inside an Android app, running an OpenClaw-compatible AI gateway as a foreground service. Users interact with their agent through Telegram — the app itself is minimal (setup, status, logs, settings). The agent has 71 tools, 35 skills (20 bundled + 13 workspace + 2 user-created), ranked memory search, cron scheduling, Android device control, Solana wallet integration, and web intelligence — all running locally on the phone, 24/7. Supports both Telegram and Discord channels.
 
 ## What It Is
 
@@ -86,7 +86,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 - **Device info** — Battery level/charging, storage stats
 - **Clipboard** — Read and write
 - **Contacts** — Search by name (requires READ_CONTACTS)
-- **SMS** — Send messages (requires SEND_SMS, user confirmation)
+- **SMS** — Send messages (SEND_SMS on dApp Store; intent handoff on Google Play — no SEND_SMS permission required, uses system SMS app)
 - **Phone calls** — Dial numbers (requires CALL_PHONE, user confirmation)
 - **GPS location** — Current coordinates (requires ACCESS_FINE_LOCATION)
 - **Text-to-speech** — Speak text with configurable speed/pitch
@@ -161,6 +161,11 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 - Bridge token authentication
 - Swap transaction verification (checks payer, programs, signers)
 
+### Channels
+- **Telegram** — Primary channel. HTML formatting, reactions, file sharing, vision, inline keyboards, bot commands.
+- **Discord** — Gateway v10 WebSocket, channel abstraction (`channel.js`), message formatting adapted for Discord markdown. Seeded via `channel` field in `config.yaml`. Full feature parity with Telegram (tools, confirmations, reactions via message edits).
+- **Channel abstraction** — `channel.js` module provides a unified `sendMessage()`/`sendTyping()`/`sendReaction()` interface. Adding a new channel requires only a new adapter module — core agent logic is channel-agnostic.
+
 ### App (Android)
 - **Single theme** — DarkOps (dark navy + crimson red + green status), 12dp corners
 - **Setup wizard** — QR scan or manual API key entry, OAuth/setup token support, haptic feedback
@@ -184,7 +189,7 @@ _None currently._
 | High | Vector embeddings for semantic memory | Needs native bindings or WASM solution |
 | Medium | FTS5 full-text search | SQL.js supports it, needs implementation |
 | Medium | dApp Store listing | Pipeline exists, needs submission |
-| Low | Multi-channel (WhatsApp, Slack) | Channel abstraction exists; add new channel modules |
+| Low | Multi-channel (WhatsApp, Slack) | Discord shipped (BAT-483); channel abstraction exists — add new channel adapters |
 | Low | Multi-agent coordination | Future architecture |
 | Low | Community skill marketplace | Skill distribution |
 
@@ -230,8 +235,8 @@ User (Telegram/Discord) <--HTTPS/WSS--> Channel API <--polling/WS--> Node.js Gat
 
 | Metric | Count |
 |--------|-------|
-| Total commits | 490+ |
-| PRs merged | 310+ |
+| Total commits | 495+ |
+| PRs merged | 312+ |
 | Tools | 71 (29 Solana/Jupiter, 13 Android bridge, 6 memory, 5 file, 5 cron, 4 telegram, 4 system, 2 web, 2 skill, 1 session) + MCP dynamic |
 | Skills | 35 (20 bundled + 13 workspace + 2 user-created) |
 | Android Bridge endpoints | 18+ |
@@ -273,6 +278,10 @@ User (Telegram/Discord) <--HTTPS/WSS--> Channel API <--polling/WS--> Node.js Gat
 
 | Date | Feature | PR |
 |------|---------|-----|
+| 2026-04-04 | Chore: bump v1.8.1 (code 16) + changelog | direct |
+| 2026-04-04 | Fix: Google Play SMS — replace SEND_SMS with intent handoff, no permission required (BAT-484) | #312 |
+| 2026-04-03 | Docs: SAB-AUDIT-v18 — first v3 audit | direct |
+| 2026-04-03 | Docs: SAB v3 design spec | direct |
 | 2026-04-03 | Docs: SAB-AUDIT-v17 — Discord channel door, diagnostics, channel-aware architecture | direct |
 | 2026-04-02 | Feat: Discord channel support — Gateway v10 WebSocket, channel abstraction layer, vendored ws@8.18.0 (BAT-483) | #310 |
 | 2026-03-31 | Docs: SAB-AUDIT-v16 — custom provider door, diagnostics, stats update | direct |

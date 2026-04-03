@@ -1,6 +1,6 @@
 # WEBSITE.md — Website Content
 
-> Last updated: 2026-03-19 | Last deployed: _never_
+> Last updated: 2026-04-04 | Last deployed: _never_
 >
 > **Rule:** Every item must earn its screen space. Less is more.
 > Before deploying, review the Editorial Notes in each section.
@@ -38,7 +38,7 @@
 |-------|-------|---------------|
 | 150,000+ | Seeker Devices | Social proof — large addressable market |
 | 56+ | Built-in Tools | Shows depth — but consider "50+" for cleaner number |
-| 267+ | PRs Shipped | Shows velocity — but do users care about PRs? |
+| 312+ | PRs Shipped | Shows velocity — but do users care about PRs? |
 | 24/7 | Autonomous Agent | Key differentiator — always on |
 
 <!-- REVIEW: Is "PRs Shipped" the right 3rd stat? Alternatives:
@@ -77,7 +77,7 @@ Self-aware — knows its own capabilities, diagnoses its own issues,
 and tells you what went wrong instead of failing silently.
 
 ### 3. Social & Messaging (icon: chat)
-Telegram integration with reactions, file sharing, and vision analysis.
+Telegram and Discord integration with reactions, file sharing, and vision analysis.
 Send SMS, make calls, manage contacts — your agent handles it all.
 
 ### 4. Deep Device Control (icon: terminal)
@@ -198,6 +198,7 @@ reminders, research, and more. Export, import, and share skills as files.
 - OpenClaw v2026.3.13 parity
 - Open-source: MIT license, CI/CD, community contribution ready
 - Self-aware agent: 100% SAB score (36/36 audit points)
+- Discord channel support — full feature parity with Telegram (tools, confirmations, reactions)
 
 <!-- REVIEW: 10 items. Max ~8 for readability. Consider cutting:
    - "OpenClaw parity" — meaningless to users, internal metric
@@ -212,7 +213,7 @@ reminders, research, and more. Export, import, and share skills as files.
 
 ### Future
 - Multi-agent coordination
-- X, Discord & WhatsApp integration
+- X & WhatsApp integration
 - Multi-chain support
 - DePIN & IoT device control
 - Agent-to-agent economy on Solana
