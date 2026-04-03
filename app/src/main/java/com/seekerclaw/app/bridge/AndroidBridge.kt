@@ -306,10 +306,6 @@ class AndroidBridge(
     // ==================== SMS ====================
 
     private fun handleSms(params: JSONObject): Response {
-        if (!hasPermission(Manifest.permission.SEND_SMS)) {
-            return jsonResponse(403, mapOf("error" to "SEND_SMS permission not granted"))
-        }
-
         val phone = params.optString("phone", "")
         val message = params.optString("message", "")
 
@@ -317,14 +313,31 @@ class AndroidBridge(
             return jsonResponse(400, mapOf("error" to "phone and message are required"))
         }
 
-        try {
-            val smsManager = context.getSystemService(SmsManager::class.java)
-            // Split long messages
-            val parts = smsManager.divideMessage(message)
-            smsManager.sendMultipartTextMessage(phone, null, parts, null, null)
-            return jsonResponse(200, mapOf("success" to true, "phone" to phone, "parts" to parts.size))
-        } catch (e: Exception) {
-            return jsonResponse(500, mapOf("error" to "Failed to send SMS: ${e.message}"))
+        // If SEND_SMS permission is available (dappStore), send directly.
+        // Otherwise (googlePlay), hand off to system messaging app via intent.
+        if (hasPermission(Manifest.permission.SEND_SMS)) {
+            try {
+                val smsManager = context.getSystemService(SmsManager::class.java)
+                val parts = smsManager.divideMessage(message)
+                smsManager.sendMultipartTextMessage(phone, null, parts, null, null)
+                return jsonResponse(200, mapOf("success" to true, "phone" to phone, "parts" to parts.size))
+            } catch (e: Exception) {
+                return jsonResponse(500, mapOf("error" to "Failed to send SMS: ${e.message}"))
+            }
+        } else {
+            // Intent handoff — opens system messaging app with message pre-filled
+            try {
+                val intent = android.content.Intent(android.content.Intent.ACTION_SENDTO).apply {
+                    data = android.net.Uri.parse("smsto:${android.net.Uri.encode(phone)}")
+                    putExtra("sms_body", message)
+                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(intent)
+                return jsonResponse(200, mapOf("success" to true, "handoff" to true, "phone" to phone,
+                    "note" to "SMS app opened with message pre-filled. User must tap Send."))
+            } catch (e: Exception) {
+                return jsonResponse(500, mapOf("error" to "Failed to open SMS app: ${e.message}"))
+            }
         }
     }
 

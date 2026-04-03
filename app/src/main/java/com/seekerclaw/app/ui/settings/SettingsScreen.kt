@@ -578,15 +578,18 @@ fun SettingsScreen(
                     onOpenSettings = { openAppSettings(context) },
                     info = SettingsHelpTexts.CONTACTS,
                 )
-                PermissionRow(
-                    label = "SMS",
-                    granted = hasSmsPermission,
-                    onRequest = {
-                        requestPermissionOrOpenSettings(context, Manifest.permission.SEND_SMS, smsLauncher)
-                    },
-                    onOpenSettings = { openAppSettings(context) },
-                    info = SettingsHelpTexts.SMS,
-                )
+                // SMS permission only on dappStore — googlePlay uses intent handoff (no permission needed)
+                if (BuildConfig.DISTRIBUTION == "dappStore") {
+                    PermissionRow(
+                        label = "SMS",
+                        granted = hasSmsPermission,
+                        onRequest = {
+                            requestPermissionOrOpenSettings(context, Manifest.permission.SEND_SMS, smsLauncher)
+                        },
+                        onOpenSettings = { openAppSettings(context) },
+                        info = SettingsHelpTexts.SMS,
+                    )
+                }
                 PermissionRow(
                     label = "Phone Calls",
                     granted = hasCallPermission,
