@@ -327,10 +327,10 @@ class AndroidBridge(
         } else {
             // Intent handoff — opens system messaging app with message pre-filled
             try {
-                val intent = android.content.Intent(android.content.Intent.ACTION_SENDTO).apply {
-                    data = android.net.Uri.parse("smsto:${android.net.Uri.encode(phone)}")
+                val intent = Intent(Intent.ACTION_SENDTO).apply {
+                    data = Uri.parse("smsto:$phone")
                     putExtra("sms_body", message)
-                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
                 context.startActivity(intent)
                 return jsonResponse(200, mapOf("success" to true, "handoff" to true, "phone" to phone,
