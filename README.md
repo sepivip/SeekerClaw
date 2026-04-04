@@ -108,6 +108,8 @@ Install via Telegram: send your agent the install link and it handles the rest.
 
 | | Skill | What it does | Install |
 |---|---|---|---|
+| :ocean: | **Byreal** | Trade on Byreal DEX — pool analytics, swap quotes, LP positions, copy top farmers | [Install](https://seekerclaw.xyz/partner-skills/byreal.md) |
+| :rocket: | **Career Companion** | AI career coach — job search, resume tailoring, mock interviews, salary research | [Install](https://seekerclaw.xyz/partner-skills/career-companion.md) |
 | :paw_prints: | **ClawPump** | Launch tokens on Solana via pump.fun — gasless launches | [Install](https://seekerclaw.xyz/partner-skills/clawpump.md) |
 | :crystal_ball: | **Dune Analytics** | Query onchain data — DEX trades, token stats, wallet activity | [Install](https://seekerclaw.xyz/partner-skills/dune-analytics.md) |
 | :house: | **Home Assistant** | Control smart home — lights, climate, vacuum, alarm, media | [Install](https://seekerclaw.xyz/partner-skills/home-assistant.md) |
