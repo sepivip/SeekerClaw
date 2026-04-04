@@ -12,6 +12,11 @@
     <img src="https://img.shields.io/badge/License-MIT-blue" alt="MIT License">
   </p>
   <p>
+    <a href="https://play.google.com/store/apps/details?id=com.seekerclaw.app"><img src="https://img.shields.io/badge/Google_Play-Download-414141?logo=google-play&logoColor=white&style=for-the-badge" alt="Google Play"></a>
+    &nbsp;
+    <a href="https://github.com/sepivip/SeekerClaw/releases/latest"><img src="https://img.shields.io/badge/dApp_Store-APK-9945FF?logo=solana&logoColor=white&style=for-the-badge" alt="dApp Store APK"></a>
+  </p>
+  <p>
     <a href="https://www.producthunt.com/products/seekerclaw"><img src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=seekerclaw&theme=dark" alt="SeekerClaw on Product Hunt" width="250" height="54"></a>
   </p>
 </div>
