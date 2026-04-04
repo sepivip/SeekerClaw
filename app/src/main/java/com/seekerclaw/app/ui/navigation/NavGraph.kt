@@ -54,6 +54,7 @@ import kotlinx.serialization.Serializable
 @Serializable object ChannelConfigRoute
 @Serializable object TelegramConfigRoute
 @Serializable object SearchConfigRoute
+@Serializable object McpConfigRoute
 @Serializable object DiscordConfigRoute
 
 data class BottomNavItem(
@@ -88,6 +89,7 @@ fun SeekerClawNavHost() {
                 dest.hasRoute(SystemRoute::class) -> "System"
                 dest.hasRoute(ChannelConfigRoute::class) -> "ChannelConfig"
                 dest.hasRoute(SearchConfigRoute::class) -> "SearchProviderConfig"
+                dest.hasRoute(McpConfigRoute::class) -> "McpConfig"
                 dest.hasRoute(DiscordConfigRoute::class) -> "DiscordConfig"
                 else -> dest.route ?: "Unknown"
             }
@@ -236,6 +238,9 @@ fun SeekerClawNavHost() {
                     onNavigateToSearchConfig = {
                         navController.navigate(SearchConfigRoute)
                     },
+                    onNavigateToMcpConfig = {
+                        navController.navigate(McpConfigRoute)
+                    },
                 )
             }
             composable<ProviderConfigRoute> {
@@ -255,6 +260,11 @@ fun SeekerClawNavHost() {
             }
             composable<SearchConfigRoute> {
                 com.seekerclaw.app.ui.settings.SearchProviderConfigScreen(
+                    onBack = { navController.popBackStack() }
+                )
+            }
+            composable<McpConfigRoute> {
+                com.seekerclaw.app.ui.settings.McpConfigScreen(
                     onBack = { navController.popBackStack() }
                 )
             }
