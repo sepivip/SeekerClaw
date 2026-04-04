@@ -49,6 +49,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -85,7 +87,6 @@ import androidx.compose.material3.IconButton
 import com.seekerclaw.app.config.ConfigClaimImport
 import com.seekerclaw.app.config.ConfigClaimImporter
 import com.seekerclaw.app.config.ConfigManager
-import com.seekerclaw.app.config.McpServerConfig
 import com.seekerclaw.app.config.availableModels
 import com.seekerclaw.app.config.searchProviderById
 import com.seekerclaw.app.qr.QrScannerActivity
@@ -114,6 +115,7 @@ fun SettingsScreen(
     onNavigateToAiConfig: () -> Unit = {},
     onNavigateToChannelConfig: () -> Unit = {},
     onNavigateToSearchConfig: () -> Unit = {},
+    onNavigateToMcpConfig: () -> Unit = {},
 ) {
     val context = LocalContext.current
     // Observe configVersion so UI refreshes when bridge saves owner ID (auto-detect)
@@ -190,12 +192,13 @@ fun SettingsScreen(
     var editLabel by remember { mutableStateOf("") }
     var editValue by remember { mutableStateOf("") }
 
-    // MCP server state
-    var mcpServers by remember { mutableStateOf(ConfigManager.loadMcpServers(context)) }
-    var showMcpDialog by remember { mutableStateOf(false) }
-    var editingMcpServer by remember { mutableStateOf<McpServerConfig?>(null) }
-    var showDeleteMcpDialog by remember { mutableStateOf(false) }
-    var deletingMcpServer by remember { mutableStateOf<McpServerConfig?>(null) }
+    // MCP server count (for ConfigField display) — load off main thread to avoid jank
+    var mcpServerCount by remember { mutableIntStateOf(0) }
+    LaunchedEffect(configVer) {
+        mcpServerCount = withContext(Dispatchers.IO) {
+            ConfigManager.loadMcpServers(context).size
+        }
+    }
 
     // Wallet connect state
     var walletAddress by remember { mutableStateOf(ConfigManager.getWalletAddress(context)) }
@@ -378,67 +381,6 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(28.dp))
 
-        // Quick Setup — QR Config Import
-        SectionLabel("Quick Setup")
-
-        Spacer(modifier = Modifier.height(10.dp))
-
-        CardSurface {
-            Text(
-                text = "Generate a config QR at seekerclaw.xyz and scan it to set up your agent in seconds.",
-                fontFamily = RethinkSans,
-                fontSize = 13.sp,
-                color = SeekerClawColors.TextDim,
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Button(
-                onClick = {
-                    if (!isConfigImporting) {
-                        Analytics.featureUsed("qr_scan")
-                        qrConfigLauncher.launch(Intent(context, QrScannerActivity::class.java))
-                    }
-                },
-                enabled = !isConfigImporting,
-                modifier = Modifier.fillMaxWidth(),
-                shape = shape,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = SeekerClawColors.ActionPrimary,
-                    contentColor = androidx.compose.ui.graphics.Color.White,
-                ),
-            ) {
-                if (isConfigImporting) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(16.dp),
-                        strokeWidth = 2.dp,
-                        color = androidx.compose.ui.graphics.Color.White,
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Importing Config\u2026", fontFamily = RethinkSans, fontSize = 14.sp)
-                } else {
-                    Text(
-                        "Scan Config QR",
-                        fontFamily = RethinkSans,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 14.sp,
-                    )
-                }
-            }
-
-            if (configImportError != null) {
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = configImportError ?: "",
-                    fontFamily = RethinkSans,
-                    fontSize = 12.sp,
-                    color = SeekerClawColors.Error,
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(28.dp))
-
         // Configuration
         CollapsibleSection("Configuration", initiallyExpanded = true) {
             Column(
@@ -484,6 +426,13 @@ fun SettingsScreen(
                         if ((config?.activeSearchApiKey ?: "").isBlank()) " (not configured)" else "",
                     onClick = onNavigateToSearchConfig,
                     info = SettingsHelpTexts.SEARCH_PROVIDER,
+                    showDivider = true,
+                )
+                ConfigField(
+                    label = "MCP Servers",
+                    value = "$mcpServerCount server${if (mcpServerCount != 1) "s" else ""} configured",
+                    onClick = onNavigateToMcpConfig,
+                    info = SettingsHelpTexts.MCP_SERVERS,
                     showDivider = false,
                 )
             }
@@ -773,109 +722,6 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(28.dp))
 
-        // MCP Servers (BAT-168)
-        CollapsibleSection("MCP Servers", initiallyExpanded = false) {
-            CardSurface {
-                Text(
-                    text = SettingsHelpTexts.MCP_SERVERS,
-                    fontFamily = RethinkSans,
-                    fontSize = 13.sp,
-                    color = SeekerClawColors.TextDim,
-                )
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                if (mcpServers.isEmpty()) {
-                    Text(
-                        text = "No servers configured",
-                        fontFamily = RethinkSans,
-                        fontSize = 13.sp,
-                        color = SeekerClawColors.TextDim,
-                        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
-                    )
-                } else {
-                    for (server in mcpServers) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 6.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = server.name,
-                                    fontFamily = RethinkSans,
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = SeekerClawColors.TextPrimary,
-                                )
-                                Text(
-                                    text = server.url,
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 11.sp,
-                                    color = SeekerClawColors.TextDim,
-                                    maxLines = 1,
-                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                                )
-                            }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                SeekerClawSwitch(
-                                    checked = server.enabled,
-                                    onCheckedChange = { enabled ->
-                                        mcpServers = mcpServers.map {
-                                            if (it.id == server.id) it.copy(enabled = enabled) else it
-                                        }
-                                        ConfigManager.saveMcpServers(context, mcpServers)
-                                        showRestartDialog = true
-                                    },
-                                )
-                                IconButton(onClick = {
-                                    editingMcpServer = server
-                                    showMcpDialog = true
-                                }) {
-                                    Icon(
-                                        imageVector = Icons.Default.Edit,
-                                        contentDescription = "Edit server",
-                                        tint = SeekerClawColors.TextDim,
-                                    )
-                                }
-                                IconButton(onClick = {
-                                    deletingMcpServer = server
-                                    showDeleteMcpDialog = true
-                                }) {
-                                    Icon(
-                                        imageVector = Icons.Default.Delete,
-                                        contentDescription = "Remove server",
-                                        tint = SeekerClawColors.Error,
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                Button(
-                    onClick = {
-                        editingMcpServer = null
-                        showMcpDialog = true
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = shape,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = SeekerClawColors.ActionPrimary,
-                        contentColor = androidx.compose.ui.graphics.Color.White,
-                    ),
-                ) {
-                    Text("Add MCP Server", fontFamily = RethinkSans, fontSize = 14.sp)
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(28.dp))
-
         // Data backup
         CollapsibleSection("Data", initiallyExpanded = false) {
             Column {
@@ -1032,6 +878,67 @@ fun SettingsScreen(
                         fontSize = 14.sp,
                     )
                 }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(32.dp))
+
+        // Quick Setup — QR Config Import
+        SectionLabel("Quick Setup")
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        CardSurface {
+            Text(
+                text = "Generate a config QR at seekerclaw.xyz and scan it to set up your agent in seconds.",
+                fontFamily = RethinkSans,
+                fontSize = 13.sp,
+                color = SeekerClawColors.TextDim,
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Button(
+                onClick = {
+                    if (!isConfigImporting) {
+                        Analytics.featureUsed("qr_scan")
+                        qrConfigLauncher.launch(Intent(context, QrScannerActivity::class.java))
+                    }
+                },
+                enabled = !isConfigImporting,
+                modifier = Modifier.fillMaxWidth(),
+                shape = shape,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = SeekerClawColors.ActionPrimary,
+                    contentColor = androidx.compose.ui.graphics.Color.White,
+                ),
+            ) {
+                if (isConfigImporting) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp,
+                        color = androidx.compose.ui.graphics.Color.White,
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Importing Config\u2026", fontFamily = RethinkSans, fontSize = 14.sp)
+                } else {
+                    Text(
+                        "Scan Config QR",
+                        fontFamily = RethinkSans,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp,
+                    )
+                }
+            }
+
+            if (configImportError != null) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = configImportError ?: "",
+                    fontFamily = RethinkSans,
+                    fontSize = 12.sp,
+                    color = SeekerClawColors.Error,
+                )
             }
         }
 
@@ -1476,195 +1383,6 @@ fun SettingsScreen(
         )
     }
 
-    // ==================== MCP Server Add/Edit Dialog ====================
-    if (showMcpDialog) {
-        var mcpName by remember(editingMcpServer) { mutableStateOf(editingMcpServer?.name ?: "") }
-        var mcpUrl by remember(editingMcpServer) { mutableStateOf(editingMcpServer?.url ?: "") }
-        var mcpToken by remember(editingMcpServer) { mutableStateOf(editingMcpServer?.authToken ?: "") }
-
-        AlertDialog(
-            onDismissRequest = { showMcpDialog = false },
-            title = {
-                Text(
-                    if (editingMcpServer != null) "Edit MCP Server" else "Add MCP Server",
-                    fontFamily = RethinkSans,
-                    fontWeight = FontWeight.Bold,
-                    color = SeekerClawColors.TextPrimary,
-                )
-            },
-            text = {
-                Column {
-                    OutlinedTextField(
-                        value = mcpName,
-                        onValueChange = { mcpName = it },
-                        label = { Text("Name", fontFamily = RethinkSans) },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = SeekerClawColors.Accent,
-                            unfocusedBorderColor = SeekerClawColors.BorderSubtle,
-                            focusedTextColor = SeekerClawColors.TextPrimary,
-                            unfocusedTextColor = SeekerClawColors.TextPrimary,
-                            cursorColor = SeekerClawColors.Accent,
-                            focusedLabelColor = SeekerClawColors.Accent,
-                            unfocusedLabelColor = SeekerClawColors.TextDim,
-                        ),
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = mcpUrl,
-                        onValueChange = { mcpUrl = it },
-                        label = { Text("Server URL", fontFamily = RethinkSans) },
-                        placeholder = { Text("https://mcp.example.com/mcp", color = SeekerClawColors.TextDim) },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = SeekerClawColors.Accent,
-                            unfocusedBorderColor = SeekerClawColors.BorderSubtle,
-                            focusedTextColor = SeekerClawColors.TextPrimary,
-                            unfocusedTextColor = SeekerClawColors.TextPrimary,
-                            cursorColor = SeekerClawColors.Accent,
-                            focusedLabelColor = SeekerClawColors.Accent,
-                            unfocusedLabelColor = SeekerClawColors.TextDim,
-                        ),
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = mcpToken,
-                        onValueChange = { mcpToken = it },
-                        label = { Text("Auth Token (optional)", fontFamily = RethinkSans) },
-                        visualTransformation = PasswordVisualTransformation(),
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = SeekerClawColors.Accent,
-                            unfocusedBorderColor = SeekerClawColors.BorderSubtle,
-                            focusedTextColor = SeekerClawColors.TextPrimary,
-                            unfocusedTextColor = SeekerClawColors.TextPrimary,
-                            cursorColor = SeekerClawColors.Accent,
-                            focusedLabelColor = SeekerClawColors.Accent,
-                            unfocusedLabelColor = SeekerClawColors.TextDim,
-                        ),
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        val trimName = mcpName.trim()
-                        val trimUrl = mcpUrl.trim()
-                        // Validate URL format before saving
-                        val isValidUrl = try {
-                            val uri = Uri.parse(trimUrl)
-                            uri.scheme in listOf("https", "http") && !uri.host.isNullOrBlank()
-                        } catch (_: Exception) { false }
-                        if (!isValidUrl) {
-                            Toast.makeText(context, "Invalid URL. Must start with https:// or http://", Toast.LENGTH_SHORT).show()
-                            return@TextButton
-                        }
-                        // Warn if auth token + plain HTTP (non-localhost)
-                        val trimToken = mcpToken.trim()
-                        if (trimToken.isNotBlank()) {
-                            val uri = Uri.parse(trimUrl)
-                            val isHttps = uri.scheme == "https"
-                            val isLocalhost = uri.host in listOf("localhost", "127.0.0.1", "::1", "[::1]")
-                            if (!isHttps && !isLocalhost) {
-                                Toast.makeText(context, "Auth token requires HTTPS (or localhost)", Toast.LENGTH_SHORT).show()
-                                return@TextButton
-                            }
-                        }
-                        if (trimName.isNotBlank() && trimUrl.isNotBlank()) {
-                            val serverId = editingMcpServer?.id
-                                ?: java.util.UUID.randomUUID().toString()
-                            val server = if (editingMcpServer != null) {
-                                editingMcpServer!!.copy(
-                                    name = trimName,
-                                    url = trimUrl,
-                                    authToken = mcpToken.trim(),
-                                )
-                            } else {
-                                McpServerConfig(
-                                    id = serverId,
-                                    name = trimName,
-                                    url = trimUrl,
-                                    authToken = mcpToken.trim(),
-                                )
-                            }
-                            mcpServers = if (editingMcpServer != null) {
-                                mcpServers.map { if (it.id == serverId) server else it }
-                            } else {
-                                mcpServers + server
-                            }
-                            ConfigManager.saveMcpServers(context, mcpServers)
-                            showMcpDialog = false
-                            showRestartDialog = true
-                        }
-                    },
-                    enabled = mcpName.isNotBlank() && mcpUrl.isNotBlank(),
-                ) {
-                    Text(
-                        "Save",
-                        fontFamily = RethinkSans,
-                        fontWeight = FontWeight.Bold,
-                        color = if (mcpName.isNotBlank() && mcpUrl.isNotBlank()) SeekerClawColors.Accent else SeekerClawColors.TextDim,
-                    )
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showMcpDialog = false }) {
-                    Text("Cancel", fontFamily = RethinkSans, color = SeekerClawColors.TextDim)
-                }
-            },
-            containerColor = SeekerClawColors.Surface,
-            shape = shape,
-        )
-    }
-
-    // ==================== MCP Server Delete Dialog ====================
-    if (showDeleteMcpDialog && deletingMcpServer != null) {
-        AlertDialog(
-            onDismissRequest = { showDeleteMcpDialog = false },
-            title = {
-                Text(
-                    "Remove Server",
-                    fontFamily = RethinkSans,
-                    fontWeight = FontWeight.Bold,
-                    color = SeekerClawColors.TextPrimary,
-                )
-            },
-            text = {
-                Text(
-                    "Remove \"${deletingMcpServer?.name}\"? Its tools will no longer be available to your agent.",
-                    fontFamily = RethinkSans,
-                    fontSize = 14.sp,
-                    color = SeekerClawColors.TextSecondary,
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    mcpServers = mcpServers.filter { it.id != deletingMcpServer?.id }
-                    ConfigManager.saveMcpServers(context, mcpServers)
-                    showDeleteMcpDialog = false
-                    deletingMcpServer = null
-                    showRestartDialog = true
-                }) {
-                    Text(
-                        "Remove",
-                        fontFamily = RethinkSans,
-                        fontWeight = FontWeight.Bold,
-                        color = SeekerClawColors.Error,
-                    )
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showDeleteMcpDialog = false }) {
-                    Text("Cancel", fontFamily = RethinkSans, color = SeekerClawColors.TextDim)
-                }
-            },
-            containerColor = SeekerClawColors.Surface,
-            shape = shape,
-        )
-    }
 }
 
 
