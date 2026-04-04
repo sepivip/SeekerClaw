@@ -49,6 +49,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -190,8 +192,13 @@ fun SettingsScreen(
     var editLabel by remember { mutableStateOf("") }
     var editValue by remember { mutableStateOf("") }
 
-    // MCP server count (for ConfigField display)
-    val mcpServerCount = remember(configVer) { ConfigManager.loadMcpServers(context).size }
+    // MCP server count (for ConfigField display) — load off main thread to avoid jank
+    var mcpServerCount by remember { mutableIntStateOf(0) }
+    LaunchedEffect(configVer) {
+        mcpServerCount = withContext(Dispatchers.IO) {
+            ConfigManager.loadMcpServers(context).size
+        }
+    }
 
     // Wallet connect state
     var walletAddress by remember { mutableStateOf(ConfigManager.getWalletAddress(context)) }

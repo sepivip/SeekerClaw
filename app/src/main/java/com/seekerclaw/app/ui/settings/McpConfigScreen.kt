@@ -27,6 +27,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -55,17 +57,19 @@ import com.seekerclaw.app.ui.theme.SeekerClawColors
 fun McpConfigScreen(onBack: () -> Unit) {
     val context = LocalContext.current
 
-    var mcpServers by remember { mutableStateOf(ConfigManager.loadMcpServers(context)) }
+    var mcpServers by remember { mutableStateOf(emptyList<McpServerConfig>()) }
     var showMcpDialog by remember { mutableStateOf(false) }
     var editingMcpServer by remember { mutableStateOf<McpServerConfig?>(null) }
     var showDeleteMcpDialog by remember { mutableStateOf(false) }
     var deletingMcpServer by remember { mutableStateOf<McpServerConfig?>(null) }
     var showRestartDialog by remember { mutableStateOf(false) }
 
-    // Reload on config changes (cross-process safe)
+    // Load MCP servers off main thread (Keystore decrypt + JSON parse)
     val configVer by ConfigManager.configVersion
     LaunchedEffect(configVer) {
-        mcpServers = ConfigManager.loadMcpServers(context)
+        mcpServers = withContext(Dispatchers.IO) {
+            ConfigManager.loadMcpServers(context)
+        }
     }
 
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
@@ -307,13 +311,13 @@ fun McpConfigScreen(onBack: () -> Unit) {
                             showRestartDialog = true
                         }
                     },
-                    enabled = mcpName.isNotBlank() && mcpUrl.isNotBlank(),
+                    enabled = mcpName.trim().isNotBlank() && mcpUrl.trim().isNotBlank(),
                 ) {
                     Text(
                         "Save",
                         fontFamily = RethinkSans,
                         fontWeight = FontWeight.Bold,
-                        color = if (mcpName.isNotBlank() && mcpUrl.isNotBlank()) SeekerClawColors.Accent else SeekerClawColors.TextDim,
+                        color = if (mcpName.trim().isNotBlank() && mcpUrl.trim().isNotBlank()) SeekerClawColors.Accent else SeekerClawColors.TextDim,
                     )
                 }
             },
