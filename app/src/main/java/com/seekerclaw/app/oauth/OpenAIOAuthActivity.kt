@@ -51,6 +51,8 @@ class OpenAIOAuthActivity : ComponentActivity() {
     private var callbackServer: CallbackServer? = null
     private val scope = CoroutineScope(Dispatchers.Main + Job())
     private var pollingJob: Job? = null
+    private var browserLaunched = false
+    private var callbackReceived = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -79,6 +81,15 @@ class OpenAIOAuthActivity : ComponentActivity() {
                 })
                 finish()
             }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // If browser was launched but no callback received, user closed the browser — finish
+        if (browserLaunched && !callbackReceived) {
+            Log.i(TAG, "Browser closed without completing OAuth — finishing")
+            finish()
         }
     }
 
@@ -138,6 +149,7 @@ class OpenAIOAuthActivity : ComponentActivity() {
             val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse(authorizeUrl))
             startActivity(browserIntent)
         }
+        browserLaunched = true
 
         // Safety timeout: if user abandons browser login, stop server and write error after 10 min
         scope.launch {
@@ -161,6 +173,7 @@ class OpenAIOAuthActivity : ComponentActivity() {
         expectedState: String,
         codeVerifier: String
     ): String {
+        callbackReceived = true
         val code = params["code"]
         val state = params["state"]
         val error = params["error"]
