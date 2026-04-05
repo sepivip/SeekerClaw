@@ -126,6 +126,12 @@ function fromApiResponse(raw) {
     // Handle nested response object (from response.completed event)
     const resp = raw.response || raw;
 
+    // Debug: log raw response structure for troubleshooting
+    if (isOAuth) {
+        log('[OpenAI-OAuth] Response keys: ' + Object.keys(resp).join(', '), 'DEBUG');
+        if (resp.output) log('[OpenAI-OAuth] Output items: ' + JSON.stringify(resp.output.map(i => ({ type: i.type, role: i.role })).slice(0, 5)), 'DEBUG');
+    }
+
     const textParts = [];
     const toolCalls = [];
 
