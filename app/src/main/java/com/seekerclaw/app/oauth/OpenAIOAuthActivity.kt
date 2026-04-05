@@ -53,6 +53,7 @@ class OpenAIOAuthActivity : ComponentActivity() {
     private var pollingJob: Job? = null
     private var browserLaunched = false
     private var callbackReceived = false
+    private var resumeCount = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -86,10 +87,14 @@ class OpenAIOAuthActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        // If browser was launched but no callback received, user closed the browser — finish
         if (browserLaunched && !callbackReceived) {
-            Log.i(TAG, "Browser closed without completing OAuth — finishing")
-            finish()
+            resumeCount++
+            // Skip first resume (Custom Tab opening triggers it).
+            // Second resume = user actually came back without completing auth.
+            if (resumeCount > 1) {
+                Log.i(TAG, "Browser closed without completing OAuth — finishing")
+                finish()
+            }
         }
     }
 
