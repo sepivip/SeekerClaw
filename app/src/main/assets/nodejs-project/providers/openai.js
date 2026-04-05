@@ -126,10 +126,10 @@ function fromApiResponse(raw) {
     // Handle nested response object (from response.completed event)
     const resp = raw.response || raw;
 
-    // Debug: log raw response structure for troubleshooting
+    // Trace: log response structure (WARN level so it always shows)
     if (isOAuth) {
-        log('[OpenAI-OAuth] Response keys: ' + Object.keys(resp).join(', '), 'DEBUG');
-        if (resp.output) log('[OpenAI-OAuth] Output items: ' + JSON.stringify(resp.output.map(i => ({ type: i.type, role: i.role })).slice(0, 5)), 'DEBUG');
+        log('[OpenAI-OAuth] fromApiResponse called. Keys: ' + Object.keys(resp).join(', ') + ', output count: ' + (resp.output?.length || 0), 'WARN');
+        if (resp.output) log('[OpenAI-OAuth] Output types: ' + JSON.stringify(resp.output.map(i => ({ type: i.type, hasContent: !!i.content })).slice(0, 5)), 'WARN');
     }
 
     const textParts = [];
