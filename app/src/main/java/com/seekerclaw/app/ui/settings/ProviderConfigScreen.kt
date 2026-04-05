@@ -369,20 +369,6 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                                     oauthRequestId = requestId
                                     oauthPolling = true
                                     oauthError = null
-                                    oauthDeviceCode = null
-                                },
-                                onSignInDeviceCode = {
-                                    val requestId = UUID.randomUUID().toString()
-                                    val intent = Intent(context, OpenAIOAuthActivity::class.java).apply {
-                                        putExtra("method", "device_code")
-                                        putExtra("requestId", requestId)
-                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                    }
-                                    context.startActivity(intent)
-                                    oauthRequestId = requestId
-                                    oauthPolling = true
-                                    oauthError = null
-                                    oauthDeviceCode = null
                                 },
                                 onSignOut = {
                                     ConfigManager.clearOpenAIOAuth(context)
@@ -391,8 +377,6 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                                 },
                                 oauthPolling = oauthPolling,
                                 oauthError = oauthError,
-                                oauthDeviceCode = oauthDeviceCode,
-                                oauthVerificationUri = oauthVerificationUri,
                             )
                         }
                     }
@@ -841,14 +825,10 @@ private fun OpenAIOAuthSection(
     isConnected: Boolean,
     email: String,
     onSignInBrowser: () -> Unit,
-    onSignInDeviceCode: () -> Unit,
     onSignOut: () -> Unit,
     oauthPolling: Boolean,
     oauthError: String?,
-    oauthDeviceCode: String?,
-    oauthVerificationUri: String?,
 ) {
-    val clipboardManager = LocalClipboardManager.current
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
 
     Column(modifier = Modifier.padding(16.dp)) {
@@ -898,66 +878,24 @@ private fun OpenAIOAuthSection(
                 Text("Sign Out", fontFamily = RethinkSans, fontWeight = FontWeight.Bold, fontSize = 14.sp)
             }
         } else if (oauthPolling) {
-            // Polling state
-            if (oauthDeviceCode != null) {
-                // Device code flow — show code
+            // Waiting for browser authentication
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    strokeWidth = 2.dp,
+                    color = SeekerClawColors.ActionPrimary,
+                )
+                Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "Go to:",
+                    text = "Waiting for authentication...",
                     fontFamily = RethinkSans,
-                    fontSize = 12.sp,
+                    fontSize = 13.sp,
                     color = SeekerClawColors.TextDim,
                 )
-                Text(
-                    text = oauthVerificationUri ?: "auth.openai.com/codex/device",
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = SeekerClawColors.TextInteractive,
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                Text(
-                    text = "Enter code:",
-                    fontFamily = RethinkSans,
-                    fontSize = 12.sp,
-                    color = SeekerClawColors.TextDim,
-                )
-                Text(
-                    text = oauthDeviceCode,
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 24.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = SeekerClawColors.TextPrimary,
-                    letterSpacing = 4.sp,
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                OutlinedButton(
-                    onClick = { clipboardManager.setText(AnnotatedString(oauthDeviceCode)) },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = shape,
-                    border = BorderStroke(1.dp, SeekerClawColors.TextDim),
-                ) {
-                    Text("Copy Code", fontFamily = RethinkSans, fontSize = 14.sp, color = SeekerClawColors.TextPrimary)
-                }
-            } else {
-                // Browser flow — waiting
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(16.dp),
-                        strokeWidth = 2.dp,
-                        color = SeekerClawColors.ActionPrimary,
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "Waiting for authentication...",
-                        fontFamily = RethinkSans,
-                        fontSize = 13.sp,
-                        color = SeekerClawColors.TextDim,
-                    )
-                }
             }
         } else {
             // Not connected — show sign in buttons
@@ -970,16 +908,7 @@ private fun OpenAIOAuthSection(
                     contentColor = Color.White,
                 ),
             ) {
-                Text("Sign in with Browser", fontFamily = RethinkSans, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-            OutlinedButton(
-                onClick = onSignInDeviceCode,
-                modifier = Modifier.fillMaxWidth(),
-                shape = shape,
-                border = BorderStroke(1.dp, SeekerClawColors.TextDim),
-            ) {
-                Text("Sign in with Code", fontFamily = RethinkSans, fontSize = 14.sp, color = SeekerClawColors.TextPrimary)
+                Text("Sign in with ChatGPT", fontFamily = RethinkSans, fontWeight = FontWeight.Bold, fontSize = 14.sp)
             }
         }
 
