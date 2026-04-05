@@ -235,7 +235,9 @@ function httpOpenAIStreamingRequest(options, body = null) {
         try {
         req = getClient(options).request(options, (res) => {
             const ct = res.headers['content-type'] || '';
-            if (res.statusCode !== 200 || !ct.includes('text/event-stream')) {
+            // Codex endpoint (chatgpt.com) doesn't send Content-Type header but streams SSE
+            const isSSE = ct.includes('text/event-stream') || (res.statusCode === 200 && options.hostname === 'chatgpt.com');
+            if (res.statusCode !== 200 || !isSSE) {
                 res.setEncoding('utf8');
                 let data = '';
                 res.on('data', chunk => data += chunk);
@@ -305,6 +307,7 @@ function httpOpenAIStreamingRequest(options, body = null) {
 
                     let parsed;
                     try { parsed = JSON.parse(eventData); } catch (_) { continue; }
+
 
                     switch (eventType) {
                         case 'response.output_item.added':

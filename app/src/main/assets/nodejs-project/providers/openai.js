@@ -126,12 +126,6 @@ function fromApiResponse(raw) {
     // Handle nested response object (from response.completed event)
     const resp = raw.response || raw;
 
-    // Diagnostic: dump raw response shape for Codex debugging
-    if (isOAuth) {
-        const outputSummary = (resp.output || []).map(i => i?.type || 'unknown');
-        log('[Codex] output types: ' + JSON.stringify(outputSummary) + ' | raw keys: ' + Object.keys(resp).join(','), 'WARN');
-    }
-
     const textParts = [];
     const toolCalls = [];
 
@@ -229,7 +223,7 @@ function formatRequest(model, maxTokens, instructions, input, tools) {
         body.tools = tools;
     }
 
-    // Codex endpoint requires store: false
+    // OAuth (Codex endpoint) requires store: false — conversations cannot be stored
     if (isOAuth) {
         body.store = false;
     }

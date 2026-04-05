@@ -1193,6 +1193,8 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
                     method: 'POST',
                     headers,
                 }, body);
+
+                // Codex diagnostic: dump raw response shape
             } catch (networkErr) {
                 const attemptEnd = Date.now();
                 timeoutSource = networkErr.timeoutSource || 'network_error';
