@@ -51,9 +51,7 @@ class OpenAIOAuthActivity : ComponentActivity() {
     private var callbackServer: CallbackServer? = null
     private val scope = CoroutineScope(Dispatchers.Main + Job())
     private var pollingJob: Job? = null
-    private var browserLaunched = false
     private var callbackReceived = false
-    private var resumeCount = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -80,19 +78,6 @@ class OpenAIOAuthActivity : ComponentActivity() {
                     put("status", "error")
                     put("message", "Unknown method: $method")
                 })
-                finish()
-            }
-        }
-    }
-
-    override fun onResume() {
-        super.onResume()
-        if (browserLaunched && !callbackReceived) {
-            resumeCount++
-            // Skip first resume (Custom Tab opening triggers it).
-            // Second resume = user actually came back without completing auth.
-            if (resumeCount > 1) {
-                Log.i(TAG, "Browser closed without completing OAuth — finishing")
                 finish()
             }
         }
@@ -154,7 +139,6 @@ class OpenAIOAuthActivity : ComponentActivity() {
             val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse(authorizeUrl))
             startActivity(browserIntent)
         }
-        browserLaunched = true
 
         // Safety timeout: if user abandons browser login, stop server and write error after 10 min
         scope.launch {
