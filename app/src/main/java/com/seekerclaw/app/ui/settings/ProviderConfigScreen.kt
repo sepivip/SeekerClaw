@@ -112,7 +112,8 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
         val deadline = System.currentTimeMillis() + 600_000 // 10 min timeout (device-code flows can take a while)
         while (oauthPolling && System.currentTimeMillis() < deadline) {
             delay(1000)
-            if (!resultFile.exists()) continue
+            val exists = withContext(Dispatchers.IO) { resultFile.exists() }
+            if (!exists) continue
             try {
                 val json = withContext(Dispatchers.IO) {
                     val text = resultFile.readText()

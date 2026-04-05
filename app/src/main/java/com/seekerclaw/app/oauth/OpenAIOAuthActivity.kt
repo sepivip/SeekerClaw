@@ -400,7 +400,7 @@ class OpenAIOAuthActivity : ComponentActivity() {
             val parts = jwt.split(".")
             if (parts.size < 3) return null
             val payload = parts[1]
-            // Base64url decode — add padding if needed
+            // Base64url decode — NO_PADDING flag handles missing '=' padding automatically
             val decoded = Base64.decode(payload, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
             val json = JSONObject(String(decoded, Charsets.UTF_8))
             val email = json.optString("email", "")
@@ -449,7 +449,11 @@ class OpenAIOAuthActivity : ComponentActivity() {
         val jsonFile = File(resultDir, "$requestId.json")
         tmpFile.writeText(result.toString())
         jsonFile.delete() // renameTo won't overwrite existing file on Android
-        tmpFile.renameTo(jsonFile)
+        if (!tmpFile.renameTo(jsonFile)) {
+            // Fallback: copy + delete if rename fails on some Android filesystems
+            tmpFile.copyTo(jsonFile, overwrite = true)
+            tmpFile.delete()
+        }
         Log.d(TAG, "Result written: ${jsonFile.absolutePath}")
     }
 
@@ -457,11 +461,17 @@ class OpenAIOAuthActivity : ComponentActivity() {
         runOnUiThread { finish() }
     }
 
+    private fun escapeHtml(text: String): String = text
+        .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        .replace("\"", "&quot;").replace("'", "&#39;")
+
     private fun buildHtmlResponse(title: String, message: String): String {
+        val safeTitle = escapeHtml(title)
+        val safeMessage = escapeHtml(message)
         return """
             <!DOCTYPE html>
             <html>
-            <head><title>$title</title>
+            <head><title>$safeTitle</title>
             <style>
                 body { font-family: -apple-system, sans-serif; display: flex;
                        justify-content: center; align-items: center; height: 100vh;
@@ -469,7 +479,7 @@ class OpenAIOAuthActivity : ComponentActivity() {
                 .card { text-align: center; padding: 2rem; }
                 h1 { color: ${if (title == "Success") "#00C805" else "#FF4444"}; }
             </style></head>
-            <body><div class="card"><h1>$title</h1><p>$message</p></div></body>
+            <body><div class="card"><h1>$safeTitle</h1><p>$safeMessage</p></div></body>
             </html>
         """.trimIndent()
     }
