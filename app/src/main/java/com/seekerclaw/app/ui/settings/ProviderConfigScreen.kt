@@ -368,6 +368,10 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                                     config = ConfigManager.loadConfig(context)
                                     showRestartDialog = true
                                 },
+                                onCancelPolling = {
+                                    oauthPolling = false
+                                    oauthError = null
+                                },
                                 oauthPolling = oauthPolling,
                                 oauthError = oauthError,
                             )
@@ -871,6 +875,7 @@ private fun OpenAIOAuthSection(
     email: String,
     onSignInBrowser: () -> Unit,
     onSignOut: () -> Unit,
+    onCancelPolling: () -> Unit,
     oauthPolling: Boolean,
     oauthError: String?,
 ) {
@@ -941,6 +946,10 @@ private fun OpenAIOAuthSection(
                     fontSize = 13.sp,
                     color = SeekerClawColors.TextDim,
                 )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            TextButton(onClick = onCancelPolling) {
+                Text("Cancel", fontFamily = RethinkSans, fontSize = 13.sp, color = SeekerClawColors.TextDim)
             }
         } else {
             // Not connected — show sign in buttons
