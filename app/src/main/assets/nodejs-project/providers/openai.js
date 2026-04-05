@@ -219,6 +219,11 @@ function formatRequest(model, maxTokens, instructions, input, tools) {
         body.tools = tools;
     }
 
+    // OAuth (Codex endpoint) requires store: false — conversations cannot be stored
+    if (isOAuth) {
+        body.store = false;
+    }
+
     // Codex models are reasoning models — they need the reasoning parameter for tool calling.
     if (model && model.includes('codex')) {
         body.reasoning = { effort: 'medium', summary: 'auto' };
