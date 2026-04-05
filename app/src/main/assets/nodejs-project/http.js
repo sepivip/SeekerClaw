@@ -8,7 +8,7 @@ const https = require('https');
 function getClient(options) {
     return options?.protocol === 'http:' ? http : https;
 }
-const { API_TIMEOUT_MS } = require('./config');
+const { API_TIMEOUT_MS, log } = require('./config');
 
 // BAT-244: timeout is configurable via options.timeout (ms). Defaults to API_TIMEOUT_MS from config.
 function httpRequest(options, body = null) {
