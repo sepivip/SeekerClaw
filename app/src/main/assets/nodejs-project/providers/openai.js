@@ -220,7 +220,10 @@ function formatRequest(model, maxTokens, instructions, input, tools) {
         input,
     };
 
-    body.max_output_tokens = maxTokens;
+    // Codex endpoint rejects max_output_tokens — subscription manages limits
+    if (!isOAuth) {
+        body.max_output_tokens = maxTokens;
+    }
 
     if (tools && tools.length > 0) {
         body.tools = tools;
