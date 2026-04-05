@@ -220,10 +220,7 @@ function formatRequest(model, maxTokens, instructions, input, tools) {
         input,
     };
 
-    // Codex endpoint manages token limits via subscription — don't set max_tokens
-    if (!isOAuth) {
-        body.max_tokens = maxTokens;
-    }
+    body.max_output_tokens = maxTokens;
 
     if (tools && tools.length > 0) {
         body.tools = tools;
@@ -258,10 +255,15 @@ let _currentRefreshToken = OPENAI_OAUTH_REFRESH;
 
 function buildHeaders(apiKey) {
     const token = isOAuth ? _currentOAuthToken : apiKey;
-    return {
+    const headers = {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${token}`,
     };
+    // Codex backend needs Accept header for SSE streaming
+    if (isOAuth) {
+        headers['Accept'] = 'text/event-stream';
+    }
+    return headers;
 }
 
 // ── Streaming ───────────────────────────────────────────────────────────────
