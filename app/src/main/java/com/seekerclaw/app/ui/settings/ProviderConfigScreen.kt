@@ -641,6 +641,9 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
             },
             text = {
                 Column {
+                    val isCustomSelected = models.none { it.id == selectedModel } && selectedModel.isNotBlank()
+                    var customModelId by remember { mutableStateOf(if (isCustomSelected) selectedModel else "") }
+
                     models.forEach { model ->
                         Row(
                             modifier = Modifier
@@ -671,6 +674,51 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                                     color = SeekerClawColors.TextDim,
                                 )
                             }
+                        }
+                    }
+                    // Custom model option
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { selectedModel = customModelId.ifBlank { "custom" } }
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(
+                            selected = isCustomSelected || selectedModel == "custom",
+                            onClick = { selectedModel = customModelId.ifBlank { "custom" } },
+                            colors = RadioButtonDefaults.colors(
+                                selectedColor = SeekerClawColors.Primary,
+                                unselectedColor = SeekerClawColors.TextDim,
+                            ),
+                        )
+                        Column(modifier = Modifier.padding(start = 8.dp).fillMaxWidth()) {
+                            Text(
+                                text = "Custom model",
+                                fontFamily = RethinkSans,
+                                fontSize = 14.sp,
+                                color = SeekerClawColors.TextPrimary,
+                            )
+                            OutlinedTextField(
+                                value = customModelId,
+                                onValueChange = {
+                                    customModelId = it
+                                    if (it.isNotBlank()) selectedModel = it
+                                },
+                                placeholder = { Text("e.g. gpt-5.4-pro", fontSize = 12.sp) },
+                                textStyle = androidx.compose.ui.text.TextStyle(
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 12.sp,
+                                    color = SeekerClawColors.TextPrimary,
+                                ),
+                                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                                singleLine = true,
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = SeekerClawColors.Primary,
+                                    unfocusedBorderColor = SeekerClawColors.TextDim,
+                                    cursorColor = SeekerClawColors.Primary,
+                                ),
+                            )
                         }
                     }
                 }

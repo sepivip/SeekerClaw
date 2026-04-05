@@ -419,9 +419,12 @@ class OpenAIOAuthActivity : ComponentActivity() {
             // Base64url decode — Android's Base64.NO_PADDING flag accepts input without '=' padding
             val decoded = Base64.decode(payload, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
             val json = JSONObject(String(decoded, Charsets.UTF_8))
+            // Try multiple claim names — OpenAI JWT varies by auth method
             val email = json.optString("email", "")
+            val name = json.optString("name", "")
+            val preferredUsername = json.optString("preferred_username", "")
             val sub = json.optString("sub", "")
-            email.ifEmpty { sub.ifEmpty { null } }
+            email.ifEmpty { preferredUsername.ifEmpty { name.ifEmpty { sub.ifEmpty { null } } } }
         } catch (e: Exception) {
             Log.w(TAG, "Failed to extract email from JWT", e)
             null
@@ -495,6 +498,12 @@ class OpenAIOAuthActivity : ComponentActivity() {
                 .card { text-align: center; padding: 2rem; }
                 h1 { color: ${if (title == "Success") "#00C805" else "#FF4444"}; }
             </style></head>
+            <script>
+                if ('$safeTitle' === 'Success') {
+                    setTimeout(function() { window.close(); }, 1500);
+                }
+            </script>
+            </head>
             <body><div class="card"><h1>$safeTitle</h1><p>$safeMessage</p></div></body>
             </html>
         """.trimIndent()
