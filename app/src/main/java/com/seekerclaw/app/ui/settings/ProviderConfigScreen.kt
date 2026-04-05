@@ -808,6 +808,14 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                 TextButton(
                     onClick = {
                         saveField("authType", selectedAuth, needsRestart = true)
+                        // Set default model when switching to OAuth (Codex models differ)
+                        if (selectedAuth == "oauth" && activeProvider == "openai") {
+                            val currentModel = config?.model ?: ""
+                            val oauthModels = modelsForProvider("openai", "oauth")
+                            if (oauthModels.none { it.id == currentModel }) {
+                                saveField("model", "gpt-5.4", needsRestart = false)
+                            }
+                        }
                         Analytics.authTypeChanged(selectedAuth)
                         showAuthTypePicker = false
                     },
