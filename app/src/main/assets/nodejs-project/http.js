@@ -250,6 +250,8 @@ function httpOpenAIStreamingRequest(options, body = null) {
                 return;
             }
 
+            log(`[HTTP-SSE] SSE stream opened: ${options.hostname}${options.path} Content-Type: ${ct}`, 'DEBUG');
+
             // Responses API SSE accumulators (fallback if stream disconnects)
             res.setEncoding('utf8');
             const outputItems = {};  // output_index → item skeleton
@@ -367,6 +369,7 @@ function httpOpenAIStreamingRequest(options, body = null) {
             res.on('end', () => {
                 clearTimeout(hardTimer);
                 if (!settled) {
+                    log(`[HTTP-SSE] Stream ended without response.completed. Items: ${Object.keys(outputItems).length}, Text keys: ${Object.keys(textAccum).length}, Accum text: ${JSON.stringify(textAccum).slice(0, 200)}`, 'WARN');
                     // Stream ended without response.completed — build from accumulated deltas
                     if (Object.keys(outputItems).length > 0) {
                         settle(resolve, { status: 200, data: buildFromAccum(), headers: res.headers });
