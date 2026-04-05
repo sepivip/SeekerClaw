@@ -320,6 +320,14 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                     "openai" -> {
                         val openaiAuthType = config?.authType ?: "api_key"
                         val openaiModelList = modelsForProvider("openai", openaiAuthType)
+                        // Auth Type first (determines model list + credential UI)
+                        val openaiAuthLabel = if (openaiAuthType == "oauth") "ChatGPT OAuth (experimental)" else "API Key"
+                        ConfigField(
+                            label = "Auth Type",
+                            value = openaiAuthLabel,
+                            onClick = { showAuthTypePicker = true },
+                            info = "API Key uses your OpenAI platform key. OAuth uses your ChatGPT subscription via Codex OAuth.",
+                        )
                         ConfigField(
                             label = "Model",
                             value = openaiModelList.find { it.id == config?.model }
@@ -327,13 +335,6 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                                 ?: config?.model?.ifBlank { "Not set" } ?: "Not set",
                             onClick = { showModelPicker = true },
                             info = SettingsHelpTexts.MODEL,
-                        )
-                        val openaiAuthLabel = if (openaiAuthType == "oauth") "ChatGPT OAuth (experimental)" else "API Key"
-                        ConfigField(
-                            label = "Auth Type",
-                            value = openaiAuthLabel,
-                            onClick = { showAuthTypePicker = true },
-                            info = "API Key uses your OpenAI platform key. OAuth uses your ChatGPT subscription via Codex OAuth.",
                         )
                         if (openaiAuthType == "api_key") {
                             ConfigField(

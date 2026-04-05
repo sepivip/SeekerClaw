@@ -41,7 +41,8 @@ class OpenAIOAuthActivity : ComponentActivity() {
         const val CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
         const val AUTH_URL = "https://auth.openai.com/oauth/authorize"
         const val TOKEN_URL = "https://auth.openai.com/oauth/token"
-        const val DEVICE_URL = "https://auth.openai.com/codex/device"
+        const val DEVICE_URL = "https://auth.openai.com/oauth/device/code"
+        const val DEVICE_VERIFY_URL = "https://auth.openai.com/codex/device"  // User-facing page
         const val REDIRECT_URI = "http://localhost:1455/auth/callback"
         const val SCOPES = "openid profile email offline_access"
         private const val CALLBACK_PORT = 1455
