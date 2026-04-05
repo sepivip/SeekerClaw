@@ -58,6 +58,7 @@ class AndroidBridge(
         "/contacts/search" to Pair(20, 60_000L),
         "/contacts/add" to Pair(10, 60_000L),
         "/location" to Pair(10, 60_000L),
+        "/openai/oauth/save-tokens" to Pair(5, 60_000L),
     )
 
     @Synchronized
@@ -143,6 +144,7 @@ class AndroidBridge(
                 "/solana/sign-only" -> handleSolanaSignOnly(params)
                 "/solana/send" -> handleSolanaSend(params)
                 "/config/save-owner" -> handleConfigSaveOwner(params)
+                "/openai/oauth/save-tokens" -> handleOpenAIOAuthSaveTokens(params)
                 "/stats/db-summary" -> proxyToNodeStats()
                 "/ping" -> jsonResponse(200, mapOf("status" to "ok", "bridge" to "AndroidBridge"))
                 else -> jsonResponse(404, mapOf("error" to "Unknown endpoint: $uri"))
@@ -673,6 +675,31 @@ class AndroidBridge(
             jsonResponse(200, mapOf("success" to true))
         } else {
             jsonResponse(500, mapOf("error" to "Failed to persist owner ID"))
+        }
+    }
+
+    // ==================== OpenAI OAuth ====================
+
+    private fun handleOpenAIOAuthSaveTokens(params: JSONObject): Response {
+        val accessToken = params.optString("accessToken", "")
+        val refreshToken = params.optString("refreshToken", "")
+        val expiresAt = params.optString("expiresAt", "")
+        if (accessToken.isBlank()) {
+            return jsonResponse(400, mapOf("error" to "accessToken required"))
+        }
+        return try {
+            val config = ConfigManager.loadConfig(context)
+                ?: return jsonResponse(500, mapOf("error" to "config not loaded"))
+            ConfigManager.saveConfig(
+                context, config.copy(
+                    openaiOAuthToken = accessToken,
+                    openaiOAuthRefresh = if (refreshToken.isNotBlank()) refreshToken else config.openaiOAuthRefresh,
+                    openaiOAuthExpiresAt = expiresAt,
+                )
+            )
+            jsonResponse(200, mapOf("success" to true))
+        } catch (e: Exception) {
+            jsonResponse(500, mapOf("error" to (e.message ?: "Unknown error")))
         }
     }
 
