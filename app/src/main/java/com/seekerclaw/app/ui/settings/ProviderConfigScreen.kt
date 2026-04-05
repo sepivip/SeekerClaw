@@ -57,15 +57,11 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import android.content.Intent
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.KeyboardType
 import org.json.JSONObject
 import java.io.File
@@ -98,8 +94,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
     var oauthRequestId by remember { mutableStateOf<String?>(null) }
     var oauthPolling by remember { mutableStateOf(false) }
     var oauthError by remember { mutableStateOf<String?>(null) }
-    var oauthDeviceCode by remember { mutableStateOf<String?>(null) }
-    var oauthVerificationUri by remember { mutableStateOf<String?>(null) }
+    // Note: device code UI removed — only browser flow used for now
 
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
 
@@ -135,18 +130,13 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                             showRestartDialog = true
                         }
                         oauthPolling = false
-                        oauthDeviceCode = null
                     }
                     "pending" -> {
-                        // Device code flow — show user code (treat blank as null)
-                        oauthDeviceCode = json.optString("userCode", "").takeIf { it.isNotBlank() }
-                        oauthVerificationUri = json.optString("verificationUri", "").takeIf { it.isNotBlank() }
                         // Continue polling — the file will be overwritten with success/error
                     }
                     "error" -> {
                         oauthError = json.optString("message", "Unknown error")
                         oauthPolling = false
-                        oauthDeviceCode = null
                     }
                 }
             } catch (e: Exception) {
@@ -318,7 +308,9 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                         )
                     }
                     "openai" -> {
-                        val openaiAuthType = config?.authType ?: "api_key"
+                        // Normalize: only "api_key" and "oauth" are valid for OpenAI;
+                        // other values (e.g. "setup_token" from Claude) fall back to "api_key"
+                        val openaiAuthType = if (config?.authType == "oauth") "oauth" else "api_key"
                         val openaiModelList = modelsForProvider("openai", openaiAuthType)
                         // Auth Type first (determines model list + credential UI)
                         val openaiAuthLabel = if (openaiAuthType == "oauth") "ChatGPT OAuth (experimental)" else "API Key"
@@ -1007,7 +999,7 @@ private suspend fun testOpenAIOAuthConnection(accessToken: String): Result<Unit>
     runCatching {
         if (accessToken.isBlank()) error("OAuth token is empty — please sign in first")
         // OAuth tokens use the Codex endpoint; /v1/models won't work.
-        // Use a lightweight HEAD to chatgpt.com to verify the token is still valid.
+        // Use a lightweight GET to chatgpt.com/backend-api/me to verify the token is still valid.
         val url = URL("https://chatgpt.com/backend-api/me")
         val conn = url.openConnection() as HttpURLConnection
         conn.requestMethod = "GET"
