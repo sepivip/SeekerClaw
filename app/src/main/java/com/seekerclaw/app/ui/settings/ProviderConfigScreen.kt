@@ -358,7 +358,6 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                                     val intent = Intent(context, OpenAIOAuthActivity::class.java).apply {
                                         putExtra("method", "browser")
                                         putExtra("requestId", requestId)
-                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                                     }
                                     context.startActivity(intent)
                                     oauthRequestId = requestId

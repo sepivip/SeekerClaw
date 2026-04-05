@@ -197,14 +197,14 @@ class OpenAIOAuthActivity : ComponentActivity() {
             return buildHtmlResponse("Error", "No authorization code received.")
         }
 
-        // Exchange code for tokens asynchronously — respond to browser immediately
+        // Exchange code for tokens asynchronously in a coroutine after returning the NanoHTTPD response.
         scope.launch {
             exchangeCodeForTokens(requestId, code, codeVerifier)
         }
 
         return buildHtmlResponse(
-            "Success",
-            "Authentication successful! You can close this tab and return to SeekerClaw."
+            "Completing Sign-In",
+            "Finishing authentication — please return to SeekerClaw for status."
         )
     }
 
@@ -420,8 +420,12 @@ class OpenAIOAuthActivity : ComponentActivity() {
             val parts = jwt.split(".")
             if (parts.size < 3) return null
             val payload = parts[1]
-            // Base64url decode — Android's Base64.NO_PADDING flag accepts input without '=' padding
-            val decoded = Base64.decode(payload, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+            // Base64url decode — normalize padding to avoid edge cases on some Android versions
+            val normalizedPayload = when (payload.length % 4) {
+                0 -> payload
+                else -> payload.padEnd(payload.length + (4 - (payload.length % 4)), '=')
+            }
+            val decoded = Base64.decode(normalizedPayload, Base64.URL_SAFE or Base64.NO_WRAP)
             val json = JSONObject(String(decoded, Charsets.UTF_8))
             // Try multiple claim names — OpenAI JWT varies by auth method
             val email = json.optString("email", "")
@@ -491,7 +495,7 @@ class OpenAIOAuthActivity : ComponentActivity() {
     private fun buildHtmlResponse(title: String, message: String): String {
         val safeTitle = escapeHtml(title)
         val safeMessage = escapeHtml(message)
-        val isSuccess = title == "Success"
+        val isSuccess = title == "Success" || title == "Completing Sign-In"
         val accentColor = if (isSuccess) "#4ADE80" else "#F87171"
         val icon = if (isSuccess) "&#10003;" else "&#10007;"
         return """
