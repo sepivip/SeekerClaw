@@ -119,8 +119,9 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                     "success" -> {
                         val accessToken = json.optString("accessToken", "")
                         val refreshToken = json.optString("refreshToken", "")
-                        val email = json.optString("email", "")
-                        val expiresAt = json.optString("expiresAt", "")
+                        // Guard against JSONObject.NULL which optString renders as "null"
+                        val email = json.optString("email", "").takeIf { it != "null" } ?: ""
+                        val expiresAt = json.optString("expiresAt", "").takeIf { it != "null" } ?: ""
                         if (accessToken.isNotBlank()) {
                             ConfigManager.updateConfigField(context, "openaiOAuthToken", accessToken)
                             if (refreshToken.isNotBlank()) ConfigManager.updateConfigField(context, "openaiOAuthRefresh", refreshToken)
@@ -701,7 +702,11 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
             "openai" -> listOf("api_key" to "API Key", "oauth" to "ChatGPT OAuth (experimental)")
             else -> listOf("api_key" to "API Key", "setup_token" to "Pro/Max Setup Token")
         }
-        var selectedAuth by remember { mutableStateOf(config?.authType ?: "api_key") }
+        // Normalize: ensure selectedAuth is a valid option for the current provider
+        val validAuthTypes = authOptions.map { it.first }.toSet()
+        var selectedAuth by remember {
+            mutableStateOf((config?.authType ?: "api_key").let { if (it in validAuthTypes) it else "api_key" })
+        }
 
         AlertDialog(
             onDismissRequest = { showAuthTypePicker = false },

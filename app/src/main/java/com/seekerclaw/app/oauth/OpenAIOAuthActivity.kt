@@ -195,7 +195,7 @@ class OpenAIOAuthActivity : ComponentActivity() {
             return buildHtmlResponse("Error", "No authorization code received.")
         }
 
-        // Exchange code for tokens (on IO thread, block the NanoHTTPD thread briefly)
+        // Exchange code for tokens asynchronously — respond to browser immediately
         scope.launch {
             exchangeCodeForTokens(requestId, code, codeVerifier)
         }
