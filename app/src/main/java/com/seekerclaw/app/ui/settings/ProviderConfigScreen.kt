@@ -15,8 +15,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.CircularProgressIndicator
 import com.seekerclaw.app.ui.components.SeekerClawScaffold
 import androidx.compose.material3.HorizontalDivider
@@ -666,7 +668,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                             )
                             Column(modifier = Modifier.padding(start = 8.dp)) {
                                 Text(
-                                    text = "${model.displayName} (${model.description})",
+                                    text = model.displayName,
                                     fontFamily = RethinkSans,
                                     fontSize = 14.sp,
                                     color = SeekerClawColors.TextPrimary,
@@ -947,9 +949,14 @@ private fun OpenAIOAuthSection(
                     color = SeekerClawColors.TextDim,
                 )
             }
-            Spacer(modifier = Modifier.height(8.dp))
-            TextButton(onClick = onCancelPolling) {
-                Text("Cancel", fontFamily = RethinkSans, fontSize = 13.sp, color = SeekerClawColors.TextDim)
+            Spacer(modifier = Modifier.height(16.dp))
+            OutlinedButton(
+                onClick = onCancelPolling,
+                modifier = Modifier.fillMaxWidth(),
+                shape = shape,
+                border = BorderStroke(1.dp, SeekerClawColors.TextDim),
+            ) {
+                Text("Cancel", fontFamily = RethinkSans, fontSize = 14.sp, color = SeekerClawColors.TextPrimary)
             }
         } else {
             // Not connected — show sign in buttons
