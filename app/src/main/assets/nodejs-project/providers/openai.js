@@ -214,8 +214,10 @@ function formatRequest(model, maxTokens, instructions, input, tools) {
         input,
     };
 
-    // Responses API uses max_tokens (not max_output_tokens)
-    body.max_tokens = maxTokens;
+    // Codex endpoint manages token limits via subscription — don't set max_tokens
+    if (!isOAuth) {
+        body.max_tokens = maxTokens;
+    }
 
     if (tools && tools.length > 0) {
         body.tools = tools;
