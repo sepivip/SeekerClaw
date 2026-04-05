@@ -306,6 +306,12 @@ function httpOpenAIStreamingRequest(options, body = null) {
                     let parsed;
                     try { parsed = JSON.parse(eventData); } catch (_) { continue; }
 
+                    // Debug: log unhandled SSE event types
+                    const _knownEvents = new Set(['response.output_item.added','response.output_text.delta','response.function_call_arguments.delta','response.completed','response.incomplete','error','response.created','response.in_progress','response.output_item.done','response.content_part.added','response.content_part.done','response.output_text.done','response.function_call_arguments.done','response.refusal.delta','response.refusal.done']);
+                    if (!_knownEvents.has(eventType) && eventType) {
+                        log('[SSE] Unknown event type: ' + eventType + ' data: ' + eventData.slice(0, 200), 'WARN');
+                    }
+
                     switch (eventType) {
                         case 'response.output_item.added':
                             if (typeof parsed.output_index === 'number' && parsed.item) {
