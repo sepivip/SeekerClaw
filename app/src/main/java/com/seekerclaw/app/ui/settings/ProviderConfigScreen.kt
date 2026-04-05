@@ -47,7 +47,6 @@ import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.config.availableModels
 import com.seekerclaw.app.config.availableProviders
 import com.seekerclaw.app.config.modelsForProvider
-import com.seekerclaw.app.config.openaiModels
 import com.seekerclaw.app.config.providerById
 import com.seekerclaw.app.oauth.OpenAIOAuthActivity
 import com.seekerclaw.app.util.Analytics
@@ -61,7 +60,6 @@ import android.content.Intent
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.ButtonColors
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults

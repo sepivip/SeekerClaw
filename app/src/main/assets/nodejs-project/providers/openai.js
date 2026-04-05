@@ -239,6 +239,7 @@ const endpoint = {
 };
 
 let _currentOAuthToken = OPENAI_OAUTH_TOKEN;
+let _currentRefreshToken = OPENAI_OAUTH_REFRESH;
 
 function buildHeaders(apiKey) {
     const token = isOAuth ? _currentOAuthToken : apiKey;
@@ -263,8 +264,10 @@ function classifyError(status, data) {
     if (status === 401 || status === 403) {
         // OAuth 401s may be retryable after token refresh — caller must call handleUnauthorized()
         return {
-            type: 'auth', retryable: isOAuth && status === 401 && !!OPENAI_OAUTH_REFRESH,
-            userMessage: '🔑 Can\'t reach the AI — OpenAI API key might be wrong. Check Settings?'
+            type: 'auth', retryable: isOAuth && status === 401 && !!_currentRefreshToken,
+            userMessage: isOAuth
+                ? '🔐 Can\'t reach the AI — your OpenAI sign-in may have expired. Please reconnect OpenAI in Settings and try again.'
+                : '🔑 Can\'t reach the AI — OpenAI API key might be wrong. Check Settings?'
         };
     }
     if (status === 402) {
@@ -309,7 +312,7 @@ function classifyError(status, data) {
  * or rethrows non-retryable error on refresh failure.
  */
 async function handleUnauthorized() {
-    if (isOAuth && OPENAI_OAUTH_REFRESH) {
+    if (isOAuth && _currentRefreshToken) {
         log('[OpenAI] OAuth 401 — attempting token refresh...', 'INFO');
         try {
             await refreshOAuthToken();
@@ -404,7 +407,7 @@ async function refreshOAuthToken() {
     const body = new URLSearchParams({
         grant_type: 'refresh_token',
         client_id: 'app_EMoamEEZ73f0CkXaXp7hrann',
-        refresh_token: OPENAI_OAUTH_REFRESH,
+        refresh_token: _currentRefreshToken,
     }).toString();
 
     return new Promise((resolve, reject) => {
@@ -425,10 +428,11 @@ async function refreshOAuthToken() {
                     const parsed = JSON.parse(data);
                     if (parsed.access_token) {
                         _currentOAuthToken = parsed.access_token;
+                        if (parsed.refresh_token) _currentRefreshToken = parsed.refresh_token;
                         // Persist via bridge
                         androidBridgeCall('/openai/oauth/save-tokens', {
                             accessToken: parsed.access_token,
-                            refreshToken: parsed.refresh_token || OPENAI_OAUTH_REFRESH,
+                            refreshToken: parsed.refresh_token || _currentRefreshToken,
                             expiresAt: new Date(Date.now() + (parsed.expires_in || 28800) * 1000).toISOString(),
                         }).catch(e => log('[OpenAI] Failed to persist refreshed tokens: ' + e.message, 'WARN'));
                         resolve(true);

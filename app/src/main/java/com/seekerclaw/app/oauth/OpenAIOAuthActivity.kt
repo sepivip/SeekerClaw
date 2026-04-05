@@ -448,6 +448,7 @@ class OpenAIOAuthActivity : ComponentActivity() {
         val tmpFile = File(resultDir, "$requestId.tmp")
         val jsonFile = File(resultDir, "$requestId.json")
         tmpFile.writeText(result.toString())
+        jsonFile.delete() // renameTo won't overwrite existing file on Android
         tmpFile.renameTo(jsonFile)
         Log.d(TAG, "Result written: ${jsonFile.absolutePath}")
     }
