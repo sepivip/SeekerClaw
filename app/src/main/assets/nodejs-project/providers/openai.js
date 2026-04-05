@@ -4,7 +4,8 @@
 // All OpenAI models route through the Responses API — future-proof
 // as OpenAI transitions away from Chat Completions.
 
-const { log } = require('../config');
+const { log, OPENAI_OAUTH_TOKEN, OPENAI_OAUTH_REFRESH, OPENAI_AUTH_TYPE } = require('../config');
+const { androidBridgeCall } = require('../bridge');
 
 // ── Neutral ↔ OpenAI Responses API message translation ──────────────────────
 
@@ -228,12 +229,22 @@ function formatRequest(model, maxTokens, instructions, input, tools) {
 
 // ── Connection details ──────────────────────────────────────────────────────
 
-const endpoint = { hostname: 'api.openai.com', path: '/v1/responses' };
+const isOAuth = OPENAI_AUTH_TYPE === 'oauth';
+const CODEX_API_HOST = 'chatgpt.com';
+const CODEX_API_PATH = '/backend-api/codex/responses';
+
+const endpoint = {
+    hostname: isOAuth ? CODEX_API_HOST : 'api.openai.com',
+    path: isOAuth ? CODEX_API_PATH : '/v1/responses',
+};
+
+let _currentOAuthToken = OPENAI_OAUTH_TOKEN;
 
 function buildHeaders(apiKey) {
+    const token = isOAuth ? _currentOAuthToken : apiKey;
     return {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
+        'Authorization': `Bearer ${token}`,
     };
 }
 
@@ -250,8 +261,9 @@ const streamProtocol = 'openai-responses';
 
 function classifyError(status, data) {
     if (status === 401 || status === 403) {
+        // OAuth 401s may be retryable after token refresh — caller must call handleUnauthorized()
         return {
-            type: 'auth', retryable: false,
+            type: 'auth', retryable: isOAuth && status === 401 && !!OPENAI_OAUTH_REFRESH,
             userMessage: '🔑 Can\'t reach the AI — OpenAI API key might be wrong. Check Settings?'
         };
     }
@@ -288,6 +300,28 @@ function classifyError(status, data) {
             ? `API error (${status}): ${reason.trim()}`
             : `Unexpected API error (${status}). Please try again.`
     };
+}
+
+/**
+ * Handle OAuth 401: attempt token refresh and signal retryable.
+ * Call this when classifyError returns { retryable: true } on a 401.
+ * Throws an error with retryable=true on success (caller retries),
+ * or rethrows non-retryable error on refresh failure.
+ */
+async function handleUnauthorized() {
+    if (isOAuth && OPENAI_OAUTH_REFRESH) {
+        log('[OpenAI] OAuth 401 — attempting token refresh...', 'INFO');
+        try {
+            await refreshOAuthToken();
+            log('[OpenAI] Token refreshed — caller should retry', 'INFO');
+            const retryError = new Error('OAuth token refreshed — retry');
+            retryError.retryable = true;
+            throw retryError;
+        } catch (e) {
+            if (e.retryable) throw e;
+            log('[OpenAI] OAuth refresh failed: ' + e.message, 'ERROR');
+        }
+    }
 }
 
 function classifyNetworkError(err) {
@@ -363,6 +397,56 @@ function formatVision(base64, mediaType) {
 
 const testEndpoint = { hostname: 'api.openai.com', path: '/v1/models', method: 'GET' };
 
+// ── OAuth token refresh ─────────────────────────────────────────────────────
+
+async function refreshOAuthToken() {
+    const https = require('https');
+    const body = new URLSearchParams({
+        grant_type: 'refresh_token',
+        client_id: 'app_EMoamEEZ73f0CkXaXp7hrann',
+        refresh_token: OPENAI_OAUTH_REFRESH,
+    }).toString();
+
+    return new Promise((resolve, reject) => {
+        const req = https.request({
+            hostname: 'auth.openai.com',
+            path: '/oauth/token',
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'Content-Length': Buffer.byteLength(body),
+            },
+            timeout: 15000,
+        }, (res) => {
+            let data = '';
+            res.on('data', chunk => data += chunk);
+            res.on('end', () => {
+                try {
+                    const parsed = JSON.parse(data);
+                    if (parsed.access_token) {
+                        _currentOAuthToken = parsed.access_token;
+                        // Persist via bridge
+                        androidBridgeCall('/openai/oauth/save-tokens', {
+                            accessToken: parsed.access_token,
+                            refreshToken: parsed.refresh_token || OPENAI_OAUTH_REFRESH,
+                            expiresAt: new Date(Date.now() + (parsed.expires_in || 28800) * 1000).toISOString(),
+                        }).catch(e => log('[OpenAI] Failed to persist refreshed tokens: ' + e.message, 'WARN'));
+                        resolve(true);
+                    } else {
+                        reject(new Error(parsed.error_description || parsed.error || 'Token refresh failed'));
+                    }
+                } catch (e) {
+                    reject(new Error('Failed to parse refresh response'));
+                }
+            });
+        });
+        req.on('error', reject);
+        req.on('timeout', () => { req.destroy(); reject(new Error('Refresh timeout')); });
+        req.write(body);
+        req.end();
+    });
+}
+
 // ── Export adapter ──────────────────────────────────────────────────────────
 
 module.exports = {
@@ -386,10 +470,15 @@ module.exports = {
     // Error & usage
     classifyError,
     classifyNetworkError,
+    handleUnauthorized,
     normalizeUsage,
     parseRateLimitHeaders,
 
+    // OAuth
+    refreshOAuthToken,
+    isOAuth,
+
     // Capabilities
     supportsCache: false,
-    authTypes: ['api_key'],
+    authTypes: ['api_key', 'oauth'],
 };
