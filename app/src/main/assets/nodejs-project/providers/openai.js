@@ -210,10 +210,12 @@ function formatRequest(model, maxTokens, instructions, input, tools) {
     const body = {
         model,
         stream: true,
-        max_output_tokens: maxTokens,
         instructions: typeof instructions === 'string' ? instructions : (instructions?.content || String(instructions)),
         input,
     };
+
+    // Responses API uses max_tokens (not max_output_tokens)
+    body.max_tokens = maxTokens;
 
     if (tools && tools.length > 0) {
         body.tools = tools;
