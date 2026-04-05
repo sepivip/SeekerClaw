@@ -228,9 +228,11 @@ class OpenAIOAuthActivity : ComponentActivity() {
             val json = JSONObject(tokenResponse)
             val accessToken = json.optString("access_token", "")
             val refreshToken = json.optString("refresh_token", "")
+            val idToken = json.optString("id_token", "")
             val expiresIn = json.optLong("expires_in", 3600)
             val expiresAt = java.time.Instant.now().plusSeconds(expiresIn).toString()
-            val email = extractEmailFromJwt(accessToken)
+            // Try id_token first (has email), fall back to access_token
+            val email = extractEmailFromJwt(idToken) ?: extractEmailFromJwt(accessToken)
 
             writeResultFile(requestId, JSONObject().apply {
                 put("status", "success")
@@ -489,24 +491,55 @@ class OpenAIOAuthActivity : ComponentActivity() {
     private fun buildHtmlResponse(title: String, message: String): String {
         val safeTitle = escapeHtml(title)
         val safeMessage = escapeHtml(message)
+        val isSuccess = title == "Success"
+        val accentColor = if (isSuccess) "#4ADE80" else "#F87171"
+        val icon = if (isSuccess) "&#10003;" else "&#10007;"
         return """
             <!DOCTYPE html>
             <html>
-            <head><title>$safeTitle</title>
+            <head>
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>SeekerClaw — $safeTitle</title>
             <style>
-                body { font-family: -apple-system, sans-serif; display: flex;
-                       justify-content: center; align-items: center; height: 100vh;
-                       margin: 0; background: #0D0D0D; color: #fff; }
-                .card { text-align: center; padding: 2rem; }
-                h1 { color: ${if (title == "Success") "#00C805" else "#FF4444"}; }
-            </style></head>
-            <script>
-                if ('$safeTitle' === 'Success') {
-                    setTimeout(function() { window.close(); }, 1500);
+                * { margin: 0; padding: 0; box-sizing: border-box; }
+                body {
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+                    display: flex; justify-content: center; align-items: center;
+                    height: 100vh; background: #0A0A0F; color: #fff;
                 }
-            </script>
+                .card {
+                    text-align: center; padding: 3rem 2rem;
+                    max-width: 400px; width: 90%;
+                }
+                .icon {
+                    width: 80px; height: 80px; border-radius: 50%;
+                    background: ${accentColor}15;
+                    border: 2px solid ${accentColor};
+                    display: flex; align-items: center; justify-content: center;
+                    margin: 0 auto 1.5rem; font-size: 36px; color: $accentColor;
+                }
+                h1 {
+                    font-size: 24px; font-weight: 700; color: $accentColor;
+                    margin-bottom: 0.75rem; letter-spacing: -0.5px;
+                }
+                .message {
+                    font-size: 15px; color: rgba(255,255,255,0.6);
+                    line-height: 1.5; margin-bottom: 2rem;
+                }
+                .brand {
+                    font-size: 12px; color: rgba(255,255,255,0.25);
+                    letter-spacing: 1px; text-transform: uppercase;
+                }
+            </style>
             </head>
-            <body><div class="card"><h1>$safeTitle</h1><p>$safeMessage</p></div></body>
+            <body>
+                <div class="card">
+                    <div class="icon">$icon</div>
+                    <h1>$safeTitle</h1>
+                    <p class="message">$safeMessage</p>
+                    <p class="brand">SeekerClaw</p>
+                </div>
+            </body>
             </html>
         """.trimIndent()
     }
