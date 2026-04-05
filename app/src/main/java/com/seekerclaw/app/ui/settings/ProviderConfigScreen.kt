@@ -109,13 +109,16 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
         if (!oauthPolling) return@LaunchedEffect
         val resultsDir = File(context.filesDir, OpenAIOAuthActivity.RESULTS_DIR)
         val resultFile = File(resultsDir, "$reqId.json")
-        val deadline = System.currentTimeMillis() + 120_000 // 2 min timeout
+        val deadline = System.currentTimeMillis() + 600_000 // 10 min timeout (device-code flows can take a while)
         while (oauthPolling && System.currentTimeMillis() < deadline) {
             delay(1000)
             if (!resultFile.exists()) continue
             try {
-                val json = JSONObject(resultFile.readText())
-                resultFile.delete()
+                val json = withContext(Dispatchers.IO) {
+                    val text = resultFile.readText()
+                    resultFile.delete()
+                    JSONObject(text)
+                }
                 when (json.optString("status")) {
                     "success" -> {
                         val accessToken = json.optString("accessToken", "")
@@ -134,9 +137,9 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                         oauthDeviceCode = null
                     }
                     "pending" -> {
-                        // Device code flow — show user code
-                        oauthDeviceCode = json.optString("userCode", "")
-                        oauthVerificationUri = json.optString("verificationUri", "")
+                        // Device code flow — show user code (treat blank as null)
+                        oauthDeviceCode = json.optString("userCode", "").takeIf { it.isNotBlank() }
+                        oauthVerificationUri = json.optString("verificationUri", "").takeIf { it.isNotBlank() }
                         // Continue polling — the file will be overwritten with success/error
                     }
                     "error" -> {
@@ -502,7 +505,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                                 "openai" -> {
                                     val authType = config?.authType ?: "api_key"
                                     if (authType == "oauth") {
-                                        testOpenAIConnection(config?.openaiOAuthToken ?: "")
+                                        testOpenAIOAuthConnection(config?.openaiOAuthToken ?: "")
                                     } else {
                                         testOpenAIConnection(config?.openaiApiKey ?: "")
                                     }
@@ -1061,6 +1064,34 @@ private suspend fun testOpenRouterConnection(apiKey: String): Result<Unit> = wit
                 else -> apiMessage.ifBlank { "HTTP $status" }
             }
             error("Connection failed ($errorMessage)")
+        } catch (_: java.net.SocketTimeoutException) {
+            error("Connection timed out")
+        } catch (_: java.io.IOException) {
+            error("Network unreachable or timeout")
+        } finally { conn.disconnect() }
+    }
+}
+
+private suspend fun testOpenAIOAuthConnection(accessToken: String): Result<Unit> = withContext(Dispatchers.IO) {
+    runCatching {
+        if (accessToken.isBlank()) error("OAuth token is empty — please sign in first")
+        // OAuth tokens use the Codex endpoint; /v1/models won't work.
+        // Use a lightweight HEAD to chatgpt.com to verify the token is still valid.
+        val url = URL("https://chatgpt.com/backend-api/me")
+        val conn = url.openConnection() as HttpURLConnection
+        conn.requestMethod = "GET"
+        conn.setRequestProperty("Authorization", "Bearer $accessToken")
+        conn.connectTimeout = 15000
+        conn.readTimeout = 15000
+        try {
+            val status = conn.responseCode
+            if (status in 200..299) return@runCatching
+            when (status) {
+                401, 403 -> error("OAuth session expired — please sign in again")
+                429 -> error("Rate limited — try again in a moment")
+                in 500..599 -> error("OpenAI unavailable")
+                else -> error("HTTP $status")
+            }
         } catch (_: java.net.SocketTimeoutException) {
             error("Connection timed out")
         } catch (_: java.io.IOException) {

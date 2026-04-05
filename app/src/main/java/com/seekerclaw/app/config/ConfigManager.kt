@@ -731,7 +731,7 @@ object ConfigManager {
         if (config.channel == "telegram" && config.telegramBotToken.isBlank()) return "missing_bot_token"
         if (config.channel == "discord" && config.discordBotToken.isBlank()) return "missing_discord_token"
         val hasCredential = when (config.provider) {
-            "openai" -> config.openaiApiKey.isNotBlank() || config.openaiOAuthToken.isNotBlank()
+            "openai" -> if (config.authType == "oauth") config.openaiOAuthToken.isNotBlank() else config.openaiApiKey.isNotBlank()
             "openrouter" -> config.openrouterApiKey.isNotBlank()
             "custom" -> config.customApiKey.isNotBlank() && config.customBaseUrl.isNotBlank()
             else -> config.activeCredential.isNotBlank()

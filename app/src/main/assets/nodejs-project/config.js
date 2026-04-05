@@ -120,6 +120,7 @@ const OPENAI_KEY = normalizeSecret(config.openaiApiKey || '');
 const OPENAI_OAUTH_TOKEN = normalizeSecret(config.openaiOAuthToken || '');
 const OPENAI_OAUTH_REFRESH = normalizeSecret(config.openaiOAuthRefresh || '');
 const OPENAI_OAUTH_EMAIL = (config.openaiOAuthEmail || '').trim();
+const AUTH_TYPE = config.authType || 'api_key';
 
 // OpenAI auth type: 'oauth' if OAuth token present and authType matches, else 'api_key'
 const OPENAI_AUTH_TYPE = (AUTH_TYPE === 'oauth' && OPENAI_OAUTH_TOKEN) ? 'oauth' : 'api_key';
@@ -132,7 +133,6 @@ const CUSTOM_FORMAT = (typeof config.customFormat === 'string' ? config.customFo
 const OPENROUTER_FALLBACK_MODEL = (typeof config.openrouterFallbackModel === 'string' ? config.openrouterFallbackModel : '').trim();
 const OPENROUTER_MODEL_CONTEXT = parseInt(config.openrouterModelContext, 10) || 0;
 const OPENROUTER_FALLBACK_CONTEXT = parseInt(config.openrouterFallbackContext, 10) || 0;
-const AUTH_TYPE = config.authType || 'api_key';
 const _defaultModel = PROVIDER === 'openai' ? 'gpt-5.2'
     : PROVIDER === 'openrouter' ? 'anthropic/claude-sonnet-4-6'
     : PROVIDER === 'custom' ? ''
@@ -193,8 +193,8 @@ const MCP_SERVERS = (config.mcpServers || [])
     .filter((server) => server && typeof server === 'object' && server.url);
 
 // Validate: channel token required per channel; API key required for active provider only
-// For OpenAI: OAuth token is a valid alternative to API key
-const _activeKey = PROVIDER === 'openai' ? (OPENAI_KEY || OPENAI_OAUTH_TOKEN)
+// For OpenAI: validate based on effective auth type (api_key needs API key, oauth needs OAuth token)
+const _activeKey = PROVIDER === 'openai' ? (OPENAI_AUTH_TYPE === 'oauth' ? OPENAI_OAUTH_TOKEN : OPENAI_KEY)
     : PROVIDER === 'openrouter' ? OPENROUTER_KEY
     : PROVIDER === 'custom' ? CUSTOM_KEY
     : ANTHROPIC_KEY;
