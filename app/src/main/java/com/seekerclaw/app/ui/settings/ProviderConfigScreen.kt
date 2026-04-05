@@ -311,12 +311,12 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                         )
                     }
                     "openai" -> {
-                        // Normalize: only "api_key" and "oauth" are valid for OpenAI;
-                        // other values (e.g. "setup_token" from Claude) fall back to "api_key"
-                        val openaiAuthType = if (config?.authType == "oauth") "oauth" else "api_key"
+                        // Normalize: only "oauth" and "api_key" are valid for OpenAI;
+                        // other values (e.g. "setup_token" from Claude) default to "oauth"
+                        val openaiAuthType = if (config?.authType == "api_key") "api_key" else "oauth"
                         val openaiModelList = modelsForProvider("openai", openaiAuthType)
                         // Auth Type first (determines model list + credential UI)
-                        val openaiAuthLabel = if (openaiAuthType == "oauth") "ChatGPT OAuth (experimental)" else "API Key"
+                        val openaiAuthLabel = if (openaiAuthType == "oauth") "ChatGPT OAuth" else "API Key"
                         ConfigField(
                             label = "Auth Type",
                             value = openaiAuthLabel,
@@ -758,7 +758,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
     // Auth type picker (Claude + OpenAI)
     if (showAuthTypePicker) {
         val authOptions = when (activeProvider) {
-            "openai" -> listOf("api_key" to "API Key", "oauth" to "ChatGPT OAuth (experimental)")
+            "openai" -> listOf("oauth" to "ChatGPT OAuth", "api_key" to "API Key")
             else -> listOf("api_key" to "API Key", "setup_token" to "Pro/Max Setup Token")
         }
         // Normalize: ensure selectedAuth is a valid option for the current provider
@@ -905,7 +905,7 @@ private fun OpenAIOAuthSection(
                 .padding(12.dp),
         ) {
             Text(
-                text = "Experimental: uses OpenAI's Codex OAuth. Not officially supported for third-party apps. Subscription rate limits apply.",
+                text = "Uses your ChatGPT subscription via Codex OAuth.",
                 fontFamily = RethinkSans,
                 fontSize = 13.sp,
                 color = SeekerClawColors.Warning,
