@@ -138,6 +138,21 @@ class OpenAIOAuthActivity : ComponentActivity() {
             val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse(authorizeUrl))
             startActivity(browserIntent)
         }
+
+        // Safety timeout: if user abandons browser login, stop server and write error after 10 min
+        scope.launch {
+            delay(600_000)
+            if (callbackServer != null) {
+                Log.w(TAG, "Browser flow timed out after 10 minutes")
+                callbackServer?.stop()
+                callbackServer = null
+                writeResultFile(requestId, JSONObject().apply {
+                    put("status", "error")
+                    put("message", "Browser login timed out. Please try again.")
+                })
+                finishOnMain()
+            }
+        }
     }
 
     private fun handleCallback(
@@ -401,7 +416,7 @@ class OpenAIOAuthActivity : ComponentActivity() {
             val parts = jwt.split(".")
             if (parts.size < 3) return null
             val payload = parts[1]
-            // Base64url decode — NO_PADDING flag handles missing '=' padding automatically
+            // Base64url decode — Android's Base64.NO_PADDING flag accepts input without '=' padding
             val decoded = Base64.decode(payload, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
             val json = JSONObject(String(decoded, Charsets.UTF_8))
             val email = json.optString("email", "")
