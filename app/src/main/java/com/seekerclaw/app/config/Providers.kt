@@ -25,7 +25,7 @@ val availableProviders = listOf(
     ProviderInfo(
         id = "openai",
         displayName = "OpenAI",
-        authTypes = listOf("api_key"),
+        authTypes = listOf("api_key", "oauth"),
         keyHint = "sk-proj-…",
         consoleUrl = "https://platform.openai.com",
         keysUrl = "https://platform.openai.com/api-keys",
@@ -54,11 +54,18 @@ val openaiModels = listOf(
     ModelInfo("gpt-5.3-codex", "GPT-5.3 Codex", "code agent"),
 )
 
+val openaiOAuthModels = listOf(
+    ModelInfo("gpt-5.4", "GPT-5.4", "frontier"),
+    ModelInfo("gpt-5.4-mini", "GPT-5.4 Mini", "fast"),
+    ModelInfo("gpt-5.3-codex", "GPT-5.3 Codex", "code agent"),
+    ModelInfo("gpt-5.3-codex-spark", "GPT-5.3 Codex Spark", "research"),
+)
+
 /** Default model for freeform providers (OpenRouter) where model list is empty. */
 const val OPENROUTER_DEFAULT_MODEL = "anthropic/claude-sonnet-4-6"
 
-fun modelsForProvider(providerId: String): List<ModelInfo> = when (providerId) {
-    "openai" -> openaiModels
+fun modelsForProvider(providerId: String, authType: String? = null): List<ModelInfo> = when (providerId) {
+    "openai" -> if (authType == "oauth") openaiOAuthModels else openaiModels
     "openrouter", "custom" -> emptyList() // Freeform: user types model ID
     else -> availableModels
 }
