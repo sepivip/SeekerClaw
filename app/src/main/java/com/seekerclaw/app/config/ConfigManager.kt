@@ -56,6 +56,10 @@ data class AppConfig(
     val channel: String = "telegram",
     val discordBotToken: String = "",
     val discordOwnerId: String = "",
+    val openaiOAuthToken: String = "",
+    val openaiOAuthRefresh: String = "",
+    val openaiOAuthEmail: String = "",
+    val openaiOAuthExpiresAt: String = "",
 ) {
     /** Anthropic/authType-based credential — used by SetupScreen and legacy flows. */
     val activeCredential: String
@@ -122,6 +126,10 @@ object ConfigManager {
     private const val KEY_DISCORD_BOT_TOKEN_ENC = "discord_bot_token_enc"
     private const val KEY_DISCORD_OWNER_ID = "discord_owner_id"
     private const val KEY_FIRST_DEPLOY_DONE = "first_deploy_done"
+    private const val KEY_OPENAI_OAUTH_TOKEN_ENC = "openai_oauth_token_enc"
+    private const val KEY_OPENAI_OAUTH_REFRESH_ENC = "openai_oauth_refresh_enc"
+    private const val KEY_OPENAI_OAUTH_EMAIL = "openai_oauth_email"
+    private const val KEY_OPENAI_OAUTH_EXPIRES_AT = "openai_oauth_expires_at"
 
     private fun prefs(context: Context): SharedPreferences =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -260,6 +268,21 @@ object ConfigManager {
             editor.remove(KEY_DISCORD_BOT_TOKEN_ENC)
         }
         editor.putString(KEY_DISCORD_OWNER_ID, config.discordOwnerId)
+
+        if (config.openaiOAuthToken.isNotBlank()) {
+            val encOAuthToken = KeystoreHelper.encrypt(config.openaiOAuthToken)
+            editor.putString(KEY_OPENAI_OAUTH_TOKEN_ENC, Base64.encodeToString(encOAuthToken, Base64.NO_WRAP))
+        } else {
+            editor.remove(KEY_OPENAI_OAUTH_TOKEN_ENC)
+        }
+        if (config.openaiOAuthRefresh.isNotBlank()) {
+            val encOAuthRefresh = KeystoreHelper.encrypt(config.openaiOAuthRefresh)
+            editor.putString(KEY_OPENAI_OAUTH_REFRESH_ENC, Base64.encodeToString(encOAuthRefresh, Base64.NO_WRAP))
+        } else {
+            editor.remove(KEY_OPENAI_OAUTH_REFRESH_ENC)
+        }
+        editor.putString(KEY_OPENAI_OAUTH_EMAIL, config.openaiOAuthEmail)
+        editor.putString(KEY_OPENAI_OAUTH_EXPIRES_AT, config.openaiOAuthExpiresAt)
 
         val persisted = editor.commit()
         if (persisted) {
@@ -407,6 +430,24 @@ object ConfigManager {
             ""
         }
 
+        val openaiOAuthToken = try {
+            val enc = p.getString(KEY_OPENAI_OAUTH_TOKEN_ENC, null)
+            if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to decrypt OpenAI OAuth token", e)
+            LogCollector.append("[Config] Failed to decrypt OpenAI OAuth token: ${e.javaClass.simpleName}", LogLevel.ERROR)
+            ""
+        }
+
+        val openaiOAuthRefresh = try {
+            val enc = p.getString(KEY_OPENAI_OAUTH_REFRESH_ENC, null)
+            if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to decrypt OpenAI OAuth refresh token", e)
+            LogCollector.append("[Config] Failed to decrypt OpenAI OAuth refresh token: ${e.javaClass.simpleName}", LogLevel.ERROR)
+            ""
+        }
+
         return AppConfig(
             anthropicApiKey = apiKey,
             setupToken = setupToken,
@@ -438,6 +479,10 @@ object ConfigManager {
             channel = p.getString(KEY_CHANNEL, "telegram") ?: "telegram",
             discordBotToken = discordBotToken,
             discordOwnerId = loadOwnerIdFromFile(context, "discord"),
+            openaiOAuthToken = openaiOAuthToken,
+            openaiOAuthRefresh = openaiOAuthRefresh,
+            openaiOAuthEmail = p.getString(KEY_OPENAI_OAUTH_EMAIL, "") ?: "",
+            openaiOAuthExpiresAt = p.getString(KEY_OPENAI_OAUTH_EXPIRES_AT, "") ?: "",
         )
     }
 
@@ -495,6 +540,10 @@ object ConfigManager {
                 saveOwnerIdToFile(context, value, "discord")
                 config.copy(discordOwnerId = value)
             }
+            "openaiOAuthToken" -> config.copy(openaiOAuthToken = value)
+            "openaiOAuthRefresh" -> config.copy(openaiOAuthRefresh = value)
+            "openaiOAuthEmail" -> config.copy(openaiOAuthEmail = value)
+            "openaiOAuthExpiresAt" -> config.copy(openaiOAuthExpiresAt = value)
             else -> return
         }
         saveConfig(context, updated)
@@ -575,6 +624,16 @@ object ConfigManager {
         configVersion.intValue++
     }
 
+    fun clearOpenAIOAuth(context: Context) {
+        prefs(context).edit()
+            .remove(KEY_OPENAI_OAUTH_TOKEN_ENC)
+            .remove(KEY_OPENAI_OAUTH_REFRESH_ENC)
+            .remove(KEY_OPENAI_OAUTH_EMAIL)
+            .remove(KEY_OPENAI_OAUTH_EXPIRES_AT)
+            .apply()
+        configVersion.intValue++
+    }
+
     /**
      * Write ephemeral config.json to workspace for Node.js to read on startup.
      * Includes per-boot bridge auth token. File is deleted after Node.js reads it.
@@ -617,6 +676,10 @@ object ConfigManager {
             put("channel", config.channel)
             if (config.discordBotToken.isNotBlank()) put("discordBotToken", config.discordBotToken)
             if (config.discordOwnerId.isNotBlank()) put("discordOwnerId", config.discordOwnerId)
+            if (config.openaiOAuthToken.isNotBlank()) put("openaiOAuthToken", config.openaiOAuthToken)
+            if (config.openaiOAuthRefresh.isNotBlank()) put("openaiOAuthRefresh", config.openaiOAuthRefresh)
+            if (config.openaiOAuthEmail.isNotBlank()) put("openaiOAuthEmail", config.openaiOAuthEmail)
+            if (config.openaiOAuthExpiresAt.isNotBlank()) put("openaiOAuthExpiresAt", config.openaiOAuthExpiresAt)
             val mcpServers = loadMcpServers(context)
             if (mcpServers.isNotEmpty()) {
                 val arr = JSONArray()
@@ -668,7 +731,7 @@ object ConfigManager {
         if (config.channel == "telegram" && config.telegramBotToken.isBlank()) return "missing_bot_token"
         if (config.channel == "discord" && config.discordBotToken.isBlank()) return "missing_discord_token"
         val hasCredential = when (config.provider) {
-            "openai" -> config.openaiApiKey.isNotBlank()
+            "openai" -> config.openaiApiKey.isNotBlank() || config.openaiOAuthToken.isNotBlank()
             "openrouter" -> config.openrouterApiKey.isNotBlank()
             "custom" -> config.customApiKey.isNotBlank() && config.customBaseUrl.isNotBlank()
             else -> config.activeCredential.isNotBlank()
