@@ -117,6 +117,13 @@ const _rawProvider = (typeof config.provider === 'string' && config.provider.tri
 const PROVIDER = _SUPPORTED_PROVIDERS.has(_rawProvider) ? _rawProvider : 'claude';
 const ANTHROPIC_KEY = normalizeSecret(config.anthropicApiKey);
 const OPENAI_KEY = normalizeSecret(config.openaiApiKey || '');
+const OPENAI_OAUTH_TOKEN = normalizeSecret(config.openaiOAuthToken || '');
+const OPENAI_OAUTH_REFRESH = normalizeSecret(config.openaiOAuthRefresh || '');
+const OPENAI_OAUTH_EMAIL = (config.openaiOAuthEmail || '').trim();
+
+// OpenAI auth type: 'oauth' if OAuth token present and authType matches, else 'api_key'
+const OPENAI_AUTH_TYPE = (AUTH_TYPE === 'oauth' && OPENAI_OAUTH_TOKEN) ? 'oauth' : 'api_key';
+
 const OPENROUTER_KEY = normalizeSecret(config.openrouterApiKey || '');
 const CUSTOM_KEY = normalizeSecret(config.customApiKey || '');
 const CUSTOM_BASE_URL = (typeof config.customBaseUrl === 'string' ? config.customBaseUrl : '').trim();
@@ -186,7 +193,8 @@ const MCP_SERVERS = (config.mcpServers || [])
     .filter((server) => server && typeof server === 'object' && server.url);
 
 // Validate: channel token required per channel; API key required for active provider only
-const _activeKey = PROVIDER === 'openai' ? OPENAI_KEY
+// For OpenAI: OAuth token is a valid alternative to API key
+const _activeKey = PROVIDER === 'openai' ? (OPENAI_KEY || OPENAI_OAUTH_TOKEN)
     : PROVIDER === 'openrouter' ? OPENROUTER_KEY
     : PROVIDER === 'custom' ? CUSTOM_KEY
     : ANTHROPIC_KEY;
@@ -199,7 +207,7 @@ if (CHANNEL === 'discord' && !DISCORD_TOKEN) {
     process.exit(1);
 }
 if (!_activeKey) {
-    const keyName = PROVIDER === 'openai' ? 'openaiApiKey'
+    const keyName = PROVIDER === 'openai' ? 'openaiApiKey or openaiOAuthToken'
         : PROVIDER === 'openrouter' ? 'openrouterApiKey'
         : PROVIDER === 'custom' ? 'customApiKey'
         : 'anthropicApiKey';
@@ -504,6 +512,7 @@ module.exports = {
     PROVIDER,
     ANTHROPIC_KEY,
     OPENAI_KEY,
+    OPENAI_OAUTH_TOKEN, OPENAI_OAUTH_REFRESH, OPENAI_OAUTH_EMAIL, OPENAI_AUTH_TYPE,
     OPENROUTER_KEY,
     CUSTOM_KEY,
     CUSTOM_BASE_URL,
