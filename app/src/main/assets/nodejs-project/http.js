@@ -8,7 +8,7 @@ const https = require('https');
 function getClient(options) {
     return options?.protocol === 'http:' ? http : https;
 }
-const { API_TIMEOUT_MS, log } = require('./config');
+const { API_TIMEOUT_MS } = require('./config');
 
 // BAT-244: timeout is configurable via options.timeout (ms). Defaults to API_TIMEOUT_MS from config.
 function httpRequest(options, body = null) {
@@ -250,8 +250,6 @@ function httpOpenAIStreamingRequest(options, body = null) {
                 return;
             }
 
-            log(`[HTTP-SSE] SSE stream opened: ${options.hostname}${options.path} Content-Type: ${ct}`, 'DEBUG');
-
             // Responses API SSE accumulators (fallback if stream disconnects)
             res.setEncoding('utf8');
             const outputItems = {};  // output_index → item skeleton
@@ -308,12 +306,6 @@ function httpOpenAIStreamingRequest(options, body = null) {
                     let parsed;
                     try { parsed = JSON.parse(eventData); } catch (_) { continue; }
 
-                    // Debug: log unhandled SSE event types
-                    const _knownEvents = new Set(['response.output_item.added','response.output_text.delta','response.function_call_arguments.delta','response.completed','response.incomplete','error','response.created','response.in_progress','response.output_item.done','response.content_part.added','response.content_part.done','response.output_text.done','response.function_call_arguments.done','response.refusal.delta','response.refusal.done']);
-                    if (!_knownEvents.has(eventType) && eventType) {
-                        log('[SSE] Unknown event type: ' + eventType + ' data: ' + eventData.slice(0, 200), 'WARN');
-                    }
-
                     switch (eventType) {
                         case 'response.output_item.added':
                             if (typeof parsed.output_index === 'number' && parsed.item) {
@@ -369,7 +361,6 @@ function httpOpenAIStreamingRequest(options, body = null) {
             res.on('end', () => {
                 clearTimeout(hardTimer);
                 if (!settled) {
-                    log(`[HTTP-SSE] Stream ended without response.completed. Items: ${Object.keys(outputItems).length}, Text keys: ${Object.keys(textAccum).length}, Accum text: ${JSON.stringify(textAccum).slice(0, 200)}`, 'WARN');
                     // Stream ended without response.completed — build from accumulated deltas
                     if (Object.keys(outputItems).length > 0) {
                         settle(resolve, { status: 200, data: buildFromAccum(), headers: res.headers });

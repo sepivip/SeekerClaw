@@ -126,12 +126,6 @@ function fromApiResponse(raw) {
     // Handle nested response object (from response.completed event)
     const resp = raw.response || raw;
 
-    // Trace: log response structure (WARN level so it always shows)
-    if (isOAuth) {
-        log('[OpenAI-OAuth] fromApiResponse called. Keys: ' + Object.keys(resp).join(', ') + ', output count: ' + (resp.output?.length || 0), 'WARN');
-        if (resp.output) log('[OpenAI-OAuth] Output types: ' + JSON.stringify(resp.output.map(i => ({ type: i.type, hasContent: !!i.content })).slice(0, 5)), 'WARN');
-    }
-
     const textParts = [];
     const toolCalls = [];
 
@@ -226,10 +220,7 @@ function formatRequest(model, maxTokens, instructions, input, tools) {
     }
 
     if (tools && tools.length > 0) {
-        // TEMP: skip tools for OAuth to test if model responds without them
-        if (!isOAuth) {
-            body.tools = tools;
-        }
+        body.tools = tools;
     }
 
     // OAuth (Codex endpoint) requires store: false — conversations cannot be stored
@@ -238,8 +229,7 @@ function formatRequest(model, maxTokens, instructions, input, tools) {
     }
 
     // Codex models are reasoning models — they need the reasoning parameter for tool calling.
-    // Skip for OAuth until we confirm basic responses work
-    if (model && model.includes('codex') && !isOAuth) {
+    if (model && model.includes('codex')) {
         body.reasoning = { effort: 'medium', summary: 'auto' };
     }
 
