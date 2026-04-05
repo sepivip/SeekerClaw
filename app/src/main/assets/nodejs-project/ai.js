@@ -2001,7 +2001,7 @@ async function chat(chatId, userMessage, options = {}) {
             }
 
             // BAT-315: Parse response through adapter into neutral format
-            log(`[OAuth-Debug] res.status=${res.status}, data keys=${Object.keys(res.data || {}).join(',')}, data.output=${JSON.stringify((res.data?.output || res.data?.response?.output || []).map(i => ({t: i.type, c: !!i.content})).slice(0,3))}`, 'WARN');
+            log(`[OAuth-Debug] res.status=${res.status}, output=${JSON.stringify((res.data?.response?.output || res.data?.output || []).slice(0,2)).slice(0,500)}`, 'WARN');
             const parsed = adapter.fromApiResponse(res.data);
             log(`[OAuth-Debug] parsed: text=${!!parsed.text}, tools=${parsed.toolCalls?.length}, stop=${parsed.stopReason}`, 'WARN');
             // Keep raw response for fallback text extraction later

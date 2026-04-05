@@ -226,7 +226,10 @@ function formatRequest(model, maxTokens, instructions, input, tools) {
     }
 
     if (tools && tools.length > 0) {
-        body.tools = tools;
+        // TEMP: skip tools for OAuth to test if model responds without them
+        if (!isOAuth) {
+            body.tools = tools;
+        }
     }
 
     // OAuth (Codex endpoint) requires store: false — conversations cannot be stored
@@ -235,7 +238,8 @@ function formatRequest(model, maxTokens, instructions, input, tools) {
     }
 
     // Codex models are reasoning models — they need the reasoning parameter for tool calling.
-    if (model && model.includes('codex')) {
+    // Skip for OAuth until we confirm basic responses work
+    if (model && model.includes('codex') && !isOAuth) {
         body.reasoning = { effort: 'medium', summary: 'auto' };
     }
 
