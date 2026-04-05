@@ -730,14 +730,19 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                 }
             },
             confirmButton = {
+                val canSave = selectedModel.isNotBlank() && selectedModel != "custom"
                 TextButton(
                     onClick = {
-                        saveField("model", selectedModel, needsRestart = true)
-                        Analytics.modelSelected(selectedModel)
-                        showModelPicker = false
+                        if (canSave) {
+                            saveField("model", selectedModel, needsRestart = true)
+                            Analytics.modelSelected(selectedModel)
+                            showModelPicker = false
+                        }
                     },
+                    enabled = canSave,
                 ) {
-                    Text("Save", fontFamily = RethinkSans, fontWeight = FontWeight.Bold, color = SeekerClawColors.ActionPrimary)
+                    Text("Save", fontFamily = RethinkSans, fontWeight = FontWeight.Bold,
+                        color = if (canSave) SeekerClawColors.ActionPrimary else SeekerClawColors.TextDim)
                 }
             },
             dismissButton = {
