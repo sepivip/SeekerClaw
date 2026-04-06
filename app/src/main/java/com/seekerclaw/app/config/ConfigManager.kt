@@ -128,7 +128,7 @@ object ConfigManager {
     private const val KEY_FIRST_DEPLOY_DONE = "first_deploy_done"
     private const val KEY_OPENAI_OAUTH_TOKEN_ENC = "openai_oauth_token_enc"
     private const val KEY_OPENAI_OAUTH_REFRESH_ENC = "openai_oauth_refresh_enc"
-    private const val KEY_OPENAI_OAUTH_EMAIL = "openai_oauth_email"
+    private const val KEY_OPENAI_OAUTH_EMAIL_ENC = "openai_oauth_email_enc"
     private const val KEY_OPENAI_OAUTH_EXPIRES_AT = "openai_oauth_expires_at"
 
     private fun prefs(context: Context): SharedPreferences =
@@ -281,7 +281,13 @@ object ConfigManager {
         } else {
             editor.remove(KEY_OPENAI_OAUTH_REFRESH_ENC)
         }
-        editor.putString(KEY_OPENAI_OAUTH_EMAIL, config.openaiOAuthEmail)
+        if (config.openaiOAuthEmail.isNotBlank()) {
+            // Email is PII — encrypt at rest like other OAuth fields.
+            val encEmail = KeystoreHelper.encrypt(config.openaiOAuthEmail)
+            editor.putString(KEY_OPENAI_OAUTH_EMAIL_ENC, Base64.encodeToString(encEmail, Base64.NO_WRAP))
+        } else {
+            editor.remove(KEY_OPENAI_OAUTH_EMAIL_ENC)
+        }
         editor.putString(KEY_OPENAI_OAUTH_EXPIRES_AT, config.openaiOAuthExpiresAt)
 
         val persisted = editor.commit()
@@ -448,6 +454,25 @@ object ConfigManager {
             ""
         }
 
+        val openaiOAuthEmail = try {
+            val enc = p.getString(KEY_OPENAI_OAUTH_EMAIL_ENC, null)
+            if (enc != null) {
+                KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP))
+            } else {
+                // One-time migration: pull any legacy plaintext value, then drop the old key
+                // so we don't keep PII unencrypted on disk.
+                val legacy = p.getString("openai_oauth_email", "") ?: ""
+                if (legacy.isNotBlank()) {
+                    p.edit().remove("openai_oauth_email").apply()
+                }
+                legacy
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to decrypt OpenAI OAuth email", e)
+            LogCollector.append("[Config] Failed to decrypt OpenAI OAuth email: ${e.javaClass.simpleName}", LogLevel.ERROR)
+            ""
+        }
+
         return AppConfig(
             anthropicApiKey = apiKey,
             setupToken = setupToken,
@@ -481,7 +506,7 @@ object ConfigManager {
             discordOwnerId = loadOwnerIdFromFile(context, "discord"),
             openaiOAuthToken = openaiOAuthToken,
             openaiOAuthRefresh = openaiOAuthRefresh,
-            openaiOAuthEmail = p.getString(KEY_OPENAI_OAUTH_EMAIL, "") ?: "",
+            openaiOAuthEmail = openaiOAuthEmail,
             openaiOAuthExpiresAt = p.getString(KEY_OPENAI_OAUTH_EXPIRES_AT, "") ?: "",
         )
     }
@@ -628,7 +653,8 @@ object ConfigManager {
         prefs(context).edit()
             .remove(KEY_OPENAI_OAUTH_TOKEN_ENC)
             .remove(KEY_OPENAI_OAUTH_REFRESH_ENC)
-            .remove(KEY_OPENAI_OAUTH_EMAIL)
+            .remove(KEY_OPENAI_OAUTH_EMAIL_ENC)
+            .remove("openai_oauth_email") // legacy plaintext key — clean up on sign-out
             .remove(KEY_OPENAI_OAUTH_EXPIRES_AT)
             .apply()
         configVersion.intValue++
