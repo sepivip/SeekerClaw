@@ -156,10 +156,10 @@ class OpenAIOAuthActivity : ComponentActivity() {
                 val stream = if (statusCode in 200..299) conn.inputStream else conn.errorStream
                 val responseBody = stream?.bufferedReader()?.use { it.readText() } ?: ""
                 if (statusCode !in 200..299) {
-                    // Don't put the response body into the exception message — it can
-                    // surface in result files / UI / logs and may contain secrets or
-                    // untrusted HTML. Body is logged separately at debug level only.
-                    Log.d(TAG, "httpPostStatic non-2xx body (truncated): ${responseBody.take(200)}")
+                    // Don't put the response body into logs OR the exception message —
+                    // OAuth/token endpoints can return content that includes secrets or
+                    // untrusted HTML. Status code is enough for diagnostics.
+                    Log.d(TAG, "httpPostStatic non-2xx response: HTTP $statusCode")
                     throw RuntimeException("HTTP $statusCode")
                 }
                 return responseBody
@@ -684,7 +684,14 @@ class OpenAIOAuthActivity : ComponentActivity() {
     private class CallbackServer(
         port: Int,
         private val onCallback: (Map<String, String>) -> String
-    ) : NanoHTTPD("127.0.0.1", port) {
+    ) : NanoHTTPD(port) {
+        // No hostname → NanoHTTPD binds to all loopback interfaces, so a browser that
+        // resolves "localhost" to ::1 (IPv6) still reaches this server. Previously bound
+        // to "127.0.0.1" only, which mismatched the literal "localhost" in REDIRECT_URI
+        // and could fail on dual-stack devices. The redirect URI must stay as "localhost"
+        // because Codex's OAuth client (app_EMoamEEZ...) is registered with that exact
+        // string — switching to 127.0.0.1 causes auth.openai.com to reject the authorize
+        // request as redirect_uri mismatch.
 
         override fun serve(session: IHTTPSession): Response {
             if (session.uri == "/auth/callback" && session.method == Method.GET) {

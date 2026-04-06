@@ -216,8 +216,10 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
 
         // Resolve the effective authType for the new provider. OpenAI defaults to OAuth
         // (ChatGPT subscription) on first switch-in — the OAuth section shows a Sign In
-        // button and writeConfigJson translates oauth+blank → api_key for Node so the
-        // agent stays startable. Explicit picker choice is remembered per-provider.
+        // button. writeConfigJson translates oauth+blank → api_key only so Node doesn't
+        // crash on an unsupported authType combination; a valid OpenAI API key is still
+        // required if the user never completes sign-in. Explicit picker choice is
+        // remembered per-provider via lastAuthType_<id>.
         val savedNewAuthType = prefs.getString("lastAuthType_$newProviderId", null)
         val effectiveAuthType = when (newProviderId) {
             "openai" -> when (savedNewAuthType) {
@@ -396,10 +398,9 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                             info = SettingsHelpTexts.MODEL,
                         )
                         // Show the OAuth section whenever an OAuth flow is in progress or has
-                        // produced an error, even if persisted authType is still "api_key".
-                        // This is the case during a first-time sign-in launched from the auth
-                        // picker — we deferred persisting authType=oauth until the token
-                        // arrives, so without this guard the polling/error UI would be invisible.
+                        // produced an error, even if the resolved authType is currently
+                        // "api_key". This keeps the polling/error UI visible during transient
+                        // OAuth state changes and recovery flows.
                         val showOAuthSection = openaiAuthType == "oauth" || oauthPolling || oauthError != null
                         if (!showOAuthSection) {
                             ConfigField(

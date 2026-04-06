@@ -137,7 +137,7 @@ object ConfigManager {
     @Volatile
     private var emailMigrated = false
 
-    private fun resolveAuthType(p: SharedPreferences, openaiOAuthToken: String): String {
+    private fun resolveAuthType(p: SharedPreferences): String {
         // Migrate legacy/invalid authType combinations so Node's strict validation
         // doesn't hard-crash on older installs and the UI doesn't drift from persisted
         // state. Rules:
@@ -518,7 +518,7 @@ object ConfigManager {
         return AppConfig(
             anthropicApiKey = apiKey,
             setupToken = setupToken,
-            authType = resolveAuthType(p, openaiOAuthToken),
+            authType = resolveAuthType(p),
             telegramBotToken = botToken,
             telegramOwnerId = loadOwnerIdFromFile(context, "telegram"),
             model = p.getString(KEY_MODEL, "claude-opus-4-6") ?: "claude-opus-4-6",
