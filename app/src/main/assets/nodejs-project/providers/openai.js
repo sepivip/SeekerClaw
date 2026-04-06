@@ -447,23 +447,31 @@ async function refreshOAuthToken() {
             let data = '';
             res.on('data', chunk => data += chunk);
             res.on('end', () => {
-                try {
-                    const parsed = JSON.parse(data);
-                    if (parsed.access_token) {
-                        _currentOAuthToken = parsed.access_token;
-                        if (parsed.refresh_token) _currentRefreshToken = parsed.refresh_token;
-                        // Persist via bridge
-                        androidBridgeCall('/openai/oauth/save-tokens', {
-                            accessToken: parsed.access_token,
-                            refreshToken: parsed.refresh_token || _currentRefreshToken,
-                            expiresAt: new Date(Date.now() + (parsed.expires_in || 28800) * 1000).toISOString(),
-                        }).catch(e => log('[OpenAI] Failed to persist refreshed tokens: ' + e.message, 'WARN'));
-                        resolve(true);
-                    } else {
-                        reject(new Error(parsed.error_description || parsed.error || 'Token refresh failed'));
-                    }
-                } catch (e) {
-                    reject(new Error('Failed to parse refresh response'));
+                const status = res.statusCode || 0;
+                let parsed = null;
+                try { parsed = JSON.parse(data); } catch (_) { /* non-JSON body */ }
+
+                if (parsed && parsed.access_token) {
+                    _currentOAuthToken = parsed.access_token;
+                    if (parsed.refresh_token) _currentRefreshToken = parsed.refresh_token;
+                    // Persist via bridge
+                    androidBridgeCall('/openai/oauth/save-tokens', {
+                        accessToken: parsed.access_token,
+                        refreshToken: parsed.refresh_token || _currentRefreshToken,
+                        expiresAt: new Date(Date.now() + (parsed.expires_in || 28800) * 1000).toISOString(),
+                    }).catch(e => log('[OpenAI] Failed to persist refreshed tokens: ' + e.message, 'WARN'));
+                    resolve(true);
+                    return;
+                }
+
+                if (parsed) {
+                    // JSON error response — surface error_description/error verbatim.
+                    reject(new Error(`Token refresh failed (HTTP ${status}): ${parsed.error_description || parsed.error || 'unknown'}`));
+                } else {
+                    // Non-JSON body (HTML/empty/5xx page). Truncate to avoid log spam and
+                    // never include credentials — refresh request body is not echoed back.
+                    const truncated = (data || '').slice(0, 200).replace(/\s+/g, ' ');
+                    reject(new Error(`Token refresh failed (HTTP ${status}): non-JSON response: ${truncated}`));
                 }
             });
         });

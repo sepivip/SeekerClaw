@@ -130,10 +130,12 @@ class OpenAIOAuthActivity : ComponentActivity() {
                 Log.w(TAG, "Browser flow timed out after 10 minutes")
                 callbackServer?.stop()
                 callbackServer = null
-                writeResultFile(requestId, JSONObject().apply {
-                    put("status", "error")
-                    put("message", "Browser login timed out. Please try again.")
-                })
+                withContext(Dispatchers.IO) {
+                    writeResultFile(requestId, JSONObject().apply {
+                        put("status", "error")
+                        put("message", "Browser login timed out. Please try again.")
+                    })
+                }
                 finishOnMain()
             }
         }
@@ -260,16 +262,20 @@ class OpenAIOAuthActivity : ComponentActivity() {
                 )
             }
 
-            writeResultFile(requestId, JSONObject().apply {
-                put("status", "success")
-            })
+            withContext(Dispatchers.IO) {
+                writeResultFile(requestId, JSONObject().apply {
+                    put("status", "success")
+                })
+            }
             Log.i(TAG, "Browser flow completed successfully")
         } catch (e: Exception) {
             Log.e(TAG, "Token exchange failed", e)
-            writeResultFile(requestId, JSONObject().apply {
-                put("status", "error")
-                put("message", "Token exchange failed: ${e.message}")
-            })
+            withContext(Dispatchers.IO) {
+                writeResultFile(requestId, JSONObject().apply {
+                    put("status", "error")
+                    put("message", "Token exchange failed: ${e.message}")
+                })
+            }
         } finally {
             callbackServer?.stop()
             callbackServer = null
