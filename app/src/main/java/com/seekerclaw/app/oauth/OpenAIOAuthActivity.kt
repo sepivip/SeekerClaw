@@ -51,6 +51,11 @@ class OpenAIOAuthActivity : ComponentActivity() {
     // Written from the NanoHTTPD server thread, read from the Main timeout coroutine — needs @Volatile.
     @Volatile
     private var callbackReceived = false
+    // Set to true once exchangeCodeForTokens has finished writing a success/error result file,
+    // so onDestroy doesn't overwrite the real outcome with a "canceled" entry.
+    @Volatile
+    private var resultWritten = false
+    private var currentRequestId: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -60,6 +65,7 @@ class OpenAIOAuthActivity : ComponentActivity() {
             finish()
             return
         }
+        currentRequestId = requestId
 
         // Minimal "waiting for sign-in" UI so the user doesn't return from the
         // browser to a blank translucent activity. The Cancel button stops the
@@ -114,10 +120,10 @@ class OpenAIOAuthActivity : ComponentActivity() {
                             put("message", "Sign-in canceled")
                         })
                     }
+                    resultWritten = true
                     finishOnMain()
                 }
             }
-            (layoutParams as? android.widget.LinearLayout.LayoutParams)?.topMargin = dp(24)
         }
         root.addView(title)
         root.addView(subtitle)
@@ -134,6 +140,21 @@ class OpenAIOAuthActivity : ComponentActivity() {
         super.onDestroy()
         callbackServer?.stop()
         callbackServer = null
+        // If the activity is dismissed (Back button, system kill, swipe-away) before any
+        // result has been written, leave a canceled result so ProviderConfigScreen stops
+        // polling immediately instead of waiting out the 10-minute deadline.
+        if (!resultWritten) {
+            currentRequestId?.let { reqId ->
+                try {
+                    writeResultFile(reqId, JSONObject().apply {
+                        put("status", "error")
+                        put("message", "Sign-in canceled")
+                    })
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to write canceled result on destroy", e)
+                }
+            }
+        }
         scope.cancel()
     }
 
@@ -154,11 +175,16 @@ class OpenAIOAuthActivity : ComponentActivity() {
             Log.i(TAG, "Callback server started on port $CALLBACK_PORT")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start callback server", e)
-            writeResultFile(requestId, JSONObject().apply {
-                put("status", "error")
-                put("message", "Failed to start callback server: ${e.message}")
-            })
-            finish()
+            scope.launch {
+                withContext(Dispatchers.IO) {
+                    writeResultFile(requestId, JSONObject().apply {
+                        put("status", "error")
+                        put("message", "Failed to start callback server: ${e.message}")
+                    })
+                }
+                resultWritten = true
+                finishOnMain()
+            }
             return
         }
 
@@ -201,6 +227,7 @@ class OpenAIOAuthActivity : ComponentActivity() {
                         put("message", "Browser login timed out. Please try again.")
                     })
                 }
+                resultWritten = true
                 finishOnMain()
             }
         }
@@ -247,6 +274,7 @@ class OpenAIOAuthActivity : ComponentActivity() {
                 put("status", "error")
                 put("message", "OAuth error: $error")
             })
+            resultWritten = true
             finishOnMain()
             return buildHtmlResponse("Error", "Authentication failed: $error")
         }
@@ -257,6 +285,7 @@ class OpenAIOAuthActivity : ComponentActivity() {
                 put("status", "error")
                 put("message", "No authorization code received")
             })
+            resultWritten = true
             finishOnMain()
             return buildHtmlResponse("Error", "No authorization code received.")
         }
@@ -332,6 +361,7 @@ class OpenAIOAuthActivity : ComponentActivity() {
                     put("status", "success")
                 })
             }
+            resultWritten = true
             Log.i(TAG, "Browser flow completed successfully")
         } catch (e: Exception) {
             Log.e(TAG, "Token exchange failed", e)
@@ -341,6 +371,7 @@ class OpenAIOAuthActivity : ComponentActivity() {
                     put("message", "Token exchange failed: ${e.message}")
                 })
             }
+            resultWritten = true
         } finally {
             callbackServer?.stop()
             callbackServer = null

@@ -131,15 +131,14 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
     var ownerId by remember { mutableStateOf(existingConfig?.telegramOwnerId ?: "") }
     val existingProvider = existingConfig?.provider ?: "claude"
     var selectedModel by remember {
-        // Setup screen: use existing config's authType when present, else null.
-        // Initial setup never has an OAuth token yet, so API-key model list is correct.
-        val setupAuthType = existingConfig?.authType
+        // Setup screen always uses API-key auth (OAuth happens later in settings),
+        // so derive the model list from the api_key list to match what saveAndStart persists.
         mutableStateOf(
             existingConfig?.model?.let { model ->
-                val models = modelsForProvider(existingProvider, setupAuthType)
+                val models = modelsForProvider(existingProvider, "api_key")
                 if (models.isEmpty() || models.any { it.id == model }) model
                 else models[0].id
-            } ?: modelsForProvider(existingProvider, setupAuthType).firstOrNull()?.id ?: availableModels[0].id
+            } ?: modelsForProvider(existingProvider, "api_key").firstOrNull()?.id ?: availableModels[0].id
         )
     }
     var agentName by remember { mutableStateOf(existingConfig?.agentName ?: "SeekerClaw") }
@@ -184,7 +183,8 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                     }
                     botToken = cfg.telegramBotToken
                     ownerId = cfg.telegramOwnerId
-                    val providerModels = modelsForProvider(cfg.provider, cfg.authType)
+                    // Setup uses api_key auth — see saveAndStart. Match the model list.
+                    val providerModels = modelsForProvider(cfg.provider, "api_key")
                     selectedModel = if (providerModels.isEmpty()) {
                         cfg.model // OpenRouter: accept freeform model as-is
                     } else {

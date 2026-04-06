@@ -71,6 +71,10 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.UUID
 
+// Sentinel for the "Custom model" radio in the model picker. Must NOT be a valid model id —
+// using "__custom__" so a real model literally named "custom" can still be entered freely.
+private const val CUSTOM_MODEL_SENTINEL = "__custom__"
+
 @Composable
 fun ProviderConfigScreen(onBack: () -> Unit) {
     val context = LocalContext.current
@@ -660,12 +664,12 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
             },
             text = {
                 Column {
-                    // "custom" is a sentinel for "user wants to type a model ID" — never display
+                    // CUSTOM_MODEL_SENTINEL is a sentinel for "user wants to type a model ID" — never display
                     // it as the model ID itself, and don't treat it as a real selection.
-                    val isCustomSelected = selectedModel == "custom" ||
+                    val isCustomSelected = selectedModel == CUSTOM_MODEL_SENTINEL ||
                         (models.none { it.id == selectedModel } && selectedModel.isNotBlank())
                     var customModelId by remember {
-                        mutableStateOf(if (isCustomSelected && selectedModel != "custom") selectedModel else "")
+                        mutableStateOf(if (isCustomSelected && selectedModel != CUSTOM_MODEL_SENTINEL) selectedModel else "")
                     }
 
                     models.forEach { model ->
@@ -704,13 +708,13 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { selectedModel = customModelId.ifBlank { "custom" } }
+                            .clickable { selectedModel = customModelId.ifBlank { CUSTOM_MODEL_SENTINEL } }
                             .padding(vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         RadioButton(
-                            selected = isCustomSelected || selectedModel == "custom",
-                            onClick = { selectedModel = customModelId.ifBlank { "custom" } },
+                            selected = isCustomSelected || selectedModel == CUSTOM_MODEL_SENTINEL,
+                            onClick = { selectedModel = customModelId.ifBlank { CUSTOM_MODEL_SENTINEL } },
                             colors = RadioButtonDefaults.colors(
                                 selectedColor = SeekerClawColors.Primary,
                                 unselectedColor = SeekerClawColors.TextDim,
@@ -748,7 +752,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                 }
             },
             confirmButton = {
-                val canSave = selectedModel.isNotBlank() && selectedModel != "custom"
+                val canSave = selectedModel.isNotBlank() && selectedModel != CUSTOM_MODEL_SENTINEL
                 TextButton(
                     onClick = {
                         if (canSave) {
