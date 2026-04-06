@@ -64,7 +64,16 @@ val openaiOAuthModels = listOf(
 /** Default model for freeform providers (OpenRouter) where model list is empty. */
 const val OPENROUTER_DEFAULT_MODEL = "anthropic/claude-sonnet-4-6"
 
-fun modelsForProvider(providerId: String, authType: String? = null): List<ModelInfo> = when (providerId) {
+/**
+ * Resolve the model list for a given provider.
+ *
+ * `authType` is required (no default) so call sites can't accidentally fall through to
+ * the API-key OpenAI list when the user is in OAuth mode. Pass `null` only when the
+ * provider is known to be auth-type-agnostic (e.g. Anthropic), or when the call site
+ * truly cannot derive an authType yet (initial setup screens before any provider has
+ * been selected).
+ */
+fun modelsForProvider(providerId: String, authType: String?): List<ModelInfo> = when (providerId) {
     "openai" -> if (authType == "oauth") openaiOAuthModels else openaiModels
     "openrouter", "custom" -> emptyList() // Freeform: user types model ID
     else -> availableModels

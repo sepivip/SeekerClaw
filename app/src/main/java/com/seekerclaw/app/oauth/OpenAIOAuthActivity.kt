@@ -61,8 +61,73 @@ class OpenAIOAuthActivity : ComponentActivity() {
             return
         }
 
+        // Minimal "waiting for sign-in" UI so the user doesn't return from the
+        // browser to a blank translucent activity. The Cancel button stops the
+        // local callback server, writes a canceled result, and finishes.
+        setContentView(buildWaitingView(requestId))
+
         Log.i(TAG, "Starting OAuth browser flow (request: $requestId)")
         startBrowserFlow(requestId)
+    }
+
+    private fun buildWaitingView(requestId: String): android.view.View {
+        val ctx = this
+        val density = resources.displayMetrics.density
+        fun dp(v: Int) = (v * density).toInt()
+
+        val root = android.widget.LinearLayout(ctx).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            gravity = android.view.Gravity.CENTER
+            setBackgroundColor(0xFF0A0A0F.toInt())
+            setPadding(dp(32), dp(32), dp(32), dp(32))
+            layoutParams = android.view.ViewGroup.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+            )
+        }
+        val title = android.widget.TextView(ctx).apply {
+            text = "Waiting for OpenAI sign-in"
+            textSize = 20f
+            setTextColor(0xFFFFFFFF.toInt())
+            gravity = android.view.Gravity.CENTER
+        }
+        val subtitle = android.widget.TextView(ctx).apply {
+            text = "Complete sign-in in your browser, then return to SeekerClaw."
+            textSize = 14f
+            setTextColor(0xCCFFFFFF.toInt())
+            gravity = android.view.Gravity.CENTER
+            setPadding(0, dp(12), 0, dp(24))
+        }
+        val progress = android.widget.ProgressBar(ctx).apply {
+            isIndeterminate = true
+        }
+        val cancel = android.widget.Button(ctx).apply {
+            text = "Cancel"
+            setOnClickListener {
+                Log.i(TAG, "User canceled OAuth flow")
+                callbackServer?.stop()
+                callbackServer = null
+                scope.launch {
+                    withContext(Dispatchers.IO) {
+                        writeResultFile(requestId, JSONObject().apply {
+                            put("status", "error")
+                            put("message", "Sign-in canceled")
+                        })
+                    }
+                    finishOnMain()
+                }
+            }
+            (layoutParams as? android.widget.LinearLayout.LayoutParams)?.topMargin = dp(24)
+        }
+        root.addView(title)
+        root.addView(subtitle)
+        root.addView(progress)
+        val cancelParams = android.widget.LinearLayout.LayoutParams(
+            android.view.ViewGroup.LayoutParams.WRAP_CONTENT,
+            android.view.ViewGroup.LayoutParams.WRAP_CONTENT,
+        ).apply { topMargin = dp(24) }
+        root.addView(cancel, cancelParams)
+        return root
     }
 
     override fun onDestroy() {

@@ -131,12 +131,15 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
     var ownerId by remember { mutableStateOf(existingConfig?.telegramOwnerId ?: "") }
     val existingProvider = existingConfig?.provider ?: "claude"
     var selectedModel by remember {
+        // Setup screen: use existing config's authType when present, else null.
+        // Initial setup never has an OAuth token yet, so API-key model list is correct.
+        val setupAuthType = existingConfig?.authType
         mutableStateOf(
             existingConfig?.model?.let { model ->
-                val models = modelsForProvider(existingProvider)
+                val models = modelsForProvider(existingProvider, setupAuthType)
                 if (models.isEmpty() || models.any { it.id == model }) model
                 else models[0].id
-            } ?: modelsForProvider(existingProvider).firstOrNull()?.id ?: availableModels[0].id
+            } ?: modelsForProvider(existingProvider, setupAuthType).firstOrNull()?.id ?: availableModels[0].id
         )
     }
     var agentName by remember { mutableStateOf(existingConfig?.agentName ?: "SeekerClaw") }
@@ -181,7 +184,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                     }
                     botToken = cfg.telegramBotToken
                     ownerId = cfg.telegramOwnerId
-                    val providerModels = modelsForProvider(cfg.provider)
+                    val providerModels = modelsForProvider(cfg.provider, cfg.authType)
                     selectedModel = if (providerModels.isEmpty()) {
                         cfg.model // OpenRouter: accept freeform model as-is
                     } else {
@@ -423,7 +426,8 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                     errorMessage = null
                     authType = if (newProvider == "claude") existingConfig?.authType ?: "api_key" else "api_key"
                     // Restore model: use existing config's model if same provider, else default
-                    val models = modelsForProvider(newProvider)
+                    // Setup screen always uses API-key auth — OAuth flow happens later in settings.
+                    val models = modelsForProvider(newProvider, "api_key")
                     selectedModel = if (newProvider == existingConfig?.provider) {
                         existingConfig.model
                     } else {
@@ -1088,7 +1092,8 @@ private fun OptionsStep(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            val setupModels = modelsForProvider(provider)
+            // Setup screen: API-key auth only (OAuth flows from settings, post-setup).
+            val setupModels = modelsForProvider(provider, "api_key")
             if (setupModels.isEmpty()) {
                 // Freeform model (e.g. OpenRouter) — editable text field
                 OutlinedTextField(
