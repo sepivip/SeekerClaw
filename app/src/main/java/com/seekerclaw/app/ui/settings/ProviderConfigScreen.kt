@@ -48,6 +48,7 @@ import com.seekerclaw.app.ui.components.ConfigField
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.config.availableModels
 import com.seekerclaw.app.config.availableProviders
+import com.seekerclaw.app.config.OPENROUTER_DEFAULT_MODEL
 import com.seekerclaw.app.config.modelsForProvider
 import com.seekerclaw.app.config.providerById
 import com.seekerclaw.app.oauth.OpenAIOAuthActivity
@@ -239,7 +240,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
         val effectiveModel: String = if (modelsForNew.isEmpty()) {
             // Freeform provider (e.g. OpenRouter) — restore last-used or set default
             val defaultModel = when (newProviderId) {
-                "openrouter" -> "anthropic/claude-sonnet-4-6"
+                "openrouter" -> OPENROUTER_DEFAULT_MODEL
                 "custom" -> ""
                 else -> ""
             }
@@ -905,9 +906,10 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                     onClick = {
                         // Persist the user's selection immediately. If they pick "oauth"
                         // without a token yet, that's fine — the OAuth section will render
-                        // with a Sign In button and ConfigManager.loadConfig() will
-                        // normalize oauth+blank back to api_key on the next load if they
-                        // never complete sign-in.
+                        // with a Sign In button. resolveAuthType() preserves the
+                        // "oauth selected, sign-in pending" state in SharedPreferences;
+                        // the oauth+blank → api_key fallback only happens at writeConfigJson
+                        // time so Node never sees an unstartable combination.
                         saveField("authType", selectedAuth, needsRestart = true)
                         context.getSharedPreferences("seekerclaw_prefs", android.content.Context.MODE_PRIVATE)
                             .edit()
