@@ -388,6 +388,14 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                                 },
                                 onSignOut = {
                                     ConfigManager.clearOpenAIOAuth(context)
+                                    // Flip authType to api_key so the next Node startup
+                                    // doesn't trip the strict validation (oauth without
+                                    // a token would otherwise hard-crash on launch).
+                                    saveField("authType", "api_key", needsRestart = true)
+                                    context.getSharedPreferences("seekerclaw_prefs", android.content.Context.MODE_PRIVATE)
+                                        .edit()
+                                        .putString("lastAuthType_openai", "api_key")
+                                        .apply()
                                     config = ConfigManager.loadConfig(context)
                                     showRestartDialog = true
                                 },
@@ -855,13 +863,14 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                             .putString("lastAuthType_$activeProvider", selectedAuth)
                             .apply()
                         // Ensure the selected model is valid for the chosen OpenAI auth type.
-                        // OAuth and API-key model lists differ — fall back to a default if not.
+                        // OAuth and API-key model lists differ — derive the fallback from the
+                        // available models so a model list change doesn't silently leave a
+                        // hardcoded ID that no longer exists.
                         if (activeProvider == "openai") {
                             val currentModel = config?.model ?: ""
                             val allowedModels = modelsForProvider("openai", selectedAuth)
                             if (allowedModels.none { it.id == currentModel }) {
-                                val fallback = if (selectedAuth == "oauth") "gpt-5.4"
-                                               else allowedModels.firstOrNull()?.id ?: "gpt-5.4"
+                                val fallback = allowedModels.firstOrNull()?.id ?: "gpt-5.4"
                                 saveField("model", fallback, needsRestart = false)
                             }
                         }

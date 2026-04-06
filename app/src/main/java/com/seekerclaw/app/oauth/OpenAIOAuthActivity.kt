@@ -28,10 +28,13 @@ import java.security.MessageDigest
 import java.security.SecureRandom
 
 /**
- * Transparent Activity that handles the OpenAI OAuth PKCE flow:
- * Custom Tabs → user signs in on auth.openai.com → localhost:1455 callback → token exchange.
+ * Activity that handles the OpenAI OAuth PKCE flow:
+ * Custom Tabs → user signs in on auth.openai.com → 127.0.0.1:1455 callback → token exchange.
  *
- * Results are communicated via files (same pattern as SolanaAuthActivity).
+ * Tokens obtained from the flow are persisted directly via [ConfigManager] (encrypted via
+ * Android Keystore). The on-disk result file under `filesDir/oauth_results/` only carries
+ * a status flag (success/error/canceled) — it never contains secrets — and is consumed by
+ * `ProviderConfigScreen`'s polling coroutine to know when to reload config.
  */
 class OpenAIOAuthActivity : ComponentActivity() {
 

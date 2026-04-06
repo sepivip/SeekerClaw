@@ -313,7 +313,6 @@ function httpOpenAIStreamingRequest(options, body = null) {
                     let parsed;
                     try { parsed = JSON.parse(eventData); } catch (_) { continue; }
 
-
                     switch (eventType) {
                         case 'response.output_item.added':
                             if (typeof parsed.output_index === 'number' && parsed.item) {
