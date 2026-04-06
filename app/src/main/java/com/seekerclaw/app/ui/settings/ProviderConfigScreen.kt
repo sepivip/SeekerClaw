@@ -119,29 +119,11 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                 }
                 when (json.optString("status")) {
                     "success" -> {
-                        val accessToken = json.optString("accessToken", "")
-                        val refreshToken = json.optString("refreshToken", "")
-                        // Guard against JSONObject.NULL which optString renders as "null"
-                        val email = json.optString("email", "").takeIf { it != "null" } ?: ""
-                        val expiresAt = json.optString("expiresAt", "").takeIf { it != "null" } ?: ""
-                        if (accessToken.isNotBlank()) {
-                            // Batch into a single saveConfig to avoid 4× SharedPreferences commits
-                            // and 4× workspace config writes / configVersion bumps.
-                            val current = config ?: ConfigManager.loadConfig(context)
-                            if (current != null) {
-                                val updated = current.copy(
-                                    openaiOAuthToken = accessToken,
-                                    openaiOAuthRefresh = if (refreshToken.isNotBlank()) refreshToken else current.openaiOAuthRefresh,
-                                    openaiOAuthEmail = if (email.isNotBlank()) email else current.openaiOAuthEmail,
-                                    openaiOAuthExpiresAt = if (expiresAt.isNotBlank()) expiresAt else current.openaiOAuthExpiresAt,
-                                )
-                                withContext(Dispatchers.IO) { ConfigManager.saveConfig(context, updated) }
-                                config = updated
-                            } else {
-                                config = ConfigManager.loadConfig(context)
-                            }
-                            showRestartDialog = true
-                        }
+                        // Tokens were persisted directly by OpenAIOAuthActivity via
+                        // ConfigManager.saveConfig — they never touch the result file.
+                        // We just reload to pick up the encrypted values.
+                        config = withContext(Dispatchers.IO) { ConfigManager.loadConfig(context) }
+                        showRestartDialog = true
                         oauthPolling = false
                     }
                     "pending" -> {

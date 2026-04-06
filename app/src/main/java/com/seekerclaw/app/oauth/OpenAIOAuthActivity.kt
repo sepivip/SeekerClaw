@@ -7,6 +7,7 @@ import android.util.Base64
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.browser.customtabs.CustomTabsIntent
+import com.seekerclaw.app.config.ConfigManager
 import fi.iki.elonen.NanoHTTPD
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -226,12 +227,29 @@ class OpenAIOAuthActivity : ComponentActivity() {
             // Try id_token first (has email), fall back to access_token
             val email = extractEmailFromJwt(idToken) ?: extractEmailFromJwt(accessToken)
 
+            // Persist tokens directly to encrypted storage instead of writing them to a
+            // result file. Bearer tokens must never sit on disk in plaintext, even briefly
+            // (RFC 6819 §5.1.4, OWASP MASVS-STORAGE-1). The result file only carries a
+            // status flag — the polling UI reloads config from ConfigManager to pick up
+            // the new tokens.
+            withContext(Dispatchers.IO) {
+                val current = ConfigManager.loadConfig(this@OpenAIOAuthActivity)
+                if (current == null) {
+                    throw IllegalStateException("Config not loaded — cannot persist OAuth tokens")
+                }
+                ConfigManager.saveConfig(
+                    this@OpenAIOAuthActivity,
+                    current.copy(
+                        openaiOAuthToken = accessToken,
+                        openaiOAuthRefresh = refreshToken.ifBlank { current.openaiOAuthRefresh },
+                        openaiOAuthEmail = email ?: current.openaiOAuthEmail,
+                        openaiOAuthExpiresAt = expiresAt,
+                    )
+                )
+            }
+
             writeResultFile(requestId, JSONObject().apply {
                 put("status", "success")
-                put("accessToken", accessToken)
-                put("refreshToken", refreshToken)
-                put("email", email ?: JSONObject.NULL)
-                put("expiresAt", expiresAt)
             })
             Log.i(TAG, "Browser flow completed successfully")
         } catch (e: Exception) {
