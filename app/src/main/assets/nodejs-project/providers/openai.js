@@ -326,18 +326,21 @@ function classifyError(status, data) {
  * or rethrows non-retryable error on refresh failure.
  */
 async function handleUnauthorized() {
-    if (isOAuth && _currentRefreshToken) {
-        log('[OpenAI] OAuth 401 — attempting token refresh...', 'INFO');
-        try {
-            await refreshOAuthToken();
-            log('[OpenAI] Token refreshed — caller should retry', 'INFO');
-            const retryError = new Error('OAuth token refreshed — retry');
-            retryError.retryable = true;
-            throw retryError;
-        } catch (e) {
-            if (e.retryable) throw e;
-            log('[OpenAI] OAuth refresh failed: ' + e.message, 'ERROR');
-        }
+    if (!(isOAuth && _currentRefreshToken)) return;
+    log('[OpenAI] OAuth 401 — attempting token refresh...', 'INFO');
+    try {
+        await refreshOAuthToken();
+        log('[OpenAI] Token refreshed — caller should retry', 'INFO');
+        const retryError = new Error('OAuth token refreshed — retry');
+        retryError.retryable = true;
+        throw retryError;
+    } catch (e) {
+        if (e.retryable) throw e;
+        // Refresh failed — make sure caller stops retrying with the dead token.
+        log('[OpenAI] OAuth refresh failed: ' + e.message, 'ERROR');
+        const fatal = new Error('OAuth token refresh failed: ' + e.message);
+        fatal.retryable = false;
+        throw fatal;
     }
 }
 

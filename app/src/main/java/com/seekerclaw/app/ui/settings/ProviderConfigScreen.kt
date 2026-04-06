@@ -125,11 +125,21 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                         val email = json.optString("email", "").takeIf { it != "null" } ?: ""
                         val expiresAt = json.optString("expiresAt", "").takeIf { it != "null" } ?: ""
                         if (accessToken.isNotBlank()) {
-                            ConfigManager.updateConfigField(context, "openaiOAuthToken", accessToken)
-                            if (refreshToken.isNotBlank()) ConfigManager.updateConfigField(context, "openaiOAuthRefresh", refreshToken)
-                            if (email.isNotBlank()) ConfigManager.updateConfigField(context, "openaiOAuthEmail", email)
-                            if (expiresAt.isNotBlank()) ConfigManager.updateConfigField(context, "openaiOAuthExpiresAt", expiresAt)
-                            config = ConfigManager.loadConfig(context)
+                            // Batch into a single saveConfig to avoid 4× SharedPreferences commits
+                            // and 4× workspace config writes / configVersion bumps.
+                            val current = config ?: ConfigManager.loadConfig(context)
+                            if (current != null) {
+                                val updated = current.copy(
+                                    openaiOAuthToken = accessToken,
+                                    openaiOAuthRefresh = if (refreshToken.isNotBlank()) refreshToken else current.openaiOAuthRefresh,
+                                    openaiOAuthEmail = if (email.isNotBlank()) email else current.openaiOAuthEmail,
+                                    openaiOAuthExpiresAt = if (expiresAt.isNotBlank()) expiresAt else current.openaiOAuthExpiresAt,
+                                )
+                                withContext(Dispatchers.IO) { ConfigManager.saveConfig(context, updated) }
+                                config = updated
+                            } else {
+                                config = ConfigManager.loadConfig(context)
+                            }
                             showRestartDialog = true
                         }
                         oauthPolling = false

@@ -694,7 +694,7 @@ class AndroidBridge(
                 context, config.copy(
                     openaiOAuthToken = accessToken,
                     openaiOAuthRefresh = if (refreshToken.isNotBlank()) refreshToken else config.openaiOAuthRefresh,
-                    openaiOAuthExpiresAt = expiresAt,
+                    openaiOAuthExpiresAt = if (expiresAt.isNotBlank()) expiresAt else config.openaiOAuthExpiresAt,
                 )
             )
             jsonResponse(200, mapOf("success" to true))

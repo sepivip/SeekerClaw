@@ -140,10 +140,12 @@ class OpenAIOAuthActivity : ComponentActivity() {
             startActivity(browserIntent)
         }
 
-        // Safety timeout: if user abandons browser login, stop server and write error after 10 min
+        // Safety timeout: if user abandons browser login, stop server and write error after 10 min.
+        // Gate on !callbackReceived so a slow token exchange (already in progress) isn't clobbered
+        // by a timeout error written over its eventual success/error result.
         scope.launch {
             delay(600_000)
-            if (callbackServer != null) {
+            if (!callbackReceived && callbackServer != null) {
                 Log.w(TAG, "Browser flow timed out after 10 minutes")
                 callbackServer?.stop()
                 callbackServer = null
