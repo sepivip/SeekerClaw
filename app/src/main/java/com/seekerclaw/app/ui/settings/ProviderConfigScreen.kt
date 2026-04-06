@@ -177,17 +177,20 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
 
         saveField("provider", newProviderId, needsRestart = true)
 
-        // OpenAI defaults to OAuth (ChatGPT subscription) when switching INTO the provider.
-        // The previous authType comes from another provider (e.g. Anthropic's default
-        // "api_key", or "setup_token"), which should not silently carry over. Users who
-        // prefer API key can change it via the auth-type picker after the switch.
-        // We persist the resolved value so UI, Node config, and validation all agree.
-        val effectiveAuthType: String? = if (newProviderId == "openai") {
-            saveField("authType", "oauth")
-            "oauth"
-        } else {
-            config?.authType
+        // Normalize auth type on EVERY provider switch so provider, auth mode,
+        // validation, and the model list stay in a consistent persisted state.
+        // - OpenAI defaults to OAuth (ChatGPT subscription); user can change later.
+        // - Anthropic accepts api_key or setup_token; everything else falls back to api_key.
+        // - OpenRouter / custom only support api_key.
+        // Without this, switching openai → claude would leave authType="oauth", which
+        // Claude doesn't support and which silently breaks credential validation.
+        val currentAuthType = config?.authType
+        val effectiveAuthType = when (newProviderId) {
+            "openai" -> "oauth"
+            "claude" -> if (currentAuthType == "setup_token") "setup_token" else "api_key"
+            else -> "api_key"
         }
+        saveField("authType", effectiveAuthType)
 
         // Restore last-used model for new provider, or fall back to first model.
         val modelsForNew = modelsForProvider(newProviderId, effectiveAuthType)

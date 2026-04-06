@@ -28,7 +28,8 @@ import java.util.zip.ZipOutputStream
 data class AppConfig(
     val anthropicApiKey: String,
     val setupToken: String = "",
-    val authType: String = "api_key", // "api_key" or "setup_token"
+    // "api_key" (all providers), "setup_token" (Anthropic only), or "oauth" (OpenAI Codex only).
+    val authType: String = "api_key",
     val telegramBotToken: String,
     val telegramOwnerId: String,
     val model: String,
