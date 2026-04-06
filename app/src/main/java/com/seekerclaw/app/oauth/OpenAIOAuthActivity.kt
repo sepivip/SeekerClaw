@@ -372,7 +372,7 @@ class OpenAIOAuthActivity : ComponentActivity() {
                     withContext(NonCancellable + Dispatchers.IO) {
                         writeResultFile(requestId, JSONObject().apply {
                             put("status", "error")
-                            put("message", "Failed to start callback server: ${e.message}")
+                            put("message", "Couldn't start local callback server. Please try again.")
                         })
                     }
                     markWriteCompleted()
@@ -443,7 +443,11 @@ class OpenAIOAuthActivity : ComponentActivity() {
         // and DoS the sign-in flow.
         if (state != expectedState) {
             Log.w(TAG, "State mismatch — ignoring stray callback (not flipping guard)")
-            return buildHtmlResponse("Error", "State verification failed. Please try again.")
+            return buildHtmlResponse(
+                "Ignored Redirect",
+                "This sign-in redirect was ignored because it did not match the active request. " +
+                    "Return to SeekerClaw to retry or cancel the sign-in."
+            )
         }
 
         // Idempotency guard: flip only after state is validated. Browser refresh on a
