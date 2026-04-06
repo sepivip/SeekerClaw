@@ -330,6 +330,13 @@ class OpenAIOAuthActivity : ComponentActivity() {
         code: String,
         codeVerifier: String
     ) {
+        // Claim the write slot at the very start of the exchange so onDestroy() can't
+        // emit a "canceled" result over an in-flight token persistence. If we can't
+        // claim, another path (cancel/timeout) is already terminating — bail out.
+        if (!claimWrite()) {
+            Log.w(TAG, "Token exchange skipped — write slot already claimed by another path")
+            return
+        }
         try {
             val tokenResponse = withContext(Dispatchers.IO) {
                 val body = buildString {
@@ -380,31 +387,23 @@ class OpenAIOAuthActivity : ComponentActivity() {
                 )
             }
 
-            // Claim the write slot BEFORE the file write so onDestroy() can't race
-            // and emit a conflicting "canceled" result. If we fail to claim, another
-            // path (likely cancel/timeout) is already handling termination.
-            if (claimWrite()) {
-                withContext(Dispatchers.IO) {
-                    writeResultFile(requestId, JSONObject().apply {
-                        put("status", "success")
-                    })
-                }
-                markWriteCompleted()
-                Log.i(TAG, "Browser flow completed successfully")
-            } else {
-                Log.w(TAG, "Token exchange completed but another path already wrote a result")
+            // We already claimed the write slot at the top of this function.
+            withContext(Dispatchers.IO) {
+                writeResultFile(requestId, JSONObject().apply {
+                    put("status", "success")
+                })
             }
+            markWriteCompleted()
+            Log.i(TAG, "Browser flow completed successfully")
         } catch (e: Exception) {
             Log.e(TAG, "Token exchange failed", e)
-            if (claimWrite()) {
-                withContext(Dispatchers.IO) {
-                    writeResultFile(requestId, JSONObject().apply {
-                        put("status", "error")
-                        put("message", "Token exchange failed: ${e.message}")
-                    })
-                }
-                markWriteCompleted()
+            withContext(Dispatchers.IO) {
+                writeResultFile(requestId, JSONObject().apply {
+                    put("status", "error")
+                    put("message", "Token exchange failed: ${e.message}")
+                })
             }
+            markWriteCompleted()
         } finally {
             callbackServer?.stop()
             callbackServer = null

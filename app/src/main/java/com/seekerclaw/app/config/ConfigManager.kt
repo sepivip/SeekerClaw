@@ -482,7 +482,25 @@ object ConfigManager {
         return AppConfig(
             anthropicApiKey = apiKey,
             setupToken = setupToken,
-            authType = p.getString(KEY_AUTH_TYPE, "api_key") ?: "api_key",
+            authType = run {
+                // Migrate legacy/invalid authType combinations so Node's strict validation
+                // doesn't hard-crash on older installs and the UI doesn't drift from
+                // persisted state. OpenAI only supports "api_key" or "oauth"; everything
+                // else (e.g. leftover "setup_token" from when the user was on Anthropic)
+                // is normalized to "api_key" and re-persisted.
+                val raw = p.getString(KEY_AUTH_TYPE, "api_key") ?: "api_key"
+                val provider = p.getString(KEY_PROVIDER, "claude") ?: "claude"
+                val normalized = when {
+                    provider == "openai" && raw != "oauth" && raw != "api_key" -> "api_key"
+                    provider != "claude" && raw == "setup_token" -> "api_key"
+                    else -> raw
+                }
+                if (normalized != raw) {
+                    Log.w(TAG, "Normalizing legacy authType '$raw' → '$normalized' (provider=$provider)")
+                    p.edit().putString(KEY_AUTH_TYPE, normalized).apply()
+                }
+                normalized
+            },
             telegramBotToken = botToken,
             telegramOwnerId = loadOwnerIdFromFile(context, "telegram"),
             model = p.getString(KEY_MODEL, "claude-opus-4-6") ?: "claude-opus-4-6",

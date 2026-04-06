@@ -121,11 +121,22 @@ const OPENAI_OAUTH_TOKEN = normalizeSecret(config.openaiOAuthToken || '');
 const OPENAI_OAUTH_REFRESH = normalizeSecret(config.openaiOAuthRefresh || '');
 
 // Normalize authType (trim/lowercase) so values like " OAuth\n" don't silently fall
-// through to api_key. For OpenAI, fail fast on unsupported values rather than risking
-// an accidental charge to the user's platform API key.
+// through to api_key. For OpenAI, alias known legacy values (e.g. "setup_token" left
+// over from when the user was on Anthropic) to "api_key" so older installs don't
+// hard-crash on startup. Truly unknown values still throw to prevent accidentally
+// charging the user's platform API key.
 const _SUPPORTED_OPENAI_AUTH_TYPES = new Set(['api_key', 'oauth']);
+const _LEGACY_OPENAI_AUTH_TYPE_ALIASES = new Map([
+    ['setup_token', 'api_key'],
+]);
 const _rawAuthType = typeof config.authType === 'string' ? config.authType.trim().toLowerCase() : '';
-const AUTH_TYPE = _rawAuthType || 'api_key';
+let AUTH_TYPE = _rawAuthType || 'api_key';
+
+if (PROVIDER === 'openai' && _LEGACY_OPENAI_AUTH_TYPE_ALIASES.has(AUTH_TYPE)) {
+    const aliased = _LEGACY_OPENAI_AUTH_TYPE_ALIASES.get(AUTH_TYPE);
+    log(`[Config] Normalizing legacy OpenAI authType ${JSON.stringify(config.authType)} → ${JSON.stringify(aliased)}`, 'WARN');
+    AUTH_TYPE = aliased;
+}
 
 if (PROVIDER === 'openai' && !_SUPPORTED_OPENAI_AUTH_TYPES.has(AUTH_TYPE)) {
     throw new Error(`Invalid OpenAI authType: ${JSON.stringify(config.authType)}. Supported values are "api_key" and "oauth".`);
