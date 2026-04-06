@@ -9,6 +9,7 @@ import androidx.activity.ComponentActivity
 import androidx.browser.customtabs.CustomTabsIntent
 import com.seekerclaw.app.config.ConfigManager
 import fi.iki.elonen.NanoHTTPD
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -51,11 +52,18 @@ class OpenAIOAuthActivity : ComponentActivity() {
     // Written from the NanoHTTPD server thread, read from the Main timeout coroutine — needs @Volatile.
     @Volatile
     private var callbackReceived = false
-    // Set to true once exchangeCodeForTokens has finished writing a success/error result file,
-    // so onDestroy doesn't overwrite the real outcome with a "canceled" entry.
-    @Volatile
-    private var resultWritten = false
+    // Three-state machine so onDestroy() never races with an in-flight result write
+    // AND a write that fails mid-way still falls back to a canceled result on destroy.
+    //   IDLE      — no write attempted yet; onDestroy may take over
+    //   WRITING   — a write is in progress; onDestroy must NOT also write
+    //   COMPLETED — write finished; onDestroy must NOT write
+    private enum class WriteState { IDLE, WRITING, COMPLETED }
+    private val writeState = AtomicReference(WriteState.IDLE)
     private var currentRequestId: String? = null
+
+    /** Atomically claim the write slot. Returns true if the caller may proceed to write. */
+    private fun claimWrite(): Boolean = writeState.compareAndSet(WriteState.IDLE, WriteState.WRITING)
+    private fun markWriteCompleted() { writeState.set(WriteState.COMPLETED) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -113,14 +121,18 @@ class OpenAIOAuthActivity : ComponentActivity() {
                 Log.i(TAG, "User canceled OAuth flow")
                 callbackServer?.stop()
                 callbackServer = null
-                resultWritten = true
-                scope.launch {
-                    withContext(Dispatchers.IO) {
-                        writeResultFile(requestId, JSONObject().apply {
-                            put("status", "error")
-                            put("message", "Sign-in canceled")
-                        })
+                if (claimWrite()) {
+                    scope.launch {
+                        withContext(Dispatchers.IO) {
+                            writeResultFile(requestId, JSONObject().apply {
+                                put("status", "error")
+                                put("message", "Sign-in canceled")
+                            })
+                        }
+                        markWriteCompleted()
+                        finishOnMain()
                     }
+                } else {
                     finishOnMain()
                 }
             }
@@ -140,11 +152,15 @@ class OpenAIOAuthActivity : ComponentActivity() {
         super.onDestroy()
         callbackServer?.stop()
         callbackServer = null
-        // If the activity is dismissed (Back button, system kill, swipe-away) before any
-        // result has been written, leave a canceled result so ProviderConfigScreen stops
-        // polling immediately instead of waiting out the 10-minute deadline.
-        if (!resultWritten) {
-            currentRequestId?.let { reqId ->
+        // If the activity is dismissed (Back button, system kill, swipe-away) before
+        // any other path has claimed the write slot, leave a canceled result so
+        // ProviderConfigScreen stops polling immediately instead of waiting out the
+        // 10-minute deadline. The file write happens on a fresh background Thread
+        // (not `scope`, which is being canceled, and not Main — file I/O in lifecycle
+        // callbacks risks ANRs on slow storage).
+        val reqId = currentRequestId
+        if (reqId != null && claimWrite()) {
+            Thread {
                 try {
                     writeResultFile(reqId, JSONObject().apply {
                         put("status", "error")
@@ -152,8 +168,10 @@ class OpenAIOAuthActivity : ComponentActivity() {
                     })
                 } catch (e: Exception) {
                     Log.w(TAG, "Failed to write canceled result on destroy", e)
+                } finally {
+                    markWriteCompleted()
                 }
-            }
+            }.start()
         }
         scope.cancel()
     }
@@ -175,15 +193,17 @@ class OpenAIOAuthActivity : ComponentActivity() {
             Log.i(TAG, "Callback server started on port $CALLBACK_PORT")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start callback server", e)
-            resultWritten = true
-            scope.launch {
-                withContext(Dispatchers.IO) {
-                    writeResultFile(requestId, JSONObject().apply {
-                        put("status", "error")
-                        put("message", "Failed to start callback server: ${e.message}")
-                    })
+            if (claimWrite()) {
+                scope.launch {
+                    withContext(Dispatchers.IO) {
+                        writeResultFile(requestId, JSONObject().apply {
+                            put("status", "error")
+                            put("message", "Failed to start callback server: ${e.message}")
+                        })
+                    }
+                    markWriteCompleted()
+                    finishOnMain()
                 }
-                finishOnMain()
             }
             return
         }
@@ -217,17 +237,17 @@ class OpenAIOAuthActivity : ComponentActivity() {
         // by a timeout error written over its eventual success/error result.
         scope.launch {
             delay(600_000)
-            if (!callbackReceived && callbackServer != null) {
+            if (!callbackReceived && callbackServer != null && claimWrite()) {
                 Log.w(TAG, "Browser flow timed out after 10 minutes")
                 callbackServer?.stop()
                 callbackServer = null
-                resultWritten = true
                 withContext(Dispatchers.IO) {
                     writeResultFile(requestId, JSONObject().apply {
                         put("status", "error")
                         put("message", "Browser login timed out. Please try again.")
                     })
                 }
+                markWriteCompleted()
                 finishOnMain()
             }
         }
@@ -270,22 +290,26 @@ class OpenAIOAuthActivity : ComponentActivity() {
         // any OpenAI-side error and tear down the flow.
         if (error != null) {
             Log.e(TAG, "OAuth error: $error")
-            resultWritten = true
-            writeResultFile(requestId, JSONObject().apply {
-                put("status", "error")
-                put("message", "OAuth error: $error")
-            })
+            if (claimWrite()) {
+                writeResultFile(requestId, JSONObject().apply {
+                    put("status", "error")
+                    put("message", "OAuth error: $error")
+                })
+                markWriteCompleted()
+            }
             finishOnMain()
             return buildHtmlResponse("Error", "Authentication failed: $error")
         }
 
         if (code == null) {
             Log.e(TAG, "No code in callback")
-            resultWritten = true
-            writeResultFile(requestId, JSONObject().apply {
-                put("status", "error")
-                put("message", "No authorization code received")
-            })
+            if (claimWrite()) {
+                writeResultFile(requestId, JSONObject().apply {
+                    put("status", "error")
+                    put("message", "No authorization code received")
+                })
+                markWriteCompleted()
+            }
             finishOnMain()
             return buildHtmlResponse("Error", "No authorization code received.")
         }
@@ -356,24 +380,30 @@ class OpenAIOAuthActivity : ComponentActivity() {
                 )
             }
 
-            // Set the guard BEFORE the file write so onDestroy() can't race in
-            // between write completion and the flag flip and emit a conflicting
-            // "canceled" result on top of the legitimate outcome.
-            resultWritten = true
-            withContext(Dispatchers.IO) {
-                writeResultFile(requestId, JSONObject().apply {
-                    put("status", "success")
-                })
+            // Claim the write slot BEFORE the file write so onDestroy() can't race
+            // and emit a conflicting "canceled" result. If we fail to claim, another
+            // path (likely cancel/timeout) is already handling termination.
+            if (claimWrite()) {
+                withContext(Dispatchers.IO) {
+                    writeResultFile(requestId, JSONObject().apply {
+                        put("status", "success")
+                    })
+                }
+                markWriteCompleted()
+                Log.i(TAG, "Browser flow completed successfully")
+            } else {
+                Log.w(TAG, "Token exchange completed but another path already wrote a result")
             }
-            Log.i(TAG, "Browser flow completed successfully")
         } catch (e: Exception) {
             Log.e(TAG, "Token exchange failed", e)
-            resultWritten = true
-            withContext(Dispatchers.IO) {
-                writeResultFile(requestId, JSONObject().apply {
-                    put("status", "error")
-                    put("message", "Token exchange failed: ${e.message}")
-                })
+            if (claimWrite()) {
+                withContext(Dispatchers.IO) {
+                    writeResultFile(requestId, JSONObject().apply {
+                        put("status", "error")
+                        put("message", "Token exchange failed: ${e.message}")
+                    })
+                }
+                markWriteCompleted()
             }
         } finally {
             callbackServer?.stop()

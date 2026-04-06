@@ -119,11 +119,20 @@ const ANTHROPIC_KEY = normalizeSecret(config.anthropicApiKey);
 const OPENAI_KEY = normalizeSecret(config.openaiApiKey || '');
 const OPENAI_OAUTH_TOKEN = normalizeSecret(config.openaiOAuthToken || '');
 const OPENAI_OAUTH_REFRESH = normalizeSecret(config.openaiOAuthRefresh || '');
-const AUTH_TYPE = config.authType || 'api_key';
 
-// OpenAI auth type strictly follows the configured authType — no silent fallback to api_key
-// when the OAuth token is missing. The credential validation below will fail fast and
-// surface a clear error instead of accidentally charging the user's platform API key.
+// Normalize authType (trim/lowercase) so values like " OAuth\n" don't silently fall
+// through to api_key. For OpenAI, fail fast on unsupported values rather than risking
+// an accidental charge to the user's platform API key.
+const _SUPPORTED_OPENAI_AUTH_TYPES = new Set(['api_key', 'oauth']);
+const _rawAuthType = typeof config.authType === 'string' ? config.authType.trim().toLowerCase() : '';
+const AUTH_TYPE = _rawAuthType || 'api_key';
+
+if (PROVIDER === 'openai' && !_SUPPORTED_OPENAI_AUTH_TYPES.has(AUTH_TYPE)) {
+    throw new Error(`Invalid OpenAI authType: ${JSON.stringify(config.authType)}. Supported values are "api_key" and "oauth".`);
+}
+
+// OpenAI auth type strictly follows the (normalized, validated) authType — no silent
+// fallback. The credential validation below will fail fast on missing OAuth token.
 const OPENAI_AUTH_TYPE = AUTH_TYPE === 'oauth' ? 'oauth' : 'api_key';
 
 const OPENROUTER_KEY = normalizeSecret(config.openrouterApiKey || '');
