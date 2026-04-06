@@ -113,6 +113,7 @@ class OpenAIOAuthActivity : ComponentActivity() {
                 Log.i(TAG, "User canceled OAuth flow")
                 callbackServer?.stop()
                 callbackServer = null
+                resultWritten = true
                 scope.launch {
                     withContext(Dispatchers.IO) {
                         writeResultFile(requestId, JSONObject().apply {
@@ -120,7 +121,6 @@ class OpenAIOAuthActivity : ComponentActivity() {
                             put("message", "Sign-in canceled")
                         })
                     }
-                    resultWritten = true
                     finishOnMain()
                 }
             }
@@ -175,6 +175,7 @@ class OpenAIOAuthActivity : ComponentActivity() {
             Log.i(TAG, "Callback server started on port $CALLBACK_PORT")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start callback server", e)
+            resultWritten = true
             scope.launch {
                 withContext(Dispatchers.IO) {
                     writeResultFile(requestId, JSONObject().apply {
@@ -182,7 +183,6 @@ class OpenAIOAuthActivity : ComponentActivity() {
                         put("message", "Failed to start callback server: ${e.message}")
                     })
                 }
-                resultWritten = true
                 finishOnMain()
             }
             return
@@ -221,13 +221,13 @@ class OpenAIOAuthActivity : ComponentActivity() {
                 Log.w(TAG, "Browser flow timed out after 10 minutes")
                 callbackServer?.stop()
                 callbackServer = null
+                resultWritten = true
                 withContext(Dispatchers.IO) {
                     writeResultFile(requestId, JSONObject().apply {
                         put("status", "error")
                         put("message", "Browser login timed out. Please try again.")
                     })
                 }
-                resultWritten = true
                 finishOnMain()
             }
         }
@@ -270,22 +270,22 @@ class OpenAIOAuthActivity : ComponentActivity() {
         // any OpenAI-side error and tear down the flow.
         if (error != null) {
             Log.e(TAG, "OAuth error: $error")
+            resultWritten = true
             writeResultFile(requestId, JSONObject().apply {
                 put("status", "error")
                 put("message", "OAuth error: $error")
             })
-            resultWritten = true
             finishOnMain()
             return buildHtmlResponse("Error", "Authentication failed: $error")
         }
 
         if (code == null) {
             Log.e(TAG, "No code in callback")
+            resultWritten = true
             writeResultFile(requestId, JSONObject().apply {
                 put("status", "error")
                 put("message", "No authorization code received")
             })
-            resultWritten = true
             finishOnMain()
             return buildHtmlResponse("Error", "No authorization code received.")
         }
@@ -356,22 +356,25 @@ class OpenAIOAuthActivity : ComponentActivity() {
                 )
             }
 
+            // Set the guard BEFORE the file write so onDestroy() can't race in
+            // between write completion and the flag flip and emit a conflicting
+            // "canceled" result on top of the legitimate outcome.
+            resultWritten = true
             withContext(Dispatchers.IO) {
                 writeResultFile(requestId, JSONObject().apply {
                     put("status", "success")
                 })
             }
-            resultWritten = true
             Log.i(TAG, "Browser flow completed successfully")
         } catch (e: Exception) {
             Log.e(TAG, "Token exchange failed", e)
+            resultWritten = true
             withContext(Dispatchers.IO) {
                 writeResultFile(requestId, JSONObject().apply {
                     put("status", "error")
                     put("message", "Token exchange failed: ${e.message}")
                 })
             }
-            resultWritten = true
         } finally {
             callbackServer?.stop()
             callbackServer = null
