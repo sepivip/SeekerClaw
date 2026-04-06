@@ -734,7 +734,9 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                                 value = customModelId,
                                 onValueChange = {
                                     customModelId = it
-                                    if (it.isNotBlank()) selectedModel = it
+                                    // Update selectedModel even when blank — point at the sentinel
+                                    // so canSave (which excludes the sentinel) disables Save.
+                                    selectedModel = it.ifBlank { CUSTOM_MODEL_SENTINEL }
                                 },
                                 placeholder = { Text("e.g. gpt-5.4-pro", fontSize = 12.sp) },
                                 textStyle = androidx.compose.ui.text.TextStyle(

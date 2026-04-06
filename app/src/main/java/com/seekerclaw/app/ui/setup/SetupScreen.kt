@@ -424,7 +424,14 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                     }
                     apiKeyError = null
                     errorMessage = null
-                    authType = if (newProvider == "claude") existingConfig?.authType ?: "api_key" else "api_key"
+                    // Claude only supports {api_key, setup_token}; everything else (including
+                    // a leftover "oauth" from OpenAI) must fall back to api_key.
+                    authType = if (newProvider == "claude") {
+                        when (existingConfig?.authType) {
+                            "setup_token" -> "setup_token"
+                            else -> "api_key"
+                        }
+                    } else "api_key"
                     // Restore model: use existing config's model if same provider, else default
                     // Setup screen always uses API-key auth — OAuth flow happens later in settings.
                     val models = modelsForProvider(newProvider, "api_key")
