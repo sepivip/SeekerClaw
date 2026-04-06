@@ -536,8 +536,8 @@ class OpenAIOAuthActivity : ComponentActivity() {
         }
 
         return buildHtmlResponse(
-            "Completing Sign-In",
-            "Finishing authentication — please return to SeekerClaw for status."
+            "Signed In",
+            "You can close this tab and return to SeekerClaw."
         )
     }
 
@@ -626,7 +626,7 @@ class OpenAIOAuthActivity : ComponentActivity() {
     private fun buildHtmlResponse(title: String, message: String): String {
         val safeTitle = escapeHtml(title)
         val safeMessage = escapeHtml(message)
-        val isSuccess = title == "Success" || title == "Completing Sign-In"
+        val isSuccess = title == "Success" || title == "Completing Sign-In" || title == "Signed In"
         val accentColor = if (isSuccess) "#4ADE80" else "#F87171"
         val icon = if (isSuccess) "&#10003;" else "&#10007;"
         return """
