@@ -218,17 +218,15 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
         }
         val currentAuthType = oldAuthType
         val savedNewAuthType = prefs.getString("lastAuthType_$newProviderId", null)
-        // Resolve authType for the new provider with a strict safety rule for OpenAI:
-        // never persist "oauth" unless an OAuth token is already present, otherwise the
-        // strict Node validation would hard-crash on the next restart with an unsignable
-        // state. The OAuth section UI will still let the user start sign-in from here.
-        val openaiHasToken = !config?.openaiOAuthToken.isNullOrBlank()
+        // Resolve authType for the new provider. OpenAI defaults to OAuth (ChatGPT
+        // subscription) on first switch-in, even without a token yet — the OAuth section
+        // shows a Sign In button and writeConfigJson translates oauth+blank → api_key
+        // for Node so the agent stays startable. The user's explicit picker choice is
+        // remembered per-provider via lastAuthType_<id>.
         val effectiveAuthType = when (newProviderId) {
-            "openai" -> when {
-                savedNewAuthType == "oauth" && openaiHasToken -> "oauth"
-                savedNewAuthType == "api_key" -> "api_key"
-                openaiHasToken -> "oauth"
-                else -> "api_key"
+            "openai" -> when (savedNewAuthType) {
+                "oauth", "api_key" -> savedNewAuthType
+                else -> "oauth" // first-time switch-in default
             }
             "claude" -> when (savedNewAuthType) {
                 "api_key", "setup_token" -> savedNewAuthType
