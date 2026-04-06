@@ -224,6 +224,13 @@ class OpenAIOAuthActivity : ComponentActivity() {
 
             val json = JSONObject(tokenResponse)
             val accessToken = json.optString("access_token", "")
+            if (accessToken.isBlank()) {
+                // Malformed/error response — don't overwrite existing tokens with "" and
+                // don't signal success to the UI.
+                val errMsg = json.optString("error_description", "")
+                    .ifBlank { json.optString("error", "Token response missing access_token") }
+                throw IllegalStateException(errMsg)
+            }
             val refreshToken = json.optString("refresh_token", "")
             val idToken = json.optString("id_token", "")
             val expiresIn = json.optLong("expires_in", 3600)

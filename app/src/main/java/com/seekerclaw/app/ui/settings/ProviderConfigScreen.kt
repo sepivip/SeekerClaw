@@ -106,7 +106,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
         if (!oauthPolling) return@LaunchedEffect
         val resultsDir = File(context.filesDir, OpenAIOAuthActivity.RESULTS_DIR)
         val resultFile = File(resultsDir, "$reqId.json")
-        val deadline = System.currentTimeMillis() + 600_000 // 10 min timeout (device-code flows can take a while)
+        val deadline = System.currentTimeMillis() + 600_000 // 10 min timeout — browser PKCE sign-in/consent can take a while
         while (oauthPolling && System.currentTimeMillis() < deadline) {
             delay(1000)
             val exists = withContext(Dispatchers.IO) { resultFile.exists() }

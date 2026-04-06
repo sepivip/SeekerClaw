@@ -7,6 +7,12 @@
 const { log, OPENAI_OAUTH_TOKEN, OPENAI_OAUTH_REFRESH, OPENAI_AUTH_TYPE } = require('../config');
 const { androidBridgeCall } = require('../bridge');
 
+// Codex CLI public OAuth client id. Must stay in sync with
+// app/src/main/java/com/seekerclaw/app/oauth/OpenAIOAuthActivity.kt:CLIENT_ID
+// (the Node side never initiates an OAuth flow — only refreshes — so duplication
+// is preferable to plumbing the value through the Android bridge.)
+const OAUTH_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
+
 // ── Neutral ↔ OpenAI Responses API message translation ──────────────────────
 
 /**
@@ -423,7 +429,7 @@ async function refreshOAuthToken() {
     const https = require('https');
     const body = new URLSearchParams({
         grant_type: 'refresh_token',
-        client_id: 'app_EMoamEEZ73f0CkXaXp7hrann',
+        client_id: OAUTH_CLIENT_ID,
         refresh_token: _currentRefreshToken,
     }).toString();
 
