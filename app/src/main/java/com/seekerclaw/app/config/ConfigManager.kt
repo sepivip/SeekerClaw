@@ -142,24 +142,23 @@ object ConfigManager {
         // doesn't hard-crash on older installs and the UI doesn't drift from persisted
         // state. Rules:
         //  - OpenAI only supports "api_key" or "oauth".
-        //  - OpenAI + "oauth" requires a non-blank token; otherwise normalize to "api_key"
-        //    (Keystore invalidation, data restore, or manual clear leaves a stale state).
         //  - Non-Claude providers can't use "setup_token".
-        // Persistence is gated on `normalized != raw`: in steady state (no drift) this
-        // is a no-op so loadConfig() doesn't write anything. If drift recurs later in
-        // the process (e.g. token decrypt starts failing mid-run), we catch it on the
-        // next load and re-persist — no process-lifetime flag.
+        //
+        // Note: we do NOT flip oauth → api_key just because the token is currently
+        // blank. The "oauth selected, sign-in pending" state is a legitimate UI state
+        // — flipping it on every loadConfig would silently revert the user's choice
+        // when they return from a failed/canceled sign-in. The unstartable
+        // oauth+blank-token combination is instead handled at workspace/config.json
+        // write time (writeConfigJson) so Node never sees it.
         val raw = p.getString(KEY_AUTH_TYPE, "api_key") ?: "api_key"
         val provider = p.getString(KEY_PROVIDER, "claude") ?: "claude"
-        val openaiTokenBlank = openaiOAuthToken.isBlank()
         val normalized = when {
-            provider == "openai" && raw == "oauth" && openaiTokenBlank -> "api_key"
             provider == "openai" && raw != "oauth" && raw != "api_key" -> "api_key"
             provider != "claude" && raw == "setup_token" -> "api_key"
             else -> raw
         }
         if (normalized != raw) {
-            Log.w(TAG, "Normalizing authType '$raw' → '$normalized' (provider=$provider, tokenBlank=$openaiTokenBlank)")
+            Log.w(TAG, "Normalizing authType '$raw' → '$normalized' (provider=$provider)")
             p.edit().putString(KEY_AUTH_TYPE, normalized).apply()
         }
         return normalized
@@ -719,7 +718,16 @@ object ConfigManager {
             put("botToken", config.telegramBotToken)
             put("ownerId", config.telegramOwnerId)
             put("anthropicApiKey", if (config.provider in listOf("openai", "openrouter", "custom")) "" else config.activeCredential)
-            put("authType", config.authType)
+            // For OpenAI: if user has selected oauth but hasn't completed sign-in (token
+            // is blank), write api_key to the workspace JSON so Node's strict validation
+            // doesn't crash on startup. The UI keeps the user's intended "oauth" choice
+            // in SharedPreferences so the OAuth section remains visible.
+            val effectiveAuthType = if (
+                config.provider == "openai" &&
+                config.authType == "oauth" &&
+                config.openaiOAuthToken.isBlank()
+            ) "api_key" else config.authType
+            put("authType", effectiveAuthType)
             put("provider", config.provider)
             put("model", config.model)
             put("agentName", config.agentName)

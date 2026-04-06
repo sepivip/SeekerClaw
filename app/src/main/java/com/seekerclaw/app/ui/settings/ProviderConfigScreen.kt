@@ -141,31 +141,11 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                 when (json.optString("status")) {
                     "success" -> {
                         // Tokens were persisted directly by OpenAIOAuthActivity via
-                        // ConfigManager.saveConfig. Only apply OpenAI-specific auth state
-                        // changes if OpenAI is still the active provider — the user may
-                        // have switched providers while polling was in progress.
-                        val shouldApply = withContext(Dispatchers.IO) {
-                            val current = ConfigManager.loadConfig(context)
-                            if (current != null &&
-                                current.provider == "openai" &&
-                                current.openaiOAuthToken.isNotBlank()
-                            ) {
-                                if (current.authType != "oauth") {
-                                    ConfigManager.saveConfig(context, current.copy(authType = "oauth"))
-                                }
-                                true
-                            } else {
-                                false
-                            }
-                        }
-                        if (shouldApply) {
-                            context.getSharedPreferences("seekerclaw_prefs", android.content.Context.MODE_PRIVATE)
-                                .edit()
-                                .putString("lastAuthType_openai", "oauth")
-                                .apply()
-                            config = withContext(Dispatchers.IO) { ConfigManager.loadConfig(context) }
-                            showRestartDialog = true
-                        }
+                        // ConfigManager.saveConfig. authType is already "oauth" (the
+                        // picker saves it on selection), so we just reload to pick up
+                        // the new token and pop the restart dialog.
+                        config = withContext(Dispatchers.IO) { ConfigManager.loadConfig(context) }
+                        showRestartDialog = true
                         oauthPolling = false
                     }
                     "error" -> {
@@ -917,34 +897,13 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                 }
             },
             confirmButton = {
-                // If switching to OpenAI OAuth without a token, the Save button becomes
-                // "Sign in with OpenAI" — it launches the browser flow directly and only
-                // persists authType=oauth after the OAuth section flow completes (the
-                // OAuth section will be rendered as soon as the picker closes because
-                // the OAuth UI is gated on the presence of the token, not the picker).
-                val oauthMissingToken = activeProvider == "openai" &&
-                    selectedAuth == "oauth" &&
-                    config?.openaiOAuthToken.isNullOrBlank()
                 TextButton(
                     onClick = {
-                        if (oauthMissingToken) {
-                            // Don't persist oauth yet — only after sign-in succeeds, the
-                            // OAuth result handler will set authType=oauth alongside the
-                            // token save. Persisting here would leave the agent unstartable
-                            // (oauth + blank token) if the user dismisses the restart dialog
-                            // or sign-in fails.
-                            Analytics.authTypeChanged(selectedAuth)
-                            showAuthTypePicker = false
-                            val requestId = UUID.randomUUID().toString()
-                            val intent = Intent(context, OpenAIOAuthActivity::class.java).apply {
-                                putExtra("requestId", requestId)
-                            }
-                            context.startActivity(intent)
-                            oauthRequestId = requestId
-                            oauthPolling = true
-                            oauthError = null
-                            return@TextButton
-                        }
+                        // Persist the user's selection immediately. If they pick "oauth"
+                        // without a token yet, that's fine — the OAuth section will render
+                        // with a Sign In button and ConfigManager.loadConfig() will
+                        // normalize oauth+blank back to api_key on the next load if they
+                        // never complete sign-in.
                         saveField("authType", selectedAuth, needsRestart = true)
                         context.getSharedPreferences("seekerclaw_prefs", android.content.Context.MODE_PRIVATE)
                             .edit()
@@ -963,7 +922,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                     },
                 ) {
                     Text(
-                        if (oauthMissingToken) "Sign in with OpenAI" else "Save",
+                        "Save",
                         fontFamily = RethinkSans,
                         fontWeight = FontWeight.Bold,
                         color = SeekerClawColors.ActionPrimary,
