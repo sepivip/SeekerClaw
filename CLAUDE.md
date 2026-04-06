@@ -351,6 +351,28 @@ The agent only knows what we tell it. If we add a new tool, database table, brid
 Bad: Adding `memory_search` tool with description "Search memory files"
 Good: Adding `memory_search` tool with description "Search your SQL.js database (seekerclaw.db) for memory content. All memory files are indexed into searchable chunks — this performs ranked keyword search with recency weighting, returning top matches with file paths and line numbers."
 
+### SAB Audit BEFORE Merge (NEVER SKIP)
+
+> **RULE: If a PR touches `buildSystemBlocks()` in `ai.js`, modifies `DIAGNOSTICS.md`, adds new error log sites in JS, or ships any user-visible AI capability — run an SAB audit BEFORE merging, not after.**
+
+The Self-Awareness Benchmark (SAB) catches drift between what the agent can do and what the agent knows it can do. SAB v3's behavioral probes are particularly good at catching gaps invisible to a human reviewer ("the auth flow is implementation detail, the agent doesn't need to know" → wrong, the user will ask).
+
+**When to run SAB before merge:**
+- New feature shipped (any provider, channel, tool, skill type, auth flow, etc.)
+- New error log sites added in JS (`log(...'ERROR'...)` or `log(...'WARN'...)`)
+- `buildSystemBlocks()` itself touched
+- `DIAGNOSTICS.md` touched
+- Any new user-facing capability
+
+**How:**
+1. Run the `sab-audit` skill (or invoke `/sab-audit`)
+2. Score honestly — pre-fix score below 95% means drift
+3. Apply the gap fixes IN THE SAME PR (don't ship the feature with a follow-up "audit fix" PR — that means the feature shipped broken)
+4. Verify post-fix score is 100%
+5. Reference the SAB audit version in the PR description
+
+**Discovered the hard way in PR #316 (BAT-485, OAuth):** the feature shipped functionally correct but with zero self-knowledge coverage. SAB-AUDIT-v19 caught 5 gaps after merge — they should have been caught before. Don't repeat.
+
 ---
 
 ## Key Implementation Details

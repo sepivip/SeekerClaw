@@ -8,7 +8,7 @@ const crypto = require('crypto');
 // ── Imports from other SeekerClaw modules ──────────────────────────────────
 
 const {
-    workDir, MODEL, PROVIDER, CHANNEL, ANTHROPIC_KEY, OPENAI_KEY, OPENROUTER_KEY, CUSTOM_KEY, CUSTOM_BASE_URL, OPENROUTER_FALLBACK_MODEL, OPENROUTER_MODEL_CONTEXT, OPENROUTER_FALLBACK_CONTEXT, AUTH_TYPE,
+    workDir, MODEL, PROVIDER, CHANNEL, ANTHROPIC_KEY, OPENAI_KEY, OPENROUTER_KEY, CUSTOM_KEY, CUSTOM_BASE_URL, OPENROUTER_FALLBACK_MODEL, OPENROUTER_MODEL_CONTEXT, OPENROUTER_FALLBACK_CONTEXT, AUTH_TYPE, OPENAI_AUTH_TYPE,
     REACTION_GUIDANCE, REACTION_NOTIFICATIONS, MEMORY_DIR,
     CONFIRM_REQUIRED, TOOL_RATE_LIMITS, TOOL_STATUS_MAP,
     API_TIMEOUT_RETRIES, API_TIMEOUT_BACKOFF_MS, API_TIMEOUT_MAX_BACKOFF_MS,
@@ -779,6 +779,16 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push(`5. Network error: check connectivity with js_eval using require("${apiScheme}").get("${apiScheme}://${apiHost}") or shell_exec "curl -s ${apiScheme}://${apiHost}"`);
     lines.push('');
 
+    // OpenAI OAuth-specific playbook (only injected when running on OAuth)
+    if (PROVIDER === 'openai' && OPENAI_AUTH_TYPE === 'oauth') {
+        lines.push('**If OpenAI OAuth fails:**');
+        lines.push('1. Token expired: the system auto-refreshes via the refresh token. If you see "OAuth refresh failed" in node_debug.log, the refresh token is invalid (revoked, ChatGPT password change) — the user must re-sign-in via Settings > AI Provider > OpenAI > Sign in with ChatGPT.');
+        lines.push('2. Sign-in canceled or failed mid-flow: tell the user to retry from Settings > AI Provider. The OAuth section stays visible after a failed sign-in — they can tap "Sign in with ChatGPT" again. They do NOT need to re-pick the auth type.');
+        lines.push('3. If OAuth refresh persistently fails: suggest the user sign out (clears OAuth tokens but keeps OAuth as the chosen auth type) and sign back in. As a fallback, they can switch to API Key in the auth picker if they have a platform key.');
+        lines.push('4. Check `grep -i "oauth\\|codex" node_debug.log | tail -20` for OAuth-specific errors.');
+        lines.push('');
+    }
+
     // Project Context - OpenClaw injects SOUL.md and memory here
     lines.push('# Project Context');
     lines.push('');
@@ -958,6 +968,15 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
         lines.push('## Provider');
         lines.push(`You are running via a custom AI endpoint (model: ${MODEL}).`);
         if (CUSTOM_BASE_URL) lines.push(`Custom endpoint: ${CUSTOM_BASE_URL}`);
+        lines.push('');
+    } else if (PROVIDER === 'openai') {
+        lines.push('## Provider');
+        lines.push(`You are running on OpenAI (model: ${MODEL}, auth: ${OPENAI_AUTH_TYPE}).`);
+        if (OPENAI_AUTH_TYPE === 'oauth') {
+            lines.push('Auth mode: **ChatGPT OAuth (Codex)** — the user signed in with their ChatGPT subscription instead of using a platform API key. Requests route through chatgpt.com/backend-api/codex/* (not api.openai.com). The OAuth token auto-refreshes when it expires; if refresh fails, the user must re-sign-in via Settings > AI Provider > OpenAI > Sign in with ChatGPT.');
+        } else {
+            lines.push('Auth mode: **API Key** — the user configured an OpenAI platform API key. Requests route through api.openai.com. To switch to ChatGPT OAuth (free with a Plus/Pro subscription), the user can change auth type in Settings > AI Provider > OpenAI.');
+        }
         lines.push('');
     }
 

@@ -130,6 +130,39 @@ grep -i "custom provider\|ECONNREFUSED\|UNABLE_TO_VERIFY\|Unexpected token" node
 3. Guide the user to Settings > AI Provider > Custom to review URL, key, headers, format, and model ID
 4. For SSL issues: suggest the user switch to an endpoint with a valid certificate, or use HTTP (if local/trusted)
 
+### OpenAI Codex OAuth — Token Refresh Failure
+**Symptoms:** Agent stops responding on OpenAI OAuth. Log shows `[OpenAI] OAuth refresh failed` or `OAuth token refresh failed`. Subsequent API calls return 401.
+**Check:**
+```
+grep -i "OAuth refresh\|oauth_refresh\|invalid_grant" node_debug.log | tail -20
+```
+**Diagnosis:** The OAuth refresh token is rejected by `auth.openai.com/oauth/token`. Causes:
+- **User changed ChatGPT password** — invalidates all refresh tokens
+- **User signed out of ChatGPT on another device** — may invalidate the SeekerClaw session
+- **Refresh token revoked** — manual revocation in OpenAI account settings
+- **OpenAI rotated client secret** — rare, would affect all users
+**Fix:**
+1. Check the exact refresh error: `grep "OAuth refresh failed" node_debug.log | tail -5` — look for `error_description`
+2. Tell the user to re-sign-in: Settings > AI Provider > OpenAI > Sign in with ChatGPT
+3. Sign-out is NOT required first — re-signing-in overwrites the stored tokens
+4. If the user can't re-sign-in (e.g., lost access to ChatGPT account), suggest switching auth type to "API Key" in the picker and providing a platform API key as a fallback
+
+### OpenAI Codex OAuth — Sign-In Flow Failures
+**Symptoms:** User taps "Sign in with ChatGPT", browser opens, but sign-in never completes. UI shows "Sign-in canceled" or hangs.
+**Check:** `grep -i "OpenAIOAuth" node_debug.log | tail -30` (note: this is Logcat, not node_debug.log — Logcat lives in Android logs, not the Node-side log)
+**Diagnosis:** The PKCE flow has several failure modes:
+- **State mismatch:** A stray request hit `127.0.0.1:1455/auth/callback` with the wrong state (CSRF defense). The legitimate redirect should still work — tell the user to retry.
+- **Browser closed before completion:** Custom Tab dismissed before consent. Tokens not exchanged. Retry from Settings.
+- **Local callback server failed to start (port 1455 in use):** Rare. App restart resolves it.
+- **Network failure during token exchange:** The browser redirect succeeded but `auth.openai.com/oauth/token` was unreachable. Check WiFi, retry.
+- **10-minute safety timeout:** If the user took too long, the activity self-cancels.
+- **Invalid_state from auth.openai.com:** Browser submitted the consent twice (slow network, double-tap). The first submission is the real one — the user is actually signed in despite the error page. Have them close the tab and check Settings.
+**Fix:**
+1. The OAuth section in Settings stays visible after a failed sign-in — the user just taps "Sign in with ChatGPT" again. They do NOT need to re-pick the auth type.
+2. If the auth picker shows "Sign in first" disabled state, that means authType=oauth is selected but no token. Tap "Sign in with ChatGPT" in the OAuth section directly.
+3. For persistent failures: check Logcat (`adb logcat | grep OpenAIOAuth`) for the exact error code. State mismatches and double-submission errors are usually benign.
+4. As a last resort, the user can sign out (clears tokens, keeps OAuth as the chosen auth type) and sign back in.
+
 ---
 
 ## Tools
