@@ -376,9 +376,10 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                     }
                     "openai" -> {
                         // Match Node's view: only "oauth" is OAuth; everything else is API key.
-                        // switchProvider() persists "api_key" when entering OpenAI unless an
-                        // OAuth token already exists, so this branch normally reflects the
-                        // user's actual saved choice. The guard protects against any drift.
+                        // switchProvider() defaults OpenAI to "oauth" on first switch-in (unless
+                        // a previous lastAuthType_openai is being restored), so this branch
+                        // normally reflects the saved choice. The guard normalizes any legacy
+                        // or drifted non-"oauth" value to "api_key".
                         val openaiAuthType = if (config?.authType == "oauth") "oauth" else "api_key"
                         val openaiModelList = modelsForProvider("openai", openaiAuthType)
                         // Auth Type first (determines model list + credential UI)
@@ -918,6 +919,15 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                             if (allowedModels.none { it.id == currentModel }) {
                                 val fallback = allowedModels.firstOrNull()?.id ?: "gpt-5.4"
                                 saveField("model", fallback, needsRestart = false)
+                            }
+                            // If switching away from OAuth, clear any leftover OAuth UI state
+                            // so the API key field renders cleanly. The showOAuthSection guard
+                            // is forced on by oauthError/oauthPolling — without this clear, a
+                            // prior OAuth error would keep the OAuth section visible.
+                            if (selectedAuth == "api_key") {
+                                oauthPolling = false
+                                oauthError = null
+                                oauthRequestId = null
                             }
                         }
                         Analytics.authTypeChanged(selectedAuth)

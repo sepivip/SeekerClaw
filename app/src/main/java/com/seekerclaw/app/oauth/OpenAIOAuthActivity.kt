@@ -684,14 +684,13 @@ class OpenAIOAuthActivity : ComponentActivity() {
     private class CallbackServer(
         port: Int,
         private val onCallback: (Map<String, String>) -> String
-    ) : NanoHTTPD(port) {
-        // No hostname → NanoHTTPD binds to all loopback interfaces, so a browser that
-        // resolves "localhost" to ::1 (IPv6) still reaches this server. Previously bound
-        // to "127.0.0.1" only, which mismatched the literal "localhost" in REDIRECT_URI
-        // and could fail on dual-stack devices. The redirect URI must stay as "localhost"
-        // because Codex's OAuth client (app_EMoamEEZ...) is registered with that exact
-        // string — switching to 127.0.0.1 causes auth.openai.com to reject the authorize
-        // request as redirect_uri mismatch.
+    ) : NanoHTTPD("localhost", port) {
+        // Bind explicitly to "localhost" so the OAuth callback listener is reachable
+        // only from the local device — never from all network interfaces (NanoHTTPD's
+        // no-hostname constructor binds to 0.0.0.0). The redirect URI must also stay
+        // as "localhost" because Codex's OAuth client (app_EMoamEEZ...) is registered
+        // with that exact string — switching to "127.0.0.1" causes auth.openai.com
+        // to reject the authorize request as redirect_uri mismatch.
 
         override fun serve(session: IHTTPSession): Response {
             if (session.uri == "/auth/callback" && session.method == Method.GET) {

@@ -807,7 +807,14 @@ object ConfigManager {
         if (config.channel == "telegram" && config.telegramBotToken.isBlank()) return "missing_bot_token"
         if (config.channel == "discord" && config.discordBotToken.isBlank()) return "missing_discord_token"
         val hasCredential = when (config.provider) {
-            "openai" -> if (config.authType == "oauth") config.openaiOAuthToken.isNotBlank() else config.openaiApiKey.isNotBlank()
+            "openai" -> {
+                // Match writeConfigJson's effective auth type: oauth requires a token,
+                // but if the user is on oauth without a token AND has a valid API key,
+                // writeConfigJson falls back to api_key for Node — so the agent IS
+                // startable. Validation must align or it would block startup despite
+                // valid credentials.
+                config.openaiOAuthToken.isNotBlank() || config.openaiApiKey.isNotBlank()
+            }
             "openrouter" -> config.openrouterApiKey.isNotBlank()
             "custom" -> config.customApiKey.isNotBlank() && config.customBaseUrl.isNotBlank()
             else -> config.activeCredential.isNotBlank()
