@@ -676,10 +676,9 @@ object ConfigManager {
             put("channel", config.channel)
             if (config.discordBotToken.isNotBlank()) put("discordBotToken", config.discordBotToken)
             if (config.discordOwnerId.isNotBlank()) put("discordOwnerId", config.discordOwnerId)
+            // Only the tokens are needed by Node — email/expiresAt are Android-only metadata.
             if (config.openaiOAuthToken.isNotBlank()) put("openaiOAuthToken", config.openaiOAuthToken)
             if (config.openaiOAuthRefresh.isNotBlank()) put("openaiOAuthRefresh", config.openaiOAuthRefresh)
-            if (config.openaiOAuthEmail.isNotBlank()) put("openaiOAuthEmail", config.openaiOAuthEmail)
-            if (config.openaiOAuthExpiresAt.isNotBlank()) put("openaiOAuthExpiresAt", config.openaiOAuthExpiresAt)
             val mcpServers = loadMcpServers(context)
             if (mcpServers.isNotEmpty()) {
                 val arr = JSONArray()

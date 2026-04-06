@@ -119,7 +119,6 @@ const ANTHROPIC_KEY = normalizeSecret(config.anthropicApiKey);
 const OPENAI_KEY = normalizeSecret(config.openaiApiKey || '');
 const OPENAI_OAUTH_TOKEN = normalizeSecret(config.openaiOAuthToken || '');
 const OPENAI_OAUTH_REFRESH = normalizeSecret(config.openaiOAuthRefresh || '');
-const OPENAI_OAUTH_EMAIL = (config.openaiOAuthEmail || '').trim();
 const AUTH_TYPE = config.authType || 'api_key';
 
 // OpenAI auth type: 'oauth' if OAuth token present and authType matches, else 'api_key'
@@ -512,7 +511,7 @@ module.exports = {
     PROVIDER,
     ANTHROPIC_KEY,
     OPENAI_KEY,
-    OPENAI_OAUTH_TOKEN, OPENAI_OAUTH_REFRESH, OPENAI_OAUTH_EMAIL, OPENAI_AUTH_TYPE,
+    OPENAI_OAUTH_TOKEN, OPENAI_OAUTH_REFRESH, OPENAI_AUTH_TYPE,
     OPENROUTER_KEY,
     CUSTOM_KEY,
     CUSTOM_BASE_URL,

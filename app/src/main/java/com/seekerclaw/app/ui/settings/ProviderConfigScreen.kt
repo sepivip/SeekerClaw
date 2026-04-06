@@ -190,8 +190,19 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
 
         saveField("provider", newProviderId, needsRestart = true)
 
-        // Restore last-used model for new provider, or fall back to first model
-        val modelsForNew = modelsForProvider(newProviderId)
+        // Normalize authType when switching to OpenAI: only "oauth" and "api_key" are valid.
+        // Default to "oauth" (ChatGPT subscription) — leftover values from other providers
+        // (e.g. "setup_token" from Anthropic) would otherwise desync UI vs Node.
+        if (newProviderId == "openai" && config?.authType !in listOf("oauth", "api_key")) {
+            saveField("authType", "oauth")
+        }
+
+        // Restore last-used model for new provider, or fall back to first model.
+        // Pass the (possibly just-updated) authType so OpenAI gets the OAuth model list when applicable.
+        val effectiveAuthType = if (newProviderId == "openai") {
+            if (config?.authType == "api_key") "api_key" else "oauth"
+        } else config?.authType
+        val modelsForNew = modelsForProvider(newProviderId, effectiveAuthType)
         if (modelsForNew.isEmpty()) {
             // Freeform provider (e.g. OpenRouter) — restore last-used or set default
             val savedModel = prefs.getString("lastModel_$newProviderId", null)
@@ -321,9 +332,11 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                         )
                     }
                     "openai" -> {
-                        // Normalize: only "oauth" and "api_key" are valid for OpenAI;
-                        // other values (e.g. "setup_token" from Claude) default to "oauth"
-                        val openaiAuthType = if (config?.authType == "api_key") "api_key" else "oauth"
+                        // Match Node's view: only "oauth" is OAuth; everything else is API key.
+                        // switchProvider() persists "oauth" as the default when entering OpenAI,
+                        // so this branch normally renders the user's actual choice — this guard
+                        // just protects against any remaining drift.
+                        val openaiAuthType = if (config?.authType == "oauth") "oauth" else "api_key"
                         val openaiModelList = modelsForProvider("openai", openaiAuthType)
                         // Auth Type first (determines model list + credential UI)
                         val openaiAuthLabel = if (openaiAuthType == "oauth") "ChatGPT OAuth" else "API Key"
