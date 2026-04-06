@@ -145,12 +145,25 @@ class OpenAIOAuthActivity : ComponentActivity() {
         expectedState: String,
         codeVerifier: String
     ): String {
-        // Idempotency guard: if the user refreshes the browser, NanoHTTPD will fire this
-        // handler multiple times. We only want to run the token exchange once and avoid
-        // racing writes to the same result file.
+        val code = params["code"]
+        val state = params["state"]
+        val error = params["error"]
+
+        // Reject stray/hostile requests BEFORE flipping the idempotency guard.
+        // Otherwise an attacker (or buggy client) hitting 127.0.0.1:1455/auth/callback
+        // with the wrong state could permanently lock out the real browser redirect
+        // and DoS the sign-in flow.
+        if (state != expectedState) {
+            Log.w(TAG, "State mismatch — ignoring stray callback (not flipping guard)")
+            return buildHtmlResponse("Error", "State verification failed. Please try again.")
+        }
+
+        // Idempotency guard: flip only after state is validated. Browser refresh on a
+        // valid redirect would otherwise launch multiple token exchanges that race
+        // on the same result file.
         synchronized(this) {
             if (callbackReceived) {
-                Log.d(TAG, "Duplicate callback ignored")
+                Log.d(TAG, "Duplicate valid callback ignored")
                 return buildHtmlResponse(
                     "Completing Sign-In",
                     "Already processing — please return to SeekerClaw for status."
@@ -158,10 +171,9 @@ class OpenAIOAuthActivity : ComponentActivity() {
             }
             callbackReceived = true
         }
-        val code = params["code"]
-        val state = params["state"]
-        val error = params["error"]
 
+        // From here on, we know this is the legitimate browser redirect — surface
+        // any OpenAI-side error and tear down the flow.
         if (error != null) {
             Log.e(TAG, "OAuth error: $error")
             writeResultFile(requestId, JSONObject().apply {
@@ -170,16 +182,6 @@ class OpenAIOAuthActivity : ComponentActivity() {
             })
             finishOnMain()
             return buildHtmlResponse("Error", "Authentication failed: $error")
-        }
-
-        if (state != expectedState) {
-            Log.e(TAG, "State mismatch")
-            writeResultFile(requestId, JSONObject().apply {
-                put("status", "error")
-                put("message", "State mismatch — possible CSRF attack")
-            })
-            finishOnMain()
-            return buildHtmlResponse("Error", "State verification failed. Please try again.")
         }
 
         if (code == null) {

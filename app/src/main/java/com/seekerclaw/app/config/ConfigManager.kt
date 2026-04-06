@@ -459,11 +459,16 @@ object ConfigManager {
             if (enc != null) {
                 KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP))
             } else {
-                // One-time migration: pull any legacy plaintext value, then drop the old key
-                // so we don't keep PII unencrypted on disk.
+                // One-time migration: pull any legacy plaintext value, persist it
+                // encrypted under the new key, then drop the old key so we don't keep
+                // PII unencrypted on disk (and the value survives subsequent launches).
                 val legacy = p.getString("openai_oauth_email", "") ?: ""
                 if (legacy.isNotBlank()) {
-                    p.edit().remove("openai_oauth_email").apply()
+                    val encLegacy = KeystoreHelper.encrypt(legacy)
+                    p.edit()
+                        .putString(KEY_OPENAI_OAUTH_EMAIL_ENC, Base64.encodeToString(encLegacy, Base64.NO_WRAP))
+                        .remove("openai_oauth_email")
+                        .apply()
                 }
                 legacy
             }
