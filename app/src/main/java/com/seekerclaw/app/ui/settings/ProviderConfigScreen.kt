@@ -186,43 +186,39 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
     }
 
     fun switchProvider(newProviderId: String) {
-        val oldProviderId = config?.provider ?: "claude"
-        val currentModel = config?.model ?: ""
-        // Capture authType BEFORE saveField("provider", ...) — saveField triggers a config
-        // reload that may normalize/mutate authType, which would otherwise corrupt the
-        // lastAuthType_<oldProvider> we're about to save.
-        val oldAuthType = config?.authType
+        // `switchProvider` is conceptually ONE user action — it should persist atomically.
+        // Batching the 2-3 field mutations (provider + authType + possibly model) into a
+        // single `saveConfig` avoids: (a) 3x disk writes on slow storage, (b) 3x
+        // configVersion bumps re-rendering every observer, (c) observers briefly seeing
+        // an inconsistent intermediate state like "OpenAI + setup_token + claude-opus".
+        val current = config ?: return
+        val oldProviderId = current.provider
+        val oldAuthType = current.authType
+        val currentModel = current.model
+
         // Cancel any in-progress OAuth polling — leaving it running across a provider
-        // switch would let a stale callback flip authType back or pop a restart dialog
-        // for a provider the user already left.
+        // switch would let a stale callback flip authType or pop a restart dialog for
+        // a provider the user already left.
         if (oldProviderId == "openai" && newProviderId != "openai") {
             oauthPolling = false
             oauthRequestId = null
             oauthError = null
         }
 
-        // Remember the current model for the old provider before switching
+        // Remember per-provider last-used model and authType (similar to lastModel_*)
+        // so explicit choices survive a round-trip through another provider. These are
+        // cheap prefs-only writes, not full config saves.
         val prefs = context.getSharedPreferences("seekerclaw_prefs", android.content.Context.MODE_PRIVATE)
-        prefs.edit().putString("lastModel_$oldProviderId", currentModel).apply()
+        prefs.edit()
+            .putString("lastModel_$oldProviderId", currentModel)
+            .putString("lastAuthType_$oldProviderId", oldAuthType)
+            .apply()
 
-        saveField("provider", newProviderId, needsRestart = true)
-
-        // Normalize auth type on EVERY provider switch so provider, auth mode,
-        // validation, and the model list stay in a consistent persisted state.
-        // We also remember the user's last-used authType per provider (similar to
-        // lastModel_*) so an explicit "api_key" choice for OpenAI survives a round-trip
-        // through another provider, while a fresh switch-in still defaults to OAuth.
-        val oldProviderAuthKey = "lastAuthType_$oldProviderId"
-        if (oldAuthType != null) {
-            prefs.edit().putString(oldProviderAuthKey, oldAuthType).apply()
-        }
-        val currentAuthType = oldAuthType
+        // Resolve the effective authType for the new provider. OpenAI defaults to OAuth
+        // (ChatGPT subscription) on first switch-in — the OAuth section shows a Sign In
+        // button and writeConfigJson translates oauth+blank → api_key for Node so the
+        // agent stays startable. Explicit picker choice is remembered per-provider.
         val savedNewAuthType = prefs.getString("lastAuthType_$newProviderId", null)
-        // Resolve authType for the new provider. OpenAI defaults to OAuth (ChatGPT
-        // subscription) on first switch-in, even without a token yet — the OAuth section
-        // shows a Sign In button and writeConfigJson translates oauth+blank → api_key
-        // for Node so the agent stays startable. The user's explicit picker choice is
-        // remembered per-provider via lastAuthType_<id>.
         val effectiveAuthType = when (newProviderId) {
             "openai" -> when (savedNewAuthType) {
                 "oauth", "api_key" -> savedNewAuthType
@@ -230,34 +226,44 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
             }
             "claude" -> when (savedNewAuthType) {
                 "api_key", "setup_token" -> savedNewAuthType
-                else -> if (currentAuthType == "setup_token") "setup_token" else "api_key"
+                else -> if (oldAuthType == "setup_token") "setup_token" else "api_key"
             }
             else -> "api_key"
         }
-        saveField("authType", effectiveAuthType)
 
-        // Restore last-used model for new provider, or fall back to first model.
+        // Resolve the effective model for the new provider.
         val modelsForNew = modelsForProvider(newProviderId, effectiveAuthType)
-        if (modelsForNew.isEmpty()) {
+        val savedModel = prefs.getString("lastModel_$newProviderId", null)
+        val effectiveModel: String = if (modelsForNew.isEmpty()) {
             // Freeform provider (e.g. OpenRouter) — restore last-used or set default
-            val savedModel = prefs.getString("lastModel_$newProviderId", null)
             val defaultModel = when (newProviderId) {
                 "openrouter" -> "anthropic/claude-sonnet-4-6"
                 "custom" -> ""
                 else -> ""
             }
-            saveField("model", savedModel?.takeIf { it.isNotBlank() } ?: defaultModel)
+            savedModel?.takeIf { it.isNotBlank() } ?: defaultModel
         } else {
-            val savedModel = prefs.getString("lastModel_$newProviderId", null)
-            val restoredModel = if (savedModel != null && modelsForNew.any { it.id == savedModel }) {
+            if (modelsForNew.any { it.id == currentModel }) {
+                // Current model is still valid — keep it.
+                currentModel
+            } else if (savedModel != null && modelsForNew.any { it.id == savedModel }) {
                 savedModel
             } else {
                 modelsForNew.firstOrNull()?.id ?: ""
             }
-            if (modelsForNew.none { it.id == currentModel }) {
-                saveField("model", restoredModel)
-            }
         }
+
+        // Single atomic save.
+        ConfigManager.saveConfig(
+            context,
+            current.copy(
+                provider = newProviderId,
+                authType = effectiveAuthType,
+                model = effectiveModel,
+            )
+        )
+        config = ConfigManager.loadConfig(context)
+        showRestartDialog = true
     }
 
     SeekerClawScaffold(title = "AI Provider", onBack = onBack) { padding ->
