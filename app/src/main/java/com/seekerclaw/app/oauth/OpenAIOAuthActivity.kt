@@ -120,12 +120,15 @@ class OpenAIOAuthActivity : ComponentActivity() {
                 }
                 Log.i(TAG, "Browser flow completed successfully")
             } catch (e: Exception) {
+                // Log the full exception (including any details) only to Logcat. The
+                // result file gets a generic user-safe message — `e.message` can
+                // contain raw HTTP response bodies that may include tokens or PII.
                 Log.e(TAG, "Token exchange failed", e)
                 try {
                     withContext(NonCancellable + Dispatchers.IO) {
                         writeResultFileStatic(appCtx, requestId, JSONObject().apply {
                             put("status", "error")
-                            put("message", "Token exchange failed: ${e.message}")
+                            put("message", "Sign-in failed. Please try again.")
                         })
                     }
                 } catch (writeErr: Exception) {
@@ -149,7 +152,13 @@ class OpenAIOAuthActivity : ComponentActivity() {
                 val statusCode = conn.responseCode
                 val stream = if (statusCode in 200..299) conn.inputStream else conn.errorStream
                 val responseBody = stream?.bufferedReader()?.use { it.readText() } ?: ""
-                if (statusCode !in 200..299) throw RuntimeException("HTTP $statusCode: $responseBody")
+                if (statusCode !in 200..299) {
+                    // Don't put the response body into the exception message — it can
+                    // surface in result files / UI / logs and may contain secrets or
+                    // untrusted HTML. Body is logged separately at debug level only.
+                    Log.d(TAG, "httpPostStatic non-2xx body (truncated): ${responseBody.take(200)}")
+                    throw RuntimeException("HTTP $statusCode")
+                }
                 return responseBody
             } finally {
                 conn.disconnect()
