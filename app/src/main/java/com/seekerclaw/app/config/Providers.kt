@@ -25,7 +25,7 @@ val availableProviders = listOf(
     ProviderInfo(
         id = "openai",
         displayName = "OpenAI",
-        authTypes = listOf("api_key"),
+        authTypes = listOf("api_key", "oauth"),
         keyHint = "sk-proj-…",
         consoleUrl = "https://platform.openai.com",
         keysUrl = "https://platform.openai.com/api-keys",
@@ -54,11 +54,31 @@ val openaiModels = listOf(
     ModelInfo("gpt-5.3-codex", "GPT-5.3 Codex", "code agent"),
 )
 
+val openaiOAuthModels = listOf(
+    ModelInfo("gpt-5.4", "GPT-5.4", "frontier"),
+    ModelInfo("gpt-5.4-mini", "GPT-5.4 Mini", "fast"),
+    ModelInfo("gpt-5.3-codex", "GPT-5.3 Codex", "code agent"),
+    ModelInfo("gpt-5.2", "GPT-5.2", "flagship"),
+)
+
 /** Default model for freeform providers (OpenRouter) where model list is empty. */
 const val OPENROUTER_DEFAULT_MODEL = "anthropic/claude-sonnet-4-6"
 
-fun modelsForProvider(providerId: String): List<ModelInfo> = when (providerId) {
-    "openai" -> openaiModels
+/**
+ * Resolve the model list for a given provider.
+ *
+ * For OpenAI, `authType` MUST be an explicit "oauth" or "api_key" — passing null or
+ * any other value throws so call sites can't accidentally fall through to the API-key
+ * model list while the user is in OAuth mode. For other providers `authType` is
+ * advisory/ignored.
+ */
+fun modelsForProvider(providerId: String, authType: String?): List<ModelInfo> = when (providerId) {
+    "openai" -> when (authType) {
+        "oauth" -> openaiOAuthModels
+        "api_key" -> openaiModels
+        null -> throw IllegalArgumentException("authType is required for providerId=openai")
+        else -> throw IllegalArgumentException("Unsupported authType '$authType' for providerId=openai")
+    }
     "openrouter", "custom" -> emptyList() // Freeform: user types model ID
     else -> availableModels
 }

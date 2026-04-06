@@ -38,7 +38,7 @@ android {
         applicationId = "com.seekerclaw.app"
         minSdk = 34
         targetSdk = 35
-        versionCode = 15
+        versionCode = 16
         versionName = "1.8.0"
 
         // Keep these in sync when updating OpenClaw or nodejs-mobile
@@ -247,6 +247,9 @@ dependencies {
 
     // NanoHTTPD for Android Bridge (Node.js <-> Kotlin IPC)
     implementation("org.nanohttpd:nanohttpd:2.3.1")
+
+    // Custom Tabs for OAuth browser flows
+    implementation("androidx.browser:browser:1.8.0")
 
     // Solana Mobile Wallet Adapter
     implementation("com.solanamobile:mobile-wallet-adapter-clientlib-ktx:2.0.3")

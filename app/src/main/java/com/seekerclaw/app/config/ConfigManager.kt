@@ -28,7 +28,8 @@ import java.util.zip.ZipOutputStream
 data class AppConfig(
     val anthropicApiKey: String,
     val setupToken: String = "",
-    val authType: String = "api_key", // "api_key" or "setup_token"
+    // "api_key" (all providers), "setup_token" (Anthropic only), or "oauth" (OpenAI Codex only).
+    val authType: String = "api_key",
     val telegramBotToken: String,
     val telegramOwnerId: String,
     val model: String,
@@ -56,6 +57,10 @@ data class AppConfig(
     val channel: String = "telegram",
     val discordBotToken: String = "",
     val discordOwnerId: String = "",
+    val openaiOAuthToken: String = "",
+    val openaiOAuthRefresh: String = "",
+    val openaiOAuthEmail: String = "",
+    val openaiOAuthExpiresAt: String = "",
 ) {
     /** Anthropic/authType-based credential — used by SetupScreen and legacy flows. */
     val activeCredential: String
@@ -122,6 +127,43 @@ object ConfigManager {
     private const val KEY_DISCORD_BOT_TOKEN_ENC = "discord_bot_token_enc"
     private const val KEY_DISCORD_OWNER_ID = "discord_owner_id"
     private const val KEY_FIRST_DEPLOY_DONE = "first_deploy_done"
+    private const val KEY_OPENAI_OAUTH_TOKEN_ENC = "openai_oauth_token_enc"
+    private const val KEY_OPENAI_OAUTH_REFRESH_ENC = "openai_oauth_refresh_enc"
+    private const val KEY_OPENAI_OAUTH_EMAIL_ENC = "openai_oauth_email_enc"
+
+    // Email migration is a true one-shot: legacy plaintext key is consumed exactly once
+    // and the encrypted form persists thereafter. Process flag avoids re-checking the
+    // legacy key on every loadConfig() call.
+    @Volatile
+    private var emailMigrated = false
+
+    private fun resolveAuthType(p: SharedPreferences): String {
+        // Migrate legacy/invalid authType combinations so Node's strict validation
+        // doesn't hard-crash on older installs and the UI doesn't drift from persisted
+        // state. Rules:
+        //  - OpenAI only supports "api_key" or "oauth".
+        //  - Non-Claude providers can't use "setup_token".
+        //
+        // Note: we do NOT flip oauth → api_key just because the token is currently
+        // blank. The "oauth selected, sign-in pending" state is a legitimate UI state
+        // — flipping it on every loadConfig would silently revert the user's choice
+        // when they return from a failed/canceled sign-in. The unstartable
+        // oauth+blank-token combination is instead handled at workspace/config.json
+        // write time (writeConfigJson) so Node never sees it.
+        val raw = p.getString(KEY_AUTH_TYPE, "api_key") ?: "api_key"
+        val provider = p.getString(KEY_PROVIDER, "claude") ?: "claude"
+        val normalized = when {
+            provider == "openai" && raw != "oauth" && raw != "api_key" -> "api_key"
+            provider != "claude" && raw == "setup_token" -> "api_key"
+            else -> raw
+        }
+        if (normalized != raw) {
+            Log.w(TAG, "Normalizing authType '$raw' → '$normalized' (provider=$provider)")
+            p.edit().putString(KEY_AUTH_TYPE, normalized).apply()
+        }
+        return normalized
+    }
+    private const val KEY_OPENAI_OAUTH_EXPIRES_AT = "openai_oauth_expires_at"
 
     private fun prefs(context: Context): SharedPreferences =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -260,6 +302,27 @@ object ConfigManager {
             editor.remove(KEY_DISCORD_BOT_TOKEN_ENC)
         }
         editor.putString(KEY_DISCORD_OWNER_ID, config.discordOwnerId)
+
+        if (config.openaiOAuthToken.isNotBlank()) {
+            val encOAuthToken = KeystoreHelper.encrypt(config.openaiOAuthToken)
+            editor.putString(KEY_OPENAI_OAUTH_TOKEN_ENC, Base64.encodeToString(encOAuthToken, Base64.NO_WRAP))
+        } else {
+            editor.remove(KEY_OPENAI_OAUTH_TOKEN_ENC)
+        }
+        if (config.openaiOAuthRefresh.isNotBlank()) {
+            val encOAuthRefresh = KeystoreHelper.encrypt(config.openaiOAuthRefresh)
+            editor.putString(KEY_OPENAI_OAUTH_REFRESH_ENC, Base64.encodeToString(encOAuthRefresh, Base64.NO_WRAP))
+        } else {
+            editor.remove(KEY_OPENAI_OAUTH_REFRESH_ENC)
+        }
+        if (config.openaiOAuthEmail.isNotBlank()) {
+            // Email is PII — encrypt at rest like other OAuth fields.
+            val encEmail = KeystoreHelper.encrypt(config.openaiOAuthEmail)
+            editor.putString(KEY_OPENAI_OAUTH_EMAIL_ENC, Base64.encodeToString(encEmail, Base64.NO_WRAP))
+        } else {
+            editor.remove(KEY_OPENAI_OAUTH_EMAIL_ENC)
+        }
+        editor.putString(KEY_OPENAI_OAUTH_EXPIRES_AT, config.openaiOAuthExpiresAt)
 
         val persisted = editor.commit()
         if (persisted) {
@@ -407,10 +470,55 @@ object ConfigManager {
             ""
         }
 
+        val openaiOAuthToken = try {
+            val enc = p.getString(KEY_OPENAI_OAUTH_TOKEN_ENC, null)
+            if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to decrypt OpenAI OAuth token", e)
+            LogCollector.append("[Config] Failed to decrypt OpenAI OAuth token: ${e.javaClass.simpleName}", LogLevel.ERROR)
+            ""
+        }
+
+        val openaiOAuthRefresh = try {
+            val enc = p.getString(KEY_OPENAI_OAUTH_REFRESH_ENC, null)
+            if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to decrypt OpenAI OAuth refresh token", e)
+            LogCollector.append("[Config] Failed to decrypt OpenAI OAuth refresh token: ${e.javaClass.simpleName}", LogLevel.ERROR)
+            ""
+        }
+
+        val openaiOAuthEmail = try {
+            val enc = p.getString(KEY_OPENAI_OAUTH_EMAIL_ENC, null)
+            if (enc != null) {
+                KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP))
+            } else if (!emailMigrated) {
+                // One-time per-process migration: pull any legacy plaintext value, persist
+                // it encrypted under the new key, then drop the old key. Gated by the
+                // emailMigrated flag so subsequent loadConfig() calls don't re-touch prefs.
+                val legacy = p.getString("openai_oauth_email", "") ?: ""
+                if (legacy.isNotBlank()) {
+                    val encLegacy = KeystoreHelper.encrypt(legacy)
+                    p.edit()
+                        .putString(KEY_OPENAI_OAUTH_EMAIL_ENC, Base64.encodeToString(encLegacy, Base64.NO_WRAP))
+                        .remove("openai_oauth_email")
+                        .apply()
+                }
+                emailMigrated = true
+                legacy
+            } else {
+                ""
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to decrypt OpenAI OAuth email", e)
+            LogCollector.append("[Config] Failed to decrypt OpenAI OAuth email: ${e.javaClass.simpleName}", LogLevel.ERROR)
+            ""
+        }
+
         return AppConfig(
             anthropicApiKey = apiKey,
             setupToken = setupToken,
-            authType = p.getString(KEY_AUTH_TYPE, "api_key") ?: "api_key",
+            authType = resolveAuthType(p),
             telegramBotToken = botToken,
             telegramOwnerId = loadOwnerIdFromFile(context, "telegram"),
             model = p.getString(KEY_MODEL, "claude-opus-4-6") ?: "claude-opus-4-6",
@@ -438,6 +546,10 @@ object ConfigManager {
             channel = p.getString(KEY_CHANNEL, "telegram") ?: "telegram",
             discordBotToken = discordBotToken,
             discordOwnerId = loadOwnerIdFromFile(context, "discord"),
+            openaiOAuthToken = openaiOAuthToken,
+            openaiOAuthRefresh = openaiOAuthRefresh,
+            openaiOAuthEmail = openaiOAuthEmail,
+            openaiOAuthExpiresAt = p.getString(KEY_OPENAI_OAUTH_EXPIRES_AT, "") ?: "",
         )
     }
 
@@ -495,6 +607,10 @@ object ConfigManager {
                 saveOwnerIdToFile(context, value, "discord")
                 config.copy(discordOwnerId = value)
             }
+            "openaiOAuthToken" -> config.copy(openaiOAuthToken = value)
+            "openaiOAuthRefresh" -> config.copy(openaiOAuthRefresh = value)
+            "openaiOAuthEmail" -> config.copy(openaiOAuthEmail = value)
+            "openaiOAuthExpiresAt" -> config.copy(openaiOAuthExpiresAt = value)
             else -> return
         }
         saveConfig(context, updated)
@@ -575,6 +691,17 @@ object ConfigManager {
         configVersion.intValue++
     }
 
+    fun clearOpenAIOAuth(context: Context) {
+        prefs(context).edit()
+            .remove(KEY_OPENAI_OAUTH_TOKEN_ENC)
+            .remove(KEY_OPENAI_OAUTH_REFRESH_ENC)
+            .remove(KEY_OPENAI_OAUTH_EMAIL_ENC)
+            .remove("openai_oauth_email") // legacy plaintext key — clean up on sign-out
+            .remove(KEY_OPENAI_OAUTH_EXPIRES_AT)
+            .apply()
+        configVersion.intValue++
+    }
+
     /**
      * Write ephemeral config.json to workspace for Node.js to read on startup.
      * Includes per-boot bridge auth token. File is deleted after Node.js reads it.
@@ -591,7 +718,16 @@ object ConfigManager {
             put("botToken", config.telegramBotToken)
             put("ownerId", config.telegramOwnerId)
             put("anthropicApiKey", if (config.provider in listOf("openai", "openrouter", "custom")) "" else config.activeCredential)
-            put("authType", config.authType)
+            // For OpenAI: if user has selected oauth but hasn't completed sign-in (token
+            // is blank), write api_key to the workspace JSON so Node's strict validation
+            // doesn't crash on startup. The UI keeps the user's intended "oauth" choice
+            // in SharedPreferences so the OAuth section remains visible.
+            val effectiveAuthType = if (
+                config.provider == "openai" &&
+                config.authType == "oauth" &&
+                config.openaiOAuthToken.isBlank()
+            ) "api_key" else config.authType
+            put("authType", effectiveAuthType)
             put("provider", config.provider)
             put("model", config.model)
             put("agentName", config.agentName)
@@ -617,6 +753,9 @@ object ConfigManager {
             put("channel", config.channel)
             if (config.discordBotToken.isNotBlank()) put("discordBotToken", config.discordBotToken)
             if (config.discordOwnerId.isNotBlank()) put("discordOwnerId", config.discordOwnerId)
+            // Only the tokens are needed by Node — email/expiresAt are Android-only metadata.
+            if (config.openaiOAuthToken.isNotBlank()) put("openaiOAuthToken", config.openaiOAuthToken)
+            if (config.openaiOAuthRefresh.isNotBlank()) put("openaiOAuthRefresh", config.openaiOAuthRefresh)
             val mcpServers = loadMcpServers(context)
             if (mcpServers.isNotEmpty()) {
                 val arr = JSONArray()
@@ -668,7 +807,14 @@ object ConfigManager {
         if (config.channel == "telegram" && config.telegramBotToken.isBlank()) return "missing_bot_token"
         if (config.channel == "discord" && config.discordBotToken.isBlank()) return "missing_discord_token"
         val hasCredential = when (config.provider) {
-            "openai" -> config.openaiApiKey.isNotBlank()
+            "openai" -> {
+                // Match writeConfigJson's effective auth type: oauth requires a token,
+                // but if the user is on oauth without a token AND has a valid API key,
+                // writeConfigJson falls back to api_key for Node — so the agent IS
+                // startable. Validation must align or it would block startup despite
+                // valid credentials.
+                config.openaiOAuthToken.isNotBlank() || config.openaiApiKey.isNotBlank()
+            }
             "openrouter" -> config.openrouterApiKey.isNotBlank()
             "custom" -> config.customApiKey.isNotBlank() && config.customBaseUrl.isNotBlank()
             else -> config.activeCredential.isNotBlank()

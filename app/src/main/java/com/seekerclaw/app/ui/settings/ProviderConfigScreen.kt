@@ -15,8 +15,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.CircularProgressIndicator
 import com.seekerclaw.app.ui.components.SeekerClawScaffold
 import androidx.compose.material3.HorizontalDivider
@@ -46,22 +48,33 @@ import com.seekerclaw.app.ui.components.ConfigField
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.config.availableModels
 import com.seekerclaw.app.config.availableProviders
+import com.seekerclaw.app.config.OPENROUTER_DEFAULT_MODEL
 import com.seekerclaw.app.config.modelsForProvider
-import com.seekerclaw.app.config.openaiModels
 import com.seekerclaw.app.config.providerById
+import com.seekerclaw.app.oauth.OpenAIOAuthActivity
 import com.seekerclaw.app.util.Analytics
 import com.seekerclaw.app.ui.theme.RethinkSans
 import com.seekerclaw.app.ui.theme.SeekerClawColors
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import android.content.Intent
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.text.input.KeyboardType
 import org.json.JSONObject
+import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.UUID
+
+// Sentinel for the "Custom model" radio in the model picker. Must NOT be a valid model id —
+// using "__custom__" so a real model literally named "custom" can still be entered freely.
+private const val CUSTOM_MODEL_SENTINEL = "__custom__"
 
 @Composable
 fun ProviderConfigScreen(onBack: () -> Unit) {
@@ -84,8 +97,77 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
     var testStatus by remember { mutableStateOf("Idle") }
     var testMessage by remember { mutableStateOf("") }
     var showRestartDialog by remember { mutableStateOf(false) }
+    // OpenAI OAuth state
+    var oauthRequestId by remember { mutableStateOf<String?>(null) }
+    var oauthPolling by remember { mutableStateOf(false) }
+    var oauthError by remember { mutableStateOf<String?>(null) }
+    // Note: device code UI removed — only browser flow used for now
+
+    // Clean up stale OAuth result files when this screen opens. If the user navigated
+    // away mid-flow or the process was killed, orphaned status files can accumulate
+    // under filesDir/oauth_results. Anything older than 1 hour is safe to delete.
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) {
+            try {
+                val resultsDir = File(context.filesDir, OpenAIOAuthActivity.RESULTS_DIR)
+                if (resultsDir.isDirectory) {
+                    val cutoff = System.currentTimeMillis() - 3_600_000L
+                    resultsDir.listFiles()?.forEach { f ->
+                        if (f.lastModified() < cutoff) f.delete()
+                    }
+                }
+            } catch (_: Exception) { /* best effort */ }
+        }
+    }
 
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
+
+    // OAuth result file polling
+    LaunchedEffect(oauthRequestId, oauthPolling) {
+        val reqId = oauthRequestId ?: return@LaunchedEffect
+        if (!oauthPolling) return@LaunchedEffect
+        val resultsDir = File(context.filesDir, OpenAIOAuthActivity.RESULTS_DIR)
+        val resultFile = File(resultsDir, "$reqId.json")
+        val deadline = System.currentTimeMillis() + 600_000 // 10 min timeout — browser PKCE sign-in/consent can take a while
+        while (oauthPolling && System.currentTimeMillis() < deadline) {
+            delay(1000)
+            val exists = withContext(Dispatchers.IO) { resultFile.exists() }
+            if (!exists) continue
+            try {
+                val json = withContext(Dispatchers.IO) {
+                    val text = resultFile.readText()
+                    resultFile.delete()
+                    JSONObject(text)
+                }
+                when (json.optString("status")) {
+                    "success" -> {
+                        // Tokens were persisted directly by OpenAIOAuthActivity via
+                        // ConfigManager.saveConfig. authType is already "oauth" (the
+                        // picker saves it on selection), so we just reload to pick up
+                        // the new token and pop the restart dialog.
+                        config = withContext(Dispatchers.IO) { ConfigManager.loadConfig(context) }
+                        showRestartDialog = true
+                        oauthPolling = false
+                    }
+                    "error" -> {
+                        oauthError = json.optString("message", "Unknown error")
+                        oauthPolling = false
+                    }
+                    else -> {
+                        oauthError = "Unexpected OAuth result status: ${json.optString("status")}"
+                        oauthPolling = false
+                    }
+                }
+            } catch (e: Exception) {
+                oauthError = "Failed to read OAuth result: ${e.message}"
+                oauthPolling = false
+            }
+        }
+        if (oauthPolling) {
+            oauthError = "OAuth timed out. Please try again."
+            oauthPolling = false
+        }
+    }
 
     fun saveField(field: String, value: String, needsRestart: Boolean = false) {
         ConfigManager.updateConfigField(context, field, value)
@@ -105,37 +187,86 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
     }
 
     fun switchProvider(newProviderId: String) {
-        val oldProviderId = config?.provider ?: "claude"
-        val currentModel = config?.model ?: ""
+        // `switchProvider` is conceptually ONE user action — it should persist atomically.
+        // Batching the 2-3 field mutations (provider + authType + possibly model) into a
+        // single `saveConfig` avoids: (a) 3x disk writes on slow storage, (b) 3x
+        // configVersion bumps re-rendering every observer, (c) observers briefly seeing
+        // an inconsistent intermediate state like "OpenAI + setup_token + claude-opus".
+        val current = config ?: return
+        val oldProviderId = current.provider
+        val oldAuthType = current.authType
+        val currentModel = current.model
 
-        // Remember the current model for the old provider before switching
+        // Cancel any in-progress OAuth polling — leaving it running across a provider
+        // switch would let a stale callback flip authType or pop a restart dialog for
+        // a provider the user already left.
+        if (oldProviderId == "openai" && newProviderId != "openai") {
+            oauthPolling = false
+            oauthRequestId = null
+            oauthError = null
+        }
+
+        // Remember per-provider last-used model and authType (similar to lastModel_*)
+        // so explicit choices survive a round-trip through another provider. These are
+        // cheap prefs-only writes, not full config saves.
         val prefs = context.getSharedPreferences("seekerclaw_prefs", android.content.Context.MODE_PRIVATE)
-        prefs.edit().putString("lastModel_$oldProviderId", currentModel).apply()
+        prefs.edit()
+            .putString("lastModel_$oldProviderId", currentModel)
+            .putString("lastAuthType_$oldProviderId", oldAuthType)
+            .apply()
 
-        saveField("provider", newProviderId, needsRestart = true)
+        // Resolve the effective authType for the new provider. OpenAI defaults to OAuth
+        // (ChatGPT subscription) on first switch-in — the OAuth section shows a Sign In
+        // button. writeConfigJson translates oauth+blank → api_key only so Node doesn't
+        // crash on an unsupported authType combination; a valid OpenAI API key is still
+        // required if the user never completes sign-in. Explicit picker choice is
+        // remembered per-provider via lastAuthType_<id>.
+        val savedNewAuthType = prefs.getString("lastAuthType_$newProviderId", null)
+        val effectiveAuthType = when (newProviderId) {
+            "openai" -> when (savedNewAuthType) {
+                "oauth", "api_key" -> savedNewAuthType
+                else -> "oauth" // first-time switch-in default
+            }
+            "claude" -> when (savedNewAuthType) {
+                "api_key", "setup_token" -> savedNewAuthType
+                else -> if (oldAuthType == "setup_token") "setup_token" else "api_key"
+            }
+            else -> "api_key"
+        }
 
-        // Restore last-used model for new provider, or fall back to first model
-        val modelsForNew = modelsForProvider(newProviderId)
-        if (modelsForNew.isEmpty()) {
+        // Resolve the effective model for the new provider.
+        val modelsForNew = modelsForProvider(newProviderId, effectiveAuthType)
+        val savedModel = prefs.getString("lastModel_$newProviderId", null)
+        val effectiveModel: String = if (modelsForNew.isEmpty()) {
             // Freeform provider (e.g. OpenRouter) — restore last-used or set default
-            val savedModel = prefs.getString("lastModel_$newProviderId", null)
             val defaultModel = when (newProviderId) {
-                "openrouter" -> "anthropic/claude-sonnet-4-6"
+                "openrouter" -> OPENROUTER_DEFAULT_MODEL
                 "custom" -> ""
                 else -> ""
             }
-            saveField("model", savedModel?.takeIf { it.isNotBlank() } ?: defaultModel)
+            savedModel?.takeIf { it.isNotBlank() } ?: defaultModel
         } else {
-            val savedModel = prefs.getString("lastModel_$newProviderId", null)
-            val restoredModel = if (savedModel != null && modelsForNew.any { it.id == savedModel }) {
+            if (modelsForNew.any { it.id == currentModel }) {
+                // Current model is still valid — keep it.
+                currentModel
+            } else if (savedModel != null && modelsForNew.any { it.id == savedModel }) {
                 savedModel
             } else {
                 modelsForNew.firstOrNull()?.id ?: ""
             }
-            if (modelsForNew.none { it.id == currentModel }) {
-                saveField("model", restoredModel)
-            }
         }
+
+        // Single atomic save.
+        ConfigManager.saveConfig(
+            context,
+            current.copy(
+                provider = newProviderId,
+                authType = effectiveAuthType,
+                model = effectiveModel,
+            )
+        )
+        config = ConfigManager.loadConfig(context)
+        showRestartDialog = true
     }
 
     SeekerClawScaffold(title = "AI Provider", onBack = onBack) { padding ->
@@ -245,26 +376,85 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                         )
                     }
                     "openai" -> {
+                        // Match Node's view: only "oauth" is OAuth; everything else is API key.
+                        // switchProvider() defaults OpenAI to "oauth" on first switch-in (unless
+                        // a previous lastAuthType_openai is being restored), so this branch
+                        // normally reflects the saved choice. The guard normalizes any legacy
+                        // or drifted non-"oauth" value to "api_key".
+                        val openaiAuthType = if (config?.authType == "oauth") "oauth" else "api_key"
+                        val openaiModelList = modelsForProvider("openai", openaiAuthType)
+                        // Auth Type first (determines model list + credential UI)
+                        val openaiAuthLabel = if (openaiAuthType == "oauth") "ChatGPT OAuth" else "API Key"
+                        ConfigField(
+                            label = "Auth Type",
+                            value = openaiAuthLabel,
+                            onClick = { showAuthTypePicker = true },
+                            info = "API Key uses your OpenAI platform key. OAuth uses your ChatGPT subscription via Codex OAuth.",
+                        )
                         ConfigField(
                             label = "Model",
-                            value = openaiModels.find { it.id == config?.model }
+                            value = openaiModelList.find { it.id == config?.model }
                                 ?.let { "${it.displayName} (${it.description})" }
                                 ?: config?.model?.ifBlank { "Not set" } ?: "Not set",
                             onClick = { showModelPicker = true },
                             info = SettingsHelpTexts.MODEL,
                         )
-                        ConfigField(
-                            label = "API Key",
-                            value = maskKey(config?.openaiApiKey),
-                            onClick = {
-                                editField = "openaiApiKey"
-                                editLabel = "OpenAI API Key"
-                                editValue = config?.openaiApiKey ?: ""
-                            },
-                            info = SettingsHelpTexts.OPENAI_API_KEY,
-                            isRequired = true,
-                            showDivider = false,
-                        )
+                        // Show the OAuth section whenever an OAuth flow is in progress or has
+                        // produced an error, even if the resolved authType is currently
+                        // "api_key". This keeps the polling/error UI visible during transient
+                        // OAuth state changes and recovery flows.
+                        val showOAuthSection = openaiAuthType == "oauth" || oauthPolling || oauthError != null
+                        if (!showOAuthSection) {
+                            ConfigField(
+                                label = "API Key",
+                                value = maskKey(config?.openaiApiKey),
+                                onClick = {
+                                    editField = "openaiApiKey"
+                                    editLabel = "OpenAI API Key"
+                                    editValue = config?.openaiApiKey ?: ""
+                                },
+                                info = SettingsHelpTexts.OPENAI_API_KEY,
+                                isRequired = true,
+                                showDivider = false,
+                            )
+                        } else {
+                            // OAuth section
+                            HorizontalDivider(
+                                color = SeekerClawColors.CardBorder,
+                                modifier = Modifier.padding(horizontal = 16.dp),
+                            )
+                            OpenAIOAuthSection(
+                                isConnected = !config?.openaiOAuthToken.isNullOrBlank(),
+                                email = config?.openaiOAuthEmail ?: "",
+                                onSignInBrowser = {
+                                    val requestId = UUID.randomUUID().toString()
+                                    val intent = Intent(context, OpenAIOAuthActivity::class.java).apply {
+                                        putExtra("requestId", requestId)
+                                    }
+                                    context.startActivity(intent)
+                                    oauthRequestId = requestId
+                                    oauthPolling = true
+                                    oauthError = null
+                                },
+                                onSignOut = {
+                                    // Clear tokens but keep authType=oauth so the OAuth
+                                    // section stays visible with the Sign In button — the
+                                    // user just signed out, they probably want to sign
+                                    // back in (or pick API Key explicitly via the picker).
+                                    // writeConfigJson will translate oauth+blank → api_key
+                                    // for Node so the agent stays startable in the meantime.
+                                    ConfigManager.clearOpenAIOAuth(context)
+                                    config = ConfigManager.loadConfig(context)
+                                    showRestartDialog = true
+                                },
+                                onCancelPolling = {
+                                    oauthPolling = false
+                                    oauthError = null
+                                },
+                                oauthPolling = oauthPolling,
+                                oauthError = oauthError,
+                            )
+                        }
                     }
                     "openrouter" -> {
                         val modelCtxDisplay = config?.openrouterModelContext?.ifBlank { null }
@@ -374,7 +564,14 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                         scope.launch {
                             val result = when (activeProvider) {
                                 "openrouter" -> testOpenRouterConnection(config?.openrouterApiKey ?: "")
-                                "openai" -> testOpenAIConnection(config?.openaiApiKey ?: "")
+                                "openai" -> {
+                                    val authType = config?.authType ?: "api_key"
+                                    if (authType == "oauth") {
+                                        testOpenAIOAuthConnection(config?.openaiOAuthToken ?: "")
+                                    } else {
+                                        testOpenAIConnection(config?.openaiApiKey ?: "")
+                                    }
+                                }
                                 "custom" -> testCustomConnection(
                                     endpointUrl = config?.customBaseUrl ?: "",
                                     apiKey = config?.customApiKey ?: "",
@@ -509,10 +706,18 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
     }
 
     // Model picker dialog — shows models for active provider only (skip for freeform providers)
-    if (showModelPicker && modelsForProvider(activeProvider).isNotEmpty()) {
-        val models = modelsForProvider(activeProvider)
+    if (showModelPicker && modelsForProvider(activeProvider, config?.authType).isNotEmpty()) {
+        val models = modelsForProvider(activeProvider, config?.authType)
         var selectedModel by remember {
-            mutableStateOf(models.firstOrNull { it.id == config?.model }?.id ?: models.firstOrNull()?.id ?: "")
+            // Preserve the user's current model even when it's not in the known list —
+            // otherwise opening the picker would silently overwrite a custom model ID.
+            val current = config?.model.orEmpty()
+            mutableStateOf(
+                when {
+                    current.isNotBlank() -> current
+                    else -> models.firstOrNull()?.id ?: ""
+                }
+            )
         }
 
         AlertDialog(
@@ -527,6 +732,14 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
             },
             text = {
                 Column {
+                    // CUSTOM_MODEL_SENTINEL is a sentinel for "user wants to type a model ID" — never display
+                    // it as the model ID itself, and don't treat it as a real selection.
+                    val isCustomSelected = selectedModel == CUSTOM_MODEL_SENTINEL ||
+                        (models.none { it.id == selectedModel } && selectedModel.isNotBlank())
+                    var customModelId by remember {
+                        mutableStateOf(if (isCustomSelected && selectedModel != CUSTOM_MODEL_SENTINEL) selectedModel else "")
+                    }
+
                     models.forEach { model ->
                         Row(
                             modifier = Modifier
@@ -545,7 +758,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                             )
                             Column(modifier = Modifier.padding(start = 8.dp)) {
                                 Text(
-                                    text = "${model.displayName} (${model.description})",
+                                    text = model.displayName,
                                     fontFamily = RethinkSans,
                                     fontSize = 14.sp,
                                     color = SeekerClawColors.TextPrimary,
@@ -559,17 +772,69 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                             }
                         }
                     }
+                    // Custom model option
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { selectedModel = customModelId.ifBlank { CUSTOM_MODEL_SENTINEL } }
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(
+                            selected = isCustomSelected || selectedModel == CUSTOM_MODEL_SENTINEL,
+                            onClick = { selectedModel = customModelId.ifBlank { CUSTOM_MODEL_SENTINEL } },
+                            colors = RadioButtonDefaults.colors(
+                                selectedColor = SeekerClawColors.Primary,
+                                unselectedColor = SeekerClawColors.TextDim,
+                            ),
+                        )
+                        Column(modifier = Modifier.padding(start = 8.dp).fillMaxWidth()) {
+                            Text(
+                                text = "Custom model",
+                                fontFamily = RethinkSans,
+                                fontSize = 14.sp,
+                                color = SeekerClawColors.TextPrimary,
+                            )
+                            OutlinedTextField(
+                                value = customModelId,
+                                onValueChange = {
+                                    customModelId = it
+                                    // Update selectedModel even when blank — point at the sentinel
+                                    // so canSave (which excludes the sentinel) disables Save.
+                                    selectedModel = it.ifBlank { CUSTOM_MODEL_SENTINEL }
+                                },
+                                placeholder = { Text("e.g. gpt-5.4-pro", fontSize = 12.sp) },
+                                textStyle = androidx.compose.ui.text.TextStyle(
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 12.sp,
+                                    color = SeekerClawColors.TextPrimary,
+                                ),
+                                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                                singleLine = true,
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = SeekerClawColors.Primary,
+                                    unfocusedBorderColor = SeekerClawColors.TextDim,
+                                    cursorColor = SeekerClawColors.Primary,
+                                ),
+                            )
+                        }
+                    }
                 }
             },
             confirmButton = {
+                val canSave = selectedModel.isNotBlank() && selectedModel != CUSTOM_MODEL_SENTINEL
                 TextButton(
                     onClick = {
-                        saveField("model", selectedModel, needsRestart = true)
-                        Analytics.modelSelected(selectedModel)
-                        showModelPicker = false
+                        if (canSave) {
+                            saveField("model", selectedModel, needsRestart = true)
+                            Analytics.modelSelected(selectedModel)
+                            showModelPicker = false
+                        }
                     },
+                    enabled = canSave,
                 ) {
-                    Text("Save", fontFamily = RethinkSans, fontWeight = FontWeight.Bold, color = SeekerClawColors.ActionPrimary)
+                    Text("Save", fontFamily = RethinkSans, fontWeight = FontWeight.Bold,
+                        color = if (canSave) SeekerClawColors.ActionPrimary else SeekerClawColors.TextDim)
                 }
             },
             dismissButton = {
@@ -582,10 +847,17 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
         )
     }
 
-    // Auth type picker (Claude only)
+    // Auth type picker (Claude + OpenAI)
     if (showAuthTypePicker) {
-        val authOptions = listOf("api_key" to "API Key", "setup_token" to "Pro/Max Setup Token")
-        var selectedAuth by remember { mutableStateOf(config?.authType ?: "api_key") }
+        val authOptions = when (activeProvider) {
+            "openai" -> listOf("oauth" to "ChatGPT OAuth", "api_key" to "API Key")
+            else -> listOf("api_key" to "API Key", "setup_token" to "Pro/Max Setup Token")
+        }
+        // Normalize: ensure selectedAuth is a valid option for the current provider
+        val validAuthTypes = authOptions.map { it.first }.toSet()
+        var selectedAuth by remember {
+            mutableStateOf((config?.authType ?: "api_key").let { if (it in validAuthTypes) it else "api_key" })
+        }
 
         AlertDialog(
             onDismissRequest = { showAuthTypePicker = false },
@@ -621,7 +893,8 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                     }
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "Both credentials are stored. Switching just changes which one is used.",
+                        text = if (activeProvider == "openai") "Switching auth type changes how you authenticate with OpenAI."
+                               else "Both credentials are stored. Switching just changes which one is used.",
                         fontFamily = RethinkSans,
                         fontSize = 12.sp,
                         color = SeekerClawColors.TextDim,
@@ -631,12 +904,44 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
             confirmButton = {
                 TextButton(
                     onClick = {
+                        // Persist the user's selection immediately. If they pick "oauth"
+                        // without a token yet, that's fine — the OAuth section will render
+                        // with a Sign In button. resolveAuthType() preserves the
+                        // "oauth selected, sign-in pending" state in SharedPreferences;
+                        // the oauth+blank → api_key fallback only happens at writeConfigJson
+                        // time so Node never sees an unstartable combination.
                         saveField("authType", selectedAuth, needsRestart = true)
+                        context.getSharedPreferences("seekerclaw_prefs", android.content.Context.MODE_PRIVATE)
+                            .edit()
+                            .putString("lastAuthType_$activeProvider", selectedAuth)
+                            .apply()
+                        if (activeProvider == "openai") {
+                            val currentModel = config?.model ?: ""
+                            val allowedModels = modelsForProvider("openai", selectedAuth)
+                            if (allowedModels.none { it.id == currentModel }) {
+                                val fallback = allowedModels.firstOrNull()?.id ?: "gpt-5.4"
+                                saveField("model", fallback, needsRestart = false)
+                            }
+                            // If switching away from OAuth, clear any leftover OAuth UI state
+                            // so the API key field renders cleanly. The showOAuthSection guard
+                            // is forced on by oauthError/oauthPolling — without this clear, a
+                            // prior OAuth error would keep the OAuth section visible.
+                            if (selectedAuth == "api_key") {
+                                oauthPolling = false
+                                oauthError = null
+                                oauthRequestId = null
+                            }
+                        }
                         Analytics.authTypeChanged(selectedAuth)
                         showAuthTypePicker = false
                     },
                 ) {
-                    Text("Save", fontFamily = RethinkSans, fontWeight = FontWeight.Bold, color = SeekerClawColors.ActionPrimary)
+                    Text(
+                        "Save",
+                        fontFamily = RethinkSans,
+                        fontWeight = FontWeight.Bold,
+                        color = SeekerClawColors.ActionPrimary,
+                    )
                 }
             },
             dismissButton = {
@@ -692,6 +997,123 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
             context = context,
             onDismiss = { showRestartDialog = false },
         )
+    }
+}
+
+@Composable
+private fun OpenAIOAuthSection(
+    isConnected: Boolean,
+    email: String,
+    onSignInBrowser: () -> Unit,
+    onSignOut: () -> Unit,
+    onCancelPolling: () -> Unit,
+    oauthPolling: Boolean,
+    oauthError: String?,
+) {
+    val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
+
+    Column(modifier = Modifier.padding(16.dp)) {
+        // Warning card
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(SeekerClawColors.Warning.copy(alpha = 0.1f), shape)
+                .padding(12.dp),
+        ) {
+            Text(
+                text = "Uses your ChatGPT subscription via Codex OAuth.",
+                fontFamily = RethinkSans,
+                fontSize = 13.sp,
+                color = SeekerClawColors.Warning,
+            )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        if (isConnected) {
+            // Connected state
+            Text(
+                text = "Connected as:",
+                fontFamily = RethinkSans,
+                fontSize = 12.sp,
+                color = SeekerClawColors.TextDim,
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = email.ifBlank { "Unknown account" },
+                fontFamily = RethinkSans,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
+                color = SeekerClawColors.ActionPrimary,
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            Button(
+                onClick = onSignOut,
+                modifier = Modifier.fillMaxWidth(),
+                shape = shape,
+                colors = ButtonDefaults.buttonColors(
+                    // Use the same destructive-action red as Reset/Wipe buttons elsewhere
+                    // for visual consistency across the app's destructive surfaces.
+                    containerColor = SeekerClawColors.ActionDanger,
+                    contentColor = Color.White,
+                ),
+            ) {
+                Text("Sign Out", fontFamily = RethinkSans, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+            }
+        } else if (oauthPolling) {
+            // Waiting for browser authentication
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    strokeWidth = 2.dp,
+                    color = SeekerClawColors.ActionPrimary,
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Waiting for authentication...",
+                    fontFamily = RethinkSans,
+                    fontSize = 13.sp,
+                    color = SeekerClawColors.TextDim,
+                )
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+            OutlinedButton(
+                onClick = onCancelPolling,
+                modifier = Modifier.fillMaxWidth(),
+                shape = shape,
+                border = BorderStroke(1.dp, SeekerClawColors.TextDim),
+            ) {
+                Text("Cancel", fontFamily = RethinkSans, fontSize = 14.sp, color = SeekerClawColors.TextPrimary)
+            }
+        } else {
+            // Not connected — show sign in buttons
+            Button(
+                onClick = onSignInBrowser,
+                modifier = Modifier.fillMaxWidth(),
+                shape = shape,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = SeekerClawColors.ActionPrimary,
+                    contentColor = Color.White,
+                ),
+            ) {
+                Text("Sign in with ChatGPT", fontFamily = RethinkSans, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+            }
+        }
+
+        // Error message
+        if (oauthError != null) {
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                text = oauthError,
+                fontFamily = RethinkSans,
+                fontSize = 13.sp,
+                color = SeekerClawColors.Error,
+            )
+        }
     }
 }
 
@@ -765,6 +1187,34 @@ private suspend fun testOpenRouterConnection(apiKey: String): Result<Unit> = wit
                 else -> apiMessage.ifBlank { "HTTP $status" }
             }
             error("Connection failed ($errorMessage)")
+        } catch (_: java.net.SocketTimeoutException) {
+            error("Connection timed out")
+        } catch (_: java.io.IOException) {
+            error("Network unreachable or timeout")
+        } finally { conn.disconnect() }
+    }
+}
+
+private suspend fun testOpenAIOAuthConnection(accessToken: String): Result<Unit> = withContext(Dispatchers.IO) {
+    runCatching {
+        if (accessToken.isBlank()) error("OAuth token is empty — please sign in first")
+        // OAuth tokens use the Codex endpoint; /v1/models won't work.
+        // Use a lightweight GET to chatgpt.com/backend-api/me to verify the token is still valid.
+        val url = URL("https://chatgpt.com/backend-api/me")
+        val conn = url.openConnection() as HttpURLConnection
+        conn.requestMethod = "GET"
+        conn.setRequestProperty("Authorization", "Bearer $accessToken")
+        conn.connectTimeout = 15000
+        conn.readTimeout = 15000
+        try {
+            val status = conn.responseCode
+            if (status in 200..299) return@runCatching
+            when (status) {
+                401, 403 -> error("OAuth session expired — please sign in again")
+                429 -> error("Rate limited — try again in a moment")
+                in 500..599 -> error("OpenAI unavailable")
+                else -> error("HTTP $status")
+            }
         } catch (_: java.net.SocketTimeoutException) {
             error("Connection timed out")
         } catch (_: java.io.IOException) {

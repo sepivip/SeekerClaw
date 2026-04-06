@@ -1261,6 +1261,12 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
             if (res.status !== 200) {
                 const errClass = classifyApiError(res.status, res.data);
                 if (errClass.retryable && retries < MAX_RETRIES) {
+                    // OAuth 401: refresh token before retry so the next attempt uses new credentials
+                    if (errClass.type === 'auth' && typeof getAdapter(PROVIDER).handleUnauthorized === 'function') {
+                        try { await getAdapter(PROVIDER).handleUnauthorized(); } catch (e) {
+                            if (!e.retryable) { log(`[Retry] OAuth refresh failed, not retrying: ${e.message}`, 'ERROR'); break; }
+                        }
+                    }
                     const retryAfterRaw = parseInt(res.headers?.['retry-after']) || 0;
                     const retryAfterMs = Math.min(retryAfterRaw * 1000, 30000);
                     // Cloudflare errors use longer backoff (5s, 10s, 20s)

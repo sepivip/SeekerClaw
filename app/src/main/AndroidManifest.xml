@@ -62,6 +62,11 @@
             android:exported="false" />
 
         <activity
+            android:name=".oauth.OpenAIOAuthActivity"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:exported="false" />
+
+        <activity
             android:name=".camera.CameraCaptureActivity"
             android:theme="@style/Theme.SeekerClaw"
             android:excludeFromRecents="true"

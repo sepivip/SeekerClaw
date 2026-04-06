@@ -108,7 +108,11 @@ fun DashboardScreen(
     }
     val hasCredential = remember(config) {
         when (config?.provider) {
-            "openai" -> config?.openaiApiKey?.isNotBlank() == true
+            // OpenAI is valid if EITHER credential is present — writeConfigJson falls
+            // back to api_key when oauth is selected without a token, so the agent is
+            // startable as long as one of the two is non-blank.
+            "openai" -> config?.openaiOAuthToken?.isNotBlank() == true ||
+                config?.openaiApiKey?.isNotBlank() == true
             "openrouter" -> config?.openrouterApiKey?.isNotBlank() == true
             "custom" -> config?.customApiKey?.isNotBlank() == true && config?.customBaseUrl?.isNotBlank() == true
             else -> config?.activeCredential?.isNotBlank() == true

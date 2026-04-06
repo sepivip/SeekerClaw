@@ -951,7 +951,7 @@ fun SettingsScreen(
 
         CardSurface {
             InfoRow("Version", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
-            InfoRow("OpenClaw", BuildConfig.OPENCLAW_VERSION)
+            InfoRow("Claw Engine", BuildConfig.OPENCLAW_VERSION)
             InfoRow("Node.js", BuildConfig.NODEJS_VERSION, isLast = true)
         }
 

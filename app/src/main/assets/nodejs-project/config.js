@@ -117,6 +117,35 @@ const _rawProvider = (typeof config.provider === 'string' && config.provider.tri
 const PROVIDER = _SUPPORTED_PROVIDERS.has(_rawProvider) ? _rawProvider : 'claude';
 const ANTHROPIC_KEY = normalizeSecret(config.anthropicApiKey);
 const OPENAI_KEY = normalizeSecret(config.openaiApiKey || '');
+const OPENAI_OAUTH_TOKEN = normalizeSecret(config.openaiOAuthToken || '');
+const OPENAI_OAUTH_REFRESH = normalizeSecret(config.openaiOAuthRefresh || '');
+
+// Normalize authType (trim/lowercase) so values like " OAuth\n" don't silently fall
+// through to api_key. For OpenAI, alias known legacy values (e.g. "setup_token" left
+// over from when the user was on Anthropic) to "api_key" so older installs don't
+// hard-crash on startup. Truly unknown values still throw to prevent accidentally
+// charging the user's platform API key.
+const _SUPPORTED_OPENAI_AUTH_TYPES = new Set(['api_key', 'oauth']);
+const _LEGACY_OPENAI_AUTH_TYPE_ALIASES = new Map([
+    ['setup_token', 'api_key'],
+]);
+const _rawAuthType = typeof config.authType === 'string' ? config.authType.trim().toLowerCase() : '';
+let AUTH_TYPE = _rawAuthType || 'api_key';
+
+if (PROVIDER === 'openai' && _LEGACY_OPENAI_AUTH_TYPE_ALIASES.has(AUTH_TYPE)) {
+    const aliased = _LEGACY_OPENAI_AUTH_TYPE_ALIASES.get(AUTH_TYPE);
+    log(`[Config] Normalizing legacy OpenAI authType ${JSON.stringify(config.authType)} → ${JSON.stringify(aliased)}`, 'WARN');
+    AUTH_TYPE = aliased;
+}
+
+if (PROVIDER === 'openai' && !_SUPPORTED_OPENAI_AUTH_TYPES.has(AUTH_TYPE)) {
+    throw new Error(`Invalid OpenAI authType: ${JSON.stringify(config.authType)}. Supported values are "api_key" and "oauth".`);
+}
+
+// OpenAI auth type strictly follows the (normalized, validated) authType — no silent
+// fallback. The credential validation below will fail fast on missing OAuth token.
+const OPENAI_AUTH_TYPE = AUTH_TYPE === 'oauth' ? 'oauth' : 'api_key';
+
 const OPENROUTER_KEY = normalizeSecret(config.openrouterApiKey || '');
 const CUSTOM_KEY = normalizeSecret(config.customApiKey || '');
 const CUSTOM_BASE_URL = (typeof config.customBaseUrl === 'string' ? config.customBaseUrl : '').trim();
@@ -125,7 +154,6 @@ const CUSTOM_FORMAT = (typeof config.customFormat === 'string' ? config.customFo
 const OPENROUTER_FALLBACK_MODEL = (typeof config.openrouterFallbackModel === 'string' ? config.openrouterFallbackModel : '').trim();
 const OPENROUTER_MODEL_CONTEXT = parseInt(config.openrouterModelContext, 10) || 0;
 const OPENROUTER_FALLBACK_CONTEXT = parseInt(config.openrouterFallbackContext, 10) || 0;
-const AUTH_TYPE = config.authType || 'api_key';
 const _defaultModel = PROVIDER === 'openai' ? 'gpt-5.2'
     : PROVIDER === 'openrouter' ? 'anthropic/claude-sonnet-4-6'
     : PROVIDER === 'custom' ? ''
@@ -186,7 +214,8 @@ const MCP_SERVERS = (config.mcpServers || [])
     .filter((server) => server && typeof server === 'object' && server.url);
 
 // Validate: channel token required per channel; API key required for active provider only
-const _activeKey = PROVIDER === 'openai' ? OPENAI_KEY
+// For OpenAI: validate based on effective auth type (api_key needs API key, oauth needs OAuth token)
+const _activeKey = PROVIDER === 'openai' ? (OPENAI_AUTH_TYPE === 'oauth' ? OPENAI_OAUTH_TOKEN : OPENAI_KEY)
     : PROVIDER === 'openrouter' ? OPENROUTER_KEY
     : PROVIDER === 'custom' ? CUSTOM_KEY
     : ANTHROPIC_KEY;
@@ -199,7 +228,7 @@ if (CHANNEL === 'discord' && !DISCORD_TOKEN) {
     process.exit(1);
 }
 if (!_activeKey) {
-    const keyName = PROVIDER === 'openai' ? 'openaiApiKey'
+    const keyName = PROVIDER === 'openai' ? 'openaiApiKey or openaiOAuthToken'
         : PROVIDER === 'openrouter' ? 'openrouterApiKey'
         : PROVIDER === 'custom' ? 'customApiKey'
         : 'anthropicApiKey';
@@ -504,6 +533,7 @@ module.exports = {
     PROVIDER,
     ANTHROPIC_KEY,
     OPENAI_KEY,
+    OPENAI_OAUTH_TOKEN, OPENAI_OAUTH_REFRESH, OPENAI_AUTH_TYPE,
     OPENROUTER_KEY,
     CUSTOM_KEY,
     CUSTOM_BASE_URL,

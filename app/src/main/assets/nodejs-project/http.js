@@ -235,7 +235,15 @@ function httpOpenAIStreamingRequest(options, body = null) {
         try {
         req = getClient(options).request(options, (res) => {
             const ct = res.headers['content-type'] || '';
-            if (res.statusCode !== 200 || !ct.includes('text/event-stream')) {
+            // Codex endpoint (chatgpt.com) sometimes streams SSE without a Content-Type
+            // header. We treat 200-from-chatgpt.com-without-CT as SSE on faith; if Codex
+            // ever returns a non-SSE 200 with an empty Content-Type, the SSE parser below
+            // tracks parsedEventCount and throws a clear "looked like SSE but no events
+            // parsed" error at end-of-stream rather than the generic "Stream ended" one.
+            const isCodexHost = options.hostname === 'chatgpt.com';
+            const isSSE = ct.includes('text/event-stream') ||
+                (res.statusCode === 200 && isCodexHost && ct.trim() === '');
+            if (res.statusCode !== 200 || !isSSE) {
                 res.setEncoding('utf8');
                 let data = '';
                 res.on('data', chunk => data += chunk);
@@ -257,6 +265,7 @@ function httpOpenAIStreamingRequest(options, body = null) {
             const funcArgAccum = {}; // output_index → accumulated arguments string
             let accumulatedUsage = null;
             let sseBuffer = '';
+            let parsedEventCount = 0; // tracks successful SSE event parses for end-of-stream diagnostics
 
             // Build response from accumulated deltas (fallback path)
             const buildFromAccum = () => {
@@ -305,6 +314,7 @@ function httpOpenAIStreamingRequest(options, body = null) {
 
                     let parsed;
                     try { parsed = JSON.parse(eventData); } catch (_) { continue; }
+                    parsedEventCount++;
 
                     switch (eventType) {
                         case 'response.output_item.added':
@@ -364,6 +374,15 @@ function httpOpenAIStreamingRequest(options, body = null) {
                     // Stream ended without response.completed — build from accumulated deltas
                     if (Object.keys(outputItems).length > 0) {
                         settle(resolve, { status: 200, data: buildFromAccum(), headers: res.headers });
+                    } else if (parsedEventCount === 0 && sseBuffer.length > 0) {
+                        // We assumed SSE (Codex header-less case) but the body never produced
+                        // a single parseable SSE event. Keep the error message generic so
+                        // arbitrary response-body content isn't embedded into err.message
+                        // (which ai.js logs verbatim).
+                        console.warn(`[http] Expected SSE but no events parsed (${sseBuffer.length} bytes); body preview: ${sseBuffer.slice(0, 200).replace(/\s+/g, ' ')}`);
+                        const err = new Error('Expected SSE but no events parsed');
+                        err.timeoutSource = 'transport';
+                        settle(reject, err);
                     } else {
                         const err = new Error('Stream ended before response.completed');
                         err.timeoutSource = 'transport';

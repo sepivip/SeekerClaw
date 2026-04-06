@@ -32,7 +32,7 @@ class BootReceiver : BroadcastReceiver() {
             return
         }
 
-        LogCollector.append("[Boot] Auto-starting OpenClaw service...")
+        LogCollector.append("[Boot] Auto-starting Claw Engine...")
         OpenClawService.start(context)
     }
 }
