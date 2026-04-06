@@ -428,15 +428,13 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                                     oauthError = null
                                 },
                                 onSignOut = {
+                                    // Clear tokens but keep authType=oauth so the OAuth
+                                    // section stays visible with the Sign In button — the
+                                    // user just signed out, they probably want to sign
+                                    // back in (or pick API Key explicitly via the picker).
+                                    // writeConfigJson will translate oauth+blank → api_key
+                                    // for Node so the agent stays startable in the meantime.
                                     ConfigManager.clearOpenAIOAuth(context)
-                                    // Flip authType to api_key so the next Node startup
-                                    // doesn't trip the strict validation (oauth without
-                                    // a token would otherwise hard-crash on launch).
-                                    saveField("authType", "api_key", needsRestart = true)
-                                    context.getSharedPreferences("seekerclaw_prefs", android.content.Context.MODE_PRIVATE)
-                                        .edit()
-                                        .putString("lastAuthType_openai", "api_key")
-                                        .apply()
                                     config = ConfigManager.loadConfig(context)
                                     showRestartDialog = true
                                 },
