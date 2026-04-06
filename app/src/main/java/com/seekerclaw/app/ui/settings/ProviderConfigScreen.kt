@@ -170,6 +170,10 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
     fun switchProvider(newProviderId: String) {
         val oldProviderId = config?.provider ?: "claude"
         val currentModel = config?.model ?: ""
+        // Capture authType BEFORE saveField("provider", ...) — saveField triggers a config
+        // reload that may normalize/mutate authType, which would otherwise corrupt the
+        // lastAuthType_<oldProvider> we're about to save.
+        val oldAuthType = config?.authType
 
         // Remember the current model for the old provider before switching
         val prefs = context.getSharedPreferences("seekerclaw_prefs", android.content.Context.MODE_PRIVATE)
@@ -182,11 +186,11 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
         // We also remember the user's last-used authType per provider (similar to
         // lastModel_*) so an explicit "api_key" choice for OpenAI survives a round-trip
         // through another provider, while a fresh switch-in still defaults to OAuth.
-        val currentAuthType = config?.authType
         val oldProviderAuthKey = "lastAuthType_$oldProviderId"
-        if (currentAuthType != null) {
-            prefs.edit().putString(oldProviderAuthKey, currentAuthType).apply()
+        if (oldAuthType != null) {
+            prefs.edit().putString(oldProviderAuthKey, oldAuthType).apply()
         }
+        val currentAuthType = oldAuthType
         val savedNewAuthType = prefs.getString("lastAuthType_$newProviderId", null)
         val effectiveAuthType = when (newProviderId) {
             "openai" -> when (savedNewAuthType) {

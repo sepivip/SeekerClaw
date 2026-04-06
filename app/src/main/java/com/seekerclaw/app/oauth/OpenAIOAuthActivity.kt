@@ -12,6 +12,7 @@ import fi.iki.elonen.NanoHTTPD
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancel
@@ -321,8 +322,22 @@ class OpenAIOAuthActivity : ComponentActivity() {
             return buildHtmlResponse("Error", "No authorization code received.")
         }
 
-        // Exchange code for tokens asynchronously in a coroutine after returning the NanoHTTPD response.
-        scope.launch {
+        // Claim the write slot HERE, before launching the exchange. This closes the race
+        // window where onDestroy() (e.g. user kills the activity right after the redirect)
+        // could otherwise sneak in and write a "canceled" result before the exchange
+        // coroutine even starts. The exchange will see the slot already claimed and just
+        // markWriteCompleted() when done.
+        if (!claimWrite()) {
+            Log.w(TAG, "Write slot already claimed before exchange could start")
+            return buildHtmlResponse("Error", "Sign-in already completed in another tab.")
+        }
+
+        // Run the exchange on GlobalScope (not the activity scope) so it survives activity
+        // destruction (rotation, system reclaim, fast back-press). The exchange persists
+        // tokens via ConfigManager and writes the result file — both are application-level
+        // side effects that must complete regardless of UI lifecycle.
+        @OptIn(kotlinx.coroutines.DelicateCoroutinesApi::class)
+        GlobalScope.launch(Dispatchers.IO) {
             exchangeCodeForTokens(requestId, code, codeVerifier)
         }
 
@@ -337,13 +352,9 @@ class OpenAIOAuthActivity : ComponentActivity() {
         code: String,
         codeVerifier: String
     ) {
-        // Claim the write slot at the very start of the exchange so onDestroy() can't
-        // emit a "canceled" result over an in-flight token persistence. If we can't
-        // claim, another path (cancel/timeout) is already terminating — bail out.
-        if (!claimWrite()) {
-            Log.w(TAG, "Token exchange skipped — write slot already claimed by another path")
-            return
-        }
+        // The write slot was claimed by handleCallback() before this coroutine was
+        // launched, so we can proceed straight to the exchange. We just need to make
+        // sure markWriteCompleted() is called on every exit path.
         try {
             val tokenResponse = withContext(Dispatchers.IO) {
                 val body = buildString {
