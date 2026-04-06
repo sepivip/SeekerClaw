@@ -130,6 +130,41 @@ object ConfigManager {
     private const val KEY_OPENAI_OAUTH_TOKEN_ENC = "openai_oauth_token_enc"
     private const val KEY_OPENAI_OAUTH_REFRESH_ENC = "openai_oauth_refresh_enc"
     private const val KEY_OPENAI_OAUTH_EMAIL_ENC = "openai_oauth_email_enc"
+
+    // Process-lifetime flag so the authType migration write only runs ONCE per process,
+    // making subsequent loadConfig() calls side-effect-free. The migration logic still
+    // returns a normalized value on every call so the in-memory AppConfig is always
+    // consistent — only the persistence write is gated.
+    @Volatile
+    private var authTypeMigrated = false
+
+    @Volatile
+    private var emailMigrated = false
+
+    private fun resolveAuthType(p: SharedPreferences, openaiOAuthToken: String): String {
+        // Migrate legacy/invalid authType combinations so Node's strict validation
+        // doesn't hard-crash on older installs and the UI doesn't drift from persisted
+        // state. Rules:
+        //  - OpenAI only supports "api_key" or "oauth".
+        //  - OpenAI + "oauth" requires a non-blank token; otherwise normalize to "api_key"
+        //    (Keystore invalidation, data restore, or manual clear leaves a stale state).
+        //  - Non-Claude providers can't use "setup_token".
+        val raw = p.getString(KEY_AUTH_TYPE, "api_key") ?: "api_key"
+        val provider = p.getString(KEY_PROVIDER, "claude") ?: "claude"
+        val openaiTokenBlank = openaiOAuthToken.isBlank()
+        val normalized = when {
+            provider == "openai" && raw == "oauth" && openaiTokenBlank -> "api_key"
+            provider == "openai" && raw != "oauth" && raw != "api_key" -> "api_key"
+            provider != "claude" && raw == "setup_token" -> "api_key"
+            else -> raw
+        }
+        if (normalized != raw && !authTypeMigrated) {
+            Log.w(TAG, "Normalizing authType '$raw' → '$normalized' (provider=$provider, tokenBlank=$openaiTokenBlank)")
+            p.edit().putString(KEY_AUTH_TYPE, normalized).apply()
+            authTypeMigrated = true
+        }
+        return normalized
+    }
     private const val KEY_OPENAI_OAUTH_EXPIRES_AT = "openai_oauth_expires_at"
 
     private fun prefs(context: Context): SharedPreferences =
@@ -459,10 +494,10 @@ object ConfigManager {
             val enc = p.getString(KEY_OPENAI_OAUTH_EMAIL_ENC, null)
             if (enc != null) {
                 KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP))
-            } else {
-                // One-time migration: pull any legacy plaintext value, persist it
-                // encrypted under the new key, then drop the old key so we don't keep
-                // PII unencrypted on disk (and the value survives subsequent launches).
+            } else if (!emailMigrated) {
+                // One-time per-process migration: pull any legacy plaintext value, persist
+                // it encrypted under the new key, then drop the old key. Gated by the
+                // emailMigrated flag so subsequent loadConfig() calls don't re-touch prefs.
                 val legacy = p.getString("openai_oauth_email", "") ?: ""
                 if (legacy.isNotBlank()) {
                     val encLegacy = KeystoreHelper.encrypt(legacy)
@@ -471,7 +506,10 @@ object ConfigManager {
                         .remove("openai_oauth_email")
                         .apply()
                 }
+                emailMigrated = true
                 legacy
+            } else {
+                ""
             }
         } catch (e: Exception) {
             Log.w(TAG, "Failed to decrypt OpenAI OAuth email", e)
@@ -482,30 +520,7 @@ object ConfigManager {
         return AppConfig(
             anthropicApiKey = apiKey,
             setupToken = setupToken,
-            authType = run {
-                // Migrate legacy/invalid authType combinations so Node's strict validation
-                // doesn't hard-crash on older installs and the UI doesn't drift from
-                // persisted state. Rules:
-                //  - OpenAI only supports "api_key" or "oauth".
-                //  - OpenAI + "oauth" requires a non-blank token; otherwise normalize to
-                //    "api_key" (Keystore invalidation, data restore, or manual clear can
-                //    leave a stale "oauth" with empty token, which would crash Node).
-                //  - Non-Claude providers can't use "setup_token".
-                val raw = p.getString(KEY_AUTH_TYPE, "api_key") ?: "api_key"
-                val provider = p.getString(KEY_PROVIDER, "claude") ?: "claude"
-                val openaiTokenBlank = openaiOAuthToken.isBlank()
-                val normalized = when {
-                    provider == "openai" && raw == "oauth" && openaiTokenBlank -> "api_key"
-                    provider == "openai" && raw != "oauth" && raw != "api_key" -> "api_key"
-                    provider != "claude" && raw == "setup_token" -> "api_key"
-                    else -> raw
-                }
-                if (normalized != raw) {
-                    Log.w(TAG, "Normalizing authType '$raw' → '$normalized' (provider=$provider, tokenBlank=$openaiTokenBlank)")
-                    p.edit().putString(KEY_AUTH_TYPE, normalized).apply()
-                }
-                normalized
-            },
+            authType = resolveAuthType(p, openaiOAuthToken),
             telegramBotToken = botToken,
             telegramOwnerId = loadOwnerIdFromFile(context, "telegram"),
             model = p.getString(KEY_MODEL, "claude-opus-4-6") ?: "claude-opus-4-6",

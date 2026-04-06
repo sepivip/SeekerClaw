@@ -313,14 +313,16 @@ class OpenAIOAuthActivity : ComponentActivity() {
         // If the activity is dismissed (Back button, system kill, swipe-away) BEFORE a
         // valid callback has arrived AND no other path has claimed the write slot, leave
         // a canceled result so ProviderConfigScreen stops polling immediately. We MUST
-        // gate on !callbackReceived — if a callback has already arrived, the GlobalScope
-        // exchange is in flight and writing a synthetic "canceled" here would race a
-        // real sign-in and produce a misleading status.
+        // gate on !callbackReceived — if a callback has already arrived, the EXCHANGE_SCOPE
+        // exchange is in flight and writing a synthetic "canceled" here would race a real
+        // sign-in and produce a misleading status. Use EXCHANGE_SCOPE (application-
+        // lifetime) instead of scope (being cancelled here) so the write actually runs.
         val reqId = currentRequestId
         if (reqId != null && !callbackReceived && claimWrite()) {
-            Thread {
+            val appCtx = applicationContext
+            EXCHANGE_SCOPE.launch {
                 try {
-                    writeResultFile(reqId, JSONObject().apply {
+                    writeResultFileStatic(appCtx, reqId, JSONObject().apply {
                         put("status", "error")
                         put("message", "Sign-in canceled")
                     })
@@ -329,7 +331,7 @@ class OpenAIOAuthActivity : ComponentActivity() {
                 } finally {
                     markWriteCompleted()
                 }
-            }.start()
+            }
         }
         scope.cancel()
     }
@@ -540,26 +542,25 @@ class OpenAIOAuthActivity : ComponentActivity() {
         try {
             doWriteResultFile(requestId, result)
         } catch (e: Exception) {
-            // Storage full or filesystem error. Try once more in a fresh thread after a
-            // short delay (transient issues like brief storage pressure can self-resolve).
-            // If that also fails, fall back to writing a minimal status file with no JSON
-            // body so the polling UI at least sees *something* and stops spinning.
+            // Storage full or filesystem error. Retry once on EXCHANGE_SCOPE after a
+            // short delay (transient pressure self-resolves). If retry also fails, write
+            // a minimal status-only file so the polling UI sees *something* and stops.
             Log.e(TAG, "Failed to write OAuth result file for requestId=$requestId", e)
-            Thread {
+            val appCtx = applicationContext
+            EXCHANGE_SCOPE.launch {
+                kotlinx.coroutines.delay(500)
                 try {
-                    Thread.sleep(500)
-                    doWriteResultFile(requestId, result)
+                    writeResultFileStatic(appCtx, requestId, result)
                     Log.i(TAG, "Result file write succeeded on retry")
                 } catch (retry: Exception) {
                     Log.e(TAG, "Result file retry also failed", retry)
-                    // Last-ditch: write a minimal status-only file so the UI stops polling.
                     try {
-                        File(filesDir, RESULTS_DIR).apply { mkdirs() }
+                        File(appCtx.filesDir, RESULTS_DIR).apply { mkdirs() }
                             .resolve("$requestId.json")
                             .writeText("""{"status":"error","message":"Failed to persist OAuth result"}""")
                     } catch (_: Exception) { /* nothing more we can do */ }
                 }
-            }.start()
+            }
             try { finishOnMain() } catch (finishEx: Exception) {
                 Log.e(TAG, "Failed to finish activity after writeResultFile error", finishEx)
             }
