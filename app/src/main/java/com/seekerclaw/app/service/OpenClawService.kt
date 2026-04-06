@@ -96,7 +96,7 @@ class OpenClawService : Service() {
         val newCrashCount = if (now - lastStart < 30_000) crashCount + 1 else 0
         prefs.edit().putLong("last_start", now).putInt("crash_count", newCrashCount).apply()
 
-        LogCollector.append("[Service] Starting OpenClaw service... (attempt ${newCrashCount + 1})")
+        LogCollector.append("[Service] Starting Claw Engine... (attempt ${newCrashCount + 1})")
         ServiceState.updateStatus(ServiceStatus.STARTING)
 
         // Generate per-boot auth token for bridge security
@@ -166,7 +166,7 @@ class OpenClawService : Service() {
 
         // Mark as running
         ServiceState.updateStatus(ServiceStatus.RUNNING)
-        LogCollector.append("[Service] OpenClaw service is now RUNNING")
+        LogCollector.append("[Service] Claw Engine is now RUNNING")
 
         // Start watchdog
         // Note: Node.js can only start once per process. If it dies,
@@ -230,13 +230,13 @@ class OpenClawService : Service() {
             }
         }
 
-        LogCollector.append("[Service] OpenClaw service started")
+        LogCollector.append("[Service] Claw Engine started")
 
         return START_STICKY
     }
 
     override fun onDestroy() {
-        LogCollector.append("[Service] Stopping OpenClaw service...")
+        LogCollector.append("[Service] Stopping Claw Engine...")
         nodeDebugJob?.cancel()
         uptimeJob?.cancel()
         Watchdog.stop()
@@ -262,7 +262,7 @@ class OpenClawService : Service() {
             .putInt("crash_count", 0)
             .apply()
 
-        LogCollector.append("[Service] OpenClaw service stopped")
+        LogCollector.append("[Service] Claw Engine stopped")
         super.onDestroy()
 
         // Service is isolated in :node process. Kill process so Node runtime cannot linger.

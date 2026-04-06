@@ -59,7 +59,7 @@ object NodeBridge {
      * Only re-copies when APK is updated (new install or app update).
      */
     fun extractBundle(context: Context) {
-        LogCollector.append("[Service] Extracting OpenClaw bundle...")
+        LogCollector.append("[Service] Extracting Claw Engine bundle...")
 
         val nodeDir = context.filesDir.absolutePath + "/" + NODE_DIR_NAME
         val entryFile = File(nodeDir, "main.js")
@@ -76,7 +76,7 @@ object NodeBridge {
             saveLastUpdateTime(context)
 
             val fileCount = File(nodeDir).walk().count { it.isFile }
-            LogCollector.append("[Service] OpenClaw bundle extracted ($fileCount files)")
+            LogCollector.append("[Service] Claw Engine bundle extracted ($fileCount files)")
 
             if (!entryFile.isFile) {
                 LogCollector.append("[Service] WARNING: main.js still missing after extraction!", LogLevel.ERROR)

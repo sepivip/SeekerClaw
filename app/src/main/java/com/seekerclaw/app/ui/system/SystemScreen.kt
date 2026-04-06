@@ -126,7 +126,7 @@ fun SystemScreen(onBack: () -> Unit) {
                 append("${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
                 if (BuildConfig.DEBUG) append(" · ${BuildConfig.GIT_SHA}")
             })
-            InfoRow("OpenClaw", BuildConfig.OPENCLAW_VERSION)
+            InfoRow("Claw Engine", BuildConfig.OPENCLAW_VERSION)
             InfoRow(
                 label = "Node.js",
                 value = "${BuildConfig.NODEJS_VERSION} — ${when (status) {
