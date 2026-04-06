@@ -328,7 +328,12 @@ class OpenAIOAuthActivity : ComponentActivity() {
         // lifetime) instead of scope (being cancelled here) so the write actually runs.
         val reqId = currentRequestId
         if (reqId != null && !callbackReceived && claimWrite()) {
+            // Capture only application Context and a local reference to the state
+            // AtomicReference. The launched lambda must NOT call any instance method
+            // (no markWriteCompleted, no writeResultFile, no Log without TAG capture)
+            // so it doesn't pin the Activity beyond destroy.
             val appCtx = applicationContext
+            val stateRef = writeState
             EXCHANGE_SCOPE.launch {
                 try {
                     writeResultFileStatic(appCtx, reqId, JSONObject().apply {
@@ -338,7 +343,7 @@ class OpenAIOAuthActivity : ComponentActivity() {
                 } catch (e: Exception) {
                     Log.w(TAG, "Failed to write canceled result on destroy", e)
                 } finally {
-                    markWriteCompleted()
+                    stateRef.set(WriteState.COMPLETED)
                 }
             }
         }

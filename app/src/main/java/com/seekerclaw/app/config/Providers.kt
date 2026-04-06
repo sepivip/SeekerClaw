@@ -67,14 +67,18 @@ const val OPENROUTER_DEFAULT_MODEL = "anthropic/claude-sonnet-4-6"
 /**
  * Resolve the model list for a given provider.
  *
- * `authType` is required (no default) so call sites can't accidentally fall through to
- * the API-key OpenAI list when the user is in OAuth mode. Pass `null` only when the
- * provider is known to be auth-type-agnostic (e.g. Anthropic), or when the call site
- * truly cannot derive an authType yet (initial setup screens before any provider has
- * been selected).
+ * For OpenAI, `authType` MUST be an explicit "oauth" or "api_key" — passing null or
+ * any other value throws so call sites can't accidentally fall through to the API-key
+ * model list while the user is in OAuth mode. For other providers `authType` is
+ * advisory/ignored.
  */
 fun modelsForProvider(providerId: String, authType: String?): List<ModelInfo> = when (providerId) {
-    "openai" -> if (authType == "oauth") openaiOAuthModels else openaiModels
+    "openai" -> when (authType) {
+        "oauth" -> openaiOAuthModels
+        "api_key" -> openaiModels
+        null -> throw IllegalArgumentException("authType is required for providerId=openai")
+        else -> throw IllegalArgumentException("Unsupported authType '$authType' for providerId=openai")
+    }
     "openrouter", "custom" -> emptyList() // Freeform: user types model ID
     else -> availableModels
 }
