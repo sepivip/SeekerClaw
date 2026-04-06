@@ -179,15 +179,24 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
 
         // Normalize auth type on EVERY provider switch so provider, auth mode,
         // validation, and the model list stay in a consistent persisted state.
-        // - OpenAI defaults to OAuth (ChatGPT subscription); user can change later.
-        // - Anthropic accepts api_key or setup_token; everything else falls back to api_key.
-        // - OpenRouter / custom only support api_key.
-        // Without this, switching openai → claude would leave authType="oauth", which
-        // Claude doesn't support and which silently breaks credential validation.
+        // We also remember the user's last-used authType per provider (similar to
+        // lastModel_*) so an explicit "api_key" choice for OpenAI survives a round-trip
+        // through another provider, while a fresh switch-in still defaults to OAuth.
         val currentAuthType = config?.authType
+        val oldProviderAuthKey = "lastAuthType_$oldProviderId"
+        if (currentAuthType != null) {
+            prefs.edit().putString(oldProviderAuthKey, currentAuthType).apply()
+        }
+        val savedNewAuthType = prefs.getString("lastAuthType_$newProviderId", null)
         val effectiveAuthType = when (newProviderId) {
-            "openai" -> "oauth"
-            "claude" -> if (currentAuthType == "setup_token") "setup_token" else "api_key"
+            "openai" -> when (savedNewAuthType) {
+                "oauth", "api_key" -> savedNewAuthType
+                else -> "oauth" // default for first-time switch into OpenAI
+            }
+            "claude" -> when (savedNewAuthType) {
+                "api_key", "setup_token" -> savedNewAuthType
+                else -> if (currentAuthType == "setup_token") "setup_token" else "api_key"
+            }
             else -> "api_key"
         }
         saveField("authType", effectiveAuthType)
@@ -840,6 +849,11 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                 TextButton(
                     onClick = {
                         saveField("authType", selectedAuth, needsRestart = true)
+                        // Remember per-provider so a round-trip through another provider preserves it.
+                        context.getSharedPreferences("seekerclaw_prefs", android.content.Context.MODE_PRIVATE)
+                            .edit()
+                            .putString("lastAuthType_$activeProvider", selectedAuth)
+                            .apply()
                         // Ensure the selected model is valid for the chosen OpenAI auth type.
                         // OAuth and API-key model lists differ — fall back to a default if not.
                         if (activeProvider == "openai") {

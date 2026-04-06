@@ -13,6 +13,7 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -122,8 +123,11 @@ class OpenAIOAuthActivity : ComponentActivity() {
                 callbackServer?.stop()
                 callbackServer = null
                 if (claimWrite()) {
+                    // NonCancellable so the result write completes even if the activity is
+                    // finished before the coroutine runs (otherwise writeState would stay
+                    // WRITING and the polling UI would hang for the full 10-min timeout).
                     scope.launch {
-                        withContext(Dispatchers.IO) {
+                        withContext(NonCancellable + Dispatchers.IO) {
                             writeResultFile(requestId, JSONObject().apply {
                                 put("status", "error")
                                 put("message", "Sign-in canceled")
@@ -195,7 +199,7 @@ class OpenAIOAuthActivity : ComponentActivity() {
             Log.e(TAG, "Failed to start callback server", e)
             if (claimWrite()) {
                 scope.launch {
-                    withContext(Dispatchers.IO) {
+                    withContext(NonCancellable + Dispatchers.IO) {
                         writeResultFile(requestId, JSONObject().apply {
                             put("status", "error")
                             put("message", "Failed to start callback server: ${e.message}")
@@ -241,7 +245,7 @@ class OpenAIOAuthActivity : ComponentActivity() {
                 Log.w(TAG, "Browser flow timed out after 10 minutes")
                 callbackServer?.stop()
                 callbackServer = null
-                withContext(Dispatchers.IO) {
+                withContext(NonCancellable + Dispatchers.IO) {
                     writeResultFile(requestId, JSONObject().apply {
                         put("status", "error")
                         put("message", "Browser login timed out. Please try again.")
@@ -388,7 +392,8 @@ class OpenAIOAuthActivity : ComponentActivity() {
             }
 
             // We already claimed the write slot at the top of this function.
-            withContext(Dispatchers.IO) {
+            // NonCancellable so a quick onDestroy can't cancel us mid-write.
+            withContext(NonCancellable + Dispatchers.IO) {
                 writeResultFile(requestId, JSONObject().apply {
                     put("status", "success")
                 })
@@ -397,7 +402,7 @@ class OpenAIOAuthActivity : ComponentActivity() {
             Log.i(TAG, "Browser flow completed successfully")
         } catch (e: Exception) {
             Log.e(TAG, "Token exchange failed", e)
-            withContext(Dispatchers.IO) {
+            withContext(NonCancellable + Dispatchers.IO) {
                 writeResultFile(requestId, JSONObject().apply {
                     put("status", "error")
                     put("message", "Token exchange failed: ${e.message}")
