@@ -221,7 +221,7 @@ class OpenAIOAuthActivity : ComponentActivity() {
         }
         // Sanitize requestId — even though the activity is exported=false, we want to
         // ensure the value can never escape filesDir/oauth_results via path traversal.
-        // Accept only canonical UUID format (lowercase hex + dashes).
+        // Accept only UUID format (hex digits, either case, separated by dashes).
         if (!UUID_PATTERN.matches(rawRequestId)) {
             Log.w(TAG, "Rejected non-UUID requestId: ${rawRequestId.take(40)}")
             finish()

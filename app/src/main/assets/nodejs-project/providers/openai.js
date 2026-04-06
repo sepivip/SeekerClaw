@@ -454,12 +454,17 @@ async function refreshOAuthToken() {
                 if (parsed && parsed.access_token) {
                     _currentOAuthToken = parsed.access_token;
                     if (parsed.refresh_token) _currentRefreshToken = parsed.refresh_token;
-                    // Persist via bridge
+                    // Persist via bridge. androidBridgeCall always resolves — even on
+                    // error — so check the resolved value rather than relying on .catch.
                     androidBridgeCall('/openai/oauth/save-tokens', {
                         accessToken: parsed.access_token,
                         refreshToken: parsed.refresh_token || _currentRefreshToken,
                         expiresAt: new Date(Date.now() + (parsed.expires_in || 28800) * 1000).toISOString(),
-                    }).catch(e => log('[OpenAI] Failed to persist refreshed tokens: ' + e.message, 'WARN'));
+                    }).then(result => {
+                        if (result && result.error) {
+                            log('[OpenAI] Failed to persist refreshed tokens: ' + result.error, 'WARN');
+                        }
+                    });
                     resolve(true);
                     return;
                 }

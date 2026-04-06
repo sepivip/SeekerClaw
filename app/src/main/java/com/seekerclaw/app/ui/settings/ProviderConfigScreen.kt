@@ -141,22 +141,31 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                 when (json.optString("status")) {
                     "success" -> {
                         // Tokens were persisted directly by OpenAIOAuthActivity via
-                        // ConfigManager.saveConfig. Now that we have a valid token, also
-                        // flip authType=oauth (the picker intentionally deferred this
-                        // until token-present so a canceled sign-in couldn't strand the
-                        // agent in an unstartable state).
-                        withContext(Dispatchers.IO) {
+                        // ConfigManager.saveConfig. Only apply OpenAI-specific auth state
+                        // changes if OpenAI is still the active provider — the user may
+                        // have switched providers while polling was in progress.
+                        val shouldApply = withContext(Dispatchers.IO) {
                             val current = ConfigManager.loadConfig(context)
-                            if (current != null && !current.openaiOAuthToken.isBlank() && current.authType != "oauth") {
-                                ConfigManager.saveConfig(context, current.copy(authType = "oauth"))
+                            if (current != null &&
+                                current.provider == "openai" &&
+                                current.openaiOAuthToken.isNotBlank()
+                            ) {
+                                if (current.authType != "oauth") {
+                                    ConfigManager.saveConfig(context, current.copy(authType = "oauth"))
+                                }
+                                true
+                            } else {
+                                false
                             }
                         }
-                        context.getSharedPreferences("seekerclaw_prefs", android.content.Context.MODE_PRIVATE)
-                            .edit()
-                            .putString("lastAuthType_openai", "oauth")
-                            .apply()
-                        config = withContext(Dispatchers.IO) { ConfigManager.loadConfig(context) }
-                        showRestartDialog = true
+                        if (shouldApply) {
+                            context.getSharedPreferences("seekerclaw_prefs", android.content.Context.MODE_PRIVATE)
+                                .edit()
+                                .putString("lastAuthType_openai", "oauth")
+                                .apply()
+                            config = withContext(Dispatchers.IO) { ConfigManager.loadConfig(context) }
+                            showRestartDialog = true
+                        }
                         oauthPolling = false
                     }
                     "error" -> {
@@ -203,6 +212,14 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
         // reload that may normalize/mutate authType, which would otherwise corrupt the
         // lastAuthType_<oldProvider> we're about to save.
         val oldAuthType = config?.authType
+        // Cancel any in-progress OAuth polling — leaving it running across a provider
+        // switch would let a stale callback flip authType back or pop a restart dialog
+        // for a provider the user already left.
+        if (oldProviderId == "openai" && newProviderId != "openai") {
+            oauthPolling = false
+            oauthRequestId = null
+            oauthError = null
+        }
 
         // Remember the current model for the old provider before switching
         val prefs = context.getSharedPreferences("seekerclaw_prefs", android.content.Context.MODE_PRIVATE)
