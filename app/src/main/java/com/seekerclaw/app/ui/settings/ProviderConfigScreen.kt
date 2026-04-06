@@ -102,6 +102,23 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
     var oauthError by remember { mutableStateOf<String?>(null) }
     // Note: device code UI removed — only browser flow used for now
 
+    // Clean up stale OAuth result files when this screen opens. If the user navigated
+    // away mid-flow or the process was killed, orphaned status files can accumulate
+    // under filesDir/oauth_results. Anything older than 1 hour is safe to delete.
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) {
+            try {
+                val resultsDir = File(context.filesDir, OpenAIOAuthActivity.RESULTS_DIR)
+                if (resultsDir.isDirectory) {
+                    val cutoff = System.currentTimeMillis() - 3_600_000L
+                    resultsDir.listFiles()?.forEach { f ->
+                        if (f.lastModified() < cutoff) f.delete()
+                    }
+                }
+            } catch (_: Exception) { /* best effort */ }
+        }
+    }
+
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
 
     // OAuth result file polling
@@ -858,7 +875,13 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                 }
             },
             confirmButton = {
+                // Block saving oauth without a token — Node's strict validation would
+                // hard-crash on the next startup. The user must sign in first.
+                val oauthMissingToken = activeProvider == "openai" &&
+                    selectedAuth == "oauth" &&
+                    config?.openaiOAuthToken.isNullOrBlank()
                 TextButton(
+                    enabled = !oauthMissingToken,
                     onClick = {
                         saveField("authType", selectedAuth, needsRestart = true)
                         // Remember per-provider so a round-trip through another provider preserves it.
@@ -867,9 +890,6 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                             .putString("lastAuthType_$activeProvider", selectedAuth)
                             .apply()
                         // Ensure the selected model is valid for the chosen OpenAI auth type.
-                        // OAuth and API-key model lists differ — derive the fallback from the
-                        // available models so a model list change doesn't silently leave a
-                        // hardcoded ID that no longer exists.
                         if (activeProvider == "openai") {
                             val currentModel = config?.model ?: ""
                             val allowedModels = modelsForProvider("openai", selectedAuth)
@@ -882,7 +902,12 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                         showAuthTypePicker = false
                     },
                 ) {
-                    Text("Save", fontFamily = RethinkSans, fontWeight = FontWeight.Bold, color = SeekerClawColors.ActionPrimary)
+                    Text(
+                        if (oauthMissingToken) "Sign in first" else "Save",
+                        fontFamily = RethinkSans,
+                        fontWeight = FontWeight.Bold,
+                        color = if (oauthMissingToken) SeekerClawColors.TextDim else SeekerClawColors.ActionPrimary,
+                    )
                 }
             },
             dismissButton = {

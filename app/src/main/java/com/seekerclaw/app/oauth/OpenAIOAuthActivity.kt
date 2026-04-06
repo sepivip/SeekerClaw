@@ -160,14 +160,14 @@ class OpenAIOAuthActivity : ComponentActivity() {
         super.onDestroy()
         callbackServer?.stop()
         callbackServer = null
-        // If the activity is dismissed (Back button, system kill, swipe-away) before
-        // any other path has claimed the write slot, leave a canceled result so
-        // ProviderConfigScreen stops polling immediately instead of waiting out the
-        // 10-minute deadline. The file write happens on a fresh background Thread
-        // (not `scope`, which is being canceled, and not Main — file I/O in lifecycle
-        // callbacks risks ANRs on slow storage).
+        // If the activity is dismissed (Back button, system kill, swipe-away) BEFORE a
+        // valid callback has arrived AND no other path has claimed the write slot, leave
+        // a canceled result so ProviderConfigScreen stops polling immediately. We MUST
+        // gate on !callbackReceived — if a callback has already arrived, the GlobalScope
+        // exchange is in flight and writing a synthetic "canceled" here would race a
+        // real sign-in and produce a misleading status.
         val reqId = currentRequestId
-        if (reqId != null && claimWrite()) {
+        if (reqId != null && !callbackReceived && claimWrite()) {
             Thread {
                 try {
                     writeResultFile(reqId, JSONObject().apply {
@@ -509,26 +509,46 @@ class OpenAIOAuthActivity : ComponentActivity() {
 
     private fun writeResultFile(requestId: String, result: JSONObject) {
         try {
-            val resultDir = File(filesDir, RESULTS_DIR).apply { mkdirs() }
-            val tmpFile = File(resultDir, "$requestId.tmp")
-            val jsonFile = File(resultDir, "$requestId.json")
-            tmpFile.writeText(result.toString())
-            jsonFile.delete() // renameTo won't overwrite existing file on Android
-            if (!tmpFile.renameTo(jsonFile)) {
-                // Fallback: copy + delete if rename fails on some Android filesystems
-                tmpFile.copyTo(jsonFile, overwrite = true)
-                tmpFile.delete()
-            }
-            Log.d(TAG, "Result written: ${jsonFile.absolutePath}")
+            doWriteResultFile(requestId, result)
         } catch (e: Exception) {
-            // Storage full or filesystem error — log and finish so the UI doesn't hang
-            // polling for a result file that will never appear, and so the callback
-            // server doesn't stay up indefinitely.
+            // Storage full or filesystem error. Try once more in a fresh thread after a
+            // short delay (transient issues like brief storage pressure can self-resolve).
+            // If that also fails, fall back to writing a minimal status file with no JSON
+            // body so the polling UI at least sees *something* and stops spinning.
             Log.e(TAG, "Failed to write OAuth result file for requestId=$requestId", e)
+            Thread {
+                try {
+                    Thread.sleep(500)
+                    doWriteResultFile(requestId, result)
+                    Log.i(TAG, "Result file write succeeded on retry")
+                } catch (retry: Exception) {
+                    Log.e(TAG, "Result file retry also failed", retry)
+                    // Last-ditch: write a minimal status-only file so the UI stops polling.
+                    try {
+                        File(filesDir, RESULTS_DIR).apply { mkdirs() }
+                            .resolve("$requestId.json")
+                            .writeText("""{"status":"error","message":"Failed to persist OAuth result"}""")
+                    } catch (_: Exception) { /* nothing more we can do */ }
+                }
+            }.start()
             try { finishOnMain() } catch (finishEx: Exception) {
                 Log.e(TAG, "Failed to finish activity after writeResultFile error", finishEx)
             }
         }
+    }
+
+    private fun doWriteResultFile(requestId: String, result: JSONObject) {
+        val resultDir = File(filesDir, RESULTS_DIR).apply { mkdirs() }
+        val tmpFile = File(resultDir, "$requestId.tmp")
+        val jsonFile = File(resultDir, "$requestId.json")
+        tmpFile.writeText(result.toString())
+        jsonFile.delete() // renameTo won't overwrite existing file on Android
+        if (!tmpFile.renameTo(jsonFile)) {
+            // Fallback: copy + delete if rename fails on some Android filesystems
+            tmpFile.copyTo(jsonFile, overwrite = true)
+            tmpFile.delete()
+        }
+        Log.d(TAG, "Result written: ${jsonFile.absolutePath}")
     }
 
     private fun finishOnMain() {
