@@ -235,8 +235,13 @@ function httpOpenAIStreamingRequest(options, body = null) {
         try {
         req = getClient(options).request(options, (res) => {
             const ct = res.headers['content-type'] || '';
-            // Codex endpoint (chatgpt.com) doesn't send Content-Type header but streams SSE
-            const isSSE = ct.includes('text/event-stream') || (res.statusCode === 200 && options.hostname === 'chatgpt.com');
+            // Codex endpoint (chatgpt.com) sometimes streams SSE without a Content-Type header.
+            // Only assume SSE-without-header when Content-Type is actually missing/blank — if
+            // Codex ever returns a JSON/HTML body with a real Content-Type, fall through to
+            // the buffered-response branch instead of mis-parsing it as SSE.
+            const isCodexHost = options.hostname === 'chatgpt.com';
+            const isSSE = ct.includes('text/event-stream') ||
+                (res.statusCode === 200 && isCodexHost && ct.trim() === '');
             if (res.statusCode !== 200 || !isSSE) {
                 res.setEncoding('utf8');
                 let data = '';

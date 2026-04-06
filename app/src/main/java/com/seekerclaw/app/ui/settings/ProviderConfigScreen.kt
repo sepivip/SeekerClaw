@@ -126,11 +126,12 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                         showRestartDialog = true
                         oauthPolling = false
                     }
-                    "pending" -> {
-                        // Continue polling — the file will be overwritten with success/error
-                    }
                     "error" -> {
                         oauthError = json.optString("message", "Unknown error")
+                        oauthPolling = false
+                    }
+                    else -> {
+                        oauthError = "Unexpected OAuth result status: ${json.optString("status")}"
                         oauthPolling = false
                     }
                 }
@@ -172,18 +173,19 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
 
         saveField("provider", newProviderId, needsRestart = true)
 
-        // Normalize authType when switching to OpenAI: only "oauth" and "api_key" are valid.
-        // Default to "oauth" (ChatGPT subscription) — leftover values from other providers
-        // (e.g. "setup_token" from Anthropic) would otherwise desync UI vs Node.
-        if (newProviderId == "openai" && config?.authType !in listOf("oauth", "api_key")) {
+        // OpenAI defaults to OAuth (ChatGPT subscription) when switching INTO the provider.
+        // The previous authType comes from another provider (e.g. Anthropic's default
+        // "api_key", or "setup_token"), which should not silently carry over. Users who
+        // prefer API key can change it via the auth-type picker after the switch.
+        // We persist the resolved value so UI, Node config, and validation all agree.
+        val effectiveAuthType: String? = if (newProviderId == "openai") {
             saveField("authType", "oauth")
+            "oauth"
+        } else {
+            config?.authType
         }
 
         // Restore last-used model for new provider, or fall back to first model.
-        // Pass the (possibly just-updated) authType so OpenAI gets the OAuth model list when applicable.
-        val effectiveAuthType = if (newProviderId == "openai") {
-            if (config?.authType == "api_key") "api_key" else "oauth"
-        } else config?.authType
         val modelsForNew = modelsForProvider(newProviderId, effectiveAuthType)
         if (modelsForNew.isEmpty()) {
             // Freeform provider (e.g. OpenRouter) — restore last-used or set default
@@ -361,7 +363,6 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                                 onSignInBrowser = {
                                     val requestId = UUID.randomUUID().toString()
                                     val intent = Intent(context, OpenAIOAuthActivity::class.java).apply {
-                                        putExtra("method", "browser")
                                         putExtra("requestId", requestId)
                                     }
                                     context.startActivity(intent)
