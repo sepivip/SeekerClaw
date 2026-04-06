@@ -699,7 +699,13 @@ class AndroidBridge(
             )
             jsonResponse(200, mapOf("success" to true))
         } catch (e: Exception) {
-            jsonResponse(500, mapOf("error" to (e.message ?: "Unknown error")))
+            // Log full details locally; never echo internal exception messages
+            // back across the bridge boundary.
+            Log.w(TAG, "Failed to save OpenAI OAuth tokens", e)
+            jsonResponse(500, mapOf(
+                "error" to "Failed to save OpenAI OAuth tokens",
+                "code" to "OPENAI_OAUTH_SAVE_FAILED",
+            ))
         }
     }
 

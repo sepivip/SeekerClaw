@@ -131,13 +131,9 @@ object ConfigManager {
     private const val KEY_OPENAI_OAUTH_REFRESH_ENC = "openai_oauth_refresh_enc"
     private const val KEY_OPENAI_OAUTH_EMAIL_ENC = "openai_oauth_email_enc"
 
-    // Process-lifetime flag so the authType migration write only runs ONCE per process,
-    // making subsequent loadConfig() calls side-effect-free. The migration logic still
-    // returns a normalized value on every call so the in-memory AppConfig is always
-    // consistent — only the persistence write is gated.
-    @Volatile
-    private var authTypeMigrated = false
-
+    // Email migration is a true one-shot: legacy plaintext key is consumed exactly once
+    // and the encrypted form persists thereafter. Process flag avoids re-checking the
+    // legacy key on every loadConfig() call.
     @Volatile
     private var emailMigrated = false
 
@@ -149,6 +145,10 @@ object ConfigManager {
         //  - OpenAI + "oauth" requires a non-blank token; otherwise normalize to "api_key"
         //    (Keystore invalidation, data restore, or manual clear leaves a stale state).
         //  - Non-Claude providers can't use "setup_token".
+        // Persistence is gated on `normalized != raw`: in steady state (no drift) this
+        // is a no-op so loadConfig() doesn't write anything. If drift recurs later in
+        // the process (e.g. token decrypt starts failing mid-run), we catch it on the
+        // next load and re-persist — no process-lifetime flag.
         val raw = p.getString(KEY_AUTH_TYPE, "api_key") ?: "api_key"
         val provider = p.getString(KEY_PROVIDER, "claude") ?: "claude"
         val openaiTokenBlank = openaiOAuthToken.isBlank()
@@ -158,10 +158,9 @@ object ConfigManager {
             provider != "claude" && raw == "setup_token" -> "api_key"
             else -> raw
         }
-        if (normalized != raw && !authTypeMigrated) {
+        if (normalized != raw) {
             Log.w(TAG, "Normalizing authType '$raw' → '$normalized' (provider=$provider, tokenBlank=$openaiTokenBlank)")
             p.edit().putString(KEY_AUTH_TYPE, normalized).apply()
-            authTypeMigrated = true
         }
         return normalized
     }
