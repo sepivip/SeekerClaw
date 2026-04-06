@@ -669,8 +669,13 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
             },
             text = {
                 Column {
-                    val isCustomSelected = models.none { it.id == selectedModel } && selectedModel.isNotBlank()
-                    var customModelId by remember { mutableStateOf(if (isCustomSelected) selectedModel else "") }
+                    // "custom" is a sentinel for "user wants to type a model ID" — never display
+                    // it as the model ID itself, and don't treat it as a real selection.
+                    val isCustomSelected = selectedModel == "custom" ||
+                        (models.none { it.id == selectedModel } && selectedModel.isNotBlank())
+                    var customModelId by remember {
+                        mutableStateOf(if (isCustomSelected && selectedModel != "custom") selectedModel else "")
+                    }
 
                     models.forEach { model ->
                         Row(
@@ -835,12 +840,15 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                 TextButton(
                     onClick = {
                         saveField("authType", selectedAuth, needsRestart = true)
-                        // Set default model when switching to OAuth (Codex models differ)
-                        if (selectedAuth == "oauth" && activeProvider == "openai") {
+                        // Ensure the selected model is valid for the chosen OpenAI auth type.
+                        // OAuth and API-key model lists differ — fall back to a default if not.
+                        if (activeProvider == "openai") {
                             val currentModel = config?.model ?: ""
-                            val oauthModels = modelsForProvider("openai", "oauth")
-                            if (oauthModels.none { it.id == currentModel }) {
-                                saveField("model", "gpt-5.4", needsRestart = false)
+                            val allowedModels = modelsForProvider("openai", selectedAuth)
+                            if (allowedModels.none { it.id == currentModel }) {
+                                val fallback = if (selectedAuth == "oauth") "gpt-5.4"
+                                               else allowedModels.firstOrNull()?.id ?: "gpt-5.4"
+                                saveField("model", fallback, needsRestart = false)
                             }
                         }
                         Analytics.authTypeChanged(selectedAuth)

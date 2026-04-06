@@ -45,6 +45,8 @@ class OpenAIOAuthActivity : ComponentActivity() {
 
     private var callbackServer: CallbackServer? = null
     private val scope = CoroutineScope(Dispatchers.Main + Job())
+    // Written from the NanoHTTPD server thread, read from the Main timeout coroutine — needs @Volatile.
+    @Volatile
     private var callbackReceived = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -140,7 +142,19 @@ class OpenAIOAuthActivity : ComponentActivity() {
         expectedState: String,
         codeVerifier: String
     ): String {
-        callbackReceived = true
+        // Idempotency guard: if the user refreshes the browser, NanoHTTPD will fire this
+        // handler multiple times. We only want to run the token exchange once and avoid
+        // racing writes to the same result file.
+        synchronized(this) {
+            if (callbackReceived) {
+                Log.d(TAG, "Duplicate callback ignored")
+                return buildHtmlResponse(
+                    "Completing Sign-In",
+                    "Already processing — please return to SeekerClaw for status."
+                )
+            }
+            callbackReceived = true
+        }
         val code = params["code"]
         val state = params["state"]
         val error = params["error"]
