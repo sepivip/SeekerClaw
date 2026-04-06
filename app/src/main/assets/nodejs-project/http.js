@@ -376,10 +376,11 @@ function httpOpenAIStreamingRequest(options, body = null) {
                         settle(resolve, { status: 200, data: buildFromAccum(), headers: res.headers });
                     } else if (parsedEventCount === 0 && sseBuffer.length > 0) {
                         // We assumed SSE (Codex header-less case) but the body never produced
-                        // a single parseable SSE event. Surface a clearer diagnostic so the
-                        // failure mode is obvious instead of a generic transport error.
-                        const preview = sseBuffer.slice(0, 200).replace(/\s+/g, ' ');
-                        const err = new Error(`Expected SSE but no events parsed (body preview: ${preview})`);
+                        // a single parseable SSE event. Keep the error message generic so
+                        // arbitrary response-body content isn't embedded into err.message
+                        // (which ai.js logs verbatim).
+                        console.warn(`[http] Expected SSE but no events parsed (${sseBuffer.length} bytes); body preview: ${sseBuffer.slice(0, 200).replace(/\s+/g, ' ')}`);
+                        const err = new Error('Expected SSE but no events parsed');
                         err.timeoutSource = 'transport';
                         settle(reject, err);
                     } else {

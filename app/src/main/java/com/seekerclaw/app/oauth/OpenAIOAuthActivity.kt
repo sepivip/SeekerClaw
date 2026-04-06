@@ -460,19 +460,21 @@ class OpenAIOAuthActivity : ComponentActivity() {
             callbackReceived = true
         }
 
-        // From here on, we know this is the legitimate browser redirect — surface
-        // any OpenAI-side error and tear down the flow.
+        // From here on, we know this is the legitimate browser redirect. Log any
+        // OpenAI-side error for diagnostics, but persist/display only a generic
+        // message — callback query params are untrusted input (any local app can
+        // hit 127.0.0.1:1455) and may contain arbitrary content.
         if (error != null) {
             Log.e(TAG, "OAuth error: $error")
             if (claimWrite()) {
                 writeResultFile(requestId, JSONObject().apply {
                     put("status", "error")
-                    put("message", "OAuth error: $error")
+                    put("message", "Authentication failed. Please try again.")
                 })
                 markWriteCompleted()
             }
             finishOnMain()
-            return buildHtmlResponse("Error", "Authentication failed: $error")
+            return buildHtmlResponse("Error", "Authentication failed. Please try again.")
         }
 
         if (code == null) {
