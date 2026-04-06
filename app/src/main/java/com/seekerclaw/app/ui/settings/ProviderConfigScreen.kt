@@ -390,9 +390,9 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                     }
                     "openai" -> {
                         // Match Node's view: only "oauth" is OAuth; everything else is API key.
-                        // switchProvider() persists "oauth" as the default when entering OpenAI,
-                        // so this branch normally renders the user's actual choice — this guard
-                        // just protects against any remaining drift.
+                        // switchProvider() persists "api_key" when entering OpenAI unless an
+                        // OAuth token already exists, so this branch normally reflects the
+                        // user's actual saved choice. The guard protects against any drift.
                         val openaiAuthType = if (config?.authType == "oauth") "oauth" else "api_key"
                         val openaiModelList = modelsForProvider("openai", openaiAuthType)
                         // Auth Type first (determines model list + credential UI)
