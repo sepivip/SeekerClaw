@@ -121,8 +121,10 @@ const OPENAI_OAUTH_TOKEN = normalizeSecret(config.openaiOAuthToken || '');
 const OPENAI_OAUTH_REFRESH = normalizeSecret(config.openaiOAuthRefresh || '');
 const AUTH_TYPE = config.authType || 'api_key';
 
-// OpenAI auth type: 'oauth' if OAuth token present and authType matches, else 'api_key'
-const OPENAI_AUTH_TYPE = (AUTH_TYPE === 'oauth' && OPENAI_OAUTH_TOKEN) ? 'oauth' : 'api_key';
+// OpenAI auth type strictly follows the configured authType — no silent fallback to api_key
+// when the OAuth token is missing. The credential validation below will fail fast and
+// surface a clear error instead of accidentally charging the user's platform API key.
+const OPENAI_AUTH_TYPE = AUTH_TYPE === 'oauth' ? 'oauth' : 'api_key';
 
 const OPENROUTER_KEY = normalizeSecret(config.openrouterApiKey || '');
 const CUSTOM_KEY = normalizeSecret(config.customApiKey || '');

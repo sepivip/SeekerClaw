@@ -229,11 +229,12 @@ class OpenAIOAuthActivity : ComponentActivity() {
             // Try id_token first (has email), fall back to access_token
             val email = extractEmailFromJwt(idToken) ?: extractEmailFromJwt(accessToken)
 
-            // Persist tokens directly to encrypted storage instead of writing them to a
-            // result file. Bearer tokens must never sit on disk in plaintext, even briefly
-            // (RFC 6819 §5.1.4, OWASP MASVS-STORAGE-1). The result file only carries a
-            // status flag — the polling UI reloads config from ConfigManager to pick up
-            // the new tokens.
+            // Persist tokens via ConfigManager rather than echoing them into the transient
+            // OAuth result file. ConfigManager encrypts secrets via Android Keystore for
+            // app-process storage; the workspace/config.json handoff to the embedded Node
+            // runtime is a separate, known constraint (Node can't read Keystore directly).
+            // The result file here only carries a status flag, and the polling UI reloads
+            // config from ConfigManager to pick up the new tokens.
             withContext(Dispatchers.IO) {
                 val current = ConfigManager.loadConfig(this@OpenAIOAuthActivity)
                 if (current == null) {
@@ -345,17 +346,27 @@ class OpenAIOAuthActivity : ComponentActivity() {
     }
 
     private fun writeResultFile(requestId: String, result: JSONObject) {
-        val resultDir = File(filesDir, RESULTS_DIR).apply { mkdirs() }
-        val tmpFile = File(resultDir, "$requestId.tmp")
-        val jsonFile = File(resultDir, "$requestId.json")
-        tmpFile.writeText(result.toString())
-        jsonFile.delete() // renameTo won't overwrite existing file on Android
-        if (!tmpFile.renameTo(jsonFile)) {
-            // Fallback: copy + delete if rename fails on some Android filesystems
-            tmpFile.copyTo(jsonFile, overwrite = true)
-            tmpFile.delete()
+        try {
+            val resultDir = File(filesDir, RESULTS_DIR).apply { mkdirs() }
+            val tmpFile = File(resultDir, "$requestId.tmp")
+            val jsonFile = File(resultDir, "$requestId.json")
+            tmpFile.writeText(result.toString())
+            jsonFile.delete() // renameTo won't overwrite existing file on Android
+            if (!tmpFile.renameTo(jsonFile)) {
+                // Fallback: copy + delete if rename fails on some Android filesystems
+                tmpFile.copyTo(jsonFile, overwrite = true)
+                tmpFile.delete()
+            }
+            Log.d(TAG, "Result written: ${jsonFile.absolutePath}")
+        } catch (e: Exception) {
+            // Storage full or filesystem error — log and finish so the UI doesn't hang
+            // polling for a result file that will never appear, and so the callback
+            // server doesn't stay up indefinitely.
+            Log.e(TAG, "Failed to write OAuth result file for requestId=$requestId", e)
+            try { finishOnMain() } catch (finishEx: Exception) {
+                Log.e(TAG, "Failed to finish activity after writeResultFile error", finishEx)
+            }
         }
-        Log.d(TAG, "Result written: ${jsonFile.absolutePath}")
     }
 
     private fun finishOnMain() {
