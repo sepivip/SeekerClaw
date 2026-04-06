@@ -169,6 +169,9 @@ function wrapExternalContent(content, source) {
 // Wrap search result text fields with untrusted content markers
 function wrapSearchResults(result, provider) {
     if (!result) return result;
+    // Surface the resolved provider so the agent can tell the user which search
+    // backend actually ran (especially when called with provider:"auto").
+    result.provider = provider;
     const src = `web_search: ${provider}`;
     // Wrap Perplexity answer
     if (typeof result.answer === 'string') {
