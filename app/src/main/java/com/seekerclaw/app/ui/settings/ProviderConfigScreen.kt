@@ -636,7 +636,15 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
     if (showModelPicker && modelsForProvider(activeProvider, config?.authType).isNotEmpty()) {
         val models = modelsForProvider(activeProvider, config?.authType)
         var selectedModel by remember {
-            mutableStateOf(models.firstOrNull { it.id == config?.model }?.id ?: models.firstOrNull()?.id ?: "")
+            // Preserve the user's current model even when it's not in the known list —
+            // otherwise opening the picker would silently overwrite a custom model ID.
+            val current = config?.model.orEmpty()
+            mutableStateOf(
+                when {
+                    current.isNotBlank() -> current
+                    else -> models.firstOrNull()?.id ?: ""
+                }
+            )
         }
 
         AlertDialog(

@@ -39,7 +39,9 @@ class OpenAIOAuthActivity : ComponentActivity() {
         const val CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
         const val AUTH_URL = "https://auth.openai.com/oauth/authorize"
         const val TOKEN_URL = "https://auth.openai.com/oauth/token"
-        const val REDIRECT_URI = "http://localhost:1455/auth/callback"
+        // Use 127.0.0.1 (not "localhost") so browsers can't resolve the redirect to ::1
+        // and miss the IPv4 NanoHTTPD listener.
+        const val REDIRECT_URI = "http://127.0.0.1:1455/auth/callback"
         const val SCOPES = "openid profile email offline_access"
         private const val CALLBACK_PORT = 1455
     }
