@@ -286,22 +286,26 @@ class OpenAIOAuthActivity : ComponentActivity() {
                 callbackServer?.stop()
                 callbackServer = null
                 if (claimWrite()) {
-                    // NonCancellable so the result write completes even if the activity is
-                    // finished before the coroutine runs (otherwise writeState would stay
-                    // WRITING and the polling UI would hang for the full 10-min timeout).
-                    scope.launch {
-                        withContext(NonCancellable + Dispatchers.IO) {
-                            writeResultFile(requestId, JSONObject().apply {
+                    // Use EXCHANGE_SCOPE (application-lifetime) so the write completes
+                    // even if the activity is destroyed before scope.launch would have
+                    // started. Capture only locals — no `this` reference inside the
+                    // lambda — and signal completion via the AtomicReference directly.
+                    val appCtx = applicationContext
+                    val stateRef = writeState
+                    EXCHANGE_SCOPE.launch {
+                        try {
+                            writeResultFileStatic(appCtx, requestId, JSONObject().apply {
                                 put("status", "error")
                                 put("message", "Sign-in canceled")
                             })
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Failed to write canceled result", e)
+                        } finally {
+                            stateRef.set(WriteState.COMPLETED)
                         }
-                        markWriteCompleted()
-                        finishOnMain()
                     }
-                } else {
-                    finishOnMain()
                 }
+                finishOnMain()
             }
         }
         root.addView(title)
@@ -368,17 +372,24 @@ class OpenAIOAuthActivity : ComponentActivity() {
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start callback server", e)
             if (claimWrite()) {
-                scope.launch {
-                    withContext(NonCancellable + Dispatchers.IO) {
-                        writeResultFile(requestId, JSONObject().apply {
+                // EXCHANGE_SCOPE so the write survives even if the activity is
+                // destroyed before this coroutine starts. No `this` capture.
+                val appCtx = applicationContext
+                val stateRef = writeState
+                EXCHANGE_SCOPE.launch {
+                    try {
+                        writeResultFileStatic(appCtx, requestId, JSONObject().apply {
                             put("status", "error")
                             put("message", "Couldn't start local callback server. Please try again.")
                         })
+                    } catch (writeErr: Exception) {
+                        Log.w(TAG, "Failed to write server-fail result", writeErr)
+                    } finally {
+                        stateRef.set(WriteState.COMPLETED)
                     }
-                    markWriteCompleted()
-                    finishOnMain()
                 }
             }
+            finishOnMain()
             return
         }
 
