@@ -10,11 +10,12 @@ import androidx.browser.customtabs.CustomTabsIntent
 import com.seekerclaw.app.config.ConfigManager
 import fi.iki.elonen.NanoHTTPD
 import java.util.concurrent.atomic.AtomicReference
+import android.content.Context
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -50,6 +51,12 @@ class OpenAIOAuthActivity : ComponentActivity() {
         const val REDIRECT_URI = "http://127.0.0.1:1455/auth/callback"
         const val SCOPES = "openid profile email offline_access"
         private const val CALLBACK_PORT = 1455
+
+        // Application-lifetime scope for the token exchange. Survives Activity destruction
+        // (rotation, system reclaim, fast back-press) so a successful browser redirect
+        // always completes its persist + result-write, regardless of UI lifecycle.
+        // SupervisorJob means a single failed exchange doesn't cancel sibling jobs.
+        private val EXCHANGE_SCOPE = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     }
 
     private var callbackServer: CallbackServer? = null
@@ -332,13 +339,13 @@ class OpenAIOAuthActivity : ComponentActivity() {
             return buildHtmlResponse("Error", "Sign-in already completed in another tab.")
         }
 
-        // Run the exchange on GlobalScope (not the activity scope) so it survives activity
-        // destruction (rotation, system reclaim, fast back-press). The exchange persists
-        // tokens via ConfigManager and writes the result file — both are application-level
-        // side effects that must complete regardless of UI lifecycle.
-        @OptIn(kotlinx.coroutines.DelicateCoroutinesApi::class)
-        GlobalScope.launch(Dispatchers.IO) {
-            exchangeCodeForTokens(requestId, code, codeVerifier)
+        // Run the exchange on the application-lifetime EXCHANGE_SCOPE (not the activity
+        // scope) so it survives activity destruction. We pass applicationContext explicitly
+        // so the exchange path doesn't pin the Activity instance through ConfigManager /
+        // file I/O — only the application Context, which is process-lifetime anyway.
+        val appCtx = applicationContext
+        EXCHANGE_SCOPE.launch {
+            exchangeCodeForTokens(appCtx, requestId, code, codeVerifier)
         }
 
         return buildHtmlResponse(
@@ -348,6 +355,7 @@ class OpenAIOAuthActivity : ComponentActivity() {
     }
 
     private suspend fun exchangeCodeForTokens(
+        appCtx: Context,
         requestId: String,
         code: String,
         codeVerifier: String
@@ -390,12 +398,12 @@ class OpenAIOAuthActivity : ComponentActivity() {
             // The result file here only carries a status flag, and the polling UI reloads
             // config from ConfigManager to pick up the new tokens.
             withContext(Dispatchers.IO) {
-                val current = ConfigManager.loadConfig(this@OpenAIOAuthActivity)
+                val current = ConfigManager.loadConfig(appCtx)
                 if (current == null) {
                     throw IllegalStateException("Config not loaded — cannot persist OAuth tokens")
                 }
                 ConfigManager.saveConfig(
-                    this@OpenAIOAuthActivity,
+                    appCtx,
                     current.copy(
                         openaiOAuthToken = accessToken,
                         openaiOAuthRefresh = refreshToken.ifBlank { current.openaiOAuthRefresh },
