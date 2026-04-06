@@ -11,6 +11,7 @@ import com.seekerclaw.app.config.ConfigManager
 import fi.iki.elonen.NanoHTTPD
 import java.util.concurrent.atomic.AtomicReference
 import android.content.Context
+import java.lang.ref.WeakReference
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -57,6 +58,137 @@ class OpenAIOAuthActivity : ComponentActivity() {
         // always completes its persist + result-write, regardless of UI lifecycle.
         // SupervisorJob means a single failed exchange doesn't cancel sibling jobs.
         private val EXCHANGE_SCOPE = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+        /**
+         * Static token-exchange entry point. Pure function — takes only Application
+         * Context + the OAuth params + a cleanup callback. Does NOT capture an Activity
+         * instance, so launching this on EXCHANGE_SCOPE cannot leak the Activity.
+         *
+         * Persists tokens via ConfigManager (encrypted via Keystore) and writes the
+         * status result file directly to filesDir. Calls [onComplete] on the same
+         * thread when done so the caller can do whatever cleanup it likes (typically
+         * via a WeakReference back to the Activity).
+         */
+        suspend fun exchangeCodeForTokensStatic(
+            appCtx: Context,
+            requestId: String,
+            code: String,
+            codeVerifier: String,
+            onComplete: () -> Unit,
+        ) {
+            try {
+                val tokenResponse = withContext(NonCancellable + Dispatchers.IO) {
+                    val body = buildString {
+                        append("grant_type=authorization_code")
+                        append("&code=").append(URLEncoder.encode(code, "UTF-8"))
+                        append("&redirect_uri=").append(URLEncoder.encode(REDIRECT_URI, "UTF-8"))
+                        append("&client_id=").append(URLEncoder.encode(CLIENT_ID, "UTF-8"))
+                        append("&code_verifier=").append(URLEncoder.encode(codeVerifier, "UTF-8"))
+                    }
+                    httpPostStatic(TOKEN_URL, body)
+                }
+                val json = JSONObject(tokenResponse)
+                val accessToken = json.optString("access_token", "")
+                if (accessToken.isBlank()) {
+                    val errMsg = json.optString("error_description", "")
+                        .ifBlank { json.optString("error", "Token response missing access_token") }
+                    throw IllegalStateException(errMsg)
+                }
+                val refreshToken = json.optString("refresh_token", "")
+                val idToken = json.optString("id_token", "")
+                val expiresIn = json.optLong("expires_in", 3600)
+                val expiresAt = java.time.Instant.now().plusSeconds(expiresIn).toString()
+                val email = extractEmailFromJwtStatic(idToken) ?: extractEmailFromJwtStatic(accessToken)
+
+                withContext(NonCancellable + Dispatchers.IO) {
+                    val current = ConfigManager.loadConfig(appCtx)
+                        ?: throw IllegalStateException("Config not loaded — cannot persist OAuth tokens")
+                    ConfigManager.saveConfig(
+                        appCtx,
+                        current.copy(
+                            openaiOAuthToken = accessToken,
+                            openaiOAuthRefresh = refreshToken.ifBlank { current.openaiOAuthRefresh },
+                            openaiOAuthEmail = email ?: current.openaiOAuthEmail,
+                            openaiOAuthExpiresAt = expiresAt,
+                        )
+                    )
+                    writeResultFileStatic(appCtx, requestId, JSONObject().apply {
+                        put("status", "success")
+                    })
+                }
+                Log.i(TAG, "Browser flow completed successfully")
+            } catch (e: Exception) {
+                Log.e(TAG, "Token exchange failed", e)
+                try {
+                    withContext(NonCancellable + Dispatchers.IO) {
+                        writeResultFileStatic(appCtx, requestId, JSONObject().apply {
+                            put("status", "error")
+                            put("message", "Token exchange failed: ${e.message}")
+                        })
+                    }
+                } catch (writeErr: Exception) {
+                    Log.e(TAG, "Failed to write OAuth error result", writeErr)
+                }
+            } finally {
+                onComplete()
+            }
+        }
+
+        /** Static HTTP POST helper — used by both the companion exchange and the instance flow. */
+        private fun httpPostStatic(url: String, body: String): String {
+            val conn = URL(url).openConnection() as HttpURLConnection
+            try {
+                conn.requestMethod = "POST"
+                conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
+                conn.doOutput = true
+                conn.connectTimeout = 15_000
+                conn.readTimeout = 15_000
+                OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use { it.write(body) }
+                val statusCode = conn.responseCode
+                val stream = if (statusCode in 200..299) conn.inputStream else conn.errorStream
+                val responseBody = stream?.bufferedReader()?.use { it.readText() } ?: ""
+                if (statusCode !in 200..299) throw RuntimeException("HTTP $statusCode: $responseBody")
+                return responseBody
+            } finally {
+                conn.disconnect()
+            }
+        }
+
+        /** Static result-file writer using only application Context — no Activity capture. */
+        private fun writeResultFileStatic(appCtx: Context, requestId: String, result: JSONObject) {
+            val resultDir = File(appCtx.filesDir, RESULTS_DIR).apply { mkdirs() }
+            val tmpFile = File(resultDir, "$requestId.tmp")
+            val jsonFile = File(resultDir, "$requestId.json")
+            tmpFile.writeText(result.toString())
+            jsonFile.delete()
+            if (!tmpFile.renameTo(jsonFile)) {
+                tmpFile.copyTo(jsonFile, overwrite = true)
+                tmpFile.delete()
+            }
+            Log.d(TAG, "Result written: ${jsonFile.absolutePath}")
+        }
+
+        /** Static JWT email extractor — no Activity dependency. */
+        private fun extractEmailFromJwtStatic(jwt: String): String? {
+            return try {
+                val parts = jwt.split(".")
+                if (parts.size < 3) return null
+                val payload = parts[1]
+                val normalized = when (payload.length % 4) {
+                    0 -> payload
+                    else -> payload.padEnd(payload.length + (4 - (payload.length % 4)), '=')
+                }
+                val decoded = Base64.decode(normalized, Base64.URL_SAFE or Base64.NO_WRAP)
+                val json = JSONObject(String(decoded, Charsets.UTF_8))
+                val email = json.optString("email", "")
+                val name = json.optString("name", "")
+                val preferredUsername = json.optString("preferred_username", "")
+                val sub = json.optString("sub", "")
+                email.ifEmpty { preferredUsername.ifEmpty { name.ifEmpty { sub.ifEmpty { null } } } }
+            } catch (_: Exception) {
+                null
+            }
+        }
     }
 
     private var callbackServer: CallbackServer? = null
@@ -339,13 +471,21 @@ class OpenAIOAuthActivity : ComponentActivity() {
             return buildHtmlResponse("Error", "Sign-in already completed in another tab.")
         }
 
-        // Run the exchange on the application-lifetime EXCHANGE_SCOPE (not the activity
-        // scope) so it survives activity destruction. We pass applicationContext explicitly
-        // so the exchange path doesn't pin the Activity instance through ConfigManager /
-        // file I/O — only the application Context, which is process-lifetime anyway.
+        // Run the exchange on the application-lifetime EXCHANGE_SCOPE via a companion
+        // function that takes only appCtx + a WeakReference for cleanup. The launched
+        // coroutine therefore does NOT capture the Activity instance — it survives
+        // destruction without leaking, and the cleanup callback is a no-op if the
+        // activity is already gone.
         val appCtx = applicationContext
+        val activityRef = WeakReference(this)
         EXCHANGE_SCOPE.launch {
-            exchangeCodeForTokens(appCtx, requestId, code, codeVerifier)
+            exchangeCodeForTokensStatic(
+                appCtx = appCtx,
+                requestId = requestId,
+                code = code,
+                codeVerifier = codeVerifier,
+                onComplete = { activityRef.get()?.onExchangeComplete() },
+            )
         }
 
         return buildHtmlResponse(
@@ -354,88 +494,16 @@ class OpenAIOAuthActivity : ComponentActivity() {
         )
     }
 
-    private suspend fun exchangeCodeForTokens(
-        appCtx: Context,
-        requestId: String,
-        code: String,
-        codeVerifier: String
-    ) {
-        // The write slot was claimed by handleCallback() before this coroutine was
-        // launched, so we can proceed straight to the exchange. We just need to make
-        // sure markWriteCompleted() is called on every exit path.
-        try {
-            val tokenResponse = withContext(Dispatchers.IO) {
-                val body = buildString {
-                    append("grant_type=authorization_code")
-                    append("&code=").append(URLEncoder.encode(code, "UTF-8"))
-                    append("&redirect_uri=").append(URLEncoder.encode(REDIRECT_URI, "UTF-8"))
-                    append("&client_id=").append(URLEncoder.encode(CLIENT_ID, "UTF-8"))
-                    append("&code_verifier=").append(URLEncoder.encode(codeVerifier, "UTF-8"))
-                }
-                httpPost(TOKEN_URL, body)
-            }
-
-            val json = JSONObject(tokenResponse)
-            val accessToken = json.optString("access_token", "")
-            if (accessToken.isBlank()) {
-                // Malformed/error response — don't overwrite existing tokens with "" and
-                // don't signal success to the UI.
-                val errMsg = json.optString("error_description", "")
-                    .ifBlank { json.optString("error", "Token response missing access_token") }
-                throw IllegalStateException(errMsg)
-            }
-            val refreshToken = json.optString("refresh_token", "")
-            val idToken = json.optString("id_token", "")
-            val expiresIn = json.optLong("expires_in", 3600)
-            val expiresAt = java.time.Instant.now().plusSeconds(expiresIn).toString()
-            // Try id_token first (has email), fall back to access_token
-            val email = extractEmailFromJwt(idToken) ?: extractEmailFromJwt(accessToken)
-
-            // Persist tokens via ConfigManager rather than echoing them into the transient
-            // OAuth result file. ConfigManager encrypts secrets via Android Keystore for
-            // app-process storage; the workspace/config.json handoff to the embedded Node
-            // runtime is a separate, known constraint (Node can't read Keystore directly).
-            // The result file here only carries a status flag, and the polling UI reloads
-            // config from ConfigManager to pick up the new tokens.
-            withContext(Dispatchers.IO) {
-                val current = ConfigManager.loadConfig(appCtx)
-                if (current == null) {
-                    throw IllegalStateException("Config not loaded — cannot persist OAuth tokens")
-                }
-                ConfigManager.saveConfig(
-                    appCtx,
-                    current.copy(
-                        openaiOAuthToken = accessToken,
-                        openaiOAuthRefresh = refreshToken.ifBlank { current.openaiOAuthRefresh },
-                        openaiOAuthEmail = email ?: current.openaiOAuthEmail,
-                        openaiOAuthExpiresAt = expiresAt,
-                    )
-                )
-            }
-
-            // We already claimed the write slot at the top of this function.
-            // NonCancellable so a quick onDestroy can't cancel us mid-write.
-            withContext(NonCancellable + Dispatchers.IO) {
-                writeResultFile(requestId, JSONObject().apply {
-                    put("status", "success")
-                })
-            }
-            markWriteCompleted()
-            Log.i(TAG, "Browser flow completed successfully")
-        } catch (e: Exception) {
-            Log.e(TAG, "Token exchange failed", e)
-            withContext(NonCancellable + Dispatchers.IO) {
-                writeResultFile(requestId, JSONObject().apply {
-                    put("status", "error")
-                    put("message", "Token exchange failed: ${e.message}")
-                })
-            }
-            markWriteCompleted()
-        } finally {
-            callbackServer?.stop()
-            callbackServer = null
-            finishOnMain()
-        }
+    /**
+     * Called by the companion-object exchange when it completes (success or failure).
+     * Runs on whatever thread the companion finishes on; hops to Main for UI work.
+     * No-op if the activity is already gone (the WeakReference returns null).
+     */
+    private fun onExchangeComplete() {
+        callbackServer?.stop()
+        callbackServer = null
+        markWriteCompleted()
+        finishOnMain()
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────
