@@ -108,7 +108,11 @@ fun DashboardScreen(
     }
     val hasCredential = remember(config) {
         when (config?.provider) {
-            "openai" -> config?.openaiApiKey?.isNotBlank() == true
+            "openai" -> if (config?.authType == "oauth") {
+                config?.openaiOAuthToken?.isNotBlank() == true
+            } else {
+                config?.openaiApiKey?.isNotBlank() == true
+            }
             "openrouter" -> config?.openrouterApiKey?.isNotBlank() == true
             "custom" -> config?.customApiKey?.isNotBlank() == true && config?.customBaseUrl?.isNotBlank() == true
             else -> config?.activeCredential?.isNotBlank() == true
