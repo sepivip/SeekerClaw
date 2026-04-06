@@ -13,7 +13,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -26,10 +25,8 @@ import java.security.MessageDigest
 import java.security.SecureRandom
 
 /**
- * Transparent Activity that handles OpenAI OAuth flows.
- * Supports two methods:
- *   - "browser": PKCE authorization code flow via Custom Tabs + local redirect server
- *   - "device_code": Device code flow with polling
+ * Transparent Activity that handles the OpenAI OAuth PKCE flow:
+ * Custom Tabs → user signs in on auth.openai.com → localhost:1455 callback → token exchange.
  *
  * Results are communicated via files (same pattern as SolanaAuthActivity).
  */
@@ -41,8 +38,6 @@ class OpenAIOAuthActivity : ComponentActivity() {
         const val CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
         const val AUTH_URL = "https://auth.openai.com/oauth/authorize"
         const val TOKEN_URL = "https://auth.openai.com/oauth/token"
-        const val DEVICE_URL = "https://auth.openai.com/oauth/device/code"
-        const val DEVICE_VERIFY_URL = "https://auth.openai.com/codex/device"  // User-facing page
         const val REDIRECT_URI = "http://localhost:1455/auth/callback"
         const val SCOPES = "openid profile email offline_access"
         private const val CALLBACK_PORT = 1455
@@ -50,44 +45,25 @@ class OpenAIOAuthActivity : ComponentActivity() {
 
     private var callbackServer: CallbackServer? = null
     private val scope = CoroutineScope(Dispatchers.Main + Job())
-    private var pollingJob: Job? = null
     private var callbackReceived = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val method = intent.getStringExtra("method") ?: run {
-            Log.w(TAG, "No method specified")
-            finish()
-            return
-        }
         val requestId = intent.getStringExtra("requestId") ?: run {
             Log.w(TAG, "No requestId specified")
             finish()
             return
         }
 
-        Log.i(TAG, "Starting OAuth flow: $method (request: $requestId)")
-
-        when (method) {
-            "browser" -> startBrowserFlow(requestId)
-            "device_code" -> startDeviceCodeFlow(requestId)
-            else -> {
-                Log.w(TAG, "Unknown method: $method")
-                writeResultFile(requestId, JSONObject().apply {
-                    put("status", "error")
-                    put("message", "Unknown method: $method")
-                })
-                finish()
-            }
-        }
+        Log.i(TAG, "Starting OAuth browser flow (request: $requestId)")
+        startBrowserFlow(requestId)
     }
 
     override fun onDestroy() {
         super.onDestroy()
         callbackServer?.stop()
         callbackServer = null
-        pollingJob?.cancel()
         scope.cancel()
     }
 
@@ -254,144 +230,6 @@ class OpenAIOAuthActivity : ComponentActivity() {
             callbackServer?.stop()
             callbackServer = null
             finishOnMain()
-        }
-    }
-
-    // ── Flow B: Device Code ──────────────────────────────────────────────
-
-    private fun startDeviceCodeFlow(requestId: String) {
-        scope.launch {
-            try {
-                val deviceResponse = withContext(Dispatchers.IO) {
-                    val body = buildString {
-                        append("client_id=").append(URLEncoder.encode(CLIENT_ID, "UTF-8"))
-                        append("&scope=").append(URLEncoder.encode(SCOPES, "UTF-8"))
-                    }
-                    httpPost(DEVICE_URL, body)
-                }
-
-                val json = JSONObject(deviceResponse)
-                val deviceCode = json.getString("device_code")
-                val userCode = json.getString("user_code")
-                val verificationUri = json.getString("verification_uri")
-                val interval = json.optInt("interval", 5)
-                val expiresIn = json.optInt("expires_in", 600)
-
-                // Write pending result so the caller can show the user code
-                writeResultFile(requestId, JSONObject().apply {
-                    put("status", "pending")
-                    put("userCode", userCode)
-                    put("verificationUri", verificationUri)
-                })
-
-                // Poll for authorization
-                pollForDeviceAuthorization(requestId, deviceCode, interval, expiresIn)
-            } catch (e: Exception) {
-                Log.e(TAG, "Device code request failed", e)
-                writeResultFile(requestId, JSONObject().apply {
-                    put("status", "error")
-                    put("message", "Device code request failed: ${e.message}")
-                })
-                finish()
-            }
-        }
-    }
-
-    private fun pollForDeviceAuthorization(
-        requestId: String,
-        deviceCode: String,
-        interval: Int,
-        expiresIn: Int
-    ) {
-        val deadline = System.currentTimeMillis() + (expiresIn * 1000L)
-
-        pollingJob = scope.launch {
-            while (isActive && System.currentTimeMillis() < deadline) {
-                delay(interval * 1000L)
-
-                try {
-                    val response = withContext(Dispatchers.IO) {
-                        val body = buildString {
-                            append("grant_type=").append(
-                                URLEncoder.encode(
-                                    "urn:ietf:params:oauth:grant-type:device_code",
-                                    "UTF-8"
-                                )
-                            )
-                            append("&device_code=").append(URLEncoder.encode(deviceCode, "UTF-8"))
-                            append("&client_id=").append(URLEncoder.encode(CLIENT_ID, "UTF-8"))
-                        }
-                        httpPostRaw(TOKEN_URL, body)
-                    }
-
-                    val statusCode = response.first
-                    val responseBody = response.second
-                    val json = JSONObject(responseBody)
-
-                    if (statusCode in 200..299 && json.has("access_token")) {
-                        // Success
-                        val accessToken = json.getString("access_token")
-                        val refreshToken = json.optString("refresh_token", "")
-                        val tokenExpiresIn = json.optLong("expires_in", 3600)
-                        val expiresAt =
-                            java.time.Instant.now().plusSeconds(tokenExpiresIn).toString()
-                        val email = extractEmailFromJwt(accessToken)
-
-                        writeResultFile(requestId, JSONObject().apply {
-                            put("status", "success")
-                            put("accessToken", accessToken)
-                            put("refreshToken", refreshToken)
-                            put("email", email ?: JSONObject.NULL)
-                            put("expiresAt", expiresAt)
-                        })
-                        Log.i(TAG, "Device code flow completed successfully")
-                        finishOnMain()
-                        return@launch
-                    }
-
-                    val errorCode = json.optString("error", "")
-                    when (errorCode) {
-                        "authorization_pending", "slow_down" -> {
-                            // Continue polling (slow_down: RFC says increase interval,
-                            // but we keep it simple for now)
-                            Log.d(TAG, "Device code polling: $errorCode")
-                        }
-
-                        "expired_token" -> {
-                            writeResultFile(requestId, JSONObject().apply {
-                                put("status", "error")
-                                put("message", "Code expired. Please try again.")
-                            })
-                            finishOnMain()
-                            return@launch
-                        }
-
-                        "access_denied" -> {
-                            writeResultFile(requestId, JSONObject().apply {
-                                put("status", "error")
-                                put("message", "Access denied by user.")
-                            })
-                            finishOnMain()
-                            return@launch
-                        }
-
-                        else -> {
-                            Log.w(TAG, "Unexpected polling error: $errorCode")
-                        }
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "Polling request failed, will retry", e)
-                }
-            }
-
-            // Timeout
-            if (isActive) {
-                writeResultFile(requestId, JSONObject().apply {
-                    put("status", "error")
-                    put("message", "Code expired. Please try again.")
-                })
-                finishOnMain()
-            }
         }
     }
 
