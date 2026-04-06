@@ -394,7 +394,13 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                             onClick = { showModelPicker = true },
                             info = SettingsHelpTexts.MODEL,
                         )
-                        if (openaiAuthType == "api_key") {
+                        // Show the OAuth section whenever an OAuth flow is in progress or has
+                        // produced an error, even if persisted authType is still "api_key".
+                        // This is the case during a first-time sign-in launched from the auth
+                        // picker — we deferred persisting authType=oauth until the token
+                        // arrives, so without this guard the polling/error UI would be invisible.
+                        val showOAuthSection = openaiAuthType == "oauth" || oauthPolling || oauthError != null
+                        if (!showOAuthSection) {
                             ConfigField(
                                 label = "API Key",
                                 value = maskKey(config?.openaiApiKey),

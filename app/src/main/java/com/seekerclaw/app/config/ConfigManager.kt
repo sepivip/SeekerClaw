@@ -485,18 +485,23 @@ object ConfigManager {
             authType = run {
                 // Migrate legacy/invalid authType combinations so Node's strict validation
                 // doesn't hard-crash on older installs and the UI doesn't drift from
-                // persisted state. OpenAI only supports "api_key" or "oauth"; everything
-                // else (e.g. leftover "setup_token" from when the user was on Anthropic)
-                // is normalized to "api_key" and re-persisted.
+                // persisted state. Rules:
+                //  - OpenAI only supports "api_key" or "oauth".
+                //  - OpenAI + "oauth" requires a non-blank token; otherwise normalize to
+                //    "api_key" (Keystore invalidation, data restore, or manual clear can
+                //    leave a stale "oauth" with empty token, which would crash Node).
+                //  - Non-Claude providers can't use "setup_token".
                 val raw = p.getString(KEY_AUTH_TYPE, "api_key") ?: "api_key"
                 val provider = p.getString(KEY_PROVIDER, "claude") ?: "claude"
+                val openaiTokenBlank = openaiOAuthToken.isBlank()
                 val normalized = when {
+                    provider == "openai" && raw == "oauth" && openaiTokenBlank -> "api_key"
                     provider == "openai" && raw != "oauth" && raw != "api_key" -> "api_key"
                     provider != "claude" && raw == "setup_token" -> "api_key"
                     else -> raw
                 }
                 if (normalized != raw) {
-                    Log.w(TAG, "Normalizing legacy authType '$raw' → '$normalized' (provider=$provider)")
+                    Log.w(TAG, "Normalizing authType '$raw' → '$normalized' (provider=$provider, tokenBlank=$openaiTokenBlank)")
                     p.edit().putString(KEY_AUTH_TYPE, normalized).apply()
                 }
                 normalized
