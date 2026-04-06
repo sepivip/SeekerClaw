@@ -47,9 +47,12 @@ class OpenAIOAuthActivity : ComponentActivity() {
         const val CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
         const val AUTH_URL = "https://auth.openai.com/oauth/authorize"
         const val TOKEN_URL = "https://auth.openai.com/oauth/token"
-        // Use 127.0.0.1 (not "localhost") so browsers can't resolve the redirect to ::1
-        // and miss the IPv4 NanoHTTPD listener.
-        const val REDIRECT_URI = "http://127.0.0.1:1455/auth/callback"
+        // Must be exactly "localhost" — the Codex OAuth client (app_EMoamEEZ...) is
+        // registered with this redirect URI. Using 127.0.0.1 causes OpenAI to reject the
+        // authorize request as a redirect_uri mismatch ("unknown_error" on their side).
+        // The IPv6-resolution risk Copilot flagged is theoretical — Codex CLI itself
+        // uses "localhost" in production and the NanoHTTPD listener resolves correctly.
+        const val REDIRECT_URI = "http://localhost:1455/auth/callback"
         const val SCOPES = "openid profile email offline_access"
         private const val CALLBACK_PORT = 1455
 
