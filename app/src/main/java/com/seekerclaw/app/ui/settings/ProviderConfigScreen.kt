@@ -1052,7 +1052,9 @@ private fun OpenAIOAuthSection(
                 modifier = Modifier.fillMaxWidth(),
                 shape = shape,
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = SeekerClawColors.Error,
+                    // Use the same destructive-action red as Reset/Wipe buttons elsewhere
+                    // for visual consistency across the app's destructive surfaces.
+                    containerColor = SeekerClawColors.ActionDanger,
                     contentColor = Color.White,
                 ),
             ) {
