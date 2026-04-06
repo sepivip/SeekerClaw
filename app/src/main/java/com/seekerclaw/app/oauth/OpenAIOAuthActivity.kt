@@ -53,6 +53,8 @@ class OpenAIOAuthActivity : ComponentActivity() {
         const val SCOPES = "openid profile email offline_access"
         private const val CALLBACK_PORT = 1455
 
+        private val UUID_PATTERN = Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
         // Application-lifetime scope for the token exchange. Survives Activity destruction
         // (rotation, system reclaim, fast back-press) so a successful browser redirect
         // always completes its persist + result-write, regardless of UI lifecycle.
@@ -212,11 +214,20 @@ class OpenAIOAuthActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val requestId = intent.getStringExtra("requestId") ?: run {
+        val rawRequestId = intent.getStringExtra("requestId") ?: run {
             Log.w(TAG, "No requestId specified")
             finish()
             return
         }
+        // Sanitize requestId — even though the activity is exported=false, we want to
+        // ensure the value can never escape filesDir/oauth_results via path traversal.
+        // Accept only canonical UUID format (lowercase hex + dashes).
+        if (!UUID_PATTERN.matches(rawRequestId)) {
+            Log.w(TAG, "Rejected non-UUID requestId: ${rawRequestId.take(40)}")
+            finish()
+            return
+        }
+        val requestId = rawRequestId
         currentRequestId = requestId
 
         // Minimal "waiting for sign-in" UI so the user doesn't return from the
@@ -523,64 +534,6 @@ class OpenAIOAuthActivity : ComponentActivity() {
         val bytes = ByteArray(32)
         SecureRandom().nextBytes(bytes)
         return Base64.encodeToString(bytes, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
-    }
-
-    /**
-     * Decode the payload segment of a JWT and extract email (or sub as fallback).
-     */
-    private fun extractEmailFromJwt(jwt: String): String? {
-        return try {
-            val parts = jwt.split(".")
-            if (parts.size < 3) return null
-            val payload = parts[1]
-            // Base64url decode — normalize padding to avoid edge cases on some Android versions
-            val normalizedPayload = when (payload.length % 4) {
-                0 -> payload
-                else -> payload.padEnd(payload.length + (4 - (payload.length % 4)), '=')
-            }
-            val decoded = Base64.decode(normalizedPayload, Base64.URL_SAFE or Base64.NO_WRAP)
-            val json = JSONObject(String(decoded, Charsets.UTF_8))
-            // Try multiple claim names — OpenAI JWT varies by auth method
-            val email = json.optString("email", "")
-            val name = json.optString("name", "")
-            val preferredUsername = json.optString("preferred_username", "")
-            val sub = json.optString("sub", "")
-            email.ifEmpty { preferredUsername.ifEmpty { name.ifEmpty { sub.ifEmpty { null } } } }
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to extract email from JWT", e)
-            null
-        }
-    }
-
-    private fun httpPost(url: String, body: String): String {
-        val result = httpPostRaw(url, body)
-        if (result.first !in 200..299) {
-            throw RuntimeException("HTTP ${result.first}: ${result.second}")
-        }
-        return result.second
-    }
-
-    /**
-     * Returns Pair(statusCode, responseBody).
-     */
-    private fun httpPostRaw(url: String, body: String): Pair<Int, String> {
-        val conn = URL(url).openConnection() as HttpURLConnection
-        try {
-            conn.requestMethod = "POST"
-            conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
-            conn.doOutput = true
-            conn.connectTimeout = 15_000
-            conn.readTimeout = 15_000
-
-            OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use { it.write(body) }
-
-            val statusCode = conn.responseCode
-            val stream = if (statusCode in 200..299) conn.inputStream else conn.errorStream
-            val responseBody = stream?.bufferedReader()?.use { it.readText() } ?: ""
-            return Pair(statusCode, responseBody)
-        } finally {
-            conn.disconnect()
-        }
     }
 
     private fun writeResultFile(requestId: String, result: JSONObject) {

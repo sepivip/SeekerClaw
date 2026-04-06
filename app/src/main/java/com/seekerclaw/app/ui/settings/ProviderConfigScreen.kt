@@ -141,8 +141,20 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                 when (json.optString("status")) {
                     "success" -> {
                         // Tokens were persisted directly by OpenAIOAuthActivity via
-                        // ConfigManager.saveConfig — they never touch the result file.
-                        // We just reload to pick up the encrypted values.
+                        // ConfigManager.saveConfig. Now that we have a valid token, also
+                        // flip authType=oauth (the picker intentionally deferred this
+                        // until token-present so a canceled sign-in couldn't strand the
+                        // agent in an unstartable state).
+                        withContext(Dispatchers.IO) {
+                            val current = ConfigManager.loadConfig(context)
+                            if (current != null && !current.openaiOAuthToken.isBlank() && current.authType != "oauth") {
+                                ConfigManager.saveConfig(context, current.copy(authType = "oauth"))
+                            }
+                        }
+                        context.getSharedPreferences("seekerclaw_prefs", android.content.Context.MODE_PRIVATE)
+                            .edit()
+                            .putString("lastAuthType_openai", "oauth")
+                            .apply()
                         config = withContext(Dispatchers.IO) { ConfigManager.loadConfig(context) }
                         showRestartDialog = true
                         oauthPolling = false
@@ -209,10 +221,17 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
         }
         val currentAuthType = oldAuthType
         val savedNewAuthType = prefs.getString("lastAuthType_$newProviderId", null)
+        // Resolve authType for the new provider with a strict safety rule for OpenAI:
+        // never persist "oauth" unless an OAuth token is already present, otherwise the
+        // strict Node validation would hard-crash on the next restart with an unsignable
+        // state. The OAuth section UI will still let the user start sign-in from here.
+        val openaiHasToken = !config?.openaiOAuthToken.isNullOrBlank()
         val effectiveAuthType = when (newProviderId) {
-            "openai" -> when (savedNewAuthType) {
-                "oauth", "api_key" -> savedNewAuthType
-                else -> "oauth" // default for first-time switch into OpenAI
+            "openai" -> when {
+                savedNewAuthType == "oauth" && openaiHasToken -> "oauth"
+                savedNewAuthType == "api_key" -> "api_key"
+                openaiHasToken -> "oauth"
+                else -> "api_key"
             }
             "claude" -> when (savedNewAuthType) {
                 "api_key", "setup_token" -> savedNewAuthType
@@ -885,9 +904,24 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                     config?.openaiOAuthToken.isNullOrBlank()
                 TextButton(
                     onClick = {
-                        // Persist the selection regardless — the strict-validation hard
-                        // crash is prevented by the existing sign-out → api_key flow and
-                        // by the user completing sign-in before any restart.
+                        if (oauthMissingToken) {
+                            // Don't persist oauth yet — only after sign-in succeeds, the
+                            // OAuth result handler will set authType=oauth alongside the
+                            // token save. Persisting here would leave the agent unstartable
+                            // (oauth + blank token) if the user dismisses the restart dialog
+                            // or sign-in fails.
+                            Analytics.authTypeChanged(selectedAuth)
+                            showAuthTypePicker = false
+                            val requestId = UUID.randomUUID().toString()
+                            val intent = Intent(context, OpenAIOAuthActivity::class.java).apply {
+                                putExtra("requestId", requestId)
+                            }
+                            context.startActivity(intent)
+                            oauthRequestId = requestId
+                            oauthPolling = true
+                            oauthError = null
+                            return@TextButton
+                        }
                         saveField("authType", selectedAuth, needsRestart = true)
                         context.getSharedPreferences("seekerclaw_prefs", android.content.Context.MODE_PRIVATE)
                             .edit()
@@ -903,19 +937,6 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                         }
                         Analytics.authTypeChanged(selectedAuth)
                         showAuthTypePicker = false
-                        // Auto-launch sign-in if user picked OAuth and has no token yet,
-                        // so they don't have to find the OAuth section after the picker
-                        // closes.
-                        if (oauthMissingToken) {
-                            val requestId = UUID.randomUUID().toString()
-                            val intent = Intent(context, OpenAIOAuthActivity::class.java).apply {
-                                putExtra("requestId", requestId)
-                            }
-                            context.startActivity(intent)
-                            oauthRequestId = requestId
-                            oauthPolling = true
-                            oauthError = null
-                        }
                     },
                 ) {
                     Text(
