@@ -268,10 +268,26 @@ function httpOpenAIStreamingRequest(options, body = null) {
             // with `item_id` instead of `output_index` — we build this map from the
             // earlier `response.output_item.added` events (which carry both fields)
             // and use it to resolve item_id back to output_index in the delta handlers.
-            const itemIdToOutputIndex = {};
+            // Object.create(null) avoids prototype pollution since the keys come from
+            // server-controlled item.id values.
+            const itemIdToOutputIndex = Object.create(null);
             let accumulatedUsage = null;
             let sseBuffer = '';
             let parsedEventCount = 0; // tracks successful SSE event parses for end-of-stream diagnostics
+
+            // Resolve output_index from either the event's own `output_index`
+            // (older Responses API shape, used by api.openai.com) or by looking
+            // up `item_id` in our map (Codex backend / gpt-5.x reasoning models —
+            // they only emit `item_id` on delta events, not `output_index`).
+            // Returns null if neither is available. Hoisted out of the per-event
+            // hot path so it's allocated once per request, not per SSE event.
+            const resolveOutputIndex = (p) => {
+                if (typeof p.output_index === 'number') return p.output_index;
+                if (typeof p.item_id === 'string' && Object.prototype.hasOwnProperty.call(itemIdToOutputIndex, p.item_id)) {
+                    return itemIdToOutputIndex[p.item_id];
+                }
+                return null;
+            };
 
             // Build response from accumulated deltas (fallback path)
             const buildFromAccum = () => {
@@ -322,19 +338,6 @@ function httpOpenAIStreamingRequest(options, body = null) {
                     try { parsed = JSON.parse(eventData); } catch (_) { continue; }
                     parsedEventCount++;
 
-                    // Resolve output_index from either the event's own `output_index`
-                    // (older Responses API shape, used by api.openai.com) or by looking
-                    // up `item_id` in our map (Codex backend / gpt-5.x reasoning models —
-                    // they only emit `item_id` on delta events, not `output_index`).
-                    // Returns null if neither is available.
-                    const resolveOutputIndex = (p) => {
-                        if (typeof p.output_index === 'number') return p.output_index;
-                        if (typeof p.item_id === 'string' && p.item_id in itemIdToOutputIndex) {
-                            return itemIdToOutputIndex[p.item_id];
-                        }
-                        return null;
-                    };
-
                     switch (eventType) {
                         case 'response.output_item.added':
                             if (typeof parsed.output_index === 'number' && parsed.item) {
@@ -373,8 +376,13 @@ function httpOpenAIStreamingRequest(options, body = null) {
                             // server's response.output is empty BUT we accumulated items
                             // ourselves, prefer our local accumulation so the user sees
                             // the model's actual reply instead of an empty response.
+                            //
+                            // Use `parsed.response || parsed` to match the existing
+                            // `fromApiResponse(raw.response || raw)` logic — handles both
+                            // wrapped (`{type, response: {output, ...}}`) and unwrapped
+                            // (`{output, ...}`) backend payload shapes.
                             {
-                                const serverResp = parsed.response || {};
+                                const serverResp = parsed.response || parsed;
                                 const serverOutput = Array.isArray(serverResp.output) ? serverResp.output : [];
                                 if (serverOutput.length === 0 && Object.keys(outputItems).length > 0) {
                                     settle(resolve, { status: 200, data: buildFromAccum(), headers: res.headers });
