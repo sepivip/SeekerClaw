@@ -3,6 +3,32 @@
 All notable changes to SeekerClaw are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.9.0] - 2026-04-07
+
+### Added
+- **OpenAI Codex OAuth** — sign in with a ChatGPT Plus/Pro subscription instead of a platform API key. Browser PKCE flow, Keystore-encrypted token storage, automatic token refresh, per-provider auth-type memory across provider switches (BAT-485, #316)
+- **Discord channel** — run the agent on Discord as an alternative to Telegram. Gateway v10 WebSocket, full media/reactions/reply threading, channel abstraction layer so future channels plug in cleanly (BAT-483, #310)
+- **Custom AI Provider** — connect any OpenAI-compatible gateway (DeepSeek, Ollama, LiteLLM, etc.) via a base URL, API key, custom headers, and a model ID. Supports both Chat Completions and OpenAI Responses formats (BAT-482, #309)
+
+### Fixed
+- **Google Play SMS hotfix** — `android_sms` on the googlePlay flavor now uses an intent handoff instead of `SEND_SMS` permission, unblocking Play Store submission (BAT-484, #312) *(also tagged as v1.8.1)*
+- **Codex SSE parsing** — handle missing Content-Type header from chatgpt.com
+- **Web search provider reporting** — agent now knows which search backend actually ran when called with `provider: "auto"`
+- **Dashboard credential check** — OpenAI OAuth users now see a green pill instead of "Credential missing"
+- **Sign Out button color** — uses ActionDanger red for consistency with Reset/Wipe
+
+### Changed
+- **Settings layout** — Quick Setup moved up, MCP Servers extracted to its own screen (#313)
+- **Renamed user-visible "OpenClaw service" → "Claw Engine"** in log messages and Settings/System About rows
+- **Provider switching is now atomic** — batched into a single `saveConfig` call instead of 2–3 sequential writes. Noticeably snappier on Seeker flash
+- **Agent self-knowledge** — added OpenAI OAuth Provider block, OAuth Self-Diagnosis playbook, and OAuth sections in `DIAGNOSTICS.md` (SAB-AUDIT-v19)
+
+### Security
+- **OAuth tokens never touch disk in plaintext** — persisted directly via `ConfigManager` (Android Keystore), result files carry only status flags (RFC 6819 §5.1.4, OWASP MASVS-STORAGE-1)
+- **`config.js` strict authType validation** — hard-fails on unsupported values for the OpenAI provider, with legacy-alias migration so older installs don't crash
+- **OAuth callback listener** binds to `localhost` only (not all network interfaces)
+- **`requestId` Intent extra** validated against a strict UUID regex (path-traversal defense)
+
 ## [1.8.0] - 2026-03-30
 
 ### Added
