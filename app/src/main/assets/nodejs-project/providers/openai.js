@@ -133,13 +133,25 @@ function fromApiResponse(raw) {
     const resp = raw.response || raw;
 
     const textParts = [];
+    const reasoningSummaryParts = [];
     const toolCalls = [];
 
     for (const item of (resp.output || [])) {
-        // Text output items
+        // Text output items (the user-facing answer)
         if (item.type === 'message' && item.content) {
             for (const part of item.content) {
                 if (part.type === 'output_text' && part.text) textParts.push(part.text);
+            }
+        }
+        // Reasoning items — Codex/gpt-5.x reasoning models emit these.
+        // The `summary` field is the human-readable rollup of the model's thinking.
+        // We collect it as a LAST-RESORT fallback if no `message` item is present
+        // (the model sometimes returns reasoning-only on terse inputs like "hey").
+        if (item.type === 'reasoning' && Array.isArray(item.summary)) {
+            for (const part of item.summary) {
+                if (part && typeof part.text === 'string' && part.text) {
+                    reasoningSummaryParts.push(part.text);
+                }
             }
         }
         // Function call output items
@@ -160,7 +172,21 @@ function fromApiResponse(raw) {
         }
     }
 
-    const text = textParts.length > 0 ? textParts.join('') : null;
+    let text = textParts.length > 0 ? textParts.join('') : null;
+
+    // Diagnostic + fallback: if no message text AND no tool calls, this is the
+    // "model produced nothing visible" case that surfaces as SILENT_REPLY upstream.
+    // Log the response shape so we can see what actually came back, then try
+    // reasoning-summary text as a last resort so the user gets *something*.
+    if (text === null && toolCalls.length === 0) {
+        const itemTypes = (resp.output || []).map(i => i.type || 'unknown').join(', ') || '(none)';
+        const incompleteReason = resp.incomplete_details?.reason || 'none';
+        log(`[OpenAI] Empty visible response — output items: [${itemTypes}], status: ${resp.status || 'unknown'}, incomplete_reason: ${incompleteReason}, reasoning_summary_chars: ${reasoningSummaryParts.join('').length}`, 'WARN');
+        if (reasoningSummaryParts.length > 0) {
+            text = reasoningSummaryParts.join('\n\n');
+            log(`[OpenAI] Falling back to reasoning summary (${text.length} chars) since no message item was returned`, 'WARN');
+        }
+    }
 
     // Map Responses API status → neutral stopReason
     const status = resp.status || 'completed';
