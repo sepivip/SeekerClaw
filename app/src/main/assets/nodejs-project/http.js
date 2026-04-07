@@ -386,6 +386,12 @@ function httpOpenAIStreamingRequest(options, body = null) {
                             {
                                 const serverResp = parsed.response || parsed;
                                 const serverOutput = Array.isArray(serverResp.output) ? serverResp.output : [];
+                                // Capture usage from the completed event BEFORE building
+                                // from accumulated deltas. Codex typically only emits the
+                                // final token counts on response.completed, and this case
+                                // returns early before the post-switch usage update runs —
+                                // without this, buildFromAccum() would lose token accounting.
+                                if (serverResp.usage) accumulatedUsage = serverResp.usage;
                                 if (serverOutput.length === 0 && Object.keys(outputItems).length > 0) {
                                     settle(resolve, { status: 200, data: buildFromAccum(), headers: res.headers });
                                 } else {
