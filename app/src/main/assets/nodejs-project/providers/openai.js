@@ -260,8 +260,14 @@ function formatRequest(model, maxTokens, instructions, input, tools) {
         body.store = false;
     }
 
-    // Codex models are reasoning models — they need the reasoning parameter for tool calling.
-    if (model && model.includes('codex')) {
+    // The Codex endpoint serves reasoning models exclusively — every model on
+    // chatgpt.com/backend-api/codex (gpt-5.4, gpt-5.4-mini, gpt-5.3-codex, etc.)
+    // requires the `reasoning` parameter or it returns `output: []` (empty response,
+    // status=completed). The previous "model.includes('codex')" check missed the
+    // gpt-5.4/gpt-5.4-mini models entirely and was the root cause of the silent
+    // empty responses observed in v1.9.0-rc1 device test. For non-OAuth (api.openai.com)
+    // we keep the older check so non-reasoning OpenAI models aren't sent the param.
+    if (isOAuth || (model && model.includes('codex'))) {
         body.reasoning = { effort: 'medium', summary: 'auto' };
     }
 
