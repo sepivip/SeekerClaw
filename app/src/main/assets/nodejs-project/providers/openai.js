@@ -255,20 +255,32 @@ function formatRequest(model, maxTokens, instructions, input, tools) {
         body.tools = tools;
     }
 
-    // OAuth (Codex endpoint) requires store: false — conversations cannot be stored
-    if (isOAuth) {
-        body.store = false;
-    }
-
     // The Codex endpoint serves reasoning models exclusively — every model on
     // chatgpt.com/backend-api/codex (gpt-5.4, gpt-5.4-mini, gpt-5.3-codex, etc.)
-    // requires the `reasoning` parameter or it returns `output: []` (empty response,
-    // status=completed). The previous "model.includes('codex')" check missed the
-    // gpt-5.4/gpt-5.4-mini models entirely and was the root cause of the silent
-    // empty responses observed in v1.9.0-rc1 device test. For non-OAuth (api.openai.com)
-    // we keep the older check so non-reasoning OpenAI models aren't sent the param.
+    // requires the `reasoning` parameter or it returns `output: []`.
     if (isOAuth || (model && model.includes('codex'))) {
         body.reasoning = { effort: 'medium', summary: 'auto' };
+    }
+
+    // DEBUG: dump the full sanitized request body shape so we can see what we're
+    // actually sending to Codex. Logs to WARN level so it always shows up.
+    // Sanitization: drop the long instructions/input/tools fields, only show types.
+    if (isOAuth) {
+        const shape = {
+            model: body.model,
+            stream: body.stream,
+            instructions_chars: typeof body.instructions === 'string' ? body.instructions.length : 0,
+            input_count: Array.isArray(body.input) ? body.input.length : (typeof body.input),
+            input_first_role: Array.isArray(body.input) && body.input[0] ? body.input[0].role : 'n/a',
+            input_first_content_type: Array.isArray(body.input) && body.input[0]
+                ? (Array.isArray(body.input[0].content) ? body.input[0].content.map(c => c.type).join('|') : typeof body.input[0].content)
+                : 'n/a',
+            tools_count: Array.isArray(body.tools) ? body.tools.length : 0,
+            store: body.store,
+            reasoning: body.reasoning,
+            max_output_tokens: body.max_output_tokens,
+        };
+        log('[Codex] request shape: ' + JSON.stringify(shape), 'WARN');
     }
 
     return JSON.stringify(body);
