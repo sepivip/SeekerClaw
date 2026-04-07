@@ -263,9 +263,31 @@ function httpOpenAIStreamingRequest(options, body = null) {
             const outputItems = {};  // output_index → item skeleton
             const textAccum = {};    // "output_index:content_index" → accumulated text
             const funcArgAccum = {}; // output_index → accumulated arguments string
+            // item_id → output_index lookup. Codex backend (gpt-5.x reasoning models
+            // served via chatgpt.com/backend-api/codex/responses) emits delta events
+            // with `item_id` instead of `output_index` — we build this map from the
+            // earlier `response.output_item.added` events (which carry both fields)
+            // and use it to resolve item_id back to output_index in the delta handlers.
+            // Object.create(null) avoids prototype pollution since the keys come from
+            // server-controlled item.id values.
+            const itemIdToOutputIndex = Object.create(null);
             let accumulatedUsage = null;
             let sseBuffer = '';
             let parsedEventCount = 0; // tracks successful SSE event parses for end-of-stream diagnostics
+
+            // Resolve output_index from either the event's own `output_index`
+            // (older Responses API shape, used by api.openai.com) or by looking
+            // up `item_id` in our map (Codex backend / gpt-5.x reasoning models —
+            // they only emit `item_id` on delta events, not `output_index`).
+            // Returns null if neither is available. Hoisted out of the per-event
+            // hot path so it's allocated once per request, not per SSE event.
+            const resolveOutputIndex = (p) => {
+                if (typeof p.output_index === 'number') return p.output_index;
+                if (typeof p.item_id === 'string' && Object.prototype.hasOwnProperty.call(itemIdToOutputIndex, p.item_id)) {
+                    return itemIdToOutputIndex[p.item_id];
+                }
+                return null;
+            };
 
             // Build response from accumulated deltas (fallback path)
             const buildFromAccum = () => {
@@ -274,13 +296,15 @@ function httpOpenAIStreamingRequest(options, body = null) {
                 for (const idx of indices) {
                     const item = outputItems[idx];
                     if (item.type === 'message') {
-                        const content = [];
-                        // Collect all text parts for this output index
-                        for (const key of Object.keys(textAccum)) {
-                            if (key.startsWith(`${idx}:`)) {
-                                content.push({ type: 'output_text', text: textAccum[key] });
-                            }
-                        }
+                        // Collect all text parts for this output index, sorted by
+                        // content_index so multi-part messages reconstruct in the
+                        // order the server emitted them. textAccum keys are
+                        // "<output_index>:<content_index>" — extract and sort numerically.
+                        const prefix = `${idx}:`;
+                        const partKeys = Object.keys(textAccum)
+                            .filter(k => k.startsWith(prefix))
+                            .sort((a, b) => Number(a.slice(prefix.length)) - Number(b.slice(prefix.length)));
+                        const content = partKeys.map(k => ({ type: 'output_text', text: textAccum[k] }));
                         output.push({ ...item, content });
                     } else if (item.type === 'function_call') {
                         output.push({
@@ -320,30 +344,60 @@ function httpOpenAIStreamingRequest(options, body = null) {
                         case 'response.output_item.added':
                             if (typeof parsed.output_index === 'number' && parsed.item) {
                                 outputItems[parsed.output_index] = parsed.item;
+                                if (typeof parsed.item.id === 'string') {
+                                    itemIdToOutputIndex[parsed.item.id] = parsed.output_index;
+                                }
                                 if (parsed.item.type === 'function_call') {
                                     funcArgAccum[parsed.output_index] = '';
                                 }
                             }
                             break;
 
-                        case 'response.output_text.delta':
-                            if (typeof parsed.output_index === 'number') {
-                                const key = `${parsed.output_index}:${parsed.content_index ?? 0}`;
+                        case 'response.output_text.delta': {
+                            const oi = resolveOutputIndex(parsed);
+                            if (oi !== null) {
+                                const key = `${oi}:${parsed.content_index ?? 0}`;
                                 textAccum[key] = (textAccum[key] || '') + (parsed.delta || '');
                             }
                             break;
+                        }
 
-                        case 'response.function_call_arguments.delta':
-                            if (typeof parsed.output_index === 'number') {
-                                funcArgAccum[parsed.output_index] =
-                                    (funcArgAccum[parsed.output_index] || '') + (parsed.delta || '');
+                        case 'response.function_call_arguments.delta': {
+                            const oi = resolveOutputIndex(parsed);
+                            if (oi !== null) {
+                                funcArgAccum[oi] = (funcArgAccum[oi] || '') + (parsed.delta || '');
                             }
                             break;
+                        }
 
                         case 'response.completed':
                             clearTimeout(hardTimer);
-                            // Authoritative: use the full response object directly
-                            settle(resolve, { status: 200, data: parsed, headers: res.headers });
+                            // Codex backend's `response.completed` event sometimes carries
+                            // an empty `output: []` array because the actual content was
+                            // delivered piece-by-piece via earlier delta events. If the
+                            // server's response.output is empty BUT we accumulated items
+                            // ourselves, prefer our local accumulation so the user sees
+                            // the model's actual reply instead of an empty response.
+                            //
+                            // Use `parsed.response || parsed` to match the existing
+                            // `fromApiResponse(raw.response || raw)` logic — handles both
+                            // wrapped (`{type, response: {output, ...}}`) and unwrapped
+                            // (`{output, ...}`) backend payload shapes.
+                            {
+                                const serverResp = parsed.response || parsed;
+                                const serverOutput = Array.isArray(serverResp.output) ? serverResp.output : [];
+                                // Capture usage from the completed event BEFORE building
+                                // from accumulated deltas. Codex typically only emits the
+                                // final token counts on response.completed, and this case
+                                // returns early before the post-switch usage update runs —
+                                // without this, buildFromAccum() would lose token accounting.
+                                if (serverResp.usage) accumulatedUsage = serverResp.usage;
+                                if (serverOutput.length === 0 && Object.keys(outputItems).length > 0) {
+                                    settle(resolve, { status: 200, data: buildFromAccum(), headers: res.headers });
+                                } else {
+                                    settle(resolve, { status: 200, data: parsed, headers: res.headers });
+                                }
+                            }
                             return;
 
                         case 'response.incomplete':
