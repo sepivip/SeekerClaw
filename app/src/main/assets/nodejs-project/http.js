@@ -296,13 +296,15 @@ function httpOpenAIStreamingRequest(options, body = null) {
                 for (const idx of indices) {
                     const item = outputItems[idx];
                     if (item.type === 'message') {
-                        const content = [];
-                        // Collect all text parts for this output index
-                        for (const key of Object.keys(textAccum)) {
-                            if (key.startsWith(`${idx}:`)) {
-                                content.push({ type: 'output_text', text: textAccum[key] });
-                            }
-                        }
+                        // Collect all text parts for this output index, sorted by
+                        // content_index so multi-part messages reconstruct in the
+                        // order the server emitted them. textAccum keys are
+                        // "<output_index>:<content_index>" — extract and sort numerically.
+                        const prefix = `${idx}:`;
+                        const partKeys = Object.keys(textAccum)
+                            .filter(k => k.startsWith(prefix))
+                            .sort((a, b) => Number(a.slice(prefix.length)) - Number(b.slice(prefix.length)));
+                        const content = partKeys.map(k => ({ type: 'output_text', text: textAccum[k] }));
                         output.push({ ...item, content });
                     } else if (item.type === 'function_call') {
                         output.push({
@@ -342,7 +344,7 @@ function httpOpenAIStreamingRequest(options, body = null) {
                         case 'response.output_item.added':
                             if (typeof parsed.output_index === 'number' && parsed.item) {
                                 outputItems[parsed.output_index] = parsed.item;
-                                if (parsed.item.id) {
+                                if (typeof parsed.item.id === 'string') {
                                     itemIdToOutputIndex[parsed.item.id] = parsed.output_index;
                                 }
                                 if (parsed.item.type === 'function_call') {
