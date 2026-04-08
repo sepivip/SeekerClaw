@@ -1384,10 +1384,19 @@ private fun SetupSuccessStep(
                 .verticalScroll(rememberScrollState()),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-        // Match Welcome's heroTop padding so the logo sits at the same vertical
-        // position. Welcome bypasses the parent's contentTop, so we add the
-        // delta here.
-        Spacer(modifier = Modifier.height(SetupLayout.heroTop - SetupLayout.contentTop))
+        // Match Welcome's logo Y position. Welcome:
+        //   Box(top=heroTop) → Box(size=heroBoxSize, contentAlignment=Center)
+        //     → Image(size=heroLogoSize)
+        //   Image top edge = heroTop + (heroBoxSize - heroLogoSize) / 2
+        // Success is inside the parent's padding(top=contentTop), so the spacer
+        // needs to add the difference.
+        Spacer(
+            modifier = Modifier.height(
+                SetupLayout.heroTop -
+                    SetupLayout.contentTop +
+                    (Sizing.heroBoxSize - Sizing.heroLogoSize) / 2
+            )
+        )
 
         // Hero logo (smaller version of Welcome's claw)
         Image(
