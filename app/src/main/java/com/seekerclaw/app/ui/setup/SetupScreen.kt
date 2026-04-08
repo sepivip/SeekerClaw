@@ -55,6 +55,10 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.RadioButtonDefaults
+import androidx.compose.material3.SecondaryIndicator
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
+import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.ui.semantics.Role
@@ -922,32 +926,41 @@ private fun ProviderSetupStep(
         Spacer(modifier = Modifier.height(10.dp))
 
         CardSurface {
-            // Auth type toggle — Claude only
+            // Auth type tabs — Claude only
             if (provider == "claude") {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                val authTabs = listOf("api_key" to "API Key", "setup_token" to "Pro/Max Token")
+                val selectedTabIndex = authTabs.indexOfFirst { it.first == authType }.coerceAtLeast(0)
+                TabRow(
+                    selectedTabIndex = selectedTabIndex,
+                    containerColor = androidx.compose.ui.graphics.Color.Transparent,
+                    contentColor = SeekerClawColors.TextPrimary,
+                    indicator = { tabPositions ->
+                        SecondaryIndicator(
+                            modifier = Modifier.tabIndicatorOffset(tabPositions[selectedTabIndex]),
+                            color = SeekerClawColors.Primary,
+                            height = 2.dp,
+                        )
+                    },
+                    divider = {
+                        HorizontalDivider(color = SeekerClawColors.CardBorder)
+                    },
                 ) {
-                    listOf("api_key" to "API Key", "setup_token" to "Pro/Max Setup Token").forEach { (type, label) ->
-                        val isAuthSelected = authType == type
-                        Button(
+                    authTabs.forEach { (type, label) ->
+                        val isAuthSelected = type == authType
+                        Tab(
+                            selected = isAuthSelected,
                             onClick = { onAuthTypeChange(type) },
-                            modifier = Modifier.weight(1f).height(48.dp),
-                            shape = shape,
-                            border = if (!isAuthSelected) BorderStroke(1.dp, SeekerClawColors.CardBorder) else null,
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (isAuthSelected) SeekerClawColors.Primary.copy(alpha = 0.15f)
-                                    else SeekerClawColors.Background,
-                                contentColor = if (isAuthSelected) SeekerClawColors.Primary
-                                    else SeekerClawColors.TextDim,
-                            ),
-                        ) {
-                            Text(
-                                text = label,
-                                fontSize = 12.sp,
-                                fontWeight = if (isAuthSelected) FontWeight.Bold else FontWeight.Normal,
-                            )
-                        }
+                            selectedContentColor = SeekerClawColors.Primary,
+                            unselectedContentColor = SeekerClawColors.TextDim,
+                            text = {
+                                Text(
+                                    text = label,
+                                    fontFamily = RethinkSans,
+                                    fontSize = TypeScale.bodyMedium,
+                                    fontWeight = if (isAuthSelected) FontWeight.ExtraBold else FontWeight.Medium,
+                                )
+                            },
+                        )
                     }
                 }
 
