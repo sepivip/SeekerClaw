@@ -119,6 +119,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import com.seekerclaw.app.ui.components.ActionResult
 import com.seekerclaw.app.ui.components.CardSurface
+import com.seekerclaw.app.ui.components.InputMask
 import com.seekerclaw.app.ui.components.InputWithActionButton
 import com.seekerclaw.app.ui.components.MorphActionButton
 import com.seekerclaw.app.ui.components.ProviderPicker
@@ -318,11 +319,15 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                     agentName = agentName.trim().ifBlank { "SeekerClaw" },
                 )
                 else -> AppConfig(
-                    anthropicApiKey = if (effectiveAuthType == "api_key") trimmedKey else "",
+                    // Preserve the OTHER auth type's stored key — never wipe data the user
+                    // might still have set in Settings under the alternate Claude auth flow.
+                    anthropicApiKey = if (effectiveAuthType == "api_key") trimmedKey
+                        else (existing?.anthropicApiKey ?: ""),
+                    setupToken = if (effectiveAuthType == "setup_token") trimmedKey
+                        else (existing?.setupToken ?: ""),
                     openaiApiKey = existing?.openaiApiKey ?: "",
                     openrouterApiKey = existing?.openrouterApiKey ?: "",
                     provider = "claude",
-                    setupToken = if (effectiveAuthType == "setup_token") trimmedKey else "",
                     authType = effectiveAuthType,
                     telegramBotToken = botToken.trim(),
                     telegramOwnerId = ownerId.trim(),
@@ -494,7 +499,19 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                     }
                 },
                 authType = authType,
-                onAuthTypeChange = { authType = it },
+                onAuthTypeChange = { newAuthType ->
+                    authType = newAuthType
+                    // Swap displayed key to the value stored under the new auth type so
+                    // the field always reflects what's saved for the active tab.
+                    if (scannedProvider == "claude") {
+                        apiKey = if (newAuthType == "setup_token")
+                            existingConfig?.setupToken ?: ""
+                        else
+                            existingConfig?.anthropicApiKey ?: ""
+                    }
+                    apiKeyError = null
+                    errorMessage = null
+                },
                 apiKeyError = apiKeyError,
                 fieldColors = fieldColors,
                 onNext = ::saveAndStart,
@@ -1067,7 +1084,7 @@ private fun ProviderSetupStep(
                 onAction = { runKeyTest() },
                 actionState = keyTestState,
                 placeholder = if (provider == "claude" && isToken) "sk-ant-oat01-\u2026" else providerInfo.keyHint,
-                isPassword = true,
+                visualTransformation = InputMask.MaskMiddle,
                 isError = apiKeyError != null,
             )
 

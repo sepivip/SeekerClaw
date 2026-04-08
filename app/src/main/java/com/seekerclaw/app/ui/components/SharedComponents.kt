@@ -58,7 +58,10 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.input.OffsetMapping
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -518,6 +521,60 @@ fun MorphActionButton(
 }
 
 /**
+ * Visual transformation that mirrors Settings' [maskKey] display:
+ * shows the first 6 characters, 8 asterisks, and the last 4 characters
+ * (e.g. "sk-ant-********abc1"). Strings <=10 chars are fully masked.
+ *
+ * Cursor positions inside the masked middle clamp to the start of the
+ * star segment — fine for read-mostly fields where users paste new
+ * keys whole rather than editing characters.
+ */
+private class MaskMiddleTransformation : VisualTransformation {
+    override fun filter(text: AnnotatedString): TransformedText {
+        val raw = text.text
+        if (raw.length <= 10) {
+            return TransformedText(
+                AnnotatedString("*".repeat(raw.length)),
+                OffsetMapping.Identity,
+            )
+        }
+        val masked = buildString {
+            append(raw.take(6))
+            append("*".repeat(8))
+            append(raw.takeLast(4))
+        }
+        return TransformedText(
+            text = AnnotatedString(masked),
+            offsetMapping = object : OffsetMapping {
+                override fun originalToTransformed(offset: Int): Int {
+                    return when {
+                        offset <= 6 -> offset
+                        offset >= raw.length - 4 -> 14 + (offset - (raw.length - 4))
+                        else -> 14
+                    }.coerceIn(0, masked.length)
+                }
+                override fun transformedToOriginal(offset: Int): Int {
+                    return when {
+                        offset <= 6 -> offset
+                        offset >= 14 -> raw.length - 4 + (offset - 14)
+                        else -> 6
+                    }.coerceIn(0, raw.length)
+                }
+            },
+        )
+    }
+}
+
+/** Convenience visual transformations exposed to callers. */
+object InputMask {
+    /** Show first 6 + 8 stars + last 4. Mirrors Settings' maskKey display. */
+    val MaskMiddle: VisualTransformation = MaskMiddleTransformation()
+
+    /** Standard password mask — every char becomes a bullet. */
+    val Password: VisualTransformation = PasswordVisualTransformation()
+}
+
+/**
  * Compound input + inline action button (shadcn-style "input with addon").
  *
  * Single rounded surface, single border, with the input on the left taking the
@@ -538,7 +595,7 @@ fun InputWithActionButton(
     actionState: ActionResult,
     modifier: Modifier = Modifier,
     placeholder: String = "",
-    isPassword: Boolean = false,
+    visualTransformation: VisualTransformation = VisualTransformation.None,
     enabled: Boolean = true,
     isError: Boolean = false,
 ) {
@@ -585,7 +642,7 @@ fun InputWithActionButton(
                 onValueChange = onValueChange,
                 singleLine = true,
                 enabled = enabled,
-                visualTransformation = if (isPassword) PasswordVisualTransformation() else VisualTransformation.None,
+                visualTransformation = visualTransformation,
                 textStyle = TextStyle(
                     color = SeekerClawColors.TextPrimary,
                     fontSize = TypeScale.bodyMedium.value.sp,
