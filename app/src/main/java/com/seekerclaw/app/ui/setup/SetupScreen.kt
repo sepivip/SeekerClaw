@@ -220,7 +220,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                     agentName = cfg.agentName
                     isQrImporting = false
                     errorMessage = null
-                    currentStep = SetupSteps.TELEGRAM // QR fills all fields — jump to final step
+                    currentStep = SetupSteps.MODEL // QR fills all fields — jump to final step (Initialize Agent)
                 }
                 .onFailure { err ->
                     isQrImporting = false
