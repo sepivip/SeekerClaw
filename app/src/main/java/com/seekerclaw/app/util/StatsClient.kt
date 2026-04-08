@@ -15,6 +15,8 @@ private const val TAG = "StatsClient"
  * Used by DashboardScreen and SystemScreen for API analytics (BAT-32),
  * and by the memory index UI for memory stats (BAT-33).
  */
+data class DayActivity(val day: String, val count: Int)
+
 data class DbSummary(
     val todayRequests: Int = 0,
     val todayInputTokens: Long = 0,
@@ -29,6 +31,7 @@ data class DbSummary(
     val memoryFilesIndexed: Int = 0,
     val memoryChunksCount: Int = 0,
     val memoryLastIndexed: String? = null,
+    val dailyActivity: List<DayActivity> = emptyList(),
 )
 
 suspend fun fetchDbSummary(): DbSummary? = withContext(Dispatchers.IO) {
@@ -45,6 +48,20 @@ suspend fun fetchDbSummary(): DbSummary? = withContext(Dispatchers.IO) {
         val month = if (json.has("month") && !json.isNull("month")) json.getJSONObject("month") else null
         val memory = if (json.has("memory") && !json.isNull("memory")) json.getJSONObject("memory") else null
 
+        val dailyActivityList = mutableListOf<DayActivity>()
+        val dailyArr = json.optJSONArray("dailyActivity")
+        if (dailyArr != null) {
+            for (i in 0 until dailyArr.length()) {
+                try {
+                    val item = dailyArr.getJSONObject(i)
+                    dailyActivityList.add(DayActivity(
+                        day = item.optString("day", ""),
+                        count = item.optInt("count", 0)
+                    ))
+                } catch (_: org.json.JSONException) { /* skip malformed entries */ }
+            }
+        }
+
         DbSummary(
             todayRequests = today?.optInt("requests", 0) ?: 0,
             todayInputTokens = today?.optLong("input_tokens", 0) ?: 0,
@@ -60,6 +77,7 @@ suspend fun fetchDbSummary(): DbSummary? = withContext(Dispatchers.IO) {
             memoryChunksCount = memory?.optInt("chunks_count", 0) ?: 0,
             memoryLastIndexed = if (memory != null && memory.has("last_indexed") && !memory.isNull("last_indexed"))
                 memory.getString("last_indexed") else null,
+            dailyActivity = dailyActivityList,
         )
     } catch (e: Exception) {
         if (e is kotlinx.coroutines.CancellationException) throw e
