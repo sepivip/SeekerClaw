@@ -403,14 +403,6 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             }
 
             Spacer(modifier = Modifier.height(SetupLayout.gapAfterIndicator))
-
-            // Step indicator (Welcome is not a step — 3 real steps)
-            SetupStepIndicator(
-                currentStep = currentStep - 1,
-                labels = listOf("AI Provider", "Model", "Telegram"),
-            )
-
-            Spacer(modifier = Modifier.height(SetupLayout.gapAfterIndicator))
         }
 
         // Error message
@@ -1054,6 +1046,7 @@ private fun ProviderSetupStep(
             onBack = onBack,
             onNext = onNext,
             nextEnabled = apiKey.isNotBlank(),
+            currentStep = 0,
         )
     }
 }
@@ -1210,6 +1203,12 @@ private fun TelegramStep(
 
         val uriHandler = LocalUriHandler.current
         Column(modifier = Modifier.fillMaxWidth()) {
+            PageDots(
+                currentStep = 2,
+                totalSteps = 3,
+                modifier = Modifier.align(Alignment.CenterHorizontally),
+            )
+            Spacer(modifier = Modifier.height(SetupLayout.gapBeforeNav))
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(SetupLayout.gapBetweenButtons),
@@ -1415,7 +1414,12 @@ private fun OptionsStep(
 
         Spacer(modifier = Modifier.height(SetupLayout.gapBeforeNav))
 
-        NavButtons(onBack = onBack, onNext = onNext, nextEnabled = selectedModel.isNotBlank())
+        NavButtons(
+            onBack = onBack,
+            onNext = onNext,
+            nextEnabled = selectedModel.isNotBlank(),
+            currentStep = 1,
+        )
     }
 }
 
@@ -1577,11 +1581,21 @@ private fun NavButtons(
     onNext: () -> Unit,
     nextEnabled: Boolean,
     nextLabel: String = "Next",
+    currentStep: Int = -1,
+    totalSteps: Int = 3,
 ) {
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
     val uriHandler = LocalUriHandler.current
 
     Column(modifier = Modifier.fillMaxWidth()) {
+        if (currentStep >= 0) {
+            PageDots(
+                currentStep = currentStep,
+                totalSteps = totalSteps,
+                modifier = Modifier.align(Alignment.CenterHorizontally),
+            )
+            Spacer(modifier = Modifier.height(SetupLayout.gapBeforeNav))
+        }
         // Row: Back | Next (same layout as Welcome's Scan Config | Skip row)
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -1642,6 +1656,34 @@ private fun NavButtons(
                     color = SeekerClawColors.TextDim,
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun PageDots(
+    currentStep: Int,
+    totalSteps: Int,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        val dotShape = RoundedCornerShape(Sizing.pageDotCornerRadius)
+        for (i in 0 until totalSteps) {
+            val isActive = i == currentStep
+            Box(
+                modifier = Modifier
+                    .width(if (isActive) Sizing.pageDotActiveWidth else Sizing.pageDotSize)
+                    .height(Sizing.pageDotSize)
+                    .background(
+                        if (isActive) SeekerClawColors.TextPrimary
+                        else SeekerClawColors.TextDim.copy(alpha = BrandAlpha.disabledSurface),
+                        dotShape,
+                    ),
+            )
         }
     }
 }

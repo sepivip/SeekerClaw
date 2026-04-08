@@ -47,6 +47,11 @@ object Sizing {
     val heroLogoSize = 184.dp
     val heroShadowOffsetY = 18.dp
     val heroShadowRadius = 120.dp
+
+    // Page-dot indicator
+    val pageDotSize = 8.dp
+    val pageDotActiveWidth = 24.dp
+    val pageDotCornerRadius = 4.dp
 }
 
 /**
