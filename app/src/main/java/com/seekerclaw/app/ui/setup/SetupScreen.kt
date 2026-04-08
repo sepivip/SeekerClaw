@@ -558,6 +558,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                 agentName = agentName.ifBlank { "SeekerClaw" },
                 botToken = botToken,
                 onContinue = onSetupComplete,
+                onBack = { currentStep = SetupSteps.PROVIDER },
             )
         }
         }
@@ -704,13 +705,6 @@ private fun WelcomeStep(
         )
 
         Spacer(modifier = Modifier.weight(1f))
-
-        PageDots(
-            currentStep = 0,
-            totalSteps = 3,
-            modifier = Modifier.align(Alignment.CenterHorizontally),
-        )
-        Spacer(modifier = Modifier.height(SetupLayout.gapBeforeNav))
 
         // Primary CTA: Get Started
         Button(
@@ -1161,7 +1155,7 @@ private fun ProviderSetupStep(
             nextEnabled = if (isOpenAIOAuth) oauthController.state.isConnected
                 else apiKey.isNotBlank(),
             nextLabel = "Initialize Agent",
-            currentStep = 2,
+            currentStep = 1,
             isLoading = isStarting,
         )
     }
@@ -1355,7 +1349,7 @@ private fun TelegramStep(
             onBack = onBack,
             onNext = onNext,
             nextEnabled = botToken.isNotBlank(),
-            currentStep = 1,
+            currentStep = 0,
         )
     }
 }
@@ -1365,16 +1359,19 @@ private fun SetupSuccessStep(
     agentName: String,
     botToken: String,
     onContinue: () -> Unit,
+    onBack: () -> Unit,
 ) {
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
     val botId = Regex("""^(\d+):""").find(botToken)?.groupValues?.get(1)
 
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 32.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
         // Checkmark circle
         Box(
             modifier = Modifier
@@ -1491,24 +1488,17 @@ private fun SetupSuccessStep(
             }
         }
 
-        Spacer(modifier = Modifier.height(28.dp))
-
-        Button(
-            onClick = onContinue,
-            shape = shape,
-            colors = ButtonDefaults.buttonColors(
-                containerColor = SeekerClawColors.ActionPrimary,
-                contentColor = Color.White,
-            ),
-            modifier = Modifier.fillMaxWidth().height(52.dp),
-        ) {
-            Text(
-                text = "Go to Dashboard",
-                fontFamily = RethinkSans,
-                fontWeight = FontWeight.Bold,
-                fontSize = 15.sp,
-            )
         }
+
+        Spacer(modifier = Modifier.height(SetupLayout.gapBeforeNav))
+
+        NavButtons(
+            onBack = onBack,
+            onNext = onContinue,
+            nextEnabled = true,
+            nextLabel = "Go to Dashboard",
+            currentStep = 2,
+        )
     }
 }
 
