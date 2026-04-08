@@ -1,5 +1,6 @@
 package com.seekerclaw.app.ui.components
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -19,6 +20,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -46,8 +50,12 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.seekerclaw.app.ui.theme.BrandAlpha
 import com.seekerclaw.app.ui.theme.RethinkSans
 import com.seekerclaw.app.ui.theme.SeekerClawColors
+import com.seekerclaw.app.ui.theme.Sizing
+import com.seekerclaw.app.ui.theme.Spacing
+import com.seekerclaw.app.ui.theme.TypeScale
 
 /**
  * Standard card surface used throughout SeekerClaw: Surface background, rounded corners, 16dp padding.
@@ -339,4 +347,108 @@ fun InfoDialog(title: String, message: String, onDismiss: () -> Unit) {
         containerColor = SeekerClawColors.Surface,
         shape = shape,
     )
+}
+
+/**
+ * Result state for [MorphActionButton]. Drives the button's container/content/border
+ * color and its label, following Material 3's state-driven button pattern.
+ *
+ * Used by Test Connection, Verify, Validate, Reload, Sync, etc. — any inline action
+ * that needs persistent inline feedback after running.
+ */
+sealed class ActionResult {
+    data object Idle : ActionResult()
+    data object Loading : ActionResult()
+    data class Success(val message: String) : ActionResult()
+    data class Error(val message: String) : ActionResult()
+}
+
+/**
+ * Material 3 inline-morph action button. The button itself reflects the action's
+ * result via container/content/border color and a swapped label — no separate text
+ * line below. Pattern matches Stripe / GitHub / Vercel "Test webhook" / "Verify"
+ * buttons. Reusable across the app for any inline test/verify/sync action.
+ *
+ * Reset to [ActionResult.Idle] when the underlying input changes so the user
+ * can re-run.
+ */
+@Composable
+fun MorphActionButton(
+    state: ActionResult,
+    idleLabel: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    loadingLabel: String = "Working\u2026",
+) {
+    val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
+
+    val container = when (state) {
+        is ActionResult.Success -> SeekerClawColors.Accent.copy(alpha = BrandAlpha.errorBackground + 0.02f)
+        is ActionResult.Error -> SeekerClawColors.Error.copy(alpha = BrandAlpha.errorBackground + 0.02f)
+        else -> SeekerClawColors.Surface
+    }
+    val content = when (state) {
+        is ActionResult.Success -> SeekerClawColors.Accent
+        is ActionResult.Error -> SeekerClawColors.Error
+        else -> SeekerClawColors.TextPrimary
+    }
+    val borderColor = when (state) {
+        is ActionResult.Success -> SeekerClawColors.Accent.copy(alpha = BrandAlpha.disabledSurface)
+        is ActionResult.Error -> SeekerClawColors.Error.copy(alpha = BrandAlpha.disabledSurface)
+        else -> SeekerClawColors.CardBorder
+    }
+
+    Button(
+        onClick = onClick,
+        enabled = enabled && state !is ActionResult.Loading,
+        modifier = modifier
+            .fillMaxWidth()
+            .height(Sizing.buttonSecondaryHeight),
+        shape = shape,
+        colors = ButtonDefaults.buttonColors(
+            containerColor = container,
+            contentColor = content,
+            disabledContainerColor = container,
+            disabledContentColor = content,
+        ),
+        border = BorderStroke(Sizing.borderThin, borderColor),
+    ) {
+        when (state) {
+            is ActionResult.Loading -> {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(Sizing.iconSm),
+                    color = SeekerClawColors.TextPrimary,
+                    strokeWidth = 2.dp,
+                )
+                Spacer(modifier = Modifier.width(Spacing.sm))
+                Text(
+                    loadingLabel,
+                    fontFamily = RethinkSans,
+                    fontSize = TypeScale.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                )
+            }
+            is ActionResult.Success -> Text(
+                "\u2713 ${state.message}",
+                fontFamily = RethinkSans,
+                fontSize = TypeScale.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+            )
+            is ActionResult.Error -> Text(
+                "\u2715 ${state.message}",
+                fontFamily = RethinkSans,
+                fontSize = TypeScale.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+            )
+            ActionResult.Idle -> Text(
+                idleLabel,
+                fontFamily = RethinkSans,
+                fontSize = TypeScale.bodyMedium,
+                fontWeight = FontWeight.Medium,
+            )
+        }
+    }
 }

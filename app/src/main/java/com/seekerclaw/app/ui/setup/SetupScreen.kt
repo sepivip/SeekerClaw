@@ -113,6 +113,8 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
+import com.seekerclaw.app.ui.components.ActionResult
+import com.seekerclaw.app.ui.components.MorphActionButton
 import com.seekerclaw.app.ui.components.SetupStepIndicator
 import com.seekerclaw.app.ui.components.dotMatrix
 import com.seekerclaw.app.ui.theme.BrandAlpha
@@ -1086,19 +1088,14 @@ private fun TelegramStep(
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
     val scope = rememberCoroutineScope()
 
-    // Test connection state
-    var isTesting by remember { mutableStateOf(false) }
-    var testOk by remember { mutableStateOf<Boolean?>(null) }
-    var testMessage by remember { mutableStateOf("") }
+    var testState by remember { mutableStateOf<ActionResult>(ActionResult.Idle) }
 
     fun runTest() {
         val token = botToken.trim()
-        if (token.isBlank() || isTesting) return
-        isTesting = true
-        testOk = null
-        testMessage = ""
+        if (token.isBlank() || testState is ActionResult.Loading) return
+        testState = ActionResult.Loading
         scope.launch {
-            try {
+            testState = try {
                 val body = withContext(Dispatchers.IO) {
                     val conn = (URL("https://api.telegram.org/bot$token/getMe").openConnection() as HttpURLConnection).apply {
                         connectTimeout = 8000
@@ -1116,25 +1113,19 @@ private fun TelegramStep(
                     }
                 }
                 if (body.startsWith("__err__:")) {
-                    testOk = false
-                    testMessage = "Telegram returned ${body.removePrefix("__err__:")}. Check the token."
+                    ActionResult.Error("Telegram returned ${body.removePrefix("__err__:")}. Check the token.")
                 } else {
                     val json = JSONObject(body)
                     if (json.optBoolean("ok", false)) {
                         val result = json.optJSONObject("result")
                         val username = result?.optString("username", "") ?: ""
-                        testOk = true
-                        testMessage = if (username.isNotBlank()) "Connected to @$username" else "Connected"
+                        ActionResult.Success(if (username.isNotBlank()) "Connected to @$username" else "Connected")
                     } else {
-                        testOk = false
-                        testMessage = json.optString("description", "Invalid response")
+                        ActionResult.Error(json.optString("description", "Invalid response"))
                     }
                 }
             } catch (e: Exception) {
-                testOk = false
-                testMessage = e.message ?: "Network error"
-            } finally {
-                isTesting = false
+                ActionResult.Error(e.message ?: "Network error")
             }
         }
     }
@@ -1210,76 +1201,16 @@ private fun TelegramStep(
 
             // Reset test state whenever the token changes so the user can retest
             LaunchedEffect(botToken) {
-                if (testOk != null || testMessage.isNotEmpty()) {
-                    testOk = null
-                    testMessage = ""
-                }
+                if (testState !is ActionResult.Idle) testState = ActionResult.Idle
             }
 
-            // Test Connection button — Material 3 state-driven morph (Variant 2)
-            val testContainer = when (testOk) {
-                true -> SeekerClawColors.Accent.copy(alpha = 0.12f)
-                false -> SeekerClawColors.Error.copy(alpha = 0.12f)
-                null -> SeekerClawColors.Surface
-            }
-            val testContent = when (testOk) {
-                true -> SeekerClawColors.Accent
-                false -> SeekerClawColors.Error
-                null -> SeekerClawColors.TextPrimary
-            }
-            val testBorder = when (testOk) {
-                true -> SeekerClawColors.Accent.copy(alpha = 0.5f)
-                false -> SeekerClawColors.Error.copy(alpha = 0.5f)
-                null -> SeekerClawColors.CardBorder
-            }
-            Button(
+            MorphActionButton(
+                state = testState,
+                idleLabel = "Test Connection",
+                loadingLabel = "Testing\u2026",
+                enabled = botToken.isNotBlank(),
                 onClick = { runTest() },
-                enabled = botToken.isNotBlank() && !isTesting,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(Sizing.buttonSecondaryHeight),
-                shape = shape,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = testContainer,
-                    contentColor = testContent,
-                    disabledContainerColor = testContainer,
-                    disabledContentColor = testContent,
-                ),
-                border = BorderStroke(Sizing.borderThin, testBorder),
-            ) {
-                when {
-                    isTesting -> {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(Sizing.iconSm),
-                            color = SeekerClawColors.TextPrimary,
-                            strokeWidth = 2.dp,
-                        )
-                        Spacer(modifier = Modifier.width(Spacing.sm))
-                        Text("Testing\u2026", fontFamily = RethinkSans, fontSize = TypeScale.bodyMedium, fontWeight = FontWeight.Medium)
-                    }
-                    testOk == true -> {
-                        Text(
-                            "\u2713 $testMessage",
-                            fontFamily = RethinkSans,
-                            fontSize = TypeScale.bodyMedium,
-                            fontWeight = FontWeight.Medium,
-                            maxLines = 1,
-                        )
-                    }
-                    testOk == false -> {
-                        Text(
-                            "\u2715 $testMessage",
-                            fontFamily = RethinkSans,
-                            fontSize = TypeScale.bodyMedium,
-                            fontWeight = FontWeight.Medium,
-                            maxLines = 1,
-                        )
-                    }
-                    else -> {
-                        Text("Test Connection", fontFamily = RethinkSans, fontSize = TypeScale.bodyMedium, fontWeight = FontWeight.Medium)
-                    }
-                }
-            }
+            )
 
             Spacer(modifier = Modifier.height(Spacing.lg))
 
