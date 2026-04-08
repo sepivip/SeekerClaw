@@ -107,7 +107,12 @@ import com.seekerclaw.app.config.modelsForProvider
 import com.seekerclaw.app.qr.QrScannerActivity
 import com.seekerclaw.app.service.OpenClawService
 import com.seekerclaw.app.util.Analytics
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
 import com.seekerclaw.app.ui.components.SetupStepIndicator
 import com.seekerclaw.app.ui.components.dotMatrix
 import com.seekerclaw.app.ui.theme.BrandAlpha
@@ -414,7 +419,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                 SetupSteps.MODEL -> "Pick Your Model" to
                     "You can always change model later in settings."
                 SetupSteps.TELEGRAM -> "Connect Telegram" to
-                    "You\u2019ll chat with your agent through Telegram."
+                    "Your User ID is set automatically when you first message your bot \u2014 you can change it later in settings."
                 else -> "" to ""
             }
             StepTitle(title = stepTitle, tagline = stepTagline)
@@ -490,8 +495,6 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                 onModelChange = { selectedModel = it },
                 modelDropdownExpanded = modelDropdownExpanded,
                 onModelDropdownExpandedChange = { modelDropdownExpanded = it },
-                agentName = agentName,
-                onAgentNameChange = { agentName = it },
                 fieldColors = fieldColors,
                 onNext = ::saveAndStart,
                 onBack = { if (!isStarting) currentStep = SetupSteps.PROVIDER },
@@ -501,8 +504,8 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             SetupSteps.TELEGRAM -> TelegramStep(
                 botToken = botToken,
                 onBotTokenChange = { botToken = it; botTokenError = null; errorMessage = null },
-                ownerId = ownerId,
-                onOwnerIdChange = { ownerId = it; errorMessage = null },
+                agentName = agentName,
+                onAgentNameChange = { agentName = it },
                 botTokenError = botTokenError,
                 fieldColors = fieldColors,
                 onNext = { currentStep = SetupSteps.PROVIDER },
@@ -1073,14 +1076,68 @@ private fun ProviderSetupStep(
 private fun TelegramStep(
     botToken: String,
     onBotTokenChange: (String) -> Unit,
-    ownerId: String,
-    onOwnerIdChange: (String) -> Unit,
+    agentName: String,
+    onAgentNameChange: (String) -> Unit,
     botTokenError: String?,
     fieldColors: androidx.compose.material3.TextFieldColors,
     onNext: () -> Unit,
     onBack: () -> Unit,
 ) {
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
+    val scope = rememberCoroutineScope()
+
+    // Test connection state
+    var isTesting by remember { mutableStateOf(false) }
+    var testOk by remember { mutableStateOf<Boolean?>(null) }
+    var testMessage by remember { mutableStateOf("") }
+
+    fun runTest() {
+        val token = botToken.trim()
+        if (token.isBlank() || isTesting) return
+        isTesting = true
+        testOk = null
+        testMessage = ""
+        scope.launch {
+            try {
+                val body = withContext(Dispatchers.IO) {
+                    val conn = (URL("https://api.telegram.org/bot$token/getMe").openConnection() as HttpURLConnection).apply {
+                        connectTimeout = 8000
+                        readTimeout = 8000
+                        requestMethod = "GET"
+                    }
+                    try {
+                        if (conn.responseCode == 200) {
+                            conn.inputStream.bufferedReader().readText()
+                        } else {
+                            "__err__:${conn.responseCode}"
+                        }
+                    } finally {
+                        conn.disconnect()
+                    }
+                }
+                if (body.startsWith("__err__:")) {
+                    testOk = false
+                    testMessage = "Telegram returned ${body.removePrefix("__err__:")}. Check the token."
+                } else {
+                    val json = JSONObject(body)
+                    if (json.optBoolean("ok", false)) {
+                        val result = json.optJSONObject("result")
+                        val username = result?.optString("username", "") ?: ""
+                        testOk = true
+                        testMessage = if (username.isNotBlank()) "Connected to @$username" else "Connected"
+                    } else {
+                        testOk = false
+                        testMessage = json.optString("description", "Invalid response")
+                    }
+                }
+            } catch (e: Exception) {
+                testOk = false
+                testMessage = e.message ?: "Network error"
+            } finally {
+                isTesting = false
+            }
+        }
+    }
 
     Column(modifier = Modifier.fillMaxSize()) {
         Column(
@@ -1149,64 +1206,76 @@ private fun TelegramStep(
                 shape = shape,
             )
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(Spacing.md))
+
+            // Test Connection button
+            Button(
+                onClick = { runTest() },
+                enabled = botToken.isNotBlank() && !isTesting,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(Sizing.buttonSecondaryHeight),
+                shape = shape,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = SeekerClawColors.Surface,
+                    contentColor = SeekerClawColors.TextPrimary,
+                    disabledContainerColor = SeekerClawColors.Surface,
+                    disabledContentColor = SeekerClawColors.TextDim,
+                ),
+                border = BorderStroke(Sizing.borderThin, SeekerClawColors.CardBorder),
+            ) {
+                if (isTesting) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(Sizing.iconSm),
+                        color = SeekerClawColors.TextPrimary,
+                        strokeWidth = 2.dp,
+                    )
+                    Spacer(modifier = Modifier.width(Spacing.sm))
+                    Text("Testing\u2026", fontFamily = RethinkSans, fontSize = TypeScale.bodyMedium, fontWeight = FontWeight.Medium)
+                } else {
+                    Text("Test Connection", fontFamily = RethinkSans, fontSize = TypeScale.bodyMedium, fontWeight = FontWeight.Medium)
+                }
+            }
+
+            if (testOk != null) {
+                Spacer(modifier = Modifier.height(Spacing.sm))
+                Text(
+                    text = testMessage,
+                    fontFamily = RethinkSans,
+                    fontSize = TypeScale.labelSmall,
+                    color = if (testOk == true) SeekerClawColors.Accent else SeekerClawColors.Error,
+                )
+            }
+
+            Spacer(modifier = Modifier.height(Spacing.lg))
 
             HorizontalDivider(color = SeekerClawColors.CardBorder)
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(Spacing.lg))
 
-            // User ID with auto-detect badge
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "User ID",
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = SeekerClawColors.TextPrimary,
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "(optional)",
-                    fontSize = 12.sp,
-                    color = SeekerClawColors.TextDim,
-                )
-                if (ownerId.isBlank()) {
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "AUTO-DETECT",
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = SeekerClawColors.Accent,
-                        letterSpacing = 0.5.sp,
-                        modifier = Modifier
-                            .background(
-                                SeekerClawColors.Accent.copy(alpha = 0.12f),
-                                RoundedCornerShape(4.dp),
-                            )
-                            .padding(horizontal = 6.dp, vertical = 2.dp),
-                    )
-                }
-            }
-            Spacer(modifier = Modifier.height(4.dp))
+            // Agent Name
             Text(
-                text = "Leave empty \u2014 the first person to message your bot becomes the owner.",
-                fontSize = 12.sp,
+                text = "Agent Name",
+                fontFamily = RethinkSans,
+                fontSize = TypeScale.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                color = SeekerClawColors.TextPrimary,
+            )
+            Spacer(modifier = Modifier.height(Spacing.xs))
+            Text(
+                text = "Give your agent a name. You can change it later.",
+                fontFamily = RethinkSans,
+                fontSize = TypeScale.labelSmall,
                 color = SeekerClawColors.TextDim,
                 lineHeight = 18.sp,
             )
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(Spacing.md))
 
             OutlinedTextField(
-                value = ownerId,
-                onValueChange = onOwnerIdChange,
-                label = { Text("User ID", fontSize = 12.sp) },
-                placeholder = {
-                    Text(
-                        "auto-detect",
-                        fontSize = 14.sp,
-                        color = SeekerClawColors.TextDim,
-                    )
-                },
+                value = agentName,
+                onValueChange = onAgentNameChange,
+                label = { Text("Agent Name", fontSize = TypeScale.labelSmall) },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 colors = fieldColors,
@@ -1234,8 +1303,6 @@ private fun OptionsStep(
     onModelChange: (String) -> Unit,
     modelDropdownExpanded: Boolean,
     onModelDropdownExpandedChange: (Boolean) -> Unit,
-    agentName: String,
-    onAgentNameChange: (String) -> Unit,
     fieldColors: androidx.compose.material3.TextFieldColors,
     onNext: () -> Unit,
     onBack: () -> Unit,
@@ -1325,37 +1392,6 @@ private fun OptionsStep(
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
-
-            HorizontalDivider(color = SeekerClawColors.CardBorder)
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Agent name
-            Text(
-                text = "Agent Name",
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Medium,
-                color = SeekerClawColors.TextPrimary,
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = "Give your agent a name. You can change this later.",
-                fontSize = 12.sp,
-                color = SeekerClawColors.TextDim,
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            OutlinedTextField(
-                value = agentName,
-                onValueChange = onAgentNameChange,
-                label = { Text("Agent Name", fontSize = 12.sp) },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                colors = fieldColors,
-                shape = shape,
-            )
         }
 
         Spacer(modifier = Modifier.height(28.dp))
