@@ -984,13 +984,6 @@ private fun ProviderSetupStep(
                         color = SeekerClawColors.Primary,
                     )
                 }
-                Spacer(modifier = Modifier.height(Spacing.xs))
-                Text(
-                    text = "Requires Claude Pro or Max subscription.",
-                    fontFamily = RethinkSans,
-                    fontSize = TypeScale.labelSmall,
-                    color = SeekerClawColors.TextDim,
-                )
             } else {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
