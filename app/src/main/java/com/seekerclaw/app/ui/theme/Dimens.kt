@@ -117,9 +117,9 @@ object BrandAlpha {
     const val disabledContent = 0.70f
     const val errorBackground = 0.10f
 
-    // Card edge highlights — diagonal glow border on CardSurface
-    const val cardHighlightStart = 0.18f
-    const val cardHighlightEnd = 0.10f
+    // Card edge highlights — corner glow border on CardSurface
+    // Mirrors atomicbot.ai's gradient-border technique (0.28 alpha)
+    const val cardHighlight = 0.28f
 }
 
 /**

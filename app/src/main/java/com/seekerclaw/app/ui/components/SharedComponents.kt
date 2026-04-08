@@ -44,8 +44,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
@@ -71,27 +75,47 @@ fun CardSurface(
 ) {
     val cardShape = remember(SeekerClawColors.CornerRadius) { RoundedCornerShape(SeekerClawColors.CornerRadius) }
 
-    // Diagonal highlight border — bright at top-left, fades through transparent,
-    // softer highlight at bottom-right. Material-style "lit edge" effect.
-    val highlightBrush = remember {
-        Brush.linearGradient(
-            colorStops = arrayOf(
-                0.00f to Color.White.copy(alpha = BrandAlpha.cardHighlightStart),
-                0.35f to Color.Transparent,
-                0.65f to Color.Transparent,
-                1.00f to Color.White.copy(alpha = BrandAlpha.cardHighlightEnd),
-            ),
-        )
-    }
-
+    // Corner-glow border — replicates atomicbot.ai's `.gradient-border` effect.
+    // Two radial gradients (top-left and bottom-right), each painted as a stroked
+    // rounded rect so only the border ring receives the highlight. Brightest at
+    // the corner, fading to transparent at ~45% radius.
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .background(
-                SeekerClawColors.Surface,
-                cardShape,
-            )
-            .border(width = Sizing.borderThin, brush = highlightBrush, shape = cardShape)
+            .background(SeekerClawColors.Surface, cardShape)
+            .drawBehind {
+                val cornerPx = SeekerClawColors.CornerRadius.toPx()
+                val cr = CornerRadius(cornerPx, cornerPx)
+                val strokePx = Sizing.borderThin.toPx()
+                val highlightRadius = size.minDimension * 0.45f
+
+                // Top-left highlight
+                drawRoundRect(
+                    brush = Brush.radialGradient(
+                        colors = listOf(
+                            Color.White.copy(alpha = BrandAlpha.cardHighlight),
+                            Color.Transparent,
+                        ),
+                        center = Offset(0f, 0f),
+                        radius = highlightRadius,
+                    ),
+                    cornerRadius = cr,
+                    style = Stroke(width = strokePx),
+                )
+                // Bottom-right highlight
+                drawRoundRect(
+                    brush = Brush.radialGradient(
+                        colors = listOf(
+                            Color.White.copy(alpha = BrandAlpha.cardHighlight),
+                            Color.Transparent,
+                        ),
+                        center = Offset(size.width, size.height),
+                        radius = highlightRadius,
+                    ),
+                    cornerRadius = cr,
+                    style = Stroke(width = strokePx),
+                )
+            }
             .padding(16.dp),
         content = content,
     )
