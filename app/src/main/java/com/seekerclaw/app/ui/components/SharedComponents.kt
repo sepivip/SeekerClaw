@@ -74,6 +74,44 @@ import com.seekerclaw.app.ui.theme.Spacing
 import com.seekerclaw.app.ui.theme.TypeScale
 
 /**
+ * Danger / destructive primary button — same shape, height, and corner glow as
+ * the green primary action button, but in the brand danger red. Use for Sign Out,
+ * Reset Config, Wipe Memory, Delete Account, etc. Centralizes the visual so every
+ * destructive action across the app shares one look.
+ */
+@Composable
+fun DangerButton(
+    onClick: () -> Unit,
+    label: String,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+) {
+    val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
+    Button(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier
+            .fillMaxWidth()
+            .height(Sizing.buttonPrimaryHeight)
+            .cornerGlowBorder(),
+        shape = shape,
+        colors = ButtonDefaults.buttonColors(
+            containerColor = SeekerClawColors.ActionDanger,
+            contentColor = Color.White,
+            disabledContainerColor = SeekerClawColors.ActionDanger.copy(alpha = BrandAlpha.disabledSurface),
+            disabledContentColor = Color.White.copy(alpha = BrandAlpha.disabledContent),
+        ),
+    ) {
+        Text(
+            label,
+            fontFamily = RethinkSans,
+            fontSize = TypeScale.titleMedium,
+            fontWeight = FontWeight.Bold,
+        )
+    }
+}
+
+/**
  * Reusable corner-glow border modifier — replicates atomicbot.ai's `.gradient-border`
  * effect. Two radial gradients (top-left + bottom-right) painted as stroked rounded
  * rects so only the border ring receives the highlight, brightest at the corner,

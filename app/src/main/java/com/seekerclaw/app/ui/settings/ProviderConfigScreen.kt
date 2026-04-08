@@ -327,6 +327,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                                 onSignIn = oauthController.signIn,
                                 onSignOut = oauthController.signOut,
                                 onCancel = oauthController.cancel,
+                                modifier = Modifier.padding(16.dp),
                             )
                         }
                     }

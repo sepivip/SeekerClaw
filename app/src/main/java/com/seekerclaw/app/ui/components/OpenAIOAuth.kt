@@ -32,6 +32,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.seekerclaw.app.config.ConfigManager
+// DangerButton + cornerGlowBorder live in this same package — no extra import needed
 import com.seekerclaw.app.oauth.OpenAIOAuthActivity
 import com.seekerclaw.app.ui.theme.RethinkSans
 import com.seekerclaw.app.ui.theme.SeekerClawColors
@@ -181,96 +182,108 @@ fun OpenAIOAuthSection(
     onSignIn: () -> Unit,
     onSignOut: () -> Unit,
     onCancel: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
 
-    Column(modifier = Modifier.padding(16.dp)) {
-        // Warning card
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(SeekerClawColors.Warning.copy(alpha = 0.1f), shape)
-                .padding(12.dp),
-        ) {
+    Column(modifier = modifier) {
+        // Single inline status line — mirrors the "Get your API key here" style
+        // on the API Key tab. Swaps content based on connection state.
+        if (state.isConnected) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "Connected as ",
+                    fontFamily = RethinkSans,
+                    fontSize = 13.sp,
+                    color = SeekerClawColors.TextSecondary,
+                )
+                Text(
+                    text = state.email.ifBlank { "your ChatGPT account" },
+                    fontFamily = RethinkSans,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = SeekerClawColors.Accent,
+                )
+            }
+        } else {
             Text(
-                text = "Uses your ChatGPT subscription via Codex OAuth.",
+                text = "Uses your ChatGPT subscription.",
                 fontFamily = RethinkSans,
                 fontSize = 13.sp,
-                color = SeekerClawColors.Warning,
+                color = SeekerClawColors.TextSecondary,
             )
         }
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        if (state.isConnected) {
-            Text(
-                text = "Connected as:",
-                fontFamily = RethinkSans,
-                fontSize = 12.sp,
-                color = SeekerClawColors.TextDim,
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = state.email.ifBlank { "Unknown account" },
-                fontFamily = RethinkSans,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Medium,
-                color = SeekerClawColors.ActionPrimary,
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-            Button(
-                onClick = onSignOut,
-                modifier = Modifier.fillMaxWidth(),
-                shape = shape,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = SeekerClawColors.ActionDanger,
-                    contentColor = Color.White,
-                ),
-            ) {
-                Text("Sign Out", fontFamily = RethinkSans, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-            }
-        } else if (state.isPolling) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(16.dp),
-                    strokeWidth = 2.dp,
-                    color = SeekerClawColors.ActionPrimary,
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "Waiting for authentication...",
-                    fontFamily = RethinkSans,
-                    fontSize = 13.sp,
-                    color = SeekerClawColors.TextDim,
+        when {
+            state.isConnected -> {
+                DangerButton(
+                    onClick = onSignOut,
+                    label = "Sign Out",
                 )
             }
-            Spacer(modifier = Modifier.height(16.dp))
-            OutlinedButton(
-                onClick = onCancel,
-                modifier = Modifier.fillMaxWidth(),
-                shape = shape,
-                border = BorderStroke(1.dp, SeekerClawColors.TextDim),
-            ) {
-                Text("Cancel", fontFamily = RethinkSans, fontSize = 14.sp, color = SeekerClawColors.TextPrimary)
+            state.isPolling -> {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp,
+                        color = SeekerClawColors.ActionPrimary,
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Waiting for authentication\u2026",
+                        fontFamily = RethinkSans,
+                        fontSize = 13.sp,
+                        color = SeekerClawColors.TextDim,
+                    )
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+                Button(
+                    onClick = onCancel,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(Sizing.buttonSecondaryHeight)
+                        .cornerGlowBorder(),
+                    shape = shape,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = SeekerClawColors.Surface,
+                        contentColor = SeekerClawColors.TextPrimary,
+                    ),
+                    border = BorderStroke(Sizing.borderThin, SeekerClawColors.CardBorder),
+                ) {
+                    Text(
+                        "Cancel",
+                        fontFamily = RethinkSans,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
             }
-        } else {
-            Button(
-                onClick = onSignIn,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(Sizing.buttonPrimaryHeight)
-                    .cornerGlowBorder(),
-                shape = shape,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = SeekerClawColors.ActionPrimary,
-                    contentColor = Color.White,
-                ),
-            ) {
-                Text("Sign in with ChatGPT", fontFamily = RethinkSans, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+            else -> {
+                Button(
+                    onClick = onSignIn,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(Sizing.buttonPrimaryHeight)
+                        .cornerGlowBorder(),
+                    shape = shape,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = SeekerClawColors.ActionPrimary,
+                        contentColor = Color.White,
+                    ),
+                ) {
+                    Text(
+                        "Sign in with ChatGPT",
+                        fontFamily = RethinkSans,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp,
+                    )
+                }
             }
         }
 
