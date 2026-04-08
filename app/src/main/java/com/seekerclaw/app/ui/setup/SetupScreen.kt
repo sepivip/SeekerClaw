@@ -604,6 +604,7 @@ private fun WelcomeStep(
 
         Text(
             text = "EMPOWER YOUR",
+            fontFamily = RethinkSans,
             fontSize = 31.sp,
             fontWeight = FontWeight.Bold,
             color = SeekerClawColors.TextPrimary,
@@ -612,6 +613,7 @@ private fun WelcomeStep(
         )
         Text(
             text = "PHONE \uD83E\uDD9E\uD83D\uDCF2",
+            fontFamily = RethinkSans,
             fontSize = 28.sp,
             fontWeight = FontWeight.Bold,
             color = SeekerClawColors.TextPrimary,
@@ -623,6 +625,7 @@ private fun WelcomeStep(
 
         Text(
             text = "3 steps and your AI assistant is live 24/7",
+            fontFamily = RethinkSans,
             fontSize = 15.sp,
             color = SeekerClawColors.TextDim,
             textAlign = TextAlign.Center,
@@ -645,11 +648,12 @@ private fun WelcomeStep(
         ) {
             Text(
                 "Get Started",
+                fontFamily = RethinkSans,
                 fontSize = 16.sp,
                 fontWeight = FontWeight.Bold,
             )
             Spacer(modifier = Modifier.width(6.dp))
-            Text("\u2197", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Text("\u2197", fontFamily = RethinkSans, fontSize = 16.sp, fontWeight = FontWeight.Bold)
         }
 
         Spacer(modifier = Modifier.height(12.dp))
@@ -685,7 +689,7 @@ private fun WelcomeStep(
                         modifier = Modifier.size(18.dp),
                     )
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Scan Config", fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                    Text("Scan Config", fontFamily = RethinkSans, fontSize = 14.sp, fontWeight = FontWeight.Medium)
                 }
             }
 
@@ -707,7 +711,7 @@ private fun WelcomeStep(
                     modifier = Modifier.size(18.dp),
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Setup Guide", fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                Text("Setup Guide", fontFamily = RethinkSans, fontSize = 14.sp, fontWeight = FontWeight.Medium)
             }
         }
 
@@ -735,6 +739,7 @@ private fun WelcomeStep(
             Spacer(modifier = Modifier.width(6.dp))
             Text(
                 "Need help? Quick setup guide",
+                fontFamily = RethinkSans,
                 fontSize = 13.sp,
                 color = SeekerClawColors.TextDim,
             )
@@ -743,6 +748,7 @@ private fun WelcomeStep(
             TextButton(onClick = onSkip) {
                 Text(
                     "Skip",
+                    fontFamily = RethinkSans,
                     fontSize = 13.sp,
                     color = SeekerClawColors.TextDim,
                 )
@@ -774,57 +780,69 @@ private fun AuroraGridBackground(modifier: Modifier = Modifier) {
     val red = SeekerClawColors.Primary
 
     Box(modifier = modifier.background(Color.Black)) {
-        // Blob 1
-        Box(
-            modifier = Modifier
-                .align(Alignment.Center)
-                .offset {
-                    val rad = Math.toRadians(angle1.toDouble())
-                    IntOffset(
-                        (cos(rad) * 180.dp.toPx()).roundToInt(),
-                        (sin(rad) * 180.dp.toPx()).roundToInt(),
-                    )
-                }
-                .size(340.dp)
-                .blur(100.dp)
-                .background(red.copy(alpha = 0.40f), CircleShape),
-        )
-        // Blob 2
-        Box(
-            modifier = Modifier
-                .align(Alignment.Center)
-                .offset {
-                    val rad = Math.toRadians(angle2.toDouble())
-                    IntOffset(
-                        (cos(rad) * 220.dp.toPx()).roundToInt(),
-                        (sin(rad) * 220.dp.toPx()).roundToInt(),
-                    )
-                }
-                .size(300.dp)
-                .blur(95.dp)
-                .background(red.copy(alpha = 0.32f), CircleShape),
-        )
-
-        // Grid lines with radial fade mask (via overlay)
         Canvas(modifier = Modifier.fillMaxSize()) {
-            val spacing = 30.dp.toPx()
-            val lineColor = red.copy(alpha = 0.08f)
+            val cx = size.width / 2f
+            val cy = size.height / 2f
+
+            // Blob 1 — drifting radial gradient (no blur modifier needed)
+            val rad1 = Math.toRadians(angle1.toDouble())
+            val b1x = cx + (cos(rad1) * 180.dp.toPx()).toFloat()
+            val b1y = cy + (sin(rad1) * 180.dp.toPx()).toFloat()
+            val b1r = 260.dp.toPx()
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        red.copy(alpha = 0.55f),
+                        red.copy(alpha = 0.25f),
+                        Color.Transparent,
+                    ),
+                    center = Offset(b1x, b1y),
+                    radius = b1r,
+                ),
+                center = Offset(b1x, b1y),
+                radius = b1r,
+            )
+
+            // Blob 2
+            val rad2 = Math.toRadians(angle2.toDouble())
+            val b2x = cx + (cos(rad2) * 220.dp.toPx()).toFloat()
+            val b2y = cy + (sin(rad2) * 220.dp.toPx()).toFloat()
+            val b2r = 240.dp.toPx()
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        red.copy(alpha = 0.45f),
+                        red.copy(alpha = 0.18f),
+                        Color.Transparent,
+                    ),
+                    center = Offset(b2x, b2y),
+                    radius = b2r,
+                ),
+                center = Offset(b2x, b2y),
+                radius = b2r,
+            )
+
+            // Grid lines
+            val spacing = 32.dp.toPx()
+            val lineColor = red.copy(alpha = 0.18f)
+            val stroke = 1.5f
             var x = 0f
             while (x < size.width) {
-                drawLine(lineColor, Offset(x, 0f), Offset(x, size.height), 1f)
+                drawLine(lineColor, Offset(x, 0f), Offset(x, size.height), stroke)
                 x += spacing
             }
             var y = 0f
             while (y < size.height) {
-                drawLine(lineColor, Offset(0f, y), Offset(size.width, y), 1f)
+                drawLine(lineColor, Offset(0f, y), Offset(size.width, y), stroke)
                 y += spacing
             }
-            // Radial mask: transparent center → black edges (fades grid + blobs at edges)
+
+            // Radial vignette — fades grid/blobs at edges back to black
             drawRect(
                 brush = Brush.radialGradient(
-                    colors = listOf(Color.Transparent, Color.Black),
-                    center = Offset(size.width / 2f, size.height / 2f),
-                    radius = size.minDimension * 0.75f,
+                    colors = listOf(Color.Transparent, Color.Transparent, Color.Black),
+                    center = Offset(cx, cy),
+                    radius = size.minDimension * 0.85f,
                 ),
             )
         }
