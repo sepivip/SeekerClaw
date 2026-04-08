@@ -103,6 +103,7 @@ import com.seekerclaw.app.ui.components.ConfigField
 import com.seekerclaw.app.ui.components.InfoDialog
 import com.seekerclaw.app.ui.components.InfoRow
 import com.seekerclaw.app.ui.components.cornerGlowBorder
+import com.seekerclaw.app.ui.theme.Sizing
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -912,6 +913,7 @@ fun SettingsScreen(
                 enabled = !isConfigImporting,
                 modifier = Modifier
                     .fillMaxWidth()
+                    .height(Sizing.buttonPrimaryHeight)
                     .cornerGlowBorder(),
                 shape = shape,
                 colors = ButtonDefaults.buttonColors(

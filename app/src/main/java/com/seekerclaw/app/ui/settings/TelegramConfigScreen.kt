@@ -35,6 +35,7 @@ import com.seekerclaw.app.ui.components.CardSurface
 import com.seekerclaw.app.ui.components.SectionLabel
 import com.seekerclaw.app.ui.components.ConfigField
 import com.seekerclaw.app.ui.components.cornerGlowBorder
+import com.seekerclaw.app.ui.theme.Sizing
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.ui.theme.RethinkSans
 import com.seekerclaw.app.ui.theme.SeekerClawColors
@@ -148,6 +149,7 @@ fun TelegramConfigScreen(onBack: () -> Unit) {
                     enabled = testStatus != "Loading",
                     modifier = Modifier
                         .fillMaxWidth()
+                        .height(Sizing.buttonPrimaryHeight)
                         .cornerGlowBorder(),
                     shape = shape,
                     colors = ButtonDefaults.buttonColors(

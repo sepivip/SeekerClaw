@@ -46,6 +46,7 @@ import com.seekerclaw.app.ui.components.CardSurface
 import com.seekerclaw.app.ui.components.SectionLabel
 import com.seekerclaw.app.ui.components.ConfigField
 import com.seekerclaw.app.ui.components.cornerGlowBorder
+import com.seekerclaw.app.ui.theme.Sizing
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.config.availableModels
 import com.seekerclaw.app.config.availableProviders
@@ -605,6 +606,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                     enabled = testStatus != "Loading",
                     modifier = Modifier
                         .fillMaxWidth()
+                        .height(Sizing.buttonPrimaryHeight)
                         .cornerGlowBorder(),
                     shape = shape,
                     colors = ButtonDefaults.buttonColors(
@@ -1100,6 +1102,7 @@ private fun OpenAIOAuthSection(
                 onClick = onSignInBrowser,
                 modifier = Modifier
                     .fillMaxWidth()
+                    .height(Sizing.buttonPrimaryHeight)
                     .cornerGlowBorder(),
                 shape = shape,
                 colors = ButtonDefaults.buttonColors(

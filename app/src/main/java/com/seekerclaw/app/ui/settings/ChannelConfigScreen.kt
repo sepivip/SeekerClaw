@@ -42,6 +42,7 @@ import com.seekerclaw.app.ui.components.ConfigField
 import com.seekerclaw.app.ui.components.SectionLabel
 import com.seekerclaw.app.ui.components.SeekerClawScaffold
 import com.seekerclaw.app.ui.components.cornerGlowBorder
+import com.seekerclaw.app.ui.theme.Sizing
 import com.seekerclaw.app.ui.theme.RethinkSans
 import com.seekerclaw.app.ui.theme.SeekerClawColors
 import kotlinx.coroutines.Dispatchers
@@ -244,6 +245,7 @@ fun ChannelConfigScreen(onBack: () -> Unit) {
                             enabled = testStatus != "Loading",
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .height(Sizing.buttonPrimaryHeight)
                                 .cornerGlowBorder(),
                             shape = shape,
                             colors = ButtonDefaults.buttonColors(
@@ -362,6 +364,7 @@ fun ChannelConfigScreen(onBack: () -> Unit) {
                                 enabled = discordTestStatus != "Loading",
                                 modifier = Modifier
                                     .fillMaxWidth()
+                                    .height(Sizing.buttonPrimaryHeight)
                                     .cornerGlowBorder(),
                                 shape = shape,
                                 colors = ButtonDefaults.buttonColors(
