@@ -116,6 +116,10 @@ object BrandAlpha {
     const val disabledSurface = 0.50f
     const val disabledContent = 0.70f
     const val errorBackground = 0.10f
+
+    // Card edge highlights — diagonal glow border on CardSurface
+    const val cardHighlightStart = 0.18f
+    const val cardHighlightEnd = 0.10f
 }
 
 /**

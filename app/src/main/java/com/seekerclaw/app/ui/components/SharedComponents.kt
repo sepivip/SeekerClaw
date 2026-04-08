@@ -2,6 +2,7 @@ package com.seekerclaw.app.ui.components
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -43,6 +44,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -69,6 +71,19 @@ fun CardSurface(
 ) {
     val cardShape = remember(SeekerClawColors.CornerRadius) { RoundedCornerShape(SeekerClawColors.CornerRadius) }
 
+    // Diagonal highlight border — bright at top-left, fades through transparent,
+    // softer highlight at bottom-right. Material-style "lit edge" effect.
+    val highlightBrush = remember {
+        Brush.linearGradient(
+            colorStops = arrayOf(
+                0.00f to Color.White.copy(alpha = BrandAlpha.cardHighlightStart),
+                0.35f to Color.Transparent,
+                0.65f to Color.Transparent,
+                1.00f to Color.White.copy(alpha = BrandAlpha.cardHighlightEnd),
+            ),
+        )
+    }
+
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -76,6 +91,7 @@ fun CardSurface(
                 SeekerClawColors.Surface,
                 cardShape,
             )
+            .border(width = Sizing.borderThin, brush = highlightBrush, shape = cardShape)
             .padding(16.dp),
         content = content,
     )
