@@ -55,9 +55,9 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.RadioButtonDefaults
-import androidx.compose.material3.SecondaryIndicator
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
+import androidx.compose.material3.TabRowDefaults
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -935,7 +935,7 @@ private fun ProviderSetupStep(
                     containerColor = androidx.compose.ui.graphics.Color.Transparent,
                     contentColor = SeekerClawColors.TextPrimary,
                     indicator = { tabPositions ->
-                        SecondaryIndicator(
+                        TabRowDefaults.Indicator(
                             modifier = Modifier.tabIndicatorOffset(tabPositions[selectedTabIndex]),
                             color = SeekerClawColors.Primary,
                             height = 2.dp,
