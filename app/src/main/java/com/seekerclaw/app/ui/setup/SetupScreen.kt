@@ -116,6 +116,7 @@ import java.net.URL
 import com.seekerclaw.app.ui.components.ActionResult
 import com.seekerclaw.app.ui.components.CardSurface
 import com.seekerclaw.app.ui.components.MorphActionButton
+import com.seekerclaw.app.ui.components.cornerGlowBorder
 import com.seekerclaw.app.ui.components.SetupStepIndicator
 import com.seekerclaw.app.ui.components.dotMatrix
 import com.seekerclaw.app.ui.theme.BrandAlpha
@@ -670,7 +671,8 @@ private fun WelcomeStep(
             onClick = onNext,
             modifier = Modifier
                 .fillMaxWidth()
-                .height(Sizing.buttonPrimaryHeight),
+                .height(Sizing.buttonPrimaryHeight)
+                .cornerGlowBorder(),
             shape = shape,
             colors = ButtonDefaults.buttonColors(
                 containerColor = SeekerClawColors.ActionPrimary,
@@ -699,7 +701,8 @@ private fun WelcomeStep(
                 enabled = !isQrImporting,
                 modifier = Modifier
                     .weight(1f)
-                    .height(Sizing.buttonSecondaryHeight),
+                    .height(Sizing.buttonSecondaryHeight)
+                    .cornerGlowBorder(),
                 shape = shape,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = SeekerClawColors.Surface,
@@ -728,7 +731,8 @@ private fun WelcomeStep(
                 onClick = onSkip,
                 modifier = Modifier
                     .weight(1f)
-                    .height(Sizing.buttonSecondaryHeight),
+                    .height(Sizing.buttonSecondaryHeight)
+                    .cornerGlowBorder(),
                 shape = shape,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = SeekerClawColors.Surface,
@@ -1581,7 +1585,8 @@ private fun NavButtons(
                 onClick = onBack,
                 modifier = Modifier
                     .weight(1f)
-                    .height(Sizing.buttonSecondaryHeight),
+                    .height(Sizing.buttonSecondaryHeight)
+                    .cornerGlowBorder(),
                 shape = shape,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = SeekerClawColors.Surface,
@@ -1597,7 +1602,8 @@ private fun NavButtons(
                 enabled = nextEnabled && !isLoading,
                 modifier = Modifier
                     .weight(1f)
-                    .height(Sizing.buttonSecondaryHeight),
+                    .height(Sizing.buttonSecondaryHeight)
+                    .cornerGlowBorder(),
                 shape = shape,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = SeekerClawColors.ActionPrimary,

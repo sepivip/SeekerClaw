@@ -65,6 +65,54 @@ import com.seekerclaw.app.ui.theme.Spacing
 import com.seekerclaw.app.ui.theme.TypeScale
 
 /**
+ * Reusable corner-glow border modifier — replicates atomicbot.ai's `.gradient-border`
+ * effect. Two radial gradients (top-left + bottom-right) painted as stroked rounded
+ * rects so only the border ring receives the highlight, brightest at the corner,
+ * fading to transparent at ~45% of the element's min dimension.
+ *
+ * Apply this to ANY surface (card, button, container) that needs the SeekerClaw
+ * "lit-edge" treatment. Single token (BrandAlpha.cardHighlight) controls intensity.
+ *
+ * Usage:
+ *   Box(Modifier.background(...).cornerGlowBorder(corner = 16.dp))
+ *   Button(modifier = Modifier.cornerGlowBorder(corner = 12.dp), ...)
+ */
+fun Modifier.cornerGlowBorder(corner: androidx.compose.ui.unit.Dp = SeekerClawColors.CornerRadius): Modifier =
+    this.drawBehind {
+        val cornerPx = corner.toPx()
+        val cr = CornerRadius(cornerPx, cornerPx)
+        val strokePx = Sizing.borderThin.toPx()
+        val highlightRadius = size.minDimension * 0.45f
+
+        // Top-left highlight
+        drawRoundRect(
+            brush = Brush.radialGradient(
+                colors = listOf(
+                    Color.White.copy(alpha = BrandAlpha.cardHighlight),
+                    Color.Transparent,
+                ),
+                center = Offset(0f, 0f),
+                radius = highlightRadius,
+            ),
+            cornerRadius = cr,
+            style = Stroke(width = strokePx),
+        )
+        // Bottom-right highlight
+        drawRoundRect(
+            brush = Brush.radialGradient(
+                colors = listOf(
+                    Color.White.copy(alpha = BrandAlpha.cardHighlight),
+                    Color.Transparent,
+                ),
+                center = Offset(size.width, size.height),
+                radius = highlightRadius,
+            ),
+            cornerRadius = cr,
+            style = Stroke(width = strokePx),
+        )
+    }
+
+/**
  * Standard card surface used throughout SeekerClaw: Surface background, rounded corners, 16dp padding.
  * Replaces the repeated Column + fillMaxWidth + background(Surface, shape) + padding(16.dp) pattern.
  */
@@ -75,47 +123,11 @@ fun CardSurface(
 ) {
     val cardShape = remember(SeekerClawColors.CornerRadius) { RoundedCornerShape(SeekerClawColors.CornerRadius) }
 
-    // Corner-glow border — replicates atomicbot.ai's `.gradient-border` effect.
-    // Two radial gradients (top-left and bottom-right), each painted as a stroked
-    // rounded rect so only the border ring receives the highlight. Brightest at
-    // the corner, fading to transparent at ~45% radius.
     Column(
         modifier = modifier
             .fillMaxWidth()
             .background(SeekerClawColors.Surface, cardShape)
-            .drawBehind {
-                val cornerPx = SeekerClawColors.CornerRadius.toPx()
-                val cr = CornerRadius(cornerPx, cornerPx)
-                val strokePx = Sizing.borderThin.toPx()
-                val highlightRadius = size.minDimension * 0.45f
-
-                // Top-left highlight
-                drawRoundRect(
-                    brush = Brush.radialGradient(
-                        colors = listOf(
-                            Color.White.copy(alpha = BrandAlpha.cardHighlight),
-                            Color.Transparent,
-                        ),
-                        center = Offset(0f, 0f),
-                        radius = highlightRadius,
-                    ),
-                    cornerRadius = cr,
-                    style = Stroke(width = strokePx),
-                )
-                // Bottom-right highlight
-                drawRoundRect(
-                    brush = Brush.radialGradient(
-                        colors = listOf(
-                            Color.White.copy(alpha = BrandAlpha.cardHighlight),
-                            Color.Transparent,
-                        ),
-                        center = Offset(size.width, size.height),
-                        radius = highlightRadius,
-                    ),
-                    cornerRadius = cr,
-                    style = Stroke(width = strokePx),
-                )
-            }
+            .cornerGlowBorder()
             .padding(16.dp),
         content = content,
     )
@@ -445,7 +457,8 @@ fun MorphActionButton(
         enabled = enabled && state !is ActionResult.Loading,
         modifier = modifier
             .fillMaxWidth()
-            .height(Sizing.buttonSecondaryHeight),
+            .height(Sizing.buttonSecondaryHeight)
+            .cornerGlowBorder(),
         shape = shape,
         colors = ButtonDefaults.buttonColors(
             containerColor = container,
