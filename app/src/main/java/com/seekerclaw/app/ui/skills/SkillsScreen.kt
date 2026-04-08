@@ -45,6 +45,7 @@ import androidx.compose.ui.unit.sp
 import coil.compose.SubcomposeAsyncImage
 import coil.request.ImageRequest
 import com.seekerclaw.app.config.ConfigManager
+import com.seekerclaw.app.ui.components.cornerGlowBorder
 import com.seekerclaw.app.ui.theme.RethinkSans
 import com.seekerclaw.app.ui.theme.SeekerClawColors
 import com.seekerclaw.app.util.Analytics
@@ -367,6 +368,7 @@ private fun MarketplaceTeaserCard(shape: RoundedCornerShape) {
         modifier = Modifier
             .fillMaxWidth()
             .background(SeekerClawColors.Surface, shape)
+            .cornerGlowBorder()
             .padding(20.dp),
     ) {
         Column {
@@ -484,6 +486,7 @@ private fun SkillCard(
         modifier = Modifier
             .fillMaxWidth()
             .background(SeekerClawColors.Surface, shape)
+            .cornerGlowBorder()
             .clickable(onClickLabel = "View ${skill.name}", onClick = onClick)
             .padding(16.dp),
         verticalAlignment = Alignment.CenterVertically,

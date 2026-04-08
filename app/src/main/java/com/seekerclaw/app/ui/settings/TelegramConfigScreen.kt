@@ -34,6 +34,7 @@ import com.seekerclaw.app.ui.components.CardSurface
 
 import com.seekerclaw.app.ui.components.SectionLabel
 import com.seekerclaw.app.ui.components.ConfigField
+import com.seekerclaw.app.ui.components.cornerGlowBorder
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.ui.theme.RethinkSans
 import com.seekerclaw.app.ui.theme.SeekerClawColors
@@ -81,7 +82,8 @@ fun TelegramConfigScreen(onBack: () -> Unit) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(SeekerClawColors.Surface, shape),
+                    .background(SeekerClawColors.Surface, shape)
+                    .cornerGlowBorder(),
             ) {
                 ConfigField(
                     label = "Bot Token",
@@ -144,7 +146,9 @@ fun TelegramConfigScreen(onBack: () -> Unit) {
                         }
                     },
                     enabled = testStatus != "Loading",
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .cornerGlowBorder(),
                     shape = shape,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = SeekerClawColors.ActionPrimary,

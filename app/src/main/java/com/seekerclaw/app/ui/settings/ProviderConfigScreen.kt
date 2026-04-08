@@ -45,6 +45,7 @@ import com.seekerclaw.app.ui.components.CardSurface
 
 import com.seekerclaw.app.ui.components.SectionLabel
 import com.seekerclaw.app.ui.components.ConfigField
+import com.seekerclaw.app.ui.components.cornerGlowBorder
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.config.availableModels
 import com.seekerclaw.app.config.availableProviders
@@ -284,7 +285,8 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(SeekerClawColors.Surface, shape),
+                    .background(SeekerClawColors.Surface, shape)
+                    .cornerGlowBorder(),
             ) {
                 availableProviders.forEachIndexed { index, provider ->
                     val isActive = provider.id == activeProvider
@@ -332,7 +334,8 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(SeekerClawColors.Surface, shape),
+                    .background(SeekerClawColors.Surface, shape)
+                    .cornerGlowBorder(),
             ) {
                 when (activeProvider) {
                     "claude" -> {
@@ -600,7 +603,9 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                         }
                     },
                     enabled = testStatus != "Loading",
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .cornerGlowBorder(),
                     shape = shape,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = SeekerClawColors.ActionPrimary,
@@ -1093,7 +1098,9 @@ private fun OpenAIOAuthSection(
             // Not connected — show sign in buttons
             Button(
                 onClick = onSignInBrowser,
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .cornerGlowBorder(),
                 shape = shape,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = SeekerClawColors.ActionPrimary,

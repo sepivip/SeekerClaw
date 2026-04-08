@@ -32,6 +32,7 @@ import com.seekerclaw.app.ui.components.CardSurface
 import com.seekerclaw.app.ui.components.ConfigField
 import com.seekerclaw.app.ui.components.SectionLabel
 import com.seekerclaw.app.ui.components.SeekerClawScaffold
+import com.seekerclaw.app.ui.components.cornerGlowBorder
 import com.seekerclaw.app.ui.theme.RethinkSans
 import com.seekerclaw.app.ui.theme.SeekerClawColors
 
@@ -81,7 +82,8 @@ fun DiscordConfigScreen(onBack: () -> Unit) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(SeekerClawColors.Surface, shape),
+                    .background(SeekerClawColors.Surface, shape)
+                    .cornerGlowBorder(),
             ) {
                 channels.forEachIndexed { index, (id, label) ->
                     val isActive = id == activeChannel
@@ -138,7 +140,8 @@ fun DiscordConfigScreen(onBack: () -> Unit) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(SeekerClawColors.Surface, shape),
+                        .background(SeekerClawColors.Surface, shape)
+                        .cornerGlowBorder(),
                 ) {
                     ConfigField(
                         label = "Bot Token",

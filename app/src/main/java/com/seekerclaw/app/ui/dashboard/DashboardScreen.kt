@@ -60,6 +60,7 @@ import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.config.modelDisplayName
 import com.seekerclaw.app.config.providerById
 import com.seekerclaw.app.service.OpenClawService
+import com.seekerclaw.app.ui.components.cornerGlowBorder
 import com.seekerclaw.app.ui.theme.SeekerClawColors
 import com.seekerclaw.app.util.Analytics
 import com.seekerclaw.app.util.LogCollector
@@ -532,6 +533,7 @@ fun DashboardScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(SeekerClawColors.Surface, shape)
+                .cornerGlowBorder()
                 .alpha(if (isRunning) 1f else 0.6f)
                 .clickable { if (configNeeded) onNavigateToSettings() else onNavigateToSystem() }
                 .padding(16.dp),
@@ -779,6 +781,7 @@ fun DashboardScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(SeekerClawColors.Surface, shape)
+                    .cornerGlowBorder()
                     .padding(horizontal = 16.dp, vertical = 14.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
@@ -828,6 +831,7 @@ private fun UplinkCard(
         modifier = Modifier
             .fillMaxWidth()
             .background(SeekerClawColors.Surface, shape)
+            .cornerGlowBorder()
             .padding(horizontal = 16.dp, vertical = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

@@ -41,6 +41,7 @@ import com.seekerclaw.app.ui.components.CardSurface
 import com.seekerclaw.app.ui.components.ConfigField
 import com.seekerclaw.app.ui.components.SectionLabel
 import com.seekerclaw.app.ui.components.SeekerClawScaffold
+import com.seekerclaw.app.ui.components.cornerGlowBorder
 import com.seekerclaw.app.ui.theme.RethinkSans
 import com.seekerclaw.app.ui.theme.SeekerClawColors
 import kotlinx.coroutines.Dispatchers
@@ -116,7 +117,8 @@ fun ChannelConfigScreen(onBack: () -> Unit) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(SeekerClawColors.Surface, shape),
+                    .background(SeekerClawColors.Surface, shape)
+                    .cornerGlowBorder(),
             ) {
                 channelOptions.forEachIndexed { index, (id, label) ->
                     val isActive = id == activeChannel
@@ -175,7 +177,8 @@ fun ChannelConfigScreen(onBack: () -> Unit) {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(SeekerClawColors.Surface, shape),
+                            .background(SeekerClawColors.Surface, shape)
+                            .cornerGlowBorder(),
                     ) {
                         ConfigField(
                             label = "Bot Token",
@@ -239,7 +242,9 @@ fun ChannelConfigScreen(onBack: () -> Unit) {
                                 }
                             },
                             enabled = testStatus != "Loading",
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .cornerGlowBorder(),
                             shape = shape,
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = SeekerClawColors.ActionPrimary,
@@ -282,7 +287,8 @@ fun ChannelConfigScreen(onBack: () -> Unit) {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(SeekerClawColors.Surface, shape),
+                            .background(SeekerClawColors.Surface, shape)
+                            .cornerGlowBorder(),
                     ) {
                         ConfigField(
                             label = "Bot Token",
@@ -354,7 +360,9 @@ fun ChannelConfigScreen(onBack: () -> Unit) {
                                     }
                                 },
                                 enabled = discordTestStatus != "Loading",
-                                modifier = Modifier.fillMaxWidth(),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .cornerGlowBorder(),
                                 shape = shape,
                                 colors = ButtonDefaults.buttonColors(
                                     containerColor = SeekerClawColors.ActionPrimary,

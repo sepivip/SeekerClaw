@@ -102,6 +102,7 @@ import com.seekerclaw.app.ui.components.SectionLabel
 import com.seekerclaw.app.ui.components.ConfigField
 import com.seekerclaw.app.ui.components.InfoDialog
 import com.seekerclaw.app.ui.components.InfoRow
+import com.seekerclaw.app.ui.components.cornerGlowBorder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -386,7 +387,8 @@ fun SettingsScreen(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(SeekerClawColors.Surface, shape),
+                    .background(SeekerClawColors.Surface, shape)
+                    .cornerGlowBorder(),
             ) {
                 ConfigField(
                     label = "AI Configuration",
@@ -446,6 +448,7 @@ fun SettingsScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(SeekerClawColors.Surface, shape)
+                    .cornerGlowBorder()
                     .padding(horizontal = 16.dp),
             ) {
                 SettingRow(
@@ -650,7 +653,8 @@ fun SettingsScreen(
                     enabled = !isConnecting,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(48.dp),
+                        .height(48.dp)
+                        .cornerGlowBorder(),
                     shape = shape,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = SeekerClawColors.ActionPrimary,
@@ -906,7 +910,9 @@ fun SettingsScreen(
                     }
                 },
                 enabled = !isConfigImporting,
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .cornerGlowBorder(),
                 shape = shape,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = SeekerClawColors.ActionPrimary,
