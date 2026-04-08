@@ -45,6 +45,7 @@ import com.seekerclaw.app.ui.components.CardSurface
 
 import com.seekerclaw.app.ui.components.SectionLabel
 import com.seekerclaw.app.ui.components.ConfigField
+import com.seekerclaw.app.ui.components.ProviderPicker
 import com.seekerclaw.app.ui.components.cornerGlowBorder
 import com.seekerclaw.app.ui.theme.Sizing
 import com.seekerclaw.app.config.ConfigManager
@@ -283,48 +284,11 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
             SectionLabel("Provider")
             Spacer(modifier = Modifier.height(10.dp))
 
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(SeekerClawColors.Surface, shape)
-                    .cornerGlowBorder(),
-            ) {
-                availableProviders.forEachIndexed { index, provider ->
-                    val isActive = provider.id == activeProvider
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { if (!isActive) switchProvider(provider.id) }
-                            .padding(horizontal = 16.dp, vertical = 14.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceBetween,
-                    ) {
-                        Column {
-                            Text(
-                                text = provider.displayName,
-                                fontFamily = RethinkSans,
-                                fontSize = 14.sp,
-                                fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
-                                color = SeekerClawColors.TextPrimary,
-                            )
-                        }
-                        if (isActive) {
-                            Text(
-                                text = "Active",
-                                fontFamily = RethinkSans,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = SeekerClawColors.Accent,
-                            )
-                        }
-                    }
-                    if (index < availableProviders.size - 1) {
-                        HorizontalDivider(
-                            color = SeekerClawColors.CardBorder,
-                            modifier = Modifier.padding(horizontal = 16.dp),
-                        )
-                    }
-                }
+            CardSurface {
+                ProviderPicker(
+                    selectedProviderId = activeProvider,
+                    onSelect = { switchProvider(it) },
+                )
             }
 
             // Active provider fields

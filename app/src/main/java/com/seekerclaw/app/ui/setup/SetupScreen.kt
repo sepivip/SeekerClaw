@@ -116,6 +116,7 @@ import java.net.URL
 import com.seekerclaw.app.ui.components.ActionResult
 import com.seekerclaw.app.ui.components.CardSurface
 import com.seekerclaw.app.ui.components.MorphActionButton
+import com.seekerclaw.app.ui.components.ProviderPicker
 import com.seekerclaw.app.ui.components.cornerGlowBorder
 import com.seekerclaw.app.ui.components.SetupStepIndicator
 import com.seekerclaw.app.ui.components.dotMatrix
@@ -172,7 +173,6 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
         )
     }
     var agentName by remember { mutableStateOf(existingConfig?.agentName ?: "SeekerClaw") }
-    var modelDropdownExpanded by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var apiKeyError by remember { mutableStateOf<String?>(null) }
     var botTokenError by remember { mutableStateOf<String?>(null) }
@@ -224,7 +224,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                     agentName = cfg.agentName
                     isQrImporting = false
                     errorMessage = null
-                    currentStep = SetupSteps.MODEL // QR fills all fields — jump to final step (Initialize Agent)
+                    currentStep = SetupSteps.PROVIDER // QR fills all fields — jump to final step (Initialize Agent)
                 }
                 .onFailure { err ->
                     isQrImporting = false
@@ -420,8 +420,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             val (stepTitle, stepTagline) = when (currentStep) {
                 SetupSteps.PROVIDER -> "Pick Your Provider" to
                     "You can always change provider later in settings, including custom providers."
-                SetupSteps.MODEL -> "Pick Your Model" to
-                    "You can always change model later in settings."
+                SetupSteps.MODEL -> "" to "" // Model step removed — unreachable
                 SetupSteps.TELEGRAM -> "Connect Telegram" to
                     "Your User ID is set automatically on your first message. You can change it \u2014 or switch chat provider \u2014 later in settings."
                 else -> "" to ""
@@ -491,20 +490,11 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                 onAuthTypeChange = { authType = it },
                 apiKeyError = apiKeyError,
                 fieldColors = fieldColors,
-                onNext = { currentStep = SetupSteps.MODEL },
-                onBack = { currentStep = SetupSteps.TELEGRAM },
-            )
-            SetupSteps.MODEL -> OptionsStep(
-                selectedModel = selectedModel,
-                onModelChange = { selectedModel = it },
-                modelDropdownExpanded = modelDropdownExpanded,
-                onModelDropdownExpandedChange = { modelDropdownExpanded = it },
-                fieldColors = fieldColors,
                 onNext = ::saveAndStart,
-                onBack = { if (!isStarting) currentStep = SetupSteps.PROVIDER },
-                provider = scannedProvider,
+                onBack = { if (!isStarting) currentStep = SetupSteps.TELEGRAM },
                 isStarting = isStarting,
             )
+            SetupSteps.MODEL -> Unit // Model step removed — default model auto-selected with provider
             SetupSteps.TELEGRAM -> TelegramStep(
                 botToken = botToken,
                 onBotTokenChange = { botToken = it; botTokenError = null; errorMessage = null },
@@ -665,6 +655,13 @@ private fun WelcomeStep(
         )
 
         Spacer(modifier = Modifier.weight(1f))
+
+        PageDots(
+            currentStep = 0,
+            totalSteps = 3,
+            modifier = Modifier.align(Alignment.CenterHorizontally),
+        )
+        Spacer(modifier = Modifier.height(SetupLayout.gapBeforeNav))
 
         // Primary CTA: Get Started
         Button(
@@ -886,6 +883,7 @@ private fun ProviderSetupStep(
     fieldColors: androidx.compose.material3.TextFieldColors,
     onNext: () -> Unit,
     onBack: () -> Unit,
+    isStarting: Boolean = false,
 ) {
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
     val providerInfo = providerById(provider)
@@ -909,42 +907,11 @@ private fun ProviderSetupStep(
         Spacer(modifier = Modifier.height(10.dp))
 
         CardSurface {
-            Column(modifier = Modifier.selectableGroup()) {
-                availableProviders.forEachIndexed { index, p ->
-                    val isSelected = p.id == provider
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .selectable(
-                                selected = isSelected,
-                                onClick = { if (!isSelected) onProviderChange(p.id) },
-                                role = Role.RadioButton,
-                            )
-                            .padding(vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        RadioButton(
-                            selected = isSelected,
-                            onClick = null,
-                            colors = RadioButtonDefaults.colors(
-                                selectedColor = SeekerClawColors.Primary,
-                                unselectedColor = SeekerClawColors.TextDim,
-                            ),
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = p.displayName,
-                            fontFamily = RethinkSans,
-                            fontSize = 15.sp,
-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                            color = if (isSelected) SeekerClawColors.TextPrimary else SeekerClawColors.TextDim,
-                        )
-                    }
-                    if (index < availableProviders.size - 1) {
-                        HorizontalDivider(color = SeekerClawColors.CardBorder)
-                    }
-                }
-            }
+            ProviderPicker(
+                selectedProviderId = provider,
+                onSelect = onProviderChange,
+                exclude = setOf("custom"), // Custom provider is Settings-only
+            )
         }
 
         Spacer(modifier = Modifier.height(20.dp))
@@ -1074,7 +1041,9 @@ private fun ProviderSetupStep(
             onBack = onBack,
             onNext = onNext,
             nextEnabled = apiKey.isNotBlank(),
-            currentStep = 1,
+            nextLabel = "Initialize Agent",
+            currentStep = 2,
+            isLoading = isStarting,
         )
     }
 }
@@ -1282,122 +1251,7 @@ private fun TelegramStep(
             onBack = onBack,
             onNext = onNext,
             nextEnabled = botToken.isNotBlank(),
-            currentStep = 0,
-        )
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun OptionsStep(
-    selectedModel: String,
-    onModelChange: (String) -> Unit,
-    modelDropdownExpanded: Boolean,
-    onModelDropdownExpandedChange: (Boolean) -> Unit,
-    fieldColors: androidx.compose.material3.TextFieldColors,
-    onNext: () -> Unit,
-    onBack: () -> Unit,
-    provider: String = "claude",
-    isStarting: Boolean = false,
-) {
-    val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
-
-    Column(modifier = Modifier.fillMaxSize()) {
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState()),
-        ) {
-        SectionLabel("Configuration")
-
-        Spacer(modifier = Modifier.height(10.dp))
-
-        CardSurface {
-            // Model
-            Text(
-                text = "AI Model",
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Medium,
-                color = SeekerClawColors.TextPrimary,
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = "Choose the model that powers your agent.",
-                fontSize = 12.sp,
-                color = SeekerClawColors.TextDim,
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Setup screen: API-key auth only (OAuth flows from settings, post-setup).
-            val setupModels = modelsForProvider(provider, "api_key")
-            if (setupModels.isEmpty()) {
-                // Freeform model (e.g. OpenRouter) — editable text field
-                OutlinedTextField(
-                    value = selectedModel,
-                    onValueChange = onModelChange,
-                    singleLine = true,
-                    label = { Text("Model ID", fontSize = 12.sp) },
-                    placeholder = { Text("e.g. anthropic/claude-sonnet-4-6", fontSize = 14.sp, color = SeekerClawColors.TextDim) },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = fieldColors,
-                    shape = shape,
-                )
-            } else {
-                ExposedDropdownMenuBox(
-                    expanded = modelDropdownExpanded,
-                    onExpandedChange = onModelDropdownExpandedChange,
-                ) {
-                    OutlinedTextField(
-                        value = setupModels.firstOrNull { it.id == selectedModel }?.let { "${it.displayName} (${it.description})" } ?: selectedModel,
-                        onValueChange = {},
-                        readOnly = true,
-                        label = { Text("Model", fontSize = 12.sp) },
-                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = modelDropdownExpanded) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .menuAnchor(MenuAnchorType.PrimaryNotEditable),
-                        colors = fieldColors,
-                        shape = shape,
-                    )
-                    ExposedDropdownMenu(
-                        expanded = modelDropdownExpanded,
-                        onDismissRequest = { onModelDropdownExpandedChange(false) },
-                    ) {
-                        setupModels.forEach { model ->
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        "${model.displayName} (${model.description})",
-                                        color = SeekerClawColors.TextPrimary,
-                                    )
-                                },
-                                onClick = {
-                                    onModelChange(model.id)
-                                    onModelDropdownExpandedChange(false)
-                                },
-                            )
-                        }
-                    }
-                }
-            }
-
-        }
-
-        Spacer(modifier = Modifier.height(28.dp))
-
-        }
-
-        Spacer(modifier = Modifier.height(SetupLayout.gapBeforeNav))
-
-        NavButtons(
-            onBack = onBack,
-            onNext = onNext,
-            nextEnabled = selectedModel.isNotBlank(),
-            nextLabel = "Initialize Agent",
-            currentStep = 2,
-            isLoading = isStarting,
+            currentStep = 1,
         )
     }
 }
