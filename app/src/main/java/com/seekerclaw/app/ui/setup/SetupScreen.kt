@@ -110,6 +110,10 @@ import com.seekerclaw.app.util.Analytics
 import kotlinx.coroutines.launch
 import com.seekerclaw.app.ui.components.SetupStepIndicator
 import com.seekerclaw.app.ui.components.dotMatrix
+import com.seekerclaw.app.ui.theme.SetupLayout
+import com.seekerclaw.app.ui.theme.Sizing
+import com.seekerclaw.app.ui.theme.Spacing
+import com.seekerclaw.app.ui.theme.TypeScale
 import kotlin.math.cos
 import kotlin.math.roundToInt
 import kotlin.math.sin
@@ -366,7 +370,8 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
         )
     } else Column(
         modifier = bgModifier
-            .padding(24.dp),
+            .padding(horizontal = SetupLayout.contentHorizontal)
+            .padding(top = SetupLayout.contentTop, bottom = SetupLayout.contentBottom),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         if (currentStep > SetupSteps.WELCOME && currentStep < SetupSteps.SUCCESS) {
@@ -395,7 +400,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                 )
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(SetupLayout.gapAfterIndicator))
 
             // Step indicator (Welcome is not a step — 3 real steps)
             SetupStepIndicator(
@@ -403,7 +408,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                 labels = listOf("AI Provider", "Model", "Telegram"),
             )
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(SetupLayout.gapAfterIndicator))
         }
 
         // Error message
@@ -572,21 +577,21 @@ private fun WelcomeStep(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 24.dp)
-                .padding(top = 72.dp, bottom = 32.dp),
+                .padding(horizontal = SetupLayout.contentHorizontal)
+                .padding(top = SetupLayout.heroTop, bottom = SetupLayout.contentBottom),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
 
         // Hero: claw symbol with ambient dark shadow beneath
         Box(
-            modifier = Modifier.size(240.dp),
+            modifier = Modifier.size(Sizing.heroBoxSize),
             contentAlignment = Alignment.Center,
         ) {
             // Ambient shadow — radial dark glow offset beneath the logo
             Canvas(modifier = Modifier.fillMaxSize()) {
                 val cx = size.width / 2f
-                val cy = size.height / 2f + 18.dp.toPx()
-                val r = 120.dp.toPx()
+                val cy = size.height / 2f + Sizing.heroShadowOffsetY.toPx()
+                val r = Sizing.heroShadowRadius.toPx()
                 drawCircle(
                     brush = Brush.radialGradient(
                         colors = listOf(
@@ -604,40 +609,40 @@ private fun WelcomeStep(
             Image(
                 painter = painterResource(R.drawable.ic_seekerclaw_symbol),
                 contentDescription = "SeekerClaw",
-                modifier = Modifier.size(184.dp),
+                modifier = Modifier.size(Sizing.heroLogoSize),
             )
         }
 
-        Spacer(modifier = Modifier.height(40.dp))
+        Spacer(modifier = Modifier.height(Spacing.xxl))
 
         Text(
             text = "EMPOWER YOUR",
             fontFamily = RethinkSans,
-            fontSize = 33.sp,
+            fontSize = TypeScale.displayLarge,
             fontWeight = FontWeight.ExtraBold,
             color = SeekerClawColors.TextPrimary,
             textAlign = TextAlign.Center,
-            lineHeight = 38.sp,
+            lineHeight = TypeScale.lineHeightDisplayLarge,
         )
         Text(
             text = "PHONE \uD83E\uDD9E\uD83D\uDCF2",
             fontFamily = RethinkSans,
-            fontSize = 29.sp,
+            fontSize = TypeScale.displaySmall,
             fontWeight = FontWeight.ExtraBold,
             color = SeekerClawColors.TextPrimary,
             textAlign = TextAlign.Center,
-            lineHeight = 34.sp,
+            lineHeight = TypeScale.lineHeightDisplaySmall,
         )
 
-        Spacer(modifier = Modifier.height(10.dp))
+        Spacer(modifier = Modifier.height(Spacing.md))
 
         Text(
             text = "3 steps and your AI assistant is live 24/7",
             fontFamily = RethinkSans,
-            fontSize = 15.sp,
+            fontSize = TypeScale.bodyLarge,
             color = SeekerClawColors.TextDim,
             textAlign = TextAlign.Center,
-            lineHeight = 22.sp,
+            lineHeight = TypeScale.lineHeightBody,
         )
 
         Spacer(modifier = Modifier.weight(1f))
@@ -647,7 +652,7 @@ private fun WelcomeStep(
             onClick = onNext,
             modifier = Modifier
                 .fillMaxWidth()
-                .height(56.dp),
+                .height(Sizing.buttonPrimaryHeight),
             shape = shape,
             colors = ButtonDefaults.buttonColors(
                 containerColor = SeekerClawColors.ActionPrimary,
@@ -657,36 +662,36 @@ private fun WelcomeStep(
             Text(
                 "Get Started",
                 fontFamily = RethinkSans,
-                fontSize = 16.sp,
+                fontSize = TypeScale.titleMedium,
                 fontWeight = FontWeight.Bold,
             )
-            Spacer(modifier = Modifier.width(6.dp))
-            Text("\u2197", fontFamily = RethinkSans, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Spacer(modifier = Modifier.width(Spacing.xs))
+            Text("\u2197", fontFamily = RethinkSans, fontSize = TypeScale.titleMedium, fontWeight = FontWeight.Bold)
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(SetupLayout.gapBetweenButtons))
 
-        // Secondary row: Scan Config + Setup Guide
+        // Secondary row: Scan Config + Skip
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(SetupLayout.gapBetweenButtons),
         ) {
             Button(
                 onClick = onScanQr,
                 enabled = !isQrImporting,
                 modifier = Modifier
                     .weight(1f)
-                    .height(52.dp),
+                    .height(Sizing.buttonSecondaryHeight),
                 shape = shape,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = SeekerClawColors.Surface,
                     contentColor = SeekerClawColors.TextPrimary,
                 ),
-                border = BorderStroke(1.dp, SeekerClawColors.CardBorder),
+                border = BorderStroke(Sizing.borderThin, SeekerClawColors.CardBorder),
             ) {
                 if (isQrImporting) {
                     CircularProgressIndicator(
-                        modifier = Modifier.size(16.dp),
+                        modifier = Modifier.size(Sizing.iconSm),
                         strokeWidth = 2.dp,
                         color = SeekerClawColors.TextPrimary,
                     )
@@ -694,10 +699,10 @@ private fun WelcomeStep(
                     Icon(
                         Icons.Default.QrCodeScanner,
                         contentDescription = null,
-                        modifier = Modifier.size(18.dp),
+                        modifier = Modifier.size(Sizing.iconMd),
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Scan Config", fontFamily = RethinkSans, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                    Spacer(modifier = Modifier.width(Spacing.sm))
+                    Text("Scan Config", fontFamily = RethinkSans, fontSize = TypeScale.bodyMedium, fontWeight = FontWeight.Medium)
                 }
             }
 
@@ -705,29 +710,29 @@ private fun WelcomeStep(
                 onClick = onSkip,
                 modifier = Modifier
                     .weight(1f)
-                    .height(52.dp),
+                    .height(Sizing.buttonSecondaryHeight),
                 shape = shape,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = SeekerClawColors.Surface,
                     contentColor = SeekerClawColors.TextPrimary,
                 ),
-                border = BorderStroke(1.dp, SeekerClawColors.CardBorder),
+                border = BorderStroke(Sizing.borderThin, SeekerClawColors.CardBorder),
             ) {
-                Text("Skip", fontFamily = RethinkSans, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                Text("Skip", fontFamily = RethinkSans, fontSize = TypeScale.bodyMedium, fontWeight = FontWeight.Medium)
             }
         }
 
         if (qrError != null) {
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(Spacing.sm))
             Text(
                 text = qrError,
                 fontFamily = FontFamily.Monospace,
                 color = SeekerClawColors.Error,
-                fontSize = 12.sp,
+                fontSize = TypeScale.labelSmall,
             )
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(SetupLayout.gapBeforeNav))
 
         TextButton(
             onClick = { uriHandler.openUri("https://seekerclaw.xyz/setup") },
@@ -736,13 +741,13 @@ private fun WelcomeStep(
                 @Suppress("DEPRECATION") Icons.Default.HelpOutline,
                 contentDescription = "Help",
                 tint = SeekerClawColors.TextDim,
-                modifier = Modifier.size(16.dp),
+                modifier = Modifier.size(Sizing.iconSm),
             )
-            Spacer(modifier = Modifier.width(6.dp))
+            Spacer(modifier = Modifier.width(Spacing.xs))
             Text(
                 "Need help? Quick setup guide",
                 fontFamily = RethinkSans,
-                fontSize = 13.sp,
+                fontSize = TypeScale.bodySmall,
                 color = SeekerClawColors.TextDim,
             )
         }
@@ -780,9 +785,9 @@ private fun AuroraGridBackground(modifier: Modifier = Modifier) {
 
             // Blob 1 — drifting radial gradient (no blur modifier needed)
             val rad1 = Math.toRadians(angle1.toDouble())
-            val b1x = cx + (cos(rad1) * 180.dp.toPx()).toFloat()
-            val b1y = cy + (sin(rad1) * 180.dp.toPx()).toFloat()
-            val b1r = 312.dp.toPx()
+            val b1x = cx + (cos(rad1) * SetupLayout.blob1Drift.toPx()).toFloat()
+            val b1y = cy + (sin(rad1) * SetupLayout.blob1Drift.toPx()).toFloat()
+            val b1r = SetupLayout.blob1Radius.toPx()
             drawCircle(
                 brush = Brush.radialGradient(
                     colors = listOf(
@@ -799,9 +804,9 @@ private fun AuroraGridBackground(modifier: Modifier = Modifier) {
 
             // Blob 2
             val rad2 = Math.toRadians(angle2.toDouble())
-            val b2x = cx + (cos(rad2) * 220.dp.toPx()).toFloat()
-            val b2y = cy + (sin(rad2) * 220.dp.toPx()).toFloat()
-            val b2r = 288.dp.toPx()
+            val b2x = cx + (cos(rad2) * SetupLayout.blob2Drift.toPx()).toFloat()
+            val b2y = cy + (sin(rad2) * SetupLayout.blob2Drift.toPx()).toFloat()
+            val b2r = SetupLayout.blob2Radius.toPx()
             drawCircle(
                 brush = Brush.radialGradient(
                     colors = listOf(
@@ -817,9 +822,9 @@ private fun AuroraGridBackground(modifier: Modifier = Modifier) {
             )
 
             // Grid lines
-            val spacing = 32.dp.toPx()
+            val spacing = SetupLayout.gridSpacing.toPx()
             val lineColor = red.copy(alpha = 0.18f)
-            val stroke = 1.5f
+            val stroke = Sizing.strokeMedium
             var x = 0f
             while (x < size.width) {
                 drawLine(lineColor, Offset(x, 0f), Offset(x, size.height), stroke)
@@ -1037,7 +1042,7 @@ private fun ProviderSetupStep(
 
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(SetupLayout.gapBeforeNav))
 
         NavButtons(
             onBack = onBack,
@@ -1195,31 +1200,31 @@ private fun TelegramStep(
 
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(SetupLayout.gapBeforeNav))
 
         val uriHandler = LocalUriHandler.current
         Column(modifier = Modifier.fillMaxWidth()) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(SetupLayout.gapBetweenButtons),
             ) {
                 Button(
                     onClick = onBack,
                     enabled = !isStarting,
-                    modifier = Modifier.weight(1f).height(52.dp),
+                    modifier = Modifier.weight(1f).height(Sizing.buttonSecondaryHeight),
                     shape = shape,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = SeekerClawColors.Surface,
                         contentColor = SeekerClawColors.TextPrimary,
                     ),
-                    border = BorderStroke(1.dp, SeekerClawColors.CardBorder),
+                    border = BorderStroke(Sizing.borderThin, SeekerClawColors.CardBorder),
                 ) {
-                    Text("Back", fontFamily = RethinkSans, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                    Text("Back", fontFamily = RethinkSans, fontSize = TypeScale.bodyMedium, fontWeight = FontWeight.Medium)
                 }
                 Button(
                     onClick = onNext,
                     enabled = botToken.isNotBlank() && !isStarting,
-                    modifier = Modifier.weight(1f).height(52.dp),
+                    modifier = Modifier.weight(1f).height(Sizing.buttonSecondaryHeight),
                     shape = shape,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = SeekerClawColors.ActionPrimary,
@@ -1230,19 +1235,19 @@ private fun TelegramStep(
                 ) {
                     if (isStarting) {
                         CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
+                            modifier = Modifier.size(Sizing.iconSm),
                             color = Color.White,
                             strokeWidth = 2.dp,
                         )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Starting\u2026", fontFamily = RethinkSans, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.width(Spacing.xs))
+                        Text("Starting\u2026", fontFamily = RethinkSans, fontSize = TypeScale.bodyMedium, fontWeight = FontWeight.Bold)
                     } else {
-                        Text("Initialize Agent", fontFamily = RethinkSans, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                        Text("Initialize Agent", fontFamily = RethinkSans, fontSize = TypeScale.bodyMedium, fontWeight = FontWeight.Bold)
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(SetupLayout.gapBeforeNav))
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -1253,13 +1258,13 @@ private fun TelegramStep(
                         @Suppress("DEPRECATION") Icons.Default.HelpOutline,
                         contentDescription = "Help",
                         tint = SeekerClawColors.TextDim,
-                        modifier = Modifier.size(16.dp),
+                        modifier = Modifier.size(Sizing.iconSm),
                     )
-                    Spacer(modifier = Modifier.width(6.dp))
+                    Spacer(modifier = Modifier.width(Spacing.xs))
                     Text(
                         "Need help? Quick setup guide",
                         fontFamily = RethinkSans,
-                        fontSize = 13.sp,
+                        fontSize = TypeScale.bodySmall,
                         color = SeekerClawColors.TextDim,
                     )
                 }
@@ -1402,7 +1407,7 @@ private fun OptionsStep(
 
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(SetupLayout.gapBeforeNav))
 
         NavButtons(onBack = onBack, onNext = onNext, nextEnabled = selectedModel.isNotBlank())
     }
@@ -1574,21 +1579,21 @@ private fun NavButtons(
         // Row: Back | Next (same layout as Welcome's Scan Config | Skip row)
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(SetupLayout.gapBetweenButtons),
         ) {
             Button(
                 onClick = onBack,
                 modifier = Modifier
                     .weight(1f)
-                    .height(52.dp),
+                    .height(Sizing.buttonSecondaryHeight),
                 shape = shape,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = SeekerClawColors.Surface,
                     contentColor = SeekerClawColors.TextPrimary,
                 ),
-                border = BorderStroke(1.dp, SeekerClawColors.CardBorder),
+                border = BorderStroke(Sizing.borderThin, SeekerClawColors.CardBorder),
             ) {
-                Text("Back", fontFamily = RethinkSans, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                Text("Back", fontFamily = RethinkSans, fontSize = TypeScale.bodyMedium, fontWeight = FontWeight.Medium)
             }
 
             Button(
@@ -1596,7 +1601,7 @@ private fun NavButtons(
                 enabled = nextEnabled,
                 modifier = Modifier
                     .weight(1f)
-                    .height(52.dp),
+                    .height(Sizing.buttonSecondaryHeight),
                 shape = shape,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = SeekerClawColors.ActionPrimary,
@@ -1605,11 +1610,11 @@ private fun NavButtons(
                     disabledContentColor = SeekerClawColors.TextDim,
                 ),
             ) {
-                Text(nextLabel, fontFamily = RethinkSans, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                Text(nextLabel, fontFamily = RethinkSans, fontSize = TypeScale.bodyMedium, fontWeight = FontWeight.Bold)
             }
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(SetupLayout.gapBeforeNav))
 
         // Help link
         Row(
@@ -1621,13 +1626,13 @@ private fun NavButtons(
                     @Suppress("DEPRECATION") Icons.Default.HelpOutline,
                     contentDescription = "Help",
                     tint = SeekerClawColors.TextDim,
-                    modifier = Modifier.size(16.dp),
+                    modifier = Modifier.size(Sizing.iconSm),
                 )
-                Spacer(modifier = Modifier.width(6.dp))
+                Spacer(modifier = Modifier.width(Spacing.xs))
                 Text(
                     "Need help? Quick setup guide",
                     fontFamily = RethinkSans,
-                    fontSize = 13.sp,
+                    fontSize = TypeScale.bodySmall,
                     color = SeekerClawColors.TextDim,
                 )
             }
