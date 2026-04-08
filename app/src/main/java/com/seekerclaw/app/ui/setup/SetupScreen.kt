@@ -1087,6 +1087,7 @@ private fun TelegramStep(
 ) {
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
     val scope = rememberCoroutineScope()
+    val uriHandler = LocalUriHandler.current
 
     var testState by remember { mutableStateOf<ActionResult>(ActionResult.Idle) }
 
@@ -1150,12 +1151,32 @@ private fun TelegramStep(
                 color = SeekerClawColors.TextPrimary,
             )
             Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = "Open Telegram \u2192 @BotFather \u2192 /newbot \u2192 copy the token.",
-                fontSize = 12.sp,
-                color = SeekerClawColors.TextDim,
-                lineHeight = 18.sp,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "Open Telegram \u2192 ",
+                    fontFamily = RethinkSans,
+                    fontSize = TypeScale.labelSmall,
+                    color = SeekerClawColors.TextDim,
+                    lineHeight = 18.sp,
+                )
+                Text(
+                    text = "@BotFather",
+                    fontFamily = RethinkSans,
+                    fontSize = TypeScale.labelSmall,
+                    color = SeekerClawColors.Primary,
+                    lineHeight = 18.sp,
+                    modifier = Modifier.clickable {
+                        uriHandler.openUri("https://t.me/BotFather")
+                    },
+                )
+                Text(
+                    text = " \u2192 /newbot",
+                    fontFamily = RethinkSans,
+                    fontSize = TypeScale.labelSmall,
+                    color = SeekerClawColors.TextDim,
+                    lineHeight = 18.sp,
+                )
+            }
 
             Spacer(modifier = Modifier.height(12.dp))
 
