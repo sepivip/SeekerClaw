@@ -149,10 +149,12 @@ private object SetupSteps {
 fun SetupScreen(onSetupComplete: () -> Unit) {
     val context = LocalContext.current
 
-    // Pre-fill from existing config (for "Run Setup Again" flow)
-    val existingConfig = remember { ConfigManager.loadConfig(context) }
+    // Pre-fill from existing config — reactive to ConfigManager.configVersion so any
+    // edit made in Settings while onboarding is on the back stack flows through here.
+    val configVersion = ConfigManager.configVersion.intValue
+    val existingConfig = remember(configVersion) { ConfigManager.loadConfig(context) }
 
-    var apiKey by remember {
+    var apiKey by remember(configVersion) {
         mutableStateOf(
             when (existingConfig?.provider) {
                 "openai" -> existingConfig.openaiApiKey
@@ -161,12 +163,12 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             }
         )
     }
-    var authType by remember { mutableStateOf(existingConfig?.authType ?: "api_key") }
-    var scannedProvider by remember { mutableStateOf(existingConfig?.provider ?: "claude") }
-    var botToken by remember { mutableStateOf(existingConfig?.telegramBotToken ?: "") }
-    var ownerId by remember { mutableStateOf(existingConfig?.telegramOwnerId ?: "") }
+    var authType by remember(configVersion) { mutableStateOf(existingConfig?.authType ?: "api_key") }
+    var scannedProvider by remember(configVersion) { mutableStateOf(existingConfig?.provider ?: "claude") }
+    var botToken by remember(configVersion) { mutableStateOf(existingConfig?.telegramBotToken ?: "") }
+    var ownerId by remember(configVersion) { mutableStateOf(existingConfig?.telegramOwnerId ?: "") }
     val existingProvider = existingConfig?.provider ?: "claude"
-    var selectedModel by remember {
+    var selectedModel by remember(configVersion) {
         // Setup screen always uses API-key auth (OAuth happens later in settings),
         // so derive the model list from the api_key list to match what saveAndStart persists.
         mutableStateOf(
@@ -177,7 +179,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             } ?: modelsForProvider(existingProvider, "api_key").firstOrNull()?.id ?: availableModels[0].id
         )
     }
-    var agentName by remember { mutableStateOf(existingConfig?.agentName ?: "SeekerClaw") }
+    var agentName by remember(configVersion) { mutableStateOf(existingConfig?.agentName ?: "SeekerClaw") }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var apiKeyError by remember { mutableStateOf<String?>(null) }
     var botTokenError by remember { mutableStateOf<String?>(null) }
