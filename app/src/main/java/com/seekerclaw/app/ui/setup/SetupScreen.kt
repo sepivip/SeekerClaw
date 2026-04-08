@@ -969,34 +969,41 @@ private fun ProviderSetupStep(
 
             // Instructions — provider-specific
             if (provider == "claude" && isToken) {
-                Text(
-                    text = "Run in your terminal:",
-                    fontSize = 13.sp,
-                    color = SeekerClawColors.TextSecondary,
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = "claude setup-token",
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 13.sp,
-                    color = SeekerClawColors.Primary,
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = "Requires Claude Pro or Max subscription.",
-                    fontSize = 12.sp,
-                    color = SeekerClawColors.TextDim,
-                )
-            } else {
-                Row {
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = "Get your API key from ",
-                        fontSize = 13.sp,
+                        text = "Run in terminal: ",
+                        fontFamily = RethinkSans,
+                        fontSize = TypeScale.bodySmall,
                         color = SeekerClawColors.TextSecondary,
                     )
                     Text(
-                        text = providerInfo.keysUrl.removePrefix("https://"),
-                        fontSize = 13.sp,
+                        text = "claude setup-token",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = TypeScale.bodySmall,
+                        fontWeight = FontWeight.Bold,
+                        color = SeekerClawColors.Primary,
+                    )
+                }
+                Spacer(modifier = Modifier.height(Spacing.xs))
+                Text(
+                    text = "Requires Claude Pro or Max subscription.",
+                    fontFamily = RethinkSans,
+                    fontSize = TypeScale.labelSmall,
+                    color = SeekerClawColors.TextDim,
+                )
+            } else {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "Get your API key ",
+                        fontFamily = RethinkSans,
+                        fontSize = TypeScale.bodySmall,
+                        color = SeekerClawColors.TextSecondary,
+                    )
+                    Text(
+                        text = "here",
+                        fontFamily = RethinkSans,
+                        fontSize = TypeScale.bodySmall,
+                        fontWeight = FontWeight.Bold,
                         color = SeekerClawColors.Primary,
                         modifier = Modifier.clickable {
                             uriHandler.openUri(providerInfo.keysUrl)
