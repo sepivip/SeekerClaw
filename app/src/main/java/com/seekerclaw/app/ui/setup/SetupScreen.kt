@@ -706,6 +706,19 @@ private fun WelcomeStep(
             lineHeight = TypeScale.lineHeightBody,
         )
 
+        Spacer(modifier = Modifier.height(Spacing.lg))
+
+        Text(
+            text = "Next, you\u2019ll add an AI provider key (or sign in), " +
+                "connect a Telegram bot, and start chatting with your agent \u2014 " +
+                "it can do amazing things.",
+            fontFamily = RethinkSans,
+            fontSize = TypeScale.bodyMedium,
+            color = SeekerClawColors.TextDim,
+            textAlign = TextAlign.Center,
+            lineHeight = TypeScale.lineHeightBody,
+        )
+
         Spacer(modifier = Modifier.weight(1f))
 
         // Primary CTA: Get Started
