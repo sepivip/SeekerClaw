@@ -1,5 +1,6 @@
 package com.seekerclaw.app.ui.theme
 
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -86,3 +87,38 @@ object SetupLayout {
     val blob2Drift = 220.dp
     val gridSpacing = Spacing.xxl              // 32
 }
+
+/**
+ * Named alpha tokens. Never inline a 0.xxf alpha value — if a new one is
+ * needed, add it here with a descriptive name so future changes flow from
+ * one place.
+ */
+object BrandAlpha {
+    // Aurora background blobs
+    const val blob1Core = 0.55f
+    const val blob1Mid = 0.25f
+    const val blob2Core = 0.45f
+    const val blob2Mid = 0.18f
+
+    // Grid lines
+    const val gridLine = 0.18f
+
+    // Logo ambient shadow
+    const val shadowStrong = 0.70f
+    const val shadowSoft = 0.35f
+
+    // UI states
+    const val disabledSurface = 0.50f
+    const val disabledContent = 0.70f
+    const val errorBackground = 0.10f
+}
+
+/**
+ * Semantic color roles for the onboarding flow. Keeps raw Color.Black /
+ * Color.White out of screens so the palette stays swappable from here.
+ */
+object OnboardingColors {
+    val heroBackground = Color.Black
+    val onActionPrimary = Color.White
+}
+

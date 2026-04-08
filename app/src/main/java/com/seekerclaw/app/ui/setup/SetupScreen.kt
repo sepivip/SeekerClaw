@@ -110,6 +110,8 @@ import com.seekerclaw.app.util.Analytics
 import kotlinx.coroutines.launch
 import com.seekerclaw.app.ui.components.SetupStepIndicator
 import com.seekerclaw.app.ui.components.dotMatrix
+import com.seekerclaw.app.ui.theme.BrandAlpha
+import com.seekerclaw.app.ui.theme.OnboardingColors
 import com.seekerclaw.app.ui.theme.SetupLayout
 import com.seekerclaw.app.ui.theme.Sizing
 import com.seekerclaw.app.ui.theme.Spacing
@@ -570,7 +572,7 @@ private fun WelcomeStep(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black),
+            .background(OnboardingColors.heroBackground),
     ) {
         AuroraGridBackground(modifier = Modifier.fillMaxSize())
 
@@ -595,8 +597,8 @@ private fun WelcomeStep(
                 drawCircle(
                     brush = Brush.radialGradient(
                         colors = listOf(
-                            Color.Black.copy(alpha = 0.70f),
-                            Color.Black.copy(alpha = 0.35f),
+                            OnboardingColors.heroBackground.copy(alpha = BrandAlpha.shadowStrong),
+                            OnboardingColors.heroBackground.copy(alpha = BrandAlpha.shadowSoft),
                             Color.Transparent,
                         ),
                         center = Offset(cx, cy),
@@ -656,7 +658,7 @@ private fun WelcomeStep(
             shape = shape,
             colors = ButtonDefaults.buttonColors(
                 containerColor = SeekerClawColors.ActionPrimary,
-                contentColor = Color.White,
+                contentColor = OnboardingColors.onActionPrimary,
             ),
         ) {
             Text(
@@ -778,7 +780,7 @@ private fun AuroraGridBackground(modifier: Modifier = Modifier) {
 
     val red = SeekerClawColors.Primary
 
-    Box(modifier = modifier.background(Color.Black)) {
+    Box(modifier = modifier.background(OnboardingColors.heroBackground)) {
         Canvas(modifier = Modifier.fillMaxSize()) {
             val cx = size.width / 2f
             val cy = size.height / 2f
@@ -791,8 +793,8 @@ private fun AuroraGridBackground(modifier: Modifier = Modifier) {
             drawCircle(
                 brush = Brush.radialGradient(
                     colors = listOf(
-                        red.copy(alpha = 0.55f),
-                        red.copy(alpha = 0.25f),
+                        red.copy(alpha = BrandAlpha.blob1Core),
+                        red.copy(alpha = BrandAlpha.blob1Mid),
                         Color.Transparent,
                     ),
                     center = Offset(b1x, b1y),
@@ -810,8 +812,8 @@ private fun AuroraGridBackground(modifier: Modifier = Modifier) {
             drawCircle(
                 brush = Brush.radialGradient(
                     colors = listOf(
-                        red.copy(alpha = 0.45f),
-                        red.copy(alpha = 0.18f),
+                        red.copy(alpha = BrandAlpha.blob2Core),
+                        red.copy(alpha = BrandAlpha.blob2Mid),
                         Color.Transparent,
                     ),
                     center = Offset(b2x, b2y),
@@ -823,7 +825,7 @@ private fun AuroraGridBackground(modifier: Modifier = Modifier) {
 
             // Grid lines
             val spacing = SetupLayout.gridSpacing.toPx()
-            val lineColor = red.copy(alpha = 0.18f)
+            val lineColor = red.copy(alpha = BrandAlpha.gridLine)
             val stroke = Sizing.strokeMedium
             var x = 0f
             while (x < size.width) {
@@ -836,10 +838,14 @@ private fun AuroraGridBackground(modifier: Modifier = Modifier) {
                 y += spacing
             }
 
-            // Radial vignette — fades grid/blobs at edges back to black
+            // Radial vignette — fades grid/blobs at edges back to background
             drawRect(
                 brush = Brush.radialGradient(
-                    colors = listOf(Color.Transparent, Color.Transparent, Color.Black),
+                    colors = listOf(
+                        Color.Transparent,
+                        Color.Transparent,
+                        OnboardingColors.heroBackground,
+                    ),
                     center = Offset(cx, cy),
                     radius = size.minDimension * 0.85f,
                 ),
@@ -1228,15 +1234,15 @@ private fun TelegramStep(
                     shape = shape,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = SeekerClawColors.ActionPrimary,
-                        contentColor = Color.White,
-                        disabledContainerColor = SeekerClawColors.ActionPrimary.copy(alpha = 0.5f),
-                        disabledContentColor = Color.White.copy(alpha = 0.7f),
+                        contentColor = OnboardingColors.onActionPrimary,
+                        disabledContainerColor = SeekerClawColors.ActionPrimary.copy(alpha = BrandAlpha.disabledSurface),
+                        disabledContentColor = OnboardingColors.onActionPrimary.copy(alpha = BrandAlpha.disabledContent),
                     ),
                 ) {
                     if (isStarting) {
                         CircularProgressIndicator(
                             modifier = Modifier.size(Sizing.iconSm),
-                            color = Color.White,
+                            color = OnboardingColors.onActionPrimary,
                             strokeWidth = 2.dp,
                         )
                         Spacer(modifier = Modifier.width(Spacing.xs))
@@ -1605,7 +1611,7 @@ private fun NavButtons(
                 shape = shape,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = SeekerClawColors.ActionPrimary,
-                    contentColor = Color.White,
+                    contentColor = OnboardingColors.onActionPrimary,
                     disabledContainerColor = SeekerClawColors.BorderSubtle,
                     disabledContentColor = SeekerClawColors.TextDim,
                 ),
