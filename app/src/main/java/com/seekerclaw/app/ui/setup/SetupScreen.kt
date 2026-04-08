@@ -63,7 +63,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.ui.semantics.Role
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.SmartToy
@@ -725,8 +727,12 @@ private fun WelcomeStep(
                 fontSize = TypeScale.titleMedium,
                 fontWeight = FontWeight.Bold,
             )
-            Spacer(modifier = Modifier.width(Spacing.xs))
-            Text("\u2197", fontFamily = RethinkSans, fontSize = TypeScale.titleMedium, fontWeight = FontWeight.Bold)
+            Spacer(modifier = Modifier.width(Spacing.sm))
+            Icon(
+                Icons.AutoMirrored.Filled.ArrowForward,
+                contentDescription = null,
+                modifier = Modifier.size(Sizing.iconMd),
+            )
         }
 
         Spacer(modifier = Modifier.height(SetupLayout.gapBetweenButtons))
@@ -780,6 +786,12 @@ private fun WelcomeStep(
                 ),
                 border = BorderStroke(Sizing.borderThin, SeekerClawColors.CardBorder),
             ) {
+                Icon(
+                    Icons.Default.SkipNext,
+                    contentDescription = null,
+                    modifier = Modifier.size(Sizing.iconMd),
+                )
+                Spacer(modifier = Modifier.width(Spacing.sm))
                 Text("Skip", fontFamily = RethinkSans, fontSize = TypeScale.bodyMedium, fontWeight = FontWeight.Medium)
             }
         }
