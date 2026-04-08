@@ -686,11 +686,11 @@ private fun WelcomeStep(
         Text(
             text = "PHONE \uD83E\uDD9E\uD83D\uDCF2",
             fontFamily = RethinkSans,
-            fontSize = TypeScale.displaySmall,
+            fontSize = TypeScale.displayLarge,
             fontWeight = FontWeight.ExtraBold,
             color = SeekerClawColors.TextPrimary,
             textAlign = TextAlign.Center,
-            lineHeight = TypeScale.lineHeightDisplaySmall,
+            lineHeight = TypeScale.lineHeightDisplayLarge,
         )
 
         Spacer(modifier = Modifier.height(Spacing.md))
@@ -1372,6 +1372,11 @@ private fun SetupSuccessStep(
                 .verticalScroll(rememberScrollState()),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
+        // Match Welcome's heroTop padding so the logo sits at the same vertical
+        // position. Welcome bypasses the parent's contentTop, so we add the
+        // delta here.
+        Spacer(modifier = Modifier.height(SetupLayout.heroTop - SetupLayout.contentTop))
+
         // Hero logo (smaller version of Welcome's claw)
         Image(
             painter = painterResource(R.drawable.ic_seekerclaw_symbol),
