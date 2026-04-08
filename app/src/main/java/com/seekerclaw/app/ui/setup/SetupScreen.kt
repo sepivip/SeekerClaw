@@ -358,7 +358,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
 
     if (currentStep == SetupSteps.WELCOME) {
         WelcomeStep(
-            onNext = { currentStep = SetupSteps.PROVIDER },
+            onNext = { currentStep = SetupSteps.TELEGRAM },
             onSkip = {
                 ConfigManager.markSetupSkipped(context)
                 onSetupComplete()
@@ -408,13 +408,16 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             Spacer(modifier = Modifier.height(Spacing.lg))
 
             // Per-step title block (same style as Welcome hero)
-            val (line1, line2) = when (currentStep) {
-                SetupSteps.PROVIDER -> "PICK YOUR" to "PROVIDER \uD83E\uDDE0"
-                SetupSteps.MODEL -> "PICK YOUR" to "MODEL \u26A1"
-                SetupSteps.TELEGRAM -> "CONNECT" to "TELEGRAM \uD83D\uDCAC"
+            val (stepTitle, stepTagline) = when (currentStep) {
+                SetupSteps.PROVIDER -> "Pick Your Provider" to
+                    "You can always change provider later in settings, including custom providers."
+                SetupSteps.MODEL -> "Pick Your Model" to
+                    "You can always change model later in settings."
+                SetupSteps.TELEGRAM -> "Connect Telegram" to
+                    "You\u2019ll chat with your agent through Telegram."
                 else -> "" to ""
             }
-            StepTitle(line1 = line1, line2 = line2)
+            StepTitle(title = stepTitle, tagline = stepTagline)
 
             Spacer(modifier = Modifier.height(SetupLayout.gapAfterIndicator))
         }
@@ -480,7 +483,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                 apiKeyError = apiKeyError,
                 fieldColors = fieldColors,
                 onNext = { currentStep = SetupSteps.MODEL },
-                onBack = { currentStep = SetupSteps.WELCOME },
+                onBack = { currentStep = SetupSteps.TELEGRAM },
             )
             SetupSteps.MODEL -> OptionsStep(
                 selectedModel = selectedModel,
@@ -490,9 +493,10 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                 agentName = agentName,
                 onAgentNameChange = { agentName = it },
                 fieldColors = fieldColors,
-                onNext = { currentStep = SetupSteps.TELEGRAM },
-                onBack = { currentStep = SetupSteps.PROVIDER },
+                onNext = ::saveAndStart,
+                onBack = { if (!isStarting) currentStep = SetupSteps.PROVIDER },
                 provider = scannedProvider,
+                isStarting = isStarting,
             )
             SetupSteps.TELEGRAM -> TelegramStep(
                 botToken = botToken,
@@ -501,9 +505,8 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                 onOwnerIdChange = { ownerId = it; errorMessage = null },
                 botTokenError = botTokenError,
                 fieldColors = fieldColors,
-                onNext = ::saveAndStart,
-                onBack = { if (!isStarting) currentStep = SetupSteps.MODEL },
-                isStarting = isStarting,
+                onNext = { currentStep = SetupSteps.PROVIDER },
+                onBack = { currentStep = SetupSteps.WELCOME },
             )
             SetupSteps.SUCCESS -> SetupSuccessStep(
                 agentName = agentName.ifBlank { "SeekerClaw" },
@@ -1061,7 +1064,7 @@ private fun ProviderSetupStep(
             onBack = onBack,
             onNext = onNext,
             nextEnabled = apiKey.isNotBlank(),
-            currentStep = 0,
+            currentStep = 1,
         )
     }
 }
@@ -1076,7 +1079,6 @@ private fun TelegramStep(
     fieldColors: androidx.compose.material3.TextFieldColors,
     onNext: () -> Unit,
     onBack: () -> Unit,
-    isStarting: Boolean = false,
 ) {
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
 
@@ -1216,80 +1218,12 @@ private fun TelegramStep(
 
         Spacer(modifier = Modifier.height(SetupLayout.gapBeforeNav))
 
-        val uriHandler = LocalUriHandler.current
-        Column(modifier = Modifier.fillMaxWidth()) {
-            PageDots(
-                currentStep = 2,
-                totalSteps = 3,
-                modifier = Modifier.align(Alignment.CenterHorizontally),
-            )
-            Spacer(modifier = Modifier.height(SetupLayout.gapBeforeNav))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(SetupLayout.gapBetweenButtons),
-            ) {
-                Button(
-                    onClick = onBack,
-                    enabled = !isStarting,
-                    modifier = Modifier.weight(1f).height(Sizing.buttonSecondaryHeight),
-                    shape = shape,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = SeekerClawColors.Surface,
-                        contentColor = SeekerClawColors.TextPrimary,
-                    ),
-                    border = BorderStroke(Sizing.borderThin, SeekerClawColors.CardBorder),
-                ) {
-                    Text("Back", fontFamily = RethinkSans, fontSize = TypeScale.bodyMedium, fontWeight = FontWeight.Medium)
-                }
-                Button(
-                    onClick = onNext,
-                    enabled = botToken.isNotBlank() && !isStarting,
-                    modifier = Modifier.weight(1f).height(Sizing.buttonSecondaryHeight),
-                    shape = shape,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = SeekerClawColors.ActionPrimary,
-                        contentColor = OnboardingColors.onActionPrimary,
-                        disabledContainerColor = SeekerClawColors.ActionPrimary.copy(alpha = BrandAlpha.disabledSurface),
-                        disabledContentColor = OnboardingColors.onActionPrimary.copy(alpha = BrandAlpha.disabledContent),
-                    ),
-                ) {
-                    if (isStarting) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(Sizing.iconSm),
-                            color = OnboardingColors.onActionPrimary,
-                            strokeWidth = 2.dp,
-                        )
-                        Spacer(modifier = Modifier.width(Spacing.xs))
-                        Text("Starting\u2026", fontFamily = RethinkSans, fontSize = TypeScale.bodyMedium, fontWeight = FontWeight.Bold)
-                    } else {
-                        Text("Initialize Agent", fontFamily = RethinkSans, fontSize = TypeScale.bodyMedium, fontWeight = FontWeight.Bold)
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(SetupLayout.gapBeforeNav))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.Center,
-            ) {
-                TextButton(onClick = { uriHandler.openUri("https://seekerclaw.xyz/setup") }) {
-                    Icon(
-                        @Suppress("DEPRECATION") Icons.Default.HelpOutline,
-                        contentDescription = "Help",
-                        tint = SeekerClawColors.TextDim,
-                        modifier = Modifier.size(Sizing.iconSm),
-                    )
-                    Spacer(modifier = Modifier.width(Spacing.xs))
-                    Text(
-                        "Need help? Quick setup guide",
-                        fontFamily = RethinkSans,
-                        fontSize = TypeScale.bodySmall,
-                        color = SeekerClawColors.TextDim,
-                    )
-                }
-            }
-        }
+        NavButtons(
+            onBack = onBack,
+            onNext = onNext,
+            nextEnabled = botToken.isNotBlank(),
+            currentStep = 0,
+        )
     }
 }
 
@@ -1306,6 +1240,7 @@ private fun OptionsStep(
     onNext: () -> Unit,
     onBack: () -> Unit,
     provider: String = "claude",
+    isStarting: Boolean = false,
 ) {
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
 
@@ -1433,7 +1368,9 @@ private fun OptionsStep(
             onBack = onBack,
             onNext = onNext,
             nextEnabled = selectedModel.isNotBlank(),
-            currentStep = 1,
+            nextLabel = "Initialize Agent",
+            currentStep = 2,
+            isLoading = isStarting,
         )
     }
 }
@@ -1598,6 +1535,7 @@ private fun NavButtons(
     nextLabel: String = "Next",
     currentStep: Int = -1,
     totalSteps: Int = 3,
+    isLoading: Boolean = false,
 ) {
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
     val uriHandler = LocalUriHandler.current
@@ -1633,7 +1571,7 @@ private fun NavButtons(
 
             Button(
                 onClick = onNext,
-                enabled = nextEnabled,
+                enabled = nextEnabled && !isLoading,
                 modifier = Modifier
                     .weight(1f)
                     .height(Sizing.buttonSecondaryHeight),
@@ -1641,11 +1579,21 @@ private fun NavButtons(
                 colors = ButtonDefaults.buttonColors(
                     containerColor = SeekerClawColors.ActionPrimary,
                     contentColor = OnboardingColors.onActionPrimary,
-                    disabledContainerColor = SeekerClawColors.BorderSubtle,
-                    disabledContentColor = SeekerClawColors.TextDim,
+                    disabledContainerColor = SeekerClawColors.ActionPrimary.copy(alpha = BrandAlpha.disabledSurface),
+                    disabledContentColor = OnboardingColors.onActionPrimary.copy(alpha = BrandAlpha.disabledContent),
                 ),
             ) {
-                Text(nextLabel, fontFamily = RethinkSans, fontSize = TypeScale.bodyMedium, fontWeight = FontWeight.Bold)
+                if (isLoading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(Sizing.iconSm),
+                        color = OnboardingColors.onActionPrimary,
+                        strokeWidth = 2.dp,
+                    )
+                    Spacer(modifier = Modifier.width(Spacing.sm))
+                    Text("Starting\u2026", fontFamily = RethinkSans, fontSize = TypeScale.bodyMedium, fontWeight = FontWeight.Bold)
+                } else {
+                    Text(nextLabel, fontFamily = RethinkSans, fontSize = TypeScale.bodyMedium, fontWeight = FontWeight.Bold)
+                }
             }
         }
 
@@ -1676,9 +1624,9 @@ private fun NavButtons(
 }
 
 @Composable
-private fun StepTitle(line1: String, line2: String) {
+private fun StepTitle(title: String, tagline: String) {
     Text(
-        text = line1,
+        text = title,
         fontFamily = RethinkSans,
         fontSize = TypeScale.displayLarge,
         fontWeight = FontWeight.ExtraBold,
@@ -1686,14 +1634,14 @@ private fun StepTitle(line1: String, line2: String) {
         textAlign = TextAlign.Center,
         lineHeight = TypeScale.lineHeightDisplayLarge,
     )
+    Spacer(modifier = Modifier.height(Spacing.sm))
     Text(
-        text = line2,
+        text = tagline,
         fontFamily = RethinkSans,
-        fontSize = TypeScale.displaySmall,
-        fontWeight = FontWeight.ExtraBold,
-        color = SeekerClawColors.TextPrimary,
+        fontSize = TypeScale.bodyLarge,
+        color = SeekerClawColors.TextDim,
         textAlign = TextAlign.Center,
-        lineHeight = TypeScale.lineHeightDisplaySmall,
+        lineHeight = TypeScale.lineHeightBody,
     )
 }
 
