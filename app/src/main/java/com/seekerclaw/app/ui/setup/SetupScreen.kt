@@ -1372,41 +1372,21 @@ private fun SetupSuccessStep(
                 .verticalScroll(rememberScrollState()),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-        // Checkmark circle
-        Box(
-            modifier = Modifier
-                .size(80.dp)
-                .background(SeekerClawColors.ActionPrimary.copy(alpha = 0.15f), CircleShape),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                Icons.Rounded.Check,
-                contentDescription = "Success",
-                tint = SeekerClawColors.ActionPrimary,
-                modifier = Modifier.size(40.dp),
-            )
-        }
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        Text(
-            text = "You're all set!",
-            fontFamily = RethinkSans,
-            fontWeight = FontWeight.Bold,
-            fontSize = 22.sp,
-            color = SeekerClawColors.TextPrimary,
+        // Hero logo (smaller version of Welcome's claw)
+        Image(
+            painter = painterResource(R.drawable.ic_seekerclaw_symbol),
+            contentDescription = "SeekerClaw",
+            modifier = Modifier.size(96.dp),
         )
 
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(Spacing.xl))
 
-        Text(
-            text = "$agentName is starting up",
-            fontFamily = RethinkSans,
-            fontSize = 14.sp,
-            color = SeekerClawColors.TextDim,
+        StepTitle(
+            title = "You\u2019re all set!",
+            tagline = "$agentName is starting up",
         )
 
-        Spacer(modifier = Modifier.height(28.dp))
+        Spacer(modifier = Modifier.height(Spacing.xl))
 
         // Guidance cards
         Column(
