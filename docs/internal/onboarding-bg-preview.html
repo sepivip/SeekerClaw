@@ -1,0 +1,483 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>SeekerClaw — Background Effects Preview</title>
+<style>
+  :root {
+    --navy: #0A0E1A;
+    --navy2: #111827;
+    --crimson: #E41F28;
+    --crimson-bright: #EF4444;
+    --purple: #7C3AED;
+    --text: #FFFFFFDE;
+    --dim: #FFFFFF80;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #05070C;
+    color: var(--text);
+    font-family: -apple-system, system-ui, sans-serif;
+    padding: 24px;
+  }
+  h1 { font-size: 20px; margin-bottom: 4px; }
+  p.sub { color: var(--dim); margin-bottom: 24px; font-size: 13px; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 20px;
+  }
+  .phone {
+    aspect-ratio: 9 / 19.5;
+    border-radius: 36px;
+    overflow: hidden;
+    position: relative;
+    background: var(--navy);
+    border: 2px solid #222;
+    box-shadow: 0 20px 60px rgba(0,0,0,.6);
+  }
+  .phone .label {
+    position: absolute;
+    top: 12px; left: 0; right: 0;
+    text-align: center;
+    font-size: 11px;
+    color: var(--dim);
+    z-index: 20;
+    letter-spacing: .5px;
+    text-transform: uppercase;
+    font-weight: 600;
+  }
+  .bg { position: absolute; inset: 0; z-index: 0; }
+  .content {
+    position: absolute;
+    inset: 0;
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    padding: 90px 24px 40px;
+  }
+  .logo {
+    width: 140px; height: 140px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    margin-bottom: 20px;
+  }
+  .logo span {
+    font-size: 60px;
+    filter: drop-shadow(0 0 16px #E41F28);
+  }
+  .title {
+    font-weight: 700;
+    margin-bottom: 6px;
+    text-align: center;
+    line-height: 1.15;
+  }
+  .title .l1 { font-size: 25px; display: block; }
+  .title .l2 { font-size: 22px; display: block; }
+  .subtitle { font-size: 12px; color: var(--dim); text-align: center; margin-bottom: 20px; }
+  .btn-primary {
+    width: 85%;
+    padding: 13px;
+    border-radius: 12px;
+    background: #00C805;
+    color: white;
+    font-weight: 700;
+    text-align: center;
+    font-size: 13px;
+    margin-top: auto;
+  }
+
+  /* ============ EFFECT 1: Aurora blobs ============ */
+  .aurora {
+    background: #000000;
+    overflow: hidden;
+  }
+  .aurora .blob {
+    position: absolute;
+    border-radius: 50%;
+    left: 50%; top: 50%;
+    transform-origin: center center;
+  }
+  .aurora .blob.red1 {
+    width: 340px; height: 340px;
+    margin-left: -170px; margin-top: -170px;
+    background: #E41F28;
+    filter: blur(100px);
+    opacity: .40;
+    animation: orbit1 22s linear infinite;
+  }
+  .aurora .blob.red2 {
+    width: 300px; height: 300px;
+    margin-left: -150px; margin-top: -150px;
+    background: #E41F28;
+    filter: blur(95px);
+    opacity: .32;
+    animation: orbit2 28s linear infinite;
+  }
+  .aurora .blob.purple, .aurora .blob.cyan { display: none; }
+  @keyframes orbit1 {
+    from { transform: rotate(0deg) translate(180px) rotate(0deg); }
+    to   { transform: rotate(360deg) translate(180px) rotate(-360deg); }
+  }
+  @keyframes orbit2 {
+    from { transform: rotate(180deg) translate(220px) rotate(-180deg); }
+    to   { transform: rotate(540deg) translate(220px) rotate(-540deg); }
+  }
+  @keyframes orbit3 {
+    from { transform: rotate(90deg) translate(260px) rotate(-90deg); }
+    to   { transform: rotate(450deg) translate(260px) rotate(-450deg); }
+  }
+  @keyframes orbit4 {
+    from { transform: rotate(270deg) translate(200px) rotate(-270deg); }
+    to   { transform: rotate(-90deg) translate(200px) rotate(90deg); }
+  }
+
+  /* ============ EFFECT 2: Mesh gradient ============ */
+  .mesh {
+    background:
+      radial-gradient(at 20% 10%, #E41F2880 0%, transparent 40%),
+      radial-gradient(at 80% 20%, #7C3AED66 0%, transparent 45%),
+      radial-gradient(at 50% 90%, #1E3A8A80 0%, transparent 50%),
+      radial-gradient(at 10% 70%, #E41F2840 0%, transparent 35%),
+      var(--navy);
+  }
+
+  /* ============ EFFECT 3: Radial glow + noise ============ */
+  .radial {
+    background:
+      radial-gradient(circle at 50% 40%, #E41F2840 0%, transparent 55%),
+      var(--navy);
+    position: relative;
+  }
+  .radial::after {
+    content: '';
+    position: absolute; inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.4'/%3E%3C/svg%3E");
+    opacity: .15;
+    mix-blend-mode: overlay;
+  }
+
+  /* ============ EFFECT 4: Starfield ============ */
+  .starfield { background: var(--navy); }
+  .starfield canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+  /* ============ Aurora overlay options ============ */
+  .ov-grain::after {
+    content: ''; position: absolute; inset: 0; pointer-events: none;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E");
+    opacity: .18; mix-blend-mode: overlay;
+  }
+  .ov-pulse::before, .ov-pulse::after {
+    content: ''; position: absolute;
+    left: 50%; top: 50%;
+    width: 40px; height: 40px; margin: -20px 0 0 -20px;
+    border: 1.5px solid #E41F28;
+    border-radius: 50%;
+    opacity: 0;
+    animation: pulse 4s ease-out infinite;
+  }
+  .ov-pulse::after { animation-delay: 2s; }
+  @keyframes pulse {
+    0%   { transform: scale(0.5); opacity: .7; }
+    80%  { opacity: .1; }
+    100% { transform: scale(8); opacity: 0; }
+  }
+  .ov-grid::after {
+    content: ''; position: absolute; inset: 0; pointer-events: none;
+    background-image:
+      linear-gradient(rgba(228,31,40,0.08) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(228,31,40,0.08) 1px, transparent 1px);
+    background-size: 30px 30px;
+    mask-image: radial-gradient(circle at center, black 30%, transparent 80%);
+    -webkit-mask-image: radial-gradient(circle at center, black 30%, transparent 80%);
+  }
+  .ov-rays::after {
+    content: ''; position: absolute;
+    left: 50%; top: 50%; width: 800px; height: 800px;
+    margin: -400px 0 0 -400px;
+    background: conic-gradient(from 0deg,
+      transparent 0deg, rgba(228,31,40,0.06) 5deg, transparent 10deg,
+      transparent 40deg, rgba(228,31,40,0.06) 45deg, transparent 50deg,
+      transparent 80deg, rgba(228,31,40,0.06) 85deg, transparent 90deg,
+      transparent 120deg, rgba(228,31,40,0.06) 125deg, transparent 130deg,
+      transparent 160deg, rgba(228,31,40,0.06) 165deg, transparent 170deg,
+      transparent 200deg, rgba(228,31,40,0.06) 205deg, transparent 210deg,
+      transparent 240deg, rgba(228,31,40,0.06) 245deg, transparent 250deg,
+      transparent 280deg, rgba(228,31,40,0.06) 285deg, transparent 290deg,
+      transparent 320deg, rgba(228,31,40,0.06) 325deg, transparent 330deg,
+      transparent 360deg);
+    animation: spin 60s linear infinite;
+    pointer-events: none;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ============ EFFECT 5: Animated gradient wave ============ */
+  .wave {
+    background: linear-gradient(135deg, #0A0E1A, #1E1B4B, #7F1D1D, #0A0E1A);
+    background-size: 300% 300%;
+    animation: wave 12s ease infinite;
+  }
+  @keyframes wave {
+    0%, 100% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+  }
+</style>
+</head>
+<body>
+
+<h1>SeekerClaw — Onboarding Background Effects</h1>
+<p class="sub">5 battle-tested options. Each phone is a miniature preview of the Welcome screen. Tuned to DarkOps palette.</p>
+
+<div class="grid">
+
+  <div class="phone">
+    <div class="label">1. Aurora Blobs</div>
+    <div class="bg aurora"><div class="blob red1"></div><div class="blob red2"></div><div class="blob purple"></div><div class="blob cyan"></div></div>
+    <div class="content">
+      <div class="logo">
+        <svg viewBox="0 0 410 399" width="92" height="90" style="filter: drop-shadow(0 12px 16px rgba(0,0,0,0.675)) drop-shadow(0 4px 6px rgba(0,0,0,0.54));">
+          <path d="M219.318,0C178.899,46.7733 154.086,110.091 154.086,179.799C154.086,259.635 186.633,331.087 237.894,378.905C206.281,391.296 170.66,398.264 132.979,398.264C94.2752,398.264 57.7435,390.913 25.4972,377.884C9.19312,342.484 0,302.43 0,260.008C0,122.375 96.7311,9.6556 219.318,0Z" fill="#E41F28"/>
+          <path d="M406.388,108.033C371.669,159.18 316.931,199.535 249.598,217.577C170.935,238.655 91.9348,224.759 32.0299,185.889C28.3567,219.43 30.8777,255.389 40.562,291.532C50.9109,330.154 68.2382,364.505 90.1585,392.813C128.969,399.676 170.533,398.285 212.003,387.173C344.946,351.551 428.789,228.942 406.388,108.033Z" fill="#E41F28"/>
+          <path d="M35.8831,182.965C84.7979,208.869 134.312,207.831 155.072,203.777C155.728,211.719 156.709,219.557 157.997,227.277C91.5345,226.586 48.9657,197.564 35.8831,182.965Z" fill="#000000" fill-opacity="0.25"/>
+        </svg>
+      </div>
+      <div class="title"><span class="l1">EMPOWER YOUR</span><span class="l2">PHONE 🦞📲</span></div>
+      <div class="subtitle">3 steps and your AI assistant is live 24/7</div>
+      <div class="btn-primary">Get Started ↗</div>
+    </div>
+  </div>
+
+  <div class="phone">
+    <div class="label">2. Mesh Gradient</div>
+    <div class="bg mesh"></div>
+    <div class="content">
+      <div class="logo">
+        <svg viewBox="0 0 410 399" width="92" height="90" style="filter: drop-shadow(0 12px 16px rgba(0,0,0,0.675)) drop-shadow(0 4px 6px rgba(0,0,0,0.54));">
+          <path d="M219.318,0C178.899,46.7733 154.086,110.091 154.086,179.799C154.086,259.635 186.633,331.087 237.894,378.905C206.281,391.296 170.66,398.264 132.979,398.264C94.2752,398.264 57.7435,390.913 25.4972,377.884C9.19312,342.484 0,302.43 0,260.008C0,122.375 96.7311,9.6556 219.318,0Z" fill="#E41F28"/>
+          <path d="M406.388,108.033C371.669,159.18 316.931,199.535 249.598,217.577C170.935,238.655 91.9348,224.759 32.0299,185.889C28.3567,219.43 30.8777,255.389 40.562,291.532C50.9109,330.154 68.2382,364.505 90.1585,392.813C128.969,399.676 170.533,398.285 212.003,387.173C344.946,351.551 428.789,228.942 406.388,108.033Z" fill="#E41F28"/>
+          <path d="M35.8831,182.965C84.7979,208.869 134.312,207.831 155.072,203.777C155.728,211.719 156.709,219.557 157.997,227.277C91.5345,226.586 48.9657,197.564 35.8831,182.965Z" fill="#000000" fill-opacity="0.25"/>
+        </svg>
+      </div>
+      <div class="title"><span class="l1">EMPOWER YOUR</span><span class="l2">PHONE 🦞📲</span></div>
+      <div class="subtitle">3 steps and your AI assistant is live 24/7</div>
+      <div class="btn-primary">Get Started ↗</div>
+    </div>
+  </div>
+
+  <div class="phone">
+    <div class="label">3. Radial Glow + Noise</div>
+    <div class="bg radial"></div>
+    <div class="content">
+      <div class="logo">
+        <svg viewBox="0 0 410 399" width="92" height="90" style="filter: drop-shadow(0 12px 16px rgba(0,0,0,0.675)) drop-shadow(0 4px 6px rgba(0,0,0,0.54));">
+          <path d="M219.318,0C178.899,46.7733 154.086,110.091 154.086,179.799C154.086,259.635 186.633,331.087 237.894,378.905C206.281,391.296 170.66,398.264 132.979,398.264C94.2752,398.264 57.7435,390.913 25.4972,377.884C9.19312,342.484 0,302.43 0,260.008C0,122.375 96.7311,9.6556 219.318,0Z" fill="#E41F28"/>
+          <path d="M406.388,108.033C371.669,159.18 316.931,199.535 249.598,217.577C170.935,238.655 91.9348,224.759 32.0299,185.889C28.3567,219.43 30.8777,255.389 40.562,291.532C50.9109,330.154 68.2382,364.505 90.1585,392.813C128.969,399.676 170.533,398.285 212.003,387.173C344.946,351.551 428.789,228.942 406.388,108.033Z" fill="#E41F28"/>
+          <path d="M35.8831,182.965C84.7979,208.869 134.312,207.831 155.072,203.777C155.728,211.719 156.709,219.557 157.997,227.277C91.5345,226.586 48.9657,197.564 35.8831,182.965Z" fill="#000000" fill-opacity="0.25"/>
+        </svg>
+      </div>
+      <div class="title"><span class="l1">EMPOWER YOUR</span><span class="l2">PHONE 🦞📲</span></div>
+      <div class="subtitle">3 steps and your AI assistant is live 24/7</div>
+      <div class="btn-primary">Get Started ↗</div>
+    </div>
+  </div>
+
+  <div class="phone">
+    <div class="label">4. Starfield</div>
+    <div class="bg starfield"><canvas id="stars"></canvas></div>
+    <div class="content">
+      <div class="logo">
+        <svg viewBox="0 0 410 399" width="92" height="90" style="filter: drop-shadow(0 12px 16px rgba(0,0,0,0.675)) drop-shadow(0 4px 6px rgba(0,0,0,0.54));">
+          <path d="M219.318,0C178.899,46.7733 154.086,110.091 154.086,179.799C154.086,259.635 186.633,331.087 237.894,378.905C206.281,391.296 170.66,398.264 132.979,398.264C94.2752,398.264 57.7435,390.913 25.4972,377.884C9.19312,342.484 0,302.43 0,260.008C0,122.375 96.7311,9.6556 219.318,0Z" fill="#E41F28"/>
+          <path d="M406.388,108.033C371.669,159.18 316.931,199.535 249.598,217.577C170.935,238.655 91.9348,224.759 32.0299,185.889C28.3567,219.43 30.8777,255.389 40.562,291.532C50.9109,330.154 68.2382,364.505 90.1585,392.813C128.969,399.676 170.533,398.285 212.003,387.173C344.946,351.551 428.789,228.942 406.388,108.033Z" fill="#E41F28"/>
+          <path d="M35.8831,182.965C84.7979,208.869 134.312,207.831 155.072,203.777C155.728,211.719 156.709,219.557 157.997,227.277C91.5345,226.586 48.9657,197.564 35.8831,182.965Z" fill="#000000" fill-opacity="0.25"/>
+        </svg>
+      </div>
+      <div class="title"><span class="l1">EMPOWER YOUR</span><span class="l2">PHONE 🦞📲</span></div>
+      <div class="subtitle">3 steps and your AI assistant is live 24/7</div>
+      <div class="btn-primary">Get Started ↗</div>
+    </div>
+  </div>
+
+  <!-- Overlay options: the aurora bg stays the same, only the overlay changes -->
+  <!-- A. Grain -->
+  <div class="phone">
+    <div class="label">A. Aurora + Grain</div>
+    <div class="bg aurora ov-grain"><div class="blob red1"></div><div class="blob red2"></div></div>
+    <div class="content">
+      <div class="logo">
+        <svg viewBox="0 0 410 399" width="92" height="90" style="filter: drop-shadow(0 12px 16px rgba(0,0,0,0.675)) drop-shadow(0 4px 6px rgba(0,0,0,0.54));">
+          <path d="M219.318,0C178.899,46.7733 154.086,110.091 154.086,179.799C154.086,259.635 186.633,331.087 237.894,378.905C206.281,391.296 170.66,398.264 132.979,398.264C94.2752,398.264 57.7435,390.913 25.4972,377.884C9.19312,342.484 0,302.43 0,260.008C0,122.375 96.7311,9.6556 219.318,0Z" fill="#E41F28"/>
+          <path d="M406.388,108.033C371.669,159.18 316.931,199.535 249.598,217.577C170.935,238.655 91.9348,224.759 32.0299,185.889C28.3567,219.43 30.8777,255.389 40.562,291.532C50.9109,330.154 68.2382,364.505 90.1585,392.813C128.969,399.676 170.533,398.285 212.003,387.173C344.946,351.551 428.789,228.942 406.388,108.033Z" fill="#E41F28"/>
+          <path d="M35.8831,182.965C84.7979,208.869 134.312,207.831 155.072,203.777C155.728,211.719 156.709,219.557 157.997,227.277C91.5345,226.586 48.9657,197.564 35.8831,182.965Z" fill="#000000" fill-opacity="0.25"/>
+        </svg>
+      </div>
+      <div class="title"><span class="l1">EMPOWER YOUR</span><span class="l2">PHONE 🦞📲</span></div>
+      <div class="subtitle">3 steps and your AI assistant is live 24/7</div>
+      <div class="btn-primary">Get Started ↗</div>
+    </div>
+  </div>
+
+  <!-- B. Pulse Rings -->
+  <div class="phone">
+    <div class="label">B. Aurora + Pulse Rings</div>
+    <div class="bg aurora ov-pulse"><div class="blob red1"></div><div class="blob red2"></div></div>
+    <div class="content">
+      <div class="logo">
+        <svg viewBox="0 0 410 399" width="92" height="90" style="filter: drop-shadow(0 12px 16px rgba(0,0,0,0.675)) drop-shadow(0 4px 6px rgba(0,0,0,0.54));">
+          <path d="M219.318,0C178.899,46.7733 154.086,110.091 154.086,179.799C154.086,259.635 186.633,331.087 237.894,378.905C206.281,391.296 170.66,398.264 132.979,398.264C94.2752,398.264 57.7435,390.913 25.4972,377.884C9.19312,342.484 0,302.43 0,260.008C0,122.375 96.7311,9.6556 219.318,0Z" fill="#E41F28"/>
+          <path d="M406.388,108.033C371.669,159.18 316.931,199.535 249.598,217.577C170.935,238.655 91.9348,224.759 32.0299,185.889C28.3567,219.43 30.8777,255.389 40.562,291.532C50.9109,330.154 68.2382,364.505 90.1585,392.813C128.969,399.676 170.533,398.285 212.003,387.173C344.946,351.551 428.789,228.942 406.388,108.033Z" fill="#E41F28"/>
+          <path d="M35.8831,182.965C84.7979,208.869 134.312,207.831 155.072,203.777C155.728,211.719 156.709,219.557 157.997,227.277C91.5345,226.586 48.9657,197.564 35.8831,182.965Z" fill="#000000" fill-opacity="0.25"/>
+        </svg>
+      </div>
+      <div class="title"><span class="l1">EMPOWER YOUR</span><span class="l2">PHONE 🦞📲</span></div>
+      <div class="subtitle">3 steps and your AI assistant is live 24/7</div>
+      <div class="btn-primary">Get Started ↗</div>
+    </div>
+  </div>
+
+  <!-- C. Floating Particles -->
+  <div class="phone">
+    <div class="label">C. Aurora + Floating Particles</div>
+    <div class="bg aurora"><div class="blob red1"></div><div class="blob red2"></div></div>
+    <canvas class="particles-canvas" style="position:absolute;inset:0;width:100%;height:100%;z-index:5;"></canvas>
+    <div class="content">
+      <div class="logo">
+        <svg viewBox="0 0 410 399" width="92" height="90" style="filter: drop-shadow(0 12px 16px rgba(0,0,0,0.675)) drop-shadow(0 4px 6px rgba(0,0,0,0.54));">
+          <path d="M219.318,0C178.899,46.7733 154.086,110.091 154.086,179.799C154.086,259.635 186.633,331.087 237.894,378.905C206.281,391.296 170.66,398.264 132.979,398.264C94.2752,398.264 57.7435,390.913 25.4972,377.884C9.19312,342.484 0,302.43 0,260.008C0,122.375 96.7311,9.6556 219.318,0Z" fill="#E41F28"/>
+          <path d="M406.388,108.033C371.669,159.18 316.931,199.535 249.598,217.577C170.935,238.655 91.9348,224.759 32.0299,185.889C28.3567,219.43 30.8777,255.389 40.562,291.532C50.9109,330.154 68.2382,364.505 90.1585,392.813C128.969,399.676 170.533,398.285 212.003,387.173C344.946,351.551 428.789,228.942 406.388,108.033Z" fill="#E41F28"/>
+          <path d="M35.8831,182.965C84.7979,208.869 134.312,207.831 155.072,203.777C155.728,211.719 156.709,219.557 157.997,227.277C91.5345,226.586 48.9657,197.564 35.8831,182.965Z" fill="#000000" fill-opacity="0.25"/>
+        </svg>
+      </div>
+      <div class="title"><span class="l1">EMPOWER YOUR</span><span class="l2">PHONE 🦞📲</span></div>
+      <div class="subtitle">3 steps and your AI assistant is live 24/7</div>
+      <div class="btn-primary">Get Started ↗</div>
+    </div>
+  </div>
+
+  <!-- D. Grid Lines -->
+  <div class="phone">
+    <div class="label">D. Aurora + Grid Lines</div>
+    <div class="bg aurora ov-grid"><div class="blob red1"></div><div class="blob red2"></div></div>
+    <div class="content">
+      <div class="logo">
+        <svg viewBox="0 0 410 399" width="92" height="90" style="filter: drop-shadow(0 12px 16px rgba(0,0,0,0.675)) drop-shadow(0 4px 6px rgba(0,0,0,0.54));">
+          <path d="M219.318,0C178.899,46.7733 154.086,110.091 154.086,179.799C154.086,259.635 186.633,331.087 237.894,378.905C206.281,391.296 170.66,398.264 132.979,398.264C94.2752,398.264 57.7435,390.913 25.4972,377.884C9.19312,342.484 0,302.43 0,260.008C0,122.375 96.7311,9.6556 219.318,0Z" fill="#E41F28"/>
+          <path d="M406.388,108.033C371.669,159.18 316.931,199.535 249.598,217.577C170.935,238.655 91.9348,224.759 32.0299,185.889C28.3567,219.43 30.8777,255.389 40.562,291.532C50.9109,330.154 68.2382,364.505 90.1585,392.813C128.969,399.676 170.533,398.285 212.003,387.173C344.946,351.551 428.789,228.942 406.388,108.033Z" fill="#E41F28"/>
+          <path d="M35.8831,182.965C84.7979,208.869 134.312,207.831 155.072,203.777C155.728,211.719 156.709,219.557 157.997,227.277C91.5345,226.586 48.9657,197.564 35.8831,182.965Z" fill="#000000" fill-opacity="0.25"/>
+        </svg>
+      </div>
+      <div class="title"><span class="l1">EMPOWER YOUR</span><span class="l2">PHONE 🦞📲</span></div>
+      <div class="subtitle">3 steps and your AI assistant is live 24/7</div>
+      <div class="btn-primary">Get Started ↗</div>
+    </div>
+  </div>
+
+  <!-- E. Radial Rays -->
+  <div class="phone">
+    <div class="label">E. Aurora + Radial Rays</div>
+    <div class="bg aurora ov-rays"><div class="blob red1"></div><div class="blob red2"></div></div>
+    <div class="content">
+      <div class="logo">
+        <svg viewBox="0 0 410 399" width="92" height="90" style="filter: drop-shadow(0 12px 16px rgba(0,0,0,0.675)) drop-shadow(0 4px 6px rgba(0,0,0,0.54));">
+          <path d="M219.318,0C178.899,46.7733 154.086,110.091 154.086,179.799C154.086,259.635 186.633,331.087 237.894,378.905C206.281,391.296 170.66,398.264 132.979,398.264C94.2752,398.264 57.7435,390.913 25.4972,377.884C9.19312,342.484 0,302.43 0,260.008C0,122.375 96.7311,9.6556 219.318,0Z" fill="#E41F28"/>
+          <path d="M406.388,108.033C371.669,159.18 316.931,199.535 249.598,217.577C170.935,238.655 91.9348,224.759 32.0299,185.889C28.3567,219.43 30.8777,255.389 40.562,291.532C50.9109,330.154 68.2382,364.505 90.1585,392.813C128.969,399.676 170.533,398.285 212.003,387.173C344.946,351.551 428.789,228.942 406.388,108.033Z" fill="#E41F28"/>
+          <path d="M35.8831,182.965C84.7979,208.869 134.312,207.831 155.072,203.777C155.728,211.719 156.709,219.557 157.997,227.277C91.5345,226.586 48.9657,197.564 35.8831,182.965Z" fill="#000000" fill-opacity="0.25"/>
+        </svg>
+      </div>
+      <div class="title"><span class="l1">EMPOWER YOUR</span><span class="l2">PHONE 🦞📲</span></div>
+      <div class="subtitle">3 steps and your AI assistant is live 24/7</div>
+      <div class="btn-primary">Get Started ↗</div>
+    </div>
+  </div>
+
+  <div class="phone">
+    <div class="label">5. Animated Wave</div>
+    <div class="bg wave"></div>
+    <div class="content">
+      <div class="logo">
+        <svg viewBox="0 0 410 399" width="92" height="90" style="filter: drop-shadow(0 12px 16px rgba(0,0,0,0.675)) drop-shadow(0 4px 6px rgba(0,0,0,0.54));">
+          <path d="M219.318,0C178.899,46.7733 154.086,110.091 154.086,179.799C154.086,259.635 186.633,331.087 237.894,378.905C206.281,391.296 170.66,398.264 132.979,398.264C94.2752,398.264 57.7435,390.913 25.4972,377.884C9.19312,342.484 0,302.43 0,260.008C0,122.375 96.7311,9.6556 219.318,0Z" fill="#E41F28"/>
+          <path d="M406.388,108.033C371.669,159.18 316.931,199.535 249.598,217.577C170.935,238.655 91.9348,224.759 32.0299,185.889C28.3567,219.43 30.8777,255.389 40.562,291.532C50.9109,330.154 68.2382,364.505 90.1585,392.813C128.969,399.676 170.533,398.285 212.003,387.173C344.946,351.551 428.789,228.942 406.388,108.033Z" fill="#E41F28"/>
+          <path d="M35.8831,182.965C84.7979,208.869 134.312,207.831 155.072,203.777C155.728,211.719 156.709,219.557 157.997,227.277C91.5345,226.586 48.9657,197.564 35.8831,182.965Z" fill="#000000" fill-opacity="0.25"/>
+        </svg>
+      </div>
+      <div class="title"><span class="l1">EMPOWER YOUR</span><span class="l2">PHONE 🦞📲</span></div>
+      <div class="subtitle">3 steps and your AI assistant is live 24/7</div>
+      <div class="btn-primary">Get Started ↗</div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// Simple starfield
+const canvas = document.getElementById('stars');
+const ctx = canvas.getContext('2d');
+function resize() {
+  canvas.width = canvas.offsetWidth * 2;
+  canvas.height = canvas.offsetHeight * 2;
+}
+resize();
+window.addEventListener('resize', resize);
+const stars = Array.from({length: 80}, () => ({
+  x: Math.random() * canvas.width,
+  y: Math.random() * canvas.height,
+  r: Math.random() * 1.8 + 0.3,
+  s: Math.random() * 0.3 + 0.05,
+  o: Math.random()
+}));
+function draw() {
+  ctx.fillStyle = '#0A0E1A';
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+  for (const s of stars) {
+    s.y += s.s;
+    s.o += 0.01;
+    if (s.y > canvas.height) s.y = 0;
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, s.r, 0, Math.PI*2);
+    ctx.fillStyle = `rgba(255,255,255,${0.3 + Math.abs(Math.sin(s.o))*0.5})`;
+    ctx.fill();
+  }
+  requestAnimationFrame(draw);
+}
+draw();
+
+// Floating particles (slow-drifting dots)
+document.querySelectorAll('.particles-canvas').forEach(pcanvas => {
+  const pctx = pcanvas.getContext('2d');
+  function psize() {
+    pcanvas.width = pcanvas.offsetWidth * 2;
+    pcanvas.height = pcanvas.offsetHeight * 2;
+  }
+  psize();
+  window.addEventListener('resize', psize);
+  const particles = Array.from({length: 40}, () => ({
+    x: Math.random() * pcanvas.width,
+    y: Math.random() * pcanvas.height,
+    r: Math.random() * 1.6 + 0.4,
+    vx: (Math.random() - 0.5) * 0.25,
+    vy: (Math.random() - 0.5) * 0.25,
+    o: Math.random() * Math.PI * 2,
+  }));
+  function pdraw() {
+    pctx.clearRect(0,0,pcanvas.width,pcanvas.height);
+    for (const p of particles) {
+      p.x += p.vx; p.y += p.vy; p.o += 0.015;
+      if (p.x < 0) p.x = pcanvas.width;
+      if (p.x > pcanvas.width) p.x = 0;
+      if (p.y < 0) p.y = pcanvas.height;
+      if (p.y > pcanvas.height) p.y = 0;
+      pctx.beginPath();
+      pctx.arc(p.x, p.y, p.r, 0, Math.PI*2);
+      pctx.fillStyle = `rgba(255,255,255,${0.25 + Math.abs(Math.sin(p.o))*0.45})`;
+      pctx.fill();
+    }
+    requestAnimationFrame(pdraw);
+  }
+  pdraw();
+});
+</script>
+
+</body>
+</html>

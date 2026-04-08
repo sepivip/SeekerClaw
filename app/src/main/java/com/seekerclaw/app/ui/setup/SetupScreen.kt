@@ -9,6 +9,12 @@ import com.seekerclaw.app.util.LogLevel
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -24,6 +30,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -69,9 +78,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
@@ -99,6 +110,9 @@ import com.seekerclaw.app.util.Analytics
 import kotlinx.coroutines.launch
 import com.seekerclaw.app.ui.components.SetupStepIndicator
 import com.seekerclaw.app.ui.components.dotMatrix
+import kotlin.math.cos
+import kotlin.math.roundToInt
+import kotlin.math.sin
 import com.seekerclaw.app.ui.theme.SeekerClawColors
 
 private object SetupSteps {
@@ -336,7 +350,21 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             .background(SeekerClawColors.Background)
     }
 
-    Column(
+    if (currentStep == SetupSteps.WELCOME) {
+        WelcomeStep(
+            onNext = { currentStep = SetupSteps.PROVIDER },
+            onSkip = {
+                ConfigManager.markSetupSkipped(context)
+                onSetupComplete()
+            },
+            onScanQr = {
+                Analytics.featureUsed("qr_scan_setup")
+                qrScanLauncher.launch(Intent(context, QrScannerActivity::class.java))
+            },
+            isQrImporting = isQrImporting,
+            qrError = qrError,
+        )
+    } else Column(
         modifier = bgModifier
             .padding(24.dp)
             .verticalScroll(scrollState),
@@ -395,19 +423,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
         }
 
         when (currentStep) {
-            SetupSteps.WELCOME -> WelcomeStep(
-                onNext = { currentStep = SetupSteps.PROVIDER },
-                onSkip = {
-                    ConfigManager.markSetupSkipped(context)
-                    onSetupComplete()
-                },
-                onScanQr = {
-                    Analytics.featureUsed("qr_scan_setup")
-                    qrScanLauncher.launch(Intent(context, QrScannerActivity::class.java))
-                },
-                isQrImporting = isQrImporting,
-                qrError = qrError,
-            )
+            SetupSteps.WELCOME -> Unit // handled by full-bleed branch above
             SetupSteps.PROVIDER -> ProviderSetupStep(
                 provider = scannedProvider,
                 onProviderChange = { newProvider ->
@@ -547,60 +563,73 @@ private fun WelcomeStep(
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
     val uriHandler = LocalUriHandler.current
 
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalAlignment = Alignment.CenterHorizontally,
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black),
     ) {
-        Spacer(modifier = Modifier.height(32.dp))
+        AuroraGridBackground(modifier = Modifier.fillMaxSize())
 
-        // Hero: glowing claw symbol
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 24.dp)
+                .padding(top = 72.dp, bottom = 32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+
+        // Hero: claw symbol with drop shadow
         Box(
             modifier = Modifier.size(240.dp),
             contentAlignment = Alignment.Center,
         ) {
-            // Red radial glow
-            Box(
+            // Shadow layer: tinted + blurred + offset down
+            Image(
+                painter = painterResource(R.drawable.ic_seekerclaw_symbol),
+                contentDescription = null,
+                colorFilter = ColorFilter.tint(Color.Black.copy(alpha = 0.675f)),
                 modifier = Modifier
-                    .size(240.dp)
-                    .background(
-                        brush = Brush.radialGradient(
-                            colors = listOf(
-                                SeekerClawColors.Error.copy(alpha = 0.35f),
-                                SeekerClawColors.Error.copy(alpha = 0.12f),
-                                Color.Transparent,
-                            ),
-                        ),
-                        shape = CircleShape,
-                    ),
+                    .size(184.dp)
+                    .offset(y = 10.dp)
+                    .blur(20.dp),
             )
             Image(
                 painter = painterResource(R.drawable.ic_seekerclaw_symbol),
                 contentDescription = "SeekerClaw",
-                modifier = Modifier.size(160.dp),
+                modifier = Modifier.size(184.dp),
             )
         }
 
         Spacer(modifier = Modifier.height(40.dp))
 
         Text(
-            text = "Empower Your Phone",
+            text = "EMPOWER YOUR",
+            fontSize = 31.sp,
+            fontWeight = FontWeight.Bold,
+            color = SeekerClawColors.TextPrimary,
+            textAlign = TextAlign.Center,
+            lineHeight = 36.sp,
+        )
+        Text(
+            text = "PHONE \uD83E\uDD9E\uD83D\uDCF2",
             fontSize = 28.sp,
             fontWeight = FontWeight.Bold,
             color = SeekerClawColors.TextPrimary,
             textAlign = TextAlign.Center,
+            lineHeight = 32.sp,
         )
 
         Spacer(modifier = Modifier.height(10.dp))
 
         Text(
-            text = "Your personal AI agent, running locally 24/7.",
+            text = "3 steps and your AI assistant is live 24/7",
             fontSize = 15.sp,
             color = SeekerClawColors.TextDim,
             textAlign = TextAlign.Center,
             lineHeight = 22.sp,
         )
 
-        Spacer(modifier = Modifier.height(40.dp))
+        Spacer(modifier = Modifier.weight(1f))
 
         // Primary CTA: Get Started
         Button(
@@ -711,11 +740,92 @@ private fun WelcomeStep(
             )
         }
 
-        TextButton(onClick = onSkip) {
-            Text(
-                "Skip",
-                fontSize = 13.sp,
-                color = SeekerClawColors.TextDim,
+            TextButton(onClick = onSkip) {
+                Text(
+                    "Skip",
+                    fontSize = 13.sp,
+                    color = SeekerClawColors.TextDim,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AuroraGridBackground(modifier: Modifier = Modifier) {
+    val infinite = rememberInfiniteTransition(label = "aurora")
+    val angle1 by infinite.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 22000, easing = LinearEasing),
+        ),
+        label = "angle1",
+    )
+    val angle2 by infinite.animateFloat(
+        initialValue = 180f,
+        targetValue = 540f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 28000, easing = LinearEasing),
+        ),
+        label = "angle2",
+    )
+
+    val red = SeekerClawColors.Primary
+
+    Box(modifier = modifier.background(Color.Black)) {
+        // Blob 1
+        Box(
+            modifier = Modifier
+                .align(Alignment.Center)
+                .offset {
+                    val rad = Math.toRadians(angle1.toDouble())
+                    IntOffset(
+                        (cos(rad) * 180.dp.toPx()).roundToInt(),
+                        (sin(rad) * 180.dp.toPx()).roundToInt(),
+                    )
+                }
+                .size(340.dp)
+                .blur(100.dp)
+                .background(red.copy(alpha = 0.40f), CircleShape),
+        )
+        // Blob 2
+        Box(
+            modifier = Modifier
+                .align(Alignment.Center)
+                .offset {
+                    val rad = Math.toRadians(angle2.toDouble())
+                    IntOffset(
+                        (cos(rad) * 220.dp.toPx()).roundToInt(),
+                        (sin(rad) * 220.dp.toPx()).roundToInt(),
+                    )
+                }
+                .size(300.dp)
+                .blur(95.dp)
+                .background(red.copy(alpha = 0.32f), CircleShape),
+        )
+
+        // Grid lines with radial fade mask (via overlay)
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val spacing = 30.dp.toPx()
+            val lineColor = red.copy(alpha = 0.08f)
+            var x = 0f
+            while (x < size.width) {
+                drawLine(lineColor, Offset(x, 0f), Offset(x, size.height), 1f)
+                x += spacing
+            }
+            var y = 0f
+            while (y < size.height) {
+                drawLine(lineColor, Offset(0f, y), Offset(size.width, y), 1f)
+                y += spacing
+            }
+            // Radial mask: transparent center → black edges (fades grid + blobs at edges)
+            drawRect(
+                brush = Brush.radialGradient(
+                    colors = listOf(Color.Transparent, Color.Black),
+                    center = Offset(size.width / 2f, size.height / 2f),
+                    radius = size.minDimension * 0.75f,
+                ),
             )
         }
     }
