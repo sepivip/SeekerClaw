@@ -114,6 +114,7 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 import com.seekerclaw.app.ui.components.ActionResult
+import com.seekerclaw.app.ui.components.CardSurface
 import com.seekerclaw.app.ui.components.MorphActionButton
 import com.seekerclaw.app.ui.components.SetupStepIndicator
 import com.seekerclaw.app.ui.components.dotMatrix
@@ -903,7 +904,7 @@ private fun ProviderSetupStep(
 
         Spacer(modifier = Modifier.height(10.dp))
 
-        SetupCard {
+        CardSurface {
             Column(modifier = Modifier.selectableGroup()) {
                 availableProviders.forEachIndexed { index, p ->
                     val isSelected = p.id == provider
@@ -949,7 +950,7 @@ private fun ProviderSetupStep(
 
         Spacer(modifier = Modifier.height(10.dp))
 
-        SetupCard {
+        CardSurface {
             // Auth type toggle — Claude only
             if (provider == "claude") {
                 Row(
@@ -1142,7 +1143,7 @@ private fun TelegramStep(
 
         Spacer(modifier = Modifier.height(10.dp))
 
-        SetupCard {
+        CardSurface {
             // Bot token
             Text(
                 text = "Bot Token",
@@ -1308,7 +1309,7 @@ private fun OptionsStep(
 
         Spacer(modifier = Modifier.height(10.dp))
 
-        SetupCard {
+        CardSurface {
             // Model
             Text(
                 text = "AI Model",
@@ -1454,7 +1455,7 @@ private fun SetupSuccessStep(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             // Step 1: Find bot on Telegram
-            SetupCard {
+            CardSurface {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
                         modifier = Modifier
@@ -1492,7 +1493,7 @@ private fun SetupSuccessStep(
             }
 
             // Step 2: Chat
-            SetupCard {
+            CardSurface {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
                         modifier = Modifier
@@ -1698,22 +1699,6 @@ private fun PageDots(
 // ============================================================================
 // SHARED COMPOSABLES — Card wrapper, requirement row, section label
 // ============================================================================
-
-@Composable
-private fun SetupCard(
-    modifier: Modifier = Modifier,
-    content: @Composable ColumnScope.() -> Unit,
-) {
-    val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .background(SeekerClawColors.Surface, shape)
-            .border(1.dp, SeekerClawColors.CardBorder, shape)
-            .padding(16.dp),
-        content = content,
-    )
-}
 
 @Composable
 private fun RequirementRow(
