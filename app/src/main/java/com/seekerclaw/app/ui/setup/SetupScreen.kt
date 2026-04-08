@@ -69,6 +69,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.painterResource
@@ -341,7 +342,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             .verticalScroll(scrollState),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        if (currentStep < SetupSteps.SUCCESS) {
+        if (currentStep > SetupSteps.WELCOME && currentStep < SetupSteps.SUCCESS) {
             // Header row: logo left, skip right
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -354,7 +355,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                     modifier = Modifier.height(36.dp),
                 )
                 Text(
-                    text = "Set up later",
+                    text = "Skip",
                     fontFamily = RethinkSans,
                     fontSize = 13.sp,
                     color = SeekerClawColors.TextDim,
@@ -367,21 +368,12 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                 )
             }
 
-            Spacer(modifier = Modifier.height(4.dp))
-
-            Text(
-                text = "Your personal AI agent, running on your phone",
-                fontSize = 13.sp,
-                color = SeekerClawColors.TextDim,
-                modifier = Modifier.fillMaxWidth(),
-            )
-
             Spacer(modifier = Modifier.height(24.dp))
 
-            // Step indicator
+            // Step indicator (Welcome is not a step — 3 real steps)
             SetupStepIndicator(
-                currentStep = currentStep,
-                labels = listOf("Welcome", "AI Provider", "Model", "Telegram"),
+                currentStep = currentStep - 1,
+                labels = listOf("AI Provider", "Model", "Telegram"),
             )
 
             Spacer(modifier = Modifier.height(24.dp))
@@ -405,6 +397,10 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
         when (currentStep) {
             SetupSteps.WELCOME -> WelcomeStep(
                 onNext = { currentStep = SetupSteps.PROVIDER },
+                onSkip = {
+                    ConfigManager.markSetupSkipped(context)
+                    onSetupComplete()
+                },
                 onScanQr = {
                     Analytics.featureUsed("qr_scan_setup")
                     qrScanLauncher.launch(Intent(context, QrScannerActivity::class.java))
@@ -543,6 +539,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
 @Composable
 private fun WelcomeStep(
     onNext: () -> Unit,
+    onSkip: () -> Unit,
     onScanQr: () -> Unit = {},
     isQrImporting: Boolean = false,
     qrError: String? = null,
@@ -554,82 +551,134 @@ private fun WelcomeStep(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text(
-            text = "SeekerClaw turns your phone into a 24/7 personal AI agent. " +
-                   "To get started, you\u2019ll need:",
-            fontSize = 14.sp,
-            color = SeekerClawColors.TextPrimary,
-            lineHeight = 22.sp,
-        )
+        Spacer(modifier = Modifier.height(32.dp))
 
-        Spacer(modifier = Modifier.height(20.dp))
-
-        // Requirements card
-        SetupCard {
-            RequirementRow(
-                icon = Icons.Default.Key,
-                title = "API Credential",
-                subtitle = "From Claude, OpenAI, or OpenRouter",
+        // Hero: glowing claw symbol
+        Box(
+            modifier = Modifier.size(240.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            // Red radial glow
+            Box(
+                modifier = Modifier
+                    .size(240.dp)
+                    .background(
+                        brush = Brush.radialGradient(
+                            colors = listOf(
+                                SeekerClawColors.Error.copy(alpha = 0.35f),
+                                SeekerClawColors.Error.copy(alpha = 0.12f),
+                                Color.Transparent,
+                            ),
+                        ),
+                        shape = CircleShape,
+                    ),
             )
-            HorizontalDivider(
-                color = SeekerClawColors.CardBorder,
-                modifier = Modifier.padding(vertical = 14.dp),
-            )
-            RequirementRow(
-                icon = Icons.Default.SmartToy,
-                title = "Telegram Bot",
-                subtitle = "Create one via @BotFather in Telegram",
-            )
-            HorizontalDivider(
-                color = SeekerClawColors.CardBorder,
-                modifier = Modifier.padding(vertical = 14.dp),
-            )
-            RequirementRow(
-                icon = Icons.Default.Person,
-                title = "Your Telegram User ID",
-                subtitle = "Optional \u2014 can be auto-detected",
+            Image(
+                painter = painterResource(R.drawable.ic_seekerclaw_symbol),
+                contentDescription = "SeekerClaw",
+                modifier = Modifier.size(160.dp),
             )
         }
 
-        Spacer(modifier = Modifier.height(48.dp))
+        Spacer(modifier = Modifier.height(40.dp))
 
-        // QR scan button
+        Text(
+            text = "Empower Your Phone",
+            fontSize = 28.sp,
+            fontWeight = FontWeight.Bold,
+            color = SeekerClawColors.TextPrimary,
+            textAlign = TextAlign.Center,
+        )
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        Text(
+            text = "Your personal AI agent, running locally 24/7.",
+            fontSize = 15.sp,
+            color = SeekerClawColors.TextDim,
+            textAlign = TextAlign.Center,
+            lineHeight = 22.sp,
+        )
+
+        Spacer(modifier = Modifier.height(40.dp))
+
+        // Primary CTA: Get Started
         Button(
-            onClick = onScanQr,
-            enabled = !isQrImporting,
+            onClick = onNext,
             modifier = Modifier
                 .fillMaxWidth()
-                .height(52.dp),
+                .height(56.dp),
             shape = shape,
             colors = ButtonDefaults.buttonColors(
                 containerColor = SeekerClawColors.ActionPrimary,
                 contentColor = Color.White,
             ),
         ) {
-            if (isQrImporting) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(16.dp),
-                    strokeWidth = 2.dp,
-                    color = Color.White,
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    "Importing\u2026",
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                )
-            } else {
+            Text(
+                "Get Started",
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("\u2197", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Secondary row: Scan Config + Setup Guide
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Button(
+                onClick = onScanQr,
+                enabled = !isQrImporting,
+                modifier = Modifier
+                    .weight(1f)
+                    .height(52.dp),
+                shape = shape,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = SeekerClawColors.Surface,
+                    contentColor = SeekerClawColors.TextPrimary,
+                ),
+                border = BorderStroke(1.dp, SeekerClawColors.CardBorder),
+            ) {
+                if (isQrImporting) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp,
+                        color = SeekerClawColors.TextPrimary,
+                    )
+                } else {
+                    Icon(
+                        Icons.Default.QrCodeScanner,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Scan Config", fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                }
+            }
+
+            Button(
+                onClick = { uriHandler.openUri("https://seekerclaw.xyz/setup") },
+                modifier = Modifier
+                    .weight(1f)
+                    .height(52.dp),
+                shape = shape,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = SeekerClawColors.Surface,
+                    contentColor = SeekerClawColors.TextPrimary,
+                ),
+                border = BorderStroke(1.dp, SeekerClawColors.CardBorder),
+            ) {
                 Icon(
-                    Icons.Default.QrCodeScanner,
-                    contentDescription = "QR code",
-                    modifier = Modifier.size(20.dp),
+                    @Suppress("DEPRECATION") Icons.Default.HelpOutline,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    "Scan Config QR",
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                )
+                Text("Setup Guide", fontSize = 14.sp, fontWeight = FontWeight.Medium)
             }
         }
 
@@ -643,28 +692,7 @@ private fun WelcomeStep(
             )
         }
 
-        Spacer(modifier = Modifier.height(10.dp))
-
-        // Manual setup button
-        Button(
-            onClick = onNext,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(48.dp),
-            shape = shape,
-            colors = ButtonDefaults.buttonColors(
-                containerColor = SeekerClawColors.Surface,
-                contentColor = SeekerClawColors.TextPrimary,
-            ),
-        ) {
-            Text(
-                "Enter Manually",
-                fontSize = 15.sp,
-                fontWeight = FontWeight.Medium,
-            )
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(16.dp))
 
         TextButton(
             onClick = { uriHandler.openUri("https://seekerclaw.xyz/setup") },
@@ -678,6 +706,14 @@ private fun WelcomeStep(
             Spacer(modifier = Modifier.width(6.dp))
             Text(
                 "Need help? Quick setup guide",
+                fontSize = 13.sp,
+                color = SeekerClawColors.TextDim,
+            )
+        }
+
+        TextButton(onClick = onSkip) {
+            Text(
+                "Skip",
                 fontSize = 13.sp,
                 color = SeekerClawColors.TextDim,
             )
