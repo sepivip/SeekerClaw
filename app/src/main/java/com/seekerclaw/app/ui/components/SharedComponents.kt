@@ -10,9 +10,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
@@ -52,8 +54,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -507,6 +513,146 @@ fun MorphActionButton(
                 fontSize = TypeScale.bodyMedium,
                 fontWeight = FontWeight.Medium,
             )
+        }
+    }
+}
+
+/**
+ * Compound input + inline action button (shadcn-style "input with addon").
+ *
+ * Single rounded surface, single border, with the input on the left taking the
+ * remaining width and a button-like action zone on the right that morphs based
+ * on [actionState] (Idle / Loading / Success / Error). A vertical divider
+ * separates the two zones.
+ *
+ * Use for any field that needs an inline test/verify/save action — Anthropic
+ * key + Test, Telegram token + Verify, OpenAI key + Test, etc. Reuses the
+ * shared [ActionResult] sealed class for state.
+ */
+@Composable
+fun InputWithActionButton(
+    value: String,
+    onValueChange: (String) -> Unit,
+    actionLabel: String,
+    onAction: () -> Unit,
+    actionState: ActionResult,
+    modifier: Modifier = Modifier,
+    placeholder: String = "",
+    isPassword: Boolean = false,
+    enabled: Boolean = true,
+    isError: Boolean = false,
+) {
+    val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
+
+    val borderColor = when {
+        isError -> SeekerClawColors.Error
+        actionState is ActionResult.Success -> SeekerClawColors.Accent.copy(alpha = BrandAlpha.disabledSurface)
+        actionState is ActionResult.Error -> SeekerClawColors.Error.copy(alpha = BrandAlpha.disabledSurface)
+        else -> SeekerClawColors.CardBorder
+    }
+
+    val actionContainer = when (actionState) {
+        is ActionResult.Success -> SeekerClawColors.Accent.copy(alpha = BrandAlpha.errorBackground + 0.02f)
+        is ActionResult.Error -> SeekerClawColors.Error.copy(alpha = BrandAlpha.errorBackground + 0.02f)
+        else -> SeekerClawColors.Background
+    }
+    val actionContent = when (actionState) {
+        is ActionResult.Success -> SeekerClawColors.Accent
+        is ActionResult.Error -> SeekerClawColors.Error
+        else -> SeekerClawColors.TextPrimary
+    }
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(Sizing.buttonPrimaryHeight)
+            .clip(shape)
+            .background(SeekerClawColors.Surface, shape)
+            .border(BorderStroke(Sizing.borderThin, borderColor), shape)
+            .cornerGlowBorder(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // Input zone
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight()
+                .padding(horizontal = Spacing.lg),
+            contentAlignment = Alignment.CenterStart,
+        ) {
+            BasicTextField(
+                value = value,
+                onValueChange = onValueChange,
+                singleLine = true,
+                enabled = enabled,
+                visualTransformation = if (isPassword) PasswordVisualTransformation() else VisualTransformation.None,
+                textStyle = TextStyle(
+                    color = SeekerClawColors.TextPrimary,
+                    fontSize = TypeScale.bodyMedium.value.sp,
+                    fontFamily = FontFamily.Monospace,
+                ),
+                cursorBrush = SolidColor(SeekerClawColors.Primary),
+                modifier = Modifier.fillMaxWidth(),
+                decorationBox = { innerTextField ->
+                    if (value.isEmpty() && placeholder.isNotEmpty()) {
+                        Text(
+                            text = placeholder,
+                            color = SeekerClawColors.TextDim,
+                            fontSize = TypeScale.bodyMedium,
+                            fontFamily = FontFamily.Monospace,
+                        )
+                    }
+                    innerTextField()
+                },
+            )
+        }
+
+        // Vertical divider
+        Box(
+            modifier = Modifier
+                .width(Sizing.borderThin)
+                .fillMaxHeight()
+                .background(SeekerClawColors.CardBorder),
+        )
+
+        // Action zone — morphs with state
+        val actionEnabled = enabled && actionState !is ActionResult.Loading
+        Box(
+            modifier = Modifier
+                .fillMaxHeight()
+                .background(actionContainer)
+                .clickable(enabled = actionEnabled) { onAction() }
+                .padding(horizontal = Spacing.lg),
+            contentAlignment = Alignment.Center,
+        ) {
+            when (actionState) {
+                ActionResult.Idle -> Text(
+                    actionLabel,
+                    fontFamily = RethinkSans,
+                    fontSize = TypeScale.bodyMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = actionContent,
+                )
+                ActionResult.Loading -> androidx.compose.material3.CircularProgressIndicator(
+                    modifier = Modifier.size(Sizing.iconSm),
+                    color = actionContent,
+                    strokeWidth = 2.dp,
+                )
+                is ActionResult.Success -> Text(
+                    "\u2713",
+                    fontFamily = RethinkSans,
+                    fontSize = TypeScale.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = actionContent,
+                )
+                is ActionResult.Error -> Text(
+                    "\u2715",
+                    fontFamily = RethinkSans,
+                    fontSize = TypeScale.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = actionContent,
+                )
+            }
         }
     }
 }

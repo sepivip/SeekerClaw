@@ -119,6 +119,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import com.seekerclaw.app.ui.components.ActionResult
 import com.seekerclaw.app.ui.components.CardSurface
+import com.seekerclaw.app.ui.components.InputWithActionButton
 import com.seekerclaw.app.ui.components.MorphActionButton
 import com.seekerclaw.app.ui.components.ProviderPicker
 import com.seekerclaw.app.ui.components.cornerGlowBorder
@@ -898,6 +899,56 @@ private fun ProviderSetupStep(
         ConfigManager.validateCredential(apiKey.trim(), effectiveAuthType) == null &&
         apiKeyError == null
 
+    // Inline test state for the API key field
+    val scope = rememberCoroutineScope()
+    var keyTestState by remember { mutableStateOf<ActionResult>(ActionResult.Idle) }
+    LaunchedEffect(apiKey, provider, authType) {
+        if (keyTestState !is ActionResult.Idle) keyTestState = ActionResult.Idle
+    }
+    fun runKeyTest() {
+        val key = apiKey.trim()
+        if (key.isBlank() || keyTestState is ActionResult.Loading) return
+        // Format check first
+        val formatErr = ConfigManager.validateCredential(key, effectiveAuthType)
+        if (formatErr != null) {
+            keyTestState = ActionResult.Error(formatErr)
+            return
+        }
+        keyTestState = ActionResult.Loading
+        scope.launch {
+            keyTestState = try {
+                val (host, path, headers) = when (provider) {
+                    "openai" -> Triple("api.openai.com", "/v1/models", mapOf("Authorization" to "Bearer $key"))
+                    "openrouter" -> Triple("openrouter.ai", "/api/v1/models", mapOf("Authorization" to "Bearer $key"))
+                    else -> Triple(
+                        "api.anthropic.com",
+                        "/v1/models",
+                        mapOf(
+                            "x-api-key" to key,
+                            "anthropic-version" to "2023-06-01",
+                        ),
+                    )
+                }
+                val code = withContext(Dispatchers.IO) {
+                    val conn = (URL("https://$host$path").openConnection() as HttpURLConnection).apply {
+                        connectTimeout = 8000
+                        readTimeout = 8000
+                        requestMethod = "GET"
+                        headers.forEach { (k, v) -> setRequestProperty(k, v) }
+                    }
+                    try { conn.responseCode } finally { conn.disconnect() }
+                }
+                when (code) {
+                    200 -> ActionResult.Success("Key is valid")
+                    401, 403 -> ActionResult.Error("Invalid or unauthorized key")
+                    else -> ActionResult.Error("HTTP $code from provider")
+                }
+            } catch (e: Exception) {
+                ActionResult.Error(e.message ?: "Network error")
+            }
+        }
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
         Column(
             modifier = Modifier
@@ -1007,43 +1058,36 @@ private fun ProviderSetupStep(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            OutlinedTextField(
+            InputWithActionButton(
                 value = apiKey,
                 onValueChange = onApiKeyChange,
-                label = {
-                    Text(
-                        if (provider == "claude" && isToken) "Setup Token" else "API Key",
-                        fontSize = 12.sp,
-                    )
-                },
-                placeholder = {
-                    Text(
-                        if (provider == "claude" && isToken) "sk-ant-oat01-\u2026" else providerInfo.keyHint,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 14.sp,
-                        color = SeekerClawColors.TextDim,
-                    )
-                },
-                modifier = Modifier.fillMaxWidth(),
-                visualTransformation = PasswordVisualTransformation(),
-                singleLine = true,
+                actionLabel = "Test",
+                onAction = { runKeyTest() },
+                actionState = keyTestState,
+                placeholder = if (provider == "claude" && isToken) "sk-ant-oat01-\u2026" else providerInfo.keyHint,
+                isPassword = true,
                 isError = apiKeyError != null,
-                trailingIcon = if (isValid) {
-                    {
-                        Icon(
-                            Icons.Default.CheckCircle,
-                            contentDescription = "Valid",
-                            tint = SeekerClawColors.Accent,
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
-                } else null,
-                supportingText = apiKeyError?.let { err ->
-                    { Text(err, fontSize = 12.sp) }
-                },
-                colors = fieldColors,
-                shape = shape,
             )
+
+            // Inline test result message below the field
+            val resultMessage = when (val s = keyTestState) {
+                is ActionResult.Success -> s.message
+                is ActionResult.Error -> s.message
+                else -> apiKeyError
+            }
+            if (!resultMessage.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(Spacing.sm))
+                Text(
+                    text = resultMessage,
+                    fontFamily = RethinkSans,
+                    fontSize = TypeScale.labelSmall,
+                    color = when (keyTestState) {
+                        is ActionResult.Success -> SeekerClawColors.Accent
+                        is ActionResult.Error -> SeekerClawColors.Error
+                        else -> SeekerClawColors.Error
+                    },
+                )
+            }
         }
 
         }
