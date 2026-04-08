@@ -486,7 +486,9 @@ fun MorphActionButton(
     val container = when (state) {
         is ActionResult.Success -> SeekerClawColors.Accent.copy(alpha = BrandAlpha.errorBackground + 0.02f)
         is ActionResult.Error -> SeekerClawColors.Error.copy(alpha = BrandAlpha.errorBackground + 0.02f)
-        else -> SeekerClawColors.Surface
+        // Use Background (darker than Surface) so the button stands out from the
+        // CardSurface it usually sits inside.
+        else -> SeekerClawColors.Background
     }
     val content = when (state) {
         is ActionResult.Success -> SeekerClawColors.Accent
@@ -496,7 +498,8 @@ fun MorphActionButton(
     val borderColor = when (state) {
         is ActionResult.Success -> SeekerClawColors.Accent.copy(alpha = BrandAlpha.disabledSurface)
         is ActionResult.Error -> SeekerClawColors.Error.copy(alpha = BrandAlpha.disabledSurface)
-        else -> SeekerClawColors.CardBorder
+        // Brighter idle border so the button has a clear edge against the card
+        else -> SeekerClawColors.TextDim.copy(alpha = BrandAlpha.disabledSurface)
     }
 
     Button(

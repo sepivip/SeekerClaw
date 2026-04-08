@@ -432,14 +432,15 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                 Text(
                     text = "Skip",
                     fontFamily = RethinkSans,
-                    fontSize = TypeScale.bodySmall,
-                    color = SeekerClawColors.TextDim,
+                    fontSize = TypeScale.bodyMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = SeekerClawColors.TextPrimary,
                     modifier = Modifier
                         .clickable {
                             ConfigManager.markSetupSkipped(context)
                             onSetupComplete()
                         }
-                        .padding(Spacing.xs),
+                        .padding(Spacing.sm),
                 )
             }
 
