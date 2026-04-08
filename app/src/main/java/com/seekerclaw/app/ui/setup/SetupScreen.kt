@@ -370,37 +370,51 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             isQrImporting = isQrImporting,
             qrError = qrError,
         )
-    } else Column(
-        modifier = bgModifier
-            .padding(horizontal = SetupLayout.contentHorizontal)
-            .padding(top = SetupLayout.contentTop, bottom = SetupLayout.contentBottom),
-        horizontalAlignment = Alignment.CenterHorizontally,
+    } else Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(OnboardingColors.heroBackground),
     ) {
+        AuroraGridBackground(modifier = Modifier.fillMaxSize())
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = SetupLayout.contentHorizontal)
+                .padding(top = SetupLayout.contentTop, bottom = SetupLayout.contentBottom),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
         if (currentStep > SetupSteps.WELCOME && currentStep < SetupSteps.SUCCESS) {
-            // Header row: logo left, skip right
+            // Top row: Skip aligned right
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                horizontalArrangement = Arrangement.End,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Image(
-                    painter = painterResource(R.drawable.ic_seekerclaw_logo_horizontal),
-                    contentDescription = "SeekerClaw logo",
-                    modifier = Modifier.height(36.dp),
-                )
                 Text(
                     text = "Skip",
                     fontFamily = RethinkSans,
-                    fontSize = 13.sp,
+                    fontSize = TypeScale.bodySmall,
                     color = SeekerClawColors.TextDim,
                     modifier = Modifier
                         .clickable {
                             ConfigManager.markSetupSkipped(context)
                             onSetupComplete()
                         }
-                        .padding(4.dp),
+                        .padding(Spacing.xs),
                 )
             }
+
+            Spacer(modifier = Modifier.height(Spacing.lg))
+
+            // Per-step title block (same style as Welcome hero)
+            val (line1, line2) = when (currentStep) {
+                SetupSteps.PROVIDER -> "PICK YOUR" to "PROVIDER \uD83E\uDDE0"
+                SetupSteps.MODEL -> "PICK YOUR" to "MODEL \u26A1"
+                SetupSteps.TELEGRAM -> "CONNECT" to "TELEGRAM \uD83D\uDCAC"
+                else -> "" to ""
+            }
+            StepTitle(line1 = line1, line2 = line2)
 
             Spacer(modifier = Modifier.height(SetupLayout.gapAfterIndicator))
         }
@@ -496,6 +510,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                 botToken = botToken,
                 onContinue = onSetupComplete,
             )
+        }
         }
         }
     }
@@ -1658,6 +1673,28 @@ private fun NavButtons(
             }
         }
     }
+}
+
+@Composable
+private fun StepTitle(line1: String, line2: String) {
+    Text(
+        text = line1,
+        fontFamily = RethinkSans,
+        fontSize = TypeScale.displayLarge,
+        fontWeight = FontWeight.ExtraBold,
+        color = SeekerClawColors.TextPrimary,
+        textAlign = TextAlign.Center,
+        lineHeight = TypeScale.lineHeightDisplayLarge,
+    )
+    Text(
+        text = line2,
+        fontFamily = RethinkSans,
+        fontSize = TypeScale.displaySmall,
+        fontWeight = FontWeight.ExtraBold,
+        color = SeekerClawColors.TextPrimary,
+        textAlign = TextAlign.Center,
+        lineHeight = TypeScale.lineHeightDisplaySmall,
+    )
 }
 
 @Composable
