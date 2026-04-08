@@ -366,8 +366,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
         )
     } else Column(
         modifier = bgModifier
-            .padding(24.dp)
-            .verticalScroll(scrollState),
+            .padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         if (currentStep > SetupSteps.WELCOME && currentStep < SetupSteps.SUCCESS) {
@@ -422,6 +421,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             Spacer(modifier = Modifier.height(16.dp))
         }
 
+        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
         when (currentStep) {
             SetupSteps.WELCOME -> Unit // handled by full-bleed branch above
             SetupSteps.PROVIDER -> ProviderSetupStep(
@@ -498,8 +498,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                 onContinue = onSetupComplete,
             )
         }
-
-        Spacer(modifier = Modifier.height(32.dp))
+        }
     }
 
     // Notification permission explanation dialog
@@ -614,20 +613,20 @@ private fun WelcomeStep(
         Text(
             text = "EMPOWER YOUR",
             fontFamily = RethinkSans,
-            fontSize = 31.sp,
-            fontWeight = FontWeight.Bold,
+            fontSize = 33.sp,
+            fontWeight = FontWeight.ExtraBold,
             color = SeekerClawColors.TextPrimary,
             textAlign = TextAlign.Center,
-            lineHeight = 36.sp,
+            lineHeight = 38.sp,
         )
         Text(
             text = "PHONE \uD83E\uDD9E\uD83D\uDCF2",
             fontFamily = RethinkSans,
-            fontSize = 28.sp,
-            fontWeight = FontWeight.Bold,
+            fontSize = 29.sp,
+            fontWeight = FontWeight.ExtraBold,
             color = SeekerClawColors.TextPrimary,
             textAlign = TextAlign.Center,
-            lineHeight = 32.sp,
+            lineHeight = 34.sp,
         )
 
         Spacer(modifier = Modifier.height(10.dp))
@@ -703,7 +702,7 @@ private fun WelcomeStep(
             }
 
             Button(
-                onClick = { uriHandler.openUri("https://seekerclaw.xyz/setup") },
+                onClick = onSkip,
                 modifier = Modifier
                     .weight(1f)
                     .height(52.dp),
@@ -714,13 +713,7 @@ private fun WelcomeStep(
                 ),
                 border = BorderStroke(1.dp, SeekerClawColors.CardBorder),
             ) {
-                Icon(
-                    @Suppress("DEPRECATION") Icons.Default.HelpOutline,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp),
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Setup Guide", fontFamily = RethinkSans, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                Text("Skip", fontFamily = RethinkSans, fontSize = 14.sp, fontWeight = FontWeight.Medium)
             }
         }
 
@@ -754,14 +747,6 @@ private fun WelcomeStep(
             )
         }
 
-            TextButton(onClick = onSkip) {
-                Text(
-                    "Skip",
-                    fontFamily = RethinkSans,
-                    fontSize = 13.sp,
-                    color = SeekerClawColors.TextDim,
-                )
-            }
         }
     }
 }
@@ -797,7 +782,7 @@ private fun AuroraGridBackground(modifier: Modifier = Modifier) {
             val rad1 = Math.toRadians(angle1.toDouble())
             val b1x = cx + (cos(rad1) * 180.dp.toPx()).toFloat()
             val b1y = cy + (sin(rad1) * 180.dp.toPx()).toFloat()
-            val b1r = 260.dp.toPx()
+            val b1r = 312.dp.toPx()
             drawCircle(
                 brush = Brush.radialGradient(
                     colors = listOf(
@@ -816,7 +801,7 @@ private fun AuroraGridBackground(modifier: Modifier = Modifier) {
             val rad2 = Math.toRadians(angle2.toDouble())
             val b2x = cx + (cos(rad2) * 220.dp.toPx()).toFloat()
             val b2y = cy + (sin(rad2) * 220.dp.toPx()).toFloat()
-            val b2r = 240.dp.toPx()
+            val b2r = 288.dp.toPx()
             drawCircle(
                 brush = Brush.radialGradient(
                     colors = listOf(
@@ -880,7 +865,13 @@ private fun ProviderSetupStep(
         ConfigManager.validateCredential(apiKey.trim(), effectiveAuthType) == null &&
         apiKeyError == null
 
-    Column(modifier = Modifier.fillMaxWidth()) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+        ) {
         // Provider selector
         SectionLabel("Provider")
 
@@ -1044,7 +1035,9 @@ private fun ProviderSetupStep(
             )
         }
 
-        Spacer(modifier = Modifier.height(28.dp))
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
 
         NavButtons(
             onBack = onBack,
@@ -1068,7 +1061,13 @@ private fun TelegramStep(
 ) {
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
 
-    Column(modifier = Modifier.fillMaxWidth()) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+        ) {
         SectionLabel("Telegram Connection")
 
         Spacer(modifier = Modifier.height(10.dp))
@@ -1194,40 +1193,75 @@ private fun TelegramStep(
             )
         }
 
-        Spacer(modifier = Modifier.height(28.dp))
+        }
 
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            TextButton(onClick = onBack, enabled = !isStarting) {
-                Text("Back", fontSize = 14.sp, color = if (isStarting) SeekerClawColors.TextDim.copy(alpha = 0.3f) else SeekerClawColors.TextDim)
-            }
-            Button(
-                onClick = onNext,
-                enabled = botToken.isNotBlank() && !isStarting,
-                modifier = Modifier.height(56.dp),
-                shape = shape,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = SeekerClawColors.ActionPrimary,
-                    contentColor = Color.White,
-                    disabledContainerColor = SeekerClawColors.ActionPrimary.copy(alpha = 0.6f),
-                    disabledContentColor = Color.White.copy(alpha = 0.7f),
-                ),
+        Spacer(modifier = Modifier.height(16.dp))
+
+        val uriHandler = LocalUriHandler.current
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                if (isStarting) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(20.dp),
-                        color = Color.White,
-                        strokeWidth = 2.dp,
+                Button(
+                    onClick = onBack,
+                    enabled = !isStarting,
+                    modifier = Modifier.weight(1f).height(52.dp),
+                    shape = shape,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = SeekerClawColors.Surface,
+                        contentColor = SeekerClawColors.TextPrimary,
+                    ),
+                    border = BorderStroke(1.dp, SeekerClawColors.CardBorder),
+                ) {
+                    Text("Back", fontFamily = RethinkSans, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                }
+                Button(
+                    onClick = onNext,
+                    enabled = botToken.isNotBlank() && !isStarting,
+                    modifier = Modifier.weight(1f).height(52.dp),
+                    shape = shape,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = SeekerClawColors.ActionPrimary,
+                        contentColor = Color.White,
+                        disabledContainerColor = SeekerClawColors.ActionPrimary.copy(alpha = 0.5f),
+                        disabledContentColor = Color.White.copy(alpha = 0.7f),
+                    ),
+                ) {
+                    if (isStarting) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            color = Color.White,
+                            strokeWidth = 2.dp,
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Starting\u2026", fontFamily = RethinkSans, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    } else {
+                        Text("Initialize Agent", fontFamily = RethinkSans, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Center,
+            ) {
+                TextButton(onClick = { uriHandler.openUri("https://seekerclaw.xyz/setup") }) {
+                    Icon(
+                        @Suppress("DEPRECATION") Icons.Default.HelpOutline,
+                        contentDescription = "Help",
+                        tint = SeekerClawColors.TextDim,
+                        modifier = Modifier.size(16.dp),
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Starting\u2026", fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                } else {
-                    Icon(Icons.Default.PlayArrow, contentDescription = "Start", modifier = Modifier.size(20.dp))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Initialize Agent", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        "Need help? Quick setup guide",
+                        fontFamily = RethinkSans,
+                        fontSize = 13.sp,
+                        color = SeekerClawColors.TextDim,
+                    )
                 }
             }
         }
@@ -1250,7 +1284,13 @@ private fun OptionsStep(
 ) {
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
 
-    Column(modifier = Modifier.fillMaxWidth()) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+        ) {
         SectionLabel("Configuration")
 
         Spacer(modifier = Modifier.height(10.dp))
@@ -1359,6 +1399,10 @@ private fun OptionsStep(
         }
 
         Spacer(modifier = Modifier.height(28.dp))
+
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
 
         NavButtons(onBack = onBack, onNext = onNext, nextEnabled = selectedModel.isNotBlank())
     }
@@ -1521,38 +1565,72 @@ private fun NavButtons(
     onBack: () -> Unit,
     onNext: () -> Unit,
     nextEnabled: Boolean,
+    nextLabel: String = "Next",
 ) {
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
+    val uriHandler = LocalUriHandler.current
 
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        TextButton(onClick = onBack) {
-            Text(
-                text = "Back",
-                fontSize = 14.sp,
-                color = SeekerClawColors.TextDim,
-            )
+    Column(modifier = Modifier.fillMaxWidth()) {
+        // Row: Back | Next (same layout as Welcome's Scan Config | Skip row)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Button(
+                onClick = onBack,
+                modifier = Modifier
+                    .weight(1f)
+                    .height(52.dp),
+                shape = shape,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = SeekerClawColors.Surface,
+                    contentColor = SeekerClawColors.TextPrimary,
+                ),
+                border = BorderStroke(1.dp, SeekerClawColors.CardBorder),
+            ) {
+                Text("Back", fontFamily = RethinkSans, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+            }
+
+            Button(
+                onClick = onNext,
+                enabled = nextEnabled,
+                modifier = Modifier
+                    .weight(1f)
+                    .height(52.dp),
+                shape = shape,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = SeekerClawColors.ActionPrimary,
+                    contentColor = Color.White,
+                    disabledContainerColor = SeekerClawColors.BorderSubtle,
+                    disabledContentColor = SeekerClawColors.TextDim,
+                ),
+            ) {
+                Text(nextLabel, fontFamily = RethinkSans, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+            }
         }
 
-        Button(
-            onClick = onNext,
-            enabled = nextEnabled,
-            shape = shape,
-            colors = ButtonDefaults.buttonColors(
-                containerColor = SeekerClawColors.ActionPrimary,
-                contentColor = Color.White,
-                disabledContainerColor = SeekerClawColors.BorderSubtle,
-                disabledContentColor = SeekerClawColors.TextDim,
-            ),
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Help link
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.Center,
         ) {
-            Text(
-                text = "Next",
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Bold,
-            )
+            TextButton(onClick = { uriHandler.openUri("https://seekerclaw.xyz/setup") }) {
+                Icon(
+                    @Suppress("DEPRECATION") Icons.Default.HelpOutline,
+                    contentDescription = "Help",
+                    tint = SeekerClawColors.TextDim,
+                    modifier = Modifier.size(16.dp),
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    "Need help? Quick setup guide",
+                    fontFamily = RethinkSans,
+                    fontSize = 13.sp,
+                    color = SeekerClawColors.TextDim,
+                )
+            }
         }
     }
 }
