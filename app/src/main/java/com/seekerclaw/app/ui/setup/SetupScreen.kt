@@ -1069,23 +1069,18 @@ private fun ProviderSetupStep(
                 isError = apiKeyError != null,
             )
 
-            // Inline test result message below the field
-            val resultMessage = when (val s = keyTestState) {
-                is ActionResult.Success -> s.message
+            // Inline error message — success is shown by the button morph alone
+            val errorMessage = when (val s = keyTestState) {
                 is ActionResult.Error -> s.message
                 else -> apiKeyError
             }
-            if (!resultMessage.isNullOrBlank()) {
+            if (!errorMessage.isNullOrBlank()) {
                 Spacer(modifier = Modifier.height(Spacing.sm))
                 Text(
-                    text = resultMessage,
+                    text = errorMessage,
                     fontFamily = RethinkSans,
                     fontSize = TypeScale.labelSmall,
-                    color = when (keyTestState) {
-                        is ActionResult.Success -> SeekerClawColors.Accent
-                        is ActionResult.Error -> SeekerClawColors.Error
-                        else -> SeekerClawColors.Error
-                    },
+                    color = SeekerClawColors.Error,
                 )
             }
         }
