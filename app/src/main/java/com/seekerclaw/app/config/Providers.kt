@@ -15,20 +15,20 @@ data class ProviderInfo(
 
 val availableProviders = listOf(
     ProviderInfo(
-        id = "claude",
-        displayName = "Anthropic",
-        authTypes = listOf("api_key", "setup_token"),
-        keyHint = "sk-ant-api03-…",
-        consoleUrl = "https://console.anthropic.com",
-        keysUrl = "https://console.anthropic.com/settings/keys",
-    ),
-    ProviderInfo(
         id = "openai",
         displayName = "OpenAI",
         authTypes = listOf("api_key", "oauth"),
         keyHint = "sk-proj-…",
         consoleUrl = "https://platform.openai.com",
         keysUrl = "https://platform.openai.com/api-keys",
+    ),
+    ProviderInfo(
+        id = "claude",
+        displayName = "Anthropic",
+        authTypes = listOf("api_key", "setup_token"),
+        keyHint = "sk-ant-api03-…",
+        consoleUrl = "https://console.anthropic.com",
+        keysUrl = "https://console.anthropic.com/settings/keys",
     ),
     ProviderInfo(
         id = "openrouter",
