@@ -1286,26 +1286,11 @@ private fun TelegramStep(
                     )
                 },
                 modifier = Modifier.fillMaxWidth(),
-                visualTransformation = PasswordVisualTransformation(),
+                visualTransformation = InputMask.MaskMiddle,
                 singleLine = true,
                 isError = botTokenError != null,
                 supportingText = botTokenError?.let { err ->
                     { Text(err, fontSize = 12.sp) }
-                },
-                trailingIcon = if (
-                    botToken.trim().matches(Regex("^\\d+:[A-Za-z0-9_-]+$")) &&
-                    botTokenError == null
-                ) {
-                    {
-                        Icon(
-                            Icons.Default.CheckCircle,
-                            contentDescription = "Valid format",
-                            tint = SeekerClawColors.Accent,
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
-                } else {
-                    null
                 },
                 colors = fieldColors,
                 shape = shape,
