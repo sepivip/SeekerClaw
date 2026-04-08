@@ -578,21 +578,30 @@ private fun WelcomeStep(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
 
-        // Hero: claw symbol with drop shadow
+        // Hero: claw symbol with ambient dark shadow beneath
         Box(
             modifier = Modifier.size(240.dp),
             contentAlignment = Alignment.Center,
         ) {
-            // Shadow layer: tinted + blurred + offset down
-            Image(
-                painter = painterResource(R.drawable.ic_seekerclaw_symbol),
-                contentDescription = null,
-                colorFilter = ColorFilter.tint(Color.Black.copy(alpha = 0.675f)),
-                modifier = Modifier
-                    .size(184.dp)
-                    .offset(y = 10.dp)
-                    .blur(20.dp),
-            )
+            // Ambient shadow — radial dark glow offset beneath the logo
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val cx = size.width / 2f
+                val cy = size.height / 2f + 18.dp.toPx()
+                val r = 120.dp.toPx()
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(
+                            Color.Black.copy(alpha = 0.70f),
+                            Color.Black.copy(alpha = 0.35f),
+                            Color.Transparent,
+                        ),
+                        center = Offset(cx, cy),
+                        radius = r,
+                    ),
+                    center = Offset(cx, cy),
+                    radius = r,
+                )
+            }
             Image(
                 painter = painterResource(R.drawable.ic_seekerclaw_symbol),
                 contentDescription = "SeekerClaw",
