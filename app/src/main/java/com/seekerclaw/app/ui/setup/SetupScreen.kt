@@ -122,7 +122,9 @@ import com.seekerclaw.app.ui.components.CardSurface
 import com.seekerclaw.app.ui.components.InputMask
 import com.seekerclaw.app.ui.components.InputWithActionButton
 import com.seekerclaw.app.ui.components.MorphActionButton
+import com.seekerclaw.app.ui.components.OpenAIOAuthSection
 import com.seekerclaw.app.ui.components.ProviderPicker
+import com.seekerclaw.app.ui.components.rememberOpenAIOAuthController
 import com.seekerclaw.app.ui.components.cornerGlowBorder
 import com.seekerclaw.app.ui.components.SetupStepIndicator
 import com.seekerclaw.app.ui.components.dotMatrix
@@ -259,22 +261,30 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
 
     fun saveAndStart() {
         if (isStarting) return
-        // Non-Claude providers only support api_key auth
-        val effectiveAuthType = if (scannedProvider != "claude") "api_key" else authType
+        // OpenAI supports oauth; everything else (non-Claude) is api_key only.
+        val effectiveAuthType = when {
+            scannedProvider == "claude" -> authType
+            scannedProvider == "openai" && authType == "oauth" -> "oauth"
+            else -> "api_key"
+        }
+        val isOpenAIOAuth = scannedProvider == "openai" && effectiveAuthType == "oauth"
 
-        if (apiKey.isBlank()) {
+        // For OpenAI OAuth, the credential lives in openaiOAuthToken (set by the OAuth
+        // activity), not apiKey — skip the apiKey blank check entirely.
+        if (!isOpenAIOAuth && apiKey.isBlank()) {
             apiKeyError = "Required"
             errorMessage = "AI credential is required"
             currentStep = SetupSteps.PROVIDER
             return
         }
-        if (scannedProvider != "claude" && apiKey.trim().startsWith("sk-ant-oat")) {
+        if (scannedProvider != "claude" && !isOpenAIOAuth && apiKey.trim().startsWith("sk-ant-oat")) {
             apiKeyError = "Setup tokens are only valid for Anthropic"
             errorMessage = apiKeyError
             currentStep = SetupSteps.PROVIDER
             return
         }
-        val credentialError = ConfigManager.validateCredential(apiKey.trim(), effectiveAuthType)
+        val credentialError = if (isOpenAIOAuth) null
+            else ConfigManager.validateCredential(apiKey.trim(), effectiveAuthType)
         if (credentialError != null) {
             apiKeyError = credentialError
             errorMessage = credentialError
@@ -297,10 +307,16 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                 "openai" -> AppConfig(
                     anthropicApiKey = existing?.anthropicApiKey ?: "",
                     setupToken = existing?.setupToken ?: "",
-                    openaiApiKey = trimmedKey,
+                    // Don't wipe an existing openaiApiKey when the user picked OAuth.
+                    openaiApiKey = if (isOpenAIOAuth) (existing?.openaiApiKey ?: "") else trimmedKey,
                     openrouterApiKey = existing?.openrouterApiKey ?: "",
+                    // Preserve OAuth tokens written by OpenAIOAuthActivity.
+                    openaiOAuthToken = existing?.openaiOAuthToken ?: "",
+                    openaiOAuthRefresh = existing?.openaiOAuthRefresh ?: "",
+                    openaiOAuthEmail = existing?.openaiOAuthEmail ?: "",
+                    openaiOAuthExpiresAt = existing?.openaiOAuthExpiresAt ?: "",
                     provider = "openai",
-                    authType = "api_key",
+                    authType = effectiveAuthType,
                     telegramBotToken = botToken.trim(),
                     telegramOwnerId = ownerId.trim(),
                     model = selectedModel,
@@ -472,14 +488,17 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                     }
                     apiKeyError = null
                     errorMessage = null
-                    // Claude only supports {api_key, setup_token}; everything else (including
-                    // a leftover "oauth" from OpenAI) must fall back to api_key.
-                    authType = if (newProvider == "claude") {
-                        when (existingConfig?.authType) {
+                    // Per-provider auth defaults: Claude → api_key/setup_token,
+                    // OpenAI → oauth (matches Settings first-time switch-in default).
+                    authType = when (newProvider) {
+                        "claude" -> when (existingConfig?.authType) {
                             "setup_token" -> "setup_token"
                             else -> "api_key"
                         }
-                    } else "api_key"
+                        "openai" -> if (existingConfig?.authType == "oauth" ||
+                            existingConfig?.openaiOAuthToken?.isNotBlank() == true) "oauth" else "api_key"
+                        else -> "api_key"
+                    }
                     // Restore model: use existing config's model if same provider, else default
                     // Setup screen always uses API-key auth — OAuth flow happens later in settings.
                     val models = modelsForProvider(newProvider, "api_key")
@@ -508,6 +527,12 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                             existingConfig?.setupToken ?: ""
                         else
                             existingConfig?.anthropicApiKey ?: ""
+                    } else if (scannedProvider == "openai") {
+                        // OAuth tab doesn't use the apiKey field — leave it untouched.
+                        // Switching to API Key restores the saved OpenAI key.
+                        if (newAuthType == "api_key") {
+                            apiKey = existingConfig?.openaiApiKey ?: ""
+                        }
                     }
                     apiKeyError = null
                     errorMessage = null
@@ -910,10 +935,18 @@ private fun ProviderSetupStep(
     isStarting: Boolean = false,
 ) {
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
+    val context = LocalContext.current
     val providerInfo = providerById(provider)
     val isToken = authType == "setup_token"
+    val isOpenAIOAuth = provider == "openai" && authType == "oauth"
     val uriHandler = LocalUriHandler.current
-    val effectiveAuthType = if (provider != "claude") "api_key" else authType
+    val effectiveAuthType = when {
+        provider == "claude" -> authType
+        isOpenAIOAuth -> "oauth"
+        else -> "api_key"
+    }
+    // Shared OAuth controller — same flow as Settings, syncs via configVersion.
+    val oauthController = rememberOpenAIOAuthController(context)
     val isValid = apiKey.trim().isNotBlank() &&
         ConfigManager.validateCredential(apiKey.trim(), effectiveAuthType) == null &&
         apiKeyError == null
@@ -996,9 +1029,13 @@ private fun ProviderSetupStep(
         Spacer(modifier = Modifier.height(10.dp))
 
         CardSurface {
-            // Auth type tabs — Claude only
-            if (provider == "claude") {
-                val authTabs = listOf("api_key" to "API Key", "setup_token" to "Pro/Max Token")
+            // Auth type tabs — Claude (API Key/Setup Token) and OpenAI (OAuth/API Key)
+            val authTabs = when (provider) {
+                "claude" -> listOf("api_key" to "API Key", "setup_token" to "Pro/Max Token")
+                "openai" -> listOf("oauth" to "OAuth", "api_key" to "API Key")
+                else -> emptyList()
+            }
+            if (authTabs.isNotEmpty()) {
                 val selectedTabIndex = authTabs.indexOfFirst { it.first == authType }.coerceAtLeast(0)
                 TabRow(
                     selectedTabIndex = selectedTabIndex,
@@ -1037,6 +1074,15 @@ private fun ProviderSetupStep(
                 Spacer(modifier = Modifier.height(16.dp))
             }
 
+            if (isOpenAIOAuth) {
+                // OAuth flow — shared with Settings via the controller. No API key field.
+                OpenAIOAuthSection(
+                    state = oauthController.state,
+                    onSignIn = oauthController.signIn,
+                    onSignOut = oauthController.signOut,
+                    onCancel = oauthController.cancel,
+                )
+            } else {
             // Instructions — provider-specific
             if (provider == "claude" && isToken) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1102,6 +1148,7 @@ private fun ProviderSetupStep(
                     color = SeekerClawColors.Error,
                 )
             }
+            } // end else (api key path)
         }
 
         }
@@ -1111,7 +1158,8 @@ private fun ProviderSetupStep(
         NavButtons(
             onBack = onBack,
             onNext = onNext,
-            nextEnabled = apiKey.isNotBlank(),
+            nextEnabled = if (isOpenAIOAuth) oauthController.state.isConnected
+                else apiKey.isNotBlank(),
             nextLabel = "Initialize Agent",
             currentStep = 2,
             isLoading = isStarting,
