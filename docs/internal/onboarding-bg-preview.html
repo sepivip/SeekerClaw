@@ -479,5 +479,274 @@ document.querySelectorAll('.particles-canvas').forEach(pcanvas => {
 });
 </script>
 
+<!-- ========================================================================
+     TEST CONNECTION BUTTON FEEDBACK VARIANTS — Material 3 patterns
+     Click each button to see how the feedback appears.
+     ======================================================================== -->
+<style>
+  .variants {
+    margin-top: 60px;
+    padding-top: 40px;
+    border-top: 1px solid #222;
+  }
+  .variants h2 {
+    font-size: 18px;
+    margin-bottom: 6px;
+  }
+  .variants p.intro {
+    color: var(--dim);
+    font-size: 13px;
+    margin-bottom: 28px;
+  }
+  .variant {
+    background: #0E1218;
+    border: 1px solid #1f2530;
+    border-radius: 16px;
+    padding: 22px;
+    margin-bottom: 18px;
+    max-width: 460px;
+  }
+  .variant .label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--dim);
+    margin-bottom: 4px;
+  }
+  .variant .name {
+    font-size: 16px;
+    font-weight: 700;
+    margin-bottom: 4px;
+  }
+  .variant .desc {
+    color: var(--dim);
+    font-size: 12px;
+    margin-bottom: 18px;
+    line-height: 1.5;
+  }
+  .field {
+    background: #14181F;
+    border: 1px solid #2a2f3a;
+    border-radius: 10px;
+    padding: 12px 14px;
+    color: var(--text);
+    font-family: monospace;
+    font-size: 13px;
+    width: 100%;
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .field .check { color: #4ADE80; font-size: 18px; }
+  .field .check.bad { color: #F87171; }
+  .btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: 100%;
+    height: 52px;
+    border: 1px solid #2a2f3a;
+    border-radius: 12px;
+    background: #14181F;
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.25s, border-color 0.25s, color 0.25s;
+    font-family: inherit;
+  }
+  .btn:hover { background: #1a1f29; }
+  .btn.success {
+    background: rgba(74, 222, 128, 0.12);
+    border-color: rgba(74, 222, 128, 0.5);
+    color: #4ADE80;
+  }
+  .btn.error {
+    background: rgba(248, 113, 113, 0.12);
+    border-color: rgba(248, 113, 113, 0.5);
+    color: #F87171;
+  }
+  .btn .spinner {
+    width: 14px; height: 14px;
+    border: 2px solid currentColor;
+    border-top-color: transparent;
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Variant 1 — text below */
+  .below-msg {
+    margin-top: 10px;
+    font-size: 12px;
+  }
+  .below-msg.ok { color: #4ADE80; }
+  .below-msg.bad { color: #F87171; }
+
+  /* Variant 3 — assist chip */
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 12px;
+    padding: 6px 12px;
+    border-radius: 16px;
+    font-size: 12px;
+    font-weight: 500;
+    border: 1px solid #2a2f3a;
+    background: #14181F;
+  }
+  .chip.ok { background: rgba(74, 222, 128, 0.12); border-color: rgba(74, 222, 128, 0.5); color: #4ADE80; }
+  .chip.bad { background: rgba(248, 113, 113, 0.12); border-color: rgba(248, 113, 113, 0.5); color: #F87171; }
+
+  /* Variant 4 — snackbar */
+  .snackbar {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%) translateY(120px);
+    background: #1F2530;
+    border: 1px solid #2f3540;
+    color: var(--text);
+    font-size: 13px;
+    padding: 14px 22px;
+    border-radius: 8px;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+    transition: transform 0.3s ease-out;
+    z-index: 100;
+  }
+  .snackbar.show { transform: translateX(-50%) translateY(0); }
+
+  /* Variant 5 — field trailing icon morph */
+  .field-status {
+    margin-left: 8px;
+    font-size: 12px;
+    font-weight: 500;
+  }
+  .field-status.ok { color: #4ADE80; }
+  .field-status.bad { color: #F87171; }
+</style>
+
+<div class="variants">
+  <h2>Test Connection — Feedback Variants</h2>
+  <p class="intro">Click each button to see how the feedback animates. Each variant cycles: idle → loading → success → idle. Hold shift while clicking to test the error state.</p>
+
+  <!-- VARIANT 1 — Current: separate text below -->
+  <div class="variant">
+    <div class="label">Variant 1</div>
+    <div class="name">Text below button (current)</div>
+    <div class="desc">Plain status line below the button. Persistent until token changes. Lowest visual priority.</div>
+    <div class="field">123456789:ABCdefGHI… <span class="check">✓</span></div>
+    <button class="btn" onclick="runVariant(this, 'below')">Test Connection</button>
+    <div class="below-msg" data-msg></div>
+  </div>
+
+  <!-- VARIANT 2 — Inline button morph (Stripe/AWS style) -->
+  <div class="variant">
+    <div class="label">Variant 2 ⭐</div>
+    <div class="name">Inline button morph (Material 3 state-driven)</div>
+    <div class="desc">Button text + color + border swap to reflect result. Persistent. Used by Stripe, GitHub, Twilio, Vercel. Most contextual feedback.</div>
+    <div class="field">123456789:ABCdefGHI… <span class="check">✓</span></div>
+    <button class="btn" onclick="runVariant(this, 'morph')">Test Connection</button>
+  </div>
+
+  <!-- VARIANT 3 — Assist chip below -->
+  <div class="variant">
+    <div class="label">Variant 3</div>
+    <div class="name">Assist chip below</div>
+    <div class="desc">Small pill-shaped status chip below the button. Material 3's "assist chip" pattern. Persistent.</div>
+    <div class="field">123456789:ABCdefGHI… <span class="check">✓</span></div>
+    <button class="btn" onclick="runVariant(this, 'chip')">Test Connection</button>
+    <div data-chip-slot></div>
+  </div>
+
+  <!-- VARIANT 4 — Snackbar -->
+  <div class="variant">
+    <div class="label">Variant 4</div>
+    <div class="name">Snackbar (Material 3 canonical for transient feedback)</div>
+    <div class="desc">Floats at the bottom of the screen for ~4s, then disappears. M3's most idiomatic confirmation pattern. Detached from the button.</div>
+    <div class="field">123456789:ABCdefGHI… <span class="check">✓</span></div>
+    <button class="btn" onclick="runVariant(this, 'snackbar')">Test Connection</button>
+  </div>
+
+  <!-- VARIANT 5 — Field trailing icon -->
+  <div class="variant">
+    <div class="label">Variant 5</div>
+    <div class="name">TextField trailing icon + label</div>
+    <div class="desc">Result appears inside / next to the input field, not the button. Material 3 form validation pattern. Button stays neutral.</div>
+    <div class="field">
+      <span>123456789:ABCdefGHI…</span>
+      <span data-field-icon class="check">✓</span>
+    </div>
+    <div data-field-status class="field-status"></div>
+    <button class="btn" onclick="runVariant(this, 'field')">Test Connection</button>
+  </div>
+</div>
+
+<div class="snackbar" id="snackbar"></div>
+
+<script>
+function runVariant(btn, kind) {
+  const isError = event.shiftKey;
+  const variant = btn.closest('.variant');
+
+  // Reset all states first
+  resetVariant(variant);
+  btn.classList.remove('success', 'error');
+  btn.disabled = true;
+
+  // Show loading
+  const originalText = btn.textContent;
+  btn.innerHTML = '<span class="spinner"></span> Testing…';
+
+  setTimeout(() => {
+    btn.disabled = false;
+    if (kind === 'morph') {
+      if (isError) {
+        btn.classList.add('error');
+        btn.innerHTML = '✕ Invalid bot token';
+      } else {
+        btn.classList.add('success');
+        btn.innerHTML = '✓ Connected to @SeekerClaw4_bot';
+      }
+    } else if (kind === 'below') {
+      btn.innerHTML = 'Test Connection';
+      const msg = variant.querySelector('[data-msg]');
+      msg.className = 'below-msg ' + (isError ? 'bad' : 'ok');
+      msg.textContent = isError ? 'Telegram returned 401. Check the token.' : 'Connected to @SeekerClaw4_bot';
+    } else if (kind === 'chip') {
+      btn.innerHTML = 'Test Connection';
+      const slot = variant.querySelector('[data-chip-slot]');
+      slot.innerHTML = '<div class="chip ' + (isError ? 'bad' : 'ok') + '">' + (isError ? '✕ Invalid bot token' : '✓ @SeekerClaw4_bot') + '</div>';
+    } else if (kind === 'snackbar') {
+      btn.innerHTML = 'Test Connection';
+      const sb = document.getElementById('snackbar');
+      sb.textContent = isError ? '✕ Invalid bot token' : '✓ Connected to @SeekerClaw4_bot';
+      sb.classList.add('show');
+      setTimeout(() => sb.classList.remove('show'), 3500);
+    } else if (kind === 'field') {
+      btn.innerHTML = 'Test Connection';
+      const icon = variant.querySelector('[data-field-icon]');
+      const status = variant.querySelector('[data-field-status]');
+      icon.textContent = isError ? '✕' : '✓';
+      icon.className = 'check' + (isError ? ' bad' : '');
+      status.className = 'field-status ' + (isError ? 'bad' : 'ok');
+      status.textContent = isError ? 'Invalid bot token' : 'Connected to @SeekerClaw4_bot';
+    }
+  }, 900);
+}
+
+function resetVariant(variant) {
+  const msg = variant.querySelector('[data-msg]');
+  if (msg) { msg.textContent = ''; msg.className = 'below-msg'; }
+  const chipSlot = variant.querySelector('[data-chip-slot]');
+  if (chipSlot) chipSlot.innerHTML = '';
+  const fieldStatus = variant.querySelector('[data-field-status]');
+  if (fieldStatus) { fieldStatus.textContent = ''; fieldStatus.className = 'field-status'; }
+}
+</script>
+
 </body>
 </html>

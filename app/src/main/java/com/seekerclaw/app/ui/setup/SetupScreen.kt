@@ -419,7 +419,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                 SetupSteps.MODEL -> "Pick Your Model" to
                     "You can always change model later in settings."
                 SetupSteps.TELEGRAM -> "Connect Telegram" to
-                    "Your User ID is set automatically when you first message your bot \u2014 you can change it later in settings."
+                    "Your User ID is set automatically on your first message. You can change it \u2014 or switch chat provider \u2014 later in settings."
                 else -> "" to ""
             }
             StepTitle(title = stepTitle, tagline = stepTagline)
@@ -1208,7 +1208,30 @@ private fun TelegramStep(
 
             Spacer(modifier = Modifier.height(Spacing.md))
 
-            // Test Connection button
+            // Reset test state whenever the token changes so the user can retest
+            LaunchedEffect(botToken) {
+                if (testOk != null || testMessage.isNotEmpty()) {
+                    testOk = null
+                    testMessage = ""
+                }
+            }
+
+            // Test Connection button — Material 3 state-driven morph (Variant 2)
+            val testContainer = when (testOk) {
+                true -> SeekerClawColors.Accent.copy(alpha = 0.12f)
+                false -> SeekerClawColors.Error.copy(alpha = 0.12f)
+                null -> SeekerClawColors.Surface
+            }
+            val testContent = when (testOk) {
+                true -> SeekerClawColors.Accent
+                false -> SeekerClawColors.Error
+                null -> SeekerClawColors.TextPrimary
+            }
+            val testBorder = when (testOk) {
+                true -> SeekerClawColors.Accent.copy(alpha = 0.5f)
+                false -> SeekerClawColors.Error.copy(alpha = 0.5f)
+                null -> SeekerClawColors.CardBorder
+            }
             Button(
                 onClick = { runTest() },
                 enabled = botToken.isNotBlank() && !isTesting,
@@ -1217,34 +1240,45 @@ private fun TelegramStep(
                     .height(Sizing.buttonSecondaryHeight),
                 shape = shape,
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = SeekerClawColors.Surface,
-                    contentColor = SeekerClawColors.TextPrimary,
-                    disabledContainerColor = SeekerClawColors.Surface,
-                    disabledContentColor = SeekerClawColors.TextDim,
+                    containerColor = testContainer,
+                    contentColor = testContent,
+                    disabledContainerColor = testContainer,
+                    disabledContentColor = testContent,
                 ),
-                border = BorderStroke(Sizing.borderThin, SeekerClawColors.CardBorder),
+                border = BorderStroke(Sizing.borderThin, testBorder),
             ) {
-                if (isTesting) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(Sizing.iconSm),
-                        color = SeekerClawColors.TextPrimary,
-                        strokeWidth = 2.dp,
-                    )
-                    Spacer(modifier = Modifier.width(Spacing.sm))
-                    Text("Testing\u2026", fontFamily = RethinkSans, fontSize = TypeScale.bodyMedium, fontWeight = FontWeight.Medium)
-                } else {
-                    Text("Test Connection", fontFamily = RethinkSans, fontSize = TypeScale.bodyMedium, fontWeight = FontWeight.Medium)
+                when {
+                    isTesting -> {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(Sizing.iconSm),
+                            color = SeekerClawColors.TextPrimary,
+                            strokeWidth = 2.dp,
+                        )
+                        Spacer(modifier = Modifier.width(Spacing.sm))
+                        Text("Testing\u2026", fontFamily = RethinkSans, fontSize = TypeScale.bodyMedium, fontWeight = FontWeight.Medium)
+                    }
+                    testOk == true -> {
+                        Text(
+                            "\u2713 $testMessage",
+                            fontFamily = RethinkSans,
+                            fontSize = TypeScale.bodyMedium,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                        )
+                    }
+                    testOk == false -> {
+                        Text(
+                            "\u2715 $testMessage",
+                            fontFamily = RethinkSans,
+                            fontSize = TypeScale.bodyMedium,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                        )
+                    }
+                    else -> {
+                        Text("Test Connection", fontFamily = RethinkSans, fontSize = TypeScale.bodyMedium, fontWeight = FontWeight.Medium)
+                    }
                 }
-            }
-
-            if (testOk != null) {
-                Spacer(modifier = Modifier.height(Spacing.sm))
-                Text(
-                    text = testMessage,
-                    fontFamily = RethinkSans,
-                    fontSize = TypeScale.labelSmall,
-                    color = if (testOk == true) SeekerClawColors.Accent else SeekerClawColors.Error,
-                )
             }
 
             Spacer(modifier = Modifier.height(Spacing.lg))
