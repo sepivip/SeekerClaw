@@ -373,6 +373,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             ConfigManager.seedWorkspace(context)
             OpenClawService.start(context)
             ConfigManager.markFirstDeploymentDone(context)
+            isStarting = false
             currentStep = SetupSteps.SUCCESS
         } catch (e: Exception) {
             LogCollector.append("[Setup] Failed to start agent: ${e.message}", LogLevel.ERROR)
