@@ -12,14 +12,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -31,7 +26,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -42,7 +36,8 @@ import com.seekerclaw.app.ui.components.ConfigField
 import com.seekerclaw.app.ui.components.SectionLabel
 import com.seekerclaw.app.ui.components.SeekerClawScaffold
 import com.seekerclaw.app.ui.components.cornerGlowBorder
-import com.seekerclaw.app.ui.theme.Sizing
+import com.seekerclaw.app.ui.components.ActionResult
+import com.seekerclaw.app.ui.components.MorphActionButton
 import com.seekerclaw.app.ui.theme.RethinkSans
 import com.seekerclaw.app.ui.theme.SeekerClawColors
 import kotlinx.coroutines.Dispatchers
@@ -85,8 +80,7 @@ fun ChannelConfigScreen(onBack: () -> Unit) {
     var showRestartDialog by remember { mutableStateOf(false) }
 
     // Telegram connection test state
-    var testStatus by remember { mutableStateOf("Idle") }
-    var testMessage by remember { mutableStateOf("") }
+    var telegramTestState by remember { mutableStateOf<ActionResult>(ActionResult.Idle) }
 
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
     val activeChannel = config?.channel ?: "telegram"
@@ -219,62 +213,28 @@ fun ChannelConfigScreen(onBack: () -> Unit) {
                         )
                         Spacer(modifier = Modifier.height(12.dp))
 
-                        Button(
+                        MorphActionButton(
+                            state = telegramTestState,
+                            idleLabel = "Test Bot",
+                            loadingLabel = "Testing\u2026",
                             onClick = {
-                                if (testStatus == "Loading") return@Button
-                                testStatus = "Loading"
-                                testMessage = ""
+                                if (telegramTestState is ActionResult.Loading) return@MorphActionButton
                                 val token = config?.telegramBotToken ?: ""
                                 if (token.isBlank()) {
-                                    testStatus = "Error"
-                                    testMessage = "Bot token is empty."
-                                    return@Button
+                                    telegramTestState = ActionResult.Error("Bot token is empty.")
+                                    return@MorphActionButton
                                 }
-
+                                telegramTestState = ActionResult.Loading
                                 scope.launch {
                                     val result = testTelegramBot(token)
-                                    if (result.isSuccess) {
-                                        testStatus = "Success"
-                                        testMessage = "Bot connected as @${result.getOrNull()}"
+                                    telegramTestState = if (result.isSuccess) {
+                                        ActionResult.Success("Bot connected as @${result.getOrNull()}")
                                     } else {
-                                        testStatus = "Error"
-                                        testMessage = result.exceptionOrNull()?.message ?: "Connection failed"
+                                        ActionResult.Error(result.exceptionOrNull()?.message ?: "Connection failed")
                                     }
                                 }
                             },
-                            enabled = testStatus != "Loading",
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(Sizing.buttonPrimaryHeight)
-                                .cornerGlowBorder(),
-                            shape = shape,
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = SeekerClawColors.ActionPrimary,
-                                contentColor = Color.White,
-                            ),
-                        ) {
-                            if (testStatus == "Loading") {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(16.dp),
-                                    strokeWidth = 2.dp,
-                                    color = Color.White,
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Testing...", fontFamily = RethinkSans, fontSize = 14.sp)
-                            } else {
-                                Text("Test Bot", fontFamily = RethinkSans, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                            }
-                        }
-
-                        if (testStatus == "Success" || testStatus == "Error") {
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Text(
-                                text = testMessage,
-                                fontFamily = RethinkSans,
-                                fontSize = 13.sp,
-                                color = if (testStatus == "Success") SeekerClawColors.ActionPrimary else SeekerClawColors.Error,
-                            )
-                        }
+                        )
                     }
                 }
 
@@ -332,8 +292,7 @@ fun ChannelConfigScreen(onBack: () -> Unit) {
                         SectionLabel("Connection Test")
                         Spacer(modifier = Modifier.height(10.dp))
 
-                        var discordTestStatus by remember { mutableStateOf("") }
-                        var discordTestMessage by remember { mutableStateOf("") }
+                        var discordTestState by remember { mutableStateOf<ActionResult>(ActionResult.Idle) }
 
                         CardSurface {
                             Text(
@@ -344,56 +303,23 @@ fun ChannelConfigScreen(onBack: () -> Unit) {
                             )
                             Spacer(modifier = Modifier.height(12.dp))
 
-                            Button(
+                            MorphActionButton(
+                                state = discordTestState,
+                                idleLabel = "Test Bot",
+                                loadingLabel = "Testing\u2026",
                                 onClick = {
-                                    if (discordTestStatus == "Loading") return@Button
-                                    discordTestStatus = "Loading"
-                                    discordTestMessage = ""
-
+                                    if (discordTestState is ActionResult.Loading) return@MorphActionButton
+                                    discordTestState = ActionResult.Loading
                                     scope.launch {
                                         val result = testDiscordBot(discordToken!!)
-                                        if (result.isSuccess) {
-                                            discordTestStatus = "Success"
-                                            discordTestMessage = "Bot connected as @${result.getOrNull()}"
+                                        discordTestState = if (result.isSuccess) {
+                                            ActionResult.Success("Bot connected as @${result.getOrNull()}")
                                         } else {
-                                            discordTestStatus = "Error"
-                                            discordTestMessage = result.exceptionOrNull()?.message ?: "Connection failed"
+                                            ActionResult.Error(result.exceptionOrNull()?.message ?: "Connection failed")
                                         }
                                     }
                                 },
-                                enabled = discordTestStatus != "Loading",
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(Sizing.buttonPrimaryHeight)
-                                    .cornerGlowBorder(),
-                                shape = shape,
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = SeekerClawColors.ActionPrimary,
-                                    contentColor = Color.White,
-                                ),
-                            ) {
-                                if (discordTestStatus == "Loading") {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(16.dp),
-                                        strokeWidth = 2.dp,
-                                        color = Color.White,
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text("Testing...", fontFamily = RethinkSans, fontSize = 14.sp)
-                                } else {
-                                    Text("Test Bot", fontFamily = RethinkSans, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                                }
-                            }
-
-                            if (discordTestStatus == "Success" || discordTestStatus == "Error") {
-                                Spacer(modifier = Modifier.height(12.dp))
-                                Text(
-                                    text = discordTestMessage,
-                                    fontFamily = RethinkSans,
-                                    fontSize = 13.sp,
-                                    color = if (discordTestStatus == "Success") SeekerClawColors.ActionPrimary else SeekerClawColors.Error,
-                                )
-                            }
+                            )
                         }
                     }
 

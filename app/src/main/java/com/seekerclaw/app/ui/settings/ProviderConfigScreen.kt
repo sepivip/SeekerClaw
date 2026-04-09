@@ -15,9 +15,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import com.seekerclaw.app.ui.components.SeekerClawScaffold
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.RadioButton
@@ -46,6 +43,8 @@ import com.seekerclaw.app.ui.components.ConfigField
 import com.seekerclaw.app.ui.components.ProviderPicker
 import com.seekerclaw.app.ui.components.OpenAIOAuthSection
 import com.seekerclaw.app.ui.components.cornerGlowBorder
+import com.seekerclaw.app.ui.components.ActionResult
+import com.seekerclaw.app.ui.components.MorphActionButton
 import com.seekerclaw.app.ui.components.rememberOpenAIOAuthController
 import com.seekerclaw.app.ui.theme.Sizing
 import com.seekerclaw.app.config.ConfigManager
@@ -91,8 +90,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
     var orModelDialog by remember { mutableStateOf<String?>(null) } // "model" or "fallback"
     var orModelValue by remember { mutableStateOf("") }
     var orContextValue by remember { mutableStateOf("") }
-    var testStatus by remember { mutableStateOf("Idle") }
-    var testMessage by remember { mutableStateOf("") }
+    var testState by remember { mutableStateOf<ActionResult>(ActionResult.Idle) }
     var showRestartDialog by remember { mutableStateOf(false) }
 
     // Shared OAuth controller — same instance used by onboarding's ProviderSetupStep.
@@ -431,11 +429,13 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                 )
                 Spacer(modifier = Modifier.height(12.dp))
 
-                Button(
+                MorphActionButton(
+                    state = testState,
+                    idleLabel = "Test Connection",
+                    loadingLabel = "Testing\u2026",
                     onClick = {
-                        if (testStatus == "Loading") return@Button
-                        testStatus = "Loading"
-                        testMessage = ""
+                        if (testState is ActionResult.Loading) return@MorphActionButton
+                        testState = ActionResult.Loading
                         scope.launch {
                             val result = when (activeProvider) {
                                 "openrouter" -> testOpenRouterConnection(config?.openrouterApiKey ?: "")
@@ -465,48 +465,14 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                                     testAnthropicConnection(anthropicCredential, authType)
                                 }
                             }
-                            if (result.isSuccess) {
-                                testStatus = "Success"
-                                testMessage = "Connection successful!"
+                            testState = if (result.isSuccess) {
+                                ActionResult.Success("Connection successful!")
                             } else {
-                                testStatus = "Error"
-                                testMessage = result.exceptionOrNull()?.message ?: "Connection failed"
+                                ActionResult.Error(result.exceptionOrNull()?.message ?: "Connection failed")
                             }
                         }
                     },
-                    enabled = testStatus != "Loading",
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(Sizing.buttonPrimaryHeight)
-                        .cornerGlowBorder(),
-                    shape = shape,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = SeekerClawColors.ActionPrimary,
-                        contentColor = Color.White,
-                    ),
-                ) {
-                    if (testStatus == "Loading") {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            strokeWidth = 2.dp,
-                            color = Color.White,
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Testing...", fontFamily = RethinkSans, fontSize = 14.sp)
-                    } else {
-                        Text("Test Connection", fontFamily = RethinkSans, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                    }
-                }
-
-                if (testStatus == "Success" || testStatus == "Error") {
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text(
-                        text = testMessage,
-                        fontFamily = RethinkSans,
-                        fontSize = 13.sp,
-                        color = if (testStatus == "Success") SeekerClawColors.ActionPrimary else SeekerClawColors.Error,
-                    )
-                }
+                )
             }
 
             Spacer(modifier = Modifier.height(20.dp))

@@ -101,6 +101,8 @@ import com.seekerclaw.app.BuildConfig
 import com.seekerclaw.app.ui.components.CardSurface
 import com.seekerclaw.app.ui.components.DangerButton
 import com.seekerclaw.app.ui.components.DangerOutlineButton
+import com.seekerclaw.app.ui.components.PrimaryButton
+import com.seekerclaw.app.ui.components.SecondaryButton
 import com.seekerclaw.app.ui.components.SectionLabel
 import com.seekerclaw.app.ui.components.ConfigField
 import com.seekerclaw.app.ui.components.InfoDialog
@@ -823,69 +825,32 @@ fun SettingsScreen(
         // Setup — combines Scan QR (primary) + Run Setup Again (secondary)
         CollapsibleSection("Setup", initiallyExpanded = true) {
             // Primary: Scan Config QR
-            Button(
+            PrimaryButton(
                 onClick = {
                     if (!isConfigImporting) {
                         Analytics.featureUsed("qr_scan")
                         qrConfigLauncher.launch(Intent(context, QrScannerActivity::class.java))
                     }
                 },
-                enabled = !isConfigImporting,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(Sizing.buttonPrimaryHeight)
-                    .cornerGlowBorder(),
-                shape = shape,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = SeekerClawColors.ActionPrimary,
-                    contentColor = androidx.compose.ui.graphics.Color.White,
-                ),
-            ) {
-                if (isConfigImporting) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(16.dp),
-                        strokeWidth = 2.dp,
-                        color = androidx.compose.ui.graphics.Color.White,
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Importing Config\u2026", fontFamily = RethinkSans, fontSize = 14.sp)
-                } else {
+                label = "Scan Config QR",
+                isLoading = isConfigImporting,
+                loadingLabel = "Importing Config\u2026",
+                leadingIcon = {
                     Icon(
                         Icons.Default.QrCodeScanner,
                         contentDescription = null,
                         modifier = Modifier.size(18.dp),
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        "Scan Config QR",
-                        fontFamily = RethinkSans,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 14.sp,
-                    )
-                }
-            }
+                },
+            )
 
             Spacer(modifier = Modifier.height(8.dp))
 
             // Secondary: Run Setup Again
-            OutlinedButton(
+            SecondaryButton(
                 onClick = { showRunSetupDialog = true },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(Sizing.buttonSecondaryHeight)
-                    .cornerGlowBorder(),
-                shape = shape,
-                border = androidx.compose.foundation.BorderStroke(1.dp, SeekerClawColors.BorderSubtle),
-                colors = ButtonDefaults.outlinedButtonColors(
-                    contentColor = SeekerClawColors.TextPrimary,
-                ),
-            ) {
-                Text(
-                    "Run Setup Again",
-                    fontFamily = RethinkSans,
-                    fontSize = 14.sp,
-                )
-            }
+                label = "Run Setup Again",
+            )
 
             Spacer(modifier = Modifier.height(10.dp))
 

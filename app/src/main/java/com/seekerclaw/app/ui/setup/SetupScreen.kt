@@ -123,6 +123,8 @@ import com.seekerclaw.app.ui.components.CardSurface
 import com.seekerclaw.app.ui.components.InputMask
 import com.seekerclaw.app.ui.components.InputWithActionButton
 import com.seekerclaw.app.ui.components.MorphActionButton
+import com.seekerclaw.app.ui.components.PrimaryButton
+import com.seekerclaw.app.ui.components.SecondaryButton
 import com.seekerclaw.app.ui.components.OpenAIOAuthSection
 import com.seekerclaw.app.ui.components.ProviderPicker
 import com.seekerclaw.app.ui.components.rememberOpenAIOAuthController
@@ -740,25 +742,10 @@ private fun WelcomeStep(
         Spacer(modifier = Modifier.weight(1f))
 
         // Primary CTA: Get Started
-        Button(
+        PrimaryButton(
             onClick = onNext,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(Sizing.buttonPrimaryHeight)
-                .cornerGlowBorder(),
-            shape = shape,
-            colors = ButtonDefaults.buttonColors(
-                containerColor = SeekerClawColors.ActionPrimary,
-                contentColor = OnboardingColors.onActionPrimary,
-            ),
-        ) {
-            Text(
-                "Get Started",
-                fontFamily = RethinkSans,
-                fontSize = TypeScale.titleMedium,
-                fontWeight = FontWeight.Bold,
-            )
-        }
+            label = "Get Started",
+        )
 
         Spacer(modifier = Modifier.height(SetupLayout.gapBetweenButtons))
 
@@ -798,27 +785,18 @@ private fun WelcomeStep(
                 }
             }
 
-            Button(
+            SecondaryButton(
                 onClick = onSkip,
-                modifier = Modifier
-                    .weight(1f)
-                    .height(Sizing.buttonSecondaryHeight)
-                    .cornerGlowBorder(),
-                shape = shape,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = SeekerClawColors.Surface,
-                    contentColor = SeekerClawColors.TextPrimary,
-                ),
-                border = BorderStroke(Sizing.borderThin, SeekerClawColors.CardBorder),
-            ) {
-                Icon(
-                    Icons.AutoMirrored.Filled.LastPage,
-                    contentDescription = null,
-                    modifier = Modifier.size(Sizing.iconMd),
-                )
-                Spacer(modifier = Modifier.width(Spacing.sm))
-                Text("Skip", fontFamily = RethinkSans, fontSize = TypeScale.bodyMedium, fontWeight = FontWeight.Medium)
-            }
+                label = "Skip",
+                modifier = Modifier.weight(1f),
+                leadingIcon = {
+                    Icon(
+                        Icons.AutoMirrored.Filled.LastPage,
+                        contentDescription = null,
+                        modifier = Modifier.size(Sizing.iconMd),
+                    )
+                },
+            )
         }
 
         if (qrError != null) {
