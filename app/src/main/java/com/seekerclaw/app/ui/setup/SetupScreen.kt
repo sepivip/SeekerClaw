@@ -1636,17 +1636,26 @@ private fun PageDots(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         val dotShape = RoundedCornerShape(Sizing.pageDotCornerRadius)
+        val anim = tween<Dp>(durationMillis = 350, easing = androidx.compose.animation.core.FastOutSlowInEasing)
+        val colorAnim = tween<Color>(durationMillis = 350, easing = androidx.compose.animation.core.FastOutSlowInEasing)
         for (i in 0 until totalSteps) {
             val isActive = i == currentStep
+            val width by androidx.compose.animation.core.animateDpAsState(
+                targetValue = if (isActive) Sizing.pageDotActiveWidth else Sizing.pageDotSize,
+                animationSpec = anim,
+                label = "pageDotWidth$i",
+            )
+            val color by androidx.compose.animation.animateColorAsState(
+                targetValue = if (isActive) SeekerClawColors.TextPrimary
+                    else SeekerClawColors.TextDim.copy(alpha = BrandAlpha.disabledSurface),
+                animationSpec = colorAnim,
+                label = "pageDotColor$i",
+            )
             Box(
                 modifier = Modifier
-                    .width(if (isActive) Sizing.pageDotActiveWidth else Sizing.pageDotSize)
+                    .width(width)
                     .height(Sizing.pageDotSize)
-                    .background(
-                        if (isActive) SeekerClawColors.TextPrimary
-                        else SeekerClawColors.TextDim.copy(alpha = BrandAlpha.disabledSurface),
-                        dotShape,
-                    ),
+                    .background(color, dotShape),
             )
         }
     }
