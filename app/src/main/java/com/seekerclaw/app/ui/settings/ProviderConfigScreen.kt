@@ -236,7 +236,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                         ConfigField(
                             label = "Model",
                             value = availableModels.find { it.id == config?.model }
-                                ?.let { "${it.displayName} (${it.description})" }
+                                ?.displayName
                                 ?: config?.model?.ifBlank { "Not set" } ?: "Not set",
                             onClick = { showModelPicker = true },
                             info = SettingsHelpTexts.MODEL,
@@ -290,7 +290,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                         ConfigField(
                             label = "Model",
                             value = openaiModelList.find { it.id == config?.model }
-                                ?.let { "${it.displayName} (${it.description})" }
+                                ?.displayName
                                 ?: config?.model?.ifBlank { "Not set" } ?: "Not set",
                             onClick = { showModelPicker = true },
                             info = SettingsHelpTexts.MODEL,

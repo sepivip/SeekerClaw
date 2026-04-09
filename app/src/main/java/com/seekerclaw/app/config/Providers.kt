@@ -49,16 +49,16 @@ val availableProviders = listOf(
 )
 
 val openaiModels = listOf(
-    ModelInfo("gpt-5.2", "GPT-5.2", "flagship • recommended"),
-    ModelInfo("gpt-5.4", "GPT-5.4", "frontier"),
-    ModelInfo("gpt-5.3-codex", "GPT-5.3 Codex", "code agent"),
+    ModelInfo("gpt-5.2", "GPT-5.2"),
+    ModelInfo("gpt-5.4", "GPT-5.4"),
+    ModelInfo("gpt-5.3-codex", "GPT-5.3 Codex"),
 )
 
 val openaiOAuthModels = listOf(
-    ModelInfo("gpt-5.2", "GPT-5.2", "flagship • recommended"),
-    ModelInfo("gpt-5.4", "GPT-5.4", "frontier"),
-    ModelInfo("gpt-5.4-mini", "GPT-5.4 Mini", "fast"),
-    ModelInfo("gpt-5.3-codex", "GPT-5.3 Codex", "code agent"),
+    ModelInfo("gpt-5.2", "GPT-5.2"),
+    ModelInfo("gpt-5.4", "GPT-5.4"),
+    ModelInfo("gpt-5.4-mini", "GPT-5.4 Mini"),
+    ModelInfo("gpt-5.3-codex", "GPT-5.3 Codex"),
 )
 
 /** Default model for freeform providers (OpenRouter) where model list is empty. */
