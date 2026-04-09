@@ -75,6 +75,93 @@ import com.seekerclaw.app.ui.theme.Spacing
 import com.seekerclaw.app.ui.theme.TypeScale
 
 /**
+ * Primary action button — green filled, 56dp, corner glow, RethinkSans bold.
+ * Use for: Get Started, Next, Create Agent, Initialize, Connect, Sign In, etc.
+ * This is the single source of truth for the app's "do the main thing" button.
+ */
+@Composable
+fun PrimaryButton(
+    onClick: () -> Unit,
+    label: String,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    isLoading: Boolean = false,
+    loadingLabel: String = "Working\u2026",
+    leadingIcon: (@Composable () -> Unit)? = null,
+) {
+    val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
+    Button(
+        onClick = onClick,
+        enabled = enabled && !isLoading,
+        modifier = modifier
+            .fillMaxWidth()
+            .height(Sizing.buttonPrimaryHeight)
+            .cornerGlowBorder(),
+        shape = shape,
+        colors = ButtonDefaults.buttonColors(
+            containerColor = SeekerClawColors.ActionPrimary,
+            contentColor = Color.White,
+            disabledContainerColor = SeekerClawColors.ActionPrimary.copy(alpha = BrandAlpha.disabledSurface),
+            disabledContentColor = Color.White.copy(alpha = BrandAlpha.disabledContent),
+        ),
+    ) {
+        if (isLoading) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(Sizing.iconSm),
+                color = Color.White,
+                strokeWidth = 2.dp,
+            )
+            Spacer(modifier = Modifier.width(Spacing.sm))
+            Text(loadingLabel, fontFamily = RethinkSans, fontSize = TypeScale.titleMedium, fontWeight = FontWeight.Bold)
+        } else {
+            if (leadingIcon != null) {
+                leadingIcon()
+                Spacer(modifier = Modifier.width(Spacing.sm))
+            }
+            Text(label, fontFamily = RethinkSans, fontSize = TypeScale.titleMedium, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+/**
+ * Secondary action button — bordered dark variant. Same shape/height/glow as
+ * PrimaryButton but uses the Surface background + CardBorder stroke, suitable
+ * for Back, Cancel, Scan Config, Skip, and other non-primary actions.
+ */
+@Composable
+fun SecondaryButton(
+    onClick: () -> Unit,
+    label: String,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    leadingIcon: (@Composable () -> Unit)? = null,
+) {
+    val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
+    Button(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier
+            .fillMaxWidth()
+            .height(Sizing.buttonSecondaryHeight)
+            .cornerGlowBorder(),
+        shape = shape,
+        colors = ButtonDefaults.buttonColors(
+            containerColor = SeekerClawColors.Surface,
+            contentColor = SeekerClawColors.TextPrimary,
+            disabledContainerColor = SeekerClawColors.Surface,
+            disabledContentColor = SeekerClawColors.TextDim,
+        ),
+        border = BorderStroke(Sizing.borderThin, SeekerClawColors.CardBorder),
+    ) {
+        if (leadingIcon != null) {
+            leadingIcon()
+            Spacer(modifier = Modifier.width(Spacing.sm))
+        }
+        Text(label, fontFamily = RethinkSans, fontSize = TypeScale.bodyMedium, fontWeight = FontWeight.Medium)
+    }
+}
+
+/**
  * Danger / destructive primary button — same shape, height, and corner glow as
  * the green primary action button, but in the brand danger red. Use for Sign Out,
  * Reset Config, Wipe Memory, Delete Account, etc. Centralizes the visual so every

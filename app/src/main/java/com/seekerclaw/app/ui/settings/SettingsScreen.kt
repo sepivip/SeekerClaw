@@ -99,12 +99,15 @@ import com.seekerclaw.app.util.LogCollector
 import com.seekerclaw.app.util.LogLevel
 import com.seekerclaw.app.BuildConfig
 import com.seekerclaw.app.ui.components.CardSurface
+import com.seekerclaw.app.ui.components.DangerButton
+import com.seekerclaw.app.ui.components.DangerOutlineButton
 import com.seekerclaw.app.ui.components.SectionLabel
 import com.seekerclaw.app.ui.components.ConfigField
 import com.seekerclaw.app.ui.components.InfoDialog
 import com.seekerclaw.app.ui.components.InfoRow
 import com.seekerclaw.app.ui.components.cornerGlowBorder
 import com.seekerclaw.app.ui.theme.Sizing
+import com.seekerclaw.app.ui.theme.Spacing
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -922,49 +925,17 @@ fun SettingsScreen(
         // Danger zone
         CollapsibleSection("Danger Zone", initiallyExpanded = false) {
             Column {
-                Button(
+                DangerOutlineButton(
                     onClick = { showResetDialog = true },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = shape,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = SeekerClawColors.ActionDanger,
-                        contentColor = SeekerClawColors.ActionDangerText,
-                    ),
-                ) {
-                    Text(
-                        "Reset Config",
-                        fontFamily = RethinkSans,
-                        fontWeight = FontWeight.Medium,
-                        fontSize = 14.sp,
-                    )
-                }
+                    label = "Reset Config",
+                )
 
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(Spacing.md))
 
-                Button(
+                DangerButton(
                     onClick = { showClearMemoryDialog = true },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = shape,
-                    border = BorderStroke(1.dp, SeekerClawColors.Error),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = SeekerClawColors.ActionDanger,
-                        contentColor = SeekerClawColors.ActionDangerText,
-                    ),
-                ) {
-                    Icon(
-                        Icons.Default.Warning,
-                        contentDescription = "Warning",
-                        modifier = Modifier.size(16.dp),
-                        tint = SeekerClawColors.ActionDangerText,
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        "Wipe Memory",
-                        fontFamily = RethinkSans,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 14.sp,
-                    )
-                }
+                    label = "Wipe Memory",
+                )
             }
         }
 
