@@ -816,11 +816,60 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(28.dp))
 
-        // Run Setup Again
+        // Setup — combines Scan QR (primary) + Run Setup Again (secondary)
         CollapsibleSection("Setup", initiallyExpanded = false) {
+            // Primary: Scan Config QR
+            Button(
+                onClick = {
+                    if (!isConfigImporting) {
+                        Analytics.featureUsed("qr_scan")
+                        qrConfigLauncher.launch(Intent(context, QrScannerActivity::class.java))
+                    }
+                },
+                enabled = !isConfigImporting,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(Sizing.buttonPrimaryHeight)
+                    .cornerGlowBorder(),
+                shape = shape,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = SeekerClawColors.ActionPrimary,
+                    contentColor = androidx.compose.ui.graphics.Color.White,
+                ),
+            ) {
+                if (isConfigImporting) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp,
+                        color = androidx.compose.ui.graphics.Color.White,
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Importing Config\u2026", fontFamily = RethinkSans, fontSize = 14.sp)
+                } else {
+                    Icon(
+                        Icons.Default.QrCodeScanner,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        "Scan Config QR",
+                        fontFamily = RethinkSans,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp,
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Secondary: Run Setup Again
             OutlinedButton(
                 onClick = { showRunSetupDialog = true },
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(Sizing.buttonSecondaryHeight)
+                    .cornerGlowBorder(),
                 shape = shape,
                 border = androidx.compose.foundation.BorderStroke(1.dp, SeekerClawColors.BorderSubtle),
                 colors = ButtonDefaults.outlinedButtonColors(
@@ -831,6 +880,25 @@ fun SettingsScreen(
                     "Run Setup Again",
                     fontFamily = RethinkSans,
                     fontSize = 14.sp,
+                )
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Text(
+                text = "Generate a config QR at seekerclaw.xyz to set up your agent in seconds.",
+                fontFamily = RethinkSans,
+                fontSize = 12.sp,
+                color = SeekerClawColors.TextDim,
+            )
+
+            if (configImportError != null) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = configImportError ?: "",
+                    fontFamily = RethinkSans,
+                    fontSize = 12.sp,
+                    color = SeekerClawColors.Error,
                 )
             }
         }
@@ -886,71 +954,6 @@ fun SettingsScreen(
             }
         }
 
-        Spacer(modifier = Modifier.height(32.dp))
-
-        // Quick Setup — QR Config Import
-        SectionLabel("Quick Setup")
-
-        Spacer(modifier = Modifier.height(10.dp))
-
-        CardSurface {
-            Text(
-                text = "Generate a config QR at seekerclaw.xyz and scan it to set up your agent in seconds.",
-                fontFamily = RethinkSans,
-                fontSize = 13.sp,
-                color = SeekerClawColors.TextDim,
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Button(
-                onClick = {
-                    if (!isConfigImporting) {
-                        Analytics.featureUsed("qr_scan")
-                        qrConfigLauncher.launch(Intent(context, QrScannerActivity::class.java))
-                    }
-                },
-                enabled = !isConfigImporting,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(Sizing.buttonPrimaryHeight)
-                    .cornerGlowBorder(),
-                shape = shape,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = SeekerClawColors.ActionPrimary,
-                    contentColor = androidx.compose.ui.graphics.Color.White,
-                ),
-            ) {
-                if (isConfigImporting) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(16.dp),
-                        strokeWidth = 2.dp,
-                        color = androidx.compose.ui.graphics.Color.White,
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Importing Config\u2026", fontFamily = RethinkSans, fontSize = 14.sp)
-                } else {
-                    Text(
-                        "Scan Config QR",
-                        fontFamily = RethinkSans,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 14.sp,
-                    )
-                }
-            }
-
-            if (configImportError != null) {
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = configImportError ?: "",
-                    fontFamily = RethinkSans,
-                    fontSize = 12.sp,
-                    color = SeekerClawColors.Error,
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(32.dp))
 
         // System info
         SectionLabel("System")
