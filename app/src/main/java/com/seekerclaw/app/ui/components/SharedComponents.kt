@@ -116,13 +116,27 @@ fun PrimaryButton(
                 strokeWidth = 2.dp,
             )
             Spacer(modifier = Modifier.width(Spacing.sm))
-            Text(loadingLabel, fontFamily = RethinkSans, fontSize = TypeScale.titleMedium, fontWeight = FontWeight.Bold)
+            Text(
+                loadingLabel,
+                fontFamily = RethinkSans,
+                fontSize = TypeScale.titleMedium,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         } else {
             if (leadingIcon != null) {
                 leadingIcon()
                 Spacer(modifier = Modifier.width(Spacing.sm))
             }
-            Text(label, fontFamily = RethinkSans, fontSize = TypeScale.titleMedium, fontWeight = FontWeight.Bold)
+            Text(
+                label,
+                fontFamily = RethinkSans,
+                fontSize = TypeScale.titleMedium,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }
@@ -171,7 +185,14 @@ fun SecondaryButton(
                 leadingIcon()
                 Spacer(modifier = Modifier.width(Spacing.sm))
             }
-            Text(label, fontFamily = RethinkSans, fontSize = TypeScale.bodyMedium, fontWeight = FontWeight.Medium)
+            Text(
+                label,
+                fontFamily = RethinkSans,
+                fontSize = TypeScale.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }

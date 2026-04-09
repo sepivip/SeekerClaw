@@ -1484,7 +1484,7 @@ private fun SetupSuccessStep(
             onBack = onBack,
             onNext = onContinue,
             nextEnabled = true,
-            nextLabel = "Go to Dashboard",
+            nextLabel = "Dashboard",
             animatedDotPosition = animatedDotPosition,
         )
     }
