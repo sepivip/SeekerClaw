@@ -78,6 +78,10 @@ import com.seekerclaw.app.ui.theme.TypeScale
  * Primary action button — green filled, 56dp, corner glow, RethinkSans bold.
  * Use for: Get Started, Next, Create Agent, Initialize, Connect, Sign In, etc.
  * This is the single source of truth for the app's "do the main thing" button.
+ *
+ * **Sizing:** Caller is responsible for width. Pass `Modifier.fillMaxWidth()`
+ * for a full-width button, or `Modifier.weight(1f)` inside a Row to split
+ * space evenly with a sibling button. Height is always [Sizing.buttonPrimaryHeight].
  */
 @Composable
 fun PrimaryButton(
@@ -88,14 +92,14 @@ fun PrimaryButton(
     isLoading: Boolean = false,
     loadingLabel: String = "Working\u2026",
     leadingIcon: (@Composable () -> Unit)? = null,
+    height: androidx.compose.ui.unit.Dp = Sizing.buttonPrimaryHeight,
 ) {
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
     Button(
         onClick = onClick,
         enabled = enabled && !isLoading,
         modifier = modifier
-            .fillMaxWidth()
-            .height(Sizing.buttonPrimaryHeight)
+            .height(height)
             .cornerGlowBorder(),
         shape = shape,
         colors = ButtonDefaults.buttonColors(
@@ -124,9 +128,12 @@ fun PrimaryButton(
 }
 
 /**
- * Secondary action button — bordered dark variant. Same shape/height/glow as
+ * Secondary action button — bordered dark variant. Same shape/glow as
  * PrimaryButton but uses the Surface background + CardBorder stroke, suitable
  * for Back, Cancel, Scan Config, Skip, and other non-primary actions.
+ *
+ * **Sizing:** Caller supplies width via [modifier] (fillMaxWidth or weight(1f)).
+ * Height is always [Sizing.buttonSecondaryHeight].
  */
 @Composable
 fun SecondaryButton(
@@ -134,14 +141,14 @@ fun SecondaryButton(
     label: String,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    isLoading: Boolean = false,
     leadingIcon: (@Composable () -> Unit)? = null,
 ) {
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
     Button(
         onClick = onClick,
-        enabled = enabled,
+        enabled = enabled && !isLoading,
         modifier = modifier
-            .fillMaxWidth()
             .height(Sizing.buttonSecondaryHeight)
             .cornerGlowBorder(),
         shape = shape,
@@ -153,11 +160,142 @@ fun SecondaryButton(
         ),
         border = BorderStroke(Sizing.borderThin, SeekerClawColors.CardBorder),
     ) {
+        if (isLoading) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(Sizing.iconSm),
+                color = SeekerClawColors.TextPrimary,
+                strokeWidth = 2.dp,
+            )
+        } else {
+            if (leadingIcon != null) {
+                leadingIcon()
+                Spacer(modifier = Modifier.width(Spacing.sm))
+            }
+            Text(label, fontFamily = RethinkSans, fontSize = TypeScale.bodyMedium, fontWeight = FontWeight.Medium)
+        }
+    }
+}
+
+/**
+ * Warning / attention action button — amber tinted variant. Use for "needs
+ * attention, not an error" states: Continue Setup, Finish Configuration,
+ * Grant Permission, Battery Optimization, etc. Not destructive, not primary
+ * — the third semantic color in our action palette.
+ */
+@Composable
+fun WarningButton(
+    onClick: () -> Unit,
+    label: String,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    leadingIcon: (@Composable () -> Unit)? = null,
+) {
+    val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
+    Button(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier
+            .height(Sizing.buttonPrimaryHeight)
+            .cornerGlowBorder(),
+        shape = shape,
+        colors = ButtonDefaults.buttonColors(
+            containerColor = SeekerClawColors.Warning.copy(alpha = BrandAlpha.errorBackground + 0.05f),
+            contentColor = SeekerClawColors.Warning,
+            disabledContainerColor = SeekerClawColors.Warning.copy(alpha = BrandAlpha.errorBackground),
+            disabledContentColor = SeekerClawColors.Warning.copy(alpha = BrandAlpha.disabledContent),
+        ),
+        border = BorderStroke(
+            Sizing.borderThin,
+            SeekerClawColors.Warning.copy(alpha = BrandAlpha.disabledSurface),
+        ),
+    ) {
         if (leadingIcon != null) {
             leadingIcon()
             Spacer(modifier = Modifier.width(Spacing.sm))
         }
-        Text(label, fontFamily = RethinkSans, fontSize = TypeScale.bodyMedium, fontWeight = FontWeight.Medium)
+        Text(label, fontFamily = RethinkSans, fontSize = TypeScale.titleMedium, fontWeight = FontWeight.Bold)
+    }
+}
+
+/**
+ * State for [DashboardActionButton] — drives the dual-state Deploy / Stop
+ * pattern used on the Dashboard. Each state has its own container color,
+ * content color, and label so a single button can cycle through the agent
+ * lifecycle without the caller re-creating the composable.
+ */
+enum class DashboardActionState {
+    /** Agent is stopped. Button shows "Deploy Agent" in green. */
+    Stopped,
+    /** Agent is running. Button shows "Stop Agent" in red. */
+    Running,
+    /** Transition in progress. Button shows spinner, disabled. */
+    Transitioning,
+}
+
+/**
+ * Dashboard Deploy / Stop button. Same shape + glow as the rest of the
+ * primary family but toggles color + label based on [state]. Consolidates
+ * the two-color primary action pattern on the Dashboard.
+ */
+@Composable
+fun DashboardActionButton(
+    state: DashboardActionState,
+    onDeploy: () -> Unit,
+    onStop: () -> Unit,
+    modifier: Modifier = Modifier,
+    deployLabel: String = "Deploy Agent",
+    stopLabel: String = "Stop Agent",
+    transitioningLabel: String = "Working\u2026",
+    leadingIcon: (@Composable (DashboardActionState) -> Unit)? = null,
+) {
+    val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
+    val container = when (state) {
+        DashboardActionState.Stopped -> SeekerClawColors.ActionPrimary
+        DashboardActionState.Running -> SeekerClawColors.Primary
+        DashboardActionState.Transitioning -> SeekerClawColors.ActionPrimary.copy(alpha = BrandAlpha.disabledSurface)
+    }
+    Button(
+        onClick = {
+            when (state) {
+                DashboardActionState.Stopped -> onDeploy()
+                DashboardActionState.Running -> onStop()
+                DashboardActionState.Transitioning -> Unit
+            }
+        },
+        enabled = state != DashboardActionState.Transitioning,
+        modifier = modifier
+            .height(Sizing.buttonSecondaryHeight)
+            .cornerGlowBorder(),
+        shape = shape,
+        colors = ButtonDefaults.buttonColors(
+            containerColor = container,
+            contentColor = Color.White,
+            disabledContainerColor = container,
+            disabledContentColor = Color.White.copy(alpha = BrandAlpha.disabledContent),
+        ),
+    ) {
+        if (state == DashboardActionState.Transitioning) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(Sizing.iconSm),
+                color = Color.White,
+                strokeWidth = 2.dp,
+            )
+            Spacer(modifier = Modifier.width(Spacing.sm))
+            Text(transitioningLabel, fontFamily = RethinkSans, fontSize = TypeScale.bodyLarge, fontWeight = FontWeight.Bold)
+        } else {
+            leadingIcon?.invoke(state)
+            if (leadingIcon != null) Spacer(modifier = Modifier.width(Spacing.sm))
+            Text(
+                text = when (state) {
+                    DashboardActionState.Stopped -> deployLabel
+                    DashboardActionState.Running -> stopLabel
+                    DashboardActionState.Transitioning -> transitioningLabel
+                },
+                fontFamily = RethinkSans,
+                fontSize = TypeScale.bodyLarge,
+                fontWeight = FontWeight.Bold,
+            )
+        }
     }
 }
 

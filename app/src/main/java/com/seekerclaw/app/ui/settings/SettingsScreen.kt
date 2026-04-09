@@ -826,6 +826,7 @@ fun SettingsScreen(
         CollapsibleSection("Setup", initiallyExpanded = true) {
             // Primary: Scan Config QR
             PrimaryButton(
+                modifier = Modifier.fillMaxWidth(),
                 onClick = {
                     if (!isConfigImporting) {
                         Analytics.featureUsed("qr_scan")
@@ -848,6 +849,7 @@ fun SettingsScreen(
 
             // Secondary: Run Setup Again
             SecondaryButton(
+                modifier = Modifier.fillMaxWidth(),
                 onClick = { showRunSetupDialog = true },
                 label = "Run Setup Again",
             )

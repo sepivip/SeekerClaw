@@ -743,6 +743,7 @@ private fun WelcomeStep(
 
         // Primary CTA: Get Started
         PrimaryButton(
+            modifier = Modifier.fillMaxWidth(),
             onClick = onNext,
             label = "Get Started",
         )
@@ -754,36 +755,19 @@ private fun WelcomeStep(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(SetupLayout.gapBetweenButtons),
         ) {
-            Button(
+            SecondaryButton(
+                modifier = Modifier.weight(1f),
                 onClick = onScanQr,
-                enabled = !isQrImporting,
-                modifier = Modifier
-                    .weight(1f)
-                    .height(Sizing.buttonSecondaryHeight)
-                    .cornerGlowBorder(),
-                shape = shape,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = SeekerClawColors.Surface,
-                    contentColor = SeekerClawColors.TextPrimary,
-                ),
-                border = BorderStroke(Sizing.borderThin, SeekerClawColors.CardBorder),
-            ) {
-                if (isQrImporting) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(Sizing.iconSm),
-                        strokeWidth = 2.dp,
-                        color = SeekerClawColors.TextPrimary,
-                    )
-                } else {
+                label = "Scan Config",
+                isLoading = isQrImporting,
+                leadingIcon = {
                     Icon(
                         Icons.Default.QrCodeScanner,
                         contentDescription = null,
                         modifier = Modifier.size(Sizing.iconMd),
                     )
-                    Spacer(modifier = Modifier.width(Spacing.sm))
-                    Text("Scan Config", fontFamily = RethinkSans, fontSize = TypeScale.bodyMedium, fontWeight = FontWeight.Medium)
-                }
-            }
+                },
+            )
 
             SecondaryButton(
                 onClick = onSkip,
@@ -1533,49 +1517,21 @@ private fun NavButtons(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(SetupLayout.gapBetweenButtons),
         ) {
-            Button(
+            SecondaryButton(
+                modifier = Modifier.weight(1f),
                 onClick = onBack,
-                modifier = Modifier
-                    .weight(1f)
-                    .height(Sizing.buttonSecondaryHeight)
-                    .cornerGlowBorder(),
-                shape = shape,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = SeekerClawColors.Surface,
-                    contentColor = SeekerClawColors.TextPrimary,
-                ),
-                border = BorderStroke(Sizing.borderThin, SeekerClawColors.CardBorder),
-            ) {
-                Text("Back", fontFamily = RethinkSans, fontSize = TypeScale.bodyMedium, fontWeight = FontWeight.Medium)
-            }
+                label = "Back",
+            )
 
-            Button(
+            PrimaryButton(
+                modifier = Modifier.weight(1f),
                 onClick = onNext,
-                enabled = nextEnabled && !isLoading,
-                modifier = Modifier
-                    .weight(1f)
-                    .height(Sizing.buttonSecondaryHeight)
-                    .cornerGlowBorder(),
-                shape = shape,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = SeekerClawColors.ActionPrimary,
-                    contentColor = OnboardingColors.onActionPrimary,
-                    disabledContainerColor = SeekerClawColors.ActionPrimary.copy(alpha = BrandAlpha.disabledSurface),
-                    disabledContentColor = OnboardingColors.onActionPrimary.copy(alpha = BrandAlpha.disabledContent),
-                ),
-            ) {
-                if (isLoading) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(Sizing.iconSm),
-                        color = OnboardingColors.onActionPrimary,
-                        strokeWidth = 2.dp,
-                    )
-                    Spacer(modifier = Modifier.width(Spacing.sm))
-                    Text("Starting\u2026", fontFamily = RethinkSans, fontSize = TypeScale.bodyMedium, fontWeight = FontWeight.Bold)
-                } else {
-                    Text(nextLabel, fontFamily = RethinkSans, fontSize = TypeScale.bodyMedium, fontWeight = FontWeight.Bold)
-                }
-            }
+                label = nextLabel,
+                enabled = nextEnabled,
+                isLoading = isLoading,
+                loadingLabel = "Starting\u2026",
+                height = Sizing.buttonSecondaryHeight,
+            )
         }
 
         Spacer(modifier = Modifier.height(SetupLayout.gapBeforeNav))

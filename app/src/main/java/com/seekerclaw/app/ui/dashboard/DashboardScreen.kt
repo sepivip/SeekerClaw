@@ -60,6 +60,9 @@ import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.config.modelDisplayName
 import com.seekerclaw.app.config.providerById
 import com.seekerclaw.app.service.OpenClawService
+import com.seekerclaw.app.ui.components.DashboardActionButton
+import com.seekerclaw.app.ui.components.DashboardActionState
+import com.seekerclaw.app.ui.components.WarningButton
 import com.seekerclaw.app.ui.components.cornerGlowBorder
 import com.seekerclaw.app.ui.theme.SeekerClawColors
 import com.seekerclaw.app.util.Analytics
@@ -473,22 +476,11 @@ fun DashboardScreen(
                     color = SeekerClawColors.TextDim,
                 )
                 Spacer(modifier = Modifier.height(12.dp))
-                Button(
+                WarningButton(
+                    modifier = Modifier.fillMaxWidth(),
                     onClick = onNavigateToSetup,
-                    shape = shape,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = SeekerClawColors.Warning,
-                        contentColor = SeekerClawColors.Background,
-                    ),
-                    modifier = Modifier.fillMaxWidth().height(44.dp),
-                ) {
-                    Text(
-                        text = "Continue Setup",
-                        fontFamily = RethinkSans,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 14.sp,
-                    )
-                }
+                    label = "Continue Setup",
+                )
             }
         }
 
@@ -730,37 +722,23 @@ fun DashboardScreen(
 
         // Action button — disabled when config incomplete (unless already running)
         val deployEnabled = isRunning || configReady
-        Button(
-            onClick = {
+        DashboardActionButton(
+            modifier = Modifier.fillMaxWidth(),
+            state = if (isRunning) DashboardActionState.Running else DashboardActionState.Stopped,
+            onDeploy = {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                if (isRunning) {
-                    Analytics.serviceStopped(uptime / 60000)
-                    OpenClawService.stop(context)
-                } else {
+                if (deployEnabled) {
                     Analytics.serviceStarted(1)
                     OpenClawService.start(context)
                     ConfigManager.markFirstDeploymentDone(context)
                 }
             },
-            enabled = deployEnabled,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(52.dp),
-            shape = shape,
-            colors = ButtonDefaults.buttonColors(
-                containerColor = if (isRunning) SeekerClawColors.Primary else SeekerClawColors.ActionPrimary,
-                contentColor = Color.White,
-                disabledContainerColor = SeekerClawColors.BorderSubtle,
-                disabledContentColor = SeekerClawColors.TextDim,
-            ),
-        ) {
-            Text(
-                text = if (isRunning) "Stop Agent" else "Deploy Agent",
-                fontFamily = RethinkSans,
-                fontWeight = FontWeight.Bold,
-                fontSize = 15.sp,
-            )
-        }
+            onStop = {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                Analytics.serviceStopped(uptime / 60000)
+                OpenClawService.stop(context)
+            },
+        )
         if (!deployEnabled) {
             Spacer(modifier = Modifier.height(8.dp))
             Text(
