@@ -189,6 +189,23 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
     var botTokenError by remember { mutableStateOf<String?>(null) }
 
     var currentStep by remember { mutableIntStateOf(SetupSteps.WELCOME) }
+    // Map SetupSteps (WELCOME=0, PROVIDER=1, MODEL=2, TELEGRAM=3, SUCCESS=4)
+    // to PageDots positions (TELEGRAM=0, PROVIDER=1, SUCCESS=2).
+    val dotPosition = when (currentStep) {
+        SetupSteps.TELEGRAM -> 0f
+        SetupSteps.PROVIDER -> 1f
+        SetupSteps.SUCCESS -> 2f
+        else -> 0f
+    }
+    // Parent-scoped animation — stable across step swaps, so it actually animates.
+    val animatedDotPosition by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = dotPosition,
+        animationSpec = androidx.compose.animation.core.tween(
+            durationMillis = 400,
+            easing = androidx.compose.animation.core.FastOutSlowInEasing,
+        ),
+        label = "dotPosition",
+    )
     var isQrImporting by remember { mutableStateOf(false) }
     var qrError by remember { mutableStateOf<String?>(null) }
 
@@ -543,6 +560,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                 fieldColors = fieldColors,
                 onNext = ::saveAndStart,
                 onBack = { if (!isStarting) currentStep = SetupSteps.TELEGRAM },
+                animatedDotPosition = animatedDotPosition,
                 isStarting = isStarting,
             )
             SetupSteps.MODEL -> Unit // Model step removed — default model auto-selected with provider
@@ -555,11 +573,13 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                 fieldColors = fieldColors,
                 onNext = { currentStep = SetupSteps.PROVIDER },
                 onBack = { currentStep = SetupSteps.WELCOME },
+                animatedDotPosition = animatedDotPosition,
             )
             SetupSteps.SUCCESS -> SetupSuccessStep(
                 agentName = agentName.ifBlank { "SeekerClaw" },
                 onContinue = onSetupComplete,
                 onBack = { currentStep = SetupSteps.PROVIDER },
+                animatedDotPosition = animatedDotPosition,
             )
         }
         }
@@ -942,6 +962,7 @@ private fun ProviderSetupStep(
     fieldColors: androidx.compose.material3.TextFieldColors,
     onNext: () -> Unit,
     onBack: () -> Unit,
+    animatedDotPosition: Float,
     isStarting: Boolean = false,
 ) {
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
@@ -1171,7 +1192,7 @@ private fun ProviderSetupStep(
             nextEnabled = if (isOpenAIOAuth) oauthController.state.isConnected
                 else apiKey.isNotBlank(),
             nextLabel = "Create Agent",
-            currentStep = 1,
+            animatedDotPosition = animatedDotPosition,
             isLoading = isStarting,
         )
     }
@@ -1187,6 +1208,7 @@ private fun TelegramStep(
     fieldColors: androidx.compose.material3.TextFieldColors,
     onNext: () -> Unit,
     onBack: () -> Unit,
+    animatedDotPosition: Float,
 ) {
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
     val scope = rememberCoroutineScope()
@@ -1361,7 +1383,7 @@ private fun TelegramStep(
             onBack = onBack,
             onNext = onNext,
             nextEnabled = botToken.isNotBlank(),
-            currentStep = 0,
+            animatedDotPosition = animatedDotPosition,
         )
     }
 }
@@ -1371,6 +1393,7 @@ private fun SetupSuccessStep(
     agentName: String,
     onContinue: () -> Unit,
     onBack: () -> Unit,
+    animatedDotPosition: Float,
 ) {
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
 
@@ -1499,7 +1522,7 @@ private fun SetupSuccessStep(
             onNext = onContinue,
             nextEnabled = true,
             nextLabel = "Go to Dashboard",
-            currentStep = 2,
+            animatedDotPosition = animatedDotPosition,
         )
     }
 }
@@ -1510,7 +1533,7 @@ private fun NavButtons(
     onNext: () -> Unit,
     nextEnabled: Boolean,
     nextLabel: String = "Next",
-    currentStep: Int = -1,
+    animatedDotPosition: Float = -1f,
     totalSteps: Int = 3,
     isLoading: Boolean = false,
 ) {
@@ -1518,9 +1541,9 @@ private fun NavButtons(
     val uriHandler = LocalUriHandler.current
 
     Column(modifier = Modifier.fillMaxWidth()) {
-        if (currentStep >= 0) {
+        if (animatedDotPosition >= 0f) {
             PageDots(
-                currentStep = currentStep,
+                animatedPosition = animatedDotPosition,
                 totalSteps = totalSteps,
                 modifier = Modifier.align(Alignment.CenterHorizontally),
             )
@@ -1625,8 +1648,8 @@ private fun StepTitle(title: String, tagline: String) {
 }
 
 @Composable
-private fun PageDots(
-    currentStep: Int,
+internal fun PageDots(
+    animatedPosition: Float,
     totalSteps: Int,
     modifier: Modifier = Modifier,
 ) {
@@ -1636,21 +1659,15 @@ private fun PageDots(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         val dotShape = RoundedCornerShape(Sizing.pageDotCornerRadius)
-        val anim = tween<Dp>(durationMillis = 350, easing = androidx.compose.animation.core.FastOutSlowInEasing)
-        val colorAnim = tween<Color>(durationMillis = 350, easing = androidx.compose.animation.core.FastOutSlowInEasing)
+        val minDp = Sizing.pageDotSize
+        val maxDp = Sizing.pageDotActiveWidth
+        val activeColor = SeekerClawColors.TextPrimary
+        val inactiveColor = SeekerClawColors.TextDim.copy(alpha = BrandAlpha.disabledSurface)
         for (i in 0 until totalSteps) {
-            val isActive = i == currentStep
-            val width by androidx.compose.animation.core.animateDpAsState(
-                targetValue = if (isActive) Sizing.pageDotActiveWidth else Sizing.pageDotSize,
-                animationSpec = anim,
-                label = "pageDotWidth$i",
-            )
-            val color by androidx.compose.animation.animateColorAsState(
-                targetValue = if (isActive) SeekerClawColors.TextPrimary
-                    else SeekerClawColors.TextDim.copy(alpha = BrandAlpha.disabledSurface),
-                animationSpec = colorAnim,
-                label = "pageDotColor$i",
-            )
+            // Proximity: 0 = fully active (this dot), 1+ = fully inactive
+            val proximity = kotlin.math.abs(animatedPosition - i).coerceIn(0f, 1f)
+            val width = minDp + (maxDp - minDp) * (1f - proximity)
+            val color = androidx.compose.ui.graphics.lerp(activeColor, inactiveColor, proximity)
             Box(
                 modifier = Modifier
                     .width(width)
