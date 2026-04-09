@@ -46,6 +46,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -618,14 +619,18 @@ object InputMask {
 /**
  * Compound input + inline action button (shadcn-style "input with addon").
  *
- * Single rounded surface, single border, with the input on the left taking the
- * remaining width and a button-like action zone on the right that morphs based
- * on [actionState] (Idle / Loading / Success / Error). A vertical divider
- * separates the two zones.
+ * Single rounded surface, single border, input on the left, action zone on the
+ * right separated by a vertical divider. The action zone **morphs by context**:
+ * - Empty field + [pasteEnabled]=true → "Paste" (reads clipboard, fills field)
+ * - Filled field, Idle                → primary [actionLabel] (e.g. "Test")
+ * - Loading / Success / Error         → spinner / ✓ / ✕ from [actionState]
  *
- * Use for any field that needs an inline test/verify/save action — Anthropic
- * key + Test, Telegram token + Verify, OpenAI key + Test, etc. Reuses the
- * shared [ActionResult] sealed class for state.
+ * This means only one trailing button is ever visible at a time: paste when
+ * the user can't do anything else, test when the field is ready to validate.
+ * Reuses [ActionResult] for post-action state.
+ *
+ * Use for any secret field that needs both a paste shortcut and an inline
+ * test/verify action — API keys, bot tokens, webhooks, etc.
  */
 @Composable
 fun InputWithActionButton(
@@ -639,7 +644,11 @@ fun InputWithActionButton(
     visualTransformation: VisualTransformation = VisualTransformation.None,
     enabled: Boolean = true,
     isError: Boolean = false,
+    pasteEnabled: Boolean = true,
+    pasteLabel: String = "Paste",
 ) {
+    val clipboard = LocalClipboardManager.current
+    val showPaste = pasteEnabled && value.isEmpty() && actionState is ActionResult.Idle
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
 
     val borderColor = when {
@@ -715,38 +724,53 @@ fun InputWithActionButton(
 
         // Action zone — morphs with state
         val actionEnabled = enabled && actionState !is ActionResult.Loading
+        val onZoneClick: () -> Unit = {
+            if (showPaste) {
+                val pasted = clipboard.getText()?.text?.trim().orEmpty()
+                if (pasted.isNotEmpty()) onValueChange(pasted)
+            } else {
+                onAction()
+            }
+        }
         Box(
             modifier = Modifier
                 .fillMaxHeight()
                 .background(actionContainer)
-                .clickable(enabled = actionEnabled) { onAction() }
+                .clickable(enabled = actionEnabled) { onZoneClick() }
                 .padding(horizontal = Spacing.lg),
             contentAlignment = Alignment.Center,
         ) {
-            when (actionState) {
-                ActionResult.Idle -> Text(
-                    actionLabel,
+            when {
+                showPaste -> Text(
+                    pasteLabel,
                     fontFamily = RethinkSans,
                     fontSize = TypeScale.bodyMedium,
                     fontWeight = FontWeight.Bold,
                     color = actionContent,
                 )
-                ActionResult.Loading -> androidx.compose.material3.CircularProgressIndicator(
+                actionState is ActionResult.Loading -> androidx.compose.material3.CircularProgressIndicator(
                     modifier = Modifier.size(Sizing.iconSm),
                     color = actionContent,
                     strokeWidth = 2.dp,
                 )
-                is ActionResult.Success -> Text(
+                actionState is ActionResult.Success -> Text(
                     "\u2713",
                     fontFamily = RethinkSans,
                     fontSize = TypeScale.titleMedium,
                     fontWeight = FontWeight.Bold,
                     color = actionContent,
                 )
-                is ActionResult.Error -> Text(
+                actionState is ActionResult.Error -> Text(
                     "\u2715",
                     fontFamily = RethinkSans,
                     fontSize = TypeScale.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = actionContent,
+                )
+                else -> Text(
+                    actionLabel,
+                    fontFamily = RethinkSans,
+                    fontSize = TypeScale.bodyMedium,
                     fontWeight = FontWeight.Bold,
                     color = actionContent,
                 )

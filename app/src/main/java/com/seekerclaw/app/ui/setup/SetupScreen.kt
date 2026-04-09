@@ -1283,43 +1283,39 @@ private fun TelegramStep(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            OutlinedTextField(
-                value = botToken,
-                onValueChange = onBotTokenChange,
-                label = { Text("Bot Token", fontSize = 12.sp) },
-                placeholder = {
-                    Text(
-                        "123456789:ABC\u2026",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 14.sp,
-                        color = SeekerClawColors.TextDim,
-                    )
-                },
-                modifier = Modifier.fillMaxWidth(),
-                visualTransformation = InputMask.MaskMiddle,
-                singleLine = true,
-                isError = botTokenError != null,
-                supportingText = botTokenError?.let { err ->
-                    { Text(err, fontSize = 12.sp) }
-                },
-                colors = fieldColors,
-                shape = shape,
-            )
-
-            Spacer(modifier = Modifier.height(Spacing.md))
-
             // Reset test state whenever the token changes so the user can retest
             LaunchedEffect(botToken) {
                 if (testState !is ActionResult.Idle) testState = ActionResult.Idle
             }
 
-            MorphActionButton(
-                state = testState,
-                idleLabel = "Test Connection",
-                loadingLabel = "Testing\u2026",
-                enabled = botToken.isNotBlank(),
-                onClick = { runTest() },
+            InputWithActionButton(
+                value = botToken,
+                onValueChange = onBotTokenChange,
+                actionLabel = "Test",
+                onAction = { runTest() },
+                actionState = testState,
+                placeholder = "123456789:ABC\u2026",
+                visualTransformation = InputMask.MaskMiddle,
+                isError = botTokenError != null,
             )
+
+            if (botTokenError != null) {
+                Spacer(modifier = Modifier.height(Spacing.xs))
+                Text(
+                    text = botTokenError,
+                    fontFamily = RethinkSans,
+                    fontSize = TypeScale.labelSmall,
+                    color = SeekerClawColors.Error,
+                )
+            } else if (testState is ActionResult.Error) {
+                Spacer(modifier = Modifier.height(Spacing.xs))
+                Text(
+                    text = (testState as ActionResult.Error).message,
+                    fontFamily = RethinkSans,
+                    fontSize = TypeScale.labelSmall,
+                    color = SeekerClawColors.Error,
+                )
+            }
 
             Spacer(modifier = Modifier.height(Spacing.lg))
 
