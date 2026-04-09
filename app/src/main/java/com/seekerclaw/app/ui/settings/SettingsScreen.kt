@@ -906,6 +906,19 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(32.dp))
 
+        // System info
+        SectionLabel("System")
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        CardSurface {
+            InfoRow("Version", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+            InfoRow("Claw Engine", BuildConfig.OPENCLAW_VERSION)
+            InfoRow("Node.js", BuildConfig.NODEJS_VERSION, isLast = true)
+        }
+
+        Spacer(modifier = Modifier.height(32.dp))
+
         // Danger zone
         CollapsibleSection("Danger Zone", initiallyExpanded = false) {
             Column {
@@ -953,18 +966,6 @@ fun SettingsScreen(
                     )
                 }
             }
-        }
-
-
-        // System info
-        SectionLabel("System")
-
-        Spacer(modifier = Modifier.height(10.dp))
-
-        CardSurface {
-            InfoRow("Version", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
-            InfoRow("Claw Engine", BuildConfig.OPENCLAW_VERSION)
-            InfoRow("Node.js", BuildConfig.NODEJS_VERSION, isLast = true)
         }
 
         Spacer(modifier = Modifier.height(24.dp))
