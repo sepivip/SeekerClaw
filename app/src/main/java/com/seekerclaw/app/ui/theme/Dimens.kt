@@ -43,8 +43,8 @@ object Sizing {
     val strokeMedium = 1.5f
 
     // Setup hero
-    val heroBoxSize = 240.dp
-    val heroLogoSize = 184.dp
+    val heroBoxSize = 216.dp
+    val heroLogoSize = 166.dp
     val heroShadowOffsetY = 18.dp
     val heroShadowRadius = 120.dp
 
