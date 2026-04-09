@@ -687,6 +687,434 @@ document.querySelectorAll('.particles-canvas').forEach(pcanvas => {
 
 <div class="snackbar" id="snackbar"></div>
 
+<!-- ============ OAUTH CARD VARIANTS ============ -->
+<style>
+  .oauth-wrap { margin-top: 60px; padding-top: 40px; border-top: 1px solid #222; }
+  .oauth-wrap h2 { font-size: 18px; margin-bottom: 6px; }
+  .oauth-wrap p.intro { color: var(--dim); font-size: 13px; margin-bottom: 28px; }
+  .oauth-row { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; max-width: 900px; }
+  .oauth-col h3 { font-size: 14px; margin-bottom: 12px; color: var(--text); }
+  .oauth-variant { margin-bottom: 22px; }
+  .oauth-variant .state-label { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--dim); margin-bottom: 8px; }
+
+  /* Shared */
+  .avatar {
+    width: 40px; height: 40px; border-radius: 50%;
+    background: linear-gradient(135deg, #10A37F, #0E8968);
+    color: white; font-weight: 700; font-size: 16px;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .avatar.empty { background: #14181F; border: 1px dashed #2a2f3a; color: var(--dim); }
+
+  /* ============ Option 12: Tonal card with footer ============ */
+  .opt12 {
+    border-radius: 16px;
+    overflow: hidden;
+    border: 1px solid #2a2f3a;
+  }
+  .opt12 .body {
+    padding: 18px 20px;
+    display: flex; align-items: center; gap: 14px;
+    background: rgba(74, 222, 128, 0.08);
+  }
+  .opt12.disconnected .body {
+    background: #14181F;
+  }
+  .opt12 .body .meta { flex: 1; min-width: 0; }
+  .opt12 .body .title { font-size: 14px; font-weight: 700; color: var(--text); }
+  .opt12 .body .sub { font-size: 12px; color: var(--dim); margin-top: 2px; }
+  .opt12 .body .sub.ok { color: #4ADE80; }
+  .opt12 .footer {
+    padding: 14px 20px;
+    background: #0C1118;
+    border-top: 1px solid #1f2530;
+    text-align: center;
+    font-size: 14px; font-weight: 600;
+    cursor: pointer;
+  }
+  .opt12 .footer.primary { color: #4ADE80; }
+  .opt12 .footer.danger { color: #EF4444; }
+
+  /* ============ Option 2: Outlined card + full-width danger ============ */
+  .opt2 {
+    background: #0E1218;
+    border: 1px solid #2a2f3a;
+    border-radius: 16px;
+    padding: 18px;
+  }
+  .opt2 .row {
+    display: flex; align-items: center; gap: 14px;
+    margin-bottom: 16px;
+  }
+  .opt2 .row .meta { flex: 1; min-width: 0; }
+  .opt2 .row .title { font-size: 14px; font-weight: 700; color: var(--text); }
+  .opt2 .row .sub { font-size: 12px; color: var(--dim); margin-top: 2px; }
+  .opt2 .chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 3px 10px;
+    border-radius: 12px;
+    font-size: 11px; font-weight: 600;
+  }
+  .opt2 .chip.ok { background: rgba(74, 222, 128, 0.15); color: #4ADE80; }
+  .opt2 .chip.off { background: #14181F; color: var(--dim); border: 1px solid #2a2f3a; }
+  .opt2 .action {
+    width: 100%; height: 48px;
+    border-radius: 12px;
+    border: none; cursor: pointer;
+    font-size: 14px; font-weight: 700;
+    font-family: inherit;
+  }
+  .opt2 .action.primary { background: #00C805; color: white; }
+  .opt2 .action.danger { background: #8B0000; color: white; }
+
+  /* ============ Option 1: ListItem row ============ */
+  .opt1 {
+    background: #0E1218;
+    border: 1px solid #2a2f3a;
+    border-radius: 16px;
+    padding: 16px 18px;
+    display: flex; align-items: center; gap: 14px;
+  }
+  .opt1 .meta { flex: 1; min-width: 0; }
+  .opt1 .title { font-size: 14px; font-weight: 700; color: var(--text); }
+  .opt1 .sub { font-size: 12px; color: var(--dim); margin-top: 2px; }
+  .opt1 .sub.ok { color: #4ADE80; }
+  .opt1 .trail {
+    padding: 8px 16px;
+    border-radius: 999px;
+    font-size: 13px; font-weight: 600;
+    border: 1px solid #2a2f3a;
+    background: transparent;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .opt1 .trail.primary { color: #4ADE80; border-color: rgba(74, 222, 128, 0.5); }
+  .opt1 .trail.danger { color: #EF4444; border-color: rgba(239, 68, 68, 0.5); }
+
+  /* ============ Option 5: Card + right-aligned action ============ */
+  .opt5 {
+    background: #0E1218;
+    border: 1px solid #2a2f3a;
+    border-radius: 16px;
+    padding: 20px;
+  }
+  .opt5 .top { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; }
+  .opt5 .top .meta { flex: 1; min-width: 0; }
+  .opt5 .top .title { font-size: 15px; font-weight: 700; color: var(--text); }
+  .opt5 .top .sub { font-size: 12px; color: var(--dim); margin-top: 2px; }
+  .opt5 .top .sub.ok { color: #4ADE80; }
+  .opt5 .actions { display: flex; justify-content: flex-end; }
+  .opt5 .btn {
+    padding: 10px 22px;
+    border-radius: 10px;
+    font-size: 13px; font-weight: 700;
+    border: none; cursor: pointer;
+    font-family: inherit;
+  }
+  .opt5 .btn.primary { background: #00C805; color: white; }
+  .opt5 .btn.danger { background: #8B0000; color: white; }
+
+  /* ============ Option 6: Filled tonal button beside ============ */
+  .opt6 {
+    background: #0E1218;
+    border: 1px solid #2a2f3a;
+    border-radius: 16px;
+    padding: 14px 18px;
+    display: flex; align-items: center; gap: 14px;
+  }
+  .opt6 .meta { flex: 1; min-width: 0; }
+  .opt6 .title { font-size: 14px; font-weight: 700; color: var(--text); }
+  .opt6 .sub { font-size: 12px; color: var(--dim); margin-top: 2px; }
+  .opt6 .sub.ok { color: #4ADE80; }
+  .opt6 .tonal {
+    padding: 10px 18px;
+    border-radius: 999px;
+    font-size: 13px; font-weight: 600;
+    border: none; cursor: pointer;
+    font-family: inherit;
+  }
+  .opt6 .tonal.primary { background: rgba(0, 200, 5, 0.18); color: #4ADE80; }
+  .opt6 .tonal.danger { background: rgba(239, 68, 68, 0.15); color: #EF4444; }
+
+  /* ============ Option 9: Outlined button (softer danger) ============ */
+  .opt9 {
+    background: #0E1218;
+    border: 1px solid #2a2f3a;
+    border-radius: 16px;
+    padding: 18px;
+  }
+  .opt9 .row {
+    display: flex; align-items: center; gap: 14px;
+    margin-bottom: 16px;
+  }
+  .opt9 .row .meta { flex: 1; min-width: 0; }
+  .opt9 .row .title { font-size: 14px; font-weight: 700; color: var(--text); }
+  .opt9 .row .sub { font-size: 12px; color: var(--dim); margin-top: 2px; }
+  .opt9 .row .sub.ok { color: #4ADE80; }
+  .opt9 .action {
+    width: 100%; height: 48px;
+    border-radius: 12px;
+    background: transparent;
+    cursor: pointer;
+    font-size: 14px; font-weight: 700;
+    font-family: inherit;
+  }
+  .opt9 .action.primary { border: 1px solid #00C805; color: #4ADE80; }
+  .opt9 .action.danger { border: 1px solid #EF4444; color: #EF4444; }
+
+  /* ============ Option 14: Status card + text link ============ */
+  .opt14 {
+    background: #0E1218;
+    border: 1px solid #2a2f3a;
+    border-radius: 16px;
+    padding: 18px;
+  }
+  .opt14 .status-badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 12px; font-weight: 600;
+    margin-bottom: 10px;
+  }
+  .opt14 .status-badge.ok { color: #4ADE80; }
+  .opt14 .status-badge.off { color: var(--dim); }
+  .opt14 .bottom {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 14px;
+  }
+  .opt14 .ident { flex: 1; min-width: 0; }
+  .opt14 .ident .title { font-size: 14px; font-weight: 700; color: var(--text); }
+  .opt14 .ident .sub { font-size: 12px; color: var(--dim); margin-top: 2px; }
+  .opt14 .text-link {
+    font-size: 13px; font-weight: 600;
+    background: transparent;
+    border: none; cursor: pointer;
+    font-family: inherit;
+    padding: 6px 4px;
+  }
+  .opt14 .text-link.primary { color: #4ADE80; }
+  .opt14 .text-link.danger { color: #EF4444; }
+</style>
+
+<div class="oauth-wrap">
+  <h2>OAuth Card — Sign In / Sign Out Combined</h2>
+  <p class="intro">Two Material 3 patterns. Each shows both states so you can judge visual consistency. Option 12 (tonal card with footer) is the most "M3-signature" — same frame morphs via tint + footer. Option 2 (outlined card + full-width action) is the simplest and matches our existing button rhythm.</p>
+
+  <div class="oauth-row">
+    <!-- Option 12 column -->
+    <div class="oauth-col">
+      <h3>Option 12 — Tonal card with footer</h3>
+
+      <div class="oauth-variant">
+        <div class="state-label">Disconnected</div>
+        <div class="opt12 disconnected">
+          <div class="body">
+            <div class="meta">
+              <div class="title">ChatGPT Account</div>
+              <div class="sub">Uses your ChatGPT subscription</div>
+            </div>
+          </div>
+          <div class="footer primary">Sign in with ChatGPT</div>
+        </div>
+      </div>
+
+      <div class="oauth-variant">
+        <div class="state-label">Connected</div>
+        <div class="opt12">
+          <div class="body">
+            <div class="meta">
+              <div class="title">bekaz@adwise.ge</div>
+              <div class="sub ok">✓ Connected via ChatGPT</div>
+            </div>
+          </div>
+          <div class="footer danger">Sign Out</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Option 2 column -->
+    <div class="oauth-col">
+      <h3>Option 2 — Outlined card + full-width action</h3>
+
+      <div class="oauth-variant">
+        <div class="state-label">Disconnected</div>
+        <div class="opt2">
+          <div class="row">
+            <div class="meta">
+              <div class="title">ChatGPT Account</div>
+              <div class="sub">Uses your ChatGPT subscription</div>
+            </div>
+            <div class="chip off">Offline</div>
+          </div>
+          <button class="action primary">Sign in with ChatGPT</button>
+        </div>
+      </div>
+
+      <div class="oauth-variant">
+        <div class="state-label">Connected</div>
+        <div class="opt2">
+          <div class="row">
+            <div class="meta">
+              <div class="title">bekaz@adwise.ge</div>
+              <div class="sub">ChatGPT OAuth</div>
+            </div>
+            <div class="chip ok">● Connected</div>
+          </div>
+          <button class="action danger">Sign Out</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Option 1 column -->
+    <div class="oauth-col">
+      <h3>Option 1 — ListItem row (trailing chip action)</h3>
+
+      <div class="oauth-variant">
+        <div class="state-label">Disconnected</div>
+        <div class="opt1">
+          <div class="meta">
+            <div class="title">ChatGPT Account</div>
+            <div class="sub">Not connected</div>
+          </div>
+          <button class="trail primary">Sign In</button>
+        </div>
+      </div>
+
+      <div class="oauth-variant">
+        <div class="state-label">Connected</div>
+        <div class="opt1">
+          <div class="meta">
+            <div class="title">bekaz@adwise.ge</div>
+            <div class="sub ok">✓ Connected</div>
+          </div>
+          <button class="trail danger">Sign Out</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Option 5 column -->
+    <div class="oauth-col">
+      <h3>Option 5 — Card + right-aligned action</h3>
+
+      <div class="oauth-variant">
+        <div class="state-label">Disconnected</div>
+        <div class="opt5">
+          <div class="top">
+            <div class="meta">
+              <div class="title">ChatGPT Account</div>
+              <div class="sub">Uses your ChatGPT subscription</div>
+            </div>
+          </div>
+          <div class="actions"><button class="btn primary">Sign in with ChatGPT</button></div>
+        </div>
+      </div>
+
+      <div class="oauth-variant">
+        <div class="state-label">Connected</div>
+        <div class="opt5">
+          <div class="top">
+            <div class="meta">
+              <div class="title">bekaz@adwise.ge</div>
+              <div class="sub ok">ChatGPT OAuth • Connected</div>
+            </div>
+          </div>
+          <div class="actions"><button class="btn danger">Sign Out</button></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Option 6 column -->
+    <div class="oauth-col">
+      <h3>Option 6 — Filled tonal button beside identity</h3>
+
+      <div class="oauth-variant">
+        <div class="state-label">Disconnected</div>
+        <div class="opt6">
+          <div class="meta">
+            <div class="title">ChatGPT Account</div>
+            <div class="sub">Uses your ChatGPT subscription</div>
+          </div>
+          <button class="tonal primary">Sign In</button>
+        </div>
+      </div>
+
+      <div class="oauth-variant">
+        <div class="state-label">Connected</div>
+        <div class="opt6">
+          <div class="meta">
+            <div class="title">bekaz@adwise.ge</div>
+            <div class="sub ok">✓ Connected</div>
+          </div>
+          <button class="tonal danger">Sign Out</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Option 9 column -->
+    <div class="oauth-col">
+      <h3>Option 9 — Outlined button (softer destructive)</h3>
+
+      <div class="oauth-variant">
+        <div class="state-label">Disconnected</div>
+        <div class="opt9">
+          <div class="row">
+            <div class="meta">
+              <div class="title">ChatGPT Account</div>
+              <div class="sub">Uses your ChatGPT subscription</div>
+            </div>
+          </div>
+          <button class="action primary">Sign in with ChatGPT</button>
+        </div>
+      </div>
+
+      <div class="oauth-variant">
+        <div class="state-label">Connected</div>
+        <div class="opt9">
+          <div class="row">
+            <div class="meta">
+              <div class="title">bekaz@adwise.ge</div>
+              <div class="sub ok">✓ Connected</div>
+            </div>
+          </div>
+          <button class="action danger">Sign Out</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Option 14 column -->
+    <div class="oauth-col">
+      <h3>Option 14 — Status card + text link</h3>
+
+      <div class="oauth-variant">
+        <div class="state-label">Disconnected</div>
+        <div class="opt14">
+          <div class="status-badge off">◌ Not connected</div>
+          <div class="bottom">
+            <div class="ident">
+              <div class="title">ChatGPT Account</div>
+              <div class="sub">Uses your ChatGPT subscription</div>
+            </div>
+            <button class="text-link primary">Sign in →</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="oauth-variant">
+        <div class="state-label">Connected</div>
+        <div class="opt14">
+          <div class="status-badge ok">● Connected via ChatGPT</div>
+          <div class="bottom">
+            <div class="ident">
+              <div class="title">bekaz@adwise.ge</div>
+              <div class="sub">ChatGPT OAuth</div>
+            </div>
+            <button class="text-link danger">Sign out</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script>
 function runVariant(btn, kind) {
   const isError = event.shiftKey;

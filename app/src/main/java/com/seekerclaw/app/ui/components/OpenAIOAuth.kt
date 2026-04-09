@@ -218,7 +218,7 @@ fun OpenAIOAuthSection(
 
         when {
             state.isConnected -> {
-                DangerButton(
+                DangerOutlineButton(
                     onClick = onSignOut,
                     label = "Sign Out",
                 )

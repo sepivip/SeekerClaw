@@ -113,6 +113,45 @@ fun DangerButton(
 }
 
 /**
+ * Softer destructive button — M3 outlined variant. Red border, transparent fill,
+ * red text. Use for reversible destructive actions like Sign Out, Cancel, Remove
+ * where full-red [DangerButton] would feel too aggressive. Same height, shape,
+ * and glow as every other primary button so it sits in the app rhythm.
+ */
+@Composable
+fun DangerOutlineButton(
+    onClick: () -> Unit,
+    label: String,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+) {
+    val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
+    Button(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier
+            .fillMaxWidth()
+            .height(Sizing.buttonPrimaryHeight)
+            .cornerGlowBorder(),
+        shape = shape,
+        colors = ButtonDefaults.buttonColors(
+            containerColor = Color.Transparent,
+            contentColor = SeekerClawColors.Error,
+            disabledContainerColor = Color.Transparent,
+            disabledContentColor = SeekerClawColors.Error.copy(alpha = BrandAlpha.disabledContent),
+        ),
+        border = BorderStroke(Sizing.borderThin, SeekerClawColors.Error.copy(alpha = BrandAlpha.disabledSurface)),
+    ) {
+        Text(
+            label,
+            fontFamily = RethinkSans,
+            fontSize = TypeScale.titleMedium,
+            fontWeight = FontWeight.Bold,
+        )
+    }
+}
+
+/**
  * Reusable corner-glow border modifier — replicates atomicbot.ai's `.gradient-border`
  * effect. Two radial gradients (top-left + bottom-right) painted as stroked rounded
  * rects so only the border ring receives the highlight, brightest at the corner,
