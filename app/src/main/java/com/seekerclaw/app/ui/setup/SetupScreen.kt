@@ -449,10 +449,10 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             // Per-step title block (same style as Welcome hero)
             val (stepTitle, stepTagline) = when (currentStep) {
                 SetupSteps.PROVIDER -> "Pick Your Provider" to
-                    "You can always change provider later in settings, including custom providers."
+                    "You can change your provider later in Settings, including custom providers."
                 SetupSteps.MODEL -> "" to "" // Model step removed — unreachable
                 SetupSteps.TELEGRAM -> "Connect Telegram" to
-                    "Your User ID is set automatically on your first message. You can change it \u2014 or switch chat provider \u2014 later in settings."
+                    "Your user ID will be set automatically when you send your first message. You can change it later in Settings."
                 else -> "" to ""
             }
             StepTitle(title = stepTitle, tagline = stepTagline)
@@ -558,7 +558,6 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             )
             SetupSteps.SUCCESS -> SetupSuccessStep(
                 agentName = agentName.ifBlank { "SeekerClaw" },
-                botToken = botToken,
                 onContinue = onSetupComplete,
                 onBack = { currentStep = SetupSteps.PROVIDER },
             )
@@ -698,7 +697,7 @@ private fun WelcomeStep(
         Spacer(modifier = Modifier.height(Spacing.md))
 
         Text(
-            text = "3 steps and your AI assistant is live 24/7",
+            text = "In 3 steps, your AI assistant will be live 24/7",
             fontFamily = RethinkSans,
             fontSize = TypeScale.bodyLarge,
             color = SeekerClawColors.TextDim,
@@ -709,9 +708,7 @@ private fun WelcomeStep(
         Spacer(modifier = Modifier.height(Spacing.lg))
 
         Text(
-            text = "Next, you\u2019ll add an AI provider key (or sign in), " +
-                "connect a Telegram bot, and start chatting with your agent \u2014 " +
-                "it can do amazing things.",
+            text = "Add your AI provider, connect Telegram, and start chatting with your agent.",
             fontFamily = RethinkSans,
             fontSize = TypeScale.bodyMedium,
             color = SeekerClawColors.TextDim,
@@ -1173,7 +1170,7 @@ private fun ProviderSetupStep(
             onNext = onNext,
             nextEnabled = if (isOpenAIOAuth) oauthController.state.isConnected
                 else apiKey.isNotBlank(),
-            nextLabel = "Initialize Agent",
+            nextLabel = "Create Agent",
             currentStep = 1,
             isLoading = isStarting,
         )
@@ -1376,12 +1373,10 @@ private fun TelegramStep(
 @Composable
 private fun SetupSuccessStep(
     agentName: String,
-    botToken: String,
     onContinue: () -> Unit,
     onBack: () -> Unit,
 ) {
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
-    val botId = Regex("""^(\d+):""").find(botToken)?.groupValues?.get(1)
 
     Column(modifier = Modifier.fillMaxSize()) {
         Column(
@@ -1416,7 +1411,7 @@ private fun SetupSuccessStep(
 
         StepTitle(
             title = "You\u2019re all set!",
-            tagline = "$agentName is starting up",
+            tagline = "$agentName is getting ready",
         )
 
         Spacer(modifier = Modifier.height(Spacing.xl))
@@ -1453,9 +1448,7 @@ private fun SetupSuccessStep(
                             color = SeekerClawColors.TextPrimary,
                         )
                         Text(
-                            text = if (!botId.isNullOrBlank())
-                                       "Search for the bot username you set with @BotFather (bot ID: $botId)"
-                                   else "Search for the bot username you created with @BotFather",
+                            text = "Open Telegram and search for your bot username.",
                             fontFamily = RethinkSans,
                             fontSize = 12.sp,
                             color = SeekerClawColors.TextDim,
