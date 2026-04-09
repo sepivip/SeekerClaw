@@ -243,6 +243,7 @@ fun DashboardActionButton(
     onDeploy: () -> Unit,
     onStop: () -> Unit,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
     deployLabel: String = "Deploy Agent",
     stopLabel: String = "Stop Agent",
     transitioningLabel: String = "Working\u2026",
@@ -262,7 +263,7 @@ fun DashboardActionButton(
                 DashboardActionState.Transitioning -> Unit
             }
         },
-        enabled = state != DashboardActionState.Transitioning,
+        enabled = enabled && state != DashboardActionState.Transitioning,
         modifier = modifier
             .height(Sizing.buttonSecondaryHeight)
             .cornerGlowBorder(),
@@ -270,8 +271,8 @@ fun DashboardActionButton(
         colors = ButtonDefaults.buttonColors(
             containerColor = container,
             contentColor = Color.White,
-            disabledContainerColor = container,
-            disabledContentColor = Color.White.copy(alpha = BrandAlpha.disabledContent),
+            disabledContainerColor = SeekerClawColors.BorderSubtle,
+            disabledContentColor = SeekerClawColors.TextDim,
         ),
     ) {
         if (state == DashboardActionState.Transitioning) {

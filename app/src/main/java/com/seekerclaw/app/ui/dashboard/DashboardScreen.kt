@@ -725,13 +725,12 @@ fun DashboardScreen(
         DashboardActionButton(
             modifier = Modifier.fillMaxWidth(),
             state = if (isRunning) DashboardActionState.Running else DashboardActionState.Stopped,
+            enabled = deployEnabled,
             onDeploy = {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                if (deployEnabled) {
-                    Analytics.serviceStarted(1)
-                    OpenClawService.start(context)
-                    ConfigManager.markFirstDeploymentDone(context)
-                }
+                Analytics.serviceStarted(1)
+                OpenClawService.start(context)
+                ConfigManager.markFirstDeploymentDone(context)
             },
             onStop = {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
