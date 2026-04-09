@@ -818,7 +818,7 @@ fun SettingsScreen(
         Spacer(modifier = Modifier.height(28.dp))
 
         // Setup — combines Scan QR (primary) + Run Setup Again (secondary)
-        CollapsibleSection("Setup", initiallyExpanded = false) {
+        CollapsibleSection("Setup", initiallyExpanded = true) {
             // Primary: Scan Config QR
             Button(
                 onClick = {
