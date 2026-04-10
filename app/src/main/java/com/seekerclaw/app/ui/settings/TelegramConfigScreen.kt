@@ -7,15 +7,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import com.seekerclaw.app.ui.components.SeekerClawScaffold
+import com.seekerclaw.app.ui.components.ActionResult
+import com.seekerclaw.app.ui.components.MorphActionButton
 
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -25,15 +22,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.seekerclaw.app.ui.components.CardSurface
 
 import com.seekerclaw.app.ui.components.SectionLabel
 import com.seekerclaw.app.ui.components.ConfigField
+import com.seekerclaw.app.ui.components.cornerGlowBorder
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.ui.theme.RethinkSans
 import com.seekerclaw.app.ui.theme.SeekerClawColors
@@ -55,8 +51,7 @@ fun TelegramConfigScreen(onBack: () -> Unit) {
     var editLabel by remember { mutableStateOf("") }
     var editValue by remember { mutableStateOf("") }
 
-    var testStatus by remember { mutableStateOf("Idle") } // Idle, Loading, Success, Error
-    var testMessage by remember { mutableStateOf("") }
+    var testState by remember { mutableStateOf<ActionResult>(ActionResult.Idle) }
 
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
 
@@ -81,7 +76,8 @@ fun TelegramConfigScreen(onBack: () -> Unit) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(SeekerClawColors.Surface, shape),
+                    .background(SeekerClawColors.Surface, shape)
+                    .cornerGlowBorder(),
             ) {
                 ConfigField(
                     label = "Bot Token",
@@ -120,59 +116,28 @@ fun TelegramConfigScreen(onBack: () -> Unit) {
                 )
                 Spacer(modifier = Modifier.height(12.dp))
 
-                Button(
+                MorphActionButton(
+                    state = testState,
+                    idleLabel = "Test Bot",
+                    loadingLabel = "Testing\u2026",
                     onClick = {
-                        if (testStatus == "Loading") return@Button
-                        testStatus = "Loading"
-                        testMessage = ""
+                        if (testState is ActionResult.Loading) return@MorphActionButton
                         val token = config?.telegramBotToken ?: ""
                         if (token.isBlank()) {
-                            testStatus = "Error"
-                            testMessage = "Bot token is empty."
-                            return@Button
+                            testState = ActionResult.Error("Bot token is empty.")
+                            return@MorphActionButton
                         }
-                        
+                        testState = ActionResult.Loading
                         scope.launch {
                             val result = testTelegramBot(token)
-                            if (result.isSuccess) {
-                                testStatus = "Success"
-                                testMessage = "Bot connected as @${result.getOrNull()}"
+                            testState = if (result.isSuccess) {
+                                ActionResult.Success("Bot connected as @${result.getOrNull()}")
                             } else {
-                                testStatus = "Error"
-                                testMessage = result.exceptionOrNull()?.message ?: "Connection failed"
+                                ActionResult.Error(result.exceptionOrNull()?.message ?: "Connection failed")
                             }
                         }
                     },
-                    enabled = testStatus != "Loading",
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = shape,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = SeekerClawColors.ActionPrimary,
-                        contentColor = Color.White,
-                    ),
-                ) {
-                    if (testStatus == "Loading") {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            strokeWidth = 2.dp,
-                            color = Color.White,
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Testing...", fontFamily = RethinkSans, fontSize = 14.sp)
-                    } else {
-                        Text("Test Bot", fontFamily = RethinkSans, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                    }
-                }
-
-                if (testStatus == "Success" || testStatus == "Error") {
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text(
-                        text = testMessage,
-                        fontFamily = RethinkSans,
-                        fontSize = 13.sp,
-                        color = if (testStatus == "Success") SeekerClawColors.ActionPrimary else SeekerClawColors.Error,
-                    )
-                }
+                )
             }
         }
     }

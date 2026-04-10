@@ -79,6 +79,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.CircularProgressIndicator
@@ -98,10 +99,17 @@ import com.seekerclaw.app.util.LogCollector
 import com.seekerclaw.app.util.LogLevel
 import com.seekerclaw.app.BuildConfig
 import com.seekerclaw.app.ui.components.CardSurface
+import com.seekerclaw.app.ui.components.DangerButton
+import com.seekerclaw.app.ui.components.DangerOutlineButton
+import com.seekerclaw.app.ui.components.PrimaryButton
+import com.seekerclaw.app.ui.components.SecondaryButton
 import com.seekerclaw.app.ui.components.SectionLabel
 import com.seekerclaw.app.ui.components.ConfigField
 import com.seekerclaw.app.ui.components.InfoDialog
 import com.seekerclaw.app.ui.components.InfoRow
+import com.seekerclaw.app.ui.components.cornerGlowBorder
+import com.seekerclaw.app.ui.theme.Sizing
+import com.seekerclaw.app.ui.theme.Spacing
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -386,7 +394,8 @@ fun SettingsScreen(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(SeekerClawColors.Surface, shape),
+                    .background(SeekerClawColors.Surface, shape)
+                    .cornerGlowBorder(),
             ) {
                 ConfigField(
                     label = "AI Configuration",
@@ -446,6 +455,7 @@ fun SettingsScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(SeekerClawColors.Surface, shape)
+                    .cornerGlowBorder()
                     .padding(horizontal = 16.dp),
             ) {
                 SettingRow(
@@ -650,7 +660,8 @@ fun SettingsScreen(
                     enabled = !isConnecting,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(48.dp),
+                        .height(48.dp)
+                        .cornerGlowBorder(),
                     shape = shape,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = SeekerClawColors.ActionPrimary,
@@ -811,125 +822,46 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(28.dp))
 
-        // Run Setup Again
-        CollapsibleSection("Setup", initiallyExpanded = false) {
-            OutlinedButton(
-                onClick = { showRunSetupDialog = true },
+        // Setup — combines Scan QR (primary) + Run Setup Again (secondary)
+        CollapsibleSection("Setup", initiallyExpanded = true) {
+            // Primary: Scan Config QR
+            PrimaryButton(
                 modifier = Modifier.fillMaxWidth(),
-                shape = shape,
-                border = androidx.compose.foundation.BorderStroke(1.dp, SeekerClawColors.BorderSubtle),
-                colors = ButtonDefaults.outlinedButtonColors(
-                    contentColor = SeekerClawColors.TextPrimary,
-                ),
-            ) {
-                Text(
-                    "Run Setup Again",
-                    fontFamily = RethinkSans,
-                    fontSize = 14.sp,
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(32.dp))
-
-        // Danger zone
-        CollapsibleSection("Danger Zone", initiallyExpanded = false) {
-            Column {
-                Button(
-                    onClick = { showResetDialog = true },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = shape,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = SeekerClawColors.ActionDanger,
-                        contentColor = SeekerClawColors.ActionDangerText,
-                    ),
-                ) {
-                    Text(
-                        "Reset Config",
-                        fontFamily = RethinkSans,
-                        fontWeight = FontWeight.Medium,
-                        fontSize = 14.sp,
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                Button(
-                    onClick = { showClearMemoryDialog = true },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = shape,
-                    border = BorderStroke(1.dp, SeekerClawColors.Error),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = SeekerClawColors.ActionDanger,
-                        contentColor = SeekerClawColors.ActionDangerText,
-                    ),
-                ) {
-                    Icon(
-                        Icons.Default.Warning,
-                        contentDescription = "Warning",
-                        modifier = Modifier.size(16.dp),
-                        tint = SeekerClawColors.ActionDangerText,
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        "Wipe Memory",
-                        fontFamily = RethinkSans,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 14.sp,
-                    )
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(32.dp))
-
-        // Quick Setup — QR Config Import
-        SectionLabel("Quick Setup")
-
-        Spacer(modifier = Modifier.height(10.dp))
-
-        CardSurface {
-            Text(
-                text = "Generate a config QR at seekerclaw.xyz and scan it to set up your agent in seconds.",
-                fontFamily = RethinkSans,
-                fontSize = 13.sp,
-                color = SeekerClawColors.TextDim,
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Button(
                 onClick = {
                     if (!isConfigImporting) {
                         Analytics.featureUsed("qr_scan")
                         qrConfigLauncher.launch(Intent(context, QrScannerActivity::class.java))
                     }
                 },
-                enabled = !isConfigImporting,
+                label = "Scan Config QR",
+                isLoading = isConfigImporting,
+                loadingLabel = "Importing Config\u2026",
+                leadingIcon = {
+                    Icon(
+                        Icons.Default.QrCodeScanner,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                },
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Secondary: Run Setup Again
+            SecondaryButton(
                 modifier = Modifier.fillMaxWidth(),
-                shape = shape,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = SeekerClawColors.ActionPrimary,
-                    contentColor = androidx.compose.ui.graphics.Color.White,
-                ),
-            ) {
-                if (isConfigImporting) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(16.dp),
-                        strokeWidth = 2.dp,
-                        color = androidx.compose.ui.graphics.Color.White,
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Importing Config\u2026", fontFamily = RethinkSans, fontSize = 14.sp)
-                } else {
-                    Text(
-                        "Scan Config QR",
-                        fontFamily = RethinkSans,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 14.sp,
-                    )
-                }
-            }
+                onClick = { showRunSetupDialog = true },
+                label = "Run Setup Again",
+            )
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Text(
+                text = "Generate a config QR at seekerclaw.xyz to set up your agent in seconds.",
+                fontFamily = RethinkSans,
+                fontSize = 12.sp,
+                color = SeekerClawColors.TextDim,
+            )
 
             if (configImportError != null) {
                 Spacer(modifier = Modifier.height(8.dp))
@@ -953,6 +885,25 @@ fun SettingsScreen(
             InfoRow("Version", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
             InfoRow("Claw Engine", BuildConfig.OPENCLAW_VERSION)
             InfoRow("Node.js", BuildConfig.NODEJS_VERSION, isLast = true)
+        }
+
+        Spacer(modifier = Modifier.height(32.dp))
+
+        // Danger zone
+        CollapsibleSection("Danger Zone", initiallyExpanded = false) {
+            Column {
+                DangerOutlineButton(
+                    onClick = { showResetDialog = true },
+                    label = "Reset Config",
+                )
+
+                Spacer(modifier = Modifier.height(Spacing.md))
+
+                DangerButton(
+                    onClick = { showClearMemoryDialog = true },
+                    label = "Wipe Memory",
+                )
+            }
         }
 
         Spacer(modifier = Modifier.height(24.dp))
@@ -1186,7 +1137,33 @@ fun SettingsScreen(
             },
             confirmButton = {
                 TextButton(onClick = {
-                    ConfigManager.saveConfig(context, importedConfig)
+                    // Merge imported config with existing to preserve fields the QR
+                    // payload doesn't carry (OAuth tokens, search keys, Solana keys,
+                    // Discord config, custom provider, etc.). Only the fields present
+                    // in the QR payload overwrite; everything else survives.
+                    val existing = ConfigManager.loadConfig(context)
+                    val merged = if (existing != null) importedConfig.copy(
+                        openaiOAuthToken = existing.openaiOAuthToken,
+                        openaiOAuthRefresh = existing.openaiOAuthRefresh,
+                        openaiOAuthEmail = existing.openaiOAuthEmail,
+                        openaiOAuthExpiresAt = existing.openaiOAuthExpiresAt,
+                        braveApiKey = importedConfig.braveApiKey.ifBlank { existing.braveApiKey },
+                        perplexityApiKey = importedConfig.perplexityApiKey.ifBlank { existing.perplexityApiKey },
+                        exaApiKey = importedConfig.exaApiKey.ifBlank { existing.exaApiKey },
+                        tavilyApiKey = importedConfig.tavilyApiKey.ifBlank { existing.tavilyApiKey },
+                        firecrawlApiKey = importedConfig.firecrawlApiKey.ifBlank { existing.firecrawlApiKey },
+                        jupiterApiKey = importedConfig.jupiterApiKey.ifBlank { existing.jupiterApiKey },
+                        heliusApiKey = importedConfig.heliusApiKey.ifBlank { existing.heliusApiKey },
+                        searchProvider = importedConfig.searchProvider.ifBlank { existing.searchProvider },
+                        customApiKey = importedConfig.customApiKey.ifBlank { existing.customApiKey },
+                        customBaseUrl = importedConfig.customBaseUrl.ifBlank { existing.customBaseUrl },
+                        customHeaders = importedConfig.customHeaders.ifBlank { existing.customHeaders },
+                        customFormat = importedConfig.customFormat.ifBlank { existing.customFormat },
+                        discordBotToken = importedConfig.discordBotToken.ifBlank { existing.discordBotToken },
+                        discordOwnerId = importedConfig.discordOwnerId.ifBlank { existing.discordOwnerId },
+                        channel = importedConfig.channel.ifBlank { existing.channel },
+                    ) else importedConfig
+                    ConfigManager.saveConfig(context, merged)
                     val savedConfig = ConfigManager.loadConfig(context)
                     LogCollector.append(
                         "[ConfigImport] Saved snapshot: ${ConfigManager.redactedSnapshot(savedConfig)}"

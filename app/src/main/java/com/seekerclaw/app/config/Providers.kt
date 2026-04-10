@@ -15,20 +15,20 @@ data class ProviderInfo(
 
 val availableProviders = listOf(
     ProviderInfo(
-        id = "claude",
-        displayName = "Anthropic",
-        authTypes = listOf("api_key", "setup_token"),
-        keyHint = "sk-ant-api03-…",
-        consoleUrl = "https://console.anthropic.com",
-        keysUrl = "https://console.anthropic.com/settings/keys",
-    ),
-    ProviderInfo(
         id = "openai",
         displayName = "OpenAI",
         authTypes = listOf("api_key", "oauth"),
         keyHint = "sk-proj-…",
         consoleUrl = "https://platform.openai.com",
         keysUrl = "https://platform.openai.com/api-keys",
+    ),
+    ProviderInfo(
+        id = "claude",
+        displayName = "Anthropic",
+        authTypes = listOf("api_key", "setup_token"),
+        keyHint = "sk-ant-api03-…",
+        consoleUrl = "https://console.anthropic.com",
+        keysUrl = "https://console.anthropic.com/settings/keys",
     ),
     ProviderInfo(
         id = "openrouter",
@@ -49,16 +49,16 @@ val availableProviders = listOf(
 )
 
 val openaiModels = listOf(
-    ModelInfo("gpt-5.4", "GPT-5.4", "frontier"),
-    ModelInfo("gpt-5.2", "GPT-5.2", "flagship"),
-    ModelInfo("gpt-5.3-codex", "GPT-5.3 Codex", "code agent"),
+    ModelInfo("gpt-5.4", "GPT-5.4"),
+    ModelInfo("gpt-5.2", "GPT-5.2"),
+    ModelInfo("gpt-5.3-codex", "GPT-5.3 Codex"),
 )
 
 val openaiOAuthModels = listOf(
-    ModelInfo("gpt-5.4", "GPT-5.4", "frontier"),
-    ModelInfo("gpt-5.4-mini", "GPT-5.4 Mini", "fast"),
-    ModelInfo("gpt-5.3-codex", "GPT-5.3 Codex", "code agent"),
-    ModelInfo("gpt-5.2", "GPT-5.2", "flagship"),
+    ModelInfo("gpt-5.4", "GPT-5.4"),
+    ModelInfo("gpt-5.2", "GPT-5.2"),
+    ModelInfo("gpt-5.4-mini", "GPT-5.4 Mini"),
+    ModelInfo("gpt-5.3-codex", "GPT-5.3 Codex"),
 )
 
 /** Default model for freeform providers (OpenRouter) where model list is empty. */

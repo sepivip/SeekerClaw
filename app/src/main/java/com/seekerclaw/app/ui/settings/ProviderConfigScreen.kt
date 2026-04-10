@@ -15,11 +15,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.CircularProgressIndicator
 import com.seekerclaw.app.ui.components.SeekerClawScaffold
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.RadioButton
@@ -45,32 +40,33 @@ import com.seekerclaw.app.ui.components.CardSurface
 
 import com.seekerclaw.app.ui.components.SectionLabel
 import com.seekerclaw.app.ui.components.ConfigField
+import com.seekerclaw.app.ui.components.ProviderPicker
+import com.seekerclaw.app.ui.components.OpenAIOAuthSection
+import com.seekerclaw.app.ui.components.cornerGlowBorder
+import com.seekerclaw.app.ui.components.ActionResult
+import com.seekerclaw.app.ui.components.MorphActionButton
+import com.seekerclaw.app.ui.components.rememberOpenAIOAuthController
+import com.seekerclaw.app.ui.theme.Sizing
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.config.availableModels
 import com.seekerclaw.app.config.availableProviders
 import com.seekerclaw.app.config.OPENROUTER_DEFAULT_MODEL
 import com.seekerclaw.app.config.modelsForProvider
 import com.seekerclaw.app.config.providerById
-import com.seekerclaw.app.oauth.OpenAIOAuthActivity
 import com.seekerclaw.app.util.Analytics
 import com.seekerclaw.app.ui.theme.RethinkSans
 import com.seekerclaw.app.ui.theme.SeekerClawColors
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import android.content.Intent
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.text.input.KeyboardType
 import org.json.JSONObject
-import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
-import java.util.UUID
 
 // Sentinel for the "Custom model" radio in the model picker. Must NOT be a valid model id —
 // using "__custom__" so a real model literally named "custom" can still be entered freely.
@@ -94,80 +90,31 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
     var orModelDialog by remember { mutableStateOf<String?>(null) } // "model" or "fallback"
     var orModelValue by remember { mutableStateOf("") }
     var orContextValue by remember { mutableStateOf("") }
-    var testStatus by remember { mutableStateOf("Idle") }
-    var testMessage by remember { mutableStateOf("") }
-    var showRestartDialog by remember { mutableStateOf(false) }
-    // OpenAI OAuth state
-    var oauthRequestId by remember { mutableStateOf<String?>(null) }
-    var oauthPolling by remember { mutableStateOf(false) }
-    var oauthError by remember { mutableStateOf<String?>(null) }
-    // Note: device code UI removed — only browser flow used for now
-
-    // Clean up stale OAuth result files when this screen opens. If the user navigated
-    // away mid-flow or the process was killed, orphaned status files can accumulate
-    // under filesDir/oauth_results. Anything older than 1 hour is safe to delete.
-    LaunchedEffect(Unit) {
-        withContext(Dispatchers.IO) {
-            try {
-                val resultsDir = File(context.filesDir, OpenAIOAuthActivity.RESULTS_DIR)
-                if (resultsDir.isDirectory) {
-                    val cutoff = System.currentTimeMillis() - 3_600_000L
-                    resultsDir.listFiles()?.forEach { f ->
-                        if (f.lastModified() < cutoff) f.delete()
-                    }
-                }
-            } catch (_: Exception) { /* best effort */ }
-        }
+    var testState by remember { mutableStateOf<ActionResult>(ActionResult.Idle) }
+    // Reset stale test result when provider, auth type, or credentials change
+    LaunchedEffect(
+        activeProvider,
+        config?.authType,
+        config?.anthropicApiKey,
+        config?.setupToken,
+        config?.openaiApiKey,
+        config?.openaiOAuthToken,
+        config?.openrouterApiKey,
+        config?.customBaseUrl,
+        config?.customApiKey,
+    ) {
+        if (testState !is ActionResult.Idle) testState = ActionResult.Idle
     }
+    var showRestartDialog by remember { mutableStateOf(false) }
+
+    // Shared OAuth controller — same instance used by onboarding's ProviderSetupStep.
+    val oauthController = rememberOpenAIOAuthController(
+        context = context,
+        onSignedIn = { showRestartDialog = true },
+        onSignedOut = { showRestartDialog = true },
+    )
 
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
-
-    // OAuth result file polling
-    LaunchedEffect(oauthRequestId, oauthPolling) {
-        val reqId = oauthRequestId ?: return@LaunchedEffect
-        if (!oauthPolling) return@LaunchedEffect
-        val resultsDir = File(context.filesDir, OpenAIOAuthActivity.RESULTS_DIR)
-        val resultFile = File(resultsDir, "$reqId.json")
-        val deadline = System.currentTimeMillis() + 600_000 // 10 min timeout — browser PKCE sign-in/consent can take a while
-        while (oauthPolling && System.currentTimeMillis() < deadline) {
-            delay(1000)
-            val exists = withContext(Dispatchers.IO) { resultFile.exists() }
-            if (!exists) continue
-            try {
-                val json = withContext(Dispatchers.IO) {
-                    val text = resultFile.readText()
-                    resultFile.delete()
-                    JSONObject(text)
-                }
-                when (json.optString("status")) {
-                    "success" -> {
-                        // Tokens were persisted directly by OpenAIOAuthActivity via
-                        // ConfigManager.saveConfig. authType is already "oauth" (the
-                        // picker saves it on selection), so we just reload to pick up
-                        // the new token and pop the restart dialog.
-                        config = withContext(Dispatchers.IO) { ConfigManager.loadConfig(context) }
-                        showRestartDialog = true
-                        oauthPolling = false
-                    }
-                    "error" -> {
-                        oauthError = json.optString("message", "Unknown error")
-                        oauthPolling = false
-                    }
-                    else -> {
-                        oauthError = "Unexpected OAuth result status: ${json.optString("status")}"
-                        oauthPolling = false
-                    }
-                }
-            } catch (e: Exception) {
-                oauthError = "Failed to read OAuth result: ${e.message}"
-                oauthPolling = false
-            }
-        }
-        if (oauthPolling) {
-            oauthError = "OAuth timed out. Please try again."
-            oauthPolling = false
-        }
-    }
 
     fun saveField(field: String, value: String, needsRestart: Boolean = false) {
         ConfigManager.updateConfigField(context, field, value)
@@ -201,9 +148,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
         // switch would let a stale callback flip authType or pop a restart dialog for
         // a provider the user already left.
         if (oldProviderId == "openai" && newProviderId != "openai") {
-            oauthPolling = false
-            oauthRequestId = null
-            oauthError = null
+            oauthController.cancel()
         }
 
         // Remember per-provider last-used model and authType (similar to lastModel_*)
@@ -281,47 +226,11 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
             SectionLabel("Provider")
             Spacer(modifier = Modifier.height(10.dp))
 
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(SeekerClawColors.Surface, shape),
-            ) {
-                availableProviders.forEachIndexed { index, provider ->
-                    val isActive = provider.id == activeProvider
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { if (!isActive) switchProvider(provider.id) }
-                            .padding(horizontal = 16.dp, vertical = 14.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceBetween,
-                    ) {
-                        Column {
-                            Text(
-                                text = provider.displayName,
-                                fontFamily = RethinkSans,
-                                fontSize = 14.sp,
-                                fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
-                                color = SeekerClawColors.TextPrimary,
-                            )
-                        }
-                        if (isActive) {
-                            Text(
-                                text = "Active",
-                                fontFamily = RethinkSans,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = SeekerClawColors.Accent,
-                            )
-                        }
-                    }
-                    if (index < availableProviders.size - 1) {
-                        HorizontalDivider(
-                            color = SeekerClawColors.CardBorder,
-                            modifier = Modifier.padding(horizontal = 16.dp),
-                        )
-                    }
-                }
+            CardSurface {
+                ProviderPicker(
+                    selectedProviderId = activeProvider,
+                    onSelect = { switchProvider(it) },
+                )
             }
 
             // Active provider fields
@@ -332,7 +241,8 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(SeekerClawColors.Surface, shape),
+                    .background(SeekerClawColors.Surface, shape)
+                    .cornerGlowBorder(),
             ) {
                 when (activeProvider) {
                     "claude" -> {
@@ -340,7 +250,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                         ConfigField(
                             label = "Model",
                             value = availableModels.find { it.id == config?.model }
-                                ?.let { "${it.displayName} (${it.description})" }
+                                ?.displayName
                                 ?: config?.model?.ifBlank { "Not set" } ?: "Not set",
                             onClick = { showModelPicker = true },
                             info = SettingsHelpTexts.MODEL,
@@ -394,7 +304,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                         ConfigField(
                             label = "Model",
                             value = openaiModelList.find { it.id == config?.model }
-                                ?.let { "${it.displayName} (${it.description})" }
+                                ?.displayName
                                 ?: config?.model?.ifBlank { "Not set" } ?: "Not set",
                             onClick = { showModelPicker = true },
                             info = SettingsHelpTexts.MODEL,
@@ -403,7 +313,8 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                         // produced an error, even if the resolved authType is currently
                         // "api_key". This keeps the polling/error UI visible during transient
                         // OAuth state changes and recovery flows.
-                        val showOAuthSection = openaiAuthType == "oauth" || oauthPolling || oauthError != null
+                        val oauthState = oauthController.state
+                        val showOAuthSection = openaiAuthType == "oauth" || oauthState.isPolling || oauthState.error != null
                         if (!showOAuthSection) {
                             ConfigField(
                                 label = "API Key",
@@ -424,35 +335,11 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                                 modifier = Modifier.padding(horizontal = 16.dp),
                             )
                             OpenAIOAuthSection(
-                                isConnected = !config?.openaiOAuthToken.isNullOrBlank(),
-                                email = config?.openaiOAuthEmail ?: "",
-                                onSignInBrowser = {
-                                    val requestId = UUID.randomUUID().toString()
-                                    val intent = Intent(context, OpenAIOAuthActivity::class.java).apply {
-                                        putExtra("requestId", requestId)
-                                    }
-                                    context.startActivity(intent)
-                                    oauthRequestId = requestId
-                                    oauthPolling = true
-                                    oauthError = null
-                                },
-                                onSignOut = {
-                                    // Clear tokens but keep authType=oauth so the OAuth
-                                    // section stays visible with the Sign In button — the
-                                    // user just signed out, they probably want to sign
-                                    // back in (or pick API Key explicitly via the picker).
-                                    // writeConfigJson will translate oauth+blank → api_key
-                                    // for Node so the agent stays startable in the meantime.
-                                    ConfigManager.clearOpenAIOAuth(context)
-                                    config = ConfigManager.loadConfig(context)
-                                    showRestartDialog = true
-                                },
-                                onCancelPolling = {
-                                    oauthPolling = false
-                                    oauthError = null
-                                },
-                                oauthPolling = oauthPolling,
-                                oauthError = oauthError,
+                                state = oauthState,
+                                onSignIn = oauthController.signIn,
+                                onSignOut = oauthController.signOut,
+                                onCancel = oauthController.cancel,
+                                modifier = Modifier.padding(16.dp),
                             )
                         }
                     }
@@ -556,11 +443,13 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                 )
                 Spacer(modifier = Modifier.height(12.dp))
 
-                Button(
+                MorphActionButton(
+                    state = testState,
+                    idleLabel = "Test Connection",
+                    loadingLabel = "Testing\u2026",
                     onClick = {
-                        if (testStatus == "Loading") return@Button
-                        testStatus = "Loading"
-                        testMessage = ""
+                        if (testState is ActionResult.Loading) return@MorphActionButton
+                        testState = ActionResult.Loading
                         scope.launch {
                             val result = when (activeProvider) {
                                 "openrouter" -> testOpenRouterConnection(config?.openrouterApiKey ?: "")
@@ -590,45 +479,14 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                                     testAnthropicConnection(anthropicCredential, authType)
                                 }
                             }
-                            if (result.isSuccess) {
-                                testStatus = "Success"
-                                testMessage = "Connection successful!"
+                            testState = if (result.isSuccess) {
+                                ActionResult.Success("Connection successful!")
                             } else {
-                                testStatus = "Error"
-                                testMessage = result.exceptionOrNull()?.message ?: "Connection failed"
+                                ActionResult.Error(result.exceptionOrNull()?.message ?: "Connection failed")
                             }
                         }
                     },
-                    enabled = testStatus != "Loading",
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = shape,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = SeekerClawColors.ActionPrimary,
-                        contentColor = Color.White,
-                    ),
-                ) {
-                    if (testStatus == "Loading") {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            strokeWidth = 2.dp,
-                            color = Color.White,
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Testing...", fontFamily = RethinkSans, fontSize = 14.sp)
-                    } else {
-                        Text("Test Connection", fontFamily = RethinkSans, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                    }
-                }
-
-                if (testStatus == "Success" || testStatus == "Error") {
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text(
-                        text = testMessage,
-                        fontFamily = RethinkSans,
-                        fontSize = 13.sp,
-                        color = if (testStatus == "Success") SeekerClawColors.ActionPrimary else SeekerClawColors.Error,
-                    )
-                }
+                )
             }
 
             Spacer(modifier = Modifier.height(20.dp))
@@ -927,9 +785,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                             // is forced on by oauthError/oauthPolling — without this clear, a
                             // prior OAuth error would keep the OAuth section visible.
                             if (selectedAuth == "api_key") {
-                                oauthPolling = false
-                                oauthError = null
-                                oauthRequestId = null
+                                oauthController.cancel()
                             }
                         }
                         Analytics.authTypeChanged(selectedAuth)
@@ -1000,122 +856,6 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
     }
 }
 
-@Composable
-private fun OpenAIOAuthSection(
-    isConnected: Boolean,
-    email: String,
-    onSignInBrowser: () -> Unit,
-    onSignOut: () -> Unit,
-    onCancelPolling: () -> Unit,
-    oauthPolling: Boolean,
-    oauthError: String?,
-) {
-    val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
-
-    Column(modifier = Modifier.padding(16.dp)) {
-        // Warning card
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(SeekerClawColors.Warning.copy(alpha = 0.1f), shape)
-                .padding(12.dp),
-        ) {
-            Text(
-                text = "Uses your ChatGPT subscription via Codex OAuth.",
-                fontFamily = RethinkSans,
-                fontSize = 13.sp,
-                color = SeekerClawColors.Warning,
-            )
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        if (isConnected) {
-            // Connected state
-            Text(
-                text = "Connected as:",
-                fontFamily = RethinkSans,
-                fontSize = 12.sp,
-                color = SeekerClawColors.TextDim,
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = email.ifBlank { "Unknown account" },
-                fontFamily = RethinkSans,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Medium,
-                color = SeekerClawColors.ActionPrimary,
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-            Button(
-                onClick = onSignOut,
-                modifier = Modifier.fillMaxWidth(),
-                shape = shape,
-                colors = ButtonDefaults.buttonColors(
-                    // Use the same destructive-action red as Reset/Wipe buttons elsewhere
-                    // for visual consistency across the app's destructive surfaces.
-                    containerColor = SeekerClawColors.ActionDanger,
-                    contentColor = Color.White,
-                ),
-            ) {
-                Text("Sign Out", fontFamily = RethinkSans, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-            }
-        } else if (oauthPolling) {
-            // Waiting for browser authentication
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(16.dp),
-                    strokeWidth = 2.dp,
-                    color = SeekerClawColors.ActionPrimary,
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "Waiting for authentication...",
-                    fontFamily = RethinkSans,
-                    fontSize = 13.sp,
-                    color = SeekerClawColors.TextDim,
-                )
-            }
-            Spacer(modifier = Modifier.height(16.dp))
-            OutlinedButton(
-                onClick = onCancelPolling,
-                modifier = Modifier.fillMaxWidth(),
-                shape = shape,
-                border = BorderStroke(1.dp, SeekerClawColors.TextDim),
-            ) {
-                Text("Cancel", fontFamily = RethinkSans, fontSize = 14.sp, color = SeekerClawColors.TextPrimary)
-            }
-        } else {
-            // Not connected — show sign in buttons
-            Button(
-                onClick = onSignInBrowser,
-                modifier = Modifier.fillMaxWidth(),
-                shape = shape,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = SeekerClawColors.ActionPrimary,
-                    contentColor = Color.White,
-                ),
-            ) {
-                Text("Sign in with ChatGPT", fontFamily = RethinkSans, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-            }
-        }
-
-        // Error message
-        if (oauthError != null) {
-            Spacer(modifier = Modifier.height(12.dp))
-            Text(
-                text = oauthError,
-                fontFamily = RethinkSans,
-                fontSize = 13.sp,
-                color = SeekerClawColors.Error,
-            )
-        }
-    }
-}
 
 internal suspend fun testAnthropicConnection(credential: String, authType: String): Result<Unit> = withContext(Dispatchers.IO) {
     runCatching {

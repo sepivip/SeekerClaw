@@ -45,6 +45,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import com.seekerclaw.app.ui.components.SeekerClawSwitch
+import com.seekerclaw.app.ui.components.cornerGlowBorder
 import com.seekerclaw.app.ui.theme.RethinkSans
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -232,7 +233,8 @@ fun LogsScreen() {
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
-                .background(SeekerClawColors.Surface, shape),
+                .background(SeekerClawColors.Surface, shape)
+                .cornerGlowBorder(),
         ) {
             if (filteredLogs.isEmpty()) {
                 Box(

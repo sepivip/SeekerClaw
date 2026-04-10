@@ -9,6 +9,12 @@ import com.seekerclaw.app.util.LogLevel
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -24,6 +30,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -46,10 +55,15 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.RadioButtonDefaults
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
+import androidx.compose.material3.TabRowDefaults
+import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.ui.semantics.Role
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.LastPage
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.filled.Person
@@ -69,8 +83,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
@@ -95,9 +112,34 @@ import com.seekerclaw.app.config.modelsForProvider
 import com.seekerclaw.app.qr.QrScannerActivity
 import com.seekerclaw.app.service.OpenClawService
 import com.seekerclaw.app.util.Analytics
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
+import com.seekerclaw.app.ui.components.ActionResult
+import com.seekerclaw.app.ui.components.CardSurface
+import com.seekerclaw.app.ui.components.InputMask
+import com.seekerclaw.app.ui.components.InputWithActionButton
+import com.seekerclaw.app.ui.components.MorphActionButton
+import com.seekerclaw.app.ui.components.PrimaryButton
+import com.seekerclaw.app.ui.components.SecondaryButton
+import com.seekerclaw.app.ui.components.OpenAIOAuthSection
+import com.seekerclaw.app.ui.components.ProviderPicker
+import com.seekerclaw.app.ui.components.rememberOpenAIOAuthController
+import com.seekerclaw.app.ui.components.cornerGlowBorder
 import com.seekerclaw.app.ui.components.SetupStepIndicator
 import com.seekerclaw.app.ui.components.dotMatrix
+import com.seekerclaw.app.ui.theme.BrandAlpha
+import com.seekerclaw.app.ui.theme.OnboardingColors
+import com.seekerclaw.app.ui.theme.SetupLayout
+import com.seekerclaw.app.ui.theme.Sizing
+import com.seekerclaw.app.ui.theme.Spacing
+import com.seekerclaw.app.ui.theme.TypeScale
+import kotlin.math.cos
+import kotlin.math.roundToInt
+import kotlin.math.sin
 import com.seekerclaw.app.ui.theme.SeekerClawColors
 
 private object SetupSteps {
@@ -113,10 +155,12 @@ private object SetupSteps {
 fun SetupScreen(onSetupComplete: () -> Unit) {
     val context = LocalContext.current
 
-    // Pre-fill from existing config (for "Run Setup Again" flow)
-    val existingConfig = remember { ConfigManager.loadConfig(context) }
+    // Pre-fill from existing config — reactive to ConfigManager.configVersion so any
+    // edit made in Settings while onboarding is on the back stack flows through here.
+    val configVersion = ConfigManager.configVersion.intValue
+    val existingConfig = remember(configVersion) { ConfigManager.loadConfig(context) }
 
-    var apiKey by remember {
+    var apiKey by remember(configVersion) {
         mutableStateOf(
             when (existingConfig?.provider) {
                 "openai" -> existingConfig.openaiApiKey
@@ -125,12 +169,12 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             }
         )
     }
-    var authType by remember { mutableStateOf(existingConfig?.authType ?: "api_key") }
-    var scannedProvider by remember { mutableStateOf(existingConfig?.provider ?: "claude") }
-    var botToken by remember { mutableStateOf(existingConfig?.telegramBotToken ?: "") }
-    var ownerId by remember { mutableStateOf(existingConfig?.telegramOwnerId ?: "") }
+    var authType by remember(configVersion) { mutableStateOf(existingConfig?.authType ?: "api_key") }
+    var scannedProvider by remember(configVersion) { mutableStateOf(existingConfig?.provider ?: "claude") }
+    var botToken by remember(configVersion) { mutableStateOf(existingConfig?.telegramBotToken ?: "") }
+    var ownerId by remember(configVersion) { mutableStateOf(existingConfig?.telegramOwnerId ?: "") }
     val existingProvider = existingConfig?.provider ?: "claude"
-    var selectedModel by remember {
+    var selectedModel by remember(configVersion) {
         // Setup screen always uses API-key auth (OAuth happens later in settings),
         // so derive the model list from the api_key list to match what saveAndStart persists.
         mutableStateOf(
@@ -141,13 +185,29 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             } ?: modelsForProvider(existingProvider, "api_key").firstOrNull()?.id ?: availableModels[0].id
         )
     }
-    var agentName by remember { mutableStateOf(existingConfig?.agentName ?: "SeekerClaw") }
-    var modelDropdownExpanded by remember { mutableStateOf(false) }
+    var agentName by remember(configVersion) { mutableStateOf(existingConfig?.agentName ?: "SeekerClaw") }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var apiKeyError by remember { mutableStateOf<String?>(null) }
     var botTokenError by remember { mutableStateOf<String?>(null) }
 
     var currentStep by remember { mutableIntStateOf(SetupSteps.WELCOME) }
+    // Map SetupSteps (WELCOME=0, PROVIDER=1, MODEL=2, TELEGRAM=3, SUCCESS=4)
+    // to PageDots positions (TELEGRAM=0, PROVIDER=1, SUCCESS=2).
+    val dotPosition = when (currentStep) {
+        SetupSteps.TELEGRAM -> 0f
+        SetupSteps.PROVIDER -> 1f
+        SetupSteps.SUCCESS -> 2f
+        else -> 0f
+    }
+    // Parent-scoped animation — stable across step swaps, so it actually animates.
+    val animatedDotPosition by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = dotPosition,
+        animationSpec = androidx.compose.animation.core.tween(
+            durationMillis = 400,
+            easing = androidx.compose.animation.core.FastOutSlowInEasing,
+        ),
+        label = "dotPosition",
+    )
     var isQrImporting by remember { mutableStateOf(false) }
     var qrError by remember { mutableStateOf<String?>(null) }
 
@@ -194,7 +254,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                     agentName = cfg.agentName
                     isQrImporting = false
                     errorMessage = null
-                    currentStep = SetupSteps.TELEGRAM // QR fills all fields — jump to final step
+                    currentStep = SetupSteps.PROVIDER // QR fills all fields — jump to final step (Initialize Agent)
                 }
                 .onFailure { err ->
                     isQrImporting = false
@@ -221,22 +281,30 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
 
     fun saveAndStart() {
         if (isStarting) return
-        // Non-Claude providers only support api_key auth
-        val effectiveAuthType = if (scannedProvider != "claude") "api_key" else authType
+        // OpenAI supports oauth; everything else (non-Claude) is api_key only.
+        val effectiveAuthType = when {
+            scannedProvider == "claude" -> authType
+            scannedProvider == "openai" && authType == "oauth" -> "oauth"
+            else -> "api_key"
+        }
+        val isOpenAIOAuth = scannedProvider == "openai" && effectiveAuthType == "oauth"
 
-        if (apiKey.isBlank()) {
+        // For OpenAI OAuth, the credential lives in openaiOAuthToken (set by the OAuth
+        // activity), not apiKey — skip the apiKey blank check entirely.
+        if (!isOpenAIOAuth && apiKey.isBlank()) {
             apiKeyError = "Required"
             errorMessage = "AI credential is required"
             currentStep = SetupSteps.PROVIDER
             return
         }
-        if (scannedProvider != "claude" && apiKey.trim().startsWith("sk-ant-oat")) {
+        if (scannedProvider != "claude" && !isOpenAIOAuth && apiKey.trim().startsWith("sk-ant-oat")) {
             apiKeyError = "Setup tokens are only valid for Anthropic"
             errorMessage = apiKeyError
             currentStep = SetupSteps.PROVIDER
             return
         }
-        val credentialError = ConfigManager.validateCredential(apiKey.trim(), effectiveAuthType)
+        val credentialError = if (isOpenAIOAuth) null
+            else ConfigManager.validateCredential(apiKey.trim(), effectiveAuthType)
         if (credentialError != null) {
             apiKeyError = credentialError
             errorMessage = credentialError
@@ -259,10 +327,16 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                 "openai" -> AppConfig(
                     anthropicApiKey = existing?.anthropicApiKey ?: "",
                     setupToken = existing?.setupToken ?: "",
-                    openaiApiKey = trimmedKey,
+                    // Don't wipe an existing openaiApiKey when the user picked OAuth.
+                    openaiApiKey = if (isOpenAIOAuth) (existing?.openaiApiKey ?: "") else trimmedKey,
                     openrouterApiKey = existing?.openrouterApiKey ?: "",
+                    // Preserve OAuth tokens written by OpenAIOAuthActivity.
+                    openaiOAuthToken = existing?.openaiOAuthToken ?: "",
+                    openaiOAuthRefresh = existing?.openaiOAuthRefresh ?: "",
+                    openaiOAuthEmail = existing?.openaiOAuthEmail ?: "",
+                    openaiOAuthExpiresAt = existing?.openaiOAuthExpiresAt ?: "",
                     provider = "openai",
-                    authType = "api_key",
+                    authType = effectiveAuthType,
                     telegramBotToken = botToken.trim(),
                     telegramOwnerId = ownerId.trim(),
                     model = selectedModel,
@@ -281,11 +355,15 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                     agentName = agentName.trim().ifBlank { "SeekerClaw" },
                 )
                 else -> AppConfig(
-                    anthropicApiKey = if (effectiveAuthType == "api_key") trimmedKey else "",
+                    // Preserve the OTHER auth type's stored key — never wipe data the user
+                    // might still have set in Settings under the alternate Claude auth flow.
+                    anthropicApiKey = if (effectiveAuthType == "api_key") trimmedKey
+                        else (existing?.anthropicApiKey ?: ""),
+                    setupToken = if (effectiveAuthType == "setup_token") trimmedKey
+                        else (existing?.setupToken ?: ""),
                     openaiApiKey = existing?.openaiApiKey ?: "",
                     openrouterApiKey = existing?.openrouterApiKey ?: "",
                     provider = "claude",
-                    setupToken = if (effectiveAuthType == "setup_token") trimmedKey else "",
                     authType = effectiveAuthType,
                     telegramBotToken = botToken.trim(),
                     telegramOwnerId = ownerId.trim(),
@@ -297,6 +375,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             ConfigManager.seedWorkspace(context)
             OpenClawService.start(context)
             ConfigManager.markFirstDeploymentDone(context)
+            isStarting = false
             currentStep = SetupSteps.SUCCESS
         } catch (e: Exception) {
             LogCollector.append("[Setup] Failed to start agent: ${e.message}", LogLevel.ERROR)
@@ -335,56 +414,70 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             .background(SeekerClawColors.Background)
     }
 
-    Column(
-        modifier = bgModifier
-            .padding(24.dp)
-            .verticalScroll(scrollState),
-        horizontalAlignment = Alignment.CenterHorizontally,
+    if (currentStep == SetupSteps.WELCOME) {
+        WelcomeStep(
+            onNext = { currentStep = SetupSteps.TELEGRAM },
+            onSkip = {
+                ConfigManager.markSetupSkipped(context)
+                onSetupComplete()
+            },
+            onScanQr = {
+                Analytics.featureUsed("qr_scan_setup")
+                qrScanLauncher.launch(Intent(context, QrScannerActivity::class.java))
+            },
+            isQrImporting = isQrImporting,
+            qrError = qrError,
+        )
+    } else Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(OnboardingColors.heroBackground),
     ) {
-        if (currentStep < SetupSteps.SUCCESS) {
-            // Header row: logo left, skip right
+        AuroraGridBackground(modifier = Modifier.fillMaxSize())
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = SetupLayout.contentHorizontal)
+                .padding(top = SetupLayout.contentTop, bottom = SetupLayout.contentBottom),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+        if (currentStep > SetupSteps.WELCOME && currentStep < SetupSteps.SUCCESS) {
+            // Top row: Skip aligned right
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                horizontalArrangement = Arrangement.End,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Image(
-                    painter = painterResource(R.drawable.ic_seekerclaw_logo_horizontal),
-                    contentDescription = "SeekerClaw logo",
-                    modifier = Modifier.height(36.dp),
-                )
                 Text(
-                    text = "Set up later",
+                    text = "Skip",
                     fontFamily = RethinkSans,
-                    fontSize = 13.sp,
-                    color = SeekerClawColors.TextDim,
+                    fontSize = TypeScale.bodyMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = SeekerClawColors.TextPrimary,
                     modifier = Modifier
                         .clickable {
                             ConfigManager.markSetupSkipped(context)
                             onSetupComplete()
                         }
-                        .padding(4.dp),
+                        .padding(Spacing.sm),
                 )
             }
 
-            Spacer(modifier = Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(Spacing.lg))
 
-            Text(
-                text = "Your personal AI agent, running on your phone",
-                fontSize = 13.sp,
-                color = SeekerClawColors.TextDim,
-                modifier = Modifier.fillMaxWidth(),
-            )
+            // Per-step title block (same style as Welcome hero)
+            val (stepTitle, stepTagline) = when (currentStep) {
+                SetupSteps.PROVIDER -> "Pick Your Provider" to
+                    "You can change your provider later in Settings, including custom providers."
+                SetupSteps.MODEL -> "" to "" // Model step removed — unreachable
+                SetupSteps.TELEGRAM -> "Connect Telegram" to
+                    "Your user ID will be set automatically when you send your first message. You can change it later in Settings."
+                else -> "" to ""
+            }
+            StepTitle(title = stepTitle, tagline = stepTagline)
 
-            Spacer(modifier = Modifier.height(24.dp))
-
-            // Step indicator
-            SetupStepIndicator(
-                currentStep = currentStep,
-                labels = listOf("Welcome", "AI Provider", "Model", "Telegram"),
-            )
-
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(SetupLayout.gapAfterIndicator))
         }
 
         // Error message
@@ -402,16 +495,9 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             Spacer(modifier = Modifier.height(16.dp))
         }
 
+        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
         when (currentStep) {
-            SetupSteps.WELCOME -> WelcomeStep(
-                onNext = { currentStep = SetupSteps.PROVIDER },
-                onScanQr = {
-                    Analytics.featureUsed("qr_scan_setup")
-                    qrScanLauncher.launch(Intent(context, QrScannerActivity::class.java))
-                },
-                isQrImporting = isQrImporting,
-                qrError = qrError,
-            )
+            SetupSteps.WELCOME -> Unit // handled by full-bleed branch above
             SetupSteps.PROVIDER -> ProviderSetupStep(
                 provider = scannedProvider,
                 onProviderChange = { newProvider ->
@@ -424,14 +510,17 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                     }
                     apiKeyError = null
                     errorMessage = null
-                    // Claude only supports {api_key, setup_token}; everything else (including
-                    // a leftover "oauth" from OpenAI) must fall back to api_key.
-                    authType = if (newProvider == "claude") {
-                        when (existingConfig?.authType) {
+                    // Per-provider auth defaults: Claude → api_key/setup_token,
+                    // OpenAI → oauth (matches Settings first-time switch-in default).
+                    authType = when (newProvider) {
+                        "claude" -> when (existingConfig?.authType) {
                             "setup_token" -> "setup_token"
                             else -> "api_key"
                         }
-                    } else "api_key"
+                        "openai" -> if (existingConfig?.authType == "oauth" ||
+                            existingConfig?.openaiOAuthToken?.isNotBlank() == true) "oauth" else "api_key"
+                        else -> "api_key"
+                    }
                     // Restore model: use existing config's model if same provider, else default
                     // Setup screen always uses API-key auth — OAuth flow happens later in settings.
                     val models = modelsForProvider(newProvider, "api_key")
@@ -451,43 +540,53 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                     }
                 },
                 authType = authType,
-                onAuthTypeChange = { authType = it },
+                onAuthTypeChange = { newAuthType ->
+                    authType = newAuthType
+                    // Swap displayed key to the value stored under the new auth type so
+                    // the field always reflects what's saved for the active tab.
+                    if (scannedProvider == "claude") {
+                        apiKey = if (newAuthType == "setup_token")
+                            existingConfig?.setupToken ?: ""
+                        else
+                            existingConfig?.anthropicApiKey ?: ""
+                    } else if (scannedProvider == "openai") {
+                        // OAuth tab doesn't use the apiKey field — leave it untouched.
+                        // Switching to API Key restores the saved OpenAI key.
+                        if (newAuthType == "api_key") {
+                            apiKey = existingConfig?.openaiApiKey ?: ""
+                        }
+                    }
+                    apiKeyError = null
+                    errorMessage = null
+                },
                 apiKeyError = apiKeyError,
                 fieldColors = fieldColors,
-                onNext = { currentStep = SetupSteps.MODEL },
-                onBack = { currentStep = SetupSteps.WELCOME },
+                onNext = ::saveAndStart,
+                onBack = { if (!isStarting) currentStep = SetupSteps.TELEGRAM },
+                animatedDotPosition = animatedDotPosition,
+                isStarting = isStarting,
             )
-            SetupSteps.MODEL -> OptionsStep(
-                selectedModel = selectedModel,
-                onModelChange = { selectedModel = it },
-                modelDropdownExpanded = modelDropdownExpanded,
-                onModelDropdownExpandedChange = { modelDropdownExpanded = it },
-                agentName = agentName,
-                onAgentNameChange = { agentName = it },
-                fieldColors = fieldColors,
-                onNext = { currentStep = SetupSteps.TELEGRAM },
-                onBack = { currentStep = SetupSteps.PROVIDER },
-                provider = scannedProvider,
-            )
+            SetupSteps.MODEL -> Unit // Model step removed — default model auto-selected with provider
             SetupSteps.TELEGRAM -> TelegramStep(
                 botToken = botToken,
                 onBotTokenChange = { botToken = it; botTokenError = null; errorMessage = null },
-                ownerId = ownerId,
-                onOwnerIdChange = { ownerId = it; errorMessage = null },
+                agentName = agentName,
+                onAgentNameChange = { agentName = it },
                 botTokenError = botTokenError,
                 fieldColors = fieldColors,
-                onNext = ::saveAndStart,
-                onBack = { if (!isStarting) currentStep = SetupSteps.MODEL },
-                isStarting = isStarting,
+                onNext = { currentStep = SetupSteps.PROVIDER },
+                onBack = { currentStep = SetupSteps.WELCOME },
+                animatedDotPosition = animatedDotPosition,
             )
             SetupSteps.SUCCESS -> SetupSuccessStep(
                 agentName = agentName.ifBlank { "SeekerClaw" },
-                botToken = botToken,
                 onContinue = onSetupComplete,
+                onBack = { currentStep = SetupSteps.PROVIDER },
+                animatedDotPosition = animatedDotPosition,
             )
         }
-
-        Spacer(modifier = Modifier.height(32.dp))
+        }
+        }
     }
 
     // Notification permission explanation dialog
@@ -543,6 +642,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
 @Composable
 private fun WelcomeStep(
     onNext: () -> Unit,
+    onSkip: () -> Unit,
     onScanQr: () -> Unit = {},
     isQrImporting: Boolean = false,
     qrError: String? = null,
@@ -550,121 +650,150 @@ private fun WelcomeStep(
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
     val uriHandler = LocalUriHandler.current
 
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalAlignment = Alignment.CenterHorizontally,
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(OnboardingColors.heroBackground),
     ) {
-        Text(
-            text = "SeekerClaw turns your phone into a 24/7 personal AI agent. " +
-                   "To get started, you\u2019ll need:",
-            fontSize = 14.sp,
-            color = SeekerClawColors.TextPrimary,
-            lineHeight = 22.sp,
-        )
+        AuroraGridBackground(modifier = Modifier.fillMaxSize())
 
-        Spacer(modifier = Modifier.height(20.dp))
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = SetupLayout.contentHorizontal)
+                .padding(top = SetupLayout.heroTop, bottom = SetupLayout.contentBottom),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
 
-        // Requirements card
-        SetupCard {
-            RequirementRow(
-                icon = Icons.Default.Key,
-                title = "API Credential",
-                subtitle = "From Claude, OpenAI, or OpenRouter",
-            )
-            HorizontalDivider(
-                color = SeekerClawColors.CardBorder,
-                modifier = Modifier.padding(vertical = 14.dp),
-            )
-            RequirementRow(
-                icon = Icons.Default.SmartToy,
-                title = "Telegram Bot",
-                subtitle = "Create one via @BotFather in Telegram",
-            )
-            HorizontalDivider(
-                color = SeekerClawColors.CardBorder,
-                modifier = Modifier.padding(vertical = 14.dp),
-            )
-            RequirementRow(
-                icon = Icons.Default.Person,
-                title = "Your Telegram User ID",
-                subtitle = "Optional \u2014 can be auto-detected",
+        // Hero: claw symbol with ambient dark shadow beneath
+        Box(
+            modifier = Modifier.size(Sizing.heroBoxSize),
+            contentAlignment = Alignment.Center,
+        ) {
+            // Ambient shadow — radial dark glow offset beneath the logo
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val cx = size.width / 2f
+                val cy = size.height / 2f + Sizing.heroShadowOffsetY.toPx()
+                val r = Sizing.heroShadowRadius.toPx()
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(
+                            OnboardingColors.heroBackground.copy(alpha = BrandAlpha.shadowStrong),
+                            OnboardingColors.heroBackground.copy(alpha = BrandAlpha.shadowSoft),
+                            Color.Transparent,
+                        ),
+                        center = Offset(cx, cy),
+                        radius = r,
+                    ),
+                    center = Offset(cx, cy),
+                    radius = r,
+                )
+            }
+            Image(
+                painter = painterResource(R.drawable.ic_seekerclaw_symbol),
+                contentDescription = "SeekerClaw",
+                modifier = Modifier.size(Sizing.heroLogoSize),
             )
         }
 
-        Spacer(modifier = Modifier.height(48.dp))
+        Spacer(modifier = Modifier.height(Spacing.xxl))
 
-        // QR scan button
-        Button(
-            onClick = onScanQr,
-            enabled = !isQrImporting,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(52.dp),
-            shape = shape,
-            colors = ButtonDefaults.buttonColors(
-                containerColor = SeekerClawColors.ActionPrimary,
-                contentColor = Color.White,
-            ),
+        Text(
+            text = "EMPOWER YOUR",
+            fontFamily = RethinkSans,
+            fontSize = TypeScale.displayLarge,
+            fontWeight = FontWeight.ExtraBold,
+            color = SeekerClawColors.TextPrimary,
+            textAlign = TextAlign.Center,
+            lineHeight = TypeScale.lineHeightDisplayLarge,
+        )
+        Text(
+            text = "PHONE \uD83E\uDD9E\uD83D\uDCF2",
+            fontFamily = RethinkSans,
+            fontSize = TypeScale.displayLarge,
+            fontWeight = FontWeight.ExtraBold,
+            color = SeekerClawColors.TextPrimary,
+            textAlign = TextAlign.Center,
+            lineHeight = TypeScale.lineHeightDisplayLarge,
+        )
+
+        Spacer(modifier = Modifier.height(Spacing.md))
+
+        Text(
+            text = "In 3 steps, your AI assistant will be live 24/7",
+            fontFamily = RethinkSans,
+            fontSize = TypeScale.bodyLarge,
+            color = SeekerClawColors.TextDim,
+            textAlign = TextAlign.Center,
+            lineHeight = TypeScale.lineHeightBody,
+        )
+
+        Spacer(modifier = Modifier.height(Spacing.lg))
+
+        Text(
+            text = "Add your AI provider, connect Telegram, and start chatting with your agent.",
+            fontFamily = RethinkSans,
+            fontSize = TypeScale.bodyMedium,
+            color = SeekerClawColors.TextDim,
+            textAlign = TextAlign.Center,
+            lineHeight = TypeScale.lineHeightBody,
+        )
+
+        Spacer(modifier = Modifier.weight(1f))
+
+        // Primary CTA: Get Started
+        PrimaryButton(
+            modifier = Modifier.fillMaxWidth(),
+            onClick = onNext,
+            label = "Get Started",
+        )
+
+        Spacer(modifier = Modifier.height(SetupLayout.gapBetweenButtons))
+
+        // Secondary row: Scan Config + Skip
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(SetupLayout.gapBetweenButtons),
         ) {
-            if (isQrImporting) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(16.dp),
-                    strokeWidth = 2.dp,
-                    color = Color.White,
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    "Importing\u2026",
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                )
-            } else {
-                Icon(
-                    Icons.Default.QrCodeScanner,
-                    contentDescription = "QR code",
-                    modifier = Modifier.size(20.dp),
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    "Scan Config QR",
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                )
-            }
+            SecondaryButton(
+                modifier = Modifier.weight(1f),
+                onClick = onScanQr,
+                label = "Scan Config",
+                isLoading = isQrImporting,
+                leadingIcon = {
+                    Icon(
+                        Icons.Default.QrCodeScanner,
+                        contentDescription = null,
+                        modifier = Modifier.size(Sizing.iconMd),
+                    )
+                },
+            )
+
+            SecondaryButton(
+                onClick = onSkip,
+                label = "Skip",
+                modifier = Modifier.weight(1f),
+                leadingIcon = {
+                    Icon(
+                        Icons.AutoMirrored.Filled.LastPage,
+                        contentDescription = null,
+                        modifier = Modifier.size(Sizing.iconMd),
+                    )
+                },
+            )
         }
 
         if (qrError != null) {
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(Spacing.sm))
             Text(
                 text = qrError,
                 fontFamily = FontFamily.Monospace,
                 color = SeekerClawColors.Error,
-                fontSize = 12.sp,
+                fontSize = TypeScale.labelSmall,
             )
         }
 
-        Spacer(modifier = Modifier.height(10.dp))
-
-        // Manual setup button
-        Button(
-            onClick = onNext,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(48.dp),
-            shape = shape,
-            colors = ButtonDefaults.buttonColors(
-                containerColor = SeekerClawColors.Surface,
-                contentColor = SeekerClawColors.TextPrimary,
-            ),
-        ) {
-            Text(
-                "Enter Manually",
-                fontSize = 15.sp,
-                fontWeight = FontWeight.Medium,
-            )
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(SetupLayout.gapBeforeNav))
 
         TextButton(
             onClick = { uriHandler.openUri("https://seekerclaw.xyz/setup") },
@@ -673,13 +802,112 @@ private fun WelcomeStep(
                 @Suppress("DEPRECATION") Icons.Default.HelpOutline,
                 contentDescription = "Help",
                 tint = SeekerClawColors.TextDim,
-                modifier = Modifier.size(16.dp),
+                modifier = Modifier.size(Sizing.iconSm),
             )
-            Spacer(modifier = Modifier.width(6.dp))
+            Spacer(modifier = Modifier.width(Spacing.xs))
             Text(
                 "Need help? Quick setup guide",
-                fontSize = 13.sp,
+                fontFamily = RethinkSans,
+                fontSize = TypeScale.bodySmall,
                 color = SeekerClawColors.TextDim,
+            )
+        }
+
+        }
+    }
+}
+
+@Composable
+private fun AuroraGridBackground(modifier: Modifier = Modifier) {
+    val infinite = rememberInfiniteTransition(label = "aurora")
+    val angle1 by infinite.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 22000, easing = LinearEasing),
+        ),
+        label = "angle1",
+    )
+    val angle2 by infinite.animateFloat(
+        initialValue = 180f,
+        targetValue = 540f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 28000, easing = LinearEasing),
+        ),
+        label = "angle2",
+    )
+
+    val red = SeekerClawColors.Primary
+
+    Box(modifier = modifier.background(OnboardingColors.heroBackground)) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val cx = size.width / 2f
+            val cy = size.height / 2f
+
+            // Blob 1 — drifting radial gradient (no blur modifier needed)
+            val rad1 = Math.toRadians(angle1.toDouble())
+            val b1x = cx + (cos(rad1) * SetupLayout.blob1Drift.toPx()).toFloat()
+            val b1y = cy + (sin(rad1) * SetupLayout.blob1Drift.toPx()).toFloat()
+            val b1r = SetupLayout.blob1Radius.toPx()
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        red.copy(alpha = BrandAlpha.blob1Core),
+                        red.copy(alpha = BrandAlpha.blob1Mid),
+                        Color.Transparent,
+                    ),
+                    center = Offset(b1x, b1y),
+                    radius = b1r,
+                ),
+                center = Offset(b1x, b1y),
+                radius = b1r,
+            )
+
+            // Blob 2
+            val rad2 = Math.toRadians(angle2.toDouble())
+            val b2x = cx + (cos(rad2) * SetupLayout.blob2Drift.toPx()).toFloat()
+            val b2y = cy + (sin(rad2) * SetupLayout.blob2Drift.toPx()).toFloat()
+            val b2r = SetupLayout.blob2Radius.toPx()
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        red.copy(alpha = BrandAlpha.blob2Core),
+                        red.copy(alpha = BrandAlpha.blob2Mid),
+                        Color.Transparent,
+                    ),
+                    center = Offset(b2x, b2y),
+                    radius = b2r,
+                ),
+                center = Offset(b2x, b2y),
+                radius = b2r,
+            )
+
+            // Grid lines
+            val spacing = SetupLayout.gridSpacing.toPx()
+            val lineColor = red.copy(alpha = BrandAlpha.gridLine)
+            val stroke = Sizing.strokeMedium
+            var x = 0f
+            while (x < size.width) {
+                drawLine(lineColor, Offset(x, 0f), Offset(x, size.height), stroke)
+                x += spacing
+            }
+            var y = 0f
+            while (y < size.height) {
+                drawLine(lineColor, Offset(0f, y), Offset(size.width, y), stroke)
+                y += spacing
+            }
+
+            // Radial vignette — fades grid/blobs at edges back to background
+            drawRect(
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        Color.Transparent,
+                        Color.Transparent,
+                        OnboardingColors.heroBackground,
+                    ),
+                    center = Offset(cx, cy),
+                    radius = size.minDimension * 0.85f,
+                ),
             )
         }
     }
@@ -697,59 +925,94 @@ private fun ProviderSetupStep(
     fieldColors: androidx.compose.material3.TextFieldColors,
     onNext: () -> Unit,
     onBack: () -> Unit,
+    animatedDotPosition: Float,
+    isStarting: Boolean = false,
 ) {
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
+    val context = LocalContext.current
     val providerInfo = providerById(provider)
     val isToken = authType == "setup_token"
+    val isOpenAIOAuth = provider == "openai" && authType == "oauth"
     val uriHandler = LocalUriHandler.current
-    val effectiveAuthType = if (provider != "claude") "api_key" else authType
+    val effectiveAuthType = when {
+        provider == "claude" -> authType
+        isOpenAIOAuth -> "oauth"
+        else -> "api_key"
+    }
+    // Shared OAuth controller — same flow as Settings, syncs via configVersion.
+    val oauthController = rememberOpenAIOAuthController(context)
     val isValid = apiKey.trim().isNotBlank() &&
         ConfigManager.validateCredential(apiKey.trim(), effectiveAuthType) == null &&
         apiKeyError == null
 
-    Column(modifier = Modifier.fillMaxWidth()) {
+    // Inline test state for the API key field
+    val scope = rememberCoroutineScope()
+    var keyTestState by remember { mutableStateOf<ActionResult>(ActionResult.Idle) }
+    LaunchedEffect(apiKey, provider, authType) {
+        if (keyTestState !is ActionResult.Idle) keyTestState = ActionResult.Idle
+    }
+    fun runKeyTest() {
+        val key = apiKey.trim()
+        if (key.isBlank() || keyTestState is ActionResult.Loading) return
+        // Format check first
+        val formatErr = ConfigManager.validateCredential(key, effectiveAuthType)
+        if (formatErr != null) {
+            keyTestState = ActionResult.Error(formatErr)
+            return
+        }
+        keyTestState = ActionResult.Loading
+        scope.launch {
+            keyTestState = try {
+                val (host, path, headers) = when (provider) {
+                    "openai" -> Triple("api.openai.com", "/v1/models", mapOf("Authorization" to "Bearer $key"))
+                    "openrouter" -> Triple("openrouter.ai", "/api/v1/models", mapOf("Authorization" to "Bearer $key"))
+                    else -> Triple(
+                        "api.anthropic.com",
+                        "/v1/models",
+                        mapOf(
+                            "x-api-key" to key,
+                            "anthropic-version" to "2023-06-01",
+                        ),
+                    )
+                }
+                val code = withContext(Dispatchers.IO) {
+                    val conn = (URL("https://$host$path").openConnection() as HttpURLConnection).apply {
+                        connectTimeout = 8000
+                        readTimeout = 8000
+                        requestMethod = "GET"
+                        headers.forEach { (k, v) -> setRequestProperty(k, v) }
+                    }
+                    try { conn.responseCode } finally { conn.disconnect() }
+                }
+                when (code) {
+                    200 -> ActionResult.Success("Key is valid")
+                    401, 403 -> ActionResult.Error("Invalid or unauthorized key")
+                    else -> ActionResult.Error("HTTP $code from provider")
+                }
+            } catch (e: Exception) {
+                ActionResult.Error(e.message ?: "Network error")
+            }
+        }
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+        ) {
         // Provider selector
         SectionLabel("Provider")
 
         Spacer(modifier = Modifier.height(10.dp))
 
-        SetupCard {
-            Column(modifier = Modifier.selectableGroup()) {
-                availableProviders.forEachIndexed { index, p ->
-                    val isSelected = p.id == provider
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .selectable(
-                                selected = isSelected,
-                                onClick = { if (!isSelected) onProviderChange(p.id) },
-                                role = Role.RadioButton,
-                            )
-                            .padding(vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        RadioButton(
-                            selected = isSelected,
-                            onClick = null,
-                            colors = RadioButtonDefaults.colors(
-                                selectedColor = SeekerClawColors.Primary,
-                                unselectedColor = SeekerClawColors.TextDim,
-                            ),
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = p.displayName,
-                            fontFamily = RethinkSans,
-                            fontSize = 15.sp,
-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                            color = if (isSelected) SeekerClawColors.TextPrimary else SeekerClawColors.TextDim,
-                        )
-                    }
-                    if (index < availableProviders.size - 1) {
-                        HorizontalDivider(color = SeekerClawColors.CardBorder)
-                    }
-                }
-            }
+        CardSurface {
+            ProviderPicker(
+                selectedProviderId = provider,
+                onSelect = onProviderChange,
+                exclude = setOf("custom"), // Custom provider is Settings-only
+            )
         }
 
         Spacer(modifier = Modifier.height(20.dp))
@@ -759,69 +1022,91 @@ private fun ProviderSetupStep(
 
         Spacer(modifier = Modifier.height(10.dp))
 
-        SetupCard {
-            // Auth type toggle — Claude only
-            if (provider == "claude") {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+        CardSurface {
+            // Auth type tabs — Claude (API Key/Setup Token) and OpenAI (OAuth/API Key)
+            val authTabs = when (provider) {
+                "claude" -> listOf("api_key" to "API Key", "setup_token" to "Pro/Max Token")
+                "openai" -> listOf("oauth" to "OAuth", "api_key" to "API Key")
+                else -> emptyList()
+            }
+            if (authTabs.isNotEmpty()) {
+                val selectedTabIndex = authTabs.indexOfFirst { it.first == authType }.coerceAtLeast(0)
+                TabRow(
+                    selectedTabIndex = selectedTabIndex,
+                    containerColor = androidx.compose.ui.graphics.Color.Transparent,
+                    contentColor = SeekerClawColors.TextPrimary,
+                    indicator = { tabPositions ->
+                        TabRowDefaults.Indicator(
+                            modifier = Modifier.tabIndicatorOffset(tabPositions[selectedTabIndex]),
+                            color = SeekerClawColors.Primary,
+                            height = 2.dp,
+                        )
+                    },
+                    divider = {
+                        HorizontalDivider(color = SeekerClawColors.CardBorder)
+                    },
                 ) {
-                    listOf("api_key" to "API Key", "setup_token" to "Pro/Max Setup Token").forEach { (type, label) ->
-                        val isAuthSelected = authType == type
-                        Button(
+                    authTabs.forEach { (type, label) ->
+                        val isAuthSelected = type == authType
+                        Tab(
+                            selected = isAuthSelected,
                             onClick = { onAuthTypeChange(type) },
-                            modifier = Modifier.weight(1f).height(48.dp),
-                            shape = shape,
-                            border = if (!isAuthSelected) BorderStroke(1.dp, SeekerClawColors.CardBorder) else null,
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (isAuthSelected) SeekerClawColors.Primary.copy(alpha = 0.15f)
-                                    else SeekerClawColors.Background,
-                                contentColor = if (isAuthSelected) SeekerClawColors.Primary
-                                    else SeekerClawColors.TextDim,
-                            ),
-                        ) {
-                            Text(
-                                text = label,
-                                fontSize = 12.sp,
-                                fontWeight = if (isAuthSelected) FontWeight.Bold else FontWeight.Normal,
-                            )
-                        }
+                            selectedContentColor = SeekerClawColors.Primary,
+                            unselectedContentColor = SeekerClawColors.TextDim,
+                            text = {
+                                Text(
+                                    text = label,
+                                    fontFamily = RethinkSans,
+                                    fontSize = TypeScale.bodyMedium,
+                                    fontWeight = if (isAuthSelected) FontWeight.ExtraBold else FontWeight.Medium,
+                                )
+                            },
+                        )
                     }
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))
             }
 
-            // Instructions — provider-specific
-            if (provider == "claude" && isToken) {
-                Text(
-                    text = "Run in your terminal:",
-                    fontSize = 13.sp,
-                    color = SeekerClawColors.TextSecondary,
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = "claude setup-token",
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 13.sp,
-                    color = SeekerClawColors.Primary,
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = "Requires Claude Pro or Max subscription.",
-                    fontSize = 12.sp,
-                    color = SeekerClawColors.TextDim,
+            if (isOpenAIOAuth) {
+                // OAuth flow — shared with Settings via the controller. No API key field.
+                OpenAIOAuthSection(
+                    state = oauthController.state,
+                    onSignIn = oauthController.signIn,
+                    onSignOut = oauthController.signOut,
+                    onCancel = oauthController.cancel,
                 )
             } else {
-                Row {
+            // Instructions — provider-specific
+            if (provider == "claude" && isToken) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = "Get your API key from ",
-                        fontSize = 13.sp,
+                        text = "Run in terminal: ",
+                        fontFamily = RethinkSans,
+                        fontSize = TypeScale.bodySmall,
                         color = SeekerClawColors.TextSecondary,
                     )
                     Text(
-                        text = providerInfo.keysUrl.removePrefix("https://"),
-                        fontSize = 13.sp,
+                        text = "claude setup-token",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = TypeScale.bodySmall,
+                        fontWeight = FontWeight.Bold,
+                        color = SeekerClawColors.Primary,
+                    )
+                }
+            } else {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "Get your API key ",
+                        fontFamily = RethinkSans,
+                        fontSize = TypeScale.bodySmall,
+                        color = SeekerClawColors.TextSecondary,
+                    )
+                    Text(
+                        text = "here",
+                        fontFamily = RethinkSans,
+                        fontSize = TypeScale.bodySmall,
+                        fontWeight = FontWeight.Bold,
                         color = SeekerClawColors.Primary,
                         modifier = Modifier.clickable {
                             uriHandler.openUri(providerInfo.keysUrl)
@@ -832,51 +1117,46 @@ private fun ProviderSetupStep(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            OutlinedTextField(
+            InputWithActionButton(
                 value = apiKey,
                 onValueChange = onApiKeyChange,
-                label = {
-                    Text(
-                        if (provider == "claude" && isToken) "Setup Token" else "API Key",
-                        fontSize = 12.sp,
-                    )
-                },
-                placeholder = {
-                    Text(
-                        if (provider == "claude" && isToken) "sk-ant-oat01-\u2026" else providerInfo.keyHint,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 14.sp,
-                        color = SeekerClawColors.TextDim,
-                    )
-                },
-                modifier = Modifier.fillMaxWidth(),
-                visualTransformation = PasswordVisualTransformation(),
-                singleLine = true,
+                actionLabel = "Test",
+                onAction = { runKeyTest() },
+                actionState = keyTestState,
+                placeholder = if (provider == "claude" && isToken) "sk-ant-oat01-\u2026" else providerInfo.keyHint,
+                visualTransformation = InputMask.MaskMiddle,
                 isError = apiKeyError != null,
-                trailingIcon = if (isValid) {
-                    {
-                        Icon(
-                            Icons.Default.CheckCircle,
-                            contentDescription = "Valid",
-                            tint = SeekerClawColors.Accent,
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
-                } else null,
-                supportingText = apiKeyError?.let { err ->
-                    { Text(err, fontSize = 12.sp) }
-                },
-                colors = fieldColors,
-                shape = shape,
             )
+
+            // Inline error message — success is shown by the button morph alone
+            val errorMessage = when (val s = keyTestState) {
+                is ActionResult.Error -> s.message
+                else -> apiKeyError
+            }
+            if (!errorMessage.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(Spacing.sm))
+                Text(
+                    text = errorMessage,
+                    fontFamily = RethinkSans,
+                    fontSize = TypeScale.labelSmall,
+                    color = SeekerClawColors.Error,
+                )
+            }
+            } // end else (api key path)
         }
 
-        Spacer(modifier = Modifier.height(28.dp))
+        }
+
+        Spacer(modifier = Modifier.height(SetupLayout.gapBeforeNav))
 
         NavButtons(
             onBack = onBack,
             onNext = onNext,
-            nextEnabled = apiKey.isNotBlank(),
+            nextEnabled = if (isOpenAIOAuth) oauthController.state.isConnected
+                else apiKey.isNotBlank(),
+            nextLabel = "Create Agent",
+            animatedDotPosition = animatedDotPosition,
+            isLoading = isStarting,
         )
     }
 }
@@ -885,22 +1165,72 @@ private fun ProviderSetupStep(
 private fun TelegramStep(
     botToken: String,
     onBotTokenChange: (String) -> Unit,
-    ownerId: String,
-    onOwnerIdChange: (String) -> Unit,
+    agentName: String,
+    onAgentNameChange: (String) -> Unit,
     botTokenError: String?,
     fieldColors: androidx.compose.material3.TextFieldColors,
     onNext: () -> Unit,
     onBack: () -> Unit,
-    isStarting: Boolean = false,
+    animatedDotPosition: Float,
 ) {
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
+    val scope = rememberCoroutineScope()
+    val uriHandler = LocalUriHandler.current
 
-    Column(modifier = Modifier.fillMaxWidth()) {
+    var testState by remember { mutableStateOf<ActionResult>(ActionResult.Idle) }
+
+    fun runTest() {
+        val token = botToken.trim()
+        if (token.isBlank() || testState is ActionResult.Loading) return
+        testState = ActionResult.Loading
+        scope.launch {
+            testState = try {
+                val body = withContext(Dispatchers.IO) {
+                    val conn = (URL("https://api.telegram.org/bot$token/getMe").openConnection() as HttpURLConnection).apply {
+                        connectTimeout = 8000
+                        readTimeout = 8000
+                        requestMethod = "GET"
+                    }
+                    try {
+                        if (conn.responseCode == 200) {
+                            conn.inputStream.bufferedReader().readText()
+                        } else {
+                            "__err__:${conn.responseCode}"
+                        }
+                    } finally {
+                        conn.disconnect()
+                    }
+                }
+                if (body.startsWith("__err__:")) {
+                    ActionResult.Error("Telegram returned ${body.removePrefix("__err__:")}. Check the token.")
+                } else {
+                    val json = JSONObject(body)
+                    if (json.optBoolean("ok", false)) {
+                        val result = json.optJSONObject("result")
+                        val username = result?.optString("username", "") ?: ""
+                        ActionResult.Success(if (username.isNotBlank()) "Connected to @$username" else "Connected")
+                    } else {
+                        ActionResult.Error(json.optString("description", "Invalid response"))
+                    }
+                }
+            } catch (e: Exception) {
+                ActionResult.Error(e.message ?: "Network error")
+            }
+        }
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+        ) {
         SectionLabel("Telegram Connection")
 
         Spacer(modifier = Modifier.height(10.dp))
 
-        SetupCard {
+        CardSurface {
             // Bot token
             Text(
                 text = "Bot Token",
@@ -909,275 +1239,98 @@ private fun TelegramStep(
                 color = SeekerClawColors.TextPrimary,
             )
             Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = "Open Telegram \u2192 @BotFather \u2192 /newbot \u2192 copy the token.",
-                fontSize = 12.sp,
-                color = SeekerClawColors.TextDim,
-                lineHeight = 18.sp,
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            OutlinedTextField(
-                value = botToken,
-                onValueChange = onBotTokenChange,
-                label = { Text("Bot Token", fontSize = 12.sp) },
-                placeholder = {
-                    Text(
-                        "123456789:ABC\u2026",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 14.sp,
-                        color = SeekerClawColors.TextDim,
-                    )
-                },
-                modifier = Modifier.fillMaxWidth(),
-                visualTransformation = PasswordVisualTransformation(),
-                singleLine = true,
-                isError = botTokenError != null,
-                supportingText = botTokenError?.let { err ->
-                    { Text(err, fontSize = 12.sp) }
-                },
-                trailingIcon = if (
-                    botToken.trim().matches(Regex("^\\d+:[A-Za-z0-9_-]+$")) &&
-                    botTokenError == null
-                ) {
-                    {
-                        Icon(
-                            Icons.Default.CheckCircle,
-                            contentDescription = "Valid format",
-                            tint = SeekerClawColors.Accent,
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
-                } else {
-                    null
-                },
-                colors = fieldColors,
-                shape = shape,
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            HorizontalDivider(color = SeekerClawColors.CardBorder)
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // User ID with auto-detect badge
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = "User ID",
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = SeekerClawColors.TextPrimary,
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "(optional)",
-                    fontSize = 12.sp,
+                    text = "Open Telegram \u2192 ",
+                    fontFamily = RethinkSans,
+                    fontSize = TypeScale.labelSmall,
                     color = SeekerClawColors.TextDim,
+                    lineHeight = 18.sp,
                 )
-                if (ownerId.isBlank()) {
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "AUTO-DETECT",
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = SeekerClawColors.Accent,
-                        letterSpacing = 0.5.sp,
-                        modifier = Modifier
-                            .background(
-                                SeekerClawColors.Accent.copy(alpha = 0.12f),
-                                RoundedCornerShape(4.dp),
-                            )
-                            .padding(horizontal = 6.dp, vertical = 2.dp),
-                    )
-                }
+                Text(
+                    text = "@BotFather",
+                    fontFamily = RethinkSans,
+                    fontSize = TypeScale.labelSmall,
+                    color = SeekerClawColors.Primary,
+                    lineHeight = 18.sp,
+                    modifier = Modifier.clickable {
+                        uriHandler.openUri("https://t.me/BotFather")
+                    },
+                )
+                Text(
+                    text = " \u2192 /newbot",
+                    fontFamily = RethinkSans,
+                    fontSize = TypeScale.labelSmall,
+                    color = SeekerClawColors.TextDim,
+                    lineHeight = 18.sp,
+                )
             }
-            Spacer(modifier = Modifier.height(4.dp))
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Reset test state whenever the token changes so the user can retest
+            LaunchedEffect(botToken) {
+                if (testState !is ActionResult.Idle) testState = ActionResult.Idle
+            }
+
+            InputWithActionButton(
+                value = botToken,
+                onValueChange = onBotTokenChange,
+                actionLabel = "Test",
+                onAction = { runTest() },
+                actionState = testState,
+                placeholder = "123456789:ABC\u2026",
+                visualTransformation = InputMask.MaskMiddle,
+                isError = botTokenError != null,
+            )
+
+            if (botTokenError != null) {
+                Spacer(modifier = Modifier.height(Spacing.xs))
+                Text(
+                    text = botTokenError,
+                    fontFamily = RethinkSans,
+                    fontSize = TypeScale.labelSmall,
+                    color = SeekerClawColors.Error,
+                )
+            } else if (testState is ActionResult.Error) {
+                Spacer(modifier = Modifier.height(Spacing.xs))
+                Text(
+                    text = (testState as ActionResult.Error).message,
+                    fontFamily = RethinkSans,
+                    fontSize = TypeScale.labelSmall,
+                    color = SeekerClawColors.Error,
+                )
+            }
+
+            Spacer(modifier = Modifier.height(Spacing.lg))
+
+            HorizontalDivider(color = SeekerClawColors.CardBorder)
+
+            Spacer(modifier = Modifier.height(Spacing.lg))
+
+            // Agent Name
             Text(
-                text = "Leave empty \u2014 the first person to message your bot becomes the owner.",
-                fontSize = 12.sp,
+                text = "Agent Name",
+                fontFamily = RethinkSans,
+                fontSize = TypeScale.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                color = SeekerClawColors.TextPrimary,
+            )
+            Spacer(modifier = Modifier.height(Spacing.xs))
+            Text(
+                text = "Give your agent a name. You can change it later.",
+                fontFamily = RethinkSans,
+                fontSize = TypeScale.labelSmall,
                 color = SeekerClawColors.TextDim,
                 lineHeight = 18.sp,
             )
 
-            Spacer(modifier = Modifier.height(12.dp))
-
-            OutlinedTextField(
-                value = ownerId,
-                onValueChange = onOwnerIdChange,
-                label = { Text("User ID", fontSize = 12.sp) },
-                placeholder = {
-                    Text(
-                        "auto-detect",
-                        fontSize = 14.sp,
-                        color = SeekerClawColors.TextDim,
-                    )
-                },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                colors = fieldColors,
-                shape = shape,
-            )
-        }
-
-        Spacer(modifier = Modifier.height(28.dp))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            TextButton(onClick = onBack, enabled = !isStarting) {
-                Text("Back", fontSize = 14.sp, color = if (isStarting) SeekerClawColors.TextDim.copy(alpha = 0.3f) else SeekerClawColors.TextDim)
-            }
-            Button(
-                onClick = onNext,
-                enabled = botToken.isNotBlank() && !isStarting,
-                modifier = Modifier.height(56.dp),
-                shape = shape,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = SeekerClawColors.ActionPrimary,
-                    contentColor = Color.White,
-                    disabledContainerColor = SeekerClawColors.ActionPrimary.copy(alpha = 0.6f),
-                    disabledContentColor = Color.White.copy(alpha = 0.7f),
-                ),
-            ) {
-                if (isStarting) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(20.dp),
-                        color = Color.White,
-                        strokeWidth = 2.dp,
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Starting\u2026", fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                } else {
-                    Icon(Icons.Default.PlayArrow, contentDescription = "Start", modifier = Modifier.size(20.dp))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Initialize Agent", fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                }
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun OptionsStep(
-    selectedModel: String,
-    onModelChange: (String) -> Unit,
-    modelDropdownExpanded: Boolean,
-    onModelDropdownExpandedChange: (Boolean) -> Unit,
-    agentName: String,
-    onAgentNameChange: (String) -> Unit,
-    fieldColors: androidx.compose.material3.TextFieldColors,
-    onNext: () -> Unit,
-    onBack: () -> Unit,
-    provider: String = "claude",
-) {
-    val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
-
-    Column(modifier = Modifier.fillMaxWidth()) {
-        SectionLabel("Configuration")
-
-        Spacer(modifier = Modifier.height(10.dp))
-
-        SetupCard {
-            // Model
-            Text(
-                text = "AI Model",
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Medium,
-                color = SeekerClawColors.TextPrimary,
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = "Choose the model that powers your agent.",
-                fontSize = 12.sp,
-                color = SeekerClawColors.TextDim,
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Setup screen: API-key auth only (OAuth flows from settings, post-setup).
-            val setupModels = modelsForProvider(provider, "api_key")
-            if (setupModels.isEmpty()) {
-                // Freeform model (e.g. OpenRouter) — editable text field
-                OutlinedTextField(
-                    value = selectedModel,
-                    onValueChange = onModelChange,
-                    singleLine = true,
-                    label = { Text("Model ID", fontSize = 12.sp) },
-                    placeholder = { Text("e.g. anthropic/claude-sonnet-4-6", fontSize = 14.sp, color = SeekerClawColors.TextDim) },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = fieldColors,
-                    shape = shape,
-                )
-            } else {
-                ExposedDropdownMenuBox(
-                    expanded = modelDropdownExpanded,
-                    onExpandedChange = onModelDropdownExpandedChange,
-                ) {
-                    OutlinedTextField(
-                        value = setupModels.firstOrNull { it.id == selectedModel }?.let { "${it.displayName} (${it.description})" } ?: selectedModel,
-                        onValueChange = {},
-                        readOnly = true,
-                        label = { Text("Model", fontSize = 12.sp) },
-                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = modelDropdownExpanded) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .menuAnchor(MenuAnchorType.PrimaryNotEditable),
-                        colors = fieldColors,
-                        shape = shape,
-                    )
-                    ExposedDropdownMenu(
-                        expanded = modelDropdownExpanded,
-                        onDismissRequest = { onModelDropdownExpandedChange(false) },
-                    ) {
-                        setupModels.forEach { model ->
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        "${model.displayName} (${model.description})",
-                                        color = SeekerClawColors.TextPrimary,
-                                    )
-                                },
-                                onClick = {
-                                    onModelChange(model.id)
-                                    onModelDropdownExpandedChange(false)
-                                },
-                            )
-                        }
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            HorizontalDivider(color = SeekerClawColors.CardBorder)
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Agent name
-            Text(
-                text = "Agent Name",
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Medium,
-                color = SeekerClawColors.TextPrimary,
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = "Give your agent a name. You can change this later.",
-                fontSize = 12.sp,
-                color = SeekerClawColors.TextDim,
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(Spacing.md))
 
             OutlinedTextField(
                 value = agentName,
                 onValueChange = onAgentNameChange,
-                label = { Text("Agent Name", fontSize = 12.sp) },
+                label = { Text("Agent Name", fontSize = TypeScale.labelSmall) },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 colors = fieldColors,
@@ -1185,62 +1338,65 @@ private fun OptionsStep(
             )
         }
 
-        Spacer(modifier = Modifier.height(28.dp))
+        }
 
-        NavButtons(onBack = onBack, onNext = onNext, nextEnabled = selectedModel.isNotBlank())
+        Spacer(modifier = Modifier.height(SetupLayout.gapBeforeNav))
+
+        NavButtons(
+            onBack = onBack,
+            onNext = onNext,
+            nextEnabled = botToken.isNotBlank(),
+            animatedDotPosition = animatedDotPosition,
+        )
     }
 }
 
 @Composable
 private fun SetupSuccessStep(
     agentName: String,
-    botToken: String,
     onContinue: () -> Unit,
+    onBack: () -> Unit,
+    animatedDotPosition: Float,
 ) {
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
-    val botId = Regex("""^(\d+):""").find(botToken)?.groupValues?.get(1)
 
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 32.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        // Checkmark circle
-        Box(
+    Column(modifier = Modifier.fillMaxSize()) {
+        Column(
             modifier = Modifier
-                .size(80.dp)
-                .background(SeekerClawColors.ActionPrimary.copy(alpha = 0.15f), CircleShape),
-            contentAlignment = Alignment.Center,
+                .weight(1f)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Icon(
-                Icons.Rounded.Check,
-                contentDescription = "Success",
-                tint = SeekerClawColors.ActionPrimary,
-                modifier = Modifier.size(40.dp),
+        // Match Welcome's logo Y position. Welcome:
+        //   Box(top=heroTop) → Box(size=heroBoxSize, contentAlignment=Center)
+        //     → Image(size=heroLogoSize)
+        //   Image top edge = heroTop + (heroBoxSize - heroLogoSize) / 2
+        // Success is inside the parent's padding(top=contentTop), so the spacer
+        // needs to add the difference.
+        Spacer(
+            modifier = Modifier.height(
+                SetupLayout.heroTop -
+                    SetupLayout.contentTop +
+                    (Sizing.heroBoxSize - Sizing.heroLogoSize) / 2
             )
-        }
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        Text(
-            text = "You're all set!",
-            fontFamily = RethinkSans,
-            fontWeight = FontWeight.Bold,
-            fontSize = 22.sp,
-            color = SeekerClawColors.TextPrimary,
         )
 
-        Spacer(modifier = Modifier.height(8.dp))
-
-        Text(
-            text = "$agentName is starting up",
-            fontFamily = RethinkSans,
-            fontSize = 14.sp,
-            color = SeekerClawColors.TextDim,
+        // Hero logo (smaller version of Welcome's claw)
+        Image(
+            painter = painterResource(R.drawable.ic_seekerclaw_symbol),
+            contentDescription = "SeekerClaw",
+            modifier = Modifier.size(96.dp),
         )
 
-        Spacer(modifier = Modifier.height(28.dp))
+        Spacer(modifier = Modifier.height(Spacing.xl))
+
+        StepTitle(
+            title = "You\u2019re all set!",
+            tagline = "$agentName is getting ready",
+        )
+
+        Spacer(modifier = Modifier.height(Spacing.xl))
 
         // Guidance cards
         Column(
@@ -1248,7 +1404,7 @@ private fun SetupSuccessStep(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             // Step 1: Find bot on Telegram
-            SetupCard {
+            CardSurface {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
                         modifier = Modifier
@@ -1274,9 +1430,7 @@ private fun SetupSuccessStep(
                             color = SeekerClawColors.TextPrimary,
                         )
                         Text(
-                            text = if (!botId.isNullOrBlank())
-                                       "Search for the bot username you set with @BotFather (bot ID: $botId)"
-                                   else "Search for the bot username you created with @BotFather",
+                            text = "Open Telegram and search for your bot username.",
                             fontFamily = RethinkSans,
                             fontSize = 12.sp,
                             color = SeekerClawColors.TextDim,
@@ -1286,7 +1440,7 @@ private fun SetupSuccessStep(
             }
 
             // Step 2: Chat
-            SetupCard {
+            CardSurface {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
                         modifier = Modifier
@@ -1322,24 +1476,17 @@ private fun SetupSuccessStep(
             }
         }
 
-        Spacer(modifier = Modifier.height(28.dp))
-
-        Button(
-            onClick = onContinue,
-            shape = shape,
-            colors = ButtonDefaults.buttonColors(
-                containerColor = SeekerClawColors.ActionPrimary,
-                contentColor = Color.White,
-            ),
-            modifier = Modifier.fillMaxWidth().height(52.dp),
-        ) {
-            Text(
-                text = "Go to Dashboard",
-                fontFamily = RethinkSans,
-                fontWeight = FontWeight.Bold,
-                fontSize = 15.sp,
-            )
         }
+
+        Spacer(modifier = Modifier.height(SetupLayout.gapBeforeNav))
+
+        NavButtons(
+            onBack = onBack,
+            onNext = onContinue,
+            nextEnabled = true,
+            nextLabel = "Dashboard",
+            animatedDotPosition = animatedDotPosition,
+        )
     }
 }
 
@@ -1348,37 +1495,119 @@ private fun NavButtons(
     onBack: () -> Unit,
     onNext: () -> Unit,
     nextEnabled: Boolean,
+    nextLabel: String = "Next",
+    animatedDotPosition: Float = -1f,
+    totalSteps: Int = 3,
+    isLoading: Boolean = false,
 ) {
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
+    val uriHandler = LocalUriHandler.current
 
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        TextButton(onClick = onBack) {
-            Text(
-                text = "Back",
-                fontSize = 14.sp,
-                color = SeekerClawColors.TextDim,
+    Column(modifier = Modifier.fillMaxWidth()) {
+        if (animatedDotPosition >= 0f) {
+            PageDots(
+                animatedPosition = animatedDotPosition,
+                totalSteps = totalSteps,
+                modifier = Modifier.align(Alignment.CenterHorizontally),
+            )
+            Spacer(modifier = Modifier.height(SetupLayout.gapBeforeNav))
+        }
+        // Row: Back | Next (same layout as Welcome's Scan Config | Skip row)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(SetupLayout.gapBetweenButtons),
+        ) {
+            SecondaryButton(
+                modifier = Modifier.weight(1f),
+                onClick = onBack,
+                label = "Back",
+            )
+
+            PrimaryButton(
+                modifier = Modifier.weight(1f),
+                onClick = onNext,
+                label = nextLabel,
+                enabled = nextEnabled,
+                isLoading = isLoading,
+                loadingLabel = "Starting\u2026",
+                height = Sizing.buttonSecondaryHeight,
             )
         }
 
-        Button(
-            onClick = onNext,
-            enabled = nextEnabled,
-            shape = shape,
-            colors = ButtonDefaults.buttonColors(
-                containerColor = SeekerClawColors.ActionPrimary,
-                contentColor = Color.White,
-                disabledContainerColor = SeekerClawColors.BorderSubtle,
-                disabledContentColor = SeekerClawColors.TextDim,
-            ),
+        Spacer(modifier = Modifier.height(SetupLayout.gapBeforeNav))
+
+        // Help link
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.Center,
         ) {
-            Text(
-                text = "Next",
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Bold,
+            TextButton(onClick = { uriHandler.openUri("https://seekerclaw.xyz/setup") }) {
+                Icon(
+                    @Suppress("DEPRECATION") Icons.Default.HelpOutline,
+                    contentDescription = "Help",
+                    tint = SeekerClawColors.TextDim,
+                    modifier = Modifier.size(Sizing.iconSm),
+                )
+                Spacer(modifier = Modifier.width(Spacing.xs))
+                Text(
+                    "Need help? Quick setup guide",
+                    fontFamily = RethinkSans,
+                    fontSize = TypeScale.bodySmall,
+                    color = SeekerClawColors.TextDim,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun StepTitle(title: String, tagline: String) {
+    Text(
+        text = title,
+        fontFamily = RethinkSans,
+        fontSize = TypeScale.displayLarge,
+        fontWeight = FontWeight.ExtraBold,
+        color = SeekerClawColors.TextPrimary,
+        textAlign = TextAlign.Center,
+        lineHeight = TypeScale.lineHeightDisplayLarge,
+    )
+    Spacer(modifier = Modifier.height(Spacing.sm))
+    Text(
+        text = tagline,
+        fontFamily = RethinkSans,
+        fontSize = TypeScale.bodyLarge,
+        color = SeekerClawColors.TextDim,
+        textAlign = TextAlign.Center,
+        lineHeight = TypeScale.lineHeightBody,
+    )
+}
+
+@Composable
+internal fun PageDots(
+    animatedPosition: Float,
+    totalSteps: Int,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        val dotShape = RoundedCornerShape(Sizing.pageDotCornerRadius)
+        val minDp = Sizing.pageDotSize
+        val maxDp = Sizing.pageDotActiveWidth
+        val activeColor = SeekerClawColors.TextPrimary
+        val inactiveColor = SeekerClawColors.TextDim.copy(alpha = BrandAlpha.disabledSurface)
+        for (i in 0 until totalSteps) {
+            // Proximity: 0 = fully active (this dot), 1+ = fully inactive
+            val proximity = kotlin.math.abs(animatedPosition - i).coerceIn(0f, 1f)
+            val width = minDp + (maxDp - minDp) * (1f - proximity)
+            val color = androidx.compose.ui.graphics.lerp(activeColor, inactiveColor, proximity)
+            Box(
+                modifier = Modifier
+                    .width(width)
+                    .height(Sizing.pageDotSize)
+                    .background(color, dotShape),
             )
         }
     }
@@ -1387,22 +1616,6 @@ private fun NavButtons(
 // ============================================================================
 // SHARED COMPOSABLES — Card wrapper, requirement row, section label
 // ============================================================================
-
-@Composable
-private fun SetupCard(
-    modifier: Modifier = Modifier,
-    content: @Composable ColumnScope.() -> Unit,
-) {
-    val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .background(SeekerClawColors.Surface, shape)
-            .border(1.dp, SeekerClawColors.CardBorder, shape)
-            .padding(16.dp),
-        content = content,
-    )
-}
 
 @Composable
 private fun RequirementRow(

@@ -39,6 +39,7 @@ import androidx.compose.ui.unit.sp
 import com.seekerclaw.app.BuildConfig
 import com.seekerclaw.app.ui.components.CardSurface
 import com.seekerclaw.app.ui.components.InfoRow
+import com.seekerclaw.app.ui.components.cornerGlowBorder
 
 import com.seekerclaw.app.ui.components.SectionLabel
 import com.seekerclaw.app.config.ConfigManager
@@ -507,6 +508,7 @@ private fun StatCard(
     Column(
         modifier = modifier
             .background(SeekerClawColors.Surface, shape)
+            .cornerGlowBorder()
             .padding(16.dp),
     ) {
         Text(

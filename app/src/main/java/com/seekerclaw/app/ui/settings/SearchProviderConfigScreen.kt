@@ -33,6 +33,7 @@ import com.seekerclaw.app.ui.components.CardSurface
 
 import com.seekerclaw.app.ui.components.SectionLabel
 import com.seekerclaw.app.ui.components.ConfigField
+import com.seekerclaw.app.ui.components.cornerGlowBorder
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.config.SearchProviderInfo
 import com.seekerclaw.app.config.availableSearchProviders
@@ -90,7 +91,8 @@ fun SearchProviderConfigScreen(onBack: () -> Unit) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(SeekerClawColors.Surface, shape),
+                    .background(SeekerClawColors.Surface, shape)
+                    .cornerGlowBorder(),
             ) {
                 availableSearchProviders.forEachIndexed { index, provider ->
                     val isActive = provider.id == activeProvider.id
@@ -145,7 +147,8 @@ fun SearchProviderConfigScreen(onBack: () -> Unit) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(SeekerClawColors.Surface, shape),
+                    .background(SeekerClawColors.Surface, shape)
+                    .cornerGlowBorder(),
             ) {
                 ConfigField(
                     label = "API Key",

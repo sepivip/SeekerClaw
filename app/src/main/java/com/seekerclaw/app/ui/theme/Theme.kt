@@ -87,7 +87,7 @@ val DarkOpsThemeColors = ThemeColors(
     errorGlow = Color(0x33F87171),
 
     warning = Color(0xFFFBBF24),       // Tailwind yellow-400
-    accent = Color(0xFF4ADE80),        // Tailwind green-400 (status/online)
+    accent = Color(0xFF00C805),        // SeekerClaw green — unified with ActionPrimary (one green app-wide)
 
     actionPrimary = Color(0xFF00C805), // Green — Deploy, Initialize, Connect
     actionDanger = Color(0xFF8B0000),  // Dark red bg — Reset, Wipe
