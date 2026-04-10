@@ -76,8 +76,16 @@ const handlers = {
                     return { error: `Unknown search provider "${provider}". Configure a provider in Settings > Search Provider.` };
             }
         } catch (e) {
+            const isKeyMissing = /not configured|API key/i.test(e.message);
+            if (isKeyMissing) {
+                log(`[WebSearch] ${provider}: no API key configured — suggesting web_fetch fallback`, 'WARN');
+                return {
+                    fallback: true,
+                    message: `No search provider API key configured (${provider}). Use the web_fetch tool instead to retrieve information from specific URLs (e.g. Wikipedia, official docs, news sites, APIs). Tip: for better search results, the user can set up a search provider in Settings > Search Provider.`,
+                };
+            }
             log(`[WebSearch] ${provider} failed: ${e.message}`, 'ERROR');
-            return { error: `Search failed (${provider}): ${e.message}. Check your API key in Settings > Search Provider.` };
+            return { error: `Search failed (${provider}): ${e.message}` };
         }
 
         const wrapped = wrapSearchResults(result, provider);
