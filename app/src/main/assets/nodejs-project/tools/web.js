@@ -76,8 +76,25 @@ const handlers = {
                     return { error: `Unknown search provider "${provider}". Configure a provider in Settings > Search Provider.` };
             }
         } catch (e) {
+            // Check if the actual API key for the resolved provider is missing/blank
+            // (not just any error mentioning "API key" — invalid/expired keys should
+            // still surface as real errors).
+            const keyForProvider = {
+                brave: config.braveApiKey,
+                perplexity: config.perplexityApiKey,
+                exa: config.exaApiKey,
+                tavily: config.tavilyApiKey,
+                firecrawl: config.firecrawlApiKey,
+            }[provider];
+            if (!keyForProvider) {
+                log(`[WebSearch] ${provider}: no API key configured — suggesting web_fetch fallback`, 'WARN');
+                return {
+                    fallback: true,
+                    message: `No API key configured for ${provider}. Use the web_fetch tool instead to retrieve information from specific URLs (e.g. Wikipedia, official docs, news sites, APIs). Tip: for better search results, the user can set up a search provider in Settings > Search Provider.`,
+                };
+            }
             log(`[WebSearch] ${provider} failed: ${e.message}`, 'ERROR');
-            return { error: `Search failed (${provider}): ${e.message}. Check your API key in Settings > Search Provider.` };
+            return { error: `Search failed (${provider}): ${e.message}` };
         }
 
         const wrapped = wrapSearchResults(result, provider);
