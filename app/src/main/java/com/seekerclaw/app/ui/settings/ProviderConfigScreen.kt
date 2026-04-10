@@ -91,6 +91,20 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
     var orModelValue by remember { mutableStateOf("") }
     var orContextValue by remember { mutableStateOf("") }
     var testState by remember { mutableStateOf<ActionResult>(ActionResult.Idle) }
+    // Reset stale test result when provider, auth type, or credentials change
+    LaunchedEffect(
+        activeProvider,
+        config?.authType,
+        config?.anthropicApiKey,
+        config?.setupToken,
+        config?.openaiApiKey,
+        config?.openaiOAuthToken,
+        config?.openrouterApiKey,
+        config?.customBaseUrl,
+        config?.customApiKey,
+    ) {
+        if (testState !is ActionResult.Idle) testState = ActionResult.Idle
+    }
     var showRestartDialog by remember { mutableStateOf(false) }
 
     // Shared OAuth controller — same instance used by onboarding's ProviderSetupStep.
