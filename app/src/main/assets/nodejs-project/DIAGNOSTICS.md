@@ -179,13 +179,14 @@ grep -i "OAuth refresh\|oauth_refresh\|invalid_grant" node_debug.log | tail -20
 
 ## Web Search
 
-### Search Provider Not Configured
-**Symptoms:** web_search returns error "... API key not configured" or "Check your API key in Settings > Search Provider."
-**Diagnosis:** The active search provider has no API key set. By default, `searchProvider` is `"brave"` — if the user never added a Brave key, searches will fail.
+### Search Provider Not Configured (Fallback Mode)
+**Symptoms:** web_search returns a structured fallback response (`{ fallback: true, message: "No API key configured for ..." }`) instead of search results. The agent is guided to use web_fetch as an alternative. Log shows `[WebSearch] <provider>: no API key configured — suggesting web_fetch fallback` at WARN level.
+**Diagnosis:** The active search provider has no API key set. By default, `searchProvider` is `"brave"` — if the user never added a Brave key, web_search gracefully falls back instead of failing with an error. The agent can still retrieve information via web_fetch from known URLs.
 **Fix:** Guide the user to Settings > Search Provider. They need to:
 1. Select a provider (Brave, Perplexity, Exa, Tavily, or Firecrawl)
 2. Enter the API key for that provider
 3. Accept the restart prompt
+**Note:** Even without a search provider key, the agent can use web_fetch to retrieve information from specific URLs (Wikipedia, official docs, news APIs). The fallback is functional, not broken — but setting up a search provider gives better results.
 
 ### Search Provider API Error
 **Symptoms:** web_search returns error with HTTP status code (e.g., "Tavily search error (401)").
