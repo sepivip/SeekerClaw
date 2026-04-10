@@ -1137,7 +1137,33 @@ fun SettingsScreen(
             },
             confirmButton = {
                 TextButton(onClick = {
-                    ConfigManager.saveConfig(context, importedConfig)
+                    // Merge imported config with existing to preserve fields the QR
+                    // payload doesn't carry (OAuth tokens, search keys, Solana keys,
+                    // Discord config, custom provider, etc.). Only the fields present
+                    // in the QR payload overwrite; everything else survives.
+                    val existing = ConfigManager.loadConfig(context)
+                    val merged = if (existing != null) importedConfig.copy(
+                        openaiOAuthToken = existing.openaiOAuthToken,
+                        openaiOAuthRefresh = existing.openaiOAuthRefresh,
+                        openaiOAuthEmail = existing.openaiOAuthEmail,
+                        openaiOAuthExpiresAt = existing.openaiOAuthExpiresAt,
+                        braveApiKey = importedConfig.braveApiKey.ifBlank { existing.braveApiKey },
+                        perplexityApiKey = importedConfig.perplexityApiKey.ifBlank { existing.perplexityApiKey },
+                        exaApiKey = importedConfig.exaApiKey.ifBlank { existing.exaApiKey },
+                        tavilyApiKey = importedConfig.tavilyApiKey.ifBlank { existing.tavilyApiKey },
+                        firecrawlApiKey = importedConfig.firecrawlApiKey.ifBlank { existing.firecrawlApiKey },
+                        jupiterApiKey = importedConfig.jupiterApiKey.ifBlank { existing.jupiterApiKey },
+                        heliusApiKey = importedConfig.heliusApiKey.ifBlank { existing.heliusApiKey },
+                        searchProvider = importedConfig.searchProvider.ifBlank { existing.searchProvider },
+                        customApiKey = importedConfig.customApiKey.ifBlank { existing.customApiKey },
+                        customBaseUrl = importedConfig.customBaseUrl.ifBlank { existing.customBaseUrl },
+                        customHeaders = importedConfig.customHeaders.ifBlank { existing.customHeaders },
+                        customFormat = importedConfig.customFormat.ifBlank { existing.customFormat },
+                        discordBotToken = importedConfig.discordBotToken.ifBlank { existing.discordBotToken },
+                        discordOwnerId = importedConfig.discordOwnerId.ifBlank { existing.discordOwnerId },
+                        channel = importedConfig.channel.ifBlank { existing.channel },
+                    ) else importedConfig
+                    ConfigManager.saveConfig(context, merged)
                     val savedConfig = ConfigManager.loadConfig(context)
                     LogCollector.append(
                         "[ConfigImport] Saved snapshot: ${ConfigManager.redactedSnapshot(savedConfig)}"
