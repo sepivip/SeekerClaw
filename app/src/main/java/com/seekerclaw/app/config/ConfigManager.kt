@@ -630,8 +630,17 @@ object ConfigManager {
         if (email.isNotBlank()) {
             val enc = KeystoreHelper.encrypt(email)
             editor.putString(KEY_OPENAI_OAUTH_EMAIL_ENC, Base64.encodeToString(enc, Base64.NO_WRAP))
+            // If an older install still has the legacy plaintext pref hanging
+            // around (loadConfigUnchecked migrates it on read, but not every code
+            // path has triggered a read since the migration landed), drop it too
+            // to ensure the encrypted value becomes the single source of truth.
+            editor.remove("openai_oauth_email")
         } else {
+            // Clear email in both locations — the encrypted key that we own and
+            // the legacy plaintext key from pre-migration installs. Leaving the
+            // plaintext pref behind on sign-out would be a PII regression.
             editor.remove(KEY_OPENAI_OAUTH_EMAIL_ENC)
+            editor.remove("openai_oauth_email")
         }
 
         editor.putString(KEY_OPENAI_OAUTH_EXPIRES_AT, expiresAt)

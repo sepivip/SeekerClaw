@@ -564,14 +564,23 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                             "setup_token" -> "setup_token"
                             else -> "api_key"
                         }
-                        "openai" -> existingConfig?.let { cfg ->
-                            // Honour prior choice when we have one: oauth if that's
-                            // what was selected, or if there's already a token on
-                            // file; api_key otherwise (e.g. user set an OpenAI API
-                            // key directly in Settings).
-                            if (cfg.authType == "oauth" || cfg.openaiOAuthToken.isNotBlank()) "oauth"
+                        "openai" -> {
+                            // Read CURRENT persisted state, not the one-time
+                            // existingConfig snapshot. The user may have completed
+                            // OAuth during this session (tokens written via
+                            // persistOpenAIOAuthTokens, configVersion bumped) and
+                            // then switched providers away and back — the snapshot
+                            // would still show openaiOAuthToken = "" and incorrectly
+                            // default back to api_key. loadConfigOrBootstrap
+                            // bypasses the SETUP_COMPLETE gate so it works mid-
+                            // onboarding too.
+                            val current = ConfigManager.loadConfigOrBootstrap(context)
+                            val hasStoredOAuthToken = current.openaiOAuthToken.isNotBlank()
+                            val previouslySelectedOAuth =
+                                existingConfig?.authType == "oauth" || current.authType == "oauth"
+                            if (existingConfig == null || hasStoredOAuthToken || previouslySelectedOAuth) "oauth"
                             else "api_key"
-                        } ?: "oauth" // fresh install → default to Sign in with ChatGPT
+                        }
                         else -> "api_key"
                     }
                     authType = newAuthType
