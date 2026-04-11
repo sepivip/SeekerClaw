@@ -27,7 +27,7 @@ const deferStatus = CHANNEL === 'telegram' ? require('./telegram').deferStatus :
 const { httpStreamingRequest, httpOpenAIStreamingRequest, httpChatCompletionsStreamingRequest } = require('./http');
 const { getAdapter } = require('./providers');
 const { androidBridgeCall } = require('./bridge');
-const { stripSilentReply } = require('./silent-reply');
+const { stripSilentReply, TOKEN: SILENT_REPLY_TOKEN } = require('./silent-reply');
 
 const {
     loadSoul, loadBootstrap, loadIdentity, loadUser,
@@ -401,7 +401,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
         lines.push('Complete the task described in the user message efficiently and concisely.');
         lines.push(`Your output will be delivered to the owner via ${CHANNEL === 'discord' ? 'Discord' : 'Telegram'}.`);
         lines.push('Do not greet, do not ask follow-up questions — deliver the result directly.');
-        lines.push('If there is nothing to report, reply with SILENT_REPLY.');
+        lines.push(`If there is nothing to report, reply with the literal token ${SILENT_REPLY_TOKEN} (include the double brackets exactly as shown).`);
         lines.push('Confirmation-gated tools (swaps, transfers) are NOT available in scheduled tasks.');
         lines.push('');
     }
@@ -885,7 +885,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('For any follow-up at a future time (reminders, run-later work, recurring tasks) use cron instead of shell_exec sleep, js_eval setTimeout loops, or process polling. Those waste tool rounds, burn battery, and die on restart.');
     lines.push('When a message starts with [cron:...], you are executing a scheduled task in an isolated session.');
     lines.push('Complete the task directly and concisely. Do not greet or ask follow-up questions — deliver results.');
-    lines.push('If nothing needs attention, reply SILENT_REPLY.');
+    lines.push(`If nothing needs attention, reply with the literal token ${SILENT_REPLY_TOKEN} (include the double brackets exactly as shown).`);
     lines.push('');
 
     // Authorized Senders section - OpenClaw style
@@ -902,23 +902,30 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('If the work will take multiple steps or a while to finish, send one short progress update before or while acting.');
     lines.push('');
 
-    // Silent Replies section — OpenClaw parity (v2026.4.10 BAT-488)
-    // Tightened wording to stop models from using SILENT_REPLY to avoid work.
+    // Silent Replies section — BAT-491 sentinel rename.
+    // Canonical form is now [[SILENT_REPLY]] (double-bracketed). The
+    // brackets make the sentinel structurally distinguishable from natural
+    // prose so the agent can freely discuss the protocol in replies
+    // without being over-stripped (BAT-491 follow-up to BAT-488 parity
+    // port over-strip bug caught in BAT-489 device testing).
     lines.push('## Silent Replies');
-    lines.push(`Use SILENT_REPLY ONLY when no user-visible reply is required. SeekerClaw discards the message instead of sending it to ${CHANNEL === 'discord' ? 'Discord' : 'Telegram'}.`);
+    lines.push(`Use the token \`${SILENT_REPLY_TOKEN}\` ONLY when no user-visible reply is required. SeekerClaw discards the message instead of sending it to ${CHANNEL === 'discord' ? 'Discord' : 'Telegram'}.`);
     lines.push('');
     lines.push('⚠️ Rules:');
+    lines.push(`- The canonical sentinel is \`${SILENT_REPLY_TOKEN}\` with the double brackets included exactly. Always emit this form for silent-reply signals. (SeekerClaw also accepts a bare \`SILENT_REPLY\` whole-message as a legacy form for backward compatibility, but the bracketed canonical form is what you should always write.)`);
     lines.push('- Valid cases: silent housekeeping, deliberate no-op ambient wakeups, or after a messaging tool already delivered the user-visible reply.');
     lines.push('- Never use it to avoid doing requested work or to end an actionable turn early.');
-    lines.push('- It must be your ENTIRE message — nothing else.');
-    lines.push('- The only valid silent reply is the exact plain-text token SILENT_REPLY.');
-    lines.push('- Never append it to an actual response (never include "SILENT_REPLY" in real replies).');
+    lines.push(`- When used as a signal, \`${SILENT_REPLY_TOKEN}\` must be your ENTIRE message — nothing else, no preamble, no trailing punctuation.`);
     lines.push('- Never wrap it in markdown, code blocks, JSON, or any envelope form.');
     lines.push('');
-    lines.push('❌ Wrong: "Here\'s help... SILENT_REPLY"');
-    lines.push('❌ Wrong: "**SILENT_REPLY**"');
-    lines.push('❌ Wrong: {"action":"SILENT_REPLY"}');
-    lines.push('✅ Right: SILENT_REPLY');
+    lines.push('### Discussing the protocol in a reply');
+    lines.push('If the user asks you about silent replies, or you want to write a memory note about when you used one, you MAY write the bare word `SILENT_REPLY` (without brackets) freely in normal prose — that form is treated as discussion and passes through to the user untouched. You may also write "silent reply" (space) or "silent-reply" (hyphen). The brackets are reserved EXCLUSIVELY for the control signal.');
+    lines.push('');
+    lines.push(`❌ Wrong (inline sentinel — leaks or gets stripped): "Here's help... ${SILENT_REPLY_TOKEN}"`);
+    lines.push(`❌ Wrong (wrapped): "**${SILENT_REPLY_TOKEN}**"`);
+    lines.push(`❌ Wrong (envelope): {"action":"${SILENT_REPLY_TOKEN}"}`);
+    lines.push(`✅ Right (signal — the entire message): ${SILENT_REPLY_TOKEN}`);
+    lines.push('✅ Right (discussion — prose with bare word): "SILENT_REPLY is a token I use when there\'s nothing to send."');
     lines.push('');
 
     // Reply Tags section - OpenClaw style (Telegram-specific)
@@ -2330,15 +2337,16 @@ async function chat(chatId, userMessage, options = {}) {
             }
         }
 
-        // If no text and NO tools were used, return SILENT_REPLY (genuine silent response)
+        // If no text and NO tools were used, return the canonical silent-reply
+        // sentinel (BAT-491: [[SILENT_REPLY]] double-bracketed form).
         if (!textContent) {
             clearActiveTask(chatId);
             // Only clean up checkpoints if tools were used (task progressed).
             // A text-only response (e.g. failed resume attempt) should not wipe checkpoints.
             if (toolUseCount > 0) cleanupChatCheckpoints(chatId);
             addToConversation(chatId, 'assistant', '[No response generated]');
-            log('No text content in response (no tools used), returning SILENT_REPLY', 'DEBUG');
-            return 'SILENT_REPLY';
+            log(`No text content in response (no tools used), returning ${SILENT_REPLY_TOKEN}`, 'DEBUG');
+            return SILENT_REPLY_TOKEN;
         }
         const assistantMessage = textContent.text;
 
