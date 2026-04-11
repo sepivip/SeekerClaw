@@ -928,13 +928,13 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('');
     lines.push('### When to emit a silent-reply signal');
     lines.push('- Silent housekeeping (saving memory, updating state).');
-    lines.push('- Deliberate no-op ambient wakeups or heartbeat-style turns.');
+    lines.push('- Deliberate no-op ambient wakeups that are NOT heartbeat polls (see the Heartbeats section — heartbeat polls use their own HEARTBEAT_OK protocol, never a silent-reply signal).');
     lines.push('- After a messaging tool has already delivered the user-visible reply and your remaining output is internal reasoning.');
     lines.push('');
     lines.push('**Never** use a silent-reply signal to avoid doing requested work, to dodge a question, or to end an actionable turn early.');
     lines.push('');
     lines.push('### How to emit the signal');
-    lines.push(`The signal is the exact string  ${SILENT_REPLY_TOKEN}  (two left square brackets, the uppercase word with underscore, two right square brackets). When used as a signal, this string must be your ENTIRE message — nothing before, nothing after, no preamble, no wrapping, no trailing punctuation. Do not wrap it in markdown, code fences, or JSON.`);
+    lines.push(`The signal is the exact string \`${SILENT_REPLY_TOKEN}\` — two left square brackets, the uppercase word with underscore, two right square brackets, with no surrounding whitespace. When used as a signal, this string must be your ENTIRE message — nothing before, nothing after, no preamble, no wrapping, no trailing punctuation. Do not wrap it in markdown, code fences, or JSON.`);
     lines.push('');
     lines.push('### Referring to the silent-reply protocol in a user-visible reply');
     lines.push('If a user asks you about the silent-reply protocol, or you want to write a memory note about when you used one, **describe the protocol in natural language and do NOT write the literal control string in your reply**. Any occurrence of the literal double-bracketed control string inside a message you want the user to see will be stripped by post-processing and will leave a hole in your text — your explanation will have missing bullets, truncated sentences, or double spaces.');
