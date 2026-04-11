@@ -50,9 +50,10 @@ class OpenAIOAuthActivity : ComponentActivity() {
         // Must be exactly "localhost" — the Codex OAuth client (app_EMoamEEZ...) is
         // registered with this redirect URI. Using 127.0.0.1 causes OpenAI to reject the
         // authorize request as a redirect_uri mismatch ("unknown_error" on their side).
-        // NOTE: this is the URI the browser resolves. The NanoHTTPD server itself binds
-        // to all loopback interfaces (see CallbackServer below) so it's reachable
-        // regardless of whether the OS resolves "localhost" to 127.0.0.1 or ::1.
+        // NOTE: the browser may resolve "localhost" to either 127.0.0.1 or ::1 depending
+        // on the device (Pixel 7 / Android 14 prefer IPv6). CallbackServer binds to the
+        // wildcard address and accepts only loopback-originated requests, so the
+        // callback arrives successfully regardless of which loopback address Chrome uses.
         const val REDIRECT_URI = "http://localhost:1455/auth/callback"
         const val SCOPES = "openid profile email offline_access"
         private const val CALLBACK_PORT = 1455

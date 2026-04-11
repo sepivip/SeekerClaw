@@ -518,10 +518,15 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                     }
                     apiKeyError = null
                     errorMessage = null
-                    // Per-provider auth defaults: Claude → api_key/setup_token,
-                    // OpenAI → oauth (Sign in with ChatGPT is the onboarding-friendly
-                    // default — matches fresh-install behaviour above and Settings
-                    // first-time switch-in default).
+                    // Per-provider auth defaults:
+                    //   Claude  → "setup_token" if the user previously used one,
+                    //             otherwise "api_key".
+                    //   OpenAI  → "oauth" on fresh install (existingConfig == null),
+                    //             or if the user previously chose oauth, or if there's
+                    //             already an OAuth token on file. Otherwise "api_key"
+                    //             — e.g. user came from Settings where they had set
+                    //             an OpenAI API key directly.
+                    //   Other   → "api_key".
                     val newAuthType = when (newProvider) {
                         "claude" -> when (existingConfig?.authType) {
                             "setup_token" -> "setup_token"
