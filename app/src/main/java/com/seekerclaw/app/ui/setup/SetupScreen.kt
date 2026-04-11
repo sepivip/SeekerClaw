@@ -252,9 +252,12 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                     botToken = cfg.telegramBotToken
                     ownerId = cfg.telegramOwnerId
                     // Match the model list to the imported config's effective auth type.
-                    // OpenAI's OAuth and API-key model lists differ (gpt-5.4-mini is
-                    // OAuth-only), so a QR config with provider=openai + authType=oauth
-                    // must validate against the OAuth list — not the API-key list.
+                    // In practice ConfigClaimImporter.parseImport() currently forces
+                    // authType="api_key" for openai (QR/claim payloads don't carry OAuth
+                    // tokens yet), so this branch resolves to the api_key model list
+                    // today. The conditional is kept deliberately: if the importer ever
+                    // learns to produce openai+oauth claims, gpt-5.4-mini and other
+                    // OAuth-only models need the OAuth list to validate correctly.
                     val qrModelAuthType = if (cfg.provider == "openai") cfg.authType else "api_key"
                     val providerModels = modelsForProvider(cfg.provider, qrModelAuthType)
                     selectedModel = if (providerModels.isEmpty()) {

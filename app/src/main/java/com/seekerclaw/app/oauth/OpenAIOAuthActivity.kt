@@ -25,6 +25,7 @@ import org.json.JSONObject
 import java.io.File
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
+import java.net.InetAddress
 import java.net.URL
 import java.net.URLEncoder
 import java.security.MessageDigest
@@ -726,11 +727,20 @@ class OpenAIOAuthActivity : ComponentActivity() {
 
         private fun isLoopback(ip: String): Boolean {
             if (ip.isEmpty()) return false
-            // IPv4 loopback: entire 127.0.0.0/8 block
-            if (ip.startsWith("127.")) return true
-            // IPv6 loopback, short and long forms
-            if (ip == "::1" || ip == "0:0:0:0:0:0:0:1") return true
-            return false
+            // Strip any IPv6 zone suffix (e.g. "fe80::1%eth0") before parsing.
+            val stripped = ip.substringBefore('%')
+            // IPv4-mapped IPv6 form ("::ffff:127.0.0.1") must be explicitly
+            // recognized — Inet6Address.isLoopbackAddress() only returns true for
+            // "::1" and doesn't unwrap the v4 mapping on all JDK/Android versions.
+            if (stripped.startsWith("::ffff:127.", ignoreCase = true)) return true
+            // Canonical path: parse as an InetAddress (no DNS lookup for numeric IPs)
+            // and let the platform classify it. Covers 127.0.0.0/8 via Inet4Address
+            // and ::1 / 0:0:0:0:0:0:0:1 via Inet6Address.
+            return try {
+                InetAddress.getByName(stripped).isLoopbackAddress
+            } catch (e: Exception) {
+                false
+            }
         }
     }
 }
