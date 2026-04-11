@@ -924,7 +924,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     // canonical form, user saw a truncated bullet).
     const channelName = CHANNEL === 'discord' ? 'Discord' : 'Telegram';
     lines.push('## Silent Replies');
-    lines.push(`When no user-visible reply is required, emit a silent-reply signal as your ENTIRE message and SeekerClaw will discard it instead of sending to ${channelName}.`);
+    lines.push(`When no user-visible reply is required, emit a silent-reply signal as your ENTIRE message and SeekerClaw will discard it instead of sending it to ${channelName}.`);
     lines.push('');
     lines.push('### When to emit a silent-reply signal');
     lines.push('- Silent housekeeping (saving memory, updating state).');
