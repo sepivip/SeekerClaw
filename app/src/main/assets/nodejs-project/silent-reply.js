@@ -18,11 +18,16 @@
 
 const TOKEN = 'SILENT_REPLY';
 
+// Single source of truth: build all regexes from TOKEN so renaming the
+// protocol token is a one-line change.
+function escapeRegex(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+const T = escapeRegex(TOKEN);
+
 // Exact match — "SILENT_REPLY" with optional surrounding whitespace
-const EXACT_REGEX = /^\s*SILENT_REPLY\s*$/i;
+const EXACT_REGEX = new RegExp(`^\\s*${T}\\s*$`, 'i');
 
 // Trailing token (optionally preceded by whitespace or markdown emphasis stars)
-const TRAILING_REGEX = /(?:^|\s+|\*+)SILENT_REPLY\s*$/gi;
+const TRAILING_REGEX = new RegExp(`(?:^|\\s+|\\*+)${T}\\s*$`, 'gi');
 
 // Two char classes for boundary detection (Copilot 4th-pass suggestion):
 // - IDENT_CHAR includes underscore — used for OUTER boundary lookbehind/ahead
@@ -40,26 +45,22 @@ const CONTENT_CHAR = '[\\p{L}\\p{N}]';
 // Outer lookbehind requires non-identifier so identifiers like
 // `MY_SILENT_REPLY_HANDLE` don't match (preceding `_` is in IDENT).
 // Allows preceding repeated tokens ("SILENT_REPLY SILENT_REPLYhello").
-const LEADING_ATTACHED_REGEX = new RegExp(
-    `(?<!${IDENT_CHAR})(?:SILENT_REPLY\\s+)*(?:SILENT_REPLY_(?=${CONTENT_CHAR})|SILENT_REPLY(?=${IDENT_CHAR}))`,
-    'giu'
-);
+const LEADING_ATTACHED_PATTERN = `(?<!${IDENT_CHAR})(?:${T}\\s+)*(?:${T}_(?=${CONTENT_CHAR})|${T}(?=${IDENT_CHAR}))`;
+const LEADING_ATTACHED_REGEX = new RegExp(LEADING_ATTACHED_PATTERN, 'giu');
 // Non-global twin used by .test() to avoid stateful lastIndex bugs.
-const LEADING_ATTACHED_TEST = new RegExp(
-    `(?<!${IDENT_CHAR})(?:SILENT_REPLY\\s+)*(?:SILENT_REPLY_(?=${CONTENT_CHAR})|SILENT_REPLY(?=${IDENT_CHAR}))`,
-    'iu'
-);
+const LEADING_ATTACHED_TEST = new RegExp(LEADING_ATTACHED_PATTERN, 'iu');
 
 // Leading with any whitespace after: "SILENT_REPLY The user..." or "SILENT_REPLY\nhello"
-const LEADING_SPACED_REGEX = /^(?:\s*SILENT_REPLY)+\s*/i;
+const LEADING_SPACED_REGEX = new RegExp(`^(?:\\s*${T})+\\s*`, 'i');
 
 // Generic strip — matches the token in any position when not glued to an
 // identifier char on EITHER side. Catches `Hello SILENT_REPLY world` and
 // preserves underscore-containing identifiers like `MY_SILENT_REPLY_HANDLE`.
 // NOTE: only used with .replace(). For .test() use TEST_REGEX (no /g flag) to
 // avoid the stateful lastIndex bug.
-const WORD_BOUNDARY_REGEX = new RegExp(`(?<!${IDENT_CHAR})SILENT_REPLY(?!${IDENT_CHAR})`, 'giu');
-const TEST_REGEX = new RegExp(`(?<!${IDENT_CHAR})SILENT_REPLY(?!${IDENT_CHAR})`, 'iu');
+const WORD_BOUNDARY_PATTERN = `(?<!${IDENT_CHAR})${T}(?!${IDENT_CHAR})`;
+const WORD_BOUNDARY_REGEX = new RegExp(WORD_BOUNDARY_PATTERN, 'giu');
+const TEST_REGEX = new RegExp(WORD_BOUNDARY_PATTERN, 'iu');
 
 /**
  * Exact silent-reply check. True only when the entire (trimmed) text is just
@@ -77,7 +78,9 @@ function isSilentReplyText(text) {
 function isSilentReplyEnvelopeText(text) {
     if (!text) return false;
     const trimmed = text.trim();
-    if (!trimmed || !trimmed.startsWith('{') || !trimmed.endsWith('}') || !trimmed.includes(TOKEN)) {
+    // Case-insensitive contains check — model may emit lowercase variants.
+    if (!trimmed || !trimmed.startsWith('{') || !trimmed.endsWith('}') ||
+        !trimmed.toUpperCase().includes(TOKEN.toUpperCase())) {
         return false;
     }
     try {
@@ -85,7 +88,10 @@ function isSilentReplyEnvelopeText(text) {
         if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
         const keys = Object.keys(parsed);
         return keys.length === 1 && keys[0] === 'action'
-            && typeof parsed.action === 'string' && parsed.action.trim() === TOKEN;
+            && typeof parsed.action === 'string'
+            // Case-insensitive comparison — matches the rest of the SILENT_REPLY
+            // handling which uses /i flag throughout.
+            && parsed.action.trim().toUpperCase() === TOKEN.toUpperCase();
     } catch (_) {
         return false;
     }
@@ -107,7 +113,7 @@ function isSilentReplyPayloadText(text) {
 // identifier). Match the token + its surrounding wrapper chars in one pass so
 // we don't leave behind orphan punctuation like `****` or `\`\``.
 const MARKDOWN_WRAPPED_REGEX = new RegExp(
-    `(?<!${IDENT_CHAR})[\`*_~\\[\\]()<>]+\\s*SILENT_REPLY\\s*[\`*_~\\[\\]()<>]+`,
+    `(?<!${IDENT_CHAR})[\`*_~\\[\\]()<>]+\\s*${T}\\s*[\`*_~\\[\\]()<>]+`,
     'giu'
 );
 
