@@ -4,6 +4,7 @@
 
 const fs = require('fs');
 const { CHANNEL } = require('./config');
+const { stripSilentReply, containsSilentReply } = require('./silent-reply');
 
 let deps = {};
 let initialized = false;
@@ -606,12 +607,13 @@ async function handleMessage(normalized) {
         let response = await deps.chat(chatId, userContent, { isResume, originalGoal: resumeGoal, statusReaction });
 
         // Strip protocol tokens the agent may have mixed into content (BAT-279)
-        // Also strip preceding bold-markdown/whitespace before tokens (OpenClaw parity 2026.3.1)
-        if (/\bSILENT_REPLY\b/i.test(response)) deps.log('[Audit] Agent sent SILENT_REPLY', 'DEBUG');
-        response = response.trim()
-            .replace(/(?:^|\s+|\*+)HEARTBEAT_OK\s*$/gi, '').replace(/\bHEARTBEAT_OK\b/gi, '')
-            .replace(/(?:^|\s+|\*+)SILENT_REPLY\s*$/gi, '').replace(/\bSILENT_REPLY\b/gi, '')
-            .trim();
+        // Uses centralized silent-reply.js helper (BAT-488) that also handles
+        // leading-attached cases like "SILENT_REPLYhello" + JSON envelope form.
+        if (containsSilentReply(response)) deps.log('[Audit] Agent sent SILENT_REPLY', 'DEBUG');
+        response = stripSilentReply(
+            response.trim()
+                .replace(/(?:^|\s+|\*+)HEARTBEAT_OK\s*$/gi, '').replace(/\bHEARTBEAT_OK\b/gi, '')
+        );
         if (!response) {
             deps.log('Agent returned protocol-token-only response, discarding', 'DEBUG');
             await statusReaction.clear();

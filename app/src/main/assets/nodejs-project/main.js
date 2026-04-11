@@ -38,6 +38,7 @@ setRedactFn(redactSecrets);
 // ============================================================================
 
 const { androidBridgeCall } = require('./bridge');
+const { stripSilentReply, containsSilentReply } = require('./silent-reply');
 
 // ── MCP (Model Context Protocol) — Remote tool servers (BAT-168) ───
 const { MCPManager } = require('./mcp-client');
@@ -331,12 +332,12 @@ async function autoResumeOnStartup() {
             const task = prev.then(async () => {
                 try {
                     const response = await chat(chatId, 'continue', { isResume: true, originalGoal: full.originalGoal || null });
-                    // Strip protocol tokens (BAT-279, OpenClaw parity 2026.3.1)
-                    if (response && /\bSILENT_REPLY\b/i.test(response)) log('[Audit] AutoResume sent SILENT_REPLY', 'DEBUG');
-                    const cleaned = response ? response.trim()
-                        .replace(/(?:^|\s+|\*+)HEARTBEAT_OK\s*$/gi, '').replace(/\bHEARTBEAT_OK\b/gi, '')
-                        .replace(/(?:^|\s+|\*+)SILENT_REPLY\s*$/gi, '').replace(/\bSILENT_REPLY\b/gi, '')
-                        .trim() : '';
+                    // Strip protocol tokens (BAT-279, OpenClaw parity 2026.3.1; BAT-488 centralized silent-reply strip)
+                    if (response && containsSilentReply(response)) log('[Audit] AutoResume sent SILENT_REPLY', 'DEBUG');
+                    const cleaned = response ? stripSilentReply(
+                        response.trim()
+                            .replace(/(?:^|\s+|\*+)HEARTBEAT_OK\s*$/gi, '').replace(/\bHEARTBEAT_OK\b/gi, '')
+                    ) : '';
                     if (cleaned) {
                         await sendMessage(chatId, cleaned);
                     }
@@ -925,10 +926,10 @@ async function runCronAgentTurn(message, jobId) {
         const response = await chat(cronChatId, prompt);
 
         // Strip protocol tokens (same pattern as heartbeat probe)
-        const cleaned = response.trim()
-            .replace(/(?:^|\s+|\*+)HEARTBEAT_OK\s*$/gi, '').replace(/\bHEARTBEAT_OK\b/gi, '')
-            .replace(/(?:^|\s+|\*+)SILENT_REPLY\s*$/gi, '').replace(/\bSILENT_REPLY\b/gi, '')
-            .trim();
+        const cleaned = stripSilentReply(
+            response.trim()
+                .replace(/(?:^|\s+|\*+)HEARTBEAT_OK\s*$/gi, '').replace(/\bHEARTBEAT_OK\b/gi, '')
+        );
 
         if (!cleaned) {
             log(`[Cron] Agent turn ${jobId} returned silent response`, 'DEBUG');
@@ -1001,12 +1002,12 @@ async function runHeartbeat() {
 
             const response = await chat(HEARTBEAT_CHAT_ID, HEARTBEAT_PROMPT);
             // Strip protocol tokens the agent may have mixed into content (OpenClaw parity 2026.3.1)
-            if (/\bSILENT_REPLY\b/i.test(response)) log('[Audit] Heartbeat sent SILENT_REPLY', 'DEBUG');
+            if (containsSilentReply(response)) log('[Audit] Heartbeat sent SILENT_REPLY', 'DEBUG');
             const hadToken = /\bHEARTBEAT_OK\b/i.test(response);
-            const cleaned = response.trim()
-                .replace(/(?:^|\s+|\*+)HEARTBEAT_OK\s*$/gi, '').replace(/\bHEARTBEAT_OK\b/gi, '')
-                .replace(/(?:^|\s+|\*+)SILENT_REPLY\s*$/gi, '').replace(/\bSILENT_REPLY\b/gi, '')
-                .trim();
+            const cleaned = stripSilentReply(
+                response.trim()
+                    .replace(/(?:^|\s+|\*+)HEARTBEAT_OK\s*$/gi, '').replace(/\bHEARTBEAT_OK\b/gi, '')
+            );
             // OpenClaw parity: if the agent included HEARTBEAT_OK but also added
             // short filler text (≤HEARTBEAT_ACK_MAX_CHARS), treat it as an ack, not an alert.
             // This prevents verbose-but-harmless responses like
