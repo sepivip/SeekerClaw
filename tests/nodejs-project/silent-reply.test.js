@@ -99,6 +99,11 @@ const cases = [
     ['legacy wrapped italic bare',             '_SILENT_REPLY_',                                '',                           true],
     ['legacy wrapped tilde bare',              '~SILENT_REPLY~',                                '',                           true],
     ['legacy wrapped with whitespace padding', '  **SILENT_REPLY**  ',                          '',                           true],
+    // Mixed wrappers — require at least one wrapper char on each side, so
+    // `(SILENT_REPLY)` and similar alternation patterns still qualify.
+    ['legacy wrapped parens bare',             '(SILENT_REPLY)',                                '',                           true],
+    ['legacy wrapped brackets bare',           '[SILENT_REPLY]',                                '',                           true],
+    ['legacy wrapped angle bare',              '<SILENT_REPLY>',                                '',                           true],
 
     // ── Section 3: protocol discussion (THE BAT-491 FIX) ────────────────
     // These all contain the literal bare `SILENT_REPLY` string INLINE in

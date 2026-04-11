@@ -78,10 +78,19 @@ const LEGACY_BARE_EXACT_REGEX = new RegExp(`^\\s*${LT}\\s*$`, 'i');
 // "When I say **SILENT_REPLY** I mean stay quiet" in normal prose is NOT
 // over-stripped (that's discussion, same as bare inline).
 //
+// Requires AT LEAST ONE wrapper character on each side (the `+`
+// quantifiers on the wrapper char class). This is important:
+//   - With `*` (zero-or-more), the regex would also match plain bare
+//     `SILENT_REPLY` and `  SILENT_REPLY  `, making LEGACY_BARE_EXACT_REGEX
+//     redundant and the intent unclear. The `+` enforces "there must be
+//     a wrapper, this isn't just the bare form."
+//   - Whitespace is allowed separately (outside the wrapper quantifier)
+//     so `  **SILENT_REPLY**  ` still matches via `<ws>**<token>**<ws>`.
+//
 // The wrapper char class matches MARKDOWN_WRAPPED_REGEX's below so the
 // set of accepted wrapper forms is consistent across canonical and legacy.
 const LEGACY_BARE_WRAPPED_EXACT_REGEX = new RegExp(
-    `^[\\s\`*_~\\[\\]()<>]*${LT}[\\s\`*_~\\[\\]()<>]*$`,
+    `^\\s*[\`*_~\\[\\]()<>]+\\s*${LT}\\s*[\`*_~\\[\\]()<>]+\\s*$`,
     'i'
 );
 
