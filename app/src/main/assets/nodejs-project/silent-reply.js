@@ -24,8 +24,11 @@ const LEADING_ATTACHED_REGEX = /^\s*(?:SILENT_REPLY\s+)*SILENT_REPLY(?=[\p{L}\p{
 // Leading with any whitespace after: "SILENT_REPLY The user..." or "SILENT_REPLY\nhello"
 const LEADING_SPACED_REGEX = /^(?:\s*SILENT_REPLY)+\s*/i;
 
-// Generic word-boundary strip — catches mid-message tokens after specific cases
+// Generic word-boundary strip — catches mid-message tokens after specific cases.
+// NOTE: only used with .replace() (not .test()). For .test() use TEST_REGEX
+// below to avoid the stateful lastIndex bug from the /g flag.
 const WORD_BOUNDARY_REGEX = /\bSILENT_REPLY\b/gi;
+const TEST_REGEX = /\bSILENT_REPLY\b/i;
 
 /**
  * Exact silent-reply check. True only when the entire (trimmed) text is just
@@ -71,12 +74,17 @@ function isSilentReplyPayloadText(text) {
  * Returns the cleaned text (trimmed). An empty result means the entire message
  * should be treated as silent.
  *
+ * Short-circuits to '' if the input is the exact `{"action":"SILENT_REPLY"}`
+ * envelope form — otherwise the token strip would leave behind a mangled
+ * `{"action":""}` JSON string that would be sent to the user.
+ *
  * Replaces the old inline pattern:
  *   .replace(/(?:^|\s+|\*+)SILENT_REPLY\s*$/gi, '').replace(/\bSILENT_REPLY\b/gi, '')
  * which missed leading-attached and JSON envelope cases.
  */
 function stripSilentReply(text) {
     if (!text) return '';
+    if (isSilentReplyEnvelopeText(text)) return '';
     return text
         .replace(LEADING_ATTACHED_REGEX, '')
         .replace(LEADING_SPACED_REGEX, '')
@@ -87,10 +95,16 @@ function stripSilentReply(text) {
 
 /**
  * Quick "contains any silent-reply form" check for logging/audit hooks.
+ * Uses the non-global TEST_REGEX so repeated calls aren't stateful via
+ * lastIndex (which would flip true→false intermittently with /g).
+ * Also catches the leading-attached form (`SILENT_REPLYhello`) and the
+ * JSON envelope form so audit logs match what stripSilentReply() can strip.
  */
 function containsSilentReply(text) {
     if (!text) return false;
-    return WORD_BOUNDARY_REGEX.test(text) || isSilentReplyEnvelopeText(text);
+    return TEST_REGEX.test(text)
+        || LEADING_ATTACHED_REGEX.test(text)
+        || isSilentReplyEnvelopeText(text);
 }
 
 module.exports = {
