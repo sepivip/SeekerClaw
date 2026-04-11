@@ -538,14 +538,27 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                         else -> "api_key"
                     }
                     authType = newAuthType
-                    // Restore model: use existing config's model if same provider, else default.
-                    // Model list must match the effective auth type (OpenAI OAuth has its own list).
+                    // Restore model. Two concerns:
+                    //  1. Freeform providers (OpenRouter/custom) have no fixed model
+                    //     list — prefer existingConfig.model for the same provider,
+                    //     otherwise use the freeform fallback.
+                    //  2. Providers with a fixed list must validate existingConfig.model
+                    //     against the list for the EFFECTIVE auth type. Example: an
+                    //     existing config with openai + api_key + "gpt-5.4-mini" would
+                    //     otherwise survive a provider-change round-trip even though
+                    //     gpt-5.4-mini is only present in the OAuth model list. Always
+                    //     coerce to the first valid entry when the stored model isn't.
                     val modelAuthType = if (newProvider == "openai") newAuthType else "api_key"
                     val models = modelsForProvider(newProvider, modelAuthType)
-                    selectedModel = if (newProvider == existingConfig?.provider) {
-                        existingConfig.model
+                    selectedModel = if (models.isEmpty()) {
+                        // Freeform (OpenRouter/custom): no validation possible
+                        if (newProvider == existingConfig?.provider) existingConfig.model
+                        else OPENROUTER_DEFAULT_MODEL
                     } else {
-                        models.firstOrNull()?.id ?: OPENROUTER_DEFAULT_MODEL
+                        val existingModel = existingConfig?.model?.takeIf { m ->
+                            newProvider == existingConfig.provider && models.any { it.id == m }
+                        }
+                        existingModel ?: models[0].id
                     }
                 },
                 apiKey = apiKey,
@@ -573,13 +586,15 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                         if (newAuthType == "api_key") {
                             apiKey = existingConfig?.openaiApiKey ?: ""
                         }
-                        // OpenAI's OAuth and API-key model lists are disjoint (OAuth has
-                        // the GPT-5.x Codex family, API-key has the public GPT-5 line).
-                        // Coerce selectedModel to a valid entry for the new auth type so
-                        // a cross-auth stale model never gets persisted by saveAndStart.
-                        val openaiModels = modelsForProvider("openai", newAuthType)
-                        if (openaiModels.isNotEmpty() && openaiModels.none { it.id == selectedModel }) {
-                            selectedModel = openaiModels[0].id
+                        // OpenAI's OAuth and API-key model lists overlap on the main
+                        // GPT-5.x entries but aren't identical — gpt-5.4-mini is
+                        // OAuth-only, for example. If the currently-selected model
+                        // isn't in the new auth type's list, coerce to the first valid
+                        // entry so a cross-auth stale model never gets persisted by
+                        // saveAndStart. Shared models are left alone.
+                        val validModels = modelsForProvider("openai", newAuthType)
+                        if (validModels.isNotEmpty() && validModels.none { it.id == selectedModel }) {
+                            selectedModel = validModels[0].id
                         }
                     }
                     apiKeyError = null
