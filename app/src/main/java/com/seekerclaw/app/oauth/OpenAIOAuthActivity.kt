@@ -25,6 +25,7 @@ import org.json.JSONObject
 import java.io.File
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
+import java.net.InetAddress
 import java.net.URL
 import java.net.URLEncoder
 import java.security.MessageDigest
@@ -32,7 +33,10 @@ import java.security.SecureRandom
 
 /**
  * Activity that handles the OpenAI OAuth PKCE flow:
- * Custom Tabs → user signs in on auth.openai.com → 127.0.0.1:1455 callback → token exchange.
+ * Custom Tabs → user signs in on auth.openai.com → localhost:1455 loopback callback → token exchange.
+ *
+ * The callback server accepts both IPv4 (127.0.0.1) and IPv6 (::1) loopback connections,
+ * so it works regardless of which one the browser resolves "localhost" to on a given device.
  *
  * Tokens obtained from the flow are persisted directly via [ConfigManager] (encrypted via
  * Android Keystore). The on-disk result file under `filesDir/oauth_results/` only carries
@@ -50,8 +54,10 @@ class OpenAIOAuthActivity : ComponentActivity() {
         // Must be exactly "localhost" — the Codex OAuth client (app_EMoamEEZ...) is
         // registered with this redirect URI. Using 127.0.0.1 causes OpenAI to reject the
         // authorize request as a redirect_uri mismatch ("unknown_error" on their side).
-        // The IPv6-resolution risk Copilot flagged is theoretical — Codex CLI itself
-        // uses "localhost" in production and the NanoHTTPD listener resolves correctly.
+        // NOTE: the browser may resolve "localhost" to either 127.0.0.1 or ::1 depending
+        // on the device (Pixel 7 / Android 14 prefer IPv6). CallbackServer binds to the
+        // wildcard address and accepts only loopback-originated requests, so the
+        // callback arrives successfully regardless of which loopback address Chrome uses.
         const val REDIRECT_URI = "http://localhost:1455/auth/callback"
         const val SCOPES = "openid profile email offline_access"
         private const val CALLBACK_PORT = 1455
@@ -106,16 +112,20 @@ class OpenAIOAuthActivity : ComponentActivity() {
                 val email = extractEmailFromJwtStatic(idToken) ?: extractEmailFromJwtStatic(accessToken)
 
                 withContext(NonCancellable + Dispatchers.IO) {
-                    val current = ConfigManager.loadConfig(appCtx)
-                        ?: throw IllegalStateException("Config not loaded — cannot persist OAuth tokens")
-                    ConfigManager.saveConfig(
-                        appCtx,
-                        current.copy(
-                            openaiOAuthToken = accessToken,
-                            openaiOAuthRefresh = refreshToken.ifBlank { current.openaiOAuthRefresh },
-                            openaiOAuthEmail = email ?: current.openaiOAuthEmail,
-                            openaiOAuthExpiresAt = expiresAt,
-                        )
+                    // Persist the 4 OAuth fields directly via ConfigManager's
+                    // bootstrap-friendly path. This works on fresh install (before
+                    // saveAndStart has ever run) and also on subsequent sign-ins
+                    // (where saveConfig has already marked setup complete). We read
+                    // the prior refresh token and email from loadConfigOrBootstrap
+                    // so blank fields from the token response don't wipe values the
+                    // user previously had.
+                    val prior = ConfigManager.loadConfigOrBootstrap(appCtx)
+                    ConfigManager.persistOpenAIOAuthTokens(
+                        context = appCtx,
+                        accessToken = accessToken,
+                        refreshToken = refreshToken.ifBlank { prior.openaiOAuthRefresh },
+                        email = email ?: prior.openaiOAuthEmail,
+                        expiresAt = expiresAt,
                     )
                     writeResultFileStatic(appCtx, requestId, JSONObject().apply {
                         put("status", "success")
@@ -684,15 +694,32 @@ class OpenAIOAuthActivity : ComponentActivity() {
     private class CallbackServer(
         port: Int,
         private val onCallback: (Map<String, String>) -> String
-    ) : NanoHTTPD("localhost", port) {
-        // Bind explicitly to "localhost" so the OAuth callback listener is reachable
-        // only from the local device — never from all network interfaces (NanoHTTPD's
-        // no-hostname constructor binds to 0.0.0.0). The redirect URI must also stay
-        // as "localhost" because Codex's OAuth client (app_EMoamEEZ...) is registered
-        // with that exact string — switching to "127.0.0.1" causes auth.openai.com
-        // to reject the authorize request as redirect_uri mismatch.
+    ) : NanoHTTPD(port) {
+        // Bind to the wildcard address (NanoHTTPD's no-hostname constructor binds to
+        // 0.0.0.0, i.e. all network interfaces). We used to pass "localhost" here,
+        // but on newer Android devices (e.g. Pixel 7 / Android 14)
+        // InetAddress.getByName("localhost") resolves to ::1 only, so the server
+        // bound only to IPv6 loopback. Meanwhile Chrome's Custom Tab resolves
+        // "localhost" to 127.0.0.1 for the redirect, causing connection refused on
+        // the callback. Reported as BAT-489.
+        //
+        // Binding wildcard accepts both 127.0.0.1 and ::1 connections — but it also
+        // accepts connections from other hosts on the same network, which we do NOT
+        // want. The localhost-only security guarantee is therefore NOT provided by
+        // the bind itself; it is enforced in serve() below by rejecting any request
+        // whose remote IP is outside the loopback range with 403 Forbidden.
 
         override fun serve(session: IHTTPSession): Response {
+            // Security: reject anything that isn't loopback. With a 0.0.0.0 bind we
+            // could in principle be reached from other hosts on the same network, so
+            // we gate every request on the client IP. NanoHTTPD reports the remote
+            // address in v4 form (127.0.0.1) or v6 form (0:0:0:0:0:0:0:1 or ::1)
+            // depending on how the client connected.
+            val remoteIp = session.remoteIpAddress ?: ""
+            if (!isLoopback(remoteIp)) {
+                Log.w(TAG, "Rejecting non-loopback callback request from $remoteIp")
+                return newFixedLengthResponse(Response.Status.FORBIDDEN, "text/plain", "Forbidden")
+            }
             if (session.uri == "/auth/callback" && session.method == Method.GET) {
                 @Suppress("DEPRECATION")
                 val params = session.parms ?: emptyMap()
@@ -700,6 +727,24 @@ class OpenAIOAuthActivity : ComponentActivity() {
                 return newFixedLengthResponse(Response.Status.OK, "text/html", html)
             }
             return newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "Not found")
+        }
+
+        private fun isLoopback(ip: String): Boolean {
+            if (ip.isEmpty()) return false
+            // Strip any IPv6 zone suffix (e.g. "fe80::1%eth0") before parsing.
+            val stripped = ip.substringBefore('%')
+            // IPv4-mapped IPv6 form ("::ffff:127.0.0.1") must be explicitly
+            // recognized — Inet6Address.isLoopbackAddress() only returns true for
+            // "::1" and doesn't unwrap the v4 mapping on all JDK/Android versions.
+            if (stripped.startsWith("::ffff:127.", ignoreCase = true)) return true
+            // Canonical path: parse as an InetAddress (no DNS lookup for numeric IPs)
+            // and let the platform classify it. Covers 127.0.0.0/8 via Inet4Address
+            // and ::1 / 0:0:0:0:0:0:0:1 via Inet6Address.
+            return try {
+                InetAddress.getByName(stripped).isLoopbackAddress
+            } catch (e: Exception) {
+                false
+            }
         }
     }
 }

@@ -332,9 +332,33 @@ object ConfigManager {
         }
     }
 
+    /**
+     * Returns the persisted config if setup is complete, otherwise null.
+     *
+     * For a "read whatever is there, even pre-setup" variant — used during
+     * onboarding to pick up OAuth tokens written by [OpenAIOAuthActivity]
+     * before saveAndStart has ever run — see [loadConfigOrBootstrap].
+     */
     fun loadConfig(context: Context): AppConfig? {
+        if (!isSetupComplete(context)) return null
+        return loadConfigUnchecked(context)
+    }
+
+    /**
+     * Loads whatever config fields are currently in SharedPreferences regardless
+     * of whether the setup flow has completed. Use this in places that must work
+     * mid-onboarding — specifically, the OpenAI OAuth controller (needs to show
+     * "connected" immediately after the callback writes tokens) and saveAndStart
+     * (needs to preserve those tokens into the first full saveConfig call).
+     *
+     * All fields default to empty strings / safe defaults if not persisted yet,
+     * so this never throws on a truly fresh install — it just returns a blank
+     * AppConfig with whatever few fields have been written so far.
+     */
+    fun loadConfigOrBootstrap(context: Context): AppConfig = loadConfigUnchecked(context)
+
+    private fun loadConfigUnchecked(context: Context): AppConfig {
         val p = prefs(context)
-        if (!p.getBoolean(KEY_SETUP_COMPLETE, false)) return null
 
         val apiKey = try {
             val enc = p.getString(KEY_API_KEY_ENC, null)
@@ -565,6 +589,68 @@ object ConfigManager {
 
     fun setKeepScreenOn(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_KEEP_SCREEN_ON, enabled).commit()
+    }
+
+    /**
+     * Persist OpenAI OAuth tokens directly to SharedPreferences, bypassing the
+     * full [saveConfig] path. Used by [OpenAIOAuthActivity] during the
+     * post-callback token exchange so the flow works on a fresh install — at
+     * that point [saveConfig]'s prerequisites (bot token, agent name, etc.)
+     * don't exist yet, and [loadConfig] still returns null because setup isn't
+     * marked complete.
+     *
+     * This deliberately does NOT set `KEY_SETUP_COMPLETE`: the user still needs
+     * to finish the onboarding flow normally. It only writes the four OAuth
+     * prefs (access token + refresh token + email + expiry) and bumps
+     * [configVersion] so reactive UI picks up the change.
+     */
+    fun persistOpenAIOAuthTokens(
+        context: Context,
+        accessToken: String,
+        refreshToken: String,
+        email: String,
+        expiresAt: String,
+    ) {
+        val editor = prefs(context).edit()
+
+        if (accessToken.isNotBlank()) {
+            val enc = KeystoreHelper.encrypt(accessToken)
+            editor.putString(KEY_OPENAI_OAUTH_TOKEN_ENC, Base64.encodeToString(enc, Base64.NO_WRAP))
+        } else {
+            editor.remove(KEY_OPENAI_OAUTH_TOKEN_ENC)
+        }
+
+        if (refreshToken.isNotBlank()) {
+            val enc = KeystoreHelper.encrypt(refreshToken)
+            editor.putString(KEY_OPENAI_OAUTH_REFRESH_ENC, Base64.encodeToString(enc, Base64.NO_WRAP))
+        } else {
+            editor.remove(KEY_OPENAI_OAUTH_REFRESH_ENC)
+        }
+
+        if (email.isNotBlank()) {
+            val enc = KeystoreHelper.encrypt(email)
+            editor.putString(KEY_OPENAI_OAUTH_EMAIL_ENC, Base64.encodeToString(enc, Base64.NO_WRAP))
+            // If an older install still has the legacy plaintext pref hanging
+            // around (loadConfigUnchecked migrates it on read, but not every code
+            // path has triggered a read since the migration landed), drop it too
+            // to ensure the encrypted value becomes the single source of truth.
+            editor.remove("openai_oauth_email")
+        } else {
+            // Clear email in both locations — the encrypted key that we own and
+            // the legacy plaintext key from pre-migration installs. Leaving the
+            // plaintext pref behind on sign-out would be a PII regression.
+            editor.remove(KEY_OPENAI_OAUTH_EMAIL_ENC)
+            editor.remove("openai_oauth_email")
+        }
+
+        editor.putString(KEY_OPENAI_OAUTH_EXPIRES_AT, expiresAt)
+
+        val persisted = editor.commit()
+        if (persisted) {
+            configVersion.intValue++
+        } else {
+            LogCollector.append("[Config] Failed to persist OAuth tokens (commit=false)", LogLevel.ERROR)
+        }
     }
 
     fun updateConfigField(context: Context, field: String, value: String) {

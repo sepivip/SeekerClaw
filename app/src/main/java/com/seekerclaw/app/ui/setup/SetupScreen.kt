@@ -79,6 +79,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -155,37 +156,56 @@ private object SetupSteps {
 fun SetupScreen(onSetupComplete: () -> Unit) {
     val context = LocalContext.current
 
-    // Pre-fill from existing config — reactive to ConfigManager.configVersion so any
-    // edit made in Settings while onboarding is on the back stack flows through here.
-    val configVersion = ConfigManager.configVersion.intValue
-    val existingConfig = remember(configVersion) { ConfigManager.loadConfig(context) }
+    // Load the persisted config ONCE on first composition — stored in a non-reactive
+    // remember so that OAuth token writes mid-onboarding (which bump ConfigManager's
+    // configVersion via persistOpenAIOAuthTokens) don't cascade into the form state
+    // below and wipe what the user has typed. The Settings screen still reacts to
+    // configVersion for its own reload; this local snapshot is only used to seed
+    // initial field values and to drive onProviderChange "preserve the other
+    // credential" restore logic.
+    val existingConfig = remember { ConfigManager.loadConfig(context) }
 
-    var apiKey by remember(configVersion) {
+    // Fresh-install defaults land on OpenAI + OAuth (Sign in with ChatGPT) — it's the
+    // first provider in the onboarding picker and the smoothest onboarding path (no
+    // key to paste, just a browser tap). If existingConfig is present (user came back
+    // from Settings or a previous partial setup), honour whatever they chose before.
+    val initialProvider = existingConfig?.provider ?: "openai"
+    val initialAuthType = existingConfig?.authType ?: "oauth"
+
+    // rememberSaveable is used for all form state so that:
+    //  1. Mid-flow recompositions triggered by OAuth token writes do NOT re-initialize
+    //     form fields from existingConfig (which would wipe a half-entered botToken).
+    //  2. The form also survives process death during onboarding (the Bundle saver
+    //     keeps these strings across activity recreation).
+    var apiKey by rememberSaveable {
         mutableStateOf(
-            when (existingConfig?.provider) {
-                "openai" -> existingConfig.openaiApiKey
-                "openrouter" -> existingConfig.openrouterApiKey
-                else -> existingConfig?.activeCredential ?: ""
-            }
+            existingConfig?.let { cfg ->
+                when (cfg.provider) {
+                    "openai" -> cfg.openaiApiKey
+                    "openrouter" -> cfg.openrouterApiKey
+                    else -> cfg.activeCredential
+                }
+            } ?: ""
         )
     }
-    var authType by remember(configVersion) { mutableStateOf(existingConfig?.authType ?: "api_key") }
-    var scannedProvider by remember(configVersion) { mutableStateOf(existingConfig?.provider ?: "claude") }
-    var botToken by remember(configVersion) { mutableStateOf(existingConfig?.telegramBotToken ?: "") }
-    var ownerId by remember(configVersion) { mutableStateOf(existingConfig?.telegramOwnerId ?: "") }
-    val existingProvider = existingConfig?.provider ?: "claude"
-    var selectedModel by remember(configVersion) {
-        // Setup screen always uses API-key auth (OAuth happens later in settings),
-        // so derive the model list from the api_key list to match what saveAndStart persists.
+    var authType by rememberSaveable { mutableStateOf(initialAuthType) }
+    var scannedProvider by rememberSaveable { mutableStateOf(initialProvider) }
+    var botToken by rememberSaveable { mutableStateOf(existingConfig?.telegramBotToken ?: "") }
+    var ownerId by rememberSaveable { mutableStateOf(existingConfig?.telegramOwnerId ?: "") }
+    var selectedModel by rememberSaveable {
+        // Use the effective auth type so OpenAI+OAuth picks from the OAuth model list
+        // (GPT-5.x Codex) instead of the API-key list — modelsForProvider throws for
+        // openai when authType is null, so we must pass it through.
+        val modelAuthType = if (initialProvider == "openai") initialAuthType else "api_key"
+        val models = modelsForProvider(initialProvider, modelAuthType)
         mutableStateOf(
             existingConfig?.model?.let { model ->
-                val models = modelsForProvider(existingProvider, "api_key")
                 if (models.isEmpty() || models.any { it.id == model }) model
                 else models[0].id
-            } ?: modelsForProvider(existingProvider, "api_key").firstOrNull()?.id ?: availableModels[0].id
+            } ?: models.firstOrNull()?.id ?: availableModels[0].id
         )
     }
-    var agentName by remember(configVersion) { mutableStateOf(existingConfig?.agentName ?: "SeekerClaw") }
+    var agentName by rememberSaveable { mutableStateOf(existingConfig?.agentName ?: "SeekerClaw") }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var apiKeyError by remember { mutableStateOf<String?>(null) }
     var botTokenError by remember { mutableStateOf<String?>(null) }
@@ -243,8 +263,15 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                     }
                     botToken = cfg.telegramBotToken
                     ownerId = cfg.telegramOwnerId
-                    // Setup uses api_key auth — see saveAndStart. Match the model list.
-                    val providerModels = modelsForProvider(cfg.provider, "api_key")
+                    // Match the model list to the imported config's effective auth type.
+                    // In practice ConfigClaimImporter.parseImport() currently forces
+                    // authType="api_key" for openai (QR/claim payloads don't carry OAuth
+                    // tokens yet), so this branch resolves to the api_key model list
+                    // today. The conditional is kept deliberately: if the importer ever
+                    // learns to produce openai+oauth claims, gpt-5.4-mini and other
+                    // OAuth-only models need the OAuth list to validate correctly.
+                    val qrModelAuthType = if (cfg.provider == "openai") cfg.authType else "api_key"
+                    val providerModels = modelsForProvider(cfg.provider, qrModelAuthType)
                     selectedModel = if (providerModels.isEmpty()) {
                         cfg.model // OpenRouter: accept freeform model as-is
                     } else {
@@ -323,6 +350,17 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
         try {
             val trimmedKey = apiKey.trim()
             val existing = ConfigManager.loadConfig(context)
+            // On fresh install (existing == null) the user may have already
+            // completed OAuth via OpenAIOAuthActivity during this setup session
+            // — those tokens are persisted to prefs independently of saveConfig,
+            // so read them via loadConfigOrBootstrap to preserve them through
+            // this first full saveConfig call. On subsequent launches `existing`
+            // is non-null and we use its values directly.
+            val bootstrap = if (existing == null) ConfigManager.loadConfigOrBootstrap(context) else null
+            val preservedOAuthToken = existing?.openaiOAuthToken ?: bootstrap?.openaiOAuthToken ?: ""
+            val preservedOAuthRefresh = existing?.openaiOAuthRefresh ?: bootstrap?.openaiOAuthRefresh ?: ""
+            val preservedOAuthEmail = existing?.openaiOAuthEmail ?: bootstrap?.openaiOAuthEmail ?: ""
+            val preservedOAuthExpiresAt = existing?.openaiOAuthExpiresAt ?: bootstrap?.openaiOAuthExpiresAt ?: ""
             val config = when (scannedProvider) {
                 "openai" -> AppConfig(
                     anthropicApiKey = existing?.anthropicApiKey ?: "",
@@ -330,11 +368,13 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                     // Don't wipe an existing openaiApiKey when the user picked OAuth.
                     openaiApiKey = if (isOpenAIOAuth) (existing?.openaiApiKey ?: "") else trimmedKey,
                     openrouterApiKey = existing?.openrouterApiKey ?: "",
-                    // Preserve OAuth tokens written by OpenAIOAuthActivity.
-                    openaiOAuthToken = existing?.openaiOAuthToken ?: "",
-                    openaiOAuthRefresh = existing?.openaiOAuthRefresh ?: "",
-                    openaiOAuthEmail = existing?.openaiOAuthEmail ?: "",
-                    openaiOAuthExpiresAt = existing?.openaiOAuthExpiresAt ?: "",
+                    // Preserve OAuth tokens written by OpenAIOAuthActivity — on
+                    // fresh install these come from the bootstrap config, not the
+                    // (null) loadConfig result.
+                    openaiOAuthToken = preservedOAuthToken,
+                    openaiOAuthRefresh = preservedOAuthRefresh,
+                    openaiOAuthEmail = preservedOAuthEmail,
+                    openaiOAuthExpiresAt = preservedOAuthExpiresAt,
                     provider = "openai",
                     authType = effectiveAuthType,
                     telegramBotToken = botToken.trim(),
@@ -347,6 +387,14 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                     setupToken = existing?.setupToken ?: "",
                     openaiApiKey = existing?.openaiApiKey ?: "",
                     openrouterApiKey = trimmedKey,
+                    // Preserve OAuth tokens even when saving as a different provider
+                    // — saveConfig writes all fields, so an empty default here would
+                    // wipe tokens the user set previously (or just set during this
+                    // session but then changed their mind about the provider).
+                    openaiOAuthToken = preservedOAuthToken,
+                    openaiOAuthRefresh = preservedOAuthRefresh,
+                    openaiOAuthEmail = preservedOAuthEmail,
+                    openaiOAuthExpiresAt = preservedOAuthExpiresAt,
                     provider = "openrouter",
                     authType = "api_key",
                     telegramBotToken = botToken.trim(),
@@ -363,6 +411,11 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                         else (existing?.setupToken ?: ""),
                     openaiApiKey = existing?.openaiApiKey ?: "",
                     openrouterApiKey = existing?.openrouterApiKey ?: "",
+                    // Preserve OAuth tokens — same rationale as the openrouter branch.
+                    openaiOAuthToken = preservedOAuthToken,
+                    openaiOAuthRefresh = preservedOAuthRefresh,
+                    openaiOAuthEmail = preservedOAuthEmail,
+                    openaiOAuthExpiresAt = preservedOAuthExpiresAt,
                     provider = "claude",
                     authType = effectiveAuthType,
                     telegramBotToken = botToken.trim(),
@@ -510,24 +563,67 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                     }
                     apiKeyError = null
                     errorMessage = null
-                    // Per-provider auth defaults: Claude → api_key/setup_token,
-                    // OpenAI → oauth (matches Settings first-time switch-in default).
-                    authType = when (newProvider) {
+                    // Per-provider auth defaults:
+                    //   Claude  → "setup_token" if the user previously used one,
+                    //             otherwise "api_key".
+                    //   OpenAI  → "oauth" on fresh install (existingConfig == null),
+                    //             or if the user previously chose oauth, or if there's
+                    //             already an OAuth token on file. Otherwise "api_key"
+                    //             — e.g. user came from Settings where they had set
+                    //             an OpenAI API key directly.
+                    //   Other   → "api_key".
+                    val newAuthType = when (newProvider) {
                         "claude" -> when (existingConfig?.authType) {
                             "setup_token" -> "setup_token"
                             else -> "api_key"
                         }
-                        "openai" -> if (existingConfig?.authType == "oauth" ||
-                            existingConfig?.openaiOAuthToken?.isNotBlank() == true) "oauth" else "api_key"
+                        "openai" -> {
+                            // Read CURRENT persisted state, not the one-time
+                            // existingConfig snapshot. The user may have completed
+                            // OAuth during this session (tokens written via
+                            // persistOpenAIOAuthTokens, configVersion bumped) and
+                            // then switched providers away and back — the snapshot
+                            // would still show openaiOAuthToken = "" and incorrectly
+                            // default back to api_key. loadConfigOrBootstrap
+                            // bypasses the SETUP_COMPLETE gate so it works mid-
+                            // onboarding too.
+                            val current = ConfigManager.loadConfigOrBootstrap(context)
+                            val hasStoredOAuthToken = current.openaiOAuthToken.isNotBlank()
+                            val previouslySelectedOAuth =
+                                existingConfig?.authType == "oauth" || current.authType == "oauth"
+                            if (existingConfig == null || hasStoredOAuthToken || previouslySelectedOAuth) "oauth"
+                            else "api_key"
+                        }
                         else -> "api_key"
                     }
-                    // Restore model: use existing config's model if same provider, else default
-                    // Setup screen always uses API-key auth — OAuth flow happens later in settings.
-                    val models = modelsForProvider(newProvider, "api_key")
-                    selectedModel = if (newProvider == existingConfig?.provider) {
-                        existingConfig.model
+                    authType = newAuthType
+                    // Restore model. Two concerns:
+                    //  1. Freeform providers (OpenRouter/custom) have no fixed model
+                    //     list — prefer existingConfig.model for the same provider,
+                    //     otherwise use the freeform fallback.
+                    //  2. Providers with a fixed list must validate existingConfig.model
+                    //     against the list for the EFFECTIVE auth type. Example: an
+                    //     existing config with openai + api_key + "gpt-5.4-mini" would
+                    //     otherwise survive a provider-change round-trip even though
+                    //     gpt-5.4-mini is only present in the OAuth model list. Always
+                    //     coerce to the first valid entry when the stored model isn't.
+                    val modelAuthType = if (newProvider == "openai") newAuthType else "api_key"
+                    val models = modelsForProvider(newProvider, modelAuthType)
+                    // Capture existingConfig into a stable local so the null check
+                    // propagates cleanly (Kotlin doesn't smart-cast a nullable into
+                    // lambdas, so we need an already-non-null local to work with).
+                    val cfgModelForProvider = existingConfig
+                        ?.takeIf { it.provider == newProvider }
+                        ?.model
+                    selectedModel = if (models.isEmpty()) {
+                        // Freeform (OpenRouter/custom): no validation possible —
+                        // preserve the stored freeform model, fall back to default.
+                        cfgModelForProvider ?: OPENROUTER_DEFAULT_MODEL
                     } else {
-                        models.firstOrNull()?.id ?: OPENROUTER_DEFAULT_MODEL
+                        // Fixed list: restore only if the stored model is still valid
+                        // for the effective auth type; otherwise coerce to first entry.
+                        cfgModelForProvider?.takeIf { m -> models.any { it.id == m } }
+                            ?: models[0].id
                     }
                 },
                 apiKey = apiKey,
@@ -543,17 +639,32 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                 onAuthTypeChange = { newAuthType ->
                     authType = newAuthType
                     // Swap displayed key to the value stored under the new auth type so
-                    // the field always reflects what's saved for the active tab.
+                    // the field always reflects what's saved for the active tab. Only
+                    // overwrite when there's actually a saved value to restore — on a
+                    // fresh install (existingConfig == null) we preserve whatever the
+                    // user has already typed, otherwise toggling tabs mid-entry would
+                    // silently wipe their input.
                     if (scannedProvider == "claude") {
-                        apiKey = if (newAuthType == "setup_token")
-                            existingConfig?.setupToken ?: ""
-                        else
-                            existingConfig?.anthropicApiKey ?: ""
+                        val saved = if (newAuthType == "setup_token") existingConfig?.setupToken
+                                    else existingConfig?.anthropicApiKey
+                        if (!saved.isNullOrBlank()) apiKey = saved
                     } else if (scannedProvider == "openai") {
                         // OAuth tab doesn't use the apiKey field — leave it untouched.
-                        // Switching to API Key restores the saved OpenAI key.
+                        // Switching to API Key restores the saved OpenAI key only if
+                        // one exists; otherwise keep the in-flight draft.
                         if (newAuthType == "api_key") {
-                            apiKey = existingConfig?.openaiApiKey ?: ""
+                            val saved = existingConfig?.openaiApiKey
+                            if (!saved.isNullOrBlank()) apiKey = saved
+                        }
+                        // OpenAI's OAuth and API-key model lists overlap on the main
+                        // GPT-5.x entries but aren't identical — gpt-5.4-mini is
+                        // OAuth-only, for example. If the currently-selected model
+                        // isn't in the new auth type's list, coerce to the first valid
+                        // entry so a cross-auth stale model never gets persisted by
+                        // saveAndStart. Shared models are left alone.
+                        val validModels = modelsForProvider("openai", newAuthType)
+                        if (validModels.isNotEmpty() && validModels.none { it.id == selectedModel }) {
+                            selectedModel = validModels[0].id
                         }
                     }
                     apiKeyError = null

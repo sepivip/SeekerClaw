@@ -72,7 +72,11 @@ fun rememberOpenAIOAuthController(
     onSignedOut: () -> Unit = {},
 ): OpenAIOAuthController {
     val configVer by ConfigManager.configVersion
-    val config = remember(configVer) { ConfigManager.loadConfig(context) }
+    // loadConfigOrBootstrap returns a config even before setup is marked
+    // complete — required so the onboarding Sign in with ChatGPT flow can
+    // show "connected" immediately after the OAuth activity persists tokens,
+    // before the user has reached the final "Create Agent" button.
+    val config = remember(configVer) { ConfigManager.loadConfigOrBootstrap(context) }
 
     var requestId by remember { mutableStateOf<String?>(null) }
     var isPolling by remember { mutableStateOf(false) }
@@ -93,8 +97,9 @@ fun rememberOpenAIOAuthController(
         }
     }
 
-    // Poll the result file written by OpenAIOAuthActivity. Tokens are persisted by the
-    // activity directly via ConfigManager.saveConfig — we just watch for status here.
+    // Poll the result file written by OpenAIOAuthActivity. Tokens are persisted by
+    // the activity directly via ConfigManager.persistOpenAIOAuthTokens — we just
+    // watch the status flag here to update the UI state.
     LaunchedEffect(requestId, isPolling) {
         val reqId = requestId ?: return@LaunchedEffect
         if (!isPolling) return@LaunchedEffect
@@ -139,8 +144,8 @@ fun rememberOpenAIOAuthController(
     }
 
     val state = OpenAIOAuthState(
-        isConnected = config?.openaiOAuthToken?.isNotBlank() == true,
-        email = config?.openaiOAuthEmail ?: "",
+        isConnected = config.openaiOAuthToken.isNotBlank(),
+        email = config.openaiOAuthEmail,
         isPolling = isPolling,
         error = error,
     )
@@ -158,10 +163,16 @@ fun rememberOpenAIOAuthController(
             error = null
         },
         signOut = {
-            ConfigManager.updateConfigField(context, "openaiOAuthToken", "")
-            ConfigManager.updateConfigField(context, "openaiOAuthRefresh", "")
-            ConfigManager.updateConfigField(context, "openaiOAuthEmail", "")
-            ConfigManager.updateConfigField(context, "openaiOAuthExpiresAt", "")
+            // Clear all 4 OAuth prefs directly — using updateConfigField would
+            // no-op on a fresh install (loadConfig returns null until setup is
+            // complete), leaving tokens orphaned after a mid-onboarding sign-out.
+            ConfigManager.persistOpenAIOAuthTokens(
+                context = context,
+                accessToken = "",
+                refreshToken = "",
+                email = "",
+                expiresAt = "",
+            )
             onSignedOut()
         },
         cancel = {
