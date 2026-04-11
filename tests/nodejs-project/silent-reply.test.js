@@ -39,10 +39,13 @@
 //
 // Coverage sections:
 //   1. Canonical [[SILENT_REPLY]] form — stripped aggressively
-//   2. Legacy bare SILENT_REPLY — whole-message only (compat safety net)
+//   2. Legacy bare SILENT_REPLY — whole-message only (compat safety net),
+//      including markdown-wrapped variants like **SILENT_REPLY**
 //   3. Protocol discussion — bare inline passes through (THE BAT-491 FIX)
 //   4. Identifier preservation — MY_SILENT_REPLY_HANDLE stays intact
 //   5. Plain text passthrough
+//   6. Punctuation-only passthrough — `[]`, `()`, `**`, etc. are kept
+//      when no sentinel was present (Copilot round 5 on PR #324)
 
 const path = require('path');
 const sr = require(path.resolve(__dirname, '..', '..', 'app', 'src', 'main', 'assets', 'nodejs-project', 'silent-reply.js'));
