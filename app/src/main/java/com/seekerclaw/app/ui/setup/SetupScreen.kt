@@ -251,8 +251,12 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                     }
                     botToken = cfg.telegramBotToken
                     ownerId = cfg.telegramOwnerId
-                    // Setup uses api_key auth — see saveAndStart. Match the model list.
-                    val providerModels = modelsForProvider(cfg.provider, "api_key")
+                    // Match the model list to the imported config's effective auth type.
+                    // OpenAI's OAuth and API-key model lists differ (gpt-5.4-mini is
+                    // OAuth-only), so a QR config with provider=openai + authType=oauth
+                    // must validate against the OAuth list — not the API-key list.
+                    val qrModelAuthType = if (cfg.provider == "openai") cfg.authType else "api_key"
+                    val providerModels = modelsForProvider(cfg.provider, qrModelAuthType)
                     selectedModel = if (providerModels.isEmpty()) {
                         cfg.model // OpenRouter: accept freeform model as-is
                     } else {

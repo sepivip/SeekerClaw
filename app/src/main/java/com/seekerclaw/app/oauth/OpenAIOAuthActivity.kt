@@ -32,7 +32,10 @@ import java.security.SecureRandom
 
 /**
  * Activity that handles the OpenAI OAuth PKCE flow:
- * Custom Tabs → user signs in on auth.openai.com → 127.0.0.1:1455 callback → token exchange.
+ * Custom Tabs → user signs in on auth.openai.com → localhost:1455 loopback callback → token exchange.
+ *
+ * The callback server accepts both IPv4 (127.0.0.1) and IPv6 (::1) loopback connections,
+ * so it works regardless of which one the browser resolves "localhost" to on a given device.
  *
  * Tokens obtained from the flow are persisted directly via [ConfigManager] (encrypted via
  * Android Keystore). The on-disk result file under `filesDir/oauth_results/` only carries
