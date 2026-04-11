@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// silent-reply.test.js — unit tests for the centralized SILENT_REPLY token
+// silent-reply.test.js — unit tests for the centralized silent-reply token
 // handling in app/src/main/assets/nodejs-project/silent-reply.js.
 //
 // Run:  node tests/nodejs-project/silent-reply.test.js
@@ -9,11 +9,25 @@
 // --------------------
 // silent-reply.js is critical — it gates whether the agent sends a message
 // to the user at all. A regression here is user-visible (either stray tokens
-// leak into chat, or legitimate replies get swallowed). On 2026-04-11 the
-// file shipped with a Unicode-property-escape regex (`\p{L}\p{N}`) that
-// crashed nodejs-mobile's V8 at module load; we rewrote it to ASCII `\w`
-// boundaries. These cases lock in the ASCII boundary semantics so future
-// rewrites can't silently regress.
+// leak into chat, or legitimate replies get swallowed).
+//
+// History:
+//   - 2026-04-11 (BAT-489): file shipped with a Unicode-property-escape
+//     regex (`\p{L}\p{N}`) that crashed nodejs-mobile's V8 at module load.
+//     Rewrote to ASCII `\w` boundaries. These cases lock in the ASCII
+//     boundary semantics so future rewrites can't silently regress.
+//   - 2026-04-11 (BAT-491): renamed the canonical sentinel from
+//     `SILENT_REPLY` to `[[SILENT_REPLY]]` because the bare form collided
+//     with natural prose when the agent discussed the protocol. Bare
+//     whole-message is still honored as a legacy backward-compat sentinel;
+//     bare inline is now discussion that passes through untouched.
+//
+// Coverage sections:
+//   1. Canonical [[SILENT_REPLY]] form — stripped aggressively
+//   2. Legacy bare SILENT_REPLY — whole-message only (compat safety net)
+//   3. Protocol discussion — bare inline passes through (THE BAT-491 FIX)
+//   4. Identifier preservation — MY_SILENT_REPLY_HANDLE stays intact
+//   5. Plain text passthrough
 
 const path = require('path');
 const sr = require(path.resolve(__dirname, '..', '..', 'app', 'src', 'main', 'assets', 'nodejs-project', 'silent-reply.js'));
@@ -21,42 +35,48 @@ const sr = require(path.resolve(__dirname, '..', '..', 'app', 'src', 'main', 'as
 const GREEN = '\x1b[32m';
 const RED = '\x1b[31m';
 const DIM = '\x1b[2m';
+const BOLD = '\x1b[1m';
 const RESET = '\x1b[0m';
 
-// [label, input, expected stripSilentReply, expected containsSilentReply]
+// [label, input, expected stripSilentReply output, expected containsSilentReply]
 const cases = [
-    // --- Exact / standalone
-    ['exact token',                     'SILENT_REPLY',                               '',                             true],
-    ['exact with surrounding whitespace', '  SILENT_REPLY  ',                          '',                             true],
-    ['lowercase exact (case insensitive)', 'silent_reply',                             '',                             true],
+    // ── Section 1: canonical [[SILENT_REPLY]] form ──────────────────────
+    ['canonical exact',                        '[[SILENT_REPLY]]',                              '',                           true],
+    ['canonical exact with whitespace',        '  [[SILENT_REPLY]]  ',                          '',                           true],
+    ['canonical lowercase (case insensitive)', '[[silent_reply]]',                              '',                           true],
+    ['canonical leading-spaced',               '[[SILENT_REPLY]] hello',                        'hello',                      true],
+    ['canonical leading-spaced newline',       '[[SILENT_REPLY]]\nhello',                       'hello',                      true],
+    ['canonical leading-glued',                '[[SILENT_REPLY]]hello',                         'hello',                      true],
+    ['canonical mid-token space bounded',      'Hello [[SILENT_REPLY]] world',                  'Hello  world',               true],
+    ['canonical repeated leading',             '[[SILENT_REPLY]] [[SILENT_REPLY]]',             '',                           true],
+    ['canonical repeat then glued',            '[[SILENT_REPLY]] [[SILENT_REPLY]]hello',        'hello',                      true],
+    ['canonical bold wrapped',                 '**[[SILENT_REPLY]]**',                          '',                           true],
+    ['canonical code wrapped',                 '`[[SILENT_REPLY]]`',                            '',                           true],
+    ['canonical json envelope',                '{"action":"[[SILENT_REPLY]]"}',                 '',                           true],
 
-    // --- Leading-spaced form ("SILENT_REPLY <content>")
-    ['leading spaced',                  'SILENT_REPLY hello',                         'hello',                        true],
-    ['leading spaced newline',          'SILENT_REPLY\nhello',                        'hello',                        true],
+    // ── Section 2: legacy bare-form whole-message (backward compat) ─────
+    ['legacy bare exact',                      'SILENT_REPLY',                                  '',                           true],
+    ['legacy bare with whitespace',            '  SILENT_REPLY  ',                              '',                           true],
+    ['legacy bare lowercase',                  'silent_reply',                                  '',                           true],
+    ['legacy json envelope bare',              '{"action":"SILENT_REPLY"}',                     '',                           true],
 
-    // --- Leading-glued form ("SILENT_REPLYhello")
-    ['leading glued',                   'SILENT_REPLYhello',                          'hello',                        true],
-    ['leading underscore-glued',        'SILENT_REPLY_hello',                         'hello',                        true],
+    // ── Section 3: protocol discussion (THE BAT-491 FIX) ────────────────
+    // These all contain the literal bare `SILENT_REPLY` string INLINE in
+    // normal prose. Expectation: pass through UNCHANGED, containsSilentReply
+    // returns false. This is what the old regex would break (over-strip).
+    // If any case in this section fails, we've regressed.
+    ['discussion: leading bare',               'SILENT_REPLY is a special internal token I use when I should do work silently.', 'SILENT_REPLY is a special internal token I use when I should do work silently.', false],
+    ['discussion: mid bare',                   'If I send SILENT_REPLY by itself, SeekerClaw discards the message.', 'If I send SILENT_REPLY by itself, SeekerClaw discards the message.', false],
+    ['discussion: trailing bare',              'The token is called SILENT_REPLY',              'The token is called SILENT_REPLY', false],
+    ['discussion: multiple inline bares',      'Use SILENT_REPLY when you have nothing to say. SILENT_REPLY is NOT a shortcut.', 'Use SILENT_REPLY when you have nothing to say. SILENT_REPLY is NOT a shortcut.', false],
 
-    // --- Mid-glued and multi-token
-    ['mid token, space bounded',        'Hello SILENT_REPLY world',                   'Hello  world',                 true],
-    ['repeated leading tokens',         'SILENT_REPLY SILENT_REPLY',                  '',                             true],
-    ['repeat then glued',               'SILENT_REPLY SILENT_REPLYhello',             'hello',                        true],
+    // ── Section 4: identifier preservation (must NOT strip or flag) ─────
+    ['identifier: underscore-bounded',         'MY_SILENT_REPLY_HANDLE',                        'MY_SILENT_REPLY_HANDLE',     false],
+    ['identifier: word glue both sides',       'testSILENT_REPLYbar',                           'testSILENT_REPLYbar',        false],
 
-    // --- Markdown-wrapped
-    ['bold wrapped',                    '**SILENT_REPLY**',                           '',                             true],
-    ['code wrapped',                    '`SILENT_REPLY`',                             '',                             true],
-
-    // --- JSON envelope
-    ['json envelope exact',             '{"action":"SILENT_REPLY"}',                  '',                             true],
-
-    // --- Identifier preservation (must NOT strip or report as match)
-    ['identifier with both-side glue',  'MY_SILENT_REPLY_HANDLE',                     'MY_SILENT_REPLY_HANDLE',       false],
-    ['identifier word glue',            'testSILENT_REPLYbar',                        'testSILENT_REPLYbar',          false],
-
-    // --- Plain text should be unchanged
-    ['regular sentence',                'Just a regular message',                     'Just a regular message',       false],
-    ['empty string',                    '',                                           '',                             false],
+    // ── Section 5: plain text passthrough ───────────────────────────────
+    ['regular sentence',                       'Just a regular message with no sentinel.',      'Just a regular message with no sentinel.', false],
+    ['empty string',                           '',                                              '',                           false],
 ];
 
 let pass = 0;
@@ -77,7 +97,7 @@ for (const [label, input, expectStrip, expectContains] of cases) {
     }
 }
 
-console.log(`\nsilent-reply.js — ${cases.length} cases`);
+console.log(`\n${BOLD}silent-reply.js${RESET} — ${cases.length} cases`);
 console.log(`${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}`);
 if (fail === 0) {
     console.log(`${GREEN}✓${RESET} ${pass}/${cases.length} passed`);
