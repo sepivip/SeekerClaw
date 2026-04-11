@@ -29,13 +29,28 @@ const EXACT_REGEX = new RegExp(`^\\s*${T}\\s*$`, 'i');
 // Trailing token (optionally preceded by whitespace or markdown emphasis stars)
 const TRAILING_REGEX = new RegExp(`(?:^|\\s+|\\*+)${T}\\s*$`, 'gi');
 
-// Two char classes for boundary detection (Copilot 4th-pass suggestion):
+// Two char-class fragments for boundary detection.
 // - IDENT_CHAR includes underscore — used for OUTER boundary lookbehind/ahead
 //   so legitimate identifiers like `MY_SILENT_REPLY_HANDLE` aren't mangled.
 // - CONTENT_CHAR excludes underscore — used to detect "token glued to a word"
 //   in the special `SILENT_REPLY_word` pass below.
-const IDENT_CHAR = '[\\p{L}\\p{N}_]';
-const CONTENT_CHAR = '[\\p{L}\\p{N}]';
+//
+// IMPORTANT: these use ASCII character classes, NOT Unicode property escapes
+// (`\p{L}\p{N}`). The Unicode-property-escape form worked on desktop Node 22
+// but crashed nodejs-mobile v18.20.4's V8 at module-load time with
+// "Invalid property name in character class" (discovered 2026-04-11 when
+// BAT-489 RC5 failed to start on device — the regex constructor threw during
+// require() and the entire Node runtime failed to initialize).
+//
+// Trade-off: `\w` in JavaScript is ASCII-only (`[A-Za-z0-9_]`), so a non-ASCII
+// letter adjacent to the token — e.g. `SILENT_REPLYこんにちは` — is NOT treated
+// as a boundary hit and the token IS stripped, leaving `こんにちは`. That's
+// the correct outcome for our use case (the model emits the token in ASCII
+// and we want to strip it regardless of what follows). The identifier
+// preservation case (`MY_SILENT_REPLY_HANDLE`) still works because the
+// surrounding `_` IS in `\w` so the lookbehind fires.
+const IDENT_CHAR = '\\w';           // [A-Za-z0-9_]
+const CONTENT_CHAR = '[^\\W_]';     // [A-Za-z0-9] (word char minus underscore)
 
 // Token attached to following content, anywhere in the text. Two alternations:
 //   1. `SILENT_REPLY_` followed by letter/number → strip the trailing underscore too
@@ -46,9 +61,9 @@ const CONTENT_CHAR = '[\\p{L}\\p{N}]';
 // `MY_SILENT_REPLY_HANDLE` don't match (preceding `_` is in IDENT).
 // Allows preceding repeated tokens ("SILENT_REPLY SILENT_REPLYhello").
 const LEADING_ATTACHED_PATTERN = `(?<!${IDENT_CHAR})(?:${T}\\s+)*(?:${T}_(?=${CONTENT_CHAR})|${T}(?=${IDENT_CHAR}))`;
-const LEADING_ATTACHED_REGEX = new RegExp(LEADING_ATTACHED_PATTERN, 'giu');
+const LEADING_ATTACHED_REGEX = new RegExp(LEADING_ATTACHED_PATTERN, 'gi');
 // Non-global twin used by .test() to avoid stateful lastIndex bugs.
-const LEADING_ATTACHED_TEST = new RegExp(LEADING_ATTACHED_PATTERN, 'iu');
+const LEADING_ATTACHED_TEST = new RegExp(LEADING_ATTACHED_PATTERN, 'i');
 
 // Leading with any whitespace after: "SILENT_REPLY The user..." or "SILENT_REPLY\nhello"
 const LEADING_SPACED_REGEX = new RegExp(`^(?:\\s*${T})+\\s*`, 'i');
@@ -59,8 +74,8 @@ const LEADING_SPACED_REGEX = new RegExp(`^(?:\\s*${T})+\\s*`, 'i');
 // NOTE: only used with .replace(). For .test() use TEST_REGEX (no /g flag) to
 // avoid the stateful lastIndex bug.
 const WORD_BOUNDARY_PATTERN = `(?<!${IDENT_CHAR})${T}(?!${IDENT_CHAR})`;
-const WORD_BOUNDARY_REGEX = new RegExp(WORD_BOUNDARY_PATTERN, 'giu');
-const TEST_REGEX = new RegExp(WORD_BOUNDARY_PATTERN, 'iu');
+const WORD_BOUNDARY_REGEX = new RegExp(WORD_BOUNDARY_PATTERN, 'gi');
+const TEST_REGEX = new RegExp(WORD_BOUNDARY_PATTERN, 'i');
 
 /**
  * Exact silent-reply check. True only when the entire (trimmed) text is just
@@ -114,7 +129,7 @@ function isSilentReplyPayloadText(text) {
 // we don't leave behind orphan punctuation like `****` or `\`\``.
 const MARKDOWN_WRAPPED_REGEX = new RegExp(
     `(?<!${IDENT_CHAR})[\`*_~\\[\\]()<>]+\\s*${T}\\s*[\`*_~\\[\\]()<>]+`,
-    'giu'
+    'gi'
 );
 
 // "Empty after strip" check — if the only thing left is whitespace and
