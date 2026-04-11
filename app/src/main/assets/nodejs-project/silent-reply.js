@@ -27,16 +27,23 @@
 // passes through unchanged. This dual-recognition shim can be removed in a
 // future release once telemetry confirms the bracketed form is reliable.
 //
-// Handles failure modes the old `\b[[SILENT_REPLY]]\b` regex would miss:
-//   1. Leading glued:    "[[SILENT_REPLY]]hello"        → "hello"
-//   2. Mid-glued:        "Hello [[SILENT_REPLY]]world"  → "Hello world"
-//   3. Markdown wrapped: "**[[SILENT_REPLY]]**"         → ""
-//   4. JSON envelope:    '{"action":"[[SILENT_REPLY]]"}' → ""
-//   5. Leading spaced:   "[[SILENT_REPLY]] hello"       → "hello"
+// Variants that must all be stripped from mixed-content text:
+//   1. Right-glued:      "[[SILENT_REPLY]]hello"        → "hello"
+//   2. Left-glued:       "OK[[SILENT_REPLY]]"           → "OK"
+//   3. Both-sides glued: "foo[[SILENT_REPLY]]bar"       → "foobar"
+//   4. Mid-token spaced: "Hello [[SILENT_REPLY]] world" → "Hello world"
+//   5. Markdown wrapped: "**[[SILENT_REPLY]]**"         → ""
+//   6. JSON envelope:    '{"action":"[[SILENT_REPLY]]"}' → ""
+//   7. Leading spaced:   "[[SILENT_REPLY]] hello"       → "hello"
 //
-// Boundaries use ASCII `\w` lookbehind/lookahead (not Unicode property
-// escapes — those crash nodejs-mobile's V8 at module-load time; see the
-// BAT-489 comment in the earlier iteration for the full story).
+// The previous iteration of this file (bare `SILENT_REPLY`, BAT-488 port)
+// used ASCII `\w` lookbehind/lookahead boundaries to prevent false matches
+// inside identifiers like `MY_SILENT_REPLY_HANDLE`. That concern is moot
+// with the bracketed form — `[[` and `]]` cannot appear in any legitimate
+// identifier — so the canonical strip now uses plain literal matching
+// without boundary constraints. This catches the glued-left variant
+// (e.g. `OK[[SILENT_REPLY]]`) that the boundary-constrained form would
+// leak to the user (flagged by Copilot round 1 on PR #324).
 
 // The canonical sentinel. Wiki-link style: `[[...]]` cannot appear in
 // natural English prose, so the agent can freely say "the silent reply
@@ -62,44 +69,41 @@ const EXACT_REGEX = new RegExp(`^\\s*${T}\\s*$`, 'i');
 // as a standalone message. Inline bare is intentionally NOT matched.
 const LEGACY_BARE_EXACT_REGEX = new RegExp(`^\\s*${LT}\\s*$`, 'i');
 
-// Trailing canonical token (optionally preceded by whitespace or markdown
-// emphasis stars). Matches `something [[SILENT_REPLY]]` at end of message.
-const TRAILING_REGEX = new RegExp(`(?:^|\\s+|\\*+)${T}\\s*$`, 'gi');
+// Plain literal canonical strip — matches `[[SILENT_REPLY]]` wherever it
+// appears in the text, case-insensitive, no boundary constraints.
+//
+// WHY NO BOUNDARIES:
+//   The bracketed form is structurally unambiguous — `[[` and `]]` never
+//   appear in natural prose or legitimate identifiers, so there is no
+//   false-match surface to protect against. Left- and right-glued cases
+//   like `OK[[SILENT_REPLY]]` or `foo[[SILENT_REPLY]]bar` are always
+//   model-output bugs, and we WANT to strip them so the user doesn't see
+//   the sentinel leak. Adding word-boundary lookbehind/lookahead would
+//   cause those cases to silently leak (flagged by Copilot round 1 on
+//   PR #324: `OK[[SILENT_REPLY]]` wasn't being stripped because `K` is a
+//   word char).
+//
+// The caller still handles markdown orphans and leading-whitespace trim
+// via MARKDOWN_WRAPPED_REGEX and LEADING_SPACED_REGEX below.
+const CANONICAL_STRIP_REGEX = new RegExp(T, 'gi');
+// Non-global twin for .test() — avoids the stateful lastIndex bug that
+// /g regexes have when reused across calls.
+const CANONICAL_TEST_REGEX = new RegExp(T, 'i');
 
-// ASCII boundary fragments. Identical to BAT-489's rewrite — no Unicode
-// property escapes (those crash nodejs-mobile v18.20.4's V8).
-const IDENT_CHAR = '\\w';           // [A-Za-z0-9_]
-const CONTENT_CHAR = '[^\\W_]';     // [A-Za-z0-9]
-
-// Canonical token attached to following content (e.g. `[[SILENT_REPLY]]hello`).
-// The lookahead `(?=${IDENT_CHAR})` catches the glue; the outer lookbehind
-// `(?<!${IDENT_CHAR})` anchors the start to a non-word context so we don't
-// match inside a larger identifier. Two alternations handle the edge case
-// where the token has a trailing underscore glued to content.
-const LEADING_ATTACHED_PATTERN = `(?<!${IDENT_CHAR})(?:${T}\\s+)*(?:${T}_(?=${CONTENT_CHAR})|${T}(?=${IDENT_CHAR}))`;
-const LEADING_ATTACHED_REGEX = new RegExp(LEADING_ATTACHED_PATTERN, 'gi');
-const LEADING_ATTACHED_TEST = new RegExp(LEADING_ATTACHED_PATTERN, 'i');
-
-// Leading canonical form with whitespace after: "[[SILENT_REPLY]] The user..."
-// or "[[SILENT_REPLY]]\nhello".
+// Leading canonical form with whitespace after, repeated occurrences:
+// "[[SILENT_REPLY]] [[SILENT_REPLY]] hello" → "hello". This pass exists
+// to collapse repeated leading sentinels into a clean trim; the main
+// CANONICAL_STRIP_REGEX above would leave double spaces behind otherwise.
 const LEADING_SPACED_REGEX = new RegExp(`^(?:\\s*${T})+\\s*`, 'i');
-
-// Generic strip — canonical token in any position when not glued to an
-// identifier char on EITHER side. Catches `Hello [[SILENT_REPLY]] world`.
-// IMPORTANT: this only targets the bracketed canonical form. Bare
-// `SILENT_REPLY` inline in prose is NEVER stripped by this regex (or any
-// other in this file), which is the entire point of the rename.
-const WORD_BOUNDARY_PATTERN = `(?<!${IDENT_CHAR})${T}(?!${IDENT_CHAR})`;
-const WORD_BOUNDARY_REGEX = new RegExp(WORD_BOUNDARY_PATTERN, 'gi');
-const TEST_REGEX = new RegExp(WORD_BOUNDARY_PATTERN, 'i');
 
 // Markdown-wrapped canonical variants:
 //   **[[SILENT_REPLY]]**, *[[SILENT_REPLY]]*, `[[SILENT_REPLY]]`,
-//   ```[[SILENT_REPLY]]```, _[[SILENT_REPLY]]_, etc. Match the token plus
-//   its surrounding wrapper chars in one pass so we don't leave behind
-//   orphan punctuation like `****` or `\`\``.
+//   ```[[SILENT_REPLY]]```, _[[SILENT_REPLY]]_, etc.
+// Matches the token plus its surrounding wrapper chars in one pass so we
+// don't leave behind orphan punctuation like `****` or `\`\``. No left
+// boundary constraint — same rationale as CANONICAL_STRIP_REGEX.
 const MARKDOWN_WRAPPED_REGEX = new RegExp(
-    `(?<!${IDENT_CHAR})[\`*_~\\[\\]()<>]+\\s*${T}\\s*[\`*_~\\[\\]()<>]+`,
+    `[\`*_~\\[\\]()<>]+\\s*${T}\\s*[\`*_~\\[\\]()<>]+`,
     'gi'
 );
 
@@ -169,8 +173,14 @@ function isSilentReplyPayloadText(text) {
  *      `{"action":""}` string)
  *   2. Legacy bare whole-message short-circuit (safety net for agents that
  *      still emit the bare form as their entire message)
- *   3. Markdown-wrapped → leading-attached → leading-spaced → trailing →
- *      word-boundary passes, ALL targeting the canonical bracketed form only
+ *   3. Markdown-wrapped pass — strips wrapper+token+wrapper atoms together
+ *      so we don't leave behind orphan `****` or `\`\``
+ *   4. Leading-spaced pass — collapses repeated leading sentinels plus
+ *      their trailing whitespace so the result trims cleanly
+ *   5. Plain canonical strip — removes every remaining `[[SILENT_REPLY]]`
+ *      occurrence anywhere in the text, left-glued / right-glued / mid /
+ *      end — no boundary constraints because the bracketed form is
+ *      structurally unambiguous
  *
  * Bare `SILENT_REPLY` inline in prose is DELIBERATELY NOT stripped. That's
  * the whole point of the rename — discussion of the protocol passes
@@ -186,10 +196,8 @@ function stripSilentReply(text) {
     if (LEGACY_BARE_EXACT_REGEX.test(text)) return '';
     const stripped = text
         .replace(MARKDOWN_WRAPPED_REGEX, '')
-        .replace(LEADING_ATTACHED_REGEX, '')
         .replace(LEADING_SPACED_REGEX, '')
-        .replace(TRAILING_REGEX, '')
-        .replace(WORD_BOUNDARY_REGEX, '')
+        .replace(CANONICAL_STRIP_REGEX, '')
         .trim();
     // If the model wrapped the token in markdown and only orphan punctuation
     // remains, treat the whole message as silent.
@@ -201,7 +209,8 @@ function stripSilentReply(text) {
  * Quick "contains any silent-reply signal form" check for logging/audit hooks.
  *
  * Returns true when:
- *   - The canonical `[[SILENT_REPLY]]` token appears (inline, glued, or wrapped)
+ *   - The canonical `[[SILENT_REPLY]]` token appears ANYWHERE in the text
+ *     (inline, left-glued, right-glued, mid, wrapped — no boundary check)
  *   - The legacy bare `SILENT_REPLY` form is the ENTIRE trimmed message
  *   - A JSON envelope form is present (canonical or legacy inner action)
  *
@@ -210,8 +219,7 @@ function stripSilentReply(text) {
  */
 function containsSilentReply(text) {
     if (!text) return false;
-    return TEST_REGEX.test(text)
-        || LEADING_ATTACHED_TEST.test(text)
+    return CANONICAL_TEST_REGEX.test(text)
         || LEGACY_BARE_EXACT_REGEX.test(text)
         || isSilentReplyEnvelopeText(text);
 }

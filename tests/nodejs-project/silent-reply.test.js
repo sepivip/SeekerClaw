@@ -47,6 +47,15 @@ const cases = [
     ['canonical leading-spaced',               '[[SILENT_REPLY]] hello',                        'hello',                      true],
     ['canonical leading-spaced newline',       '[[SILENT_REPLY]]\nhello',                       'hello',                      true],
     ['canonical leading-glued',                '[[SILENT_REPLY]]hello',                         'hello',                      true],
+    // ── Glued-LEFT cases (Copilot PR #324 round 1) — model appends sentinel ──
+    // directly to a real reply without a separating space. These MUST be
+    // stripped so the sentinel doesn't leak to the user. Since [[...]] is
+    // structurally unambiguous, the canonical strip has no left-boundary
+    // constraint.
+    ['canonical glued-left (word)',            'OK[[SILENT_REPLY]]',                            'OK',                         true],
+    ['canonical glued-left (sentence tail)',   'Handled it.[[SILENT_REPLY]]',                   'Handled it.',                true],
+    ['canonical glued-both-sides',             'foo[[SILENT_REPLY]]bar',                        'foobar',                     true],
+    ['canonical glued-left then space+word',   'done[[SILENT_REPLY]] and more',                 'done and more',              true],
     ['canonical mid-token space bounded',      'Hello [[SILENT_REPLY]] world',                  'Hello  world',               true],
     ['canonical repeated leading',             '[[SILENT_REPLY]] [[SILENT_REPLY]]',             '',                           true],
     ['canonical repeat then glued',            '[[SILENT_REPLY]] [[SILENT_REPLY]]hello',        'hello',                      true],
