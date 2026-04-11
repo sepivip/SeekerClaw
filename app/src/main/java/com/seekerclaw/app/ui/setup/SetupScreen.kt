@@ -550,15 +550,21 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                     //     coerce to the first valid entry when the stored model isn't.
                     val modelAuthType = if (newProvider == "openai") newAuthType else "api_key"
                     val models = modelsForProvider(newProvider, modelAuthType)
+                    // Capture existingConfig into a stable local so the null check
+                    // propagates cleanly (Kotlin doesn't smart-cast a nullable into
+                    // lambdas, so we need an already-non-null local to work with).
+                    val cfgModelForProvider = existingConfig
+                        ?.takeIf { it.provider == newProvider }
+                        ?.model
                     selectedModel = if (models.isEmpty()) {
-                        // Freeform (OpenRouter/custom): no validation possible
-                        if (newProvider == existingConfig?.provider) existingConfig.model
-                        else OPENROUTER_DEFAULT_MODEL
+                        // Freeform (OpenRouter/custom): no validation possible —
+                        // preserve the stored freeform model, fall back to default.
+                        cfgModelForProvider ?: OPENROUTER_DEFAULT_MODEL
                     } else {
-                        val existingModel = existingConfig?.model?.takeIf { m ->
-                            newProvider == existingConfig.provider && models.any { it.id == m }
-                        }
-                        existingModel ?: models[0].id
+                        // Fixed list: restore only if the stored model is still valid
+                        // for the effective auth type; otherwise coerce to first entry.
+                        cfgModelForProvider?.takeIf { m -> models.any { it.id == m } }
+                            ?: models[0].id
                     }
                 },
                 apiKey = apiKey,
