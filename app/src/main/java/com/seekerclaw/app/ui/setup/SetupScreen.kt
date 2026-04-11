@@ -387,6 +387,14 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                     setupToken = existing?.setupToken ?: "",
                     openaiApiKey = existing?.openaiApiKey ?: "",
                     openrouterApiKey = trimmedKey,
+                    // Preserve OAuth tokens even when saving as a different provider
+                    // — saveConfig writes all fields, so an empty default here would
+                    // wipe tokens the user set previously (or just set during this
+                    // session but then changed their mind about the provider).
+                    openaiOAuthToken = preservedOAuthToken,
+                    openaiOAuthRefresh = preservedOAuthRefresh,
+                    openaiOAuthEmail = preservedOAuthEmail,
+                    openaiOAuthExpiresAt = preservedOAuthExpiresAt,
                     provider = "openrouter",
                     authType = "api_key",
                     telegramBotToken = botToken.trim(),
@@ -403,6 +411,11 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                         else (existing?.setupToken ?: ""),
                     openaiApiKey = existing?.openaiApiKey ?: "",
                     openrouterApiKey = existing?.openrouterApiKey ?: "",
+                    // Preserve OAuth tokens — same rationale as the openrouter branch.
+                    openaiOAuthToken = preservedOAuthToken,
+                    openaiOAuthRefresh = preservedOAuthRefresh,
+                    openaiOAuthEmail = preservedOAuthEmail,
+                    openaiOAuthExpiresAt = preservedOAuthExpiresAt,
                     provider = "claude",
                     authType = effectiveAuthType,
                     telegramBotToken = botToken.trim(),
