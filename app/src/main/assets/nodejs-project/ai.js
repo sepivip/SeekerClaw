@@ -27,6 +27,7 @@ const deferStatus = CHANNEL === 'telegram' ? require('./telegram').deferStatus :
 const { httpStreamingRequest, httpOpenAIStreamingRequest, httpChatCompletionsStreamingRequest } = require('./http');
 const { getAdapter } = require('./providers');
 const { androidBridgeCall } = require('./bridge');
+const { stripSilentReply } = require('./silent-reply');
 
 const {
     loadSoul, loadBootstrap, loadIdentity, loadUser,
@@ -910,11 +911,13 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('- Valid cases: silent housekeeping, deliberate no-op ambient wakeups, or after a messaging tool already delivered the user-visible reply.');
     lines.push('- Never use it to avoid doing requested work or to end an actionable turn early.');
     lines.push('- It must be your ENTIRE message — nothing else.');
+    lines.push('- The only valid silent reply is the exact plain-text token SILENT_REPLY.');
     lines.push('- Never append it to an actual response (never include "SILENT_REPLY" in real replies).');
-    lines.push('- Never wrap it in markdown or code blocks.');
+    lines.push('- Never wrap it in markdown, code blocks, JSON, or any envelope form.');
     lines.push('');
     lines.push('❌ Wrong: "Here\'s help... SILENT_REPLY"');
     lines.push('❌ Wrong: "**SILENT_REPLY**"');
+    lines.push('❌ Wrong: {"action":"SILENT_REPLY"}');
     lines.push('✅ Right: SILENT_REPLY');
     lines.push('');
 
@@ -2296,10 +2299,15 @@ async function chat(chatId, userMessage, options = {}) {
 
             if (summaryRes.status === 200) {
                 const summaryParsed = adapter.fromApiResponse(summaryRes.data);
-                if (summaryParsed.text && summaryParsed.text.trim() !== 'SILENT_REPLY') {
-                    textContent = { text: summaryParsed.text };
-                } else if (summaryParsed.text) {
-                    log('Summary returned SILENT_REPLY token — falling through to fallback', 'DEBUG');
+                if (summaryParsed.text) {
+                    // Use the centralized strip helper so we catch envelope/wrap/glued
+                    // forms — not just the literal 'SILENT_REPLY' string.
+                    const cleaned = stripSilentReply(summaryParsed.text);
+                    if (cleaned) {
+                        textContent = { text: cleaned };
+                    } else {
+                        log('Summary returned SILENT_REPLY token (any form) — falling through to fallback', 'DEBUG');
+                    }
                 }
             }
 

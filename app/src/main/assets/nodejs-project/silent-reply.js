@@ -24,36 +24,42 @@ const EXACT_REGEX = /^\s*SILENT_REPLY\s*$/i;
 // Trailing token (optionally preceded by whitespace or markdown emphasis stars)
 const TRAILING_REGEX = /(?:^|\s+|\*+)SILENT_REPLY\s*$/gi;
 
-// Letter-or-number class (NO underscore). Used by lookbehind/lookahead to
-// detect identifier boundaries without `\b` (which fails between word chars).
-// Underscore is excluded because we want `_` to count as a strip boundary so
-// `SILENT_REPLY_hello` strips cleanly instead of being treated as one ident.
-const LN = '[\\p{L}\\p{N}]';
+// Two char classes for boundary detection (Copilot 4th-pass suggestion):
+// - IDENT_CHAR includes underscore — used for OUTER boundary lookbehind/ahead
+//   so legitimate identifiers like `MY_SILENT_REPLY_HANDLE` aren't mangled.
+// - CONTENT_CHAR excludes underscore — used to detect "token glued to a word"
+//   in the special `SILENT_REPLY_word` pass below.
+const IDENT_CHAR = '[\\p{L}\\p{N}_]';
+const CONTENT_CHAR = '[\\p{L}\\p{N}]';
 
-// Token attached to following letter/number content, anywhere in the text:
-// matches "SILENT_REPLYhello" at start AND "Hello SILENT_REPLYworld" mid-message.
-// Lookbehind ensures the token isn't itself glued to a preceding letter/number.
+// Token attached to following content, anywhere in the text. Two alternations:
+//   1. `SILENT_REPLY_` followed by letter/number → strip the trailing underscore too
+//      (catches `SILENT_REPLY_hello` cleanly → `hello`)
+//   2. `SILENT_REPLY` followed by any identifier char → strip just the token
+//      (catches `SILENT_REPLYhello` → `hello`)
+// Outer lookbehind requires non-identifier so identifiers like
+// `MY_SILENT_REPLY_HANDLE` don't match (preceding `_` is in IDENT).
 // Allows preceding repeated tokens ("SILENT_REPLY SILENT_REPLYhello").
 const LEADING_ATTACHED_REGEX = new RegExp(
-    `(?<!${LN})(?:SILENT_REPLY\\s+)*SILENT_REPLY(?=${LN})`,
+    `(?<!${IDENT_CHAR})(?:SILENT_REPLY\\s+)*(?:SILENT_REPLY_(?=${CONTENT_CHAR})|SILENT_REPLY(?=${IDENT_CHAR}))`,
     'giu'
 );
 // Non-global twin used by .test() to avoid stateful lastIndex bugs.
 const LEADING_ATTACHED_TEST = new RegExp(
-    `(?<!${LN})(?:SILENT_REPLY\\s+)*SILENT_REPLY(?=${LN})`,
+    `(?<!${IDENT_CHAR})(?:SILENT_REPLY\\s+)*(?:SILENT_REPLY_(?=${CONTENT_CHAR})|SILENT_REPLY(?=${IDENT_CHAR}))`,
     'iu'
 );
 
 // Leading with any whitespace after: "SILENT_REPLY The user..." or "SILENT_REPLY\nhello"
 const LEADING_SPACED_REGEX = /^(?:\s*SILENT_REPLY)+\s*/i;
 
-// Generic strip — matches the token in any position when not glued to a
-// letter/number on EITHER side. Catches `Hello SILENT_REPLY world` and the
-// word-boundary mid-cases.
+// Generic strip — matches the token in any position when not glued to an
+// identifier char on EITHER side. Catches `Hello SILENT_REPLY world` and
+// preserves underscore-containing identifiers like `MY_SILENT_REPLY_HANDLE`.
 // NOTE: only used with .replace(). For .test() use TEST_REGEX (no /g flag) to
 // avoid the stateful lastIndex bug.
-const WORD_BOUNDARY_REGEX = new RegExp(`(?<!${LN})SILENT_REPLY(?!${LN})`, 'giu');
-const TEST_REGEX = new RegExp(`(?<!${LN})SILENT_REPLY(?!${LN})`, 'iu');
+const WORD_BOUNDARY_REGEX = new RegExp(`(?<!${IDENT_CHAR})SILENT_REPLY(?!${IDENT_CHAR})`, 'giu');
+const TEST_REGEX = new RegExp(`(?<!${IDENT_CHAR})SILENT_REPLY(?!${IDENT_CHAR})`, 'iu');
 
 /**
  * Exact silent-reply check. True only when the entire (trimmed) text is just
@@ -101,7 +107,7 @@ function isSilentReplyPayloadText(text) {
 // identifier). Match the token + its surrounding wrapper chars in one pass so
 // we don't leave behind orphan punctuation like `****` or `\`\``.
 const MARKDOWN_WRAPPED_REGEX = new RegExp(
-    `(?<!${LN})[\`*_~\\[\\]()<>]+\\s*SILENT_REPLY\\s*[\`*_~\\[\\]()<>]+`,
+    `(?<!${IDENT_CHAR})[\`*_~\\[\\]()<>]+\\s*SILENT_REPLY\\s*[\`*_~\\[\\]()<>]+`,
     'giu'
 );
 
