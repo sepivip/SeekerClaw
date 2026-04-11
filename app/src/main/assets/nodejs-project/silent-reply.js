@@ -70,6 +70,21 @@ const EXACT_REGEX = new RegExp(`^\\s*${T}\\s*$`, 'i');
 // as a standalone message. Inline bare is intentionally NOT matched.
 const LEGACY_BARE_EXACT_REGEX = new RegExp(`^\\s*${LT}\\s*$`, 'i');
 
+// Whole-message markdown-wrapped LEGACY bare form. The old silent-reply
+// module used to strip `**SILENT_REPLY**`, `` `SILENT_REPLY` ``,
+// `_SILENT_REPLY_`, etc. as sentinels — an agent running an older system
+// prompt may still emit these as their entire message. We preserve that
+// behavior BUT only for whole-message matches, so an agent that writes
+// "When I say **SILENT_REPLY** I mean stay quiet" in normal prose is NOT
+// over-stripped (that's discussion, same as bare inline).
+//
+// The wrapper char class matches MARKDOWN_WRAPPED_REGEX's below so the
+// set of accepted wrapper forms is consistent across canonical and legacy.
+const LEGACY_BARE_WRAPPED_EXACT_REGEX = new RegExp(
+    `^[\\s\`*_~\\[\\]()<>]*${LT}[\\s\`*_~\\[\\]()<>]*$`,
+    'i'
+);
+
 // Plain literal canonical strip — matches `[[SILENT_REPLY]]` wherever it
 // appears in the text, case-insensitive, no boundary constraints.
 //
@@ -124,16 +139,21 @@ const MARKDOWN_WRAPPED_REGEX = new RegExp(
 const ONLY_MARKDOWN_PUNCT_REGEX = /^[\s`*_~\[\]()<>]*$/;
 
 /**
- * Exact silent-reply check. True when the entire (trimmed) text is the
- * canonical `[[SILENT_REPLY]]` token OR the legacy bare `SILENT_REPLY`
- * token. Used for "should we reply at all?" gating.
+ * Exact silent-reply check. True when the entire (trimmed) text is:
+ *   - the canonical `[[SILENT_REPLY]]` token (EXACT_REGEX), OR
+ *   - the legacy bare `SILENT_REPLY` token (LEGACY_BARE_EXACT_REGEX), OR
+ *   - a markdown-wrapped legacy form like `**SILENT_REPLY**` or
+ *     `` `SILENT_REPLY` `` as the WHOLE message
+ *     (LEGACY_BARE_WRAPPED_EXACT_REGEX)
  *
  * Inline bare mentions of SILENT_REPLY in prose return FALSE — that's
  * discussion, not a sentinel.
  */
 function isSilentReplyText(text) {
     if (!text) return false;
-    return EXACT_REGEX.test(text) || LEGACY_BARE_EXACT_REGEX.test(text);
+    return EXACT_REGEX.test(text)
+        || LEGACY_BARE_EXACT_REGEX.test(text)
+        || LEGACY_BARE_WRAPPED_EXACT_REGEX.test(text);
 }
 
 /**
@@ -183,11 +203,15 @@ function isSilentReplyPayloadText(text) {
  *      `{"action":""}` string)
  *   2. Legacy bare whole-message short-circuit (safety net for agents that
  *      still emit the bare form as their entire message)
- *   3. Markdown-wrapped pass — strips wrapper+token+wrapper atoms together
- *      so we don't leave behind orphan `****` or `\`\``
- *   4. Leading-spaced pass — collapses repeated leading sentinels plus
+ *   3. Legacy bare markdown-wrapped whole-message short-circuit — catches
+ *      `**SILENT_REPLY**`, `` `SILENT_REPLY` ``, `_SILENT_REPLY_`, etc.
+ *      when they are the ENTIRE message. Older agents running the pre-
+ *      BAT-491 system prompt may still emit these.
+ *   4. Markdown-wrapped canonical pass — strips wrapper+token+wrapper
+ *      atoms together so we don't leave behind orphan `****` or `\`\``
+ *   5. Leading-spaced pass — collapses repeated leading sentinels plus
  *      their trailing whitespace so the result trims cleanly
- *   5. Plain canonical strip — removes every remaining `[[SILENT_REPLY]]`
+ *   6. Plain canonical strip — removes every remaining `[[SILENT_REPLY]]`
  *      occurrence anywhere in the text, left-glued / right-glued / mid /
  *      end — no boundary constraints because the bracketed form is
  *      structurally unambiguous
@@ -204,6 +228,11 @@ function stripSilentReply(text) {
     if (!text) return '';
     if (isSilentReplyEnvelopeText(text)) return '';
     if (LEGACY_BARE_EXACT_REGEX.test(text)) return '';
+    // Legacy whole-message markdown-wrapped form (`**SILENT_REPLY**`,
+    // `` `SILENT_REPLY` ``, etc.) — older agents may still emit this.
+    // Only strips when the entire message is the wrapped bare token;
+    // inline wrapped bare in prose still passes through as discussion.
+    if (LEGACY_BARE_WRAPPED_EXACT_REGEX.test(text)) return '';
     const stripped = text
         .replace(MARKDOWN_WRAPPED_REGEX, '')
         .replace(LEADING_SPACED_REGEX, '')
@@ -247,6 +276,7 @@ function containsSilentReply(text) {
     if (!text) return false;
     return CANONICAL_TEST_REGEX.test(text)
         || LEGACY_BARE_EXACT_REGEX.test(text)
+        || LEGACY_BARE_WRAPPED_EXACT_REGEX.test(text)
         || isSilentReplyEnvelopeText(text);
 }
 

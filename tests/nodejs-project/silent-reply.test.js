@@ -14,13 +14,28 @@
 // History:
 //   - 2026-04-11 (BAT-489): file shipped with a Unicode-property-escape
 //     regex (`\p{L}\p{N}`) that crashed nodejs-mobile's V8 at module load.
-//     Rewrote to ASCII `\w` boundaries. These cases lock in the ASCII
-//     boundary semantics so future rewrites can't silently regress.
+//     Rewrote the regex compilation to be compatible with Node 18's V8.
+//     The current implementation was rewritten again for BAT-491; these
+//     tests lock in the externally visible BEHAVIOR rather than any
+//     particular regex strategy, so future rewrites that keep the
+//     user-facing semantics intact will continue to pass.
 //   - 2026-04-11 (BAT-491): renamed the canonical sentinel from
 //     `SILENT_REPLY` to `[[SILENT_REPLY]]` because the bare form collided
 //     with natural prose when the agent discussed the protocol. Bare
-//     whole-message is still honored as a legacy backward-compat sentinel;
-//     bare inline is now discussion that passes through untouched.
+//     whole-message (plain and markdown-wrapped) is still honored as a
+//     legacy backward-compat sentinel; bare inline is now discussion
+//     that passes through untouched.
+//
+// Invariants these tests protect:
+//   - Canonical `[[SILENT_REPLY]]` is stripped everywhere it appears
+//     (including left/right/both-sides-glued variants).
+//   - Whole-message legacy bare `SILENT_REPLY` is honored as a sentinel.
+//   - Whole-message legacy WRAPPED bare (`**SILENT_REPLY**` etc.) is
+//     honored as a sentinel (added in Copilot round 3 on PR #324).
+//   - Inline bare `SILENT_REPLY` in prose passes through UNCHANGED —
+//     this is the BAT-491 over-strip fix.
+//   - Identifier-like strings (`MY_SILENT_REPLY_HANDLE`) are never
+//     touched.
 //
 // Coverage sections:
 //   1. Canonical [[SILENT_REPLY]] form — stripped aggressively
@@ -75,6 +90,15 @@ const cases = [
     ['legacy bare with whitespace',            '  SILENT_REPLY  ',                              '',                           true],
     ['legacy bare lowercase',                  'silent_reply',                                  '',                           true],
     ['legacy json envelope bare',              '{"action":"SILENT_REPLY"}',                     '',                           true],
+    // Legacy markdown-wrapped whole-message forms (Copilot round 3 on PR #324).
+    // Older agents running the pre-BAT-491 system prompt may still emit these
+    // as their ENTIRE message — we honor them as sentinels for backward compat.
+    // Inline wrapped-bare in prose is still NOT stripped (discussion passthrough).
+    ['legacy wrapped bold bare',               '**SILENT_REPLY**',                              '',                           true],
+    ['legacy wrapped code bare',               '`SILENT_REPLY`',                                '',                           true],
+    ['legacy wrapped italic bare',             '_SILENT_REPLY_',                                '',                           true],
+    ['legacy wrapped tilde bare',              '~SILENT_REPLY~',                                '',                           true],
+    ['legacy wrapped with whitespace padding', '  **SILENT_REPLY**  ',                          '',                           true],
 
     // ── Section 3: protocol discussion (THE BAT-491 FIX) ────────────────
     // These all contain the literal bare `SILENT_REPLY` string INLINE in
