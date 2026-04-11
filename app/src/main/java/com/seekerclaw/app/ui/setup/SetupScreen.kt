@@ -617,17 +617,22 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                 onAuthTypeChange = { newAuthType ->
                     authType = newAuthType
                     // Swap displayed key to the value stored under the new auth type so
-                    // the field always reflects what's saved for the active tab.
+                    // the field always reflects what's saved for the active tab. Only
+                    // overwrite when there's actually a saved value to restore — on a
+                    // fresh install (existingConfig == null) we preserve whatever the
+                    // user has already typed, otherwise toggling tabs mid-entry would
+                    // silently wipe their input.
                     if (scannedProvider == "claude") {
-                        apiKey = if (newAuthType == "setup_token")
-                            existingConfig?.setupToken ?: ""
-                        else
-                            existingConfig?.anthropicApiKey ?: ""
+                        val saved = if (newAuthType == "setup_token") existingConfig?.setupToken
+                                    else existingConfig?.anthropicApiKey
+                        if (!saved.isNullOrBlank()) apiKey = saved
                     } else if (scannedProvider == "openai") {
                         // OAuth tab doesn't use the apiKey field — leave it untouched.
-                        // Switching to API Key restores the saved OpenAI key.
+                        // Switching to API Key restores the saved OpenAI key only if
+                        // one exists; otherwise keep the in-flight draft.
                         if (newAuthType == "api_key") {
-                            apiKey = existingConfig?.openaiApiKey ?: ""
+                            val saved = existingConfig?.openaiApiKey
+                            if (!saved.isNullOrBlank()) apiKey = saved
                         }
                         // OpenAI's OAuth and API-key model lists overlap on the main
                         // GPT-5.x entries but aren't identical — gpt-5.4-mini is
