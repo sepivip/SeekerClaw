@@ -686,16 +686,19 @@ class OpenAIOAuthActivity : ComponentActivity() {
         port: Int,
         private val onCallback: (Map<String, String>) -> String
     ) : NanoHTTPD(port) {
-        // Bind to all loopback interfaces (NanoHTTPD's no-hostname constructor binds
-        // to 0.0.0.0). We used to pass "localhost" here, but on newer Android devices
-        // (e.g. Pixel 7 / Android 14) InetAddress.getByName("localhost") resolves to
-        // ::1 only, so the server bound only to IPv6 loopback. Meanwhile Chrome's
-        // Custom Tab resolves "localhost" to 127.0.0.1 for the redirect, causing
-        // connection refused on the callback. Reported as BAT-489.
+        // Bind to the wildcard address (NanoHTTPD's no-hostname constructor binds to
+        // 0.0.0.0, i.e. all network interfaces). We used to pass "localhost" here,
+        // but on newer Android devices (e.g. Pixel 7 / Android 14)
+        // InetAddress.getByName("localhost") resolves to ::1 only, so the server
+        // bound only to IPv6 loopback. Meanwhile Chrome's Custom Tab resolves
+        // "localhost" to 127.0.0.1 for the redirect, causing connection refused on
+        // the callback. Reported as BAT-489.
         //
-        // Binding to 0.0.0.0 accepts both 127.0.0.1 and ::1 connections. We preserve
-        // the localhost-only security intent by validating the remote IP in serve()
-        // below — any non-loopback request is rejected with 403.
+        // Binding wildcard accepts both 127.0.0.1 and ::1 connections — but it also
+        // accepts connections from other hosts on the same network, which we do NOT
+        // want. The localhost-only security guarantee is therefore NOT provided by
+        // the bind itself; it is enforced in serve() below by rejecting any request
+        // whose remote IP is outside the loopback range with 403 Forbidden.
 
         override fun serve(session: IHTTPSession): Response {
             // Security: reject anything that isn't loopback. With a 0.0.0.0 bind we

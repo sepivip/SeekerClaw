@@ -568,6 +568,14 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                         if (newAuthType == "api_key") {
                             apiKey = existingConfig?.openaiApiKey ?: ""
                         }
+                        // OpenAI's OAuth and API-key model lists are disjoint (OAuth has
+                        // the GPT-5.x Codex family, API-key has the public GPT-5 line).
+                        // Coerce selectedModel to a valid entry for the new auth type so
+                        // a cross-auth stale model never gets persisted by saveAndStart.
+                        val openaiModels = modelsForProvider("openai", newAuthType)
+                        if (openaiModels.isNotEmpty() && openaiModels.none { it.id == selectedModel }) {
+                            selectedModel = openaiModels[0].id
+                        }
                     }
                     apiKeyError = null
                     errorMessage = null
