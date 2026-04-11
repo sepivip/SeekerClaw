@@ -179,11 +179,13 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
     //     keeps these strings across activity recreation).
     var apiKey by rememberSaveable {
         mutableStateOf(
-            when (existingConfig?.provider) {
-                "openai" -> existingConfig.openaiApiKey
-                "openrouter" -> existingConfig.openrouterApiKey
-                else -> existingConfig?.activeCredential ?: ""
-            }
+            existingConfig?.let { cfg ->
+                when (cfg.provider) {
+                    "openai" -> cfg.openaiApiKey
+                    "openrouter" -> cfg.openrouterApiKey
+                    else -> cfg.activeCredential
+                }
+            } ?: ""
         )
     }
     var authType by rememberSaveable { mutableStateOf(initialAuthType) }
@@ -562,9 +564,14 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                             "setup_token" -> "setup_token"
                             else -> "api_key"
                         }
-                        "openai" -> if (existingConfig == null ||
-                            existingConfig.authType == "oauth" ||
-                            existingConfig.openaiOAuthToken.isNotBlank()) "oauth" else "api_key"
+                        "openai" -> existingConfig?.let { cfg ->
+                            // Honour prior choice when we have one: oauth if that's
+                            // what was selected, or if there's already a token on
+                            // file; api_key otherwise (e.g. user set an OpenAI API
+                            // key directly in Settings).
+                            if (cfg.authType == "oauth" || cfg.openaiOAuthToken.isNotBlank()) "oauth"
+                            else "api_key"
+                        } ?: "oauth" // fresh install → default to Sign in with ChatGPT
                         else -> "api_key"
                     }
                     authType = newAuthType
