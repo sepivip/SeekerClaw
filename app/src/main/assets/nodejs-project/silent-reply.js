@@ -242,6 +242,13 @@ function stripSilentReply(text) {
     // Only strips when the entire message is the wrapped bare token;
     // inline wrapped bare in prose still passes through as discussion.
     if (LEGACY_BARE_WRAPPED_EXACT_REGEX.test(text)) return '';
+    // Fast path: if no sentinel form is present in the text at all, return
+    // the trimmed text unchanged. This avoids the downstream "empty after
+    // strip" punct-only guard from accidentally suppressing legitimate
+    // punctuation-only replies like `[]`, `()`, or `**` that never
+    // contained a sentinel in the first place (flagged by Copilot round 5
+    // on PR #324).
+    if (!containsSilentReply(text)) return text.trim();
     const stripped = text
         .replace(MARKDOWN_WRAPPED_REGEX, '')
         .replace(LEADING_SPACED_REGEX, '')
@@ -264,7 +271,10 @@ function stripSilentReply(text) {
         })
         .trim();
     // If the model wrapped the token in markdown and only orphan punctuation
-    // remains, treat the whole message as silent.
+    // remains AFTER a sentinel was stripped, treat the whole message as
+    // silent. The `containsSilentReply(text)` guard above ensures this only
+    // runs when there was actually a sentinel in the input, so unrelated
+    // punctuation-only messages pass through unchanged.
     if (ONLY_MARKDOWN_PUNCT_REGEX.test(stripped)) return '';
     return stripped;
 }

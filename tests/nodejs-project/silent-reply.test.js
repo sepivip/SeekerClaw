@@ -122,6 +122,19 @@ const cases = [
     // ── Section 5: plain text passthrough ───────────────────────────────
     ['regular sentence',                       'Just a regular message with no sentinel.',      'Just a regular message with no sentinel.', false],
     ['empty string',                           '',                                              '',                           false],
+
+    // ── Section 6: punctuation-only messages without a sentinel ─────────
+    // Copilot round 5 on PR #324 caught that ONLY_MARKDOWN_PUNCT_REGEX
+    // used to run unconditionally — an assistant reply consisting solely
+    // of punctuation like `[]` or `**` was being dropped even though no
+    // sentinel was ever present. These cases lock in the fix: the
+    // punct-only suppression now only applies AFTER a sentinel was
+    // actually stripped. A standalone punctuation message passes through.
+    ['punct-only empty brackets',              '[]',                                            '[]',                         false],
+    ['punct-only empty parens',                '()',                                            '()',                         false],
+    ['punct-only empty angles',                '<>',                                            '<>',                         false],
+    ['punct-only bold markers',                '**',                                            '**',                         false],
+    ['punct-only code fence',                  '```',                                           '```',                        false],
 ];
 
 let pass = 0;
