@@ -338,6 +338,17 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
         try {
             val trimmedKey = apiKey.trim()
             val existing = ConfigManager.loadConfig(context)
+            // On fresh install (existing == null) the user may have already
+            // completed OAuth via OpenAIOAuthActivity during this setup session
+            // — those tokens are persisted to prefs independently of saveConfig,
+            // so read them via loadConfigOrBootstrap to preserve them through
+            // this first full saveConfig call. On subsequent launches `existing`
+            // is non-null and we use its values directly.
+            val bootstrap = if (existing == null) ConfigManager.loadConfigOrBootstrap(context) else null
+            val preservedOAuthToken = existing?.openaiOAuthToken ?: bootstrap?.openaiOAuthToken ?: ""
+            val preservedOAuthRefresh = existing?.openaiOAuthRefresh ?: bootstrap?.openaiOAuthRefresh ?: ""
+            val preservedOAuthEmail = existing?.openaiOAuthEmail ?: bootstrap?.openaiOAuthEmail ?: ""
+            val preservedOAuthExpiresAt = existing?.openaiOAuthExpiresAt ?: bootstrap?.openaiOAuthExpiresAt ?: ""
             val config = when (scannedProvider) {
                 "openai" -> AppConfig(
                     anthropicApiKey = existing?.anthropicApiKey ?: "",
@@ -345,11 +356,13 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                     // Don't wipe an existing openaiApiKey when the user picked OAuth.
                     openaiApiKey = if (isOpenAIOAuth) (existing?.openaiApiKey ?: "") else trimmedKey,
                     openrouterApiKey = existing?.openrouterApiKey ?: "",
-                    // Preserve OAuth tokens written by OpenAIOAuthActivity.
-                    openaiOAuthToken = existing?.openaiOAuthToken ?: "",
-                    openaiOAuthRefresh = existing?.openaiOAuthRefresh ?: "",
-                    openaiOAuthEmail = existing?.openaiOAuthEmail ?: "",
-                    openaiOAuthExpiresAt = existing?.openaiOAuthExpiresAt ?: "",
+                    // Preserve OAuth tokens written by OpenAIOAuthActivity — on
+                    // fresh install these come from the bootstrap config, not the
+                    // (null) loadConfig result.
+                    openaiOAuthToken = preservedOAuthToken,
+                    openaiOAuthRefresh = preservedOAuthRefresh,
+                    openaiOAuthEmail = preservedOAuthEmail,
+                    openaiOAuthExpiresAt = preservedOAuthExpiresAt,
                     provider = "openai",
                     authType = effectiveAuthType,
                     telegramBotToken = botToken.trim(),

@@ -112,16 +112,20 @@ class OpenAIOAuthActivity : ComponentActivity() {
                 val email = extractEmailFromJwtStatic(idToken) ?: extractEmailFromJwtStatic(accessToken)
 
                 withContext(NonCancellable + Dispatchers.IO) {
-                    val current = ConfigManager.loadConfig(appCtx)
-                        ?: throw IllegalStateException("Config not loaded — cannot persist OAuth tokens")
-                    ConfigManager.saveConfig(
-                        appCtx,
-                        current.copy(
-                            openaiOAuthToken = accessToken,
-                            openaiOAuthRefresh = refreshToken.ifBlank { current.openaiOAuthRefresh },
-                            openaiOAuthEmail = email ?: current.openaiOAuthEmail,
-                            openaiOAuthExpiresAt = expiresAt,
-                        )
+                    // Persist the 4 OAuth fields directly via ConfigManager's
+                    // bootstrap-friendly path. This works on fresh install (before
+                    // saveAndStart has ever run) and also on subsequent sign-ins
+                    // (where saveConfig has already marked setup complete). We read
+                    // the prior refresh token and email from loadConfigOrBootstrap
+                    // so blank fields from the token response don't wipe values the
+                    // user previously had.
+                    val prior = ConfigManager.loadConfigOrBootstrap(appCtx)
+                    ConfigManager.persistOpenAIOAuthTokens(
+                        context = appCtx,
+                        accessToken = accessToken,
+                        refreshToken = refreshToken.ifBlank { prior.openaiOAuthRefresh },
+                        email = email ?: prior.openaiOAuthEmail,
+                        expiresAt = expiresAt,
                     )
                     writeResultFileStatic(appCtx, requestId, JSONObject().apply {
                         put("status", "success")
