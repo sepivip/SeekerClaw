@@ -42,7 +42,7 @@ android {
         versionName = "1.9.0"
 
         // Keep these in sync when updating OpenClaw or nodejs-mobile
-        buildConfigField("String", "OPENCLAW_VERSION", "\"2026.3.24\"")
+        buildConfigField("String", "OPENCLAW_VERSION", "\"2026.4.10\"")
         buildConfigField("String", "NODEJS_VERSION", "\"18 LTS\"")
 
         // Git commit SHA (short) — always available, every build knows its source
