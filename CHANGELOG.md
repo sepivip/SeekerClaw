@@ -11,6 +11,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 - **Custom AI Provider** — connect any OpenAI-compatible gateway (DeepSeek, Ollama, LiteLLM, etc.) via a base URL, API key, custom headers, and a model ID. Supports both Chat Completions and OpenAI Responses formats (BAT-482, #309)
 
 ### Fixed
+- **OpenAI OAuth unreachable on Pixel 7 / Android 14+** — the callback server was bound to literal `"localhost"`, which newer Android resolves to `::1` only. Chrome's Custom Tab resolves `localhost` to `127.0.0.1` for the redirect, so the callback hit a socket the server wasn't listening on and the flow hung on a blank "site can't be reached" page. Server now binds wildcard and accepts both IPv4 and IPv6 loopback (including IPv4-mapped IPv6 `::ffff:127.0.0.1`), with a remote-IP filter in `serve()` rejecting any non-loopback client. Worked on Seeker, broken on Pixel 7 (BAT-489, #323)
+- **Fresh-install OAuth deadlock** — with OpenAI OAuth now the default on new installs, the token exchange used to throw `IllegalStateException("Config not loaded")` because `ConfigManager.loadConfig` returns null until `KEY_SETUP_COMPLETE` is set, which only happens after `saveConfig`. New `loadConfigOrBootstrap` + `persistOpenAIOAuthTokens` paths let OAuth persist tokens mid-onboarding without marking setup complete prematurely (BAT-489, #323)
+- **Fresh-install default provider** — the picker visually showed OpenAI first after the BAT-487 reorder, but state still defaulted to `provider=claude + authType=api_key`. New installs now land on OpenAI + Sign in with ChatGPT with no taps required (BAT-489, #323)
+- **Setup form state wiped by OAuth** — typing a bot token on the Telegram step then signing in with ChatGPT used to blank out the bot token field because the configVersion bump from OAuth cascaded into `remember(configVersion)` field initializers. Form state is now `rememberSaveable`, so it survives mid-flow OAuth writes (and process death, as a bonus) (BAT-489, #323)
+- **Cross-provider OAuth token wipe in saveAndStart** — saving setup as Claude or OpenRouter used to overwrite existing OpenAI OAuth tokens with empty strings. Preserved-OAuth values are now threaded through every provider branch (BAT-489, #323)
+- **Legacy plaintext email pref PII leak** — the plaintext→encrypted `openai_oauth_email` migration only cleared the plaintext key on read, so signing out could leave it behind. Every OAuth write/clear now wipes both forms (BAT-489, #323)
 - **Google Play SMS hotfix** — `android_sms` on the googlePlay flavor now uses an intent handoff instead of `SEND_SMS` permission, unblocking Play Store submission (BAT-484, #312) *(also tagged as v1.8.1)*
 - **Codex SSE parsing** — handle missing Content-Type header from chatgpt.com
 - **Web search provider reporting** — agent now knows which search backend actually ran when called with `provider: "auto"`
@@ -26,7 +32,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 ### Security
 - **OAuth tokens never touch disk in plaintext** — persisted directly via `ConfigManager` (Android Keystore), result files carry only status flags (RFC 6819 §5.1.4, OWASP MASVS-STORAGE-1)
 - **`config.js` strict authType validation** — hard-fails on unsupported values for the OpenAI provider, with legacy-alias migration so older installs don't crash
-- **OAuth callback listener** binds to `localhost` only (not all network interfaces)
+- **OAuth callback listener** accepts only loopback clients (127.0.0.0/8, `::1`, and IPv4-mapped IPv6 forms) via a remote-IP check in `serve()` — wildcard bind is required for cross-platform loopback compatibility, so security is enforced at the request layer, not the socket layer (BAT-489)
 - **`requestId` Intent extra** validated against a strict UUID regex (path-traversal defense)
 
 ## [1.8.0] - 2026-03-30
