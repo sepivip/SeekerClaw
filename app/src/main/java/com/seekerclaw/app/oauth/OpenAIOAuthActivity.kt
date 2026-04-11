@@ -50,8 +50,9 @@ class OpenAIOAuthActivity : ComponentActivity() {
         // Must be exactly "localhost" — the Codex OAuth client (app_EMoamEEZ...) is
         // registered with this redirect URI. Using 127.0.0.1 causes OpenAI to reject the
         // authorize request as a redirect_uri mismatch ("unknown_error" on their side).
-        // The IPv6-resolution risk Copilot flagged is theoretical — Codex CLI itself
-        // uses "localhost" in production and the NanoHTTPD listener resolves correctly.
+        // NOTE: this is the URI the browser resolves. The NanoHTTPD server itself binds
+        // to all loopback interfaces (see CallbackServer below) so it's reachable
+        // regardless of whether the OS resolves "localhost" to 127.0.0.1 or ::1.
         const val REDIRECT_URI = "http://localhost:1455/auth/callback"
         const val SCOPES = "openid profile email offline_access"
         private const val CALLBACK_PORT = 1455
@@ -684,15 +685,29 @@ class OpenAIOAuthActivity : ComponentActivity() {
     private class CallbackServer(
         port: Int,
         private val onCallback: (Map<String, String>) -> String
-    ) : NanoHTTPD("localhost", port) {
-        // Bind explicitly to "localhost" so the OAuth callback listener is reachable
-        // only from the local device — never from all network interfaces (NanoHTTPD's
-        // no-hostname constructor binds to 0.0.0.0). The redirect URI must also stay
-        // as "localhost" because Codex's OAuth client (app_EMoamEEZ...) is registered
-        // with that exact string — switching to "127.0.0.1" causes auth.openai.com
-        // to reject the authorize request as redirect_uri mismatch.
+    ) : NanoHTTPD(port) {
+        // Bind to all loopback interfaces (NanoHTTPD's no-hostname constructor binds
+        // to 0.0.0.0). We used to pass "localhost" here, but on newer Android devices
+        // (e.g. Pixel 7 / Android 14) InetAddress.getByName("localhost") resolves to
+        // ::1 only, so the server bound only to IPv6 loopback. Meanwhile Chrome's
+        // Custom Tab resolves "localhost" to 127.0.0.1 for the redirect, causing
+        // connection refused on the callback. Reported as BAT-489.
+        //
+        // Binding to 0.0.0.0 accepts both 127.0.0.1 and ::1 connections. We preserve
+        // the localhost-only security intent by validating the remote IP in serve()
+        // below — any non-loopback request is rejected with 403.
 
         override fun serve(session: IHTTPSession): Response {
+            // Security: reject anything that isn't loopback. With a 0.0.0.0 bind we
+            // could in principle be reached from other hosts on the same network, so
+            // we gate every request on the client IP. NanoHTTPD reports the remote
+            // address in v4 form (127.0.0.1) or v6 form (0:0:0:0:0:0:0:1 or ::1)
+            // depending on how the client connected.
+            val remoteIp = session.remoteIpAddress ?: ""
+            if (!isLoopback(remoteIp)) {
+                Log.w(TAG, "Rejecting non-loopback callback request from $remoteIp")
+                return newFixedLengthResponse(Response.Status.FORBIDDEN, "text/plain", "Forbidden")
+            }
             if (session.uri == "/auth/callback" && session.method == Method.GET) {
                 @Suppress("DEPRECATION")
                 val params = session.parms ?: emptyMap()
@@ -700,6 +715,15 @@ class OpenAIOAuthActivity : ComponentActivity() {
                 return newFixedLengthResponse(Response.Status.OK, "text/html", html)
             }
             return newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "Not found")
+        }
+
+        private fun isLoopback(ip: String): Boolean {
+            if (ip.isEmpty()) return false
+            // IPv4 loopback: entire 127.0.0.0/8 block
+            if (ip.startsWith("127.")) return true
+            // IPv6 loopback, short and long forms
+            if (ip == "::1" || ip == "0:0:0:0:0:0:0:1") return true
+            return false
         }
     }
 }

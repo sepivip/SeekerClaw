@@ -160,6 +160,13 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
     val configVersion = ConfigManager.configVersion.intValue
     val existingConfig = remember(configVersion) { ConfigManager.loadConfig(context) }
 
+    // Fresh-install defaults land on OpenAI + OAuth (Sign in with ChatGPT) — it's the
+    // first provider in the onboarding picker and the smoothest onboarding path (no
+    // key to paste, just a browser tap). If existingConfig is present (user came back
+    // from Settings or a previous partial setup), honour whatever they chose before.
+    val initialProvider = existingConfig?.provider ?: "openai"
+    val initialAuthType = existingConfig?.authType ?: "oauth"
+
     var apiKey by remember(configVersion) {
         mutableStateOf(
             when (existingConfig?.provider) {
@@ -169,20 +176,21 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             }
         )
     }
-    var authType by remember(configVersion) { mutableStateOf(existingConfig?.authType ?: "api_key") }
-    var scannedProvider by remember(configVersion) { mutableStateOf(existingConfig?.provider ?: "claude") }
+    var authType by remember(configVersion) { mutableStateOf(initialAuthType) }
+    var scannedProvider by remember(configVersion) { mutableStateOf(initialProvider) }
     var botToken by remember(configVersion) { mutableStateOf(existingConfig?.telegramBotToken ?: "") }
     var ownerId by remember(configVersion) { mutableStateOf(existingConfig?.telegramOwnerId ?: "") }
-    val existingProvider = existingConfig?.provider ?: "claude"
     var selectedModel by remember(configVersion) {
-        // Setup screen always uses API-key auth (OAuth happens later in settings),
-        // so derive the model list from the api_key list to match what saveAndStart persists.
+        // Use the effective auth type so OpenAI+OAuth picks from the OAuth model list
+        // (GPT-5.x Codex) instead of the API-key list — modelsForProvider throws for
+        // openai when authType is null, so we must pass it through.
+        val modelAuthType = if (initialProvider == "openai") initialAuthType else "api_key"
+        val models = modelsForProvider(initialProvider, modelAuthType)
         mutableStateOf(
             existingConfig?.model?.let { model ->
-                val models = modelsForProvider(existingProvider, "api_key")
                 if (models.isEmpty() || models.any { it.id == model }) model
                 else models[0].id
-            } ?: modelsForProvider(existingProvider, "api_key").firstOrNull()?.id ?: availableModels[0].id
+            } ?: models.firstOrNull()?.id ?: availableModels[0].id
         )
     }
     var agentName by remember(configVersion) { mutableStateOf(existingConfig?.agentName ?: "SeekerClaw") }
@@ -511,19 +519,24 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                     apiKeyError = null
                     errorMessage = null
                     // Per-provider auth defaults: Claude → api_key/setup_token,
-                    // OpenAI → oauth (matches Settings first-time switch-in default).
-                    authType = when (newProvider) {
+                    // OpenAI → oauth (Sign in with ChatGPT is the onboarding-friendly
+                    // default — matches fresh-install behaviour above and Settings
+                    // first-time switch-in default).
+                    val newAuthType = when (newProvider) {
                         "claude" -> when (existingConfig?.authType) {
                             "setup_token" -> "setup_token"
                             else -> "api_key"
                         }
-                        "openai" -> if (existingConfig?.authType == "oauth" ||
-                            existingConfig?.openaiOAuthToken?.isNotBlank() == true) "oauth" else "api_key"
+                        "openai" -> if (existingConfig == null ||
+                            existingConfig.authType == "oauth" ||
+                            existingConfig.openaiOAuthToken.isNotBlank()) "oauth" else "api_key"
                         else -> "api_key"
                     }
-                    // Restore model: use existing config's model if same provider, else default
-                    // Setup screen always uses API-key auth — OAuth flow happens later in settings.
-                    val models = modelsForProvider(newProvider, "api_key")
+                    authType = newAuthType
+                    // Restore model: use existing config's model if same provider, else default.
+                    // Model list must match the effective auth type (OpenAI OAuth has its own list).
+                    val modelAuthType = if (newProvider == "openai") newAuthType else "api_key"
+                    val models = modelsForProvider(newProvider, modelAuthType)
                     selectedModel = if (newProvider == existingConfig?.provider) {
                         existingConfig.model
                     } else {
