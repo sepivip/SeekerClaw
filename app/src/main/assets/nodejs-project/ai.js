@@ -401,7 +401,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
         lines.push('Complete the task described in the user message efficiently and concisely.');
         lines.push(`Your output will be delivered to the owner via ${CHANNEL === 'discord' ? 'Discord' : 'Telegram'}.`);
         lines.push('Do not greet, do not ask follow-up questions — deliver the result directly.');
-        lines.push(`If there is nothing to report, reply with the literal token ${SILENT_REPLY_TOKEN} (include the double brackets exactly as shown).`);
+        lines.push('If there is nothing to report, emit a silent-reply signal as your entire message (see the Silent Replies section below for the exact form).');
         lines.push('Confirmation-gated tools (swaps, transfers) are NOT available in scheduled tasks.');
         lines.push('');
     }
@@ -885,7 +885,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('For any follow-up at a future time (reminders, run-later work, recurring tasks) use cron instead of shell_exec sleep, js_eval setTimeout loops, or process polling. Those waste tool rounds, burn battery, and die on restart.');
     lines.push('When a message starts with [cron:...], you are executing a scheduled task in an isolated session.');
     lines.push('Complete the task directly and concisely. Do not greet or ask follow-up questions — deliver results.');
-    lines.push(`If nothing needs attention, reply with the literal token ${SILENT_REPLY_TOKEN} (include the double brackets exactly as shown).`);
+    lines.push('If nothing needs attention, emit a silent-reply signal as your entire message (see the Silent Replies section below for the exact form).');
     lines.push('');
 
     // Authorized Senders section - OpenClaw style
@@ -902,30 +902,48 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('If the work will take multiple steps or a while to finish, send one short progress update before or while acting.');
     lines.push('');
 
-    // Silent Replies section — BAT-491 sentinel rename.
-    // Canonical form is now [[SILENT_REPLY]] (double-bracketed). The
-    // brackets make the sentinel structurally distinguishable from natural
-    // prose so the agent can freely discuss the protocol in replies
-    // without being over-stripped (BAT-491 follow-up to BAT-488 parity
-    // port over-strip bug caught in BAT-489 device testing).
+    // Silent Replies section — BAT-492 prompt-only amendment to BAT-491.
+    //
+    // Intentionally DOES NOT include explicit right/wrong examples that show
+    // the literal sentinel string inline. Priming the model with examples
+    // like "❌ Wrong: Here's help... [[SILENT_REPLY]]" teaches it to
+    // reproduce the literal bracketed form when describing the protocol to
+    // users — and the strip in silent-reply.js then removes those mentions
+    // from discussion, leaving holes in the reply.
+    //
+    // Instead: tell the agent ONCE what the signal is (single mention of
+    // the literal form, explicitly as "emit this exact string"), then tell
+    // it firmly NEVER to write the literal form in a user-visible reply,
+    // and give it safe natural-language alternatives for protocol
+    // discussion. The model is good at following negative instructions
+    // when the alternative is clear.
+    //
+    // Root cause ref: BAT-492 — over-strip in protocol discussion caught
+    // during BAT-491 Test 2 device testing (agent wrote "the real control
+    // form is [[SILENT_REPLY]]" in a reply, the strip ate the inline
+    // canonical form, user saw a truncated bullet).
+    const channelName = CHANNEL === 'discord' ? 'Discord' : 'Telegram';
     lines.push('## Silent Replies');
-    lines.push(`Use the token \`${SILENT_REPLY_TOKEN}\` ONLY when no user-visible reply is required. SeekerClaw discards the message instead of sending it to ${CHANNEL === 'discord' ? 'Discord' : 'Telegram'}.`);
+    lines.push(`When no user-visible reply is required, emit a silent-reply signal as your ENTIRE message and SeekerClaw will discard it instead of sending to ${channelName}.`);
     lines.push('');
-    lines.push('⚠️ Rules:');
-    lines.push(`- The canonical sentinel is \`${SILENT_REPLY_TOKEN}\` with the double brackets included exactly. Always emit this form for silent-reply signals. (SeekerClaw also accepts a bare \`SILENT_REPLY\` whole-message as a legacy form for backward compatibility, but the bracketed canonical form is what you should always write.)`);
-    lines.push('- Valid cases: silent housekeeping, deliberate no-op ambient wakeups, or after a messaging tool already delivered the user-visible reply.');
-    lines.push('- Never use it to avoid doing requested work or to end an actionable turn early.');
-    lines.push(`- When used as a signal, \`${SILENT_REPLY_TOKEN}\` must be your ENTIRE message — nothing else, no preamble, no trailing punctuation.`);
-    lines.push('- Never wrap it in markdown, code blocks, JSON, or any envelope form.');
+    lines.push('### When to emit a silent-reply signal');
+    lines.push('- Silent housekeeping (saving memory, updating state).');
+    lines.push('- Deliberate no-op ambient wakeups or heartbeat-style turns.');
+    lines.push('- After a messaging tool has already delivered the user-visible reply and your remaining output is internal reasoning.');
     lines.push('');
-    lines.push('### Discussing the protocol in a reply');
-    lines.push('If the user asks you about silent replies, or you want to write a memory note about when you used one, you MAY write the bare word `SILENT_REPLY` (without brackets) freely in normal prose — that form is treated as discussion and passes through to the user untouched. You may also write "silent reply" (space) or "silent-reply" (hyphen). The brackets are reserved EXCLUSIVELY for the control signal.');
+    lines.push('**Never** use a silent-reply signal to avoid doing requested work, to dodge a question, or to end an actionable turn early.');
     lines.push('');
-    lines.push(`❌ Wrong (inline sentinel — leaks or gets stripped): "Here's help... ${SILENT_REPLY_TOKEN}"`);
-    lines.push(`❌ Wrong (wrapped): "**${SILENT_REPLY_TOKEN}**"`);
-    lines.push(`❌ Wrong (envelope): {"action":"${SILENT_REPLY_TOKEN}"}`);
-    lines.push(`✅ Right (signal — the entire message): ${SILENT_REPLY_TOKEN}`);
-    lines.push('✅ Right (discussion — prose with bare word): "SILENT_REPLY is a token I use when there\'s nothing to send."');
+    lines.push('### How to emit the signal');
+    lines.push(`The signal is the exact string  ${SILENT_REPLY_TOKEN}  (two left square brackets, the uppercase word with underscore, two right square brackets). When used as a signal, this string must be your ENTIRE message — nothing before, nothing after, no preamble, no wrapping, no trailing punctuation. Do not wrap it in markdown, code fences, or JSON.`);
+    lines.push('');
+    lines.push('### Referring to the silent-reply protocol in a user-visible reply');
+    lines.push('If a user asks you about the silent-reply protocol, or you want to write a memory note about when you used one, **describe the protocol in natural language and do NOT write the literal control string in your reply**. Any occurrence of the literal double-bracketed control string inside a message you want the user to see will be stripped by post-processing and will leave a hole in your text — your explanation will have missing bullets, truncated sentences, or double spaces.');
+    lines.push('');
+    lines.push('Safe natural-language ways to refer to the protocol in prose:');
+    lines.push('- "a silent-reply signal", "the silent-reply protocol", "a no-show marker", "an internal no-reply token"');
+    lines.push('- The bare word `SILENT_REPLY` (without brackets) passes through unchanged if you need to name it specifically.');
+    lines.push('- Lowercase/hyphenated forms `silent-reply` or `silent reply` also pass through unchanged.');
+    lines.push('- If a user literally asks you to show the control string, describe it instead: "it is the uppercase word SILENT_REPLY enclosed in double square brackets" — do not attempt to paste the literal form; it will be stripped.');
     lines.push('');
 
     // Reply Tags section - OpenClaw style (Telegram-specific)
