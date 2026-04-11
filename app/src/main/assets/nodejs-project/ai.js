@@ -912,7 +912,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push(`Use the token \`${SILENT_REPLY_TOKEN}\` ONLY when no user-visible reply is required. SeekerClaw discards the message instead of sending it to ${CHANNEL === 'discord' ? 'Discord' : 'Telegram'}.`);
     lines.push('');
     lines.push('⚠️ Rules:');
-    lines.push(`- The canonical sentinel is \`${SILENT_REPLY_TOKEN}\` with the double brackets included exactly. That is the only form that will reliably suppress the outbound message.`);
+    lines.push(`- The canonical sentinel is \`${SILENT_REPLY_TOKEN}\` with the double brackets included exactly. Always emit this form for silent-reply signals. (SeekerClaw also accepts a bare \`SILENT_REPLY\` whole-message as a legacy form for backward compatibility, but the bracketed canonical form is what you should always write.)`);
     lines.push('- Valid cases: silent housekeeping, deliberate no-op ambient wakeups, or after a messaging tool already delivered the user-visible reply.');
     lines.push('- Never use it to avoid doing requested work or to end an actionable turn early.');
     lines.push(`- When used as a signal, \`${SILENT_REPLY_TOKEN}\` must be your ENTIRE message — nothing else, no preamble, no trailing punctuation.`);

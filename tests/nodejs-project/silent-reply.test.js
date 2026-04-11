@@ -56,7 +56,14 @@ const cases = [
     ['canonical glued-left (sentence tail)',   'Handled it.[[SILENT_REPLY]]',                   'Handled it.',                true],
     ['canonical glued-both-sides',             'foo[[SILENT_REPLY]]bar',                        'foobar',                     true],
     ['canonical glued-left then space+word',   'done[[SILENT_REPLY]] and more',                 'done and more',              true],
-    ['canonical mid-token space bounded',      'Hello [[SILENT_REPLY]] world',                  'Hello  world',               true],
+    // Mid-token with spaces on both sides — strip collapses to a SINGLE space,
+    // not a double space. Verifies the whitespace-aware replacer in stripSilentReply
+    // (Copilot PR #324 round 2 flagged the previous double-space behavior).
+    ['canonical mid-token space bounded',      'Hello [[SILENT_REPLY]] world',                  'Hello world',                true],
+    ['canonical mid-token tab bounded',        'Hello\t[[SILENT_REPLY]]\tworld',                'Hello world',                true],
+    // Multi-line structure preserved — newlines are NOT consumed by the
+    // whitespace-collapse replacer, so paragraph breaks stay intact.
+    ['canonical mid-token newline preserved',  'Line 1\n[[SILENT_REPLY]]\nLine 2',              'Line 1\n\nLine 2',           true],
     ['canonical repeated leading',             '[[SILENT_REPLY]] [[SILENT_REPLY]]',             '',                           true],
     ['canonical repeat then glued',            '[[SILENT_REPLY]] [[SILENT_REPLY]]hello',        'hello',                      true],
     ['canonical bold wrapped',                 '**[[SILENT_REPLY]]**',                          '',                           true],

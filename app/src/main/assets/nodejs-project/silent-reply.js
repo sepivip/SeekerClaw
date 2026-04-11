@@ -32,6 +32,7 @@
 //   2. Left-glued:       "OK[[SILENT_REPLY]]"           → "OK"
 //   3. Both-sides glued: "foo[[SILENT_REPLY]]bar"       → "foobar"
 //   4. Mid-token spaced: "Hello [[SILENT_REPLY]] world" → "Hello world"
+//                        (surrounding spaces collapse to ONE space, not two)
 //   5. Markdown wrapped: "**[[SILENT_REPLY]]**"         → ""
 //   6. JSON envelope:    '{"action":"[[SILENT_REPLY]]"}' → ""
 //   7. Leading spaced:   "[[SILENT_REPLY]] hello"       → "hello"
@@ -85,7 +86,16 @@ const LEGACY_BARE_EXACT_REGEX = new RegExp(`^\\s*${LT}\\s*$`, 'i');
 //
 // The caller still handles markdown orphans and leading-whitespace trim
 // via MARKDOWN_WRAPPED_REGEX and LEADING_SPACED_REGEX below.
-const CANONICAL_STRIP_REGEX = new RegExp(T, 'gi');
+//
+// The strip pattern captures adjacent horizontal whitespace (space/tab,
+// NOT newlines) on both sides so stripSilentReply can collapse
+// "Hello [[SILENT_REPLY]] world" to "Hello world" (single space) instead
+// of "Hello  world" (double space left behind by a naked token strip).
+// The replacer logic lives in stripSilentReply — see the comment there.
+// Newlines are deliberately NOT in the boundary class so multi-line
+// structure is preserved: `Line 1\n[[SILENT_REPLY]]\nLine 2` → the token
+// is removed but the newlines stay, giving `Line 1\n\nLine 2`.
+const CANONICAL_STRIP_REGEX = new RegExp(`([ \\t]*)${T}([ \\t]*)`, 'gi');
 // Non-global twin for .test() — avoids the stateful lastIndex bug that
 // /g regexes have when reused across calls.
 const CANONICAL_TEST_REGEX = new RegExp(T, 'i');
@@ -197,7 +207,23 @@ function stripSilentReply(text) {
     const stripped = text
         .replace(MARKDOWN_WRAPPED_REGEX, '')
         .replace(LEADING_SPACED_REGEX, '')
-        .replace(CANONICAL_STRIP_REGEX, '')
+        // Replacer collapses surrounding horizontal whitespace:
+        //   "Hello [[SILENT_REPLY]] world"  → "Hello world"   (both sides → 1 space)
+        //   "done[[SILENT_REPLY]] and more" → "done and more" (trailing only → 1 space)
+        //   "hello [[SILENT_REPLY]]"        → "hello"         (leading only → 1 space, then .trim())
+        //   "OK[[SILENT_REPLY]]bar"          → "OKbar"         (neither side → empty)
+        //   "foo[[SILENT_REPLY]]bar"         → "foobar"        (neither side → empty)
+        //   "Handled it.[[SILENT_REPLY]]"   → "Handled it."   (neither side → empty)
+        // Rule: if EITHER side has horizontal whitespace, emit a single
+        // space so word boundaries are preserved. Only when there is NO
+        // whitespace on either side (glued case) do we emit empty. This
+        // prevents the "double space left behind by a naked strip" output
+        // bug Copilot flagged on PR #324 round 2 while still handling the
+        // fully-glued variants from round 1 correctly.
+        .replace(CANONICAL_STRIP_REGEX, (_match, before, after) => {
+            if (before || after) return ' ';
+            return '';
+        })
         .trim();
     // If the model wrapped the token in markdown and only orphan punctuation
     // remains, treat the whole message as silent.
