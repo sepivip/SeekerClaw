@@ -27,6 +27,7 @@ const deferStatus = CHANNEL === 'telegram' ? require('./telegram').deferStatus :
 const { httpStreamingRequest, httpOpenAIStreamingRequest, httpChatCompletionsStreamingRequest } = require('./http');
 const { getAdapter } = require('./providers');
 const { androidBridgeCall } = require('./bridge');
+const { stripSilentReply } = require('./silent-reply');
 
 const {
     loadSoul, loadBootstrap, loadIdentity, loadUser,
@@ -880,6 +881,8 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('- **agentTurn**: Runs a full AI turn with tools at the scheduled time (for research, monitoring, analysis). Costs API tokens per execution.');
     lines.push(`- **reminder**: Sends raw text to ${CHANNEL === 'discord' ? 'Discord' : 'Telegram'} (for simple alerts like "take meds"). Zero cost.`);
     lines.push('Use agentTurn when the task needs intelligence (check prices, generate reports, analyze data). Use reminder for simple text notifications.');
+    // OpenClaw parity (v2026.4.10 BAT-488) — steer away from degenerate polling loops
+    lines.push('For any follow-up at a future time (reminders, run-later work, recurring tasks) use cron instead of shell_exec sleep, js_eval setTimeout loops, or process polling. Those waste tool rounds, burn battery, and die on restart.');
     lines.push('When a message starts with [cron:...], you are executing a scheduled task in an isolated session.');
     lines.push('Complete the task directly and concisely. Do not greet or ask follow-up questions — deliver results.');
     lines.push('If nothing needs attention, reply SILENT_REPLY.');
@@ -890,12 +893,32 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push(`Authorized senders: ${getOwnerId() || '(pending auto-detect)'}. These senders are allowlisted; do not assume they are the owner.`);
     lines.push('');
 
-    // Silent Replies section - OpenClaw style
+    // Execution Bias section — OpenClaw parity (v2026.4.10 BAT-488)
+    // Stops models from planning-instead-of-doing on actionable requests.
+    lines.push('## Execution Bias');
+    lines.push('If the user asks you to do the work, start doing it in the same turn.');
+    lines.push('Use a real tool call or concrete action first when the task is actionable; do not stop at a plan or promise-to-act reply.');
+    lines.push('Commentary-only turns are incomplete when tools are available and the next action is clear.');
+    lines.push('If the work will take multiple steps or a while to finish, send one short progress update before or while acting.');
+    lines.push('');
+
+    // Silent Replies section — OpenClaw parity (v2026.4.10 BAT-488)
+    // Tightened wording to stop models from using SILENT_REPLY to avoid work.
     lines.push('## Silent Replies');
-    lines.push('If nothing useful to say (no action taken, no information to convey), reply with exactly:');
-    lines.push('SILENT_REPLY');
-    lines.push(`SeekerClaw will discard the message instead of sending it to ${CHANNEL === 'discord' ? 'Discord' : 'Telegram'}.`);
-    lines.push('Use sparingly — most messages should have content.');
+    lines.push(`Use SILENT_REPLY ONLY when no user-visible reply is required. SeekerClaw discards the message instead of sending it to ${CHANNEL === 'discord' ? 'Discord' : 'Telegram'}.`);
+    lines.push('');
+    lines.push('⚠️ Rules:');
+    lines.push('- Valid cases: silent housekeeping, deliberate no-op ambient wakeups, or after a messaging tool already delivered the user-visible reply.');
+    lines.push('- Never use it to avoid doing requested work or to end an actionable turn early.');
+    lines.push('- It must be your ENTIRE message — nothing else.');
+    lines.push('- The only valid silent reply is the exact plain-text token SILENT_REPLY.');
+    lines.push('- Never append it to an actual response (never include "SILENT_REPLY" in real replies).');
+    lines.push('- Never wrap it in markdown, code blocks, JSON, or any envelope form.');
+    lines.push('');
+    lines.push('❌ Wrong: "Here\'s help... SILENT_REPLY"');
+    lines.push('❌ Wrong: "**SILENT_REPLY**"');
+    lines.push('❌ Wrong: {"action":"SILENT_REPLY"}');
+    lines.push('✅ Right: SILENT_REPLY');
     lines.push('');
 
     // Reply Tags section - OpenClaw style (Telegram-specific)
@@ -2276,10 +2299,15 @@ async function chat(chatId, userMessage, options = {}) {
 
             if (summaryRes.status === 200) {
                 const summaryParsed = adapter.fromApiResponse(summaryRes.data);
-                if (summaryParsed.text && summaryParsed.text.trim() !== 'SILENT_REPLY') {
-                    textContent = { text: summaryParsed.text };
-                } else if (summaryParsed.text) {
-                    log('Summary returned SILENT_REPLY token — falling through to fallback', 'DEBUG');
+                if (summaryParsed.text) {
+                    // Use the centralized strip helper so we catch envelope/wrap/glued
+                    // forms — not just the literal 'SILENT_REPLY' string.
+                    const cleaned = stripSilentReply(summaryParsed.text);
+                    if (cleaned) {
+                        textContent = { text: cleaned };
+                    } else {
+                        log('Summary returned SILENT_REPLY token (any form) — falling through to fallback', 'DEBUG');
+                    }
                 }
             }
 
