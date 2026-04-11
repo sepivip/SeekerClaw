@@ -79,6 +79,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -155,10 +156,14 @@ private object SetupSteps {
 fun SetupScreen(onSetupComplete: () -> Unit) {
     val context = LocalContext.current
 
-    // Pre-fill from existing config — reactive to ConfigManager.configVersion so any
-    // edit made in Settings while onboarding is on the back stack flows through here.
-    val configVersion = ConfigManager.configVersion.intValue
-    val existingConfig = remember(configVersion) { ConfigManager.loadConfig(context) }
+    // Load the persisted config ONCE on first composition — stored in a non-reactive
+    // remember so that OAuth token writes mid-onboarding (which bump ConfigManager's
+    // configVersion via persistOpenAIOAuthTokens) don't cascade into the form state
+    // below and wipe what the user has typed. The Settings screen still reacts to
+    // configVersion for its own reload; this local snapshot is only used to seed
+    // initial field values and to drive onProviderChange "preserve the other
+    // credential" restore logic.
+    val existingConfig = remember { ConfigManager.loadConfig(context) }
 
     // Fresh-install defaults land on OpenAI + OAuth (Sign in with ChatGPT) — it's the
     // first provider in the onboarding picker and the smoothest onboarding path (no
@@ -167,7 +172,12 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
     val initialProvider = existingConfig?.provider ?: "openai"
     val initialAuthType = existingConfig?.authType ?: "oauth"
 
-    var apiKey by remember(configVersion) {
+    // rememberSaveable is used for all form state so that:
+    //  1. Mid-flow recompositions triggered by OAuth token writes do NOT re-initialize
+    //     form fields from existingConfig (which would wipe a half-entered botToken).
+    //  2. The form also survives process death during onboarding (the Bundle saver
+    //     keeps these strings across activity recreation).
+    var apiKey by rememberSaveable {
         mutableStateOf(
             when (existingConfig?.provider) {
                 "openai" -> existingConfig.openaiApiKey
@@ -176,11 +186,11 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             }
         )
     }
-    var authType by remember(configVersion) { mutableStateOf(initialAuthType) }
-    var scannedProvider by remember(configVersion) { mutableStateOf(initialProvider) }
-    var botToken by remember(configVersion) { mutableStateOf(existingConfig?.telegramBotToken ?: "") }
-    var ownerId by remember(configVersion) { mutableStateOf(existingConfig?.telegramOwnerId ?: "") }
-    var selectedModel by remember(configVersion) {
+    var authType by rememberSaveable { mutableStateOf(initialAuthType) }
+    var scannedProvider by rememberSaveable { mutableStateOf(initialProvider) }
+    var botToken by rememberSaveable { mutableStateOf(existingConfig?.telegramBotToken ?: "") }
+    var ownerId by rememberSaveable { mutableStateOf(existingConfig?.telegramOwnerId ?: "") }
+    var selectedModel by rememberSaveable {
         // Use the effective auth type so OpenAI+OAuth picks from the OAuth model list
         // (GPT-5.x Codex) instead of the API-key list — modelsForProvider throws for
         // openai when authType is null, so we must pass it through.
@@ -193,7 +203,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             } ?: models.firstOrNull()?.id ?: availableModels[0].id
         )
     }
-    var agentName by remember(configVersion) { mutableStateOf(existingConfig?.agentName ?: "SeekerClaw") }
+    var agentName by rememberSaveable { mutableStateOf(existingConfig?.agentName ?: "SeekerClaw") }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var apiKeyError by remember { mutableStateOf<String?>(null) }
     var botTokenError by remember { mutableStateOf<String?>(null) }
