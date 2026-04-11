@@ -68,29 +68,49 @@ function isSilentReplyPayloadText(text) {
     return isSilentReplyText(text) || isSilentReplyEnvelopeText(text);
 }
 
+// Markdown-wrapped variants the system prompt explicitly calls out as wrong:
+//   **SILENT_REPLY**, *SILENT_REPLY*, `SILENT_REPLY`, ```SILENT_REPLY```,
+//   _SILENT_REPLY_, [SILENT_REPLY], (SILENT_REPLY), <SILENT_REPLY>, ~SILENT_REPLY~
+// Match the token plus its surrounding wrapper chars in one pass so we don't
+// leave behind orphan punctuation like `****` or `\`\``.
+const MARKDOWN_WRAPPED_REGEX = /[`*_~\[\]()<>]+\s*SILENT_REPLY\s*[`*_~\[\]()<>]+/gi;
+
+// "Empty after strip" check — if the only thing left is whitespace and
+// markdown punctuation (no actual content), treat as fully silent. Prevents
+// orphan `****` / `\`\`` / `[]` from being sent to the user when the model
+// emits a markdown-wrapped variant the regex pass missed.
+const ONLY_MARKDOWN_PUNCT_REGEX = /^[\s`*_~\[\]()<>]*$/;
+
 /**
- * Strip all SILENT_REPLY occurrences from mixed-content text. Runs the four
- * passes in order: leading-attached → leading-spaced → trailing → word-boundary.
- * Returns the cleaned text (trimmed). An empty result means the entire message
- * should be treated as silent.
+ * Strip all SILENT_REPLY occurrences from mixed-content text. Runs the passes
+ * in order: JSON envelope short-circuit → markdown-wrapped → leading-attached →
+ * leading-spaced → trailing → word-boundary. Returns the cleaned text (trimmed).
+ * An empty result means the entire message should be treated as silent.
  *
- * Short-circuits to '' if the input is the exact `{"action":"SILENT_REPLY"}`
- * envelope form — otherwise the token strip would leave behind a mangled
- * `{"action":""}` JSON string that would be sent to the user.
+ * Short-circuits to '' for:
+ *   - Exact `{"action":"SILENT_REPLY"}` envelope (otherwise the token strip
+ *     would leave a mangled `{"action":""}` JSON string)
+ *   - Result that is only whitespace + markdown punctuation after stripping
+ *     (otherwise `**SILENT_REPLY**` would leave orphan `****`)
  *
  * Replaces the old inline pattern:
  *   .replace(/(?:^|\s+|\*+)SILENT_REPLY\s*$/gi, '').replace(/\bSILENT_REPLY\b/gi, '')
- * which missed leading-attached and JSON envelope cases.
+ * which missed leading-attached, JSON envelope, and markdown-wrapped cases.
  */
 function stripSilentReply(text) {
     if (!text) return '';
     if (isSilentReplyEnvelopeText(text)) return '';
-    return text
+    const stripped = text
+        .replace(MARKDOWN_WRAPPED_REGEX, '')
         .replace(LEADING_ATTACHED_REGEX, '')
         .replace(LEADING_SPACED_REGEX, '')
         .replace(TRAILING_REGEX, '')
         .replace(WORD_BOUNDARY_REGEX, '')
         .trim();
+    // If the model wrapped the token in markdown and only orphan punctuation
+    // remains, treat the whole message as silent.
+    if (ONLY_MARKDOWN_PUNCT_REGEX.test(stripped)) return '';
+    return stripped;
 }
 
 /**
