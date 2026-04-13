@@ -82,7 +82,21 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
     // Default to OpenAI (matching SetupScreen's BAT-489 fresh-install default)
     // so that if a user skips setup and navigates here, they land on OpenAI+OAuth
     // instead of Anthropic+api_key.
+    //
+    // NOTE (Copilot PR #330 round 1): if the user calls markSetupSkipped()
+    // without going through the full setup flow, loadConfig returns a config
+    // with provider="claude" (from SharedPreferences getString default) — so
+    // this ?: "openai" fallback only fires when config is truly null (i.e.
+    // setup never completed at all). That's a pre-existing edge case in the
+    // "skip" path that would need a deeper fix (persist openai/oauth defaults
+    // during skip) — tracked but not blocking.
     val activeProvider = providerById(config?.provider ?: "openai").id
+    // Derive effectiveAuthType so modelsForProvider("openai", authType) never
+    // receives null — that throws (authType is required for OpenAI). When
+    // config is null and provider defaults to openai, use "oauth" as the
+    // auth type (matching the SetupScreen fresh-install default).
+    val effectiveAuthType = config?.authType
+        ?: if (activeProvider == "openai") "oauth" else "api_key"
     var editField by remember { mutableStateOf<String?>(null) }
     var editLabel by remember { mutableStateOf("") }
     var editValue by remember { mutableStateOf("") }
@@ -567,8 +581,8 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
     }
 
     // Model picker dialog — shows models for active provider only (skip for freeform providers)
-    if (showModelPicker && modelsForProvider(activeProvider, config?.authType).isNotEmpty()) {
-        val models = modelsForProvider(activeProvider, config?.authType)
+    if (showModelPicker && modelsForProvider(activeProvider, effectiveAuthType).isNotEmpty()) {
+        val models = modelsForProvider(activeProvider, effectiveAuthType)
         var selectedModel by remember {
             // Preserve the user's current model even when it's not in the known list —
             // otherwise opening the picker would silently overwrite a custom model ID.

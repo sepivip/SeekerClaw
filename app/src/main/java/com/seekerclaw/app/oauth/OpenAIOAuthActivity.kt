@@ -440,7 +440,6 @@ class OpenAIOAuthActivity : ComponentActivity() {
             val isSuccess = title == "Success" || title == "Completing Sign-In" || title == "Signed In"
             // DarkOps design system colors (from Theme.kt)
             val statusColor = if (isSuccess) "#00C805" else "#F87171" // actionPrimary / error
-            val icon = if (isSuccess) "&#10003;" else "&#10007;"
             return """
                 <!DOCTYPE html>
                 <html>
