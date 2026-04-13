@@ -211,11 +211,18 @@ class OpenAIOAuthActivity : ComponentActivity() {
                 val stream = if (statusCode in 200..299) conn.inputStream else conn.errorStream
                 val responseBody = stream?.bufferedReader()?.use { it.readText() } ?: ""
                 if (statusCode !in 200..299) {
-                    // Log.w survives R8 (Log.d doesn't). Include response body
-                    // so release-build logcat shows what the token endpoint returned
-                    // (e.g. "invalid_grant", "redirect_uri mismatch", etc.).
-                    Log.w(TAG, "Token endpoint HTTP $statusCode: ${responseBody.take(500)}")
-                    throw RuntimeException("HTTP $statusCode: ${responseBody.take(200)}")
+                    // Log.w survives R8 (Log.d doesn't). Extract only the
+                    // error/error_description fields from the JSON response
+                    // to avoid leaking full token-endpoint payloads into
+                    // production logcat (Copilot PR #328 review feedback).
+                    val safeError = try {
+                        val j = org.json.JSONObject(responseBody)
+                        "${j.optString("error", "?")} — ${j.optString("error_description", "")}"
+                    } catch (_: Exception) {
+                        responseBody.take(100).replace(Regex("[\\r\\n]+"), " ")
+                    }
+                    Log.w(TAG, "Token endpoint HTTP $statusCode: $safeError")
+                    throw RuntimeException("HTTP $statusCode: $safeError")
                 }
                 return responseBody
             } finally {
@@ -311,6 +318,7 @@ class OpenAIOAuthActivity : ComponentActivity() {
             if (!isActiveFlow(requestId)) {
                 Log.w(TAG, "Callback arrived for stale flow $requestId — ignoring")
                 serverInstance.stop()
+                OAuthKeepAliveService.stop(appCtx)
                 return buildHtmlResponse(
                     "Ignored Redirect",
                     "A newer sign-in attempt is active. Return to SeekerClaw."
@@ -345,6 +353,7 @@ class OpenAIOAuthActivity : ComponentActivity() {
                 // Stop THIS flow's server via the captured instance — activeServer
                 // may not be assigned yet or may point to a newer flow's server.
                 serverInstance.stop()
+                OAuthKeepAliveService.stop(appCtx)
                 synchronized(FLOW_LOCK) {
                     activeTimeoutJob?.cancel()
                     activeTimeoutJob = null
@@ -368,6 +377,7 @@ class OpenAIOAuthActivity : ComponentActivity() {
                     markWriteCompleted()
                 }
                 serverInstance.stop()
+                OAuthKeepAliveService.stop(appCtx)
                 synchronized(FLOW_LOCK) {
                     activeTimeoutJob?.cancel()
                     activeTimeoutJob = null
@@ -400,9 +410,12 @@ class OpenAIOAuthActivity : ComponentActivity() {
                         // server socket closes while NanoHTTPD is mid-write, and Chrome
                         // sees a broken/empty response instead of the success/error HTML
                         // page. 500ms is plenty for a small HTML payload on localhost.
-                        // Runs on Dispatchers.IO (EXCHANGE_SCOPE) so blocking is safe.
-                        try { Thread.sleep(500) } catch (_: InterruptedException) { }
-                        serverInstance.stop()
+                        // Launched as a separate coroutine to avoid blocking an IO thread
+                        // (Copilot review feedback on Thread.sleep in coroutine context).
+                        EXCHANGE_SCOPE.launch {
+                            kotlinx.coroutines.delay(500)
+                            serverInstance.stop()
+                        }
                         synchronized(FLOW_LOCK) {
                             if (activeFlowId == requestId) {
                                 activeTimeoutJob?.cancel()
