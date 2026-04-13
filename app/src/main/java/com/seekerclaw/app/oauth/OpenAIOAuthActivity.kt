@@ -405,31 +405,24 @@ class OpenAIOAuthActivity : ComponentActivity() {
                     onComplete = {
                         // Brief delay before stopping the server so NanoHTTPD's serve
                         // thread has time to finish writing the HTTP response to Chrome.
-                        // Without this, the exchange coroutine's finally block races
-                        // against the serve thread: if the exchange fails fast, the
-                        // server socket closes while NanoHTTPD is mid-write, and Chrome
-                        // sees a broken/empty response instead of the success/error HTML
-                        // page. 500ms is plenty for a small HTML payload on localhost.
-                        // Launched as a separate coroutine to avoid blocking an IO thread
-                        // (Copilot review feedback on Thread.sleep in coroutine context).
+                        // State cleanup + service stop happen AFTER the server is actually
+                        // stopped — keeping them atomic prevents a new OAuth attempt from
+                        // starting on the same port while the old server is still bound.
                         EXCHANGE_SCOPE.launch {
                             kotlinx.coroutines.delay(500)
                             serverInstance.stop()
-                        }
-                        synchronized(FLOW_LOCK) {
-                            if (activeFlowId == requestId) {
-                                activeTimeoutJob?.cancel()
-                                activeTimeoutJob = null
-                                if (activeServer === serverInstance) activeServer = null
-                                activeWriteState = WriteState.COMPLETED
-                                activeFlowId = null
-                                activeCallbackReceived = false
+                            synchronized(FLOW_LOCK) {
+                                if (activeFlowId == requestId) {
+                                    activeTimeoutJob?.cancel()
+                                    activeTimeoutJob = null
+                                    if (activeServer === serverInstance) activeServer = null
+                                    activeWriteState = WriteState.COMPLETED
+                                    activeFlowId = null
+                                    activeCallbackReceived = false
+                                }
                             }
+                            OAuthKeepAliveService.stop(appCtx)
                         }
-                        // Stop the keep-alive foreground service now that the OAuth
-                        // flow is complete (success, error, or timeout). The service
-                        // also has a 2-minute auto-stop safety net.
-                        OAuthKeepAliveService.stop(appCtx)
                         activityRef.get()?.finishOnMain()
                     },
                 )

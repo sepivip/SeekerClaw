@@ -68,8 +68,7 @@ class OAuthKeepAliveService : Service() {
 
     // Single Handler instance — must be the SAME object in onStartCommand
     // and onDestroy so removeCallbacks actually finds the posted Runnable.
-    // Copilot flagged the original code which created new Handler instances
-    // in both methods (removeCallbacks on a different instance is a no-op).
+    // Using a different Handler instance would make removeCallbacks a no-op.
     private val handler = Handler(android.os.Looper.getMainLooper())
 
     private val autoStopRunnable = Runnable {
