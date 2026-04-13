@@ -173,6 +173,12 @@ class OpenAIOAuthActivity : ComponentActivity() {
                 }
                 Log.i(TAG, "Browser flow completed successfully")
             } catch (e: Exception) {
+                // Log.w survives R8 optimization (Log.d is stripped).
+                // Include the exception class + message explicitly so release-build
+                // logcat shows the actual error — R8 can strip the Throwable stack
+                // trace from Log.e's 3-arg overload, leaving "Token exchange failed"
+                // with zero diagnostic context (discovered BAT-494 Pixel 7 diagnosis).
+                Log.w(TAG, "Exchange error: ${e.javaClass.simpleName}: ${e.message}")
                 Log.e(TAG, "Token exchange failed", e)
                 // Only write error result if still active — don't clobber a newer flow.
                 if (!isActiveFlow(requestId)) return
@@ -204,8 +210,11 @@ class OpenAIOAuthActivity : ComponentActivity() {
                 val stream = if (statusCode in 200..299) conn.inputStream else conn.errorStream
                 val responseBody = stream?.bufferedReader()?.use { it.readText() } ?: ""
                 if (statusCode !in 200..299) {
-                    Log.d(TAG, "httpPostStatic non-2xx response: HTTP $statusCode")
-                    throw RuntimeException("HTTP $statusCode")
+                    // Log.w survives R8 (Log.d doesn't). Include response body
+                    // so release-build logcat shows what the token endpoint returned
+                    // (e.g. "invalid_grant", "redirect_uri mismatch", etc.).
+                    Log.w(TAG, "Token endpoint HTTP $statusCode: ${responseBody.take(500)}")
+                    throw RuntimeException("HTTP $statusCode: ${responseBody.take(200)}")
                 }
                 return responseBody
             } finally {
@@ -383,6 +392,15 @@ class OpenAIOAuthActivity : ComponentActivity() {
                     code = code,
                     codeVerifier = codeVerifier,
                     onComplete = {
+                        // Brief delay before stopping the server so NanoHTTPD's serve
+                        // thread has time to finish writing the HTTP response to Chrome.
+                        // Without this, the exchange coroutine's finally block races
+                        // against the serve thread: if the exchange fails fast, the
+                        // server socket closes while NanoHTTPD is mid-write, and Chrome
+                        // sees a broken/empty response instead of the success/error HTML
+                        // page. 500ms is plenty for a small HTML payload on localhost.
+                        // Runs on Dispatchers.IO (EXCHANGE_SCOPE) so blocking is safe.
+                        try { Thread.sleep(500) } catch (_: InterruptedException) { }
                         serverInstance.stop()
                         synchronized(FLOW_LOCK) {
                             if (activeFlowId == requestId) {
