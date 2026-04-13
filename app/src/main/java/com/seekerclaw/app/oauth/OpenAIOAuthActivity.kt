@@ -217,7 +217,7 @@ class OpenAIOAuthActivity : ComponentActivity() {
                     // production logcat (Copilot PR #328 review feedback).
                     val safeError = try {
                         val j = org.json.JSONObject(responseBody)
-                        "${j.optString("error", "?")} — ${j.optString("error_description", "")}"
+                        "${j.optString("error", "?")} — ${j.optString("error_description", "")}".take(200)
                     } catch (_: Exception) {
                         responseBody.take(100).replace(Regex("[\\r\\n]+"), " ")
                     }
@@ -535,7 +535,12 @@ class OpenAIOAuthActivity : ComponentActivity() {
                             """<svg viewBox="0 0 24 24" fill="none"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41z" fill="$statusColor"/></svg>"""
                         }</div>
                         <h1>$safeTitle</h1>
-                        <div class="status">${if (isSuccess) "Connected" else "Failed"}</div>
+                        <div class="status">${when (title) {
+                            "Signed In", "Success" -> "Connected"
+                            "Completing Sign-In" -> "Processing"
+                            "Ignored Redirect" -> "Ignored"
+                            else -> "Failed"
+                        }}</div>
                         <p class="message">$safeMessage</p>
                         <p class="hint">Tap <b>&#10005;</b> or <b>&#8592;</b> above to return to SeekerClaw</p>
                         <div class="divider"></div>
