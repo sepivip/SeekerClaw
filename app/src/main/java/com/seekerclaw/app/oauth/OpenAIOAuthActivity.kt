@@ -419,9 +419,13 @@ class OpenAIOAuthActivity : ComponentActivity() {
                                     activeWriteState = WriteState.COMPLETED
                                     activeFlowId = null
                                     activeCallbackReceived = false
+                                    // Only stop the keep-alive service if this is still
+                                    // the active flow. A newer flow may have started during
+                                    // the 500ms delay — stopping the service would kill
+                                    // the newer flow's network access.
+                                    OAuthKeepAliveService.stop(appCtx)
                                 }
                             }
-                            OAuthKeepAliveService.stop(appCtx)
                         }
                         activityRef.get()?.finishOnMain()
                     },

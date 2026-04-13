@@ -30,10 +30,12 @@ import com.seekerclaw.app.SeekerClawApplication
  * LIFECYCLE
  * ---------
  * Started by OpenAIOAuthActivity BEFORE opening Chrome Custom Tab.
- * Stopped by OpenAIOAuthActivity in ALL completion paths: onComplete
- * callback (success/error), cancel button press, server-start failure,
- * and error/missing-code callback handler paths. Also auto-stops after
- * 10 minutes as a safety net matching the OAuth polling timeout.
+ * Explicitly stopped by OpenAIOAuthActivity in the normal completion
+ * paths: onComplete callback (success/error), cancel button press,
+ * server-start failure, and error/missing-code callback handler paths.
+ * If the OAuth flow reaches its 10-minute timeout without an explicit
+ * stop, this service's own auto-stop safety net (also 10 minutes)
+ * cleans it up — the two timeouts are aligned by design.
  */
 class OAuthKeepAliveService : Service() {
 
