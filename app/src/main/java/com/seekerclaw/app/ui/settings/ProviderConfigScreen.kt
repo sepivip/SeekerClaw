@@ -79,7 +79,10 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
     val configVer by ConfigManager.configVersion
     var config by remember(configVer) { mutableStateOf(ConfigManager.loadConfig(context)) }
 
-    val activeProvider = providerById(config?.provider ?: "claude").id
+    // Default to OpenAI (matching SetupScreen's BAT-489 fresh-install default)
+    // so that if a user skips setup and navigates here, they land on OpenAI+OAuth
+    // instead of Anthropic+api_key.
+    val activeProvider = providerById(config?.provider ?: "openai").id
     var editField by remember { mutableStateOf<String?>(null) }
     var editLabel by remember { mutableStateOf("") }
     var editValue by remember { mutableStateOf("") }
@@ -714,7 +717,10 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
         // Normalize: ensure selectedAuth is a valid option for the current provider
         val validAuthTypes = authOptions.map { it.first }.toSet()
         var selectedAuth by remember {
-            mutableStateOf((config?.authType ?: "api_key").let { if (it in validAuthTypes) it else "api_key" })
+            // Default to "oauth" when on OpenAI with no saved config, matching
+            // the SetupScreen fresh-install default (BAT-489 / BAT-495).
+            val fallbackAuth = if (activeProvider == "openai") "oauth" else "api_key"
+            mutableStateOf((config?.authType ?: fallbackAuth).let { if (it in validAuthTypes) it else fallbackAuth })
         }
 
         AlertDialog(
