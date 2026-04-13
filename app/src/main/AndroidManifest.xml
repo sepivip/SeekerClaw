@@ -56,6 +56,16 @@
             android:foregroundServiceType="specialUse"
             android:exported="false" />
 
+        <!-- Temporary foreground service that keeps the process alive with
+             unrestricted network access during the OAuth browser flow.
+             Without this, Android restricts background internet access on
+             Pixel 7 / Android 14 and the token exchange fails with
+             UnknownHostException (BAT-494). -->
+        <service
+            android:name=".service.OAuthKeepAliveService"
+            android:foregroundServiceType="shortService"
+            android:exported="false" />
+
         <activity
             android:name=".solana.SolanaAuthActivity"
             android:theme="@android:style/Theme.Translucent.NoTitleBar"

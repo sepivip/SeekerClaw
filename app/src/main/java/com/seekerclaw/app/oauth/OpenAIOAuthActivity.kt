@@ -8,6 +8,7 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.browser.customtabs.CustomTabsIntent
 import com.seekerclaw.app.config.ConfigManager
+import com.seekerclaw.app.service.OAuthKeepAliveService
 import fi.iki.elonen.NanoHTTPD
 import android.content.Context
 import java.lang.ref.WeakReference
@@ -412,6 +413,10 @@ class OpenAIOAuthActivity : ComponentActivity() {
                                 activeCallbackReceived = false
                             }
                         }
+                        // Stop the keep-alive foreground service now that the OAuth
+                        // flow is complete (success, error, or timeout). The service
+                        // also has a 2-minute auto-stop safety net.
+                        OAuthKeepAliveService.stop(appCtx)
                         activityRef.get()?.finishOnMain()
                     },
                 )
@@ -578,6 +583,7 @@ class OpenAIOAuthActivity : ComponentActivity() {
                         }
                     }
                 }
+                OAuthKeepAliveService.stop(applicationContext)
                 finish()
             }
         }
@@ -611,6 +617,13 @@ class OpenAIOAuthActivity : ComponentActivity() {
 
         val appCtx = applicationContext
         val activityRef = WeakReference(this)
+
+        // Start a temporary foreground service BEFORE opening Chrome Custom Tab.
+        // On Pixel 7 / Android 14, the background process's internet is restricted
+        // when Chrome takes the foreground — DNS resolution for auth.openai.com fails
+        // with UnknownHostException. The foreground service gives the process
+        // unrestricted network access for the duration of the OAuth flow (BAT-494).
+        OAuthKeepAliveService.start(appCtx)
 
         // Start callback server — lives in companion object, survives Activity destruction.
         // Pass the server instance into the callback so handleCallbackStatic can stop
@@ -648,6 +661,7 @@ class OpenAIOAuthActivity : ComponentActivity() {
                     }
                 }
             }
+            OAuthKeepAliveService.stop(appCtx)
             finish()
             return
         }
