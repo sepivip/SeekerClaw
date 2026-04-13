@@ -438,7 +438,8 @@ class OpenAIOAuthActivity : ComponentActivity() {
             val safeTitle = escapeHtml(title)
             val safeMessage = escapeHtml(message)
             val isSuccess = title == "Success" || title == "Completing Sign-In" || title == "Signed In"
-            val accentColor = if (isSuccess) "#4ADE80" else "#F87171"
+            // DarkOps design system colors (from Theme.kt)
+            val statusColor = if (isSuccess) "#00C805" else "#F87171" // actionPrimary / error
             val icon = if (isSuccess) "&#10003;" else "&#10007;"
             return """
                 <!DOCTYPE html>
@@ -451,40 +452,94 @@ class OpenAIOAuthActivity : ComponentActivity() {
                     body {
                         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
                         display: flex; justify-content: center; align-items: center;
-                        height: 100vh; background: #0A0A0F; color: #fff;
+                        min-height: 100vh; background: #0A0A0F; color: #fff;
+                        padding: 24px;
                     }
                     .card {
-                        text-align: center; padding: 3rem 2rem;
-                        max-width: 400px; width: 90%;
+                        text-align: center; padding: 40px 28px 32px;
+                        max-width: 380px; width: 100%;
+                        background: #16161F;
+                        border: 1px solid rgba(55, 65, 81, 0.25);
+                        border-radius: 12px;
+                        position: relative;
+                        overflow: hidden;
                     }
-                    .icon {
-                        width: 80px; height: 80px; border-radius: 50%;
-                        background: ${accentColor}15;
-                        border: 2px solid ${accentColor};
+                    /* Corner glow — mirrors the Compose cornerGlowBorder */
+                    .card::before {
+                        content: '';
+                        position: absolute; top: -1px; left: -1px; right: -1px; bottom: -1px;
+                        border-radius: 12px;
+                        background: radial-gradient(ellipse at top left, ${statusColor}20 0%, transparent 50%),
+                                    radial-gradient(ellipse at bottom right, ${statusColor}10 0%, transparent 50%);
+                        pointer-events: none; z-index: 0;
+                    }
+                    .card > * { position: relative; z-index: 1; }
+                    .icon-ring {
+                        width: 72px; height: 72px; border-radius: 50%;
+                        background: ${statusColor}12;
+                        border: 2px solid ${statusColor}40;
                         display: flex; align-items: center; justify-content: center;
-                        margin: 0 auto 1.5rem; font-size: 36px; color: $accentColor;
+                        margin: 0 auto 20px; font-size: 32px; color: $statusColor;
                     }
                     h1 {
-                        font-size: 24px; font-weight: 700; color: $accentColor;
-                        margin-bottom: 0.75rem; letter-spacing: -0.5px;
+                        font-size: 20px; font-weight: 700;
+                        color: rgba(255, 255, 255, 0.94);
+                        margin-bottom: 8px; letter-spacing: -0.3px;
+                    }
+                    .status {
+                        display: inline-block; padding: 3px 10px;
+                        background: ${statusColor}18; color: $statusColor;
+                        border-radius: 999px; font-size: 12px; font-weight: 600;
+                        letter-spacing: 0.5px; text-transform: uppercase;
+                        margin-bottom: 16px;
                     }
                     .message {
-                        font-size: 15px; color: rgba(255,255,255,0.6);
-                        line-height: 1.5; margin-bottom: 2rem;
+                        font-size: 14px; color: #9CA3AF;
+                        line-height: 1.6; margin-bottom: 28px;
+                    }
+                    .close-btn {
+                        display: inline-block; padding: 12px 32px;
+                        background: ${statusColor}; color: #0A0A0F;
+                        border: none; border-radius: 8px;
+                        font-size: 15px; font-weight: 700;
+                        letter-spacing: 0.3px; cursor: pointer;
+                        margin-bottom: 24px; transition: opacity 0.15s;
+                    }
+                    .close-btn:active { opacity: 0.7; }
+                    .divider {
+                        height: 1px; background: rgba(55, 65, 81, 0.4);
+                        margin-bottom: 16px;
                     }
                     .brand {
-                        font-size: 12px; color: rgba(255,255,255,0.25);
-                        letter-spacing: 1px; text-transform: uppercase;
+                        font-size: 11px; color: rgba(255, 255, 255, 0.2);
+                        letter-spacing: 2px; text-transform: uppercase;
                     }
+                    .brand span { color: #E41F28; }
                 </style>
                 </head>
                 <body>
                     <div class="card">
-                        <div class="icon">$icon</div>
+                        <div class="icon-ring">$icon</div>
                         <h1>$safeTitle</h1>
+                        <div class="status">${if (isSuccess) "Connected" else "Failed"}</div>
                         <p class="message">$safeMessage</p>
-                        <p class="brand">SeekerClaw</p>
+                        <button class="close-btn" onclick="window.close()">
+                            ${if (isSuccess) "Return to SeekerClaw" else "Close"}
+                        </button>
+                        <div class="divider"></div>
+                        <p class="brand"><span>&#9679;</span> SeekerClaw</p>
                     </div>
+                    ${if (isSuccess) """
+                    <script>
+                        // Auto-close the Custom Tab after 3 seconds on success so the
+                        // user doesn't have to tap — they see "Connected" briefly, then
+                        // land back in SeekerClaw automatically. Falls back gracefully
+                        // if window.close() is blocked (some browsers restrict it for
+                        // non-script-opened windows — the button is still there as manual
+                        // fallback).
+                        setTimeout(function() { try { window.close(); } catch(e) {} }, 3000);
+                    </script>
+                    """ else ""}
                 </body>
                 </html>
             """.trimIndent()
