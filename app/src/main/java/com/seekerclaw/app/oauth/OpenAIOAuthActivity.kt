@@ -315,10 +315,11 @@ class OpenAIOAuthActivity : ComponentActivity() {
 
             // Reject callbacks from a stale flow — a new OAuth attempt may have
             // started (resetting shared state). Don't flip any shared guards.
+            // Only stop the stale flow's captured server here; do NOT stop the
+            // process-wide keep-alive service because a newer flow may still need it.
             if (!isActiveFlow(requestId)) {
                 Log.w(TAG, "Callback arrived for stale flow $requestId — ignoring")
                 serverInstance.stop()
-                OAuthKeepAliveService.stop(appCtx)
                 return buildHtmlResponse(
                     "Ignored Redirect",
                     "A newer sign-in attempt is active. Return to SeekerClaw."
