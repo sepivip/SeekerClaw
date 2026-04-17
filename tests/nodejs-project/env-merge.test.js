@@ -103,9 +103,15 @@ t('config.js merge wiring still present (structural, not substring)', () => {
     // Merge loop iterates config.envVars entries
     assert.ok(/Object\.entries\s*\(\s*config\.envVars\s*\)/.test(code),
         'config.js is missing Object.entries(config.envVars) merge loop');
-    // Actually writes into process.env
-    assert.ok(/process\.env\[key\]\s*=\s*String\(value\)/.test(code),
-        'config.js is missing process.env[key] = String(value) assignment');
+    // Actually writes into process.env — value source can be String(value) or a
+    // named variable (e.g. `str`) after the value has been size-checked.
+    assert.ok(/process\.env\[key\]\s*=\s*(String\(value\)|[A-Za-z_$][\w$]*)/.test(code),
+        'config.js is missing process.env[key] = <value> assignment');
+    // Size-checks the value against the 8 KB cap before writing (defense in depth).
+    // The threshold can be either a literal (e.g. 8192) or a named constant
+    // (e.g. _ENV_MAX_VALUE_BYTES) — accept either as evidence the check is wired.
+    assert.ok(/Buffer\.byteLength\s*\([^)]+,\s*['"]utf8['"]\s*\)\s*>\s*[\w$]+/.test(code),
+        'config.js is missing Buffer.byteLength value-size check');
     // Pushes into USER_ENV_KEYS after a successful write
     assert.ok(/USER_ENV_KEYS\.push\s*\(\s*key\s*\)/.test(code),
         'config.js is missing USER_ENV_KEYS.push(key) inside merge loop');
