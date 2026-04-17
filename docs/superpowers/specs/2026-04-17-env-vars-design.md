@@ -131,7 +131,7 @@ Layout:
 - **Header card:** "N vars set · used by M skills" subtitle. If N=0, an empty state with inline CTA.
 - **List, alphabetical by name:**
   - Row: monospace `KEY_NAME` · masked value `••••••` · trailing edit pencil.
-  - Below the name, a wrap-row of skill chips for every skill whose `requires.env` contains this key (e.g. `github-ops`, `review-pr`). Tap chip → navigate to Skills screen scrolled to that skill.
+  - Below the name, a wrap-row of skill chips for every skill whose `requires.env` contains this key (e.g. `github-ops`, `review-pr`). Chips are **non-interactive visual labels** — the agent-facing "which skills use this var" info is valuable without a tap target, and deep-linking to a filtered/scrolled Skills list is a separate UX problem deferred out of this PR. (The inverse direction — Skills screen → tap missing env → pre-filled Add dialog — IS wired; see §7.)
   - If no skills reference the key, show dim `· unused` label (not an error — some vars are for `shell_exec` only).
   - Tap row → edit modal. Swipe left → delete confirm dialog.
 - Empty state: "No env vars yet. Add your first, or paste a .env file."

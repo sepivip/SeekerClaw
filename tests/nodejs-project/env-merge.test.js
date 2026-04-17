@@ -25,20 +25,29 @@ const RESERVED_EXACT = new Set([
     'API_TIMEOUT_BACKOFF_MS', 'API_TIMEOUT_MAX_BACKOFF_MS',
     'WS_NO_UTF_8_VALIDATE', 'WS_NO_BUFFER_UTIL',
 ]);
-const RESERVED_PREFIXES = ['NODE_', 'npm_', 'ANDROID_', 'LC_', 'JAVA_'];
+const RESERVED_PREFIXES = ['NODE_', 'NPM_', 'ANDROID_', 'LC_', 'JAVA_'];
+const MAX_KEYS = 256;
+const MAX_VALUE_BYTES = 8192;
 
 function mergeEnvVars(envVarsObj, targetEnv) {
     const merged = [];
-    if (!envVarsObj || typeof envVarsObj !== 'object') return merged;
+    let droppedOversize = 0;
+    if (!envVarsObj || typeof envVarsObj !== 'object') return { merged, droppedOversize };
     for (const [key, value] of Object.entries(envVarsObj)) {
+        if (merged.length >= MAX_KEYS) break;
         if (typeof key !== 'string') continue;
         if (!/^[A-Z_][A-Z0-9_]*$/.test(key)) continue;
         if (RESERVED_EXACT.has(key)) continue;
         if (RESERVED_PREFIXES.some((p) => key.startsWith(p))) continue;
-        targetEnv[key] = String(value);
+        const str = String(value);
+        if (Buffer.byteLength(str, 'utf8') > MAX_VALUE_BYTES) {
+            droppedOversize++;
+            continue;
+        }
+        targetEnv[key] = str;
         merged.push(key);
     }
-    return merged;
+    return { merged, droppedOversize };
 }
 
 // --- tests ---
@@ -47,9 +56,9 @@ function t(name, fn) { tests.push([name, fn]); }
 
 t('merges simple KEY=VALUE', () => {
     const env = {};
-    const keys = mergeEnvVars({ FOO: 'bar' }, env);
+    const { merged } = mergeEnvVars({ FOO: 'bar' }, env);
     assert.strictEqual(env.FOO, 'bar');
-    assert.deepStrictEqual(keys, ['FOO']);
+    assert.deepStrictEqual(merged, ['FOO']);
 });
 
 t('coerces non-string values to string', () => {
@@ -60,15 +69,21 @@ t('coerces non-string values to string', () => {
 
 t('skips reserved exact name PATH', () => {
     const env = {};
-    const keys = mergeEnvVars({ PATH: '/tmp' }, env);
+    const { merged } = mergeEnvVars({ PATH: '/tmp' }, env);
     assert.strictEqual(env.PATH, undefined);
-    assert.deepStrictEqual(keys, []);
+    assert.deepStrictEqual(merged, []);
 });
 
 t('skips reserved prefix NODE_*', () => {
     const env = {};
     mergeEnvVars({ NODE_OPTIONS: '--foo' }, env);
     assert.strictEqual(env.NODE_OPTIONS, undefined);
+});
+
+t('skips reserved prefix NPM_*', () => {
+    const env = {};
+    mergeEnvVars({ NPM_CONFIG_X: 'y' }, env);
+    assert.strictEqual(env.NPM_CONFIG_X, undefined);
 });
 
 t('skips invalid names (lowercase)', () => {
@@ -85,9 +100,28 @@ t('skips invalid names (leading digit)', () => {
 
 t('empty/missing object is no-op', () => {
     const env = {};
-    assert.deepStrictEqual(mergeEnvVars(null, env), []);
-    assert.deepStrictEqual(mergeEnvVars(undefined, env), []);
-    assert.deepStrictEqual(mergeEnvVars({}, env), []);
+    assert.deepStrictEqual(mergeEnvVars(null, env), { merged: [], droppedOversize: 0 });
+    assert.deepStrictEqual(mergeEnvVars(undefined, env), { merged: [], droppedOversize: 0 });
+    assert.deepStrictEqual(mergeEnvVars({}, env), { merged: [], droppedOversize: 0 });
+});
+
+t('drops values over 8 KB cap and reports count', () => {
+    const env = {};
+    const big = 'x'.repeat(8193);
+    const small = 'ok';
+    const { merged, droppedOversize } = mergeEnvVars({ TOO_BIG: big, FINE: small }, env);
+    assert.strictEqual(env.TOO_BIG, undefined);
+    assert.strictEqual(env.FINE, 'ok');
+    assert.deepStrictEqual(merged, ['FINE']);
+    assert.strictEqual(droppedOversize, 1);
+});
+
+t('stops at MAX_KEYS cap', () => {
+    const env = {};
+    const input = {};
+    for (let i = 0; i < 260; i++) input[`KEY_${i}`] = String(i);
+    const { merged } = mergeEnvVars(input, env);
+    assert.strictEqual(merged.length, 256);
 });
 
 t('config.js merge wiring still present (structural, not substring)', () => {
