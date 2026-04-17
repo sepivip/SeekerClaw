@@ -15,6 +15,7 @@ const {
     truncateToolResult,
     localTimestamp, localDateStr, log,
     getOwnerId,
+    USER_ENV_KEYS,
 } = require('./config');
 
 const { redactSecrets } = require('./security');
@@ -694,6 +695,24 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('Note: Keys in agent_settings.json persist across restarts. After saving a key, built-in tools (web_search, Jupiter, etc.) pick it up immediately — no restart needed.');
     lines.push('If asked about config issues, check agent_settings.json and PLATFORM.md.');
     lines.push('');
+
+    // Environment Variables — key names only; values are secrets (BAT-495)
+    if (USER_ENV_KEYS && USER_ENV_KEYS.length > 0) {
+        const keyList = USER_ENV_KEYS.map((k) => `\`${k}\``).join(', ');
+        lines.push('## Environment Variables');
+        lines.push(`The user has set ${USER_ENV_KEYS.length} env var${USER_ENV_KEYS.length === 1 ? '' : 's'}: ${keyList}.`);
+        lines.push('These values are available to shell_exec, js_eval, and skills via `process.env`. ' +
+            'You cannot read their values directly — they are secrets by design. ' +
+            'Use the `env_list` tool to re-check availability at any time. ' +
+            'If a skill requires a variable that is not in this list, tell the user to add it in ' +
+            'Settings → Env Vars (they can paste a `.env` file for bulk add).');
+        lines.push('');
+    } else {
+        lines.push('## Environment Variables');
+        lines.push('The user has not set any env vars yet. Skills with `requires.env` will be blocked until ' +
+            'the user adds the needed keys in Settings → Env Vars.');
+        lines.push('');
+    }
 
     // Health System — agent knows the health file mechanism (BAT-232)
     lines.push('## Health Monitoring');
