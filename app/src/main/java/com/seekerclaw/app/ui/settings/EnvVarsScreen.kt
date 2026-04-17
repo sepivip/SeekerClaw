@@ -99,11 +99,8 @@ fun EnvVarsScreen(
         }
     }
 
-    val refresh: () -> Unit = {
-        val loaded = ConfigManager.loadEnvVars(context)
-        envVars = loaded
-        EnvVarRegistry.refreshFromConfig(context)
-    }
+    // No manual refresh: ConfigManager.saveEnvVars bumps configVersion, which triggers
+    // the LaunchedEffect(configVer) above to re-load envVars + refresh the registry.
 
     val onSave: (EnvVar) -> Unit = { newVar ->
         val updated = when (val s = dialogState) {
@@ -111,7 +108,6 @@ fun EnvVarsScreen(
             else -> envVars + newVar
         }
         ConfigManager.saveEnvVars(context, updated)
-        refresh()
         dialogState = EnvVarDialogState.Hidden
     }
 
@@ -381,9 +377,12 @@ fun EnvVarsScreen(
             existingKeys = envVars.map { it.name }.toSet(),
             onDismiss = { showPasteDialog = false },
             onApply = { newVars ->
-                val merged = (envVars + newVars).distinctBy { it.name }
+                // associateBy keeps the LAST occurrence — pasted newVars overwrite
+                // existing entries with the same name. This matches the paste preview
+                // which counts "will overwrite" rows; distinctBy {} would silently
+                // drop the user's intended overwrite.
+                val merged = (envVars + newVars).associateBy { it.name }.values.toList()
                 ConfigManager.saveEnvVars(context, merged)
-                refresh()
                 showPasteDialog = false
             },
         )
@@ -402,8 +401,17 @@ fun EnvVarsScreen(
                 )
             },
             text = {
+                val affectedSkills = EnvVarRegistry.skillsForKey(target.name)
+                val body = if (affectedSkills.isEmpty()) {
+                    "Delete \"${target.name}\"? This cannot be undone."
+                } else {
+                    val skillWord = if (affectedSkills.size == 1) "skill" else "skills"
+                    val preview = affectedSkills.take(3).joinToString(", ")
+                    val suffix = if (affectedSkills.size > 3) ", +${affectedSkills.size - 3} more" else ""
+                    "Delete \"${target.name}\"? Required by ${affectedSkills.size} $skillWord: $preview$suffix. These will stop working until the var is re-added."
+                }
                 Text(
-                    text = "Delete \"${target.name}\"? Skills that require it will stop working until the var is re-added.",
+                    text = body,
                     fontFamily = RethinkSans,
                     fontSize = 14.sp,
                     color = SeekerClawColors.TextSecondary,
@@ -412,7 +420,6 @@ fun EnvVarsScreen(
             confirmButton = {
                 TextButton(onClick = {
                     ConfigManager.saveEnvVars(context, envVars.filterNot { it.name == target.name })
-                    refresh()
                     deleteTarget = null
                 }) {
                     Text(

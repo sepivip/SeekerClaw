@@ -1,9 +1,11 @@
 package com.seekerclaw.app.config
 
 import android.content.Context
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.withContext
 
 /**
  * Single source of truth for env var key names and the skill ↔ env reverse index.
@@ -22,9 +24,15 @@ object EnvVarRegistry {
     private val _skillRequirements = MutableStateFlow<Map<String, List<String>>>(emptyMap())
     val skillRequirements: StateFlow<Map<String, List<String>>> = _skillRequirements.asStateFlow()
 
-    /** Reads the current env var list from encrypted prefs and publishes the names. */
-    fun refreshFromConfig(context: Context) {
-        _keys.value = ConfigManager.loadEnvVars(context).map { it.name }.toSet()
+    /**
+     * Reads the current env var list from encrypted prefs and publishes the names.
+     * Suspending: Keystore decrypt + JSON parse runs on [Dispatchers.IO] to avoid main-thread jank.
+     */
+    suspend fun refreshFromConfig(context: Context) {
+        val names = withContext(Dispatchers.IO) {
+            ConfigManager.loadEnvVars(context).map { it.name }.toSet()
+        }
+        _keys.value = names
     }
 
     /**

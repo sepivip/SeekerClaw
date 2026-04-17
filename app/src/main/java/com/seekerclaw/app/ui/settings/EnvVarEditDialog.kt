@@ -24,6 +24,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.seekerclaw.app.config.EnvVar
+import java.util.Locale
 
 @Composable
 fun EnvVarEditDialog(
@@ -46,14 +47,16 @@ fun EnvVarEditDialog(
     var value by remember { mutableStateOf(initialValue) }
     var showValue by remember { mutableStateOf(false) }
 
-    val normalizedName = name.uppercase().trim()
+    // Locale.ROOT avoids locale-specific uppercasing (e.g. Turkish `i` → `İ` would
+    // fail the ASCII-only POSIX name regex).
+    val normalizedName = name.uppercase(Locale.ROOT).trim()
     val nameError: String? = when {
         name.isEmpty() -> null // silent while empty; Save button stays disabled
         !isEdit && existingKeys.contains(normalizedName) -> "Key already exists — edit instead"
         else -> EnvVar.validateName(normalizedName)
     }
     val valueError: String? = EnvVar.validateValue(value)
-    val canSave = name.isNotEmpty() && nameError == null && valueError == null
+    val canSave = name.isNotEmpty() && value.isNotBlank() && nameError == null && valueError == null
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -62,7 +65,7 @@ fun EnvVarEditDialog(
             Column {
                 OutlinedTextField(
                     value = name,
-                    onValueChange = { input -> name = input.uppercase() },
+                    onValueChange = { input -> name = input.uppercase(Locale.ROOT) },
                     label = { Text("KEY") },
                     enabled = !isEdit,
                     singleLine = true,
