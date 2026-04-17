@@ -95,6 +95,38 @@ function normalizeSecret(val) {
 }
 
 // ============================================================================
+// USER ENV VARS — merge user-set env vars into process.env
+// ============================================================================
+// Filters out POSIX-invalid names and reserved names (defense in depth — the
+// Android-side UI already blocks these, but a malicious config import could
+// bypass that). USER_ENV_KEYS is exported so buildSystemBlocks() and the
+// env_list tool can list the user-set keys without filtering process.env
+// (which also contains system vars like PATH).
+
+const _ENV_RESERVED_EXACT = new Set([
+    'PATH', 'HOME', 'TMPDIR', 'USER', 'SHELL', 'LANG', 'TERM',
+    'AGENT_VERSION',
+    'API_TIMEOUT_MS', 'API_TIMEOUT_RETRIES',
+    'API_TIMEOUT_BACKOFF_MS', 'API_TIMEOUT_MAX_BACKOFF_MS',
+    'WS_NO_UTF_8_VALIDATE', 'WS_NO_BUFFER_UTIL',
+]);
+const _ENV_RESERVED_PREFIXES = ['NODE_', 'npm_', 'ANDROID_', 'LC_', 'JAVA_'];
+const USER_ENV_KEYS = [];
+
+if (config.envVars && typeof config.envVars === 'object') {
+    for (const [key, value] of Object.entries(config.envVars)) {
+        if (typeof key !== 'string') continue;
+        if (!/^[A-Z_][A-Z0-9_]*$/.test(key)) continue;
+        if (_ENV_RESERVED_EXACT.has(key)) continue;
+        if (_ENV_RESERVED_PREFIXES.some((p) => key.startsWith(p))) continue;
+        process.env[key] = String(value);
+        USER_ENV_KEYS.push(key);
+    }
+    USER_ENV_KEYS.sort();
+    log(`[Config] Merged ${USER_ENV_KEYS.length} user env var(s) into process.env`, 'DEBUG');
+}
+
+// ============================================================================
 // CONFIG CONSTANTS
 // ============================================================================
 
@@ -596,4 +628,7 @@ module.exports = {
 
     // Conversational API keys (BAT-236)
     syncAgentApiKeys,
+
+    // User env vars (BAT-495)
+    USER_ENV_KEYS,
 };
