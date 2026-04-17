@@ -74,6 +74,12 @@ fun EnvVarsScreen(
 ) {
     val context = LocalContext.current
     var envVars by remember { mutableStateOf(emptyList<EnvVar>()) }
+    // Gate all save-initiating actions (+ button, Raw editor, delete) until the
+    // initial async load completes. Without this, the user could open the Add
+    // dialog during the load window, save `FOO=bar`, and silently wipe every
+    // other already-stored env var because the save would have been built on
+    // top of an empty list.
+    var isLoaded by remember { mutableStateOf(false) }
     var dialogState by remember { mutableStateOf<EnvVarDialogState>(EnvVarDialogState.Hidden) }
     var showRawEditor by remember { mutableStateOf(false) }
     var deleteTarget by remember { mutableStateOf<EnvVar?>(null) }
@@ -103,11 +109,14 @@ fun EnvVarsScreen(
         }
         envVars = loaded
         EnvVarRegistry.updateKeys(loaded)
+        isLoaded = true
     }
 
-    // Open Add dialog pre-filled when navigated with a prefillKey query param
-    LaunchedEffect(prefillKey) {
-        if (!prefillKey.isNullOrBlank() && dialogState is EnvVarDialogState.Hidden) {
+    // Open Add dialog pre-filled when navigated with a prefillKey query param.
+    // Wait for isLoaded so the eventual save builds on the real (loaded) list
+    // instead of the empty initial state.
+    LaunchedEffect(prefillKey, isLoaded) {
+        if (isLoaded && !prefillKey.isNullOrBlank() && dialogState is EnvVarDialogState.Hidden) {
             dialogState = EnvVarDialogState.Add(prefillName = prefillKey)
         }
     }
@@ -147,11 +156,14 @@ fun EnvVarsScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { dialogState = EnvVarDialogState.Add() }) {
+                    IconButton(
+                        onClick = { dialogState = EnvVarDialogState.Add() },
+                        enabled = isLoaded,
+                    ) {
                         Icon(
                             imageVector = Icons.Default.Add,
                             contentDescription = "Add env var",
-                            tint = SeekerClawColors.TextPrimary,
+                            tint = if (isLoaded) SeekerClawColors.TextPrimary else SeekerClawColors.TextDim,
                         )
                     }
                 },
@@ -223,6 +235,7 @@ fun EnvVarsScreen(
                 Spacer(modifier = Modifier.height(8.dp))
                 TextButton(
                     onClick = { showRawEditor = true },
+                    enabled = isLoaded,
                     contentPadding = PaddingValues(0.dp),
                 ) {
                     Text(
@@ -265,6 +278,7 @@ fun EnvVarsScreen(
                             Button(
                                 onClick = { dialogState = EnvVarDialogState.Add() },
                                 shape = shape,
+                                enabled = isLoaded,
                                 colors = ButtonDefaults.buttonColors(
                                     containerColor = SeekerClawColors.ActionPrimary,
                                     contentColor = Color.White,
@@ -282,7 +296,10 @@ fun EnvVarsScreen(
                                     modifier = Modifier.padding(start = 4.dp),
                                 )
                             }
-                            TextButton(onClick = { showRawEditor = true }) {
+                            TextButton(
+                                onClick = { showRawEditor = true },
+                                enabled = isLoaded,
+                            ) {
                                 Text(
                                     text = "{ }  Raw editor",
                                     fontFamily = RethinkSans,

@@ -51,7 +51,12 @@ fun EnvVarRawEditorDialog(
     val initialText = remember(currentVars) {
         currentVars.sortedBy { it.name }.joinToString("\n") { "${it.name}=${it.value}" }
     }
-    var text by remember { mutableStateOf(initialText) }
+    // Key the editable buffer to currentVars too — if the parent ever opens the
+    // dialog before its async load completes (the screen now blocks this, but
+    // keep the guard), the buffer picks up the real content when the prop
+    // updates. Once the user is actively editing, the parent closes the dialog
+    // on save before configVersion-driven reloads fire, so we don't clobber edits.
+    var text by remember(currentVars) { mutableStateOf(initialText) }
 
     // Parse + diff run synchronously on each `text` change. Kotlin regex over
     // realistic inputs (≤ 256 keys × a few hundred bytes each = ~100 KB of text)
