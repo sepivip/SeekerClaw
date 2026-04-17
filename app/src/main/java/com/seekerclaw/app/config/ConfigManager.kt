@@ -974,13 +974,16 @@ object ConfigManager {
      * caller could bypass the UI.
      */
     fun saveEnvVars(context: Context, vars: List<EnvVar>) {
-        // associateBy gives last-occurrence wins with stable insertion order — same
-        // semantics as EnvVarRawEditorDialog's merge so paste/edit round-trips are
-        // consistent regardless of which entry point a duplicate arrives through.
+        // Last-wins-on-value dedup via associateBy: when a name appears multiple
+        // times, the later entry's VALUE replaces the earlier one's, matching
+        // `.env` convention and EnvVarRawEditorDialog. Iteration order follows
+        // first-insertion of each key (Kotlin LinkedHashMap behavior — entries
+        // don't re-order on update), which is fine because loadEnvVars sorts
+        // alphabetically before returning anyway.
         val cleaned = vars
             .filter { EnvVar.validateName(it.name) == null } // regex + reserved check
             .filter { EnvVar.validateValue(it.value) == null } // 8 KB UTF-8 byte cap + no newlines
-            .associateBy { it.name } // last-wins dedup
+            .associateBy { it.name }
             .values
             .take(EnvVar.MAX_KEYS)
             .toList()
@@ -1018,18 +1021,21 @@ object ConfigManager {
             val enc = prefs(context).getString(KEY_ENV_VARS_ENC, null) ?: return emptyList()
             val json = KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP))
             val arr = JSONArray(json)
-            (0 until arr.length())
-                .asSequence()
-                .map { i ->
-                    val obj = arr.getJSONObject(i)
-                    EnvVar(
-                        name = obj.getString("name"),
-                        value = obj.optString("value", ""),
-                    )
-                }
-                .filter { EnvVar.validateName(it.name) == null }
+            val raw = (0 until arr.length()).map { i ->
+                val obj = arr.getJSONObject(i)
+                EnvVar(
+                    name = obj.getString("name"),
+                    value = obj.optString("value", ""),
+                )
+            }
+            // Same last-wins dedup as saveEnvVars (associateBy — later values
+            // replace earlier ones). Using distinctBy here would diverge from
+            // saveEnvVars' semantics and produce inconsistent results on
+            // corrupted/legacy blobs that happen to contain duplicate names.
+            raw.filter { EnvVar.validateName(it.name) == null }
                 .filter { EnvVar.validateValue(it.value) == null }
-                .distinctBy { it.name }
+                .associateBy { it.name }
+                .values
                 .take(EnvVar.MAX_KEYS)
                 .sortedBy { it.name }
                 .toList()
