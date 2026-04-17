@@ -969,15 +969,19 @@ object ConfigManager {
      * Bumps [configVersion] so observers re-read.
      *
      * Defense in depth: applies full validation (name regex, reserved check, value size cap),
-     * dedupes on name (first occurrence wins), and enforces [EnvVar.MAX_KEYS]. UI already
-     * blocks these, but a malicious programmatic caller could bypass the UI.
+     * dedupes on name (last occurrence wins — matches `.env` convention and the Raw editor),
+     * and enforces [EnvVar.MAX_KEYS]. UI already blocks these, but a malicious programmatic
+     * caller could bypass the UI.
      */
     fun saveEnvVars(context: Context, vars: List<EnvVar>) {
+        // associateBy gives last-occurrence wins with stable insertion order — same
+        // semantics as EnvVarRawEditorDialog's merge so paste/edit round-trips are
+        // consistent regardless of which entry point a duplicate arrives through.
         val cleaned = vars
-            .asSequence()
             .filter { EnvVar.validateName(it.name) == null } // regex + reserved check
-            .filter { EnvVar.validateValue(it.value) == null } // 8 KB UTF-8 byte cap
-            .distinctBy { it.name } // first occurrence wins
+            .filter { EnvVar.validateValue(it.value) == null } // 8 KB UTF-8 byte cap + no newlines
+            .associateBy { it.name } // last-wins dedup
+            .values
             .take(EnvVar.MAX_KEYS)
             .toList()
         if (cleaned.size < vars.size) {

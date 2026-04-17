@@ -14,22 +14,31 @@ object EnvVarParser {
         return text.lines()
             .asSequence()
             .mapNotNull { rawLine ->
-                val trimmed = rawLine.trim()
-                if (trimmed.isEmpty() || trimmed.startsWith("#")) null
-                else parseLine(trimmed, rawLine)
+                // Strip a trailing \r (Windows CRLF endings — String.lines() leaves
+                // the \r) and leading whitespace (for indented / export-prefixed
+                // lines). Preserve trailing whitespace inside values — a round-trip
+                // through the Raw editor should not silently mutate user input.
+                val stripped = rawLine.trimEnd('\r')
+                val leftTrimmed = stripped.trimStart()
+                if (leftTrimmed.isEmpty() || leftTrimmed.startsWith("#")) null
+                else parseLine(leftTrimmed, rawLine)
             }
             .toList()
     }
 
-    /** [trimmed] is used for parsing; [rawLine] is preserved verbatim for UI preview / error display. */
-    private fun parseLine(trimmed: String, rawLine: String): ParsedEnvEntry {
-        val stripped = if (trimmed.startsWith("export ")) trimmed.removePrefix("export ").trimStart() else trimmed
+    /** [leftTrimmed] is used for parsing (leading whitespace + \r removed only);
+     *  [rawLine] is preserved verbatim for UI preview / error display. */
+    private fun parseLine(leftTrimmed: String, rawLine: String): ParsedEnvEntry {
+        val stripped = if (leftTrimmed.startsWith("export ")) leftTrimmed.removePrefix("export ").trimStart() else leftTrimmed
         val eq = stripped.indexOf('=')
         if (eq <= 0) {
             return ParsedEnvEntry(name = stripped, value = "", status = ParseStatus.MALFORMED, rawLine = rawLine)
         }
         val rawName = stripped.substring(0, eq).trim()
-        val rawValue = unquote(stripped.substring(eq + 1).trim())
+        // Preserve trailing whitespace in unquoted values — POSIX `.env` convention
+        // calls for stripping it, but that breaks Raw editor round-trips where the
+        // user's intent is to persist exactly what they wrote. Quotes still strip.
+        val rawValue = unquote(stripped.substring(eq + 1))
 
         val status = when {
             !EnvVar.NAME_REGEX.matches(rawName) -> ParseStatus.INVALID_NAME

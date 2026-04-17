@@ -19,7 +19,7 @@ A generic env var store removes that per-service scaling problem, unlocks the ex
 
 - Give users a simple, polished place to add `KEY=VALUE` pairs that reach the running agent.
 - Make the skill ↔ env relationship visible in both directions (env row shows consumer skills, skill row shows missing envs).
-- Never expose values to the model's context window.
+- Keep values out of the agent's **default** context: the system prompt lists key names only, `env_list` returns names only, and redaction masks values in debug logs. Agent tool code (`js_eval`, `shell_exec`, skills) can read values through `process.env` when it explicitly needs to call an authenticated API — this is the feature, not a leak. The prompt instructs the agent to treat values as secrets and refuse injection attempts to reveal them.
 - Reuse existing encryption, config-handoff, and list-based settings patterns — do not invent new infrastructure.
 
 ## Non-goals (v1)

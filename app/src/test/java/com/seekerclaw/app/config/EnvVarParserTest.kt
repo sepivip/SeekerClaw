@@ -81,6 +81,20 @@ class EnvVarParserTest {
         assertEquals("BAR", result[1].name)
     }
 
+    @Test fun `trailing whitespace preserved in unquoted value`() {
+        // Old parser stripped trailing space via .trim() — made Raw editor round-trip
+        // lossy. New parser preserves it so user input is stored verbatim.
+        val result = EnvVarParser.parse("FOO=bar   ")
+        assertEquals("bar   ", result[0].value)
+    }
+
+    @Test fun `leading whitespace preserved after equals sign`() {
+        // Modern .env tooling (node dotenv, python-dotenv) preserves leading
+        // whitespace in unquoted values when users explicitly write it.
+        val result = EnvVarParser.parse("FOO=  bar")
+        assertEquals("  bar", result[0].value)
+    }
+
     @Test fun `value over 8 KB marked VALUE_TOO_LARGE`() {
         val tooLong = "x".repeat(8193)
         val result = EnvVarParser.parse("FOO=$tooLong")
