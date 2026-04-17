@@ -14,6 +14,7 @@ const {
     localTimestamp, log, setRedactFn,
     getOwnerId, setOwnerId,
     workDir, config, debugLog,
+    USER_ENV_KEYS,
 } = require('./config');
 
 process.on('uncaughtException', (err) => log('UNCAUGHT: ' + (err.stack || err), 'ERROR'));
@@ -26,12 +27,20 @@ process.on('unhandledRejection', (reason) => log('UNHANDLED: ' + reason, 'ERROR'
 const {
     redactSecrets,
     wrapExternalContent,
+    registerRedactedSecret,
 } = require('./security');
 
 // Wire redactSecrets into config.js log() so early log lines before this point
 // are unredacted (acceptable — they only contain non-secret startup info) and
 // all subsequent log lines go through redaction.
 setRedactFn(redactSecrets);
+
+// Register user-provided env-var values as secrets to mask in debug logs (BAT-495).
+// Values < 7 chars are skipped inside registerRedactedSecret to avoid false positives.
+for (const key of USER_ENV_KEYS) {
+    const val = process.env[key];
+    if (typeof val === 'string') registerRedactedSecret(val);
+}
 
 // ============================================================================
 // BRIDGE (extracted to bridge.js — BAT-195)
