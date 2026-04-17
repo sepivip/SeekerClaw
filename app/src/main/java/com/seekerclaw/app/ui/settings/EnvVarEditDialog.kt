@@ -56,7 +56,10 @@ fun EnvVarEditDialog(
         else -> EnvVar.validateName(normalizedName)
     }
     val valueError: String? = EnvVar.validateValue(value)
-    val canSave = name.isNotEmpty() && value.isNotBlank() && nameError == null && valueError == null
+    // Empty values are allowed everywhere else (paste dialog's `FOO=` → OK,
+    // ConfigManager.saveEnvVars permits empty strings) — keep the Add dialog
+    // consistent. Some users use empty values as explicit "disabled" flags.
+    val canSave = name.isNotEmpty() && nameError == null && valueError == null
 
     AlertDialog(
         onDismissRequest = onDismiss,
