@@ -28,6 +28,7 @@ const {
     redactSecrets,
     wrapExternalContent,
     registerRedactedSecret,
+    registerRedactedSecrets,
 } = require('./security');
 
 // Wire redactSecrets into config.js log() so early log lines before this point
@@ -36,11 +37,11 @@ const {
 setRedactFn(redactSecrets);
 
 // Register user-provided env-var values as secrets to mask in debug logs (BAT-495).
-// Values < 7 chars are skipped inside registerRedactedSecret to avoid false positives.
-for (const key of USER_ENV_KEYS) {
-    const val = process.env[key];
-    if (typeof val === 'string') registerRedactedSecret(val);
-}
+// Batch registration rebuilds the alternation regex once instead of once per key
+// (up to 256 keys, length-filtered inside registerRedactedSecrets to avoid FPs).
+registerRedactedSecrets(
+    USER_ENV_KEYS.map((k) => process.env[k]).filter((v) => typeof v === 'string')
+);
 
 // ============================================================================
 // BRIDGE (extracted to bridge.js — BAT-195)

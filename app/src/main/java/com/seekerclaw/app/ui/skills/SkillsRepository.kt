@@ -91,30 +91,7 @@ object SkillsRepository {
             is String -> t.split(',').map { it.trim().lowercase() }.filter { it.isNotEmpty() }
             else -> extractBodyTriggers(content)
         }
-        val requiresEnv: List<String> = run {
-            // Extract the raw frontmatter block (between the two --- markers).
-            val frontmatter = if (content.startsWith("---")) {
-                val endIdx = content.indexOf("---", 3)
-                if (endIdx >= 0) content.substring(3, endIdx) else return@run emptyList()
-            } else {
-                return@run emptyList()
-            }
-            // Find the `requires:` top-level block (must start at column 0).
-            val requiresBlock = Regex(
-                "(?m)^requires:\\s*\\n((?:[ \\t]+[^\\n]*\\n?)+)"
-            ).find(frontmatter) ?: return@run emptyList()
-            val body = requiresBlock.groupValues[1]
-            // Within that block, find an `env:` sub-key whose value is a YAML list.
-            val envList = Regex(
-                "(?m)^[ \\t]+env:\\s*\\n((?:[ \\t]+-[ \\t]*[^\\n]+\\n?)+)"
-            ).find(body) ?: return@run emptyList()
-            envList.groupValues[1]
-                .lineSequence()
-                .map { it.trim().removePrefix("-").trim().trim('"', '\'') }
-                .filter { it.isNotEmpty() }
-                .filter { Regex("^[A-Z_][A-Z0-9_]*$").matches(it) }
-                .toList()
-        }
+        val requiresEnv: List<String> = parseRequiresEnv(content)
         val warnings = validateSkillFormat(description, version, triggers, content)
         return SkillInfo(
             name = name,
@@ -137,6 +114,75 @@ object SkillsRepository {
      * - Inline sequences: triggers: [hello, test]
      * - Block sequences:  triggers:\n  - hello\n  - test
      */
+    private val POSIX_ENV_NAME = Regex("^[A-Z_][A-Z0-9_]*$")
+
+    /**
+     * Extract `requires.env` env var names from skill frontmatter.
+     *
+     * Handles both layouts in real skill frontmatter:
+     *   (a) top-level: `requires:\n  env:\n    - KEY` (or flow `env: [KEY, KEY]`)
+     *   (b) nested:    `metadata:\n  openclaw:\n    requires:\n      env: [...]`
+     *
+     * The flow form (`env: [A, B]`) is the one used by bundled SeekerClaw skills
+     * (e.g. default-skills/github/SKILL.md); the block form matches the
+     * OpenClaw-canonical shape. Both parse to the same list.
+     *
+     * The final POSIX-name filter acts as a safety net — any accidentally-matched
+     * `env:` key elsewhere in the YAML is discarded unless items look like env vars.
+     */
+    private fun parseRequiresEnv(content: String): List<String> {
+        if (!content.startsWith("---")) return emptyList()
+        val endIdx = content.indexOf("---", 3)
+        if (endIdx < 0) return emptyList()
+        val frontmatter = content.substring(3, endIdx)
+
+        // Scan every `env:` occurrence and try both inline-flow and block-list forms.
+        // Earlier matches win (shallower is more canonical), but any match with valid
+        // items is returned.
+        val envKeyRegex = Regex("(?m)^[ \\t]*env:\\s*(.*)$")
+        for (match in envKeyRegex.findAll(frontmatter)) {
+            val after = match.groupValues[1].trim()
+
+            // Inline flow form: `env: [KEY, "KEY2"]` (possibly empty `env: []`)
+            if (after.startsWith("[")) {
+                val close = after.indexOf(']')
+                if (close >= 0) {
+                    val items = after.substring(1, close)
+                        .split(',')
+                        .map { it.trim().trim('"', '\'') }
+                        .filter { it.isNotEmpty() && POSIX_ENV_NAME.matches(it) }
+                    if (items.isNotEmpty()) return items
+                    // `env: []` is an explicit empty — skip to next candidate
+                    continue
+                }
+            }
+
+            // Block-list form — the value is empty on this line; following indented
+            // `- KEY` lines hold the items. Collect consecutive `- ...` lines.
+            if (after.isEmpty()) {
+                val lineEnd = frontmatter.indexOf('\n', match.range.last)
+                if (lineEnd < 0) continue
+                val tail = frontmatter.substring(lineEnd + 1)
+                val items = tail.lineSequence()
+                    .takeWhile { line ->
+                        val t = line.trim()
+                        t.startsWith("-") || t.isEmpty()
+                    }
+                    .mapNotNull { line ->
+                        val t = line.trim()
+                        if (!t.startsWith("-")) return@mapNotNull null
+                        t.removePrefix("-").trim().trim('"', '\'').takeIf { it.isNotEmpty() }
+                    }
+                    .filter { POSIX_ENV_NAME.matches(it) }
+                    .toList()
+                if (items.isNotEmpty()) return items
+                // Block form with no items — keep scanning (might be `requires.env: []`
+                // at top level and another non-empty env elsewhere in the same file)
+            }
+        }
+        return emptyList()
+    }
+
     private fun parseFrontmatter(content: String): Map<String, Any> {
         if (!content.startsWith("---")) return emptyMap()
         val endIdx = content.indexOf("---", 3)

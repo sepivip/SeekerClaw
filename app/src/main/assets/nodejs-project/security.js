@@ -18,26 +18,51 @@ let _dynamicPatterns = [];
 
 // Extra literal secrets registered at runtime (e.g. user env-var values — BAT-495).
 // Use a Set so duplicates are silently ignored. The alternation regex is rebuilt
-// on each register so redactSecrets() does a single O(msg) pass regardless of
-// how many secrets are registered.
+// ONCE per register batch so redactSecrets() does a single O(msg) pass.
 const _extraRedactedSecrets = new Set();
 let _extraRedactedRegex = null;
 
-// Register a runtime secret value for redaction.
-// Guard: values shorter than 7 chars are rejected to avoid false-positive matches
-// on common log tokens (e.g. "true", "1234", port numbers, etc.).
+// Guard against pathological inputs: values ≥ 7 chars (avoid common-word
+// false positives) and ≤ 4096 chars (a 2 MB regex alternation from 256 × 8 KB
+// values risks V8 compile limits; anything longer is probably a PEM/blob
+// where substring-matching on log text would be accidental anyway).
+const _MIN_SECRET_LEN = 7;
+const _MAX_SECRET_LEN = 4096;
+
+function _rebuildExtraRedactedRegex() {
+    if (_extraRedactedSecrets.size === 0) { _extraRedactedRegex = null; return; }
+    // Longest first so one secret that is a substring of another doesn't get
+    // partially swallowed by the shorter match.
+    const parts = Array.from(_extraRedactedSecrets)
+        .sort((a, b) => b.length - a.length)
+        .map(_escRx);
+    _extraRedactedRegex = new RegExp(parts.join('|'), 'g');
+}
+
+// Register a single runtime secret value for redaction. Rebuilds the alternation
+// regex once. Prefer registerRedactedSecrets(list) for startup batch registration
+// so the regex is built just once per batch.
 function registerRedactedSecret(s) {
-    if (typeof s !== 'string' || s.length < 7) return;
+    if (typeof s !== 'string') return;
+    if (s.length < _MIN_SECRET_LEN || s.length > _MAX_SECRET_LEN) return;
     const sizeBefore = _extraRedactedSecrets.size;
     _extraRedactedSecrets.add(s);
-    if (_extraRedactedSecrets.size !== sizeBefore) {
-        // Alternation of literal escapes — longest first to avoid partial-prefix
-        // swallowing when one secret is a substring of another.
-        const parts = Array.from(_extraRedactedSecrets)
-            .sort((a, b) => b.length - a.length)
-            .map(_escRx);
-        _extraRedactedRegex = new RegExp(parts.join('|'), 'g');
+    if (_extraRedactedSecrets.size !== sizeBefore) _rebuildExtraRedactedRegex();
+}
+
+// Register many runtime secrets at once, rebuilding the alternation regex just
+// once for the whole batch. Use this at startup to avoid O(N) rebuilds.
+function registerRedactedSecrets(values) {
+    if (!Array.isArray(values) || values.length === 0) return;
+    let added = false;
+    for (const s of values) {
+        if (typeof s !== 'string') continue;
+        if (s.length < _MIN_SECRET_LEN || s.length > _MAX_SECRET_LEN) continue;
+        const sizeBefore = _extraRedactedSecrets.size;
+        _extraRedactedSecrets.add(s);
+        if (_extraRedactedSecrets.size !== sizeBefore) added = true;
     }
+    if (added) _rebuildExtraRedactedRegex();
 }
 
 // Rebuild literal-match patterns for secrets without a known prefix.
@@ -231,6 +256,7 @@ module.exports = {
     redactSecrets,
     rebuildRedactPatterns,
     registerRedactedSecret,
+    registerRedactedSecrets,
     safePath,
     INJECTION_PATTERNS,
     normalizeWhitespace,
