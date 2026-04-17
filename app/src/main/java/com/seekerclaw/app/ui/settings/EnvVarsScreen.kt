@@ -173,6 +173,30 @@ fun EnvVarsScreen(
             SectionLabel("Environment Variables")
             Spacer(modifier = Modifier.height(10.dp))
 
+            // Security disclosure: values are readable by the agent's shell/js
+            // tools and any skill that declares requires.env. Prompt injection
+            // from untrusted content could cause the agent to exfiltrate them.
+            CardSurface {
+                Row(verticalAlignment = Alignment.Top) {
+                    Text(
+                        text = "\u26A0",
+                        fontSize = 14.sp,
+                        color = SeekerClawColors.Warning,
+                        modifier = Modifier.padding(end = 8.dp, top = 1.dp),
+                    )
+                    Text(
+                        text = "Values are readable by the agent's shell_exec, js_eval, and skills. " +
+                            "Prompt injection from untrusted content could cause the agent to reveal them \u2014 " +
+                            "only store values you're comfortable exposing to the agent.",
+                        fontFamily = RethinkSans,
+                        fontSize = 12.sp,
+                        color = SeekerClawColors.TextSecondary,
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
             // Header / summary card
             CardSurface {
                 if (envVars.isEmpty()) {
