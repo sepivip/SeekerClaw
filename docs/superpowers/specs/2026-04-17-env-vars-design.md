@@ -61,7 +61,7 @@ Exact:     PATH, HOME, TMPDIR, USER, SHELL, LANG, TERM,
            API_TIMEOUT_BACKOFF_MS, API_TIMEOUT_MAX_BACKOFF_MS,
            WS_NO_UTF_8_VALIDATE, WS_NO_BUFFER_UTIL
 
-Prefixes:  NODE_*, npm_*, ANDROID_*, LC_*, JAVA_*
+Prefixes:  NODE_*, NPM_*, ANDROID_*, LC_*, JAVA_*
 ```
 
 Source of truth: `EnvVar.RESERVED_EXACT` / `EnvVar.RESERVED_PREFIXES` in `app/src/main/java/com/seekerclaw/app/config/EnvVar.kt`. The JS side (`config.js` merge block) duplicates these lists intentionally — both layers enforce independently.
@@ -79,7 +79,7 @@ if (config.envVars && typeof config.envVars === 'object') {
     for (const [key, value] of Object.entries(config.envVars)) {
         if (!/^[A-Z_][A-Z0-9_]*$/.test(key)) continue;
         if (RESERVED.has(key) || key.startsWith('NODE_') ||
-            key.startsWith('npm_') || key.startsWith('ANDROID_') ||
+            key.startsWith('NPM_') || key.startsWith('ANDROID_') ||
             key.startsWith('LC_')) continue;
         process.env[key] = String(value);
     }

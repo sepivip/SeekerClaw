@@ -350,4 +350,4 @@ grep -i "rate limit.*mcp\|rate limit.*exceeded" node_debug.log | tail -10
 1. **Missing env vars (`requires.env`):** Call `env_list` to confirm which vars are set. For each missing var, tell the user to add it in **Settings → Env Vars**. They can paste a `.env` file for bulk add (multi-key paste dialog). Once added, the service must restart to apply the new vars — the skill will then become available.
 2. **Missing binaries (`requires.bins`):** Explain the requirement and suggest alternatives (e.g., use `js_eval` instead of a shell binary).
 3. **Config keys (`requires.config`):** The skill needs a built-in config value (e.g., Jupiter API key, Helius API key). Guide the user to the relevant Settings page.
-4. Use `shell_exec "grep 'Skipping' node_debug.log | tail -10"` to see which skills were gated and why at last startup.
+4. Use the `shell_exec` tool to run `grep 'Skipping' node_debug.log | tail -10` — shows which skills were gated and why at last startup.
