@@ -72,8 +72,14 @@ fun EnvVarRawEditorDialog(
     }
     val invalid = parsed.filter { it.status != ParseStatus.OK }
 
+    // ConfigManager.saveEnvVars silently caps at EnvVar.MAX_KEYS (256) after dedup.
+    // Surface that limit here so users don't paste 500 entries, see "Save" enabled,
+    // and discover after save that half were dropped.
+    val overCap = finalList.size > EnvVar.MAX_KEYS
+    val overCapBy = if (overCap) finalList.size - EnvVar.MAX_KEYS else 0
+
     val hasChanges = added.isNotEmpty() || removed.isNotEmpty() || modified.isNotEmpty()
-    val canSave = invalid.isEmpty() && hasChanges
+    val canSave = invalid.isEmpty() && hasChanges && !overCap
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -134,6 +140,16 @@ fun EnvVarRawEditorDialog(
                             fontWeight = FontWeight.Medium,
                             color = SeekerClawColors.TextSecondary,
                         )
+                        if (overCap) {
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                text = "Exceeds ${EnvVar.MAX_KEYS}-key limit by $overCapBy. " +
+                                    "Remove $overCapBy row${if (overCapBy == 1) "" else "s"} to enable save.",
+                                fontFamily = RethinkSans,
+                                fontSize = 12.sp,
+                                color = SeekerClawColors.Error,
+                            )
+                        }
                         Spacer(Modifier.height(8.dp))
 
                         if (added.isNotEmpty()) {
