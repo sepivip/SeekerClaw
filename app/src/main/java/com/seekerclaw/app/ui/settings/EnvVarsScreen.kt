@@ -75,7 +75,7 @@ fun EnvVarsScreen(
     val context = LocalContext.current
     var envVars by remember { mutableStateOf(emptyList<EnvVar>()) }
     var dialogState by remember { mutableStateOf<EnvVarDialogState>(EnvVarDialogState.Hidden) }
-    var showPasteDialog by remember { mutableStateOf(false) }
+    var showRawEditor by remember { mutableStateOf(false) }
     var deleteTarget by remember { mutableStateOf<EnvVar?>(null) }
     // Track whether the user made any edit in this session so the restart
     // banner stays visible even if all vars get deleted — deletion also
@@ -199,11 +199,11 @@ fun EnvVarsScreen(
                 }
                 Spacer(modifier = Modifier.height(8.dp))
                 TextButton(
-                    onClick = { showPasteDialog = true },
+                    onClick = { showRawEditor = true },
                     contentPadding = PaddingValues(0.dp),
                 ) {
                     Text(
-                        text = "Paste .env file",
+                        text = "{ }  Raw editor",
                         fontFamily = RethinkSans,
                         fontSize = 13.sp,
                         color = SeekerClawColors.TextInteractive,
@@ -228,7 +228,7 @@ fun EnvVarsScreen(
                             color = SeekerClawColors.TextPrimary,
                         )
                         Text(
-                            text = "Tap + to add your first, or paste a .env file.",
+                            text = "Tap + to add your first, or use the raw editor for bulk paste.",
                             fontFamily = RethinkSans,
                             fontSize = 13.sp,
                             color = SeekerClawColors.TextDim,
@@ -259,9 +259,9 @@ fun EnvVarsScreen(
                                     modifier = Modifier.padding(start = 4.dp),
                                 )
                             }
-                            TextButton(onClick = { showPasteDialog = true }) {
+                            TextButton(onClick = { showRawEditor = true }) {
                                 Text(
-                                    text = "Paste .env",
+                                    text = "{ }  Raw editor",
                                     fontFamily = RethinkSans,
                                     fontSize = 14.sp,
                                     color = SeekerClawColors.TextInteractive,
@@ -399,20 +399,17 @@ fun EnvVarsScreen(
         )
     }
 
-    // Paste dialog
-    if (showPasteDialog) {
-        EnvVarPasteDialog(
-            existingKeys = envVars.map { it.name }.toSet(),
-            onDismiss = { showPasteDialog = false },
-            onApply = { newVars ->
-                // associateBy keeps the LAST occurrence — pasted newVars overwrite
-                // existing entries with the same name. This matches the paste preview
-                // which counts "will overwrite" rows; distinctBy {} would silently
-                // drop the user's intended overwrite.
-                val merged = (envVars + newVars).associateBy { it.name }.values.toList()
-                ConfigManager.saveEnvVars(context, merged)
+    // Raw editor (full round-trip: see current vars, edit freely, apply diff)
+    if (showRawEditor) {
+        EnvVarRawEditorDialog(
+            currentVars = envVars,
+            onDismiss = { showRawEditor = false },
+            onApply = { finalList ->
+                // Raw editor returns the COMPLETE intended list — replace outright,
+                // not merge. This is how rename/delete/edit-in-place work.
+                ConfigManager.saveEnvVars(context, finalList)
                 editsThisSession = true
-                showPasteDialog = false
+                showRawEditor = false
             },
         )
     }
