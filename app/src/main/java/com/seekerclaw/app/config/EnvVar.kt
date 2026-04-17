@@ -36,6 +36,7 @@ data class EnvVar(
             return null
         }
 
+        /** Returns null if valid, or a human-readable error string. UTF-8 byte length is checked (not character count). */
         fun validateValue(value: String): String? {
             if (value.toByteArray(Charsets.UTF_8).size > MAX_VALUE_BYTES) {
                 return "Value exceeds ${MAX_VALUE_BYTES / 1024} KB limit"

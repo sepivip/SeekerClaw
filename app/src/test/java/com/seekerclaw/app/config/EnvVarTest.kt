@@ -57,6 +57,11 @@ class EnvVarTest {
         assertNull(EnvVar.validateName("AGENT_NAME"))
     }
 
+    @Test fun `generic multi-word uppercase name passes`() {
+        assertNull(EnvVar.validateName("FOO_BAR_BAZ"))
+        assertNull(EnvVar.validateName("MY_CUSTOM_API_KEY"))
+    }
+
     @Test fun `value over 8 KB fails`() {
         val tooLong = "a".repeat(8193)
         assertNotNull(EnvVar.validateValue(tooLong))
