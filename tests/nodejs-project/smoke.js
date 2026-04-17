@@ -99,6 +99,7 @@ const SKIP_REASONS = {
     'tools/index.js': 'requires main.js + handlers',
     'tools/android.js': 'requires bridge.js',
     'tools/cron.js': 'requires cron.js',
+    'tools/env.js': 'requires config.js (USER_ENV_KEYS)',
     'tools/file.js': 'requires main.js globals',
     'tools/memory.js': 'requires memory.js state',
     'tools/session.js': 'requires ai.js',
