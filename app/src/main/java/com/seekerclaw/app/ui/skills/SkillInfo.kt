@@ -12,4 +12,5 @@ data class SkillInfo(
     val isDefault: Boolean = false,
     val isModifiedDefault: Boolean = false,
     val imageUrl: String = "",
+    val requiresEnv: List<String> = emptyList(),
 )

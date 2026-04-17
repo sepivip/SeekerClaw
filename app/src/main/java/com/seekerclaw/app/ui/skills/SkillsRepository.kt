@@ -48,7 +48,14 @@ object SkillsRepository {
                     }
                 }
             }
-        return result.sortedBy { it.name.lowercase() }
+        val sorted = result.sortedBy { it.name.lowercase() }
+        // Feed the skill ↔ env reverse index so EnvVarsScreen/SkillsScreen can
+        // surface missing vars without re-parsing frontmatter.
+        val requirementsMap: Map<String, List<String>> = sorted
+            .filter { it.requiresEnv.isNotEmpty() }
+            .associate { it.dirName to it.requiresEnv }
+        com.seekerclaw.app.config.EnvVarRegistry.setSkillRequirements(requirementsMap)
+        return sorted
     }
 
     private fun computeHash(content: String): String {
@@ -78,6 +85,30 @@ object SkillsRepository {
             is String -> t.split(',').map { it.trim().lowercase() }.filter { it.isNotEmpty() }
             else -> extractBodyTriggers(content)
         }
+        val requiresEnv: List<String> = run {
+            // Extract the raw frontmatter block (between the two --- markers).
+            val frontmatter = if (content.startsWith("---")) {
+                val endIdx = content.indexOf("---", 3)
+                if (endIdx >= 0) content.substring(3, endIdx) else return@run emptyList()
+            } else {
+                return@run emptyList()
+            }
+            // Find the `requires:` top-level block (must start at column 0).
+            val requiresBlock = Regex(
+                "(?m)^requires:\\s*\\n((?:[ \\t]+[^\\n]*\\n?)+)"
+            ).find(frontmatter) ?: return@run emptyList()
+            val body = requiresBlock.groupValues[1]
+            // Within that block, find an `env:` sub-key whose value is a YAML list.
+            val envList = Regex(
+                "(?m)^[ \\t]+env:\\s*\\n((?:[ \\t]+-[ \\t]*[^\\n]+\\n?)+)"
+            ).find(body) ?: return@run emptyList()
+            envList.groupValues[1]
+                .lineSequence()
+                .map { it.trim().removePrefix("-").trim().trim('"', '\'') }
+                .filter { it.isNotEmpty() }
+                .filter { Regex("^[A-Z_][A-Z0-9_]*$").matches(it) }
+                .toList()
+        }
         val warnings = validateSkillFormat(description, version, triggers, content)
         return SkillInfo(
             name = name,
@@ -89,6 +120,7 @@ object SkillsRepository {
             dirName = dirName,
             warnings = warnings,
             imageUrl = imageUrl,
+            requiresEnv = requiresEnv,
         )
     }
 
