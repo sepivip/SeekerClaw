@@ -2,7 +2,8 @@
 
 **Date:** 2026-04-17
 **Status:** Approved for implementation
-**Branch:** `feature/env-vars`
+**Branch:** `feature/BAT-495-env-vars`
+**Linear:** [BAT-495](https://linear.app/batcave/issue/BAT-495/env-vars-user-managed-env-var-store)
 
 ## Summary
 
@@ -194,7 +195,7 @@ New row under the MCP Servers row: "Env Vars · N set" → navigates to `EnvVars
 
 ### 10. Rollout
 
-- Feature branch: `feature/env-vars` (to be renamed `feature/BAT-XXX-env-vars` once Linear ticket is created during plan phase).
+- Feature branch: `feature/BAT-495-env-vars` (worktree at `GITseekerclaw-worktrees/BAT-495/`).
 - PR requests Copilot review. Iterate to zero comments before merge.
 - Tag bump: app version 1.9.1 (patch — new feature, no breaking changes). Tool count 71 → 72.
 - `MEMORY.md` updates: tool count, file list (`tools/env.js` added), screen list (EnvVarsScreen added).
