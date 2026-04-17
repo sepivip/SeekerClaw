@@ -27,7 +27,6 @@ process.on('unhandledRejection', (reason) => log('UNHANDLED: ' + reason, 'ERROR'
 const {
     redactSecrets,
     wrapExternalContent,
-    registerRedactedSecret,
     registerRedactedSecrets,
 } = require('./security');
 
