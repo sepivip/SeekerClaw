@@ -112,6 +112,7 @@ object ConfigManager {
     private const val KEY_WALLET_ADDRESS = "wallet_address"
     private const val KEY_WALLET_LABEL = "wallet_label"
     private const val KEY_MCP_SERVERS_ENC = "mcp_servers_enc"
+    private const val KEY_ENV_VARS_ENC = "env_vars_enc"
     private const val KEY_HEARTBEAT_INTERVAL = "heartbeat_interval"
     private const val KEY_PROVIDER = "provider"
     private const val KEY_OPENAI_API_KEY_ENC = "openai_api_key_enc"
@@ -842,6 +843,14 @@ object ConfigManager {
             // Only the tokens are needed by Node — email/expiresAt are Android-only metadata.
             if (config.openaiOAuthToken.isNotBlank()) put("openaiOAuthToken", config.openaiOAuthToken)
             if (config.openaiOAuthRefresh.isNotBlank()) put("openaiOAuthRefresh", config.openaiOAuthRefresh)
+            val envVars = loadEnvVars(context)
+            if (envVars.isNotEmpty()) {
+                val envObj = JSONObject()
+                for (v in envVars) {
+                    envObj.put(v.name, v.value)
+                }
+                put("envVars", envObj)
+            }
             val mcpServers = loadMcpServers(context)
             if (mcpServers.isNotEmpty()) {
                 val arr = JSONArray()
@@ -943,6 +952,56 @@ object ConfigManager {
                 } else null
             }
             else -> null
+        }
+    }
+
+    // ==================== Env Vars ====================
+
+    /**
+     * Persist the user's env var list, encrypted, to SharedPreferences.
+     * Bumps [configVersion] so observers re-read.
+     * Reserved names are filtered out defensively (UI already prevents, but double-check here).
+     */
+    fun saveEnvVars(context: Context, vars: List<EnvVar>) {
+        val filtered = vars.filterNot { EnvVar.isReserved(it.name) }
+        val json = JSONArray().apply {
+            for (v in filtered) {
+                put(JSONObject().apply {
+                    put("name", v.name)
+                    put("value", v.value)
+                })
+            }
+        }.toString()
+        val enc = KeystoreHelper.encrypt(json)
+        prefs(context).edit()
+            .putString(KEY_ENV_VARS_ENC, Base64.encodeToString(enc, Base64.NO_WRAP))
+            .apply()
+        configVersion.intValue++
+    }
+
+    /**
+     * Load the user's env var list. Returns empty list if unset or decryption fails.
+     * Sorted alphabetically by name (stable UI).
+     */
+    fun loadEnvVars(context: Context): List<EnvVar> {
+        return try {
+            val enc = prefs(context).getString(KEY_ENV_VARS_ENC, null) ?: return emptyList()
+            val json = KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP))
+            val arr = JSONArray(json)
+            (0 until arr.length())
+                .map { i ->
+                    val obj = arr.getJSONObject(i)
+                    EnvVar(
+                        name = obj.getString("name"),
+                        value = obj.optString("value", ""),
+                    )
+                }
+                .filterNot { EnvVar.isReserved(it.name) }
+                .sortedBy { it.name }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to load env vars", e)
+            LogCollector.append("[Config] Failed to load env vars: ${e.javaClass.simpleName}", LogLevel.ERROR)
+            emptyList()
         }
     }
 
