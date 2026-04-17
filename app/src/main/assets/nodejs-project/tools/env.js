@@ -18,9 +18,10 @@ const tools = [
 ];
 
 const handlers = {
+    // Return a plain object — ai.js normalizes/serializes tool results.
     env_list: async (_input) => {
         const keys = [...USER_ENV_KEYS].sort();
-        return JSON.stringify({ keys, count: keys.length });
+        return { keys, count: keys.length };
     },
 };
 

@@ -35,11 +35,12 @@ t('env_list description mentions values-never-returned guarantee', () => {
         `description should note that values are NOT returned; got: ${desc}`);
 });
 
-t('env_list returns keys and count', async () => {
+t('env_list returns keys and count (plain object, not JSON string)', async () => {
     const handler = envMod.handlers.env_list;
     const result = await handler({});
-    const parsed = JSON.parse(result);
-    assert.deepStrictEqual(parsed, {
+    // Handler should return a plain object — ai.js does the JSON serialization.
+    assert.strictEqual(typeof result, 'object', 'result must be an object, not a JSON string');
+    assert.deepStrictEqual(result, {
         keys: ['BAR', 'BAZ', 'FOO'],
         count: 3,
     });
@@ -50,8 +51,7 @@ t('env_list empty when no keys set', async () => {
     delete require.cache[envToolPath];
     const freshEnvMod = require(envToolPath);
     const result = await freshEnvMod.handlers.env_list({});
-    const parsed = JSON.parse(result);
-    assert.deepStrictEqual(parsed, { keys: [], count: 0 });
+    assert.deepStrictEqual(result, { keys: [], count: 0 });
 });
 
 let passed = 0, failed = 0;

@@ -14,7 +14,13 @@ object SkillsRepository {
         defaultSkillHashes: Map<String, String> = emptyMap(),
     ): List<SkillInfo> {
         val skillsDir = File(workspaceDir, "skills")
-        if (!skillsDir.exists()) return emptyList()
+        if (!skillsDir.exists()) {
+            // Keep the registry consistent with "no skills loaded" — otherwise
+            // a stale requirements map from a prior load would still drive
+            // red-dot badges on the (now-empty) Skills screen.
+            com.seekerclaw.app.config.EnvVarRegistry.setSkillRequirements(emptyMap())
+            return emptyList()
+        }
 
         val result = mutableListOf<SkillInfo>()
         skillsDir.listFiles()
