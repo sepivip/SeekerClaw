@@ -347,7 +347,7 @@ grep -i "rate limit.*mcp\|rate limit.*exceeded" node_debug.log | tail -10
 4. Use `env_list` to see which env vars are currently set; compare to the skill's `requires.env` list
 **Diagnosis:** Skills with unmet requirements are silently gated at load time. The node startup log records: `[Skills] Skipping '<name>' — missing: env:VAR_NAME`. Skills requiring unset env vars won't appear in the active skills list even when their trigger keywords match.
 **Fix:**
-1. **Missing env vars (`requires.env`):** Call `env_list` to confirm which vars are set. For each missing var, tell the user to add it in **Settings → Env Vars**. They can paste a `.env` file for bulk add (multi-key paste dialog). Once added, the service must restart to apply the new vars — the skill will then become available.
+1. **Missing env vars (`requires.env`):** Call `env_list` to confirm which vars are set. For each missing var, tell the user to add it in **Settings → Env Vars** (single add, or use the **Raw editor** button for bulk). Once added, the service must restart to apply the new vars — the skill will then become available.
 2. **Missing binaries (`requires.bins`):** Explain the requirement and suggest alternatives (e.g., use `js_eval` instead of a shell binary).
 3. **Config keys (`requires.config`):** The skill needs a built-in config value (e.g., Jupiter API key, Helius API key). Guide the user to the relevant Settings page.
 4. Use the `shell_exec` tool to run `grep 'Skipping' node_debug.log | tail -10` — shows which skills were gated and why at last startup.
