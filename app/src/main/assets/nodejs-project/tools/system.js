@@ -165,10 +165,14 @@ const handlers = {
         // Detect shell: Android uses /system/bin/sh, standard Unix uses /bin/sh
         const shellPath = fs.existsSync('/system/bin/sh') ? '/system/bin/sh' : '/bin/sh';
         // Build child env from process.env (needed for nodejs-mobile paths)
-        // but strip any vars that could leak secrets to child processes.
+        // but strip any vars that could leak *system* secrets to child processes.
+        // User-set env vars (BAT-495) are always preserved — the user explicitly
+        // added them to use them from shell_exec / skills.
+        const { USER_ENV_KEYS } = require('../config');
+        const userEnvSet = new Set(USER_ENV_KEYS);
         const childEnv = { ...process.env, HOME: workDir, TERM: 'dumb' };
-        // Remove sensitive patterns (API keys, tokens, credentials)
         for (const key of Object.keys(childEnv)) {
+            if (userEnvSet.has(key)) continue; // preserve user-set env vars
             const k = key.toUpperCase();
             if (k.includes('KEY') || k.includes('TOKEN') || k.includes('SECRET') ||
                 k.includes('PASSWORD') || k.includes('CREDENTIAL') || k.includes('AUTH')) {
@@ -294,9 +298,20 @@ const handlers = {
             'symlinkSync', 'symlink', 'linkSync', 'link',
         ]);
         const FSP_GUARDED = new Set(['readFile', 'writeFile', 'appendFile', 'open', 'copyFile', 'cp']);
-        // Safe process subset — env is empty to prevent leaking sensitive variables
-        // Defined here so sandboxedRequire can return it for require('process')
-        const safeProcess = { env: {}, cwd: () => workDir, platform: process.platform, arch: process.arch, version: process.version };
+        // Safe process subset — env contains ONLY user-set BAT-495 env vars.
+        // System secrets (bot tokens, provider API keys from config.json) stay hidden
+        // because they live in the `config` object, not process.env (with the
+        // exception of USER_ENV_KEYS which config.js explicitly merges in).
+        // The user's skill/tool code gets to read their own env vars via
+        // `process.env.MY_KEY`; system secrets remain unreachable.
+        const { USER_ENV_KEYS } = require('../config');
+        const userEnv = {};
+        for (const key of USER_ENV_KEYS) {
+            if (Object.prototype.hasOwnProperty.call(process.env, key)) {
+                userEnv[key] = process.env[key];
+            }
+        }
+        const safeProcess = { env: userEnv, cwd: () => workDir, platform: process.platform, arch: process.arch, version: process.version };
         const sandboxedRequire = (mod) => {
             if (typeof mod !== 'string') {
                 throw new Error('Module identifier must be a string in js_eval.');
