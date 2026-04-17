@@ -8,7 +8,7 @@ SeekerClaw turns a Solana Seeker phone into a 24/7 personal AI agent you control
 
 ## Elevator Pitch
 
-SeekerClaw embeds a full Node.js runtime inside an Android app, running an OpenClaw-compatible AI gateway as a foreground service. Users interact with their agent through Telegram — the app itself is minimal (setup, status, logs, settings). The agent has 71 tools, 35 skills (20 bundled + 13 workspace + 2 user-created), ranked memory search, cron scheduling, Android device control, Solana wallet integration, and web intelligence — all running locally on the phone, 24/7. Supports both Telegram and Discord channels.
+SeekerClaw embeds a full Node.js runtime inside an Android app, running an OpenClaw-compatible AI gateway as a foreground service. Users interact with their agent through Telegram — the app itself is minimal (setup, status, logs, settings). The agent has 72 tools, 35 skills (20 bundled + 13 workspace + 2 user-created), ranked memory search, cron scheduling, Android device control, Solana wallet integration, and web intelligence — all running locally on the phone, 24/7. Supports both Telegram and Discord channels.
 
 ## What It Is
 
@@ -60,6 +60,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 - **Search provider system** — Configurable web search backend (Exa, Tavily, Firecrawl, Brave, Perplexity) with per-provider API key management in Settings. Single-provider architecture — one active at a time.
 - **Skill routing** — Routing blocks prevent conflicting skills from firing together; reply tag first-token rule for reliable `[[reply_to_current]]` detection
 - **Skill requirements gating** — Skills with `requires.bins` or `requires.env` in YAML frontmatter are checked at runtime; unmet requirements are reported and skill is skipped
+- **Env Vars** (v1.9.1, 2026-04-17) — user-managed env var store in Settings. Feeds `process.env` on Node side. Skill `requires.env` gates now work out of the box. New `env_list` tool exposes key names only to the agent (never values). Skills screen shows red-dot for missing envs with one-tap add flow. Paste-`.env` bulk import with per-row preview.
 
 ### Memory System
 - **SOUL.md** — Agent personality (user-editable)
@@ -211,7 +212,7 @@ User (Telegram/Discord) <--HTTPS/WSS--> Channel API <--polling/WS--> Node.js Gat
 │   - Dashboard                  - Node.js Runtime   │
 │   - Setup                        - OpenClaw Gateway │
 │   - Logs                         - AI Agent         │
-│   - Settings                     - 71 Tools         │
+│   - Settings                     - 72 Tools         │
 │                                  - SQL.js DB        │
 │  Boot Receiver ──> Auto-start                      │
 │  Watchdog ──> 30s health check                     │
@@ -237,13 +238,13 @@ User (Telegram/Discord) <--HTTPS/WSS--> Channel API <--polling/WS--> Node.js Gat
 |--------|-------|
 | Total commits | 495+ |
 | PRs merged | 312+ |
-| Tools | 71 (29 Solana/Jupiter, 13 Android bridge, 6 memory, 5 file, 5 cron, 4 telegram, 4 system, 2 web, 2 skill, 1 session) + MCP dynamic |
+| Tools | 72 (29 Solana/Jupiter, 13 Android bridge, 6 memory, 5 file, 5 cron, 4 telegram, 4 system, 2 web, 2 skill, 1 session, 1 env) + MCP dynamic |
 | Skills | 35 (20 bundled + 13 workspace + 2 user-created) |
 | Android Bridge endpoints | 18+ |
 | Telegram commands | 12 |
 | Channels | 2 (Telegram + Discord) |
-| Lines of JS | ~17,800 (main.js + message-handler.js + ai.js + 18 modules + 4 provider adapters) |
-| Lines of Kotlin | ~15,000+ (45 files) |
+| Lines of JS | ~17,800 (main.js + message-handler.js + ai.js + 18 modules + 4 provider adapters + tools/env.js) |
+| Lines of Kotlin | ~15,000+ (50 files) |
 | SQL.js tables | 4 |
 | Themes | 1 (DarkOps only) |
 
@@ -278,6 +279,7 @@ User (Telegram/Discord) <--HTTPS/WSS--> Channel API <--polling/WS--> Node.js Gat
 
 | Date | Feature | PR |
 |------|---------|-----|
+| 2026-04-17 | Feat: Env Vars — user-managed env var store (BAT-495). Feeds `process.env` + unlocks skill `requires.env` gates. New `env_list` tool (names only). Paste-`.env` bulk import. Skills screen inverse surfacing. | #332 |
 | 2026-04-04 | Chore: bump v1.8.1 (code 16) + changelog | direct |
 | 2026-04-04 | Fix: Google Play SMS — replace SEND_SMS with intent handoff, no permission required (BAT-484) | #312 |
 | 2026-04-03 | Docs: SAB-AUDIT-v18 — first v3 audit | direct |
