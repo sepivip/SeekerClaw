@@ -19,9 +19,11 @@ data class EnvVar(
             "WS_NO_UTF_8_VALIDATE", "WS_NO_BUFFER_UTIL",
         )
 
-        /** Reserved name prefixes. Canary count enforced by test. */
+        /** Reserved name prefixes. Canary count enforced by test.
+         *  All entries are UPPERCASE — [validateName] uppercases input before the
+         *  prefix check, so mixed-case reservations would be dead code. */
         val RESERVED_PREFIXES: List<String> = listOf(
-            "NODE_", "npm_", "ANDROID_", "LC_", "JAVA_",
+            "NODE_", "NPM_", "ANDROID_", "LC_", "JAVA_",
         )
 
         fun isReserved(name: String): Boolean =

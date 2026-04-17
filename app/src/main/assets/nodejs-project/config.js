@@ -110,7 +110,9 @@ const _ENV_RESERVED_EXACT = new Set([
     'API_TIMEOUT_BACKOFF_MS', 'API_TIMEOUT_MAX_BACKOFF_MS',
     'WS_NO_UTF_8_VALIDATE', 'WS_NO_BUFFER_UTIL',
 ]);
-const _ENV_RESERVED_PREFIXES = ['NODE_', 'npm_', 'ANDROID_', 'LC_', 'JAVA_'];
+// All prefixes UPPERCASE — the POSIX name regex above rejects any input with
+// lowercase, so a mixed-case reservation would be unreachable dead code.
+const _ENV_RESERVED_PREFIXES = ['NODE_', 'NPM_', 'ANDROID_', 'LC_', 'JAVA_'];
 // Defense-in-depth caps mirror Kotlin EnvVar.MAX_KEYS / MAX_VALUE_BYTES — a
 // tampered config.json that bypasses the UI cannot push oversized blobs into
 // process.env or exceed the 256-key ceiling.

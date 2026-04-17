@@ -48,6 +48,12 @@ class EnvVarTest {
         assertNotNull(EnvVar.validateName("npm_config_x"))
     }
 
+    @Test fun `uppercase NPM prefix also reserved`() {
+        // User types `npm_x` → auto-uppercases to `NPM_X` → hits the NPM_ reservation.
+        // Prevents the dead-code problem of reserving `npm_` which regex already blocks.
+        assertNotNull(EnvVar.validateName("NPM_CONFIG_X"))
+    }
+
     @Test fun `reserved API_TIMEOUT_MS fails`() {
         assertNotNull(EnvVar.validateName("API_TIMEOUT_MS"))
     }
