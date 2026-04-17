@@ -22,12 +22,11 @@ let _dynamicPatterns = [];
 const _extraRedactedSecrets = new Set();
 let _extraRedactedRegex = null;
 
-// Guard against pathological inputs: values ≥ 7 chars (avoid common-word
-// false positives) and ≤ 4096 chars (a 2 MB regex alternation from 256 × 8 KB
-// values risks V8 compile limits; anything longer is probably a PEM/blob
-// where substring-matching on log text would be accidental anyway).
+// Guard against false positives: values ≥ 7 chars (avoid common-word clobbering
+// like "true"/"1234"). No upper cap — the Kotlin EnvVar.MAX_VALUE_BYTES=8192
+// cap is already the ceiling, and any stored value deserves redaction regardless
+// of length. 256 keys × 8 KB = ~2 MB of alternation text, which V8 handles fine.
 const _MIN_SECRET_LEN = 7;
-const _MAX_SECRET_LEN = 4096;
 
 function _rebuildExtraRedactedRegex() {
     if (_extraRedactedSecrets.size === 0) { _extraRedactedRegex = null; return; }
@@ -43,8 +42,7 @@ function _rebuildExtraRedactedRegex() {
 // regex once. Prefer registerRedactedSecrets(list) for startup batch registration
 // so the regex is built just once per batch.
 function registerRedactedSecret(s) {
-    if (typeof s !== 'string') return;
-    if (s.length < _MIN_SECRET_LEN || s.length > _MAX_SECRET_LEN) return;
+    if (typeof s !== 'string' || s.length < _MIN_SECRET_LEN) return;
     const sizeBefore = _extraRedactedSecrets.size;
     _extraRedactedSecrets.add(s);
     if (_extraRedactedSecrets.size !== sizeBefore) _rebuildExtraRedactedRegex();
@@ -56,8 +54,7 @@ function registerRedactedSecrets(values) {
     if (!Array.isArray(values) || values.length === 0) return;
     let added = false;
     for (const s of values) {
-        if (typeof s !== 'string') continue;
-        if (s.length < _MIN_SECRET_LEN || s.length > _MAX_SECRET_LEN) continue;
+        if (typeof s !== 'string' || s.length < _MIN_SECRET_LEN) continue;
         const sizeBefore = _extraRedactedSecrets.size;
         _extraRedactedSecrets.add(s);
         if (_extraRedactedSecrets.size !== sizeBefore) added = true;
