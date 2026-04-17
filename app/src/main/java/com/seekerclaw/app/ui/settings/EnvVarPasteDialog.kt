@@ -75,6 +75,7 @@ fun EnvVarPasteDialog(
                             ParseStatus.INVALID_NAME -> "invalid name"
                             ParseStatus.RESERVED -> "reserved"
                             ParseStatus.MALFORMED -> "malformed"
+                            ParseStatus.VALUE_TOO_LARGE -> "value > 8 KB"
                         }
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Checkbox(

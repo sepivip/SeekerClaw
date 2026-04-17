@@ -1,6 +1,6 @@
 package com.seekerclaw.app.config
 
-enum class ParseStatus { OK, INVALID_NAME, RESERVED, MALFORMED }
+enum class ParseStatus { OK, INVALID_NAME, RESERVED, MALFORMED, VALUE_TOO_LARGE }
 
 data class ParsedEnvEntry(
     val name: String,
@@ -34,6 +34,7 @@ object EnvVarParser {
         val status = when {
             !EnvVar.NAME_REGEX.matches(rawName) -> ParseStatus.INVALID_NAME
             EnvVar.isReserved(rawName) -> ParseStatus.RESERVED
+            EnvVar.validateValue(rawValue) != null -> ParseStatus.VALUE_TOO_LARGE
             else -> ParseStatus.OK
         }
         return ParsedEnvEntry(name = rawName, value = rawValue, status = status, rawLine = rawLine)

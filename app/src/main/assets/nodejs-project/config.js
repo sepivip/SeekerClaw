@@ -111,19 +111,32 @@ const _ENV_RESERVED_EXACT = new Set([
     'WS_NO_UTF_8_VALIDATE', 'WS_NO_BUFFER_UTIL',
 ]);
 const _ENV_RESERVED_PREFIXES = ['NODE_', 'npm_', 'ANDROID_', 'LC_', 'JAVA_'];
+// Defense-in-depth caps mirror Kotlin EnvVar.MAX_KEYS / MAX_VALUE_BYTES — a
+// tampered config.json that bypasses the UI cannot push oversized blobs into
+// process.env or exceed the 256-key ceiling.
+const _ENV_MAX_KEYS = 256;
+const _ENV_MAX_VALUE_BYTES = 8192;
 const USER_ENV_KEYS = [];
 
 if (config.envVars && typeof config.envVars === 'object') {
+    let droppedOversize = 0;
     for (const [key, value] of Object.entries(config.envVars)) {
+        if (USER_ENV_KEYS.length >= _ENV_MAX_KEYS) break;
         if (typeof key !== 'string') continue;
         if (!/^[A-Z_][A-Z0-9_]*$/.test(key)) continue;
         if (_ENV_RESERVED_EXACT.has(key)) continue;
         if (_ENV_RESERVED_PREFIXES.some((p) => key.startsWith(p))) continue;
-        process.env[key] = String(value);
+        const str = String(value);
+        if (Buffer.byteLength(str, 'utf8') > _ENV_MAX_VALUE_BYTES) {
+            droppedOversize++;
+            continue;
+        }
+        process.env[key] = str;
         USER_ENV_KEYS.push(key);
     }
     USER_ENV_KEYS.sort();
-    log(`[Config] Merged ${USER_ENV_KEYS.length} user env var(s) into process.env`, 'DEBUG');
+    const note = droppedOversize > 0 ? ` (${droppedOversize} dropped for exceeding ${_ENV_MAX_VALUE_BYTES}-byte cap)` : '';
+    log(`[Config] Merged ${USER_ENV_KEYS.length} user env var(s) into process.env${note}`, 'DEBUG');
 }
 
 // ============================================================================

@@ -80,4 +80,11 @@ class EnvVarParserTest {
         assertEquals("FOO", result[0].name)
         assertEquals("BAR", result[1].name)
     }
+
+    @Test fun `value over 8 KB marked VALUE_TOO_LARGE`() {
+        val tooLong = "x".repeat(8193)
+        val result = EnvVarParser.parse("FOO=$tooLong")
+        assertEquals(1, result.size)
+        assertEquals(ParseStatus.VALUE_TOO_LARGE, result[0].status)
+    }
 }
