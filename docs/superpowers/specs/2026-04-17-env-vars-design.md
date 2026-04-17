@@ -46,7 +46,7 @@ data class EnvVar(
 
 - Storage: single encrypted blob in `SharedPreferences` under key `env_vars_enc`, AES-256-GCM via existing `KeystoreHelper`.
 - On decrypt: `JSONArray` of `{name, value}` objects; sorted alphabetically on load.
-- Pattern mirrors `loadMcpServers` / `saveMcpServers` in [ConfigManager.kt:951-990](../../app/src/main/java/com/seekerclaw/app/config/ConfigManager.kt#L951).
+- Pattern mirrors the `loadMcpServers` / `saveMcpServers` implementation in [ConfigManager.kt](../../app/src/main/java/com/seekerclaw/app/config/ConfigManager.kt) (search for `==== MCP Servers ====`). Line anchors avoided — new sections above shift the numbers.
 - Sanity limits: max 256 keys, max 8192 bytes per value.
 - Validation: name must match `^[A-Z_][A-Z0-9_]*$`. Lowercase input auto-uppercases on blur with a one-time info toast.
 
@@ -55,18 +55,22 @@ data class EnvVar(
 A constant list, enforced in both Kotlin (on save) and JavaScript (at merge time — defense in depth against a malicious config import):
 
 ```
-PATH, HOME, TMPDIR, USER, SHELL, LANG, LC_*,
-NODE_*, npm_*,
-ANDROID_*,
-AGENT_VERSION, API_TIMEOUT_MS, API_TIMEOUT_RETRIES,
-API_TIMEOUT_BACKOFF_MS, API_TIMEOUT_MAX_BACKOFF_MS
+Exact:     PATH, HOME, TMPDIR, USER, SHELL, LANG, TERM,
+           AGENT_VERSION,
+           API_TIMEOUT_MS, API_TIMEOUT_RETRIES,
+           API_TIMEOUT_BACKOFF_MS, API_TIMEOUT_MAX_BACKOFF_MS,
+           WS_NO_UTF_8_VALIDATE, WS_NO_BUFFER_UTIL
+
+Prefixes:  NODE_*, npm_*, ANDROID_*, LC_*, JAVA_*
 ```
+
+Source of truth: `EnvVar.RESERVED_EXACT` / `EnvVar.RESERVED_PREFIXES` in `app/src/main/java/com/seekerclaw/app/config/EnvVar.kt`. The JS side (`config.js` merge block) duplicates these lists intentionally — both layers enforce independently.
 
 Attempting to save a reserved name shows inline red error: "`PATH` is reserved."
 
 ### 3. Runtime plumbing
 
-- `ConfigManager.generateConfigJson()` gains a top-level `envVars: { KEY: VALUE, ... }` field, written to the `config.json` handoff file that the service already creates.
+- `ConfigManager.writeConfigJson()` writes a top-level `envVars: { KEY: VALUE, ... }` field into the `config.json` handoff file that the service already creates.
 - In [config.js](../../app/src/main/assets/nodejs-project/config.js), after `const config = JSON.parse(...)`, merge into `process.env`:
 
 ```javascript

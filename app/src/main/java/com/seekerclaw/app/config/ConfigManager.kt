@@ -960,12 +960,27 @@ object ConfigManager {
     /**
      * Persist the user's env var list, encrypted, to SharedPreferences.
      * Bumps [configVersion] so observers re-read.
-     * Reserved names are filtered out defensively (UI already prevents, but double-check here).
+     *
+     * Defense in depth: applies full validation (name regex, reserved check, value size cap),
+     * dedupes on name (first occurrence wins), and enforces [EnvVar.MAX_KEYS]. UI already
+     * blocks these, but a malicious programmatic caller could bypass the UI.
      */
     fun saveEnvVars(context: Context, vars: List<EnvVar>) {
-        val filtered = vars.filterNot { EnvVar.isReserved(it.name) }
+        val cleaned = vars
+            .asSequence()
+            .filter { EnvVar.validateName(it.name) == null } // regex + reserved check
+            .filter { EnvVar.validateValue(it.value) == null } // 8 KB UTF-8 byte cap
+            .distinctBy { it.name } // first occurrence wins
+            .take(EnvVar.MAX_KEYS)
+            .toList()
+        if (cleaned.size < vars.size) {
+            LogCollector.append(
+                "[Config] Dropped ${vars.size - cleaned.size} env var(s) on save (invalid name/value or over ${EnvVar.MAX_KEYS} keys)",
+                LogLevel.WARN,
+            )
+        }
         val json = JSONArray().apply {
-            for (v in filtered) {
+            for (v in cleaned) {
                 put(JSONObject().apply {
                     put("name", v.name)
                     put("value", v.value)
@@ -982,6 +997,10 @@ object ConfigManager {
     /**
      * Load the user's env var list. Returns empty list if unset or decryption fails.
      * Sorted alphabetically by name (stable UI).
+     *
+     * Defense in depth: the same validation + dedup + cap rules as [saveEnvVars] are applied
+     * here so an imported or corrupted blob cannot inject invalid names, oversized values,
+     * or duplicates into `process.env`.
      */
     fun loadEnvVars(context: Context): List<EnvVar> {
         return try {
@@ -989,6 +1008,7 @@ object ConfigManager {
             val json = KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP))
             val arr = JSONArray(json)
             (0 until arr.length())
+                .asSequence()
                 .map { i ->
                     val obj = arr.getJSONObject(i)
                     EnvVar(
@@ -996,8 +1016,12 @@ object ConfigManager {
                         value = obj.optString("value", ""),
                     )
                 }
-                .filterNot { EnvVar.isReserved(it.name) }
+                .filter { EnvVar.validateName(it.name) == null }
+                .filter { EnvVar.validateValue(it.value) == null }
+                .distinctBy { it.name }
+                .take(EnvVar.MAX_KEYS)
                 .sortedBy { it.name }
+                .toList()
         } catch (e: Exception) {
             Log.w(TAG, "Failed to load env vars", e)
             LogCollector.append("[Config] Failed to load env vars: ${e.javaClass.simpleName}", LogLevel.ERROR)

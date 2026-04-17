@@ -13,17 +13,20 @@ object EnvVarParser {
     fun parse(text: String): List<ParsedEnvEntry> {
         return text.lines()
             .asSequence()
-            .map { it.trim() }
-            .filter { it.isNotEmpty() && !it.startsWith("#") }
-            .map { parseLine(it) }
+            .mapNotNull { rawLine ->
+                val trimmed = rawLine.trim()
+                if (trimmed.isEmpty() || trimmed.startsWith("#")) null
+                else parseLine(trimmed, rawLine)
+            }
             .toList()
     }
 
-    private fun parseLine(line: String): ParsedEnvEntry {
-        val stripped = if (line.startsWith("export ")) line.removePrefix("export ").trimStart() else line
+    /** [trimmed] is used for parsing; [rawLine] is preserved verbatim for UI preview / error display. */
+    private fun parseLine(trimmed: String, rawLine: String): ParsedEnvEntry {
+        val stripped = if (trimmed.startsWith("export ")) trimmed.removePrefix("export ").trimStart() else trimmed
         val eq = stripped.indexOf('=')
         if (eq <= 0) {
-            return ParsedEnvEntry(name = stripped, value = "", status = ParseStatus.MALFORMED, rawLine = line)
+            return ParsedEnvEntry(name = stripped, value = "", status = ParseStatus.MALFORMED, rawLine = rawLine)
         }
         val rawName = stripped.substring(0, eq).trim()
         val rawValue = unquote(stripped.substring(eq + 1).trim())
@@ -33,7 +36,7 @@ object EnvVarParser {
             EnvVar.isReserved(rawName) -> ParseStatus.RESERVED
             else -> ParseStatus.OK
         }
-        return ParsedEnvEntry(name = rawName, value = rawValue, status = status, rawLine = line)
+        return ParsedEnvEntry(name = rawName, value = rawValue, status = status, rawLine = rawLine)
     }
 
     private fun unquote(s: String): String {
