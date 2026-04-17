@@ -44,8 +44,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.SubcomposeAsyncImage
 import coil.request.ImageRequest
+import androidx.compose.runtime.collectAsState
+import androidx.navigation.NavHostController
 import com.seekerclaw.app.config.ConfigManager
+import com.seekerclaw.app.config.EnvVarRegistry
 import com.seekerclaw.app.ui.components.cornerGlowBorder
+import com.seekerclaw.app.ui.navigation.EnvVarsRoute
 import com.seekerclaw.app.ui.theme.RethinkSans
 import com.seekerclaw.app.ui.theme.SeekerClawColors
 import com.seekerclaw.app.util.Analytics
@@ -56,7 +60,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 @Composable
-fun SkillsScreen() {
+fun SkillsScreen(navController: NavHostController) {
     val context = LocalContext.current
     val workspaceDir = remember { File(context.filesDir, "workspace") }
     var selectedSkill by remember { mutableStateOf<SkillInfo?>(null) }
@@ -98,6 +102,7 @@ fun SkillsScreen() {
     } else {
         SkillsListContent(
             workspaceDir = workspaceDir,
+            navController = navController,
             onSkillClick = { selectedSkill = it },
         )
     }
@@ -106,9 +111,12 @@ fun SkillsScreen() {
 @Composable
 private fun SkillsListContent(
     workspaceDir: File,
+    navController: NavHostController,
     onSkillClick: (SkillInfo) -> Unit,
 ) {
     val context = LocalContext.current
+    val envKeys by EnvVarRegistry.keys.collectAsState()
+    LaunchedEffect(Unit) { EnvVarRegistry.refreshFromConfig(context) }
     var skills by remember { mutableStateOf<List<SkillInfo>>(emptyList()) }
     var searchQuery by remember { mutableStateOf("") }
     var reloadTrigger by remember { mutableStateOf(0) }
@@ -253,7 +261,7 @@ private fun SkillsListContent(
                         )
                     }
                     items(addedSkills, key = { it.filePath }) { skill ->
-                        SkillCard(skill = skill, shape = shape, onClick = { onSkillClick(skill) })
+                        SkillCard(skill = skill, shape = shape, envKeys = envKeys, navController = navController, onClick = { onSkillClick(skill) })
                     }
                 }
 
@@ -263,7 +271,7 @@ private fun SkillsListContent(
                         SectionHeader(title = "Default (${defaultSkills.size})")
                     }
                     items(defaultSkills, key = { it.filePath }) { skill ->
-                        SkillCard(skill = skill, shape = shape, onClick = { onSkillClick(skill) })
+                        SkillCard(skill = skill, shape = shape, envKeys = envKeys, navController = navController, onClick = { onSkillClick(skill) })
                     }
                 }
             }
@@ -480,8 +488,13 @@ private fun EmojiAvatar(
 private fun SkillCard(
     skill: SkillInfo,
     shape: RoundedCornerShape,
+    envKeys: Set<String>,
+    navController: NavHostController,
     onClick: () -> Unit,
 ) {
+    val missingEnv = skill.requiresEnv.filterNot { envKeys.contains(it) }
+    val hasMissingEnv = missingEnv.isNotEmpty()
+    val allEnvSatisfied = skill.requiresEnv.isNotEmpty() && missingEnv.isEmpty()
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -549,6 +562,48 @@ private fun SkillCard(
                         fontFamily = RethinkSans,
                         fontSize = 11.sp,
                         color = SeekerClawColors.Accent,
+                    )
+                }
+            }
+            if (hasMissingEnv) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            navController.navigate(EnvVarsRoute(prefillKey = missingEnv.first()))
+                        }
+                        .padding(top = 6.dp),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .background(SeekerClawColors.Error, CircleShape),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = "Missing: " + missingEnv.joinToString(", "),
+                        fontFamily = RethinkSans,
+                        color = SeekerClawColors.Error,
+                        fontSize = 12.sp,
+                    )
+                }
+            } else if (allEnvSatisfied) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(top = 6.dp),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .background(SeekerClawColors.Primary, CircleShape),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = "Env ready",
+                        fontFamily = RethinkSans,
+                        color = SeekerClawColors.Primary,
+                        fontSize = 12.sp,
                     )
                 }
             }

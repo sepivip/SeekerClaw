@@ -221,7 +221,7 @@ fun SeekerClawNavHost() {
                 LogsScreen()
             }
             composable<SkillsRoute> {
-                SkillsScreen()
+                SkillsScreen(navController = navController)
             }
             composable<SettingsRoute> {
                 SettingsScreen(
