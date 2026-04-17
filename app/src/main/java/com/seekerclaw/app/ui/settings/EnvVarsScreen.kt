@@ -173,10 +173,10 @@ fun EnvVarsScreen(
             SectionLabel("Environment Variables")
             Spacer(modifier = Modifier.height(10.dp))
 
-            // Security disclosure: values are readable by the agent's shell/js
-            // tools and any skill that declares requires.env. Prompt injection
-            // from untrusted content could cause the agent to exfiltrate them.
+            // Combined header card: security disclosure + summary + raw editor action.
+            // Three sections of related meta-info, one surface — less card noise.
             CardSurface {
+                // Security disclosure — values are readable by agent tools / skills
                 Row(verticalAlignment = Alignment.Top) {
                     Text(
                         text = "\u26A0",
@@ -193,12 +193,12 @@ fun EnvVarsScreen(
                         color = SeekerClawColors.TextSecondary,
                     )
                 }
-            }
 
-            Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(12.dp))
+                HorizontalDivider(color = SeekerClawColors.BorderSubtle.copy(alpha = 0.3f))
+                Spacer(modifier = Modifier.height(12.dp))
 
-            // Header / summary card
-            CardSurface {
+                // Summary + Raw editor action
                 if (envVars.isEmpty()) {
                     Text(
                         text = "Env vars let your agent access API keys and secrets that skills require. " +
