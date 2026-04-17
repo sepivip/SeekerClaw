@@ -39,8 +39,17 @@ data class EnvVar(
             return null
         }
 
-        /** Returns null if valid, or a human-readable error string. UTF-8 byte length is checked (not character count). */
+        /**
+         * Returns null if valid, or a human-readable error string.
+         * - UTF-8 byte length is checked (not character count).
+         * - Newlines (`\r`, `\n`) are rejected: env vars are line-oriented in
+         *   `.env` files, the Raw editor, and shell_exec contexts, so embedding
+         *   a newline would corrupt the `\n`-delimited `KEY=VALUE` serialization.
+         */
         fun validateValue(value: String): String? {
+            if (value.contains('\n') || value.contains('\r')) {
+                return "Value cannot contain newline characters"
+            }
             if (value.toByteArray(Charsets.UTF_8).size > MAX_VALUE_BYTES) {
                 return "Value exceeds ${MAX_VALUE_BYTES / 1024} KB limit"
             }

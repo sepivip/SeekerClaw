@@ -711,7 +711,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
             'read them via `process.env` inside a tool call. Use `env_list` to check availability before suggesting ' +
             'an API call that needs a specific credential.');
         lines.push('If a skill\u2019s `requires.env` lists a key not in the list above, tell the user to add it in ' +
-            'Settings \u2192 Env Vars (single add, `.env` paste, or Raw editor for bulk).');
+            'Settings \u2192 Env Vars (`+` button for single add, or open the Raw editor and paste `.env` contents for bulk).');
         lines.push('');
     } else {
         lines.push('## Environment Variables');

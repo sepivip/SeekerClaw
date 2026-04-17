@@ -78,6 +78,12 @@ class EnvVarTest {
         assertNull(EnvVar.validateValue(ok))
     }
 
+    @Test fun `value with newline fails`() {
+        assertNotNull(EnvVar.validateValue("foo\nbar"))
+        assertNotNull(EnvVar.validateValue("foo\r\nbar"))
+        assertNotNull(EnvVar.validateValue("\n"))
+    }
+
     @Test fun `reserved names list size is stable`() {
         // Canary: if these numbers change without deliberate intent, review should catch.
         assertEquals(14, EnvVar.RESERVED_EXACT.size)

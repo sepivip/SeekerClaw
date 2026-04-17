@@ -60,7 +60,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 - **Search provider system** — Configurable web search backend (Exa, Tavily, Firecrawl, Brave, Perplexity) with per-provider API key management in Settings. Single-provider architecture — one active at a time.
 - **Skill routing** — Routing blocks prevent conflicting skills from firing together; reply tag first-token rule for reliable `[[reply_to_current]]` detection
 - **Skill requirements gating** — Skills with `requires.bins` or `requires.env` in YAML frontmatter are checked at runtime; unmet requirements are reported and skill is skipped
-- **Env Vars** (v1.9.1, 2026-04-17) — user-managed env var store in Settings. Feeds `process.env` on Node side. Skill `requires.env` gates now work out of the box. New `env_list` tool exposes key names only to the agent (never values). Skills screen shows red-dot for missing envs with one-tap add flow. Paste-`.env` bulk import with per-row preview.
+- **Env Vars** (v1.9.1, 2026-04-17) — user-managed env var store in Settings. Feeds `process.env` on Node side. Skill `requires.env` gates now work out of the box. New `env_list` tool exposes key names only to the agent (never values). Skills screen shows red-dot for missing envs with one-tap add flow. Raw editor for round-trip bulk edit with added/modified/removed/invalid diff preview.
 
 ### Memory System
 - **SOUL.md** — Agent personality (user-editable)

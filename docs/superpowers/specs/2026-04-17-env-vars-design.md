@@ -134,19 +134,23 @@ Layout:
   - Below the name, a wrap-row of skill chips for every skill whose `requires.env` contains this key (e.g. `github-ops`, `review-pr`). Chips are **non-interactive visual labels** — the agent-facing "which skills use this var" info is valuable without a tap target, and deep-linking to a filtered/scrolled Skills list is a separate UX problem deferred out of this PR. (The inverse direction — Skills screen → tap missing env → pre-filled Add dialog — IS wired; see §7.)
   - If no skills reference the key, show dim `· unused` label (not an error — some vars are for `shell_exec` only).
   - Tap row → edit modal. Swipe left → delete confirm dialog.
-- Empty state: "No env vars yet. Add your first, or paste a .env file."
+- Empty state: "No env vars yet. Tap + to add your first, or use the Raw editor for bulk paste."
 
-#### Add/Edit dialog
+#### Add/Edit dialog (single-var flow)
 
 - Two inputs:
-  - `KEY` — monospace, validates live, auto-uppercases on blur, disallows reserved names with inline error.
-  - `VALUE` — password visual transformation, eye icon to toggle reveal.
-- Primary action: **Save** (disabled until name valid and value non-empty).
-- Secondary action: **Paste .env file** — opens a multi-line textarea. On "Parse", the dialog shows a preview:
-  - `{N} new, {M} will overwrite, {K} invalid (reserved or malformed)`.
-  - Per-row checkboxes so the user can unselect overwrites.
-  - Confirm button adds the selected set.
-- Edit dialog: same fields pre-filled. Name field locked (rename = delete + create to keep the mental model simple).
+  - `KEY` — monospace, validates live, auto-uppercases on blur (Locale.ROOT), disallows reserved names with inline error.
+  - `VALUE` — password visual transformation, eye icon to toggle reveal. Empty values are allowed (matches Raw editor + POSIX `.env` convention where `FOO=` is valid).
+- Primary action: **Save** (disabled until name is valid). Validation rejects newlines in values.
+- Edit dialog: same fields pre-filled. Name field locked (rename = delete + create; or use the Raw editor for in-place rename across the full list).
+
+#### Raw editor dialog (bulk flow — subsumes the former "Paste .env" dialog)
+
+- Pre-filled with current vars serialized as `KEY=VALUE` lines (alphabetical, plaintext — same exposure as the per-row eye toggle in the Add dialog).
+- Free-text edit: add, delete, rename, change values, or paste a full `.env` at once.
+- Live diff preview against the current list: **added / modified / removed / invalid** buckets with per-key accent colors.
+- Invalid rows (`INVALID_NAME`, `RESERVED`, `MALFORMED`, `VALUE_TOO_LARGE`) **block save** — prevents silent drops.
+- Save replaces the entire list with the parsed final state (last-wins on duplicate names within the text).
 
 #### Delete confirmation
 

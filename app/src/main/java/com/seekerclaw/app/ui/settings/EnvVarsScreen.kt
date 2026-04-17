@@ -81,10 +81,9 @@ fun EnvVarsScreen(
     // banner stays visible even if all vars get deleted — deletion also
     // requires a restart to remove the values from the running Node process.
     var editsThisSession by remember { mutableStateOf(false) }
-    // Observe EnvVarRegistry flows so the list + chips recompose when vars change
-    // OR when skills load later (requirements may arrive after this screen mounts).
-    @Suppress("UNUSED_VARIABLE")
-    val envKeys by EnvVarRegistry.keys.collectAsState()
+    // Observe skill-requirements so chips recompose when skills load after the
+    // screen mounts. Env var key changes are driven by ConfigManager.configVersion
+    // below — no separate subscription needed.
     val skillReqs by EnvVarRegistry.skillRequirements.collectAsState()
     // Reactive skillsForKey derived from the observed requirements flow, replacing
     // the non-reactive EnvVarRegistry.skillsForKey(...) snapshot read.
