@@ -27,12 +27,25 @@ object EnvVarRegistry {
     /**
      * Reads the current env var list from encrypted prefs and publishes the names.
      * Suspending: Keystore decrypt + JSON parse runs on [Dispatchers.IO] to avoid main-thread jank.
+     *
+     * Prefer [updateKeys] at call sites that already have the decrypted list to
+     * avoid a second decrypt+parse pass.
      */
     suspend fun refreshFromConfig(context: Context) {
         val names = withContext(Dispatchers.IO) {
             ConfigManager.loadEnvVars(context).map { it.name }.toSet()
         }
         _keys.value = names
+    }
+
+    /**
+     * Publish key names from an already-loaded list. Synchronous — no I/O.
+     * Use this when the caller has just loaded the env var list (e.g. in
+     * EnvVarsScreen's LaunchedEffect after a configVersion bump) so we avoid
+     * a redundant keystore decrypt + JSON parse inside [refreshFromConfig].
+     */
+    fun updateKeys(envVars: List<EnvVar>) {
+        _keys.value = envVars.map { it.name }.toSet()
     }
 
     /**

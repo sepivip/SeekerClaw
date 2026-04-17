@@ -77,19 +77,29 @@ fun EnvVarsScreen(
     var dialogState by remember { mutableStateOf<EnvVarDialogState>(EnvVarDialogState.Hidden) }
     var showPasteDialog by remember { mutableStateOf(false) }
     var deleteTarget by remember { mutableStateOf<EnvVar?>(null) }
-    // Observe EnvVarRegistry.keys so the list recomposes when vars are added/deleted externally.
+    // Observe EnvVarRegistry flows so the list + chips recompose when vars change
+    // OR when skills load later (requirements may arrive after this screen mounts).
     @Suppress("UNUSED_VARIABLE")
     val envKeys by EnvVarRegistry.keys.collectAsState()
+    val skillReqs by EnvVarRegistry.skillRequirements.collectAsState()
+    // Reactive skillsForKey derived from the observed requirements flow, replacing
+    // the non-reactive EnvVarRegistry.skillsForKey(...) snapshot read.
+    val skillsForKey: (String) -> List<String> = { key ->
+        skillReqs.filterValues { it.contains(key) }.keys.sorted()
+    }
 
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
 
-    // Load env vars off main thread (Keystore decrypt + JSON parse)
+    // Load env vars off main thread (Keystore decrypt + JSON parse). The registry
+    // is updated from the already-loaded list to avoid a second decrypt on every
+    // configVersion bump — use updateKeys instead of refreshFromConfig here.
     val configVer by ConfigManager.configVersion
     LaunchedEffect(configVer) {
-        envVars = withContext(Dispatchers.IO) {
+        val loaded = withContext(Dispatchers.IO) {
             ConfigManager.loadEnvVars(context)
         }
-        EnvVarRegistry.refreshFromConfig(context)
+        envVars = loaded
+        EnvVarRegistry.updateKeys(loaded)
     }
 
     // Open Add dialog pre-filled when navigated with a prefillKey query param
@@ -170,7 +180,7 @@ fun EnvVarsScreen(
                     )
                 } else {
                     val skillCount = envVars
-                        .flatMap { EnvVarRegistry.skillsForKey(it.name) }
+                        .flatMap { skillsForKey(it.name) }
                         .toSet()
                         .size
                     Text(
@@ -259,7 +269,7 @@ fun EnvVarsScreen(
                 // Env var list
                 CardSurface {
                     for ((index, envVar) in envVars.withIndex()) {
-                        val usedBy = EnvVarRegistry.skillsForKey(envVar.name)
+                        val usedBy = skillsForKey(envVar.name)
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -289,8 +299,15 @@ fun EnvVarsScreen(
                                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                                     ) {
                                         usedBy.take(3).forEach { skill ->
+                                            // Non-interactive: these chips are visual labels
+                                            // (not tappable links). enabled=false removes the
+                                            // click affordance so screen readers + users don't
+                                            // expect action. Deep-link to the Skills screen is
+                                            // deliberately out of scope for v1 — see
+                                            // docs/superpowers/specs/2026-04-17-env-vars-design.md.
                                             AssistChip(
-                                                onClick = {},
+                                                onClick = { /* visual-only */ },
+                                                enabled = false,
                                                 label = {
                                                     Text(
                                                         text = skill,
@@ -303,6 +320,8 @@ fun EnvVarsScreen(
                                                 colors = AssistChipDefaults.assistChipColors(
                                                     containerColor = SeekerClawColors.Surface,
                                                     labelColor = SeekerClawColors.TextDim,
+                                                    disabledContainerColor = SeekerClawColors.Surface,
+                                                    disabledLabelColor = SeekerClawColors.TextDim,
                                                 ),
                                                 modifier = Modifier.height(24.dp),
                                             )
@@ -401,7 +420,7 @@ fun EnvVarsScreen(
                 )
             },
             text = {
-                val affectedSkills = EnvVarRegistry.skillsForKey(target.name)
+                val affectedSkills = skillsForKey(target.name)
                 val body = if (affectedSkills.isEmpty()) {
                     "Delete \"${target.name}\"? This cannot be undone."
                 } else {

@@ -17,15 +17,26 @@ function _escRx(s) { return s.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&'); }
 let _dynamicPatterns = [];
 
 // Extra literal secrets registered at runtime (e.g. user env-var values — BAT-495).
-// Use a Set so duplicates are silently ignored.
+// Use a Set so duplicates are silently ignored. The alternation regex is rebuilt
+// on each register so redactSecrets() does a single O(msg) pass regardless of
+// how many secrets are registered.
 const _extraRedactedSecrets = new Set();
+let _extraRedactedRegex = null;
 
 // Register a runtime secret value for redaction.
 // Guard: values shorter than 7 chars are rejected to avoid false-positive matches
 // on common log tokens (e.g. "true", "1234", port numbers, etc.).
 function registerRedactedSecret(s) {
-    if (typeof s === 'string' && s.length >= 7) {
-        _extraRedactedSecrets.add(s);
+    if (typeof s !== 'string' || s.length < 7) return;
+    const sizeBefore = _extraRedactedSecrets.size;
+    _extraRedactedSecrets.add(s);
+    if (_extraRedactedSecrets.size !== sizeBefore) {
+        // Alternation of literal escapes — longest first to avoid partial-prefix
+        // swallowing when one secret is a substring of another.
+        const parts = Array.from(_extraRedactedSecrets)
+            .sort((a, b) => b.length - a.length)
+            .map(_escRx);
+        _extraRedactedRegex = new RegExp(parts.join('|'), 'g');
     }
 }
 
@@ -74,9 +85,10 @@ function redactSecrets(msg) {
     for (const { rx, replacement } of _dynamicPatterns) {
         msg = msg.replace(rx, replacement);
     }
-    // Redact user-provided env-var values registered at startup (BAT-495)
-    for (const secret of _extraRedactedSecrets) {
-        msg = msg.split(secret).join('[REDACTED_ENV]');
+    // Redact user-provided env-var values registered at startup (BAT-495) — single
+    // alternation regex is rebuilt on register, so this stays O(msg length).
+    if (_extraRedactedRegex) {
+        msg = msg.replace(_extraRedactedRegex, '[REDACTED_ENV]');
     }
     return msg;
 }
