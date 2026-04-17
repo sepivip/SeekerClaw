@@ -124,6 +124,7 @@ fun SettingsScreen(
     onNavigateToChannelConfig: () -> Unit = {},
     onNavigateToSearchConfig: () -> Unit = {},
     onNavigateToMcpConfig: () -> Unit = {},
+    onNavigateToEnvVars: () -> Unit = {},
 ) {
     val context = LocalContext.current
     // Observe configVersion so UI refreshes when bridge saves owner ID (auto-detect)
@@ -205,6 +206,14 @@ fun SettingsScreen(
     LaunchedEffect(configVer) {
         mcpServerCount = withContext(Dispatchers.IO) {
             ConfigManager.loadMcpServers(context).size
+        }
+    }
+
+    // Env var count (for ConfigField display) — load off main thread to avoid jank
+    var envVarCount by remember { mutableIntStateOf(0) }
+    LaunchedEffect(configVer) {
+        envVarCount = withContext(Dispatchers.IO) {
+            ConfigManager.loadEnvVars(context).size
         }
     }
 
@@ -442,6 +451,12 @@ fun SettingsScreen(
                     value = "$mcpServerCount server${if (mcpServerCount != 1) "s" else ""} configured",
                     onClick = onNavigateToMcpConfig,
                     info = SettingsHelpTexts.MCP_SERVERS,
+                    showDivider = true,
+                )
+                ConfigField(
+                    label = "Env Vars",
+                    value = "$envVarCount var${if (envVarCount != 1) "s" else ""} set",
+                    onClick = onNavigateToEnvVars,
                     showDivider = false,
                 )
             }

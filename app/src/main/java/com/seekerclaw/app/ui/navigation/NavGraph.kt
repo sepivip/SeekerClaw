@@ -31,6 +31,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.toRoute
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.ui.dashboard.DashboardScreen
 import com.seekerclaw.app.ui.logs.LogsScreen
@@ -56,6 +57,7 @@ import kotlinx.serialization.Serializable
 @Serializable object SearchConfigRoute
 @Serializable object McpConfigRoute
 @Serializable object DiscordConfigRoute
+@Serializable data class EnvVarsRoute(val prefillKey: String? = null)
 
 data class BottomNavItem(
     val label: String,
@@ -91,6 +93,7 @@ fun SeekerClawNavHost() {
                 dest.hasRoute(SearchConfigRoute::class) -> "SearchProviderConfig"
                 dest.hasRoute(McpConfigRoute::class) -> "McpConfig"
                 dest.hasRoute(DiscordConfigRoute::class) -> "DiscordConfig"
+                dest.hasRoute(EnvVarsRoute::class) -> "EnvVars"
                 else -> dest.route ?: "Unknown"
             }
             Analytics.logScreenView(screenName)
@@ -241,6 +244,9 @@ fun SeekerClawNavHost() {
                     onNavigateToMcpConfig = {
                         navController.navigate(McpConfigRoute)
                     },
+                    onNavigateToEnvVars = {
+                        navController.navigate(EnvVarsRoute())
+                    },
                 )
             }
             composable<ProviderConfigRoute> {
@@ -266,6 +272,13 @@ fun SeekerClawNavHost() {
             composable<McpConfigRoute> {
                 com.seekerclaw.app.ui.settings.McpConfigScreen(
                     onBack = { navController.popBackStack() }
+                )
+            }
+            composable<EnvVarsRoute> { backStackEntry ->
+                val route = backStackEntry.toRoute<EnvVarsRoute>()
+                com.seekerclaw.app.ui.settings.EnvVarsScreen(
+                    onBack = { navController.popBackStack() },
+                    prefillKey = route.prefillKey,
                 )
             }
             composable<DiscordConfigRoute> {
