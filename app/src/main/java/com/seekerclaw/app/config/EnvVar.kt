@@ -5,7 +5,8 @@ data class EnvVar(
     val value: String,
 ) {
     companion object {
-        private val NAME_REGEX = Regex("^[A-Z_][A-Z0-9_]*$")
+        /** Shared charset rule — also referenced by EnvVarParser so the two stay in sync. */
+        internal val NAME_REGEX = Regex("^[A-Z_][A-Z0-9_]*$")
         const val MAX_VALUE_BYTES = 8192
         const val MAX_KEYS = 256
 

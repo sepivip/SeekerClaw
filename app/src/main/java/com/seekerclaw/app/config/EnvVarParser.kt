@@ -10,8 +10,6 @@ data class ParsedEnvEntry(
 )
 
 object EnvVarParser {
-    private val NAME_REGEX = Regex("^[A-Z_][A-Z0-9_]*$")
-
     fun parse(text: String): List<ParsedEnvEntry> {
         return text.lines()
             .asSequence()
@@ -31,7 +29,7 @@ object EnvVarParser {
         val rawValue = unquote(stripped.substring(eq + 1).trim())
 
         val status = when {
-            !NAME_REGEX.matches(rawName) -> ParseStatus.INVALID_NAME
+            !EnvVar.NAME_REGEX.matches(rawName) -> ParseStatus.INVALID_NAME
             EnvVar.isReserved(rawName) -> ParseStatus.RESERVED
             else -> ParseStatus.OK
         }

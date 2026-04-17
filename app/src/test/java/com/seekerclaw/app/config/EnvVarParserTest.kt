@@ -73,4 +73,11 @@ class EnvVarParserTest {
         val result = EnvVarParser.parse("FOO=a=b=c")
         assertEquals("a=b=c", result[0].value)
     }
+
+    @Test fun `CRLF line endings parsed correctly`() {
+        val result = EnvVarParser.parse("FOO=1\r\nBAR=2\r\n")
+        assertEquals(2, result.size)
+        assertEquals("FOO", result[0].name)
+        assertEquals("BAR", result[1].name)
+    }
 }
