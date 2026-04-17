@@ -53,6 +53,12 @@ fun EnvVarRawEditorDialog(
     }
     var text by remember { mutableStateOf(initialText) }
 
+    // Parse + diff run synchronously on each `text` change. Kotlin regex over
+    // realistic inputs (≤ 256 keys × a few hundred bytes each = ~100 KB of text)
+    // completes in sub-ms and keeps the preview perfectly live. A pathological
+    // 2 MB paste (theoretical max: 256 × 8 KB) might add a few ms of jank — if
+    // that ever shows up in practice, debounce here with LaunchedEffect(text)
+    // + Dispatchers.Default. Not worth the complexity for the typical case.
     val parsed = remember(text) { EnvVarParser.parse(text) }
     val currentByName = remember(currentVars) { currentVars.associateBy { it.name } }
 
