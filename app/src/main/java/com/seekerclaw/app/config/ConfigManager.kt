@@ -843,6 +843,13 @@ object ConfigManager {
             // Only the tokens are needed by Node — email/expiresAt are Android-only metadata.
             if (config.openaiOAuthToken.isNotBlank()) put("openaiOAuthToken", config.openaiOAuthToken)
             if (config.openaiOAuthRefresh.isNotBlank()) put("openaiOAuthRefresh", config.openaiOAuthRefresh)
+            // NOTE: loadEnvVars() decrypts on the calling thread, matching the
+            // pre-existing pattern in this function — every secret field above
+            // (bot tokens, API keys, OAuth tokens, MCP tokens) is also decrypted
+            // from Keystore on the same thread. Capped at 256 keys × 8 KB; typical
+            // real-world size is a few keys × a few hundred bytes, so total work is
+            // small. If `writeConfigJson` is ever migrated off the main thread,
+            // this block moves with it — see service/OpenClawService.kt caller.
             val envVars = loadEnvVars(context)
             if (envVars.isNotEmpty()) {
                 val envObj = JSONObject()

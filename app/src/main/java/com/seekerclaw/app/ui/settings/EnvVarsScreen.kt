@@ -77,6 +77,10 @@ fun EnvVarsScreen(
     var dialogState by remember { mutableStateOf<EnvVarDialogState>(EnvVarDialogState.Hidden) }
     var showPasteDialog by remember { mutableStateOf(false) }
     var deleteTarget by remember { mutableStateOf<EnvVar?>(null) }
+    // Track whether the user made any edit in this session so the restart
+    // banner stays visible even if all vars get deleted — deletion also
+    // requires a restart to remove the values from the running Node process.
+    var editsThisSession by remember { mutableStateOf(false) }
     // Observe EnvVarRegistry flows so the list + chips recompose when vars change
     // OR when skills load later (requirements may arrive after this screen mounts).
     @Suppress("UNUSED_VARIABLE")
@@ -118,6 +122,7 @@ fun EnvVarsScreen(
             else -> envVars + newVar
         }
         ConfigManager.saveEnvVars(context, updated)
+        editsThisSession = true
         dialogState = EnvVarDialogState.Hidden
     }
 
@@ -363,9 +368,13 @@ fun EnvVarsScreen(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(12.dp))
+            }
 
-                // Restart banner
+            // Restart banner — shown when the list is non-empty OR the user has
+            // made any changes in this session (deletions included). A restart
+            // is needed to remove deleted values from the running Node process.
+            if (envVars.isNotEmpty() || editsThisSession) {
+                Spacer(modifier = Modifier.height(12.dp))
                 CardSurface {
                     Text(
                         text = "Restart the service from the Dashboard to apply changes.",
@@ -402,6 +411,7 @@ fun EnvVarsScreen(
                 // drop the user's intended overwrite.
                 val merged = (envVars + newVars).associateBy { it.name }.values.toList()
                 ConfigManager.saveEnvVars(context, merged)
+                editsThisSession = true
                 showPasteDialog = false
             },
         )
@@ -439,6 +449,7 @@ fun EnvVarsScreen(
             confirmButton = {
                 TextButton(onClick = {
                     ConfigManager.saveEnvVars(context, envVars.filterNot { it.name == target.name })
+                    editsThisSession = true
                     deleteTarget = null
                 }) {
                     Text(
