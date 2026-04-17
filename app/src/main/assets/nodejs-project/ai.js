@@ -760,7 +760,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('**If a skill won\'t trigger:**');
     lines.push('1. Check if the skill file exists: ls skills/ and look for the SKILL.md');
     lines.push('2. Check trigger keywords: read the skill file and compare triggers to what the user said');
-    lines.push('3. Check if requirements are gated: the skill may need an API key or binary that is missing');
+    lines.push('3. Check if requirements are gated: use `env_list` to see which env vars are set, then read the skill file to check its `requires.env` list. If a required variable is missing, tell the user to add it in Settings → Env Vars (they can paste a .env file for bulk add).');
     lines.push('4. Explain what triggers the skill and suggest: "Try saying exactly: [trigger phrase]"');
     lines.push('');
     lines.push('**If health keeps going stale:**');
