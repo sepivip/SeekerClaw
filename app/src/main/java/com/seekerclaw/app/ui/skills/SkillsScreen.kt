@@ -570,7 +570,10 @@ private fun SkillCard(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable {
+                        .clickable(
+                            onClickLabel = "Add missing env vars",
+                            role = androidx.compose.ui.semantics.Role.Button,
+                        ) {
                             navController.navigate(EnvVarsRoute(prefillKey = missingEnv.first()))
                         }
                         .padding(top = 6.dp),
