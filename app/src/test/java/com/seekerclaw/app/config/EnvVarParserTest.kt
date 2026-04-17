@@ -95,6 +95,14 @@ class EnvVarParserTest {
         assertEquals("  bar", result[0].value)
     }
 
+    @Test fun `unquoted value with escaped-literal sequences treated as normal chars`() {
+        // A `.env` line like `FOO=a\nb` literally contains backslash-n, not a
+        // real newline. Parser keeps it verbatim; status is OK.
+        val result = EnvVarParser.parse("FOO=a\\nb")
+        assertEquals(ParseStatus.OK, result[0].status)
+        assertEquals("a\\nb", result[0].value)
+    }
+
     @Test fun `value over 8 KB marked VALUE_TOO_LARGE`() {
         val tooLong = "x".repeat(8193)
         val result = EnvVarParser.parse("FOO=$tooLong")

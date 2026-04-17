@@ -193,6 +193,7 @@ fun EnvVarRawEditorDialog(
                                         ParseStatus.RESERVED -> "reserved"
                                         ParseStatus.MALFORMED -> "malformed"
                                         ParseStatus.VALUE_TOO_LARGE -> "value > 8 KB"
+                                        ParseStatus.VALUE_HAS_NEWLINE -> "value contains newline"
                                         ParseStatus.OK -> ""
                                     }
                                     val name = entry.name.ifBlank { "(unnamed)" }

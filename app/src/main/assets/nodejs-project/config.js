@@ -129,6 +129,12 @@ if (config.envVars && typeof config.envVars === 'object') {
         if (_ENV_RESERVED_EXACT.has(key)) continue;
         if (_ENV_RESERVED_PREFIXES.some((p) => key.startsWith(p))) continue;
         const str = String(value);
+        // Newline-free rule mirrors Kotlin EnvVar.validateValue. A value with
+        // embedded \r or \n interpolated into a shell command (e.g.
+        // `curl -H "Authorization: Bearer $TOK"`) can split the command; on a
+        // .env round-trip the serialization would be ambiguous. Skip defensively
+        // in case a tampered config.json tries to inject newline values.
+        if (str.indexOf('\n') >= 0 || str.indexOf('\r') >= 0) continue;
         if (Buffer.byteLength(str, 'utf8') > _ENV_MAX_VALUE_BYTES) {
             droppedOversize++;
             continue;

@@ -1,6 +1,6 @@
 package com.seekerclaw.app.config
 
-enum class ParseStatus { OK, INVALID_NAME, RESERVED, MALFORMED, VALUE_TOO_LARGE }
+enum class ParseStatus { OK, INVALID_NAME, RESERVED, MALFORMED, VALUE_TOO_LARGE, VALUE_HAS_NEWLINE }
 
 data class ParsedEnvEntry(
     val name: String,
@@ -43,6 +43,12 @@ object EnvVarParser {
         val status = when {
             !EnvVar.NAME_REGEX.matches(rawName) -> ParseStatus.INVALID_NAME
             EnvVar.isReserved(rawName) -> ParseStatus.RESERVED
+            // Distinguish newline rejection from size-cap rejection so the Raw
+            // editor can surface the specific reason. In practice the parser
+            // rarely sees newline-containing values (each input line is one
+            // entry), but a legacy stored value with `\n` would hit this path
+            // when rehydrated as the Raw editor's initialText.
+            rawValue.contains('\n') || rawValue.contains('\r') -> ParseStatus.VALUE_HAS_NEWLINE
             EnvVar.validateValue(rawValue) != null -> ParseStatus.VALUE_TOO_LARGE
             else -> ParseStatus.OK
         }
