@@ -90,15 +90,28 @@ t('empty/missing object is no-op', () => {
     assert.deepStrictEqual(mergeEnvVars({}, env), []);
 });
 
-t('config.js source fingerprint still present', () => {
+t('config.js merge wiring still present (structural, not substring)', () => {
     const src = fs.readFileSync(CONFIG_JS, 'utf8');
-    // Drift detector: these tokens must appear in config.js for the merge
-    // feature to be wired. If this fails, the real module has been edited
-    // without updating this test's pure copy.
-    assert.ok(src.includes('USER_ENV_KEYS'),
-        'config.js is missing USER_ENV_KEYS export');
-    assert.ok(src.includes('config.envVars'),
-        'config.js is missing config.envVars merge');
+    // Strip comments so "USER_ENV_KEYS" in a comment can't satisfy these checks.
+    const code = src
+        .replace(/\/\*[\s\S]*?\*\//g, '')  // block comments
+        .replace(/(^|[^:])\/\/[^\n]*/g, '$1');  // line comments (avoid URLs)
+
+    // Declaration of the export array
+    assert.ok(/const\s+USER_ENV_KEYS\s*=\s*\[\s*\]/.test(code),
+        'config.js is missing `const USER_ENV_KEYS = []` declaration');
+    // Merge loop iterates config.envVars entries
+    assert.ok(/Object\.entries\s*\(\s*config\.envVars\s*\)/.test(code),
+        'config.js is missing Object.entries(config.envVars) merge loop');
+    // Actually writes into process.env
+    assert.ok(/process\.env\[key\]\s*=\s*String\(value\)/.test(code),
+        'config.js is missing process.env[key] = String(value) assignment');
+    // Pushes into USER_ENV_KEYS after a successful write
+    assert.ok(/USER_ENV_KEYS\.push\s*\(\s*key\s*\)/.test(code),
+        'config.js is missing USER_ENV_KEYS.push(key) inside merge loop');
+    // Exported from module.exports
+    assert.ok(/module\.exports\s*=\s*\{[^}]*\bUSER_ENV_KEYS\b/s.test(code),
+        'config.js is missing USER_ENV_KEYS in module.exports');
 });
 
 // --- runner ---
