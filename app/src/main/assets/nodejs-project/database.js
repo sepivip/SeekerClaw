@@ -52,6 +52,26 @@ function setShutdownDeps(deps) {
 // INIT & PERSISTENCE
 // ============================================================================
 
+function createToolCallLogSchema(dbInstance) {
+    dbInstance.run(`CREATE TABLE IF NOT EXISTS tool_call_log (
+        id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+        turn_id            TEXT    NOT NULL,
+        message_id         TEXT,
+        tool_name          TEXT    NOT NULL,
+        triggered_by_skill TEXT,
+        call_shape         TEXT    NOT NULL,
+        result_status      TEXT    NOT NULL,
+        error_kind         TEXT,
+        latency_ms         INTEGER,
+        created_at         INTEGER NOT NULL
+    )`);
+    dbInstance.run(`CREATE INDEX IF NOT EXISTS idx_tcl_created ON tool_call_log(created_at)`);
+    dbInstance.run(`CREATE INDEX IF NOT EXISTS idx_tcl_tool    ON tool_call_log(tool_name, created_at)`);
+    dbInstance.run(`CREATE INDEX IF NOT EXISTS idx_tcl_shape   ON tool_call_log(call_shape, created_at)`);
+    dbInstance.run(`CREATE INDEX IF NOT EXISTS idx_tcl_turn    ON tool_call_log(turn_id)`);
+    dbInstance.run(`CREATE INDEX IF NOT EXISTS idx_tcl_skill   ON tool_call_log(triggered_by_skill, created_at)`);
+}
+
 async function initDatabase() {
     try {
         const initSqlJs = require('./sql-wasm.js');
@@ -91,6 +111,9 @@ async function initDatabase() {
             retry_count INTEGER DEFAULT 0,
             duration_ms INTEGER
         )`);
+
+        // Tool call log — feeds "Go to School" self-improvement analysis
+        createToolCallLogSchema(db);
 
         // Memory indexing tables (BAT-25)
         db.run(`CREATE TABLE IF NOT EXISTS chunks (
@@ -609,6 +632,7 @@ module.exports = {
     getDb,
     setShutdownDeps,
     initDatabase,
+    createToolCallLogSchema,
     indexMemoryFiles,
     saveSession,
     getRecentSessions,
