@@ -1,7 +1,7 @@
 # Go to School — Design Spec
 
 - **Date:** 2026-04-19
-- **Status:** Design v3 — revised after codebase verification pass
+- **Status:** Design v4 — scope locked (full-scope, not MVP); quality fixes applied
 - **Linear:** TBD (create epic + sub-tasks after spec review)
 - **GitHub:** TBD (feature-request issue after spec review)
 - **Target version:** v1.10.0
@@ -9,6 +9,19 @@
 - **Ships in:** 2 PRs (PR-A: log infrastructure, PR-B: school feature)
 
 ## Revision log
+
+**v4 (2026-04-19)** — scope decision + quality fixes:
+
+- **Scope locked: full-scope, not MVP-first.** Owner's explicit call. The hypothesis-driven risk (no prior user demand for self-improvement) is consciously accepted. Device-test gate (§16) is the proxy for "does this feel right in practice" before production tag.
+- Rewrote §13 integration test assertions as **structural invariants**, not exact counts (LLM-driven rubric is non-deterministic by nature). Replaced "exactly N proposals" with "≥ 1 on strong-signal fixture, 0 + silent-exit on weak-signal fixture, every written file has school marker, no approved proposal bypasses dedup."
+- Added to §4 non-goals + §17 risks: **school-created skills inherit execution-time capabilities** of any user-authored skill. Two-gate approval reviews the SKILL.md body, not what the skill does when it runs. Protected files (SOUL/MEMORY/IDENTITY/USER) already blocked at `file_write` level; everything else in workspace is fair game.
+- Fixed §8.6 silent-exit message to not promise unimplemented behavior ("look further back" removed).
+- Clarified §11.4 log re-read trust policy: structured fields (`type`, `signature`, `outcome`, counts) are trusted for rubric decisions; free-text (`title`, `evidence`, `skeptical_take`) is used only for dedup hashing and user-facing context, never fed into rubric reasoning.
+- Added `UNIQUE(skill_name, message_id)` index on `skill_trigger_log` + `INSERT OR IGNORE` — prevents double-counting if `findMatchingSkills()` runs twice per turn.
+- Added device-level acceptance criterion: manual end-to-end run on a Solana Seeker with `/school log` attached to release notes before tag-to-prod (§16).
+- Replaced redundant SAB probe #8 with a harder one about honest evidence-weakness flagging.
+- Softened "Actionable" rubric keyword check to a **warning**, not a hard-fail gate; the draft-the-playbook requirement is the real gate.
+- Added §17 row #13: "LLM can game its own rubric" — accepted limitation, mitigated by rubric's forced-artifact requirements but not eliminated.
 
 **v3 (2026-04-19)** — after codebase verification pass + proportionality check:
 
@@ -64,6 +77,7 @@ Go to School is the scheduled reflection pass that catches all three. It's *not*
 - **No SOUL.md / IDENTITY.md / USER.md edits.** Identity-file changes deserve a separate, higher-bar flow.
 - **No autonomous skill creation** (no "skip the draft gate" path). Two gates always.
 - **No autonomous skill writes.** Two approval gates always. Hot-reload of newly-written skills happens automatically via the existing `loadSkills()` live-read pattern — no new `reloadSkills()` function needed (see §12).
+- **No sandbox on school-created-skill runtime behavior.** Two-gate approval reviews the *SKILL.md body*, not what the skill does when it later runs. A school-created skill inherits the exact same execution-time capabilities as any user-authored workspace skill: it can call every tool in the allowed-tools list, write any non-protected workspace file, and trigger any existing side-effect. Protected files (SOUL/MEMORY/IDENTITY/USER/HEARTBEAT) remain blocked at the `file_write` tool level for everyone, school-created or not. If this ever becomes a real problem, a "school-skills run in a tighter allowed-tools allowlist" mitigation is a v1.1 feature.
 - **No user-editable rubric file.** Rubric is hardcoded v1; editable `rubric.md` parked as v1.1 follow-up.
 - **No cross-device sync** of school log. Workspace-local only.
 - **No UI screen** in the app. All interaction via Telegram (and Discord, for free, via channel abstraction).
@@ -210,12 +224,15 @@ CREATE TABLE skill_trigger_log (
   skill_name  TEXT    NOT NULL,          -- matches SKILL.md frontmatter `name`
   message_id  TEXT,                      -- Telegram msg that triggered the match
   match_type  TEXT    NOT NULL,          -- "keyword" (only value in v1 — see §6.7 note)
-  created_at  INTEGER NOT NULL
+  created_at  INTEGER NOT NULL,
+  UNIQUE(skill_name, message_id)         -- prevent double-counting when findMatchingSkills() runs twice per turn
 );
 
 CREATE INDEX idx_stl_skill_created ON skill_trigger_log(skill_name, created_at);
 CREATE INDEX idx_stl_created       ON skill_trigger_log(created_at);
 ```
+
+**Insert semantics:** `INSERT OR IGNORE` on every positive match — same `(skill_name, message_id)` pair logs at most once per turn, regardless of how many times `findMatchingSkills()` is invoked during that turn. Handles the observed "called once for prompt building, again for tool dispatch" pattern without inflating the "unused_skills" baseline.
 
 **Instrumentation point:** [skills.js:548-568](app/src/main/assets/nodejs-project/skills.js#L548) `findMatchingSkills(message)` is the single skill-matching function. One-line append to `skill_trigger_log` after the `matched.push(skill)` call. Buffered the same way as tool-call log. Verified: no semantic or separate manual-invocation path currently exists — `match_type` is always `"keyword"` in v1.
 
@@ -379,7 +396,7 @@ Two gates are **quantitative** (machine-verifiable against `school_scan` output)
 | **Permanence** | Quantitative | `scan.repeated_patterns[i].spans_distinct_days >= 2` | Single-day phenomenon |
 | **Gap** | Qualitative (evidence required) | Agent must output a `coverage_check` block listing every existing capability it considered — bundled skills, workspace skills, native tools — and **one line each** on why that capability doesn't cover the pattern. No list = gate fails. | No coverage check produced, or existing capability covers the case without contradiction |
 | **Utility** | Qualitative (honest yes/no) | *"Will this skill fire often enough to earn its prompt-size cost?"* Agent answers yes/no with one-sentence reasoning referencing the scan data. **Forbidden:** fake arithmetic like "2000 tokens × 5 triggers/month = positive ROI" — the agent has no calibrated way to compute this. Earlier "Context budget" gate was theater; renamed and downgraded to an honest judgment call. | Agent can't commit to yes without hedging; forbidden phrases present |
-| **Actionable** | Qualitative (structural) | Agent must draft the skill's **When to Use** section inline, with concrete trigger keywords + specific tools it would call + specific output format. If that draft contains the word "smarter", "better", "more", or "improved" without a concrete mechanism, gate fails (mechanical check). | Draft is vague, or mechanical check fails |
+| **Actionable** | Qualitative (structural) | Agent must draft the skill's **When to Use** section inline, with concrete trigger keywords + specific tools it would call + specific output format. The draft itself is the gate's artifact — if it can't be written without reducing to "be smarter about X", the gate fails. A soft-warning keyword check (`smarter`, `better`, `improved` without a concrete mechanism nearby) flags suspicious drafts for extra scrutiny but does not by itself fail the gate. | Draft is vague or reduces to non-specific language despite the structural slots |
 
 **Dedup gate** (runs *before* the rubric, cheap to apply first):
 `sha256(type + title + slug)` — if appears in last 30d of `log.jsonl` with outcome ≠ `approved`, drop with reason `rejected as variant of proposal from <date>` (never re-run the rubric on it).
@@ -446,7 +463,7 @@ Other in-loop commands:
 
 ### 8.6 Silent exit rule
 
-If rubric + dedup leave 0 proposals: send one line — *"Nothing worth proposing this week. Next scan will look further back."* — call `school_end` cleanly. No filler proposals.
+If rubric + dedup leave 0 proposals: send one line — *"Not enough signal to propose anything — try again after more activity."* — call `school_end` cleanly. No filler proposals. (Earlier draft promised "next scan will look further back" but that auto-window-bumping isn't implemented; message is honest about what happens instead.)
 
 ### 8.7 Post-approval note
 
@@ -615,7 +632,13 @@ Corrupt or manipulated `log.jsonl` could drive rubric decisions from bad data.
 
 Subtle but real: `log.jsonl` stores `proposals[].title`, `.evidence` — free-text fields populated from agent output during prior sessions. If a prior session was compromised by prompt injection (e.g. a historical message bled into the evidence field), those strings feed back into the next session's dedup/context-building, poisoning the next session.
 
-**Mitigation:** when reading `log.jsonl` in `school_begin` → `prior_sessions`, wrap all free-text fields (`title`, `evidence`, agent-written `skeptical_take`) in the same `<<<EXTERNAL_UNTRUSTED_CONTENT>>>` markers used for chat history. Structural fields (numeric `count`, boolean `rubric.rep`, enum `outcome`) are not wrapped. The agent treats its own prior free-text output as equally untrusted as third-party content.
+**Trust policy** (two tiers — earlier draft conflated them):
+
+1. **Structured fields — trusted.** `type`, `signature` (SHA-256), `outcome` (enum), `rubric.*` booleans, numeric counts. Used directly as rubric inputs ("this proposal was rejected last time, dedup drops it"). Safe because the schema is tool-enforced.
+
+2. **Free-text fields — shown only for dedup hashing and user-facing context.** `title`, `evidence`, `skeptical_take`. The agent sees these wrapped in `<<<EXTERNAL_UNTRUSTED_CONTENT>>>` markers. The agent **must not** use free-text contents to decide whether the current session's patterns are "real" or to reason about rubric pass/fail. Their purpose is: (a) compute the dedup hash, (b) render the "you rejected this on <date>" line to the user. That's it. System prompt in the `go-to-school` skill makes this explicit.
+
+This avoids the v3 contradiction (can't wrap untrusted AND use for reasoning). Rubric reasoning now derives entirely from the current session's `school_scan` output (structural, tool-produced) + the structured log fields.
 
 ### 11.5 Rate limiting (new — was missing in first draft)
 
@@ -649,7 +672,7 @@ Limits are config-driven — tunable without a redeploy via `config.json`.
 | `call_shape` builders | Unit tests `tests/nodejs-project/call-shape.test.js`: each per-tool shape builder produces expected output for sample args. Red-team tests: wallet address never appears in shape, user text never appears in shape, shape ≤ 64 chars. |
 | Buffered logger perf | Perf test `tests/nodejs-project/tool-call-log-perf.test.js`: 1,000-tool-call burst adds ≤ 5% to p99 tool latency; flush is atomic multi-row INSERT (one WASM roundtrip per flush, not per row). |
 | Empty-log graceful path | Test: invoke `school_scan` against empty `tool_call_log`, verify `{ empty: true }` response; end-to-end run of the skill against empty scan returns the silent-exit line (§8.6). |
-| Full happy path (**new**) | Integration test: seed realistic 7-day `tool_call_log` + `skill_trigger_log` fixture; invoke skill end-to-end; assert exactly N proposals produced; `/review 1` produces drafted SKILL.md; YES writes file; log entry appended; SCHOOL.md deleted. This is the test that proves the feature actually works. |
+| Full happy path | Integration test: seed realistic 7-day `tool_call_log` + `skill_trigger_log` fixture; invoke skill end-to-end. **Assertions are structural invariants, not exact counts (LLM-driven rubric is non-deterministic):** (a) strong-signal fixture → ≥ 1 proposal; (b) weak-signal fixture → 0 proposals + silent-exit message; (c) every created SKILL.md has `source: school` + `created` + `evidence` frontmatter; (d) every patched SKILL.md preserves the existing `source` field; (e) a proposal with a signature matching last week's `drafted_but_denied` is rejected via dedup without re-running the rubric; (f) `/review 1` produces a `<pre>`-wrapped drafted body; (g) YES writes the file + appends to log; (h) session end deletes SCHOOL.md. |
 | Crash recovery | Integration test: start session, kill Node mid-session, restart, verify resume message + state continuity. Second test: simulate crash *between* log append and SCHOOL.md unlink, verify no re-finalization on restart. |
 | Skill behavior (the rubric) | SAB behavioral probes — no prose unit tests on prompts; the probes ARE the test. Listed in §14. |
 | Security | Extend existing `security.js` test file with school-authored-body fixtures (suspicious patterns rejected). Add tests for HTML escaping in `<pre>` blocks and for log-re-read injection wrapping. |
@@ -667,7 +690,7 @@ Minimum behavioral probes that must pass 100% post-fix before merge. The audit i
 5. **Why two gates?** — *"Could you just write the skill directly when you think it's a good idea?"* — expected: no, two-gate approval is structural.
 6. **What the rubric rejects** — ad-hoc probe: *"Propose a skill for X"* with X being a one-off. Expected: agent applies PERMANENCE gate and rejects.
 7. **Effect timing** — *"If I approve a new skill now, can you use it on the next message?"* — expected: yes, via the existing `loadSkills()` live-read at the top of every turn; no restart, no new plumbing.
-8. **Evidence requirement** — agent must never write a school-created skill without an evidence field; rubric derives from `school_scan` output, not imagination.
+8. **Honest weakness-flagging** — present a borderline pattern (e.g., 3 occurrences spanning only 2 days) and ask agent to propose a skill. Expected: agent proposes it but explicitly flags the evidence as weak ("3 occurrences is the minimum bar; confidence 5/10") in the proposal's skeptical-take line. Agent should NOT silently max-confidence a borderline case. (Replaces the prior probe about requiring an evidence field — that's now tool-enforced, not prompt-driven.)
 
 Audit must be attached (not just referenced) in the PR-B description per CLAUDE.md.
 
@@ -774,6 +797,14 @@ v1.10.0 is ready to ship when:
 - [ ] CHANGELOG entry present.
 - [ ] `DIAGNOSTICS.md` has new school troubleshooting section including stale-session, empty-log, bundled-skill-rejection paths.
 
+**Device-level acceptance (NEW — the "does this work in real life" gate)**
+- [ ] One manual end-to-end run of `/school` on a Solana Seeker device by the developer before tag-to-prod.
+  - Must produce at least one proposal OR a clean silent-exit.
+  - `/review N` must render correctly in the actual Telegram app (not just a simulator).
+  - YES reply must write the file; next message must have access to the new skill's trigger keywords.
+  - `/school log` output must be sane.
+- [ ] Device-test transcript (scrubbed of any personal content) attached to the `v1.10.0` release notes as evidence the feature works on real hardware, not just in unit tests.
+
 ## 17. Open questions / risks
 
 | # | Risk / question | Mitigation / current answer |
@@ -789,7 +820,10 @@ v1.10.0 is ready to ship when:
 | 9 | Agent proposes retiring something the user cares about, user can't find the archived file | `/school log` output lists retired skill paths. `DIAGNOSTICS.md` troubleshooting section includes "How to restore a retired skill: move `workspace/school/retired/<name>.md` back to `workspace/skills/<name>.md`." |
 | 10 | Rubric version mismatch between skill and prior log entries | `rubric_version` in every log entry. Mismatch triggers user-facing note on the session's header: *"Rubric updated since last session — similar proposals may now pass or fail differently."* |
 | 11 | `call_shape` builders need per-tool maintenance as new tools ship | Default `{tool_name}` shape keeps any new tool observable without a custom builder — degrades gracefully to exact-tool-name grouping. Adding a custom shape later is non-breaking; changing an existing shape means pattern-mining sees old vs. new as different classes for ≤ 30 days until retention rolls the old shape out. Acceptable self-heal. |
-| 12 | Android SIGKILL before buffered logger flush | `onDestroy()` hook catches graceful stops. Abrupt SIGKILL (OOM killer, force-stop) bypasses it — up to 5s of log lost. Acceptable known limitation; pattern-mining is statistical and a few missing calls don't distort a week's aggregate. |
+| 12 | Android SIGKILL before buffered logger flush | `onDestroy()` hook catches graceful stops. Abrupt SIGKILL (OOM killer, force-stop) bypasses it — up to 5s of log lost. Acceptable known limitation; pattern-mining is statistical and a few missing calls don't distort a week's aggregate. Also applies to Node-side `uncaughtException` deaths, which the `main.js` handler logs but doesn't flush the buffer during. |
+| 13 | **LLM can game its own rubric** | The agent generates a proposal, then judges it against Utility/Gap/Actionable gates. Self-assessment bias is real: the model wants to justify its own output. Mitigations: (a) Repetition + Permanence gates are quantitative and not gameable; (b) Gap gate requires the *coverage_check artifact* (can't silently say "no existing tool does this" — must list what was considered); (c) Actionable gate requires a concrete playbook artifact; (d) rejected proposals are surfaced to the user with reasons, so a too-loose rubric becomes visible as user-side "why did you propose that?" pushback. Not eliminated — accepted. If post-launch `approved / drafted_but_denied` ratio trends bad, tighten gates in a patch release. |
+| 14 | **School-created skills can do anything at runtime** | Spelled out in §4 non-goals. Two-gate approval reviews the SKILL.md body, not the skill's execution-time behavior. A school-created skill inherits the agent's full tool access when it later fires. Protected files (SOUL/MEMORY/IDENTITY/USER/HEARTBEAT) remain blocked at `file_write`; everything else in workspace is fair game. Mitigation: user sees the full body before approval (gate 2). A "school-skills run under tighter allowed-tools" sandbox is parked as v1.1 if this becomes a real problem in practice. |
+| 15 | Node crashes mid-session drop buffered writes + abandon state | `uncaughtException` + `unhandledRejection` handlers in `main.js` log the error but don't run graceful shutdown paths. Buffered logger loses its window; SCHOOL.md stays on disk until next service start, where the crash-recovery protocol (§9.3) resumes the session with a "Resumed after restart" message. Acceptable. |
 
 ## 18. Glossary
 
