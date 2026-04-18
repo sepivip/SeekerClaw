@@ -2,25 +2,11 @@
 // tool-call-log.test.js — schema + insert smoke test for tool_call_log.
 // Run: node tests/nodejs-project/tool-call-log.test.js
 
-const fs = require('fs');
-const os = require('os');
 const path = require('path');
+const { setupConfigFixture } = require('./_fixtures');
 
 async function main() {
-    // database.js transitively requires config.js, which reads config.json from
-    // process.argv[2] (falls back to __dirname) and calls process.exit(1) if it's
-    // missing. Stand up a minimal fixture workdir so the require succeeds in a
-    // standalone test environment.
-    const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), 'seekerclaw-tcl-test-'));
-    fs.writeFileSync(path.join(fixtureDir, 'config.json'), JSON.stringify({
-        channel: 'telegram',
-        botToken: 'test-bot-token',
-        ownerId: '1',
-        provider: 'claude',
-        anthropicApiKey: 'test-anthropic-key',
-        agentName: 'TestAgent',
-    }));
-    process.argv[2] = fixtureDir;
+    setupConfigFixture('seekerclaw-tcl-test-');
 
     const SQL_PATH = path.join(__dirname, '../../app/src/main/assets/nodejs-project/sql-wasm.js');
     const initSqlJs = require(SQL_PATH);
