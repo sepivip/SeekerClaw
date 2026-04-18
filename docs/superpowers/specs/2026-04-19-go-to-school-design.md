@@ -1,7 +1,7 @@
 # Go to School — Design Spec
 
 - **Date:** 2026-04-19
-- **Status:** Design v6 — state machine moved to deterministic JS; review-flow UX fixes
+- **Status:** Design v7 — input classification + write-failure + plan-phase items pulled into spec
 - **Linear:** TBD (create epic + sub-tasks after spec review)
 - **GitHub:** TBD (feature-request issue after spec review)
 - **Target version:** v1.10.0
@@ -9,6 +9,17 @@
 - **Ships in:** 2 PRs (PR-A: log infrastructure, PR-B: school feature)
 
 ## Revision log
+
+**v7 (2026-04-19)** — tightening classification + write-failure + promoting deferred items:
+
+- **Classification echo rule** (§8.5.1) — agent must echo its input classification back to the user in every state-changing reply (*"Understood as YES on proposal 3 — writing now."*). Gives the user a visible correction opportunity if the LLM misclassified. Acknowledges honestly in §17 that the deterministic state machine only kicks in *after* classification, which is still LLM-driven.
+- **Removed `kind: "unrelated"` from `school_handle_input`** (§7.6) — agent only calls the tool when input is school-relevant (yes/no/review/skip/stop). Unrelated messages route through normal handling with a locally-appended reminder in `reviewing_<N>`. One less tool dispatch per turn.
+- **Explicit input-classification rubric** (§8.5.1) — `/command` prefix OR exact YES/NO/Y/N/👍/👎 (with ≤ 120 chars total) are school-relevant. Everything else is unrelated. Free-text like "skip that" is NOT parsed — user must use `/skip N`. Prevents ambiguity about "cancel" / "hold on" / "skip it".
+- **60-second bare-YES window now specified** (§10) — uses Telegram message's `date` field (server-side send timestamp, monotonic and agent-observable), not agent wall-clock. Threshold chosen because it's long enough for typical review reading time, short enough that a stale YES from earlier in the conversation can't drift into a new review. Shrink to 30s post-launch if mis-routings happen.
+- **`/school-reset` now requires confirmation** (§9.5) — first `/school-reset` replies *"This will discard any open session. Type `/school-reset-confirm` within 60s to proceed."* Second confirms. Accidental typing no longer destroys state.
+- **`rubric_version` defined** (§9.1) — equals the bundled `go-to-school` skill's frontmatter `version` field at the moment the session ran. One source of truth; bumping the skill version bumps the rubric version.
+- **`school_begin` `resumed_state` shape defined** (§7.1) — parsed YAML frontmatter + open proposals list + current state, not raw markdown.
+- **Write-failure handling** (§7.6 + §8.5.1) — if `school_write_skill` / `school_retire_skill` fail after a YES, state stays `reviewing_<N>` (NOT logged as approved), agent surfaces the failure reason, user can retry YES or send NO.
 
 **v6 (2026-04-19)** — state machine in JS + review-flow UX fixes:
 
@@ -263,7 +274,22 @@ The state machine is implemented in `school.js` as a pure function `transition(c
 ### 7.1 `school_begin` — start or resume a session
 
 - **Args:** `{ reason: "on_demand" | "cron" | "resumed" }`
-- **Behavior:** if `workspace/SCHOOL.md` exists → return its content as `resumed_state`; else create it with initial plan, return new `session_id`.
+- **Behavior:** if `workspace/SCHOOL.md` exists → parse it and return parsed structure as `resumed_state`; else create it with initial plan, return new `session_id`.
+- **`resumed_state` shape** (when `resumed: true`):
+  ```json
+  {
+    "session_id": "uuid",
+    "started_at": 1713614400000,
+    "trigger": "on_demand",
+    "state": "reviewing_3",              // one of: scanning | awaiting_approval | reviewing_<N> | done
+    "window_days": 7,
+    "open_proposal_ns": [1, 3, 4],
+    "proposals": [ /* full proposal objects mirrored from SCHOOL.md body */ ],
+    "rubric_version": "1.0.0",
+    "reviewing_opened_at": 1713614700000  // null unless state is reviewing_<N>; used for 60s bare-YES disambiguation
+  }
+  ```
+  Raw markdown is NOT returned — agent receives parsed structure only.
 - **Returns:**
   ```json
   {
@@ -271,7 +297,9 @@ The state machine is implemented in `school.js` as a pure function `transition(c
     "started_at": 1713614400000,
     "resumed": false,
     "prior_sessions": [ /* last 10 log entries, for dedup input */ ],
-    "resumed_state": null
+    "resumed_state": null,
+    "started_after_cleanup": false,       // true if stale session was just auto-ended
+    "cleaned_up": null                    // { prior_session_id, prior_started_at } when started_after_cleanup
   }
   ```
 
@@ -373,16 +401,26 @@ The only tool that mutates `SCHOOL.md.state` or logs proposal outcomes. Agent mu
   {
     "session_id": "uuid",
     "input": {
-      "kind": "yes" | "no" | "review" | "skip" | "stop" | "unrelated",
+      "kind": "yes" | "no" | "review" | "skip" | "stop",
       "proposal_n": 3,              // required for review/skip; optional for yes/no (see disambiguation)
-      "raw_text": "YES 3"           // the exact user text, for auditing
+      "raw_text": "YES 3",          // the exact user text, for auditing
+      "message_date": 1713614700    // unix-seconds from Telegram message.date — used for 60s bare-YES window
     }
   }
   ```
+  (v7: removed `kind: "unrelated"` — agent doesn't call this tool at all for unrelated messages. Normal message-routing handles them; if state is `reviewing_<N>`, the agent appends the pending-review reminder locally.)
 
 - **Disambiguation for `yes` / `no`** (enforced in `school.js`, not in prompt):
-  1. If `proposal_n` provided → transition uses that N.
-  2. If `proposal_n` omitted → check SCHOOL.md.state: if exactly one review has been `reviewing_<N>` in the last 60 seconds, use that N. Otherwise return `{ ok: false, error: "ambiguous_bare_yes_no", hint: "Reply YES N or NO N — multiple proposals open." }`.
+  1. If `proposal_n` provided → tool checks it matches the currently-reviewed N; mismatch returns `{ ok: false, error: "invalid_proposal_n" }`.
+  2. If `proposal_n` omitted → check `SCHOOL.md.reviewing_opened_at`: if state is `reviewing_<N>` AND `message_date - reviewing_opened_at <= 60s`, use that N. Otherwise return `{ ok: false, error: "ambiguous_bare_yes_no", hint: "Reply YES N or NO N." }`.
+  3. Timestamp source is the **Telegram message's `date` field** (server-observable, unix-seconds). Not agent wall-clock, not delivery time. If the input didn't originate from Telegram (e.g., Discord channel), the channel adapter normalizes to the same semantics (send-time from the source platform).
+
+- **Write-failure handling (NEW in v7):** when `next_action.kind` is `write_skill` or `retire_skill`, the agent executes the follow-up tool call. If that call fails:
+  1. Agent does NOT call `school_handle_input` with a "confirm the approved transition" or similar — the state machine is still in `reviewing_<N>` from before the YES.
+  2. Agent replies *"Couldn't write proposal {N}: {error}. Reply YES {N} to retry, NO {N} to decline, or `/stop` to end."*
+  3. No log entry written — proposal outcome stays unresolved until user's next input.
+  
+  This means the YES that triggered the failed write must be re-sent. Intentional — we don't want silent retries on disk full / security rejections / concurrent-write races.
 
 - **Behavior:** pure function of `(SCHOOL.md.state, input)`. Applies the transition table (see §8.5.1). Writes:
   - Updated `SCHOOL.md.state` + `open_proposal_ns`.
@@ -578,7 +616,22 @@ The session state lives in `SCHOOL.md.state`. Transitions are **deterministic JS
 - **`/skip` works on any open proposal**, not just the currently-reviewed one.
 - **Session always drains to `done`** — every end path calls `school_end` with enumerated outcomes. No leaked state.
 
-**Implementation note (changed from v5):** state transitions are driven by **deterministic JS** in `school.js`, invoked via the `school_handle_input` tool. Not by the skill prompt. The skill prompt's job shrinks to: (a) detect what kind of input the user just sent (YES/NO/review/skip/stop/other), (b) call `school_handle_input` with structured args, (c) execute the `next_action` the tool returns. Transitions themselves are mechanically correct. Rubric + proposal drafting + message formatting stay in the prompt.
+**Implementation note (changed from v5):** state transitions are driven by **deterministic JS** in `school.js`, invoked via the `school_handle_input` tool. Not by the skill prompt. The skill prompt's job shrinks to: (a) classify the user's input, (b) for school-relevant inputs, call `school_handle_input` with structured args, (c) execute the `next_action` the tool returns. Transitions themselves are mechanically correct. Rubric + proposal drafting + message formatting stay in the prompt.
+
+**Input classification rubric (NEW in v7)** — the skill prompt's classification step is explicit, not implicit:
+
+An input is **school-relevant** iff it matches *one* of:
+- Starts with `/review ` followed by a positive integer → `kind: "review"`, `proposal_n: <int>`
+- Starts with `/skip ` followed by a positive integer → `kind: "skip"`, `proposal_n: <int>`
+- Equals `/stop` (exact, trimmed) → `kind: "stop"`
+- Matches `^(YES|NO|Y|N|👍|👎)\s*(\d+)?\s*$` case-insensitive after trim (≤ 120 chars) → `kind: "yes"` or `"no"`, `proposal_n` optional
+- Starts with `YES ` or `NO ` followed by number + non-empty trailing text (embedded form) → YES/NO captured, trailing text routed to normal handling in the same turn
+
+**Everything else is unrelated.** Free-text like "skip that one", "cancel this", "I dunno" is NOT parsed as a command — the classification deliberately rejects natural-language approximations to prevent ambiguity. User must use the explicit forms. The skill prompt documents this explicitly to the user in the proposal message footer.
+
+**Classification echo (NEW in v7):** after calling `school_handle_input` with a school-relevant input, the agent's reply must echo back its classification in the first sentence — *"Understood as YES on proposal 3 — writing now."* / *"Taking that as /skip 2 — logged."* Gives the user a visible correction opportunity if the agent misclassified. The state machine is deterministic from `school_handle_input` onwards, but input classification is still LLM-driven — the echo is the user's audit hook.
+
+**Write-failure continuation (NEW in v7):** when `next_action` requires a follow-up tool call (`write_skill` / `retire_skill`) and it fails, state stays at `reviewing_<N>`. Agent surfaces the failure to the user with a retry prompt. No silent retries; no log entry until the write succeeds or the user gives up.
 
 ### 8.6 Silent exit rule
 
@@ -618,6 +671,8 @@ One JSON line per completed session. One line ≈ 1–3 KB. 90-day rolling reten
 ```
 
 **Outcome enum** (every proposal must have exactly one): `approved` | `drafted_but_denied` | `skipped` | `ignored` | `rejected_by_rubric` | `rejected_as_duplicate` | `abandoned_stale`.
+
+**`rubric_version` semantics (defined in v7):** equals the bundled `go-to-school` skill's YAML frontmatter `version` field at the moment the session ran. Single source of truth — bumping the skill's `version` on a rubric change automatically stamps new log entries with the new rubric version. Old log entries retain the `version` they were written against; when the current skill version differs from a prior entry's `rubric_version`, the session's proposal messages carry a small note *"rubric updated since last session — similar proposals may now pass or fail differently"* (already in §8.2).
 
 **No schema versioning.** Simple append-only. If the shape ever needs to change, future-us writes a one-off migration script then. Pre-paying that complexity now is defensive engineering for a problem that may never materialize.
 
@@ -695,6 +750,12 @@ Without this, a crashed-and-never-responded session blocks all future `/school` 
 ### 9.5 Malformed state handling
 
 - **Corrupt `SCHOOL.md` YAML:** agent refuses to start new session. Sends Telegram: *"SCHOOL.md is unreadable. Delete `workspace/SCHOOL.md` manually or reply /school-reset to clear."* Surface-not-auto-recover keeps user in control.
+- **`/school-reset` requires two-step confirmation** (NEW in v7):
+  1. First `/school-reset` → agent replies *"This will discard the current open session and any drafts. Reply `/school-reset-confirm` within 60s to proceed, or do nothing to cancel."*
+  2. `/school-reset-confirm` within 60s → agent deletes `workspace/SCHOOL.md` + contents of `workspace/school/drafts/`, replies *"School state cleared."*
+  3. Any other input (or > 60s elapsed) → the pending reset expires; agent responds normally to the new input. No state lost.
+  
+  Without the confirmation gate, an accidental `/school-reset` typo (e.g. typing it thinking it was `/school log`) would irreversibly drop an in-progress session. The 60s window is short enough that a forgotten/stale reset doesn't linger.
 - **Corrupt `log.jsonl` line:** skip the bad line with WARN. Dedup continues with valid lines. Never blocks a session.
 
 ### 9.6 `/school log` command
@@ -730,7 +791,7 @@ Reads `log.jsonl` tail, aggregates counts in memory. Zero new tool calls.
   - ✅ after a YES→write succeeds
   - ❌ on a tool error
 - **`/review N` payload** — drafted artifact inside a `<pre>` block; agent's follow-up: *"Write to workspace? Reply `YES N` or `NO N` (or just `YES` / `NO` if only one review is open)."* Text replies (no inline-keyboard buttons) keep flow auditable and portable to Discord.
-- **YES / NO disambiguation** (v6): bare `YES` / `NO` is accepted by `school_handle_input` **only when exactly one review has been opened in the last 60 seconds**. Multiple open reviews, or bare YES/NO outside that 60s window → agent replies *"Which proposal? Reply YES N or NO N."* `YES 3` with N=3 outside `reviewing_<3>` is rejected with *"Proposal 3 is not currently under review."* Protects against Telegram out-of-order message delivery silently approving the wrong proposal.
+- **YES / NO disambiguation** (v6, tightened in v7): bare `YES` / `NO` is accepted by `school_handle_input` **only when state is `reviewing_<N>` AND the Telegram message's `date` field is within 60 seconds of `reviewing_opened_at`**. Outside that window (or multiple reviews somehow open) → *"Which proposal? Reply YES N or NO N."* `YES 3` with N=3 outside `reviewing_<3>` → *"Proposal 3 is not currently under review."* Timestamp source is Telegram's server-side `message.date`, not agent wall-clock. 60s chosen as typical review reading time; easy to shrink to 30s post-launch if mis-routings are observed.
 - **Accepted affirmative / negative forms:** `YES`, `yes`, `Yes`, `Y`, `y`, `👍`, `ok`, `OK` → yes. `NO`, `no`, `No`, `N`, `n`, `👎`, `nope` → no. Case- and emoji-tolerant. Embedded forms like `"YES, and also..."` are treated as YES + an unrelated trailing message — the YES consumes the review, and the "and also" portion is routed to normal message handling in the same turn.
 - **HTML escaping (new — was missed in first draft):** drafted SKILL.md bodies can legitimately contain `<`, `>`, `&`, and even literal `</pre>` in examples. Before wrapping in `<pre>`, every `<`, `>`, `&` in the body is HTML-escaped via the existing helper in `telegram.js` (or a new `escapeHtml()` if not present). Missing this breaks Telegram rendering and could let a malicious historical message that ends up in a proposal inject HTML into the user's chat.
 - **Discord parity** — all of the above works without Discord-specific code thanks to `channel.js` abstraction. Pre-formatted strings compose the same way; HTML escaping is bypassed for Discord (which uses markdown; channel adapter handles the conversion).
@@ -913,8 +974,13 @@ v1.10.0 is ready to ship when:
 - [ ] Rubric rejects proposals that fail each of the 5 gates in respective targeted test probes.
 - [ ] Proposals that fail dedup are visibly rejected with *"variant of proposal from <date>"* reason.
 - [ ] Approval flow: `/review N` → `YES N` creates file; `NO N` records `drafted_but_denied`; `/skip` records `skipped`; `/stop` records remaining as `ignored`. Bare `YES` / `NO` works when exactly one review opened in last 60s; otherwise agent asks for disambiguation.
-- [ ] Mid-review unrelated message keeps review open (verified: user asks "what's the weather?" in `reviewing_3`, receives weather answer + reminder about pending proposal 3, state stays `reviewing_3`).
+- [ ] Mid-review unrelated message keeps review open (verified: user asks "what's the weather?" in `reviewing_3`, receives weather answer + reminder about pending proposal 3, state stays `reviewing_3`). Agent does NOT call `school_handle_input` for the unrelated message.
 - [ ] State-machine unit tests: all 32 `(state, input)` transitions match §8.5.1 table.
+- [ ] Classification echo present: every state-changing reply begins with *"Understood as …"* / *"Taking that as …"* (structural test on outbound message format).
+- [ ] Write-failure path: simulate `school_write_skill` failure after YES; assert state stays `reviewing_<N>`, no log entry written, user receives retry prompt.
+- [ ] `/school-reset` two-step: first `/school-reset` replies with confirmation prompt; `/school-reset-confirm` within 60s clears state; any other input cancels the pending reset.
+- [ ] `rubric_version` in logged entries equals the bundled skill's frontmatter `version` at session time (verified by bumping skill `version` and asserting next log entry's `rubric_version` matches).
+- [ ] `school_begin.resumed_state` returns parsed structure (not raw markdown) on resume.
 - [ ] Every school-created SKILL.md has `source: school`, `created: <date>`, `evidence: <string>` in frontmatter. No workaround path exists.
 - [ ] Every school-patched SKILL.md **preserves** existing `source` field and appends `last_patched_by: school` + `last_patched_at` + `patch_evidence` (does NOT overwrite existing provenance).
 - [ ] Bundled skills cannot be patched or retired via school (verified in test).
@@ -964,6 +1030,7 @@ v1.10.0 is ready to ship when:
 | 13 | **LLM can game its own rubric** | The agent generates a proposal, then judges it against Utility/Gap/Actionable gates. Self-assessment bias is real: the model wants to justify its own output. Mitigations: (a) Repetition + Permanence gates are quantitative and not gameable; (b) Gap gate requires the *coverage_check artifact* (can't silently say "no existing tool does this" — must list what was considered); (c) Actionable gate requires a concrete playbook artifact; (d) rejected proposals are surfaced to the user with reasons, so a too-loose rubric becomes visible as user-side "why did you propose that?" pushback. Not eliminated — accepted. If post-launch `approved / drafted_but_denied` ratio trends bad, tighten gates in a patch release. |
 | 14 | **School-created skills can do anything at runtime** | Spelled out in §4 non-goals. Two-gate approval reviews the SKILL.md body, not the skill's execution-time behavior. A school-created skill inherits the agent's full tool access when it later fires. Protected files (SOUL/MEMORY/IDENTITY/USER/HEARTBEAT) remain blocked at `file_write`; everything else in workspace is fair game. Mitigation: user sees the full body before approval (gate 2). A "school-skills run under tighter allowed-tools" sandbox is parked as v1.1 if this becomes a real problem in practice. |
 | 15 | Node crashes mid-session drop buffered writes + abandon state | `uncaughtException` + `unhandledRejection` handlers in `main.js` log the error but don't run graceful shutdown paths. Buffered logger loses its window; SCHOOL.md stays on disk until next service start, where the crash-recovery protocol (§9.3) resumes the session with a "Resumed after restart" message. Acceptable. |
+| 16 | **State machine is deterministic only AFTER input classification** | Honest acknowledgment: `school_handle_input` is mechanically correct, but the step BEFORE it — "was that user input a YES, a /skip, or unrelated?" — is still LLM-driven. Mitigations: (a) input classification rubric (§8.5.1) is explicit and pattern-based, not prose-interpretive, which minimizes drift surface; (b) classification echo (§8.5.1) surfaces the agent's interpretation to the user in every state-changing reply, giving a visible correction opportunity; (c) free-text approximations ("skip that", "cancel") are deliberately NOT accepted — users must use explicit forms. Risk is bounded, not eliminated. |
 
 ## 18. Glossary
 
