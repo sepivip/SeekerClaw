@@ -72,6 +72,19 @@ function createToolCallLogSchema(dbInstance) {
     dbInstance.run(`CREATE INDEX IF NOT EXISTS idx_tcl_skill   ON tool_call_log(triggered_by_skill, created_at)`);
 }
 
+function createSkillTriggerLogSchema(dbInstance) {
+    dbInstance.run(`CREATE TABLE IF NOT EXISTS skill_trigger_log (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        skill_name  TEXT    NOT NULL,
+        message_id  TEXT,
+        match_type  TEXT    NOT NULL,
+        created_at  INTEGER NOT NULL,
+        UNIQUE(skill_name, message_id)
+    )`);
+    dbInstance.run(`CREATE INDEX IF NOT EXISTS idx_stl_skill_created ON skill_trigger_log(skill_name, created_at)`);
+    dbInstance.run(`CREATE INDEX IF NOT EXISTS idx_stl_created       ON skill_trigger_log(created_at)`);
+}
+
 async function initDatabase() {
     try {
         const initSqlJs = require('./sql-wasm.js');
@@ -114,6 +127,9 @@ async function initDatabase() {
 
         // Tool call log — feeds "Go to School" self-improvement analysis
         createToolCallLogSchema(db);
+
+        // Skill trigger log — feeds "Go to School" self-improvement analysis
+        createSkillTriggerLogSchema(db);
 
         // Memory indexing tables (BAT-25)
         db.run(`CREATE TABLE IF NOT EXISTS chunks (
@@ -633,6 +649,7 @@ module.exports = {
     setShutdownDeps,
     initDatabase,
     createToolCallLogSchema,
+    createSkillTriggerLogSchema,
     indexMemoryFiles,
     saveSession,
     getRecentSessions,
