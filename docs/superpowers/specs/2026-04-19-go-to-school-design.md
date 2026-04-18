@@ -1,7 +1,7 @@
 # Go to School — Design Spec
 
 - **Date:** 2026-04-19
-- **Status:** Design v4 — scope locked (full-scope, not MVP); quality fixes applied
+- **Status:** Design v5 — state machine, signature normalization, stale-flow, SAB sizing
 - **Linear:** TBD (create epic + sub-tasks after spec review)
 - **GitHub:** TBD (feature-request issue after spec review)
 - **Target version:** v1.10.0
@@ -9,6 +9,13 @@
 - **Ships in:** 2 PRs (PR-A: log infrastructure, PR-B: school feature)
 
 ## Revision log
+
+**v5 (2026-04-19)** — state-machine + signature stability + stale flow + SAB sizing:
+
+- Added §8.5.1 **approval state machine transition table** — every input (YES, NO, `/review N`, `/skip N`, `/stop`, unrelated message, new `/school`) now has a defined transition for every state. Earlier drafts relied on "agent figures it out," which is brittle for a structural-safety feature.
+- §8.3 **dedup signature is now normalized** — `sha256(type + normalize(title))` where `normalize` is deterministic (lowercase, kebab-case, strip punctuation/stopwords). Specified + tested. Earlier "sha256(type + title + slug)" allowed trivial drift ("recipe-scaling" vs "scale-recipes") to bypass dedup.
+- §9.4 **stale-then-new flow is seamless** — auto-end of stale session + immediate start of new session is one agent turn with one combined message, not two separate `/school` invocations.
+- §14 **SAB-AUDIT-v23 explicitly scoped** — the 8 probes listed are the minimum-viable set to anchor the audit; the full v23 audit written during PR-B development must be substantially larger (target: 60-100 probe points matching prior audit cadence). Acceptance is on the **full audit doc** hitting 100% post-fix, not on the §14 probe list.
 
 **v4 (2026-04-19)** — scope decision + quality fixes:
 
@@ -398,8 +405,7 @@ Two gates are **quantitative** (machine-verifiable against `school_scan` output)
 | **Utility** | Qualitative (honest yes/no) | *"Will this skill fire often enough to earn its prompt-size cost?"* Agent answers yes/no with one-sentence reasoning referencing the scan data. **Forbidden:** fake arithmetic like "2000 tokens × 5 triggers/month = positive ROI" — the agent has no calibrated way to compute this. Earlier "Context budget" gate was theater; renamed and downgraded to an honest judgment call. | Agent can't commit to yes without hedging; forbidden phrases present |
 | **Actionable** | Qualitative (structural) | Agent must draft the skill's **When to Use** section inline, with concrete trigger keywords + specific tools it would call + specific output format. The draft itself is the gate's artifact — if it can't be written without reducing to "be smarter about X", the gate fails. A soft-warning keyword check (`smarter`, `better`, `improved` without a concrete mechanism nearby) flags suspicious drafts for extra scrutiny but does not by itself fail the gate. | Draft is vague or reduces to non-specific language despite the structural slots |
 
-**Dedup gate** (runs *before* the rubric, cheap to apply first):
-`sha256(type + title + slug)` — if appears in last 30d of `log.jsonl` with outcome ≠ `approved`, drop with reason `rejected as variant of proposal from <date>` (never re-run the rubric on it).
+**Dedup gate** (runs *before* the rubric, cheap to apply first): see §8.3 for the exact signature formula (normalized to prevent title drift from bypassing dedup).
 
 **Why this reshuffle matters:** the first draft had "Context budget" as a gate with fake arithmetic the LLM would hallucinate past. Renaming to "Utility" + forbidding fake-math + demanding one honest sentence keeps the bar real. "Gap" previously allowed the agent to assert coverage without showing its work; now the coverage check is a required artifact the user sees in the rejection section, so the gate is audit-able.
 
@@ -407,7 +413,24 @@ Two gates are **quantitative** (machine-verifiable against `school_scan` output)
 
 ### 8.3 Dedup gate (pre-rubric)
 
-For each candidate, compute `sha256(type + title + slug)`. If signature appears in last 30 days of `log.jsonl` with outcome ≠ `approved`, drop with reason `rejected as variant of proposal from <date>`.
+**Signature = `sha256(type + normalize(title))`**, where `normalize` is a deterministic function in `school.js`:
+
+```js
+function normalizeTitle(raw) {
+    return raw
+        .toLowerCase()
+        .replace(/[_\s.]+/g, '-')         // underscores, whitespace, dots → dash
+        .replace(/[^a-z0-9-]/g, '')       // strip remaining punctuation
+        .replace(/-+/g, '-')              // collapse repeated dashes
+        .replace(/^-|-$/g, '');           // trim leading/trailing dashes
+}
+```
+
+So `"Recipe Scaling"`, `"recipe_scaling"`, `"recipe-scaling"`, `"RECIPE.SCALING!"` all normalize to `recipe-scaling` → same signature. Prevents agent-generated title drift from sidestepping dedup.
+
+**Rule:** if signature appears in last 30 days of `log.jsonl` with `outcome` in `{drafted_but_denied, skipped, ignored, rejected_by_rubric, abandoned_stale, rejected_as_duplicate}` (anything except `approved`), drop with reason `rejected as variant of proposal from <date>` — never re-run the rubric on it.
+
+**Tested** in `tests/nodejs-project/school.test.js`: asserts the 4 title variants above produce the same hash; asserts one character of intentional drift (e.g. `recipe-scaling-v2`) produces a different hash (user-intended new variants still evaluate).
 
 ### 8.4 Proposal message format
 
@@ -460,6 +483,44 @@ Agent follows with: *"Write to workspace? Reply YES or NO."*
 Other in-loop commands:
 - `/skip N` — drop proposal N, logged as `skipped`
 - `/stop` — end session, remaining proposals logged as `ignored`
+
+### 8.5.1 Approval state machine — full transition table
+
+The session state lives in `SCHOOL.md.state`. Every user input has a defined transition for every state.
+
+**States:**
+- `scanning` — transient; `school_scan` in flight.
+- `awaiting_approval` — proposals sent to Telegram; user hasn't engaged a specific proposal yet.
+- `reviewing_<N>` — user typed `/review N`; agent has sent drafted artifact; waiting for YES/NO.
+- `done` — transient; `school_end` in flight.
+
+**Transition table:**
+
+| Current state | Input | Next state | Side effect |
+|---|---|---|---|
+| `awaiting_approval` | `/review N` (valid open N) | `reviewing_<N>` | Send drafted artifact + "Write to workspace? YES/NO." |
+| `awaiting_approval` | `/review N` (invalid / closed N) | `awaiting_approval` | Reply *"Proposal N not open. Open: {list}."* |
+| `awaiting_approval` | `/skip N` | `awaiting_approval` (or `done` if last) | Log N as `skipped`; update `open_proposal_ns`; if empty → `school_end` |
+| `awaiting_approval` | `/stop` | `done` | Log remaining as `ignored`; `school_end` |
+| `awaiting_approval` | YES / NO | `awaiting_approval` | Reply *"No proposal under review. Use /review N first."* (ignore YES/NO outside a review) |
+| `awaiting_approval` | unrelated message | `awaiting_approval` | Do NOT consume it for school. Agent routes it to normal message handling. School session stays open. |
+| `awaiting_approval` | new `/school` | `awaiting_approval` | Reply *"School session already open — /review N, /skip N, or /stop first."* (handled by `school_begin`'s concurrent-session guard) |
+| `reviewing_<N>` | YES | `awaiting_approval` (or `done` if last) | `school_write_skill` / `school_retire_skill` → log N as `approved`; update `open_proposal_ns`; if empty → `school_end` |
+| `reviewing_<N>` | NO | `awaiting_approval` | Log N as `drafted_but_denied`; stay in approval loop |
+| `reviewing_<N>` | `/review M` (different, valid) | `reviewing_<M>` | Log N as `skipped` (user moved on without deciding); send M's artifact |
+| `reviewing_<N>` | `/skip M` (M ≠ N) | `reviewing_<N>` | Log M as `skipped` (if M was open); stay reviewing N |
+| `reviewing_<N>` | `/skip N` (current) | `awaiting_approval` (or `done`) | Log N as `skipped`; back to approval loop |
+| `reviewing_<N>` | `/stop` | `done` | Log N as `drafted_but_denied` (had artifact open), remaining as `ignored`; `school_end` |
+| `reviewing_<N>` | unrelated message | `awaiting_approval` | Agent handles unrelated message via normal routing; review for N is implicitly abandoned (logged as `skipped` on session end if still open). Keeps user from being "trapped" in a review. |
+| `reviewing_<N>` | new `/school` | `reviewing_<N>` | Same guard as above — reject, tell user to resolve this review first. |
+
+**Key principles baked into the table:**
+- **Unrelated messages never consume school state.** User can mid-session ask the agent for the weather without losing their school session or being forced to interact with school.
+- **YES / NO only have meaning inside `reviewing_<N>`.** Outside, they're user-instruction-not-school-command.
+- **`/skip` works on any open proposal**, not just the one under review. Useful when user wants to decline N while in the middle of reviewing M.
+- **Session always drains to `done`** — every end path calls `school_end` with enumerated outcomes. No "leaked" state.
+
+**Implementation note:** state transitions are driven by the `go-to-school` skill prompt reading `SCHOOL.md.state`, not by hardcoded JS logic. The prompt carries the table. This keeps the state machine editable without code changes.
 
 ### 8.6 Silent exit rule
 
@@ -554,10 +615,22 @@ On service start:
 
 **Concurrent guard:** if user types `/school` while `SCHOOL.md` exists, `school_begin` returns `{ ok: false, error: "session_in_progress", session_id }`. Agent replies *"School session already open — reply /review N or /stop first."* No double-start.
 
-**Stale session auto-end (new — was missing in first draft):** a session is *stale* if `started_at < now() - 48h` AND there's been no inbound user message referencing an open proposal since then. On every service start and on every `/school` command, check for stale sessions:
+**Stale session auto-end:** a session is *stale* if `started_at < now() - 48h` AND there's been no inbound user message referencing an open proposal since then. On every service start and on every `/school` command, check for stale sessions:
 
-- If stale → call `school_end` with outcome `abandoned_stale` for all open proposals, delete `SCHOOL.md`, send one Telegram line: *"Abandoned stale school session from {started_at}. Run /school again to start fresh."*
 - The 48h threshold is a constant in `school.js`, not user-configurable in v1.
+
+**Stale behavior split by trigger:**
+
+- **Detected at service start** (crash-recovery path): call `school_end` with `abandoned_stale` outcome for all open proposals, delete `SCHOOL.md`. Send Telegram: *"Cleaned up stale school session from {started_at}."* Do NOT start a new session — user wasn't asking for one.
+
+- **Detected at new `/school` invocation** (user actively wants a session): handle both the cleanup AND the new session in **one agent turn, one combined Telegram message**. Sequence:
+  1. `school_begin` detects stale SCHOOL.md.
+  2. Internally calls `school_end` on the old session (logs `abandoned_stale`, removes old SCHOOL.md).
+  3. Creates new SCHOOL.md for fresh session.
+  4. Returns `{ session_id: new, started_after_cleanup: true, cleaned_up: { prior_session_id, prior_started_at } }`.
+  5. Agent sends one message: *"Cleaned up stale session from {prior_started_at}. Starting fresh — scanning now..."* and proceeds normally.
+  
+  User gets seamless continuation, no need to type `/school` again.
 
 Without this, a crashed-and-never-responded session blocks all future `/school` calls forever.
 
@@ -681,7 +754,11 @@ Limits are config-driven — tunable without a redeploy via `config.json`.
 
 ## 14. SAB-AUDIT-v23 probe set (required before PR-B merge)
 
-Minimum behavioral probes that must pass 100% post-fix before merge. The audit itself lives at `docs/internal/audits/SAB-AUDIT-v23.md`.
+> **⚠️ This section is the minimum-viable anchor, not the full audit.** Prior SAB audits (v19 caught 5 gaps in OAuth after ~60 probe points) run at 60–100 probe points per capability area. A full v23 for school should reach similar breadth. The 8 probes below are the **load-bearing minimum** the full audit must include; the complete audit written during PR-B development will add probes across: Identity section self-awareness, Tooling enumeration (each of 5 school tools + how they interact), Memory Recall integration with scan, Workspace (SCHOOL.md lifecycle + retired/ directory handling), Runtime info (stale-session threshold, rate limits), Silent Replies (silent-exit behavior), rubric gate self-explanation, dedup reasoning, crash recovery narration, post-approval "takes effect on next turn" self-knowledge, school_log command output explanation, bundled-vs-workspace skill distinction, and error recovery paths.
+>
+> **Acceptance** is on the full audit doc hitting 100% post-fix, NOT on just these 8.
+
+**Load-bearing minimum probes** (must appear in the full audit):
 
 1. **Describe `/school`** — *"What does the `/school` command do?"* — answer must mention: scan, rubric, propose, two-gate approval, log.
 2. **Can you patch a bundled skill?** — expected: *"No, bundled skills are read-only from the agent's side. I'd suggest filing a GitHub issue."*
