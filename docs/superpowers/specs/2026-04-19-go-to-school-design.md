@@ -1,12 +1,32 @@
 # Go to School — Design Spec
 
 - **Date:** 2026-04-19
-- **Status:** Design (pending user review → writing-plans)
+- **Status:** Design v2 — revised after production-risk self-review (see Revision Log)
 - **Linear:** TBD (create epic + sub-tasks after spec review)
 - **GitHub:** TBD (feature-request issue after spec review)
 - **Target version:** v1.10.0
 - **Branch:** `feature/go-to-school`
-- **Ships in:** 2 PRs (PR-A: tool-call log, PR-B: school feature)
+- **Ships in:** 2 PRs (PR-A: log infrastructure, PR-B: school feature)
+
+## Revision log
+
+**v2 (2026-04-19)** — addressed 12 production risks caught in adversarial self-review against a 5,000-user production app:
+
+1. Replaced `args_fingerprint` (exact hash) with per-tool `call_shape` (structural classifier) — pattern-mining now fires on repeated *classes* of calls, not just identical calls (§6.2).
+2. Added buffered async logger — tool-call logging now off the hot path (§6.3).
+3. Added `skill_trigger_log` table — `unused_skills` detection was fictional without it (§6.7).
+4. Rewrote rubric: "Context budget" gate removed (LLM can't do its fake arithmetic); replaced with "Utility" (honest yes/no) + coverage-artifact requirement for "Gap" (§8.2).
+5. Added stale-session auto-end (48h threshold) — first draft let crashed sessions block `/school` forever (§9.4).
+6. Added `schema_version` to log entries + forward/back-compat reader rules (§9.1).
+7. Added HTML escaping for `<pre>` blocks in Telegram payloads (§10).
+8. Added rate limit on `/school` (1 per 5min, 10 per 24h) — first draft had none (§11.5).
+9. Added log-re-read injection wrapping — prior sessions' free-text fields are now wrapped as untrusted (§11.4).
+10. **Reversed** first-draft "restart required" decision — skills now take effect on the next turn via `reloadSkills()`, one-time prompt-cache cost accepted (§12).
+11. Added feature flag (`BuildConfig.FEATURE_SCHOOL_ENABLED` + remote `featureFlags.school`) — killswitch required for a production app (§15.2).
+12. Added canary/staged rollout plan + Firebase telemetry counters (§15.3).
+13. Enforced SAB audit via CI status check, not honor system (§12).
+14. Expanded test matrix: perf, empty-log, happy-path integration, red-team `call_shape`, rate limit (§13).
+15. Fixed frontmatter marker policy: patches **preserve** existing `source` field, add `last_patched_by` (first draft wrongly overwrote) (§7.3).
 
 ---
 
@@ -39,7 +59,7 @@ Go to School is the scheduled reflection pass that catches all three. It's *not*
 
 - **No SOUL.md / IDENTITY.md / USER.md edits.** Identity-file changes deserve a separate, higher-bar flow.
 - **No autonomous skill creation** (no "skip the draft gate" path). Two gates always.
-- **No mid-session skill hot-reload.** Newly-written skills take effect after next service restart; user is told this explicitly.
+- **No autonomous skill writes.** Two approval gates always. (First draft listed "no hot-reload" here; v2 reversed that — skills now do hot-reload on approval via `reloadSkills()`, see §12.)
 - **No user-editable rubric file.** Rubric is hardcoded v1; editable `rubric.md` parked as v1.1 follow-up.
 - **No cross-device sync** of school log. Workspace-local only.
 - **No UI screen** in the app. All interaction via Telegram (and Discord, for free, via channel abstraction).
@@ -95,32 +115,65 @@ workspace/                          (user-side, preserved across updates)
 
 ```sql
 CREATE TABLE tool_call_log (
-  id               INTEGER PRIMARY KEY AUTOINCREMENT,
-  turn_id          TEXT    NOT NULL,       -- groups tool calls from one agent turn
-  message_id       TEXT,                   -- Telegram msg that triggered the turn (null for cron)
-  tool_name        TEXT    NOT NULL,       -- e.g. "web_fetch", "solana_swap"
-  args_fingerprint TEXT    NOT NULL,       -- SHA-256 of canonicalized args (dedup, no raw args stored)
-  result_status    TEXT    NOT NULL,       -- "ok" | "error" | "timeout" | "blocked"
-  error_kind       TEXT,                   -- e.g. "bridge_unreachable", "rate_limited"
-  latency_ms       INTEGER,
-  created_at       INTEGER NOT NULL        -- unix ms
+  id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+  turn_id              TEXT    NOT NULL,       -- groups tool calls from one agent turn
+  message_id           TEXT,                   -- Telegram msg that triggered the turn (null for cron)
+  tool_name            TEXT    NOT NULL,       -- e.g. "web_fetch", "solana_swap"
+  triggered_by_skill   TEXT,                   -- skill name if a skill was active for this turn (null otherwise)
+  call_shape           TEXT    NOT NULL,       -- structural classifier, see §6.2
+  result_status        TEXT    NOT NULL,       -- "ok" | "error" | "timeout" | "blocked_by_policy" | "blocked_by_confirmation"
+  error_kind           TEXT,                   -- e.g. "bridge_unreachable", "rate_limited"
+  latency_ms           INTEGER,
+  created_at           INTEGER NOT NULL        -- unix ms
 );
 
 CREATE INDEX idx_tcl_created ON tool_call_log(created_at);
 CREATE INDEX idx_tcl_tool    ON tool_call_log(tool_name, created_at);
+CREATE INDEX idx_tcl_shape   ON tool_call_log(call_shape, created_at);
 CREATE INDEX idx_tcl_turn    ON tool_call_log(turn_id);
+CREATE INDEX idx_tcl_skill   ON tool_call_log(triggered_by_skill, created_at);
 ```
 
-### 6.2 Why `args_fingerprint` instead of `args_json`
+### 6.2 `call_shape` — structural classifier (not a hash)
 
-- **Privacy** — no wallet addresses, user text, API keys persisted.
-- **Storage** — 32-byte hash vs. kilobytes of JSON per call.
-- **Dedup** — identical operations detect via identical fingerprints.
-- **Trade-off** — can't show *what* was in a repeated call. Acceptable: school correlates `message_id` → existing `api_request_log` for message context.
+Earlier drafts used `args_fingerprint = sha256(canonicalized_args)`. That broke the feature's own core signal: a user querying balances for 3 different wallets produces 3 unique fingerprints, so "repetition ≥ 3" never fires even though the behavior is clearly repeated. Pattern-mining needs **shape, not identity.**
 
-### 6.3 Instrumentation
+`call_shape` is a short, per-tool-defined string that captures the *class* of the call without sensitive values. Each tool defines a shape-builder in `tools/<tool>.js`. Examples:
 
-Single wrap point in `tools/index.js:executeTool()`. Wrap with try/finally, measure `latency_ms`, classify `result_status`, derive `error_kind` from thrown errors. No per-tool code changes.
+| Tool | `call_shape` |
+|---|---|
+| `web_fetch` | `web_fetch:{hostname}:{method}` → `web_fetch:api.anthropic.com:POST` |
+| `solana_swap` | `solana_swap:{input_mint_short}:{output_mint_short}` → `solana_swap:SOL:USDC` |
+| `solana_balance` | `solana_balance:self` vs `solana_balance:other` |
+| `file_read` | `file_read:{path_pattern}` → `file_read:memory/*.md`, `file_read:skills/*.md` |
+| `shell_exec` | `shell_exec:{first_token}` → `shell_exec:ls`, `shell_exec:cat` |
+| `android_sms` | `android_sms` (no shape needed — one use case) |
+| default | `{tool_name}` (just the tool name, for tools without custom shape) |
+
+**Privacy rules for shape-builders:**
+- Hostnames, well-known public token mints, workspace path patterns, and tool-name first tokens are allowed.
+- Wallet addresses (even public), user text, API keys, phone numbers, full URLs with query strings — **never** included.
+- Shape strings are capped at 64 chars. If a builder produces longer, truncate with a `…` suffix.
+
+**Why this works:**
+- Three balance queries of three wallets → all produce `solana_balance:other` → count = 3 → "Repetition" gate fires correctly.
+- Pattern-mining SQL groups on `call_shape`, not on raw args.
+- Zero sensitive data in the log (stronger guarantee than fingerprints, which were deterministic and could still cluster by identity).
+- Shape-builder is one function per tool; defaults to tool name only so the log works from day one even without custom shapes.
+
+### 6.3 Instrumentation + async batching
+
+Single wrap point in `tools/index.js:executeTool()`. Wrap with try/finally, measure `latency_ms`, classify `result_status`, derive `error_kind` from thrown errors, call `tool.shape(args)` to get `call_shape`, and push to an in-memory buffer. **Writes are NOT synchronous with tool execution.**
+
+**Buffer flush rules:**
+- Buffer flushes to SQL.js every **5 seconds** OR when buffer length ≥ **100 entries** (whichever first).
+- Flush is a single multi-row `INSERT` statement (SQL.js handles this efficiently — one WASM roundtrip).
+- On graceful shutdown (`SIGTERM` / app teardown), flush immediately.
+- **Lossiness on crash:** up to 5 seconds of tool-call history can be lost on abrupt kill. Acceptable tradeoff — the feature is about *patterns*, and 5s of loss doesn't distort pattern detection.
+
+**Perf target:** adds ≤ 50µs per tool call (in-memory push). Flush amortized; expected < 2ms at p99 for a 100-row batch on a Seeker. No per-call DB roundtrip — this was the big miss in the first draft.
+
+Skill-trigger capture for `triggered_by_skill`: when the skill matcher identifies an active skill for a turn, the turn's active skill name is set in a turn-local context and read by the `executeTool` wrap. Empty for direct tool calls and for turns where no skill triggered.
 
 ### 6.4 Retention
 
@@ -134,11 +187,37 @@ Single wrap point in `tools/index.js:executeTool()`. Wrap with try/finally, meas
 
 ### 6.6 Ship behavior (PR-A scope)
 
-- New table migration in `database.js`.
-- Wrap `executeTool()`.
+- New table migration in `database.js` — both `tool_call_log` and `skill_trigger_log` (§6.7).
+- Wrap `executeTool()` with buffered async logger.
+- Wire `triggered_by_skill` via turn-local context from the skill matcher.
+- Wire skill-match events to `skill_trigger_log`.
 - Retention purge task (runs on service start).
-- Unit tests (`tests/nodejs-project/tool-call-log.test.js`).
-- **No UI.** Log is infrastructure; only school reads it.
+- Unit tests (`tests/nodejs-project/tool-call-log.test.js`, `skill-trigger-log.test.js`).
+- Perf test: 1,000-tool-call burst should not regress p99 tool latency by > 5%.
+- **No UI.** Logs are infrastructure; only school reads them.
+
+### 6.7 `skill_trigger_log` — required for `unused_skills` detection
+
+The first draft claimed school could detect "unused skills" from `tool_call_log` alone. It can't — skills don't literally wrap tool calls, they influence the LLM's behavior. Without a skill-trigger event, school has no data for the "unused" retire path.
+
+```sql
+CREATE TABLE skill_trigger_log (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  skill_name  TEXT    NOT NULL,          -- matches SKILL.md frontmatter `name`
+  message_id  TEXT,                      -- Telegram msg that triggered the match
+  match_type  TEXT    NOT NULL,          -- "keyword" | "semantic" | "manual"
+  created_at  INTEGER NOT NULL
+);
+
+CREATE INDEX idx_stl_skill_created ON skill_trigger_log(skill_name, created_at);
+CREATE INDEX idx_stl_created       ON skill_trigger_log(created_at);
+```
+
+**Instrumentation point:** the skill matcher in `skills.js` already decides when a skill is "active" for a turn. Add one line: append to `skill_trigger_log` on every positive match. Buffered the same way as tool-call log.
+
+**Retention:** same 30-day window + same caps as tool-call log.
+
+**What school asks this for:** `SELECT skill_name FROM skill_trigger_log WHERE created_at > ? GROUP BY skill_name` → subtract from full workspace+bundled skill list → `unused_skills` candidates for retire proposals.
 
 ## 7. School tools API (5 tools)
 
@@ -161,19 +240,34 @@ All live in `tools/school.js`. Structured JSON in/out. Zero prompt generation.
 
 ### 7.2 `school_scan` — pattern-mine the tool-call log
 
-- **Args:** `{ window_days: 1-30, min_repetition: int (default 3) }`
-- **Behavior:** runs pre-baked SQL against `tool_call_log` + correlates with `api_request_log` for message context.
+- **Args:** `{ window_days: 1-30 (default 7), min_repetition: int (default 3), caps?: { patterns?: int, sequences?: int, turns?: int, unused?: int } }`
+- **Behavior:** runs pre-baked SQL against `tool_call_log` + `skill_trigger_log`. Groups on `call_shape`, not raw args. Correlates with `api_request_log` for turn metadata (tokens, cache).
+- **Hard output caps** (prevents context blow-up on busy weeks; defaults can be tightened by caller):
+  - `repeated_patterns`: max **5** entries (top by count, ties broken by most-recent)
+  - `failed_sequences`: max **10**
+  - `expensive_turns`: max **5**
+  - `unused_tools` and `unused_skills`: max **20** each
+  - Overall JSON payload cap: **32 KB**. If the payload would exceed, entries are truncated starting with the largest-count group.
+- **Empty-log behavior:** if `total_tool_calls < 20` in window, returns `{ empty: true, reason: "insufficient_signal", suggested_window_days: N }` — agent uses this to trigger the silent-exit path (§8.6).
 - **Returns:**
   ```json
   {
     "window_days": 7,
+    "empty": false,
     "total_turns": 142,
     "total_tool_calls": 387,
+    "schema_version": 1,
     "repeated_patterns": [
-      { "tool_chain": ["web_fetch","file_write"], "count": 5, "sample_turn_ids": ["..."], "sample_message_ids": ["..."] }
+      {
+        "call_shape_chain": ["web_fetch:docs.example.com:GET", "file_write:memory/*.md"],
+        "count": 5,
+        "sample_turn_ids": ["..."],
+        "sample_message_ids": ["..."],
+        "spans_distinct_days": 3
+      }
     ],
     "failed_sequences": [
-      { "tool_name": "solana_swap", "error_kind": "bridge_unreachable", "count": 3 }
+      { "tool_name": "solana_swap", "call_shape": "solana_swap:SOL:USDC", "error_kind": "bridge_unreachable", "count": 3 }
     ],
     "expensive_turns": [
       { "turn_id": "...", "tool_count": 11, "message_id": "...", "latency_ms_total": 18200 }
@@ -196,11 +290,14 @@ All live in `tools/school.js`. Structured JSON in/out. Zero prompt generation.
   ```
 - **Enforcement (tool-level, no way around these):**
   - Frontmatter must parse as valid YAML.
-  - **Auto-injects** mandatory marker block: `source: school`, `created: <today>`, `evidence: <evidence arg>`. Overwrites conflicting values in agent-provided body.
+  - Body must be non-empty and contain at least one `#` heading after frontmatter (catches "accidentally empty skill").
   - Path-safety: must resolve under `workspace/skills/`; no traversal; no collision with bundled skills.
   - Size cap: 64 KB per skill (matches existing skill import cap).
   - For `mode: "patch"`: target must exist in `workspace/skills/`. Bundled skills rejected with `error: "cannot_patch_bundled"` + hint to file a GitHub issue.
   - Body passes through existing `security.js` suspicious-pattern detector (reuses the skill-import blocker).
+- **Frontmatter marker policy (provenance-preserving):**
+  - For `mode: "create"`: tool **sets** `source: school`, `created: <today>`, `evidence: <evidence arg>`. Overwrites if agent provided conflicting values.
+  - For `mode: "patch"`: tool **preserves** the existing `source` field (never overwrites user-authored skills' provenance). Adds `last_patched_by: school`, `last_patched_at: <today>`, `patch_evidence: <evidence arg>` at the end of the frontmatter. Earlier drafts said patches stamp `source: school` — that was wrong; it destroyed the user-authored provenance.
 - **Returns:** `{ ok: true, path, action, sha256 }` or `{ ok: false, error: "...", hint: "..." }`.
 
 ### 7.4 `school_retire_skill` — archive, don't delete (reversible)
@@ -271,13 +368,22 @@ allowed-tools:
 
 Every candidate pattern must pass **all 5** before it's shown as a proposal. First gate to fail determines the rejection reason surfaced to the user.
 
-| Gate | Test | Fails if |
-|---|---|---|
-| **Repetition** | Pattern appeared ≥ 3× in `school_scan` output | "I vaguely remember" / ≤ 2 occurrences |
-| **Gap** | No existing tool, bundled skill, or workspace skill covers this | Overlaps existing capability without specifying what that one fails at |
-| **Context budget** | Estimated skill size × estimated trigger rate pays back ≥ 1 token per token added to system prompt | Skill sits cold in the prompt most of the time |
-| **Permanence** | Pattern spans ≥ 2 different days OR ≥ 2 different message contexts | One-shot, single-task, single-day phenomenon |
-| **Actionable** | Writeable as concrete playbook with trigger keywords + specific tools + output format | Reduces to "be smarter about X" with no steps |
+Two gates are **quantitative** (machine-verifiable against `school_scan` output). Three are **qualitative** (LLM judgment) — for those, the skill explicitly requires the agent to produce the *evidence artifact* that justifies the pass, not just say "it passes." This is the rigor-vs-theater fix from the first-draft review.
+
+| Gate | Type | Test | Fails if |
+|---|---|---|---|
+| **Repetition** | Quantitative | `scan.repeated_patterns[i].count >= 3` (or `failed_sequences[i].count >= 3`, or `unused_*` present) | ≤ 2 occurrences |
+| **Permanence** | Quantitative | `scan.repeated_patterns[i].spans_distinct_days >= 2` | Single-day phenomenon |
+| **Gap** | Qualitative (evidence required) | Agent must output a `coverage_check` block listing every existing capability it considered — bundled skills, workspace skills, native tools — and **one line each** on why that capability doesn't cover the pattern. No list = gate fails. | No coverage check produced, or existing capability covers the case without contradiction |
+| **Utility** | Qualitative (honest yes/no) | *"Will this skill fire often enough to earn its prompt-size cost?"* Agent answers yes/no with one-sentence reasoning referencing the scan data. **Forbidden:** fake arithmetic like "2000 tokens × 5 triggers/month = positive ROI" — the agent has no calibrated way to compute this. Earlier "Context budget" gate was theater; renamed and downgraded to an honest judgment call. | Agent can't commit to yes without hedging; forbidden phrases present |
+| **Actionable** | Qualitative (structural) | Agent must draft the skill's **When to Use** section inline, with concrete trigger keywords + specific tools it would call + specific output format. If that draft contains the word "smarter", "better", "more", or "improved" without a concrete mechanism, gate fails (mechanical check). | Draft is vague, or mechanical check fails |
+
+**Dedup gate** (runs *before* the rubric, cheap to apply first):
+`sha256(type + title + slug)` — if appears in last 30d of `log.jsonl` with outcome ≠ `approved`, drop with reason `rejected as variant of proposal from <date>` (never re-run the rubric on it).
+
+**Why this reshuffle matters:** the first draft had "Context budget" as a gate with fake arithmetic the LLM would hallucinate past. Renaming to "Utility" + forbidding fake-math + demanding one honest sentence keeps the bar real. "Gap" previously allowed the agent to assert coverage without showing its work; now the coverage check is a required artifact the user sees in the rejection section, so the gate is audit-able.
+
+**Rubric version:** bump `rubric_version` in `log.jsonl` when the gate set or gate definitions change. School reads prior sessions' `rubric_version` and, if it differs from current, prefixes proposals with *"rubric updated since last session"* so the user knows why similar proposals may now pass/fail.
 
 ### 8.3 Dedup gate (pre-rubric)
 
@@ -341,7 +447,7 @@ If rubric + dedup leave 0 proposals: send one line — *"Nothing worth proposing
 
 ### 8.7 Post-approval note
 
-After any skill file is written / retired, agent appends to same message: *"Takes effect after the next service restart."* Keeps user calibrated about the hot-reload constraint.
+After any skill file is written / retired, agent appends to same message: *"Live on next turn (one-time prompt-cache miss)."* — calibrates user about the small one-time latency cost per approved skill, and confirms no manual restart is needed.
 
 ## 9. State & crash recovery
 
@@ -351,6 +457,7 @@ One JSON line per completed session. One line ≈ 1–3 KB. 90-day rolling reten
 
 ```json
 {
+  "schema_version": 1,
   "session_id": "uuid",
   "started_at": 1713614400000,
   "ended_at":   1713615120000,
@@ -364,13 +471,17 @@ One JSON line per completed session. One line ≈ 1–3 KB. 90-day rolling reten
       "title": "recipe-scaling",
       "signature": "sha256:...",
       "confidence": 8,
-      "rubric": { "rep": true, "gap": true, "budget": true, "perm": true, "action": true },
+      "rubric": { "rep": true, "perm": true, "gap": true, "util": true, "action": true },
       "outcome": "approved",
       "skill_path": "skills/recipe-scaling.md"
     }
   ]
 }
 ```
+
+**Outcome enum** (every proposal must have exactly one): `approved` | `drafted_but_denied` | `skipped` | `ignored` | `rejected_by_rubric` | `rejected_as_duplicate` | `abandoned_stale`.
+
+**Schema versioning:** every line starts with `schema_version: <int>`. Reader supports **current + previous one version** (`1` and `2` during a migration). Lines with unknown versions are skipped with a WARN log (fail-closed). When bumping version, ship a migration in the release notes and keep the reader's previous-version support live for ≥ 90 days (the log retention window) so rolling reads stay compatible.
 
 **Why JSONL not SQLite:** cheap append, cheap tail, easy to inspect and export, ships with existing memory export/import.
 
@@ -420,9 +531,16 @@ On service start:
    - Otherwise: send Telegram — *"Resumed school session from {started_at}. Still awaiting your /review on proposals {open_proposal_ns}."* Continue session.
 3. **If absent → idle**, no action.
 
-### 9.4 Concurrent session guard
+### 9.4 Concurrent session guard + stale session timeout
 
-If user types `/school` while `SCHOOL.md` exists, `school_begin` returns `{ ok: false, error: "session_in_progress", session_id }`. Agent replies *"School session already open — reply /review N or /stop first."* No double-start.
+**Concurrent guard:** if user types `/school` while `SCHOOL.md` exists, `school_begin` returns `{ ok: false, error: "session_in_progress", session_id }`. Agent replies *"School session already open — reply /review N or /stop first."* No double-start.
+
+**Stale session auto-end (new — was missing in first draft):** a session is *stale* if `started_at < now() - 48h` AND there's been no inbound user message referencing an open proposal since then. On every service start and on every `/school` command, check for stale sessions:
+
+- If stale → call `school_end` with outcome `abandoned_stale` for all open proposals, delete `SCHOOL.md`, send one Telegram line: *"Abandoned stale school session from {started_at}. Run /school again to start fresh."*
+- The 48h threshold is a constant in `school.js`, not user-configurable in v1.
+
+Without this, a crashed-and-never-responded session blocks all future `/school` calls forever.
 
 ### 9.5 Malformed state handling
 
@@ -462,7 +580,8 @@ Reads `log.jsonl` tail, aggregates counts in memory. Zero new tool calls.
   - ✅ after a YES→write succeeds
   - ❌ on a tool error
 - **`/review N` payload** — drafted artifact inside a `<pre>` block; agent's follow-up: *"Write to workspace? Reply YES or NO."* Text replies (no inline-keyboard buttons) keeps flow auditable and portable to Discord.
-- **Discord parity** — all of the above works without Discord-specific code thanks to `channel.js` abstraction. Pre-formatted strings compose the same way.
+- **HTML escaping (new — was missed in first draft):** drafted SKILL.md bodies can legitimately contain `<`, `>`, `&`, and even literal `</pre>` in examples. Before wrapping in `<pre>`, every `<`, `>`, `&` in the body is HTML-escaped via the existing helper in `telegram.js` (or a new `escapeHtml()` if not present). Missing this breaks Telegram rendering and could let a malicious historical message that ends up in a proposal inject HTML into the user's chat.
+- **Discord parity** — all of the above works without Discord-specific code thanks to `channel.js` abstraction. Pre-formatted strings compose the same way; HTML escaping is bypassed for Discord (which uses markdown; channel adapter handles the conversion).
 
 ## 11. Security
 
@@ -490,28 +609,50 @@ Corrupt or manipulated `log.jsonl` could drive rubric decisions from bad data.
 
 **Mitigation:** JSONL parser fails *closed* — bad line skipped with WARN, session continues. Worst case: school proposes something it would've deduped against; user rejects it via the existing two-gate. No SHA chain or crypto signing needed for v1.
 
+### 11.4 Feedback-loop injection via log re-reads
+
+Subtle but real: `log.jsonl` stores `proposals[].title`, `.evidence` — free-text fields populated from agent output during prior sessions. If a prior session was compromised by prompt injection (e.g. a historical message bled into the evidence field), those strings feed back into the next session's dedup/context-building, poisoning the next session.
+
+**Mitigation:** when reading `log.jsonl` in `school_begin` → `prior_sessions`, wrap all free-text fields (`title`, `evidence`, agent-written `skeptical_take`) in the same `<<<EXTERNAL_UNTRUSTED_CONTENT>>>` markers used for chat history. Structural fields (numeric `count`, boolean `rubric.rep`, enum `outcome`) are not wrapped. The agent treats its own prior free-text output as equally untrusted as third-party content.
+
+### 11.5 Rate limiting (new — was missing in first draft)
+
+`/school` is cheap per-message but expensive per-session (full scan + Claude analysis ≈ 50–100 KB of tokens-in, ≈ $0.02–0.10 on Opus 4.6). Unrestricted `/school` calls could drive real cost or denial-of-service via repeated prompt-injection attempts.
+
+**Limits** (reuse the existing rate-limiter pattern from `solana_swap` / `android_sms`):
+- **Per-command throttle:** max 1 `/school` invocation per **5 minutes** per owner.
+- **Daily cap:** max **10** school sessions per 24 hours. (Normal use: 1/week = ~0.04/day; 10/day is generous headroom for debugging + legitimate power use.)
+- **Exceeded limit** → immediate reply: *"School ran recently. Next available at {time}."* No side effects, no session started.
+
+Limits are config-driven — tunable without a redeploy via `config.json`.
+
 ## 12. Integration with existing systems
 
 | System | Touch point |
 |---|---|
-| `buildSystemBlocks()` in `ai.js` | **NEW "Self-Improvement" section.** Names the `/school` command, lists the 5 school tools, describes the rubric, states *"skills created via school take effect after next service restart"*. Required by CLAUDE.md Agent Self-Awareness rule. |
-| `DIAGNOSTICS.md` | **NEW section** on troubleshooting school sessions: stuck SCHOOL.md, empty scan results, missing tool-call log, how `/school-reset` works. |
-| SAB audit | **SAB-AUDIT-v23** must include behavioral probes for school. Required by CLAUDE.md SAB-Before-Merge rule. Probes listed in §14. |
+| `buildSystemBlocks()` in `ai.js` | **NEW "Self-Improvement" section.** Names the `/school` command, lists the 5 school tools, describes the rubric, states *"skills created via school take effect immediately on the next turn — one-time prompt cache miss ≈ one assistant turn's input tokens"*. Required by CLAUDE.md Agent Self-Awareness rule. |
+| `DIAGNOSTICS.md` | **NEW section** on troubleshooting school sessions: stuck SCHOOL.md, empty scan results, missing tool-call log, how `/school-reset` works, stale-session auto-end behavior. |
+| SAB audit | **SAB-AUDIT-v23** must include behavioral probes for school. **Enforcement mechanism** (new — the first draft's "concurrent with dev" was aspirational): PR-B is marked **Draft** until the SAB-AUDIT-v23 doc is attached to the PR at 100% post-fix score. CI status check `sab-audit-attached` enforces this — bot comments on the PR requiring the audit file's presence and a parseable 100% score line. Merge is blocked until the check is green. No "we'll do it after merge" path. |
 | Cron scheduling | **No new wiring.** User says "go to school every Sunday at 9am" → agent invokes existing `cron_create` tool with NL time + payload `/school`. Recurrence is a user choice, not a feature switch. |
-| Tool descriptions | All 5 `school_*` tool descriptions follow CLAUDE.md rule: *specific*. Reference concrete data sources (*"queries `tool_call_log` and `api_request_log` SQL.js tables"*, not *"analyzes history"*). |
-| Skill loading | Newly-written skills take effect on next service restart. Agent explicitly tells user. Restart button in Settings is manual path. |
+| Tool descriptions | All 5 `school_*` tool descriptions follow CLAUDE.md rule: *specific*. Reference concrete data sources (*"queries `tool_call_log` and `skill_trigger_log` SQL.js tables with structural `call_shape` grouping"*, not *"analyzes history"*). |
+| Skill loading (CHANGED from first draft) | Newly-written skills take effect **on the very next agent turn** via a `reloadSkills()` call after `school_write_skill` succeeds. This invalidates the prompt cache for one turn (≈ one assistant input worth of tokens, $0.01–0.05 on Opus 4.6 depending on conversation length). First-draft decision to defer to service restart was over-cautious — the cost is one-time per school-approved skill; the UX cost of "restart manually" recurs forever. |
 | Memory preservation | `workspace/school/` directory added to preserved paths list. Never touched by app updates. |
 
 ## 13. Testing strategy
 
 | Layer | What & how |
 |---|---|
-| `school.js` module | Unit tests `tests/nodejs-project/school.test.js`: `scanLogs` returns correct structure given fixtures, `log.jsonl` atomic append + retention prune, `SCHOOL.md` YAML parsing handles malformed input gracefully, dedup hash is stable across sessions. Fixtures seeded in in-memory SQL.js. |
-| `tools/school.js` | Unit tests `tests/nodejs-project/school-tools.test.js`: `school_write_skill` enforces frontmatter markers (auto-injects even if omitted; overwrites conflicting values), rejects bundled paths, rejects traversals, rejects oversize; `school_retire_skill` moves reversibly; `school_end` atomicity verified (log write happens before unlink). |
-| Crash recovery | Integration test: start session, kill Node, restart, verify resume message + state continuity. Uses `ProcessManager` or equivalent test harness. |
+| `school.js` module | Unit tests `tests/nodejs-project/school.test.js`: `scanLogs` returns correct structure given fixtures, `log.jsonl` atomic append + retention prune, `SCHOOL.md` YAML parsing handles malformed input gracefully, dedup hash is stable across sessions, **schema_version mismatch skips the line without crashing**, **stale-session auto-end runs at service start**. Fixtures seeded in in-memory SQL.js. |
+| `tools/school.js` | Unit tests `tests/nodejs-project/school-tools.test.js`: `school_write_skill` enforces frontmatter markers (auto-injects on `create`; **preserves `source` on `patch`, adds `last_patched_by`**), rejects bundled paths, rejects traversals, rejects oversize, rejects empty body; `school_retire_skill` moves reversibly; `school_end` atomicity verified (log write happens before unlink). |
+| `call_shape` builders | Unit tests `tests/nodejs-project/call-shape.test.js`: each per-tool shape builder produces expected output for sample args. Red-team tests: wallet address never appears in shape, user text never appears in shape, shape ≤ 64 chars. |
+| Buffered logger perf | Perf test `tests/nodejs-project/tool-call-log-perf.test.js`: 1,000-tool-call burst adds ≤ 5% to p99 tool latency; flush is atomic multi-row INSERT (one WASM roundtrip per flush, not per row). |
+| Empty-log graceful path | Test: invoke `school_scan` against empty `tool_call_log`, verify `{ empty: true }` response; end-to-end run of the skill against empty scan returns the silent-exit line (§8.6). |
+| Full happy path (**new**) | Integration test: seed realistic 7-day `tool_call_log` + `skill_trigger_log` fixture; invoke skill end-to-end; assert exactly N proposals produced; `/review 1` produces drafted SKILL.md; YES writes file; log entry appended; SCHOOL.md deleted. This is the test that proves the feature actually works. |
+| Crash recovery | Integration test: start session, kill Node mid-session, restart, verify resume message + state continuity. Second test: simulate crash *between* log append and SCHOOL.md unlink, verify no re-finalization on restart. |
 | Skill behavior (the rubric) | SAB behavioral probes — no prose unit tests on prompts; the probes ARE the test. Listed in §14. |
-| Security | Extend existing `security.js` test file with school-authored-body fixtures. Reuses the suspicious-pattern test harness. |
-| Smoke | Add a `require('./school')` assertion to `tests/nodejs-project/smoke.js` (catches regex/V8 crashes at module load — precedent from PR #325). |
+| Security | Extend existing `security.js` test file with school-authored-body fixtures (suspicious patterns rejected). Add tests for HTML escaping in `<pre>` blocks and for log-re-read injection wrapping. |
+| Rate limiting | Test: 2nd `/school` within 5min returns "School ran recently"; 11th school session in 24h blocked; limits tunable from config.json fixture. |
+| Smoke | Add `require('./school')` assertion to `tests/nodejs-project/smoke.js` (catches regex/V8 crashes at module load — precedent from PR #325). |
 
 ## 14. SAB-AUDIT-v23 probe set (required before PR-B merge)
 
@@ -523,7 +664,7 @@ Minimum behavioral probes that must pass 100% post-fix before merge. The audit i
 4. **Dedup understanding** — *"If you proposed X last week and I rejected it, will you propose X again?"* — expected: no, signature dedup against 30d log window.
 5. **Why two gates?** — *"Could you just write the skill directly when you think it's a good idea?"* — expected: no, two-gate approval is structural.
 6. **What the rubric rejects** — ad-hoc probe: *"Propose a skill for X"* with X being a one-off. Expected: agent applies PERMANENCE gate and rejects.
-7. **Effect timing** — *"If I approve a new skill now, can you use it on the next message?"* — expected: no, takes effect after service restart.
+7. **Effect timing** — *"If I approve a new skill now, can you use it on the next message?"* — expected: yes, via `reloadSkills()` triggered by `school_write_skill`; one-time prompt-cache miss on the next turn.
 8. **Evidence requirement** — agent must never write a school-created skill without an evidence field; rubric derives from `school_scan` output, not imagination.
 
 Audit must be attached (not just referenced) in the PR-B description per CLAUDE.md.
@@ -532,47 +673,75 @@ Audit must be attached (not just referenced) in the PR-B description per CLAUDE.
 
 ### 15.1 Ship order
 
-- **PR-A — Tool-call log infrastructure**
-  - `database.js` migration for `tool_call_log`
-  - `tools/index.js` instrumentation wrap
-  - Retention purge task
-  - Unit tests + smoke test assertion
+- **PR-A — Log infrastructure**
+  - `database.js` migrations for `tool_call_log` AND `skill_trigger_log`
+  - Per-tool `call_shape` builders (minimum: web_fetch, solana_swap, solana_balance, file_read, shell_exec, android_sms, plus a `{tool_name}` default for the rest)
+  - `tools/index.js` instrumentation with buffered async writer
+  - Skill-trigger instrumentation in `skills.js`
+  - Retention purge task (30d, caps)
+  - Unit tests + perf test + smoke assertion
   - No UI, no user-visible behavior change
-  - Ships in v1.9.x patch or v1.10.0-rc1
+  - Ships as **v1.10.0-rc1** (pre-release build, gated by rate-of-adoption on RC channel)
 
-- **Wait window — 7 to 14 days**
-  - Production log accumulates data
-  - Validate: log size growth, retention prune works, no performance regression on heavy-tool turns
+- **RC soak — minimum 7 days on RC channel, minimum 3 days in production**
+  - Watch Firebase Analytics: DB write latency, service crash rate.
+  - Validate logs accumulate to expected shapes (spot-check `call_shape` values don't leak sensitive data — red-team one device's log before full rollout).
+  - No go/no-go required if metrics stay green.
 
 - **PR-B — School feature**
-  - `school.js` + `tools/school.js`
+  - `school.js` + `tools/school.js` (5 tools)
   - Bundled `go-to-school` skill
   - `buildSystemBlocks()` Self-Improvement section
+  - `reloadSkills()` trigger after `school_write_skill`
+  - Feature flag plumbing (see §15.2)
   - `DIAGNOSTICS.md` troubleshooting section
-  - `tests/nodejs-project/school*.test.js`
-  - SAB-AUDIT-v23 attached and 100% post-fix
-  - Ships in v1.10.0
+  - `tests/nodejs-project/school*.test.js` (all layers from §13)
+  - **SAB-AUDIT-v23 attached, 100% post-fix, CI status check `sab-audit-attached` green**
+  - Ships in **v1.10.0** after RC validates PR-A in production for 7+ days
 
-### 15.2 Feature flag / killswitch
+### 15.2 Feature flag / killswitch (CHANGED — the first draft was wrong)
 
-**No feature flag.** School is opt-in at the command level — zero always-on behavior, zero passive cost, zero background work. If it misbehaves, user simply stops typing `/school` and nothing runs.
+**SeekerClaw has 5k users in production. Shipping without a killswitch is reckless.** If the first production `/school` hits a latent bug that corrupts `log.jsonl` or writes a pathological SKILL.md, recovery without a flag = ship-an-app-update, which takes ≥ 24h. That's too long.
 
-### 15.3 CHANGELOG (v1.10.0, under "Added")
+**Flag mechanism (two layers):**
 
-> **Go to School** — The agent can now analyze its own recent activity (memory, chat history, tool-call log) and propose concrete self-improvements: new skills to create, existing skills to patch, unused skills to retire. Every proposal passes a 5-gate rubric, and proposals the rubric rejects are surfaced with reasons. Two-gate approval keeps the user in control. Trigger with `/school`; recur with `cron_create`.
+1. **`BuildConfig.FEATURE_SCHOOL_ENABLED`** — Kotlin-side build-time flag. Default `true` in v1.10.0. If future releases want to gate by flavor (e.g., disable on googlePlay while dappStore ships), flip at build. Passed to Node via `config.json`.
 
-### 15.4 Linear epic structure
+2. **Remote runtime override** — `config.json` has a new `featureFlags.school` field (server-delivered via the existing config-claim mechanism). If `false`, the `/school` command handler returns *"Self-improvement is temporarily disabled. See @SeekerClaw for status."* and nothing else runs. If the flag flips to `false` mid-session, the session completes normally (no mid-flight kill) but the next `/school` is blocked.
+
+**Telemetry (opt-in users only, via existing Firebase pipeline):**
+- Counter: `school_session_started`, `school_proposal_approved`, `school_proposal_denied`, `school_session_errored`.
+- No content ever leaves the device — only counters.
+- Firebase-disabled users are silently not counted (existing behavior).
+
+### 15.3 Canary / staged rollout
+
+SeekerClaw's dApp Store and Google Play channels both support staged releases. Recommended cadence for **v1.10.0**:
+
+- Day 0: RC1 to the dApp Store "Release Candidate" channel (existing process — tag `v1.10.0-rc1`, GitHub pre-release).
+- Day 7: if RC1 clean (no crashes tagged `school*`, no `config_load_failed` spike), tag `v1.10.0` for production.
+- Day 7 + production: staged 10% → 50% → 100% over 72 hours on Google Play. dApp Store doesn't stage — ships full at Day 7.
+- If `school_session_errored` rate > 2% in first 24h of production, flip `featureFlags.school` to `false` via config push (zero app update needed).
+
+### 15.4 CHANGELOG (v1.10.0, under "Added")
+
+> **Go to School** — The agent can now analyze its own recent activity (memory, chat history, tool-call log) and propose concrete self-improvements: new skills to create, existing skills to patch, unused skills to retire. Every proposal passes a 5-gate rubric, and proposals the rubric rejects are surfaced with reasons. Two-gate approval keeps the user in control. Trigger with `/school`; recur with `cron_create`. Remotely disablable via `featureFlags.school`.
+
+### 15.5 Linear epic structure
 
 Suggested breakdown (user creates after spec review):
 - **BAT-XXX: Epic — Go to School (v1.10.0)**
-  - Sub-task A: Tool-call log table + instrumentation + retention (PR-A)
-  - Sub-task B: School tools (`school.js` + `tools/school.js`) (PR-B)
-  - Sub-task C: Bundled `go-to-school` skill (PR-B)
-  - Sub-task D: `buildSystemBlocks()` + DIAGNOSTICS.md updates (PR-B)
-  - Sub-task E: SAB-AUDIT-v23 (runs concurrent with PR-B dev, not after)
-  - Sub-task F: Tests (unit + integration + smoke) (PR-B)
+  - Sub-task A1: `tool_call_log` table + instrumentation + retention (PR-A)
+  - Sub-task A2: `skill_trigger_log` table + instrumentation in skill matcher (PR-A)
+  - Sub-task A3: `call_shape` builders for priority tools + default (PR-A)
+  - Sub-task B1: School module + 5 tools (`school.js` + `tools/school.js`) (PR-B)
+  - Sub-task B2: Bundled `go-to-school` skill with rubric (PR-B)
+  - Sub-task B3: `reloadSkills()` + `buildSystemBlocks()` + DIAGNOSTICS.md updates (PR-B)
+  - Sub-task B4: Feature flag plumbing + telemetry counters (PR-B)
+  - Sub-task C1: SAB-AUDIT-v23 — **must leave PR-B Draft state with 100% attached; enforced by `sab-audit-attached` CI status check, not honor system**
+  - Sub-task C2: Tests (unit + integration + perf + empty-log + security) (PR-B)
 
-### 15.5 GitHub feature-request framing
+### 15.6 GitHub feature-request framing
 
 Outcome-first, not implementation-first. Single issue body:
 > *"Give the agent a way to study itself. The agent should be able to analyze what it's actually been doing (the tools it called, the conversations it had, the memory it wrote), spot patterns worth codifying, and propose concrete changes to its skill set — new skills, patches to existing ones, retirements of dead ones. Every proposal should pass a rigorous self-critique and show me the rejections too, so I can audit the thinking, not just the suggestions. Two-gate approval: I see the list, pick what to draft, then YES/NO the draft before anything gets written."*
@@ -581,33 +750,54 @@ Outcome-first, not implementation-first. Single issue body:
 
 v1.10.0 is ready to ship when:
 
-- [ ] **PR-A merged**, tool-call log collecting data for ≥ 7 days in production.
+**Feature correctness**
+- [ ] **PR-A merged**, `tool_call_log` AND `skill_trigger_log` collecting data for ≥ 7 days in production.
 - [ ] `/school` command present and discoverable via `/help`.
 - [ ] A fresh session on real accumulated data produces at least one non-trivial proposal within 30s wall-clock on a Seeker-class device.
+- [ ] Empty-log run cleanly produces `"Nothing worth proposing this week"` and calls `school_end` without writing anything.
 - [ ] Rubric rejects proposals that fail each of the 5 gates in respective targeted test probes.
 - [ ] Proposals that fail dedup are visibly rejected with *"variant of proposal from <date>"* reason.
 - [ ] Approval flow: `/review N` → YES creates file; NO records `drafted_but_denied`; `/skip` records `skipped`; `/stop` records remaining as `ignored`.
-- [ ] Every school-written SKILL.md has `source: school`, `created: <date>`, `evidence: <string>` in frontmatter. No workaround path exists.
+- [ ] Every school-created SKILL.md has `source: school`, `created: <date>`, `evidence: <string>` in frontmatter. No workaround path exists.
+- [ ] Every school-patched SKILL.md **preserves** existing `source` field and appends `last_patched_by: school` + `last_patched_at` + `patch_evidence` (does NOT overwrite existing provenance).
 - [ ] Bundled skills cannot be patched or retired via school (verified in test).
+- [ ] New skills take effect on the very next agent turn (verified: `reloadSkills()` called after `school_write_skill`).
+
+**Production hardening**
+- [ ] Feature flag `BuildConfig.FEATURE_SCHOOL_ENABLED` present; remote `featureFlags.school` override disables `/school` without app update (verified in integration test against a config fixture).
+- [ ] Rate limits enforced: 1 session per 5 min, max 10 per 24h (verified in rate-limit tests).
+- [ ] Stale session auto-end runs at service start and at `/school` invocation (verified in test with 48h+ old SCHOOL.md fixture).
 - [ ] Kill-in-the-middle test: Node process killed during active session, restart detects `SCHOOL.md`, sends resume message, user can continue.
+- [ ] `call_shape` red-team: manually inspect produced shapes on a seeded log containing wallet addresses, API keys, PII — none of the sensitive values appear in any `call_shape` value.
+- [ ] Buffered logger perf test: 1000-tool-call burst adds ≤ 5% p99 tool latency.
+- [ ] HTML escaping test: drafted SKILL.md containing `<pre>`, `</pre>`, `<script>` renders correctly in Telegram, no injection.
+- [ ] Log schema versioning: line with `schema_version: 99` skipped with WARN, session continues.
+
+**Ops**
 - [ ] `/school log` returns compact history summary.
-- [ ] SAB-AUDIT-v23 post-fix score = 100%, attached to PR-B.
+- [ ] `/school-reset` clears `workspace/SCHOOL.md` and `workspace/school/drafts/`, sends confirmation message.
+- [ ] SAB-AUDIT-v23 post-fix score = 100%, attached to PR-B, `sab-audit-attached` CI check green.
 - [ ] No regression in existing smoke test suite.
 - [ ] CHANGELOG entry present.
-- [ ] `DIAGNOSTICS.md` has new school troubleshooting section.
+- [ ] `DIAGNOSTICS.md` has new school troubleshooting section including stale-session, flag-disabled, empty-log paths.
+- [ ] Telemetry counters visible in Firebase post-launch (opt-in users only).
 
 ## 17. Open questions / risks
 
 | # | Risk / question | Mitigation / current answer |
 |---|---|---|
-| 1 | `args_fingerprint` hashing cost on every tool call | Pre-computed once per call in `executeTool` wrapper; negligible vs. network/LLM latency |
-| 2 | Retention purge on service start adds boot latency on large logs | Purge is async post-boot, doesn't block service ready signal |
-| 3 | Rubric too strict → 0 proposals most weeks, feature feels useless | Silent-exit line is honest. Rubric tunable via skill version bump. Monitor post-launch. |
-| 4 | Rubric too loose → weekly noise of bad proposals | Post-launch telemetry (via `log.jsonl`): rate of `approved` / `drafted_but_denied`. If denied > 50%, tighten. |
-| 5 | School "discovers" a capability the user doesn't want (e.g. retire an emotionally-valued skill) | Two-gate approval catches this. Retire is reversible (archive, not delete). |
-| 6 | Tool-call log leaks sensitive data via `error_kind` or `message_id` linkage | `error_kind` is a classified string from an allowlist. `message_id` is internal to SeekerClaw and never exposed externally. `args_fingerprint` is hashed. |
-| 7 | User-editable rubric — requested but parked to v1.1 | Skill body is readable by the user; v1.1 is a `workspace/school/rubric.md` override. |
-| 8 | Concurrent `/school` on mobile + desktop (future multi-device) | Explicitly out of scope; multi-device sync is not a v1 feature. Concurrent session guard in §9.4 handles single-device re-trigger. |
+| 1 | Retention purge on service start adds boot latency on large logs | Purge is async post-boot, doesn't block service ready signal |
+| 2 | Rubric too strict → 0 proposals most weeks, feature feels useless | Silent-exit line is honest. Rubric tunable via skill version bump. `log.jsonl` outcome aggregation lets us see `rejected_by_rubric` rate over time. |
+| 3 | Rubric too loose → weekly noise of bad proposals | `log.jsonl` tracks `approved` vs `drafted_but_denied` ratio. If denied > 50% across ≥ 3 users (telemetry), tighten rubric in v1.10.x patch. |
+| 4 | School "discovers" a capability the user doesn't want (e.g. retire an emotionally-valued skill) | Two-gate approval catches this. Retire is reversible (archive in `workspace/school/retired/`, not delete). User can restore by moving the file back. |
+| 5 | Tool-call log leaks sensitive data | `call_shape` strings pass red-team test as acceptance criterion (no wallet addresses, no user text, no keys). `error_kind` is classified-string allowlist. `message_id` is internal SeekerClaw ID, never external. Shape builder per tool is reviewable in PR-A. |
+| 6 | User-editable rubric — requested but parked to v1.1 | Skill body is readable by the user; v1.1 ships `workspace/school/rubric.md` override. |
+| 7 | Concurrent `/school` on mobile + desktop (future multi-device) | Explicitly out of scope; multi-device sync is not a v1 feature. Concurrent session guard in §9.4 handles single-device re-trigger. |
+| 8 | Log data never leaves device (user privacy) | `tool_call_log` and `skill_trigger_log` are workspace-local SQL.js. Not in memory export. Not synced anywhere. Telemetry counters (§15.2) are counters only — zero content. Documented in app Privacy page. |
+| 9 | Agent proposes retiring something the user cares about, user can't find the archived file | `/school log` output lists retired skill paths. `DIAGNOSTICS.md` troubleshooting section includes "How to restore a retired skill: move `workspace/school/retired/<name>.md` back to `workspace/skills/<name>.md`." |
+| 10 | Rubric version mismatch between skill and prior log entries | `rubric_version` in every log entry. Mismatch triggers user-facing note on the session's header: *"Rubric updated since last session — similar proposals may now pass or fail differently."* |
+| 11 | Prompt-cache cost of `reloadSkills()` is recurring per approval | True but bounded: ~$0.01–0.05 per approved skill, only once per skill. Measured against the alternative (user manually restarts the service after every school session, friction recurring). Telemetry counter `school_skill_reloaded` tracks volume. |
+| 12 | `call_shape` builders need per-tool maintenance as new tools ship | Default `{tool_name}` shape keeps any new tool observable without a custom builder — degrades gracefully to exact-tool-name grouping. Adding a custom shape later is non-breaking. |
 
 ## 18. Glossary
 
