@@ -1,7 +1,7 @@
 # Go to School — Design Spec
 
 - **Date:** 2026-04-19
-- **Status:** Design v5 — state machine, signature normalization, stale-flow, SAB sizing
+- **Status:** Design v6 — state machine moved to deterministic JS; review-flow UX fixes
 - **Linear:** TBD (create epic + sub-tasks after spec review)
 - **GitHub:** TBD (feature-request issue after spec review)
 - **Target version:** v1.10.0
@@ -9,6 +9,13 @@
 - **Ships in:** 2 PRs (PR-A: log infrastructure, PR-B: school feature)
 
 ## Revision log
+
+**v6 (2026-04-19)** — state machine in JS + review-flow UX fixes:
+
+- **State machine moved from skill prompt to `school.js`.** v5 put the 32-transition table in the skill's markdown body and said the agent would "honor" it. Lazy framing: LLMs drift on large transition tables, especially under time pressure. For a production approval flow touching file writes, that's the kind of decision that quietly causes incidents. New architecture: transitions live in a deterministic JS state machine module in `school.js`, exposed via a new sixth tool `school_handle_input`. Agent detects user intent (YES / NO / `/review N` / `/skip N` / `/stop` / other), calls the tool with structured args, tool returns the new state + the next action. Agent executes the next action via existing tools. Transitions are mechanically correct by construction.
+- **Fixed "unrelated message demotes state" trap** (§8.5.1). In `reviewing_<N>`, an unrelated user message now **keeps** the review open. Agent answers the unrelated question, then appends *"Still awaiting YES/NO on proposal {N}."* Only `/skip` / `/stop` / or a different `/review M` exits the review state. Common chat-interleaving UX doesn't silently void user context anymore.
+- **YES / NO disambiguation** (§10 + §8.5.1). Bare `YES` / `NO` is ambiguous under out-of-order Telegram delivery. Now: bare YES/NO is accepted only when exactly **one** review has been opened in the last 60s; otherwise the agent requires `YES N` / `NO N`. On out-of-order-delivery risk, `school_handle_input` inspects the proposal number against the open set and rejects if mismatched.
+- Added 32-row state-machine unit test to §13: for every `(state, input)` pair, assert next state + next action match the transition table.
 
 **v5 (2026-04-19)** — state-machine + signature stability + stale flow + SAB sizing:
 
@@ -247,9 +254,11 @@ CREATE INDEX idx_stl_created       ON skill_trigger_log(created_at);
 
 **What school asks this for:** `SELECT skill_name FROM skill_trigger_log WHERE created_at > ? GROUP BY skill_name` → subtract from full workspace+bundled skill list → `unused_skills` candidates for retire proposals.
 
-## 7. School tools API (5 tools)
+## 7. School tools API (6 tools)
 
 All live in `tools/school.js`. Structured JSON in/out. Zero prompt generation.
+
+The state machine is implemented in `school.js` as a pure function `transition(currentState, input) → {nextState, nextAction, error?}`. The sixth tool `school_handle_input` is the *only* way the state machine advances — agent cannot write to `SCHOOL.md.state` directly via `file_write` (state file is protected via path-sandbox in `school.js`; arbitrary writes to SCHOOL.md are rejected).
 
 ### 7.1 `school_begin` — start or resume a session
 
@@ -355,7 +364,52 @@ All live in `tools/school.js`. Structured JSON in/out. Zero prompt generation.
 - **Behavior:** append single JSON line to `log.jsonl`, THEN delete `SCHOOL.md`. Ordering guarantees crash recovery never re-finalizes a session that's already logged.
 - **Returns:** `{ ok: true, log_line_number }`.
 
-### 7.6 What's deliberately NOT a tool
+### 7.6 `school_handle_input` — advance the state machine (NEW in v6)
+
+The only tool that mutates `SCHOOL.md.state` or logs proposal outcomes. Agent must call this whenever the user sends an input that could advance the session (YES, NO, `/review N`, `/skip N`, `/stop`, or any message during an active session when state is `reviewing_<N>`).
+
+- **Args:**
+  ```json
+  {
+    "session_id": "uuid",
+    "input": {
+      "kind": "yes" | "no" | "review" | "skip" | "stop" | "unrelated",
+      "proposal_n": 3,              // required for review/skip; optional for yes/no (see disambiguation)
+      "raw_text": "YES 3"           // the exact user text, for auditing
+    }
+  }
+  ```
+
+- **Disambiguation for `yes` / `no`** (enforced in `school.js`, not in prompt):
+  1. If `proposal_n` provided → transition uses that N.
+  2. If `proposal_n` omitted → check SCHOOL.md.state: if exactly one review has been `reviewing_<N>` in the last 60 seconds, use that N. Otherwise return `{ ok: false, error: "ambiguous_bare_yes_no", hint: "Reply YES N or NO N — multiple proposals open." }`.
+
+- **Behavior:** pure function of `(SCHOOL.md.state, input)`. Applies the transition table (see §8.5.1). Writes:
+  - Updated `SCHOOL.md.state` + `open_proposal_ns`.
+  - Log entries in memory (flushed to `log.jsonl` on session end, not per-transition — atomic final write per §7.5).
+
+- **Returns:**
+  ```json
+  {
+    "ok": true,
+    "previous_state": "reviewing_3",
+    "new_state": "awaiting_approval",
+    "next_action": {
+      "kind": "write_skill" | "retire_skill" | "end_session" | "reply_only",
+      "tool_call": { "tool": "school_write_skill", "args": {...} },   // present when kind needs a follow-up tool
+      "reply_template": "Proposal 3 approved and written. Live on next turn."
+    },
+    "open_proposal_ns": [1, 4]
+  }
+  ```
+  Or error:
+  ```json
+  { "ok": false, "error": "no_review_open" | "ambiguous_bare_yes_no" | "invalid_proposal_n" | "session_not_found", "hint": "..." }
+  ```
+
+- **Why not let the agent drive transitions directly:** 4 states × 8 inputs = 32 transitions. LLMs drift on that surface, especially under unusual input (e.g. `YES. And also the weather.`). State logic must be mechanically correct for a flow that writes files. The tool is the deterministic guardrail; the agent is just the input classifier + next-action executor.
+
+### 7.7 What's deliberately NOT a tool
 
 - **Applying the rubric** — pure reasoning, stays in prompt.
 - **Drafting SKILL.md text** — agent's LLM strength, no JS templating.
@@ -385,6 +439,7 @@ allowed-tools:
   - school_write_skill
   - school_retire_skill
   - school_end
+  - school_handle_input
   - file_read
   - file_write
   - telegram_send
@@ -486,7 +541,7 @@ Other in-loop commands:
 
 ### 8.5.1 Approval state machine — full transition table
 
-The session state lives in `SCHOOL.md.state`. Every user input has a defined transition for every state.
+The session state lives in `SCHOOL.md.state`. Transitions are **deterministic JS** in `school.js` (the `transition()` pure function) invoked via the `school_handle_input` tool (§7.6). Not a prompt-driven state machine — too much drift surface for an approval flow that writes files.
 
 **States:**
 - `scanning` — transient; `school_scan` in flight.
@@ -496,31 +551,34 @@ The session state lives in `SCHOOL.md.state`. Every user input has a defined tra
 
 **Transition table:**
 
-| Current state | Input | Next state | Side effect |
+| Current state | Input | Next state | Next action |
 |---|---|---|---|
-| `awaiting_approval` | `/review N` (valid open N) | `reviewing_<N>` | Send drafted artifact + "Write to workspace? YES/NO." |
+| `awaiting_approval` | `/review N` (valid open N) | `reviewing_<N>` | Send drafted artifact + *"Write to workspace? Reply YES N or NO N (or just YES/NO)."* |
 | `awaiting_approval` | `/review N` (invalid / closed N) | `awaiting_approval` | Reply *"Proposal N not open. Open: {list}."* |
 | `awaiting_approval` | `/skip N` | `awaiting_approval` (or `done` if last) | Log N as `skipped`; update `open_proposal_ns`; if empty → `school_end` |
 | `awaiting_approval` | `/stop` | `done` | Log remaining as `ignored`; `school_end` |
 | `awaiting_approval` | YES / NO | `awaiting_approval` | Reply *"No proposal under review. Use /review N first."* (ignore YES/NO outside a review) |
-| `awaiting_approval` | unrelated message | `awaiting_approval` | Do NOT consume it for school. Agent routes it to normal message handling. School session stays open. |
-| `awaiting_approval` | new `/school` | `awaiting_approval` | Reply *"School session already open — /review N, /skip N, or /stop first."* (handled by `school_begin`'s concurrent-session guard) |
-| `reviewing_<N>` | YES | `awaiting_approval` (or `done` if last) | `school_write_skill` / `school_retire_skill` → log N as `approved`; update `open_proposal_ns`; if empty → `school_end` |
-| `reviewing_<N>` | NO | `awaiting_approval` | Log N as `drafted_but_denied`; stay in approval loop |
-| `reviewing_<N>` | `/review M` (different, valid) | `reviewing_<M>` | Log N as `skipped` (user moved on without deciding); send M's artifact |
-| `reviewing_<N>` | `/skip M` (M ≠ N) | `reviewing_<N>` | Log M as `skipped` (if M was open); stay reviewing N |
+| `awaiting_approval` | unrelated | `awaiting_approval` | Do NOT consume for school — the agent routes it to normal message handling. Session stays open. |
+| `awaiting_approval` | new `/school` | `awaiting_approval` | Reject via `school_begin` concurrent-session guard. |
+| `reviewing_<N>` | YES N (explicit) or bare YES (unambiguous) | `awaiting_approval` (or `done` if last) | `school_write_skill` / `school_retire_skill` → log N as `approved`; if empty after → `school_end` |
+| `reviewing_<N>` | NO N (explicit) or bare NO (unambiguous) | `awaiting_approval` | Log N as `drafted_but_denied`; stay in approval loop |
+| `reviewing_<N>` | bare YES / NO when another review was opened within last 60s | `reviewing_<N>` | Reply *"Which proposal? Reply YES N or NO N."* — handled by `school_handle_input` returning `ambiguous_bare_yes_no`. |
+| `reviewing_<N>` | YES M / NO M where M ≠ N | `reviewing_<N>` | Reply *"Proposal M is not currently under review."* — reject mismatch at the tool level. |
+| `reviewing_<N>` | `/review M` (different, valid) | `reviewing_<M>` | Log N as `skipped` (user switched without deciding); send M's artifact |
+| `reviewing_<N>` | `/skip M` (M ≠ N) | `reviewing_<N>` | Log M as `skipped` if open; stay reviewing N |
 | `reviewing_<N>` | `/skip N` (current) | `awaiting_approval` (or `done`) | Log N as `skipped`; back to approval loop |
-| `reviewing_<N>` | `/stop` | `done` | Log N as `drafted_but_denied` (had artifact open), remaining as `ignored`; `school_end` |
-| `reviewing_<N>` | unrelated message | `awaiting_approval` | Agent handles unrelated message via normal routing; review for N is implicitly abandoned (logged as `skipped` on session end if still open). Keeps user from being "trapped" in a review. |
-| `reviewing_<N>` | new `/school` | `reviewing_<N>` | Same guard as above — reject, tell user to resolve this review first. |
+| `reviewing_<N>` | `/stop` | `done` | Log N as `drafted_but_denied`, remaining as `ignored`; `school_end` |
+| `reviewing_<N>` | **unrelated message** (CHANGED in v6) | `reviewing_<N>` (unchanged) | Agent handles unrelated message via normal routing, then appends *"Still awaiting YES/NO on proposal {N}."* to its reply. Review remains open. v5 demoted state here, which trapped users — fixed. |
+| `reviewing_<N>` | new `/school` | `reviewing_<N>` | Reject via concurrent-session guard. |
 
 **Key principles baked into the table:**
-- **Unrelated messages never consume school state.** User can mid-session ask the agent for the weather without losing their school session or being forced to interact with school.
-- **YES / NO only have meaning inside `reviewing_<N>`.** Outside, they're user-instruction-not-school-command.
-- **`/skip` works on any open proposal**, not just the one under review. Useful when user wants to decline N while in the middle of reviewing M.
-- **Session always drains to `done`** — every end path calls `school_end` with enumerated outcomes. No "leaked" state.
+- **Unrelated messages never lose user context.** Asking the agent for the weather mid-review does not silently skip the proposal. Agent answers the weather AND reminds about the pending review.
+- **YES / NO has disambiguated form `YES N` / `NO N`**. Bare YES/NO is accepted only when unambiguous (exactly one `reviewing_<N>` opened in the last 60s). Otherwise the tool returns `ambiguous_bare_yes_no` and the agent asks for clarification.
+- **YES N matched against the actively-reviewed proposal.** If user sends `YES 3` while state is `reviewing_1`, the tool rejects with `invalid_proposal_n` — protects against Telegram out-of-order delivery.
+- **`/skip` works on any open proposal**, not just the currently-reviewed one.
+- **Session always drains to `done`** — every end path calls `school_end` with enumerated outcomes. No leaked state.
 
-**Implementation note:** state transitions are driven by the `go-to-school` skill prompt reading `SCHOOL.md.state`, not by hardcoded JS logic. The prompt carries the table. This keeps the state machine editable without code changes.
+**Implementation note (changed from v5):** state transitions are driven by **deterministic JS** in `school.js`, invoked via the `school_handle_input` tool. Not by the skill prompt. The skill prompt's job shrinks to: (a) detect what kind of input the user just sent (YES/NO/review/skip/stop/other), (b) call `school_handle_input` with structured args, (c) execute the `next_action` the tool returns. Transitions themselves are mechanically correct. Rubric + proposal drafting + message formatting stay in the prompt.
 
 ### 8.6 Silent exit rule
 
@@ -671,7 +729,9 @@ Reads `log.jsonl` tail, aggregates counts in memory. Zero new tool calls.
   - 📝 during draft of a `/review N`
   - ✅ after a YES→write succeeds
   - ❌ on a tool error
-- **`/review N` payload** — drafted artifact inside a `<pre>` block; agent's follow-up: *"Write to workspace? Reply YES or NO."* Text replies (no inline-keyboard buttons) keeps flow auditable and portable to Discord.
+- **`/review N` payload** — drafted artifact inside a `<pre>` block; agent's follow-up: *"Write to workspace? Reply `YES N` or `NO N` (or just `YES` / `NO` if only one review is open)."* Text replies (no inline-keyboard buttons) keep flow auditable and portable to Discord.
+- **YES / NO disambiguation** (v6): bare `YES` / `NO` is accepted by `school_handle_input` **only when exactly one review has been opened in the last 60 seconds**. Multiple open reviews, or bare YES/NO outside that 60s window → agent replies *"Which proposal? Reply YES N or NO N."* `YES 3` with N=3 outside `reviewing_<3>` is rejected with *"Proposal 3 is not currently under review."* Protects against Telegram out-of-order message delivery silently approving the wrong proposal.
+- **Accepted affirmative / negative forms:** `YES`, `yes`, `Yes`, `Y`, `y`, `👍`, `ok`, `OK` → yes. `NO`, `no`, `No`, `N`, `n`, `👎`, `nope` → no. Case- and emoji-tolerant. Embedded forms like `"YES, and also..."` are treated as YES + an unrelated trailing message — the YES consumes the review, and the "and also" portion is routed to normal message handling in the same turn.
 - **HTML escaping (new — was missed in first draft):** drafted SKILL.md bodies can legitimately contain `<`, `>`, `&`, and even literal `</pre>` in examples. Before wrapping in `<pre>`, every `<`, `>`, `&` in the body is HTML-escaped via the existing helper in `telegram.js` (or a new `escapeHtml()` if not present). Missing this breaks Telegram rendering and could let a malicious historical message that ends up in a proposal inject HTML into the user's chat.
 - **Discord parity** — all of the above works without Discord-specific code thanks to `channel.js` abstraction. Pre-formatted strings compose the same way; HTML escaping is bypassed for Discord (which uses markdown; channel adapter handles the conversion).
 
@@ -742,6 +802,7 @@ Limits are config-driven — tunable without a redeploy via `config.json`.
 |---|---|
 | `school.js` module | Unit tests `tests/nodejs-project/school.test.js`: `scanLogs` returns correct structure given fixtures, `log.jsonl` atomic append + retention prune, `SCHOOL.md` YAML parsing handles malformed input gracefully, dedup hash is stable across sessions, **stale-session auto-end runs at service start**. Fixtures seeded in in-memory SQL.js. |
 | `tools/school.js` | Unit tests `tests/nodejs-project/school-tools.test.js`: `school_write_skill` enforces frontmatter markers (auto-injects on `create`; **preserves `source` on `patch`, adds `last_patched_by`**), rejects bundled paths, rejects traversals, rejects oversize, rejects empty body; `school_retire_skill` moves reversibly; `school_end` atomicity verified (log write happens before unlink). |
+| State machine (NEW) | Unit tests `tests/nodejs-project/school-state-machine.test.js`: for every `(state, input)` pair in the §8.5.1 transition table, assert `transition(state, input)` returns the expected `(nextState, nextAction)`. Plus edge cases: bare YES with zero opens → `no_review_open`; bare YES with two opens in 60s → `ambiguous_bare_yes_no`; bare YES with one open 90s ago → `ambiguous_bare_yes_no` (stale window); `YES 3` when `reviewing_1` → `invalid_proposal_n`; embedded `"YES, and also..."` parses YES and emits unrelated-message side output. |
 | `call_shape` builders | Unit tests `tests/nodejs-project/call-shape.test.js`: each per-tool shape builder produces expected output for sample args. Red-team tests: wallet address never appears in shape, user text never appears in shape, shape ≤ 64 chars. |
 | Buffered logger perf | Perf test `tests/nodejs-project/tool-call-log-perf.test.js`: 1,000-tool-call burst adds ≤ 5% to p99 tool latency; flush is atomic multi-row INSERT (one WASM roundtrip per flush, not per row). |
 | Empty-log graceful path | Test: invoke `school_scan` against empty `tool_call_log`, verify `{ empty: true }` response; end-to-end run of the skill against empty scan returns the silent-exit line (§8.6). |
@@ -791,7 +852,7 @@ Audit must be attached (not just referenced) in the PR-B description per CLAUDE.
   - No go/no-go required if metrics stay green.
 
 - **PR-B — School feature**
-  - `school.js` + `tools/school.js` (5 tools)
+  - `school.js` (including deterministic state-machine `transition()`) + `tools/school.js` (6 tools)
   - Bundled `go-to-school` skill
   - `buildSystemBlocks()` Self-Improvement section
   - `DIAGNOSTICS.md` troubleshooting section
@@ -829,7 +890,7 @@ Suggested breakdown (user creates after spec review):
   - Sub-task A1: `tool_call_log` table + instrumentation + retention (PR-A)
   - Sub-task A2: `skill_trigger_log` table + instrumentation in skill matcher (PR-A)
   - Sub-task A3: `call_shape` builders for priority tools + default (PR-A)
-  - Sub-task B1: School module + 5 tools (`school.js` + `tools/school.js`) (PR-B)
+  - Sub-task B1: School module + 6 tools (`school.js` incl. state-machine `transition()` + `tools/school.js`) (PR-B)
   - Sub-task B2: Bundled `go-to-school` skill with rubric (PR-B)
   - Sub-task B3: `buildSystemBlocks()` + DIAGNOSTICS.md updates (PR-B) *(no `reloadSkills()` — existing live-read handles it)*
   - Sub-task C1: SAB-AUDIT-v23 — **must leave PR-B Draft state with 100% attached; enforced by `sab-audit-attached` CI status check, not honor system**
@@ -851,7 +912,9 @@ v1.10.0 is ready to ship when:
 - [ ] Empty-log run cleanly produces `"Nothing worth proposing this week"` and calls `school_end` without writing anything.
 - [ ] Rubric rejects proposals that fail each of the 5 gates in respective targeted test probes.
 - [ ] Proposals that fail dedup are visibly rejected with *"variant of proposal from <date>"* reason.
-- [ ] Approval flow: `/review N` → YES creates file; NO records `drafted_but_denied`; `/skip` records `skipped`; `/stop` records remaining as `ignored`.
+- [ ] Approval flow: `/review N` → `YES N` creates file; `NO N` records `drafted_but_denied`; `/skip` records `skipped`; `/stop` records remaining as `ignored`. Bare `YES` / `NO` works when exactly one review opened in last 60s; otherwise agent asks for disambiguation.
+- [ ] Mid-review unrelated message keeps review open (verified: user asks "what's the weather?" in `reviewing_3`, receives weather answer + reminder about pending proposal 3, state stays `reviewing_3`).
+- [ ] State-machine unit tests: all 32 `(state, input)` transitions match §8.5.1 table.
 - [ ] Every school-created SKILL.md has `source: school`, `created: <date>`, `evidence: <string>` in frontmatter. No workaround path exists.
 - [ ] Every school-patched SKILL.md **preserves** existing `source` field and appends `last_patched_by: school` + `last_patched_at` + `patch_evidence` (does NOT overwrite existing provenance).
 - [ ] Bundled skills cannot be patched or retired via school (verified in test).
