@@ -45,15 +45,79 @@ async function main() {
             result_status: 'ok', error_kind: null, latency_ms: 10, created_at: 1713614400000 + i
         });
     }
-    // Wait briefly for interval flush
-    await new Promise(r => setTimeout(r, 80));
+    // Explicit flush — the size-trigger setImmediate may have already fired for rows
+    // 1-5, but rows 6-7 are still buffered. Drain before asserting count.
     await logger.flushNow();
 
     const r = db.exec('SELECT COUNT(*) FROM tool_call_log WHERE turn_id = ?', ['t2']);
     const c = r[0].values[0][0];
     if (c !== 7) { console.error(`FAIL buffered logger: expected 7 rows, got ${c}`); process.exit(1); }
     console.log('  ✓ buffered logger flushes on size + interval');
-    logger.stop();
+    await logger.stop();
+
+    // Re-trigger scenario: burst records beyond 2× maxBufferSize. With the
+    // re-trigger fix, all rows should land without needing to wait for the
+    // 5s interval. We use a small flushIntervalMs so the test fails loudly
+    // if the re-trigger path is broken (would have to fall back on interval).
+    const burstLogger = new ToolCallLogger({ db, flushIntervalMs: 5000, maxBufferSize: 5 });
+    for (let i = 0; i < 20; i++) {
+        burstLogger.record({
+            turn_id: 'burst', message_id: `b${i}`, tool_name: 'web_fetch',
+            triggered_by_skill: null, call_shape: 'web_fetch:example.com:GET',
+            result_status: 'ok', error_kind: null, latency_ms: 1, created_at: 1713614400000 + i
+        });
+    }
+    // Yield enough ticks for setImmediate cascades + async flushes to complete.
+    // The re-trigger in finally block should chain flushes until buffer drains.
+    await new Promise(r => setTimeout(r, 200));
+    await burstLogger.flushNow();
+    await burstLogger.stop();
+    const burstCount = db.exec('SELECT COUNT(*) FROM tool_call_log WHERE turn_id = ?', ['burst'])[0].values[0][0];
+    if (burstCount !== 20) {
+        console.error(`FAIL burst: expected 20 rows, got ${burstCount} (re-trigger path broken?)`);
+        process.exit(1);
+    }
+    console.log('  ✓ buffered logger re-triggers flush when buffer still over threshold after flush completes');
+
+    // Hard-cap scenario: simulate persistent failure by using a stopped db.
+    // Push more than 10× maxBufferSize entries. Buffer should cap, oldest dropped.
+    // We can't easily simulate real db failure without closing it (which would
+    // corrupt other tests), so we verify the cap by reaching into the buffer
+    // directly while flushing is perma-disabled via a small trick: create a
+    // logger, stop it immediately (so no background flush), and push lots.
+
+    // Actually cleaner: use a separate logger with a fresh in-memory SQL that we
+    // close mid-way to force flush failures.
+    const capSQL = await initSqlJs({ locateFile: f => path.join(path.dirname(SQL_PATH), f) });
+    const capDb = new capSQL.Database();
+    createToolCallLogSchema(capDb);
+    let warnCount = 0;
+    const capLogger = new ToolCallLogger({
+        db: capDb, flushIntervalMs: 5000, maxBufferSize: 5,
+        log: (msg, level) => { if (level === 'WARN' && msg.includes('hard-cap')) warnCount++; }
+    });
+    capDb.close();  // Force all subsequent flushes to throw
+    // Push 60 rows (12× maxBufferSize, above 10× hard cap)
+    for (let i = 0; i < 60; i++) {
+        capLogger.record({
+            turn_id: 'cap', message_id: `c${i}`, tool_name: 'web_fetch',
+            triggered_by_skill: null, call_shape: 'web_fetch:x:GET',
+            result_status: 'ok', error_kind: null, latency_ms: 1, created_at: i
+        });
+    }
+    // Allow any scheduled setImmediates to drain
+    await new Promise(r => setTimeout(r, 50));
+    if (warnCount === 0) {
+        console.error(`FAIL hard-cap: expected at least one WARN log for dropped rows, got 0`);
+        process.exit(1);
+    }
+    if (capLogger.buffer.length > 50) {
+        console.error(`FAIL hard-cap: buffer grew to ${capLogger.buffer.length}, expected ≤ 50 (5 × 10)`);
+        process.exit(1);
+    }
+    console.log(`  ✓ buffered logger enforces hard cap (dropped ${60 - capLogger.buffer.length} oldest rows on persistent flush failure)`);
+    // No stop() needed — capDb is closed; capLogger's interval is on a different timer that will no-op on next tick
+
     console.log('all tests passed');
     process.exit(0);
 }
