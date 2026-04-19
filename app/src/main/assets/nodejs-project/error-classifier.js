@@ -5,6 +5,10 @@
 // Heuristic list intentionally small. Tune based on real tool_call_log
 // distributions after PR-A soaks in production.
 
+// Module-scope constants — avoid re-allocating on every classify call.
+const HTTP_ALLOWLIST = new Set(['400','401','403','404','409','422','429','500','502','503','504']);
+const HTTP_STATUS_RE = /\b(4\d{2}|5\d{2})\b/;
+
 function classifyError(raw) {
     if (!raw) return 'unknown';
     const s = String(raw);
@@ -31,11 +35,10 @@ function classifyError(raw) {
 
     // HTTP status. Allowlist common codes to keep error_kind low-cardinality;
     // unknown 4xx/5xx collapse to http_4xx / http_5xx.
-    const httpStatus = s.match(/\b(4\d{2}|5\d{2})\b/);
+    const httpStatus = s.match(HTTP_STATUS_RE);
     if (httpStatus) {
         const code = httpStatus[1];
-        const allowlist = new Set(['400','401','403','404','409','422','429','500','502','503','504']);
-        if (allowlist.has(code)) return `http_${code}`;
+        if (HTTP_ALLOWLIST.has(code)) return `http_${code}`;
         return code[0] === '4' ? 'http_4xx' : 'http_5xx';
     }
 

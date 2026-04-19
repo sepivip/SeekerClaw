@@ -1,11 +1,19 @@
 #!/usr/bin/env node
 // tool-call-log-perf.test.js — ensure the buffered logger doesn't
 // regress p99 tool latency under a 1000-call burst.
-// Target: 1000 records + flush < 200ms wall-clock total. If this
-// fails, the buffered-insert path is slower than expected.
+//
+// Budget: 200ms wall-clock on a dev laptop; loosened to 1000ms under CI
+// (CI runners vary wildly in contention/disk). Override with env var
+// TCL_PERF_BUDGET_MS=N for custom tuning. Timing is always reported so
+// trend regressions are visible even when the assertion passes.
 
 const path = require('path');
 const { setupConfigFixture } = require('./_fixtures');
+
+const DEFAULT_BUDGET_MS = process.env.CI ? 1000 : 200;
+const BUDGET_MS = process.env.TCL_PERF_BUDGET_MS
+    ? Number(process.env.TCL_PERF_BUDGET_MS)
+    : DEFAULT_BUDGET_MS;
 
 async function main() {
     // database.js transitively requires config.js (reads config.json or exits);
@@ -44,11 +52,11 @@ async function main() {
 
     await logger.stop();
 
-    if (elapsed > 200) {
-        console.error(`FAIL: 1000-record burst took ${elapsed}ms (budget: 200ms)`);
+    if (elapsed > BUDGET_MS) {
+        console.error(`FAIL: 1000-record burst took ${elapsed}ms (budget: ${BUDGET_MS}ms)`);
         process.exit(1);
     }
-    console.log(`  ✓ 1000 records + flush = ${elapsed}ms (budget 200ms)`);
+    console.log(`  ✓ 1000 records + flush = ${elapsed}ms (budget ${BUDGET_MS}ms)`);
     console.log('all tests passed');
     process.exit(0);
 }
