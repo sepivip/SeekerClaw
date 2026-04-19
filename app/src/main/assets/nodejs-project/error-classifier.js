@@ -29,9 +29,15 @@ function classifyError(raw) {
     // rather than http_401/http_403 — more useful for pattern-mining)
     if (/unauthorized|401|authentication|forbidden|403/i.test(s)) return 'unauthorized';
 
-    // HTTP status codes (remaining 4xx/5xx)
+    // HTTP status. Allowlist common codes to keep error_kind low-cardinality;
+    // unknown 4xx/5xx collapse to http_4xx / http_5xx.
     const httpStatus = s.match(/\b(4\d{2}|5\d{2})\b/);
-    if (httpStatus) return `http_${httpStatus[1]}`;
+    if (httpStatus) {
+        const code = httpStatus[1];
+        const allowlist = new Set(['400','401','403','404','409','422','429','500','502','503','504']);
+        if (allowlist.has(code)) return `http_${code}`;
+        return code[0] === '4' ? 'http_4xx' : 'http_5xx';
+    }
 
     // Validation / user input
     if (/invalid|expected|must be|required/i.test(lower)) return 'validation_error';

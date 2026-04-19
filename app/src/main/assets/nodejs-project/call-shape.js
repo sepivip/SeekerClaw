@@ -57,6 +57,11 @@ const builders = {
     shell_exec: (args) => {
         const cmd = (args && args.cmd) || '';
         const first = cmd.trim().split(/\s+/)[0] || 'empty';
+        // If the first token is a path (./foo, /usr/bin/foo, ../foo) or contains
+        // any filesystem separators, collapse to 'other' to avoid leaking filenames.
+        // Only bare command names (ls, cat, curl, etc.) are exposed.
+        if (first === 'empty') return 'shell_exec:empty';
+        if (/[\/\\]/.test(first) || first.startsWith('.')) return 'shell_exec:other';
         return `shell_exec:${first}`;
     },
     android_sms: () => 'android_sms',

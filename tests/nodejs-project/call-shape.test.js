@@ -60,6 +60,9 @@ assertEq(getShape('file_read', { path: 'TODO.md' }), 'file_read:other:depth1',
 // shell_exec: first token only
 assertEq(getShape('shell_exec', { cmd: 'ls -la /tmp' }), 'shell_exec:ls', 'shell_exec shape: first token');
 assertEq(getShape('shell_exec', { cmd: 'cat /etc/passwd' }), 'shell_exec:cat', 'shell_exec shape: cat');
+assertEq(getShape('shell_exec', { cmd: './scripts/private.sh --flag' }), 'shell_exec:other', 'shell_exec leading-dot path collapses to other');
+assertEq(getShape('shell_exec', { cmd: '/data/data/com.seekerclaw.app/bin/helper' }), 'shell_exec:other', 'shell_exec absolute path collapses to other');
+assertEq(getShape('shell_exec', { cmd: '../bin/tool --x' }), 'shell_exec:other', 'shell_exec parent-dir path collapses to other');
 
 // default — just the tool name
 assertEq(getShape('some_new_unknown_tool', { whatever: 'x' }), 'some_new_unknown_tool',
@@ -71,6 +74,7 @@ const apiKey = 'sk-ant-api03-secret';
 assertNotContains(getShape('solana_balance', { address: wallet }), wallet, 'wallet not in shape');
 assertNotContains(getShape('web_fetch', { url: `https://example.com?key=${apiKey}` }), apiKey, 'api key not in shape');
 assertNotContains(getShape('file_read', { path: 'memory/private-name-here.md' }), 'private-name-here', 'filename not in shape');
+assertNotContains(getShape('shell_exec', { cmd: './scripts/private-name.sh' }), 'private-name', 'shell_exec path name not in shape');
 
 // Size cap — shell_exec builder passes through user input after prefix, so it's the
 // one that can produce arbitrarily long raw shapes. Must truncate to 64 JS chars with

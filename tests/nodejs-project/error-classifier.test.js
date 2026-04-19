@@ -37,6 +37,10 @@ assertEq(classifyError('socket hang up'), 'connection_reset', 'ECONNRESET/socket
 
 assertEq(classifyError('HTTP 404 Not Found'), 'http_404', 'http 404');
 assertEq(classifyError('HTTP 500 Internal Server Error'), 'http_500', 'http 500');
+assertEq(classifyError('HTTP 418 I am a teapot'), 'http_4xx', 'http 418 → http_4xx (not allowlisted)');
+assertEq(classifyError('HTTP 502 Bad Gateway'), 'http_502', 'http 502 → http_502 (allowlisted)');
+assertEq(classifyError('HTTP 599 unusual 5xx'), 'http_5xx', 'http 599 → http_5xx (not allowlisted)');
+assertEq(classifyError('HTTP 422 Unprocessable Entity'), 'http_422', 'http 422 allowlisted');
 
 assertEq(classifyError('Too many requests'), 'rate_limited', 'rate_limited');
 
