@@ -620,7 +620,7 @@ telegram('getMe')
                     const { purgeOldLogs, getDb } = require('./database');
                     const db = getDb();
                     if (db) purgeOldLogs(db);
-                } catch (e) { /* best-effort */ }
+                } catch (e) { log(`[DB] retention purge setup failed (non-fatal): ${e.message}`, 'WARN'); }
             });
 
             indexMemoryFiles();

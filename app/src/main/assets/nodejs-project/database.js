@@ -74,20 +74,24 @@ function createToolCallLogSchema(dbInstance) {
     dbInstance.run(`CREATE INDEX IF NOT EXISTS idx_tcl_skill   ON tool_call_log(triggered_by_skill, created_at)`);
 }
 
+// Cap applied on next startup; mid-session growth is bounded by mobile reboot cadence.
 const TOOL_CALL_LOG_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;  // 30 days
+// Row cap for tool_call_log only; skill_trigger_log is naturally bounded by UNIQUE(skill_name, message_id)
 const MAX_TOOL_CALL_LOG_ROWS = 50000;
 
 function purgeOldLogs(dbInstance, now = Date.now()) {
     const cutoff = now - TOOL_CALL_LOG_RETENTION_MS;
     // Each DELETE wrapped independently — tolerate missing tables on fresh installs.
-    try { dbInstance.run(`DELETE FROM tool_call_log WHERE created_at < ?`, [cutoff]); } catch (_) {}
-    try { dbInstance.run(`DELETE FROM skill_trigger_log WHERE created_at < ?`, [cutoff]); } catch (_) {}
+    try { dbInstance.run(`DELETE FROM tool_call_log WHERE created_at < ?`, [cutoff]); }
+    catch (e) { log(`[DB] purge tool_call_log by age failed (non-fatal): ${e.message}`, 'WARN'); }
+    try { dbInstance.run(`DELETE FROM skill_trigger_log WHERE created_at < ?`, [cutoff]); }
+    catch (e) { log(`[DB] purge skill_trigger_log by age failed (non-fatal): ${e.message}`, 'WARN'); }
     // Cap row count
     try {
         dbInstance.run(`DELETE FROM tool_call_log WHERE id IN (
             SELECT id FROM tool_call_log ORDER BY created_at DESC LIMIT -1 OFFSET ?
         )`, [MAX_TOOL_CALL_LOG_ROWS]);
-    } catch (_) {}
+    } catch (e) { log(`[DB] purge tool_call_log by row cap failed (non-fatal): ${e.message}`, 'WARN'); }
 }
 
 function createSkillTriggerLogSchema(dbInstance) {
