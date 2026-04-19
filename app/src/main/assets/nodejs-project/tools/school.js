@@ -2,7 +2,7 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const pathMod = require('path');
-const { writeSchoolMd, readSchoolMd, appendLogLine, readPriorSessions, schoolMdPath, writeSkillFile, transition, scanLogs } = require('../school');
+const { writeSchoolMd, readSchoolMd, schoolStateFromFrontmatter, appendLogLine, readPriorSessions, schoolMdPath, writeSkillFile, transition, scanLogs } = require('../school');
 
 function newSessionId() { return crypto.randomBytes(8).toString('hex'); }
 
@@ -116,8 +116,14 @@ async function schoolWriteSkillHandler(args, ctx) {
 async function schoolRetireSkillHandler(args, ctx) {
     const workDir = (ctx && ctx.workDir) || process.env.WORKDIR;
     const relPath = args.path;
-    if (!relPath.startsWith('skills/') || relPath.includes('..')) {
-        return { ok: false, error: 'cannot_retire_bundled' };
+    // Two distinct rejection cases. Using separate error codes makes failures
+    // diagnosable — "cannot_retire_bundled" was misleading because bundled-skill
+    // protection lives in the APK assets, not in the workspace path check.
+    if (relPath.includes('..')) {
+        return { ok: false, error: 'path_traversal' };
+    }
+    if (!relPath.startsWith('skills/')) {
+        return { ok: false, error: 'path_outside_workspace_skills' };
     }
     const src = pathMod.join(workDir, relPath);
     if (!fs.existsSync(src)) return { ok: false, error: 'target_missing' };
@@ -130,9 +136,47 @@ async function schoolRetireSkillHandler(args, ctx) {
 }
 
 async function schoolHandleInputHandler(args, ctx) {
+    const workDir = (ctx && ctx.workDir) || process.env.WORKDIR;
     try {
-        const { nextState, nextAction } = transition(args.state, args.input);
-        return { ok: true, previous_state: args.state.kind, new_state: nextState.kind, next_action: nextAction, open_proposal_ns: nextState.open_proposal_ns || [] };
+        // Load persisted state from SCHOOL.md so the state machine operates on
+        // the authoritative session record, not whatever the agent passed in
+        // args.state (which can drift across turns). args.state is still a
+        // useful fallback for first-turn calls before any state is persisted.
+        const fm = readSchoolMd(workDir);
+        const persistedState = schoolStateFromFrontmatter(fm);
+        const prevState = persistedState || args.state;
+        if (!prevState || !prevState.kind) {
+            return { ok: false, error: 'no_session_state', hint: 'SCHOOL.md missing; call school_begin first' };
+        }
+        const { nextState, nextAction } = transition(prevState, args.input);
+        // Persist the new state back to SCHOOL.md. Preserve session metadata
+        // (session_id, started_at, trigger, window_days, rubric_version,
+        // proposals) from the existing record; only the state-machine fields
+        // change per input.
+        if (fm) {
+            writeSchoolMd(workDir, {
+                session_id: fm.session_id,
+                started_at: fm.started_at,
+                trigger: fm.trigger,
+                state: nextState.kind,
+                window_days: fm.window_days,
+                open_proposal_ns: nextState.open_proposal_ns || [],
+                reviewing_n: nextState.reviewing_n,
+                reviewing_opened_at: nextState.reviewing_opened_at,
+                rubric_version: fm.rubric_version,
+                proposals: fm.proposals,
+            });
+        }
+        return {
+            ok: true,
+            session_id: fm ? fm.session_id : args.session_id,
+            previous_state: prevState.kind,
+            new_state: nextState.kind,
+            next_action: nextAction,
+            open_proposal_ns: nextState.open_proposal_ns || [],
+            reviewing_n: nextState.reviewing_n != null ? nextState.reviewing_n : null,
+            reviewing_opened_at: nextState.reviewing_opened_at || null,
+        };
     } catch (e) {
         return { ok: false, error: 'transition_failed', hint: e.message };
     }

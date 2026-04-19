@@ -87,6 +87,23 @@ process.env.WORKDIR = tmp;
     if (!patched.includes('last_patched_by: school')) { console.error('FAIL: patch must add last_patched_by'); process.exit(1); }
     console.log('  ✓ school_write_skill (patch) preserves source + adds last_patched_by');
 
+    // Patch body that OMITS source: entirely must still have the original source
+    // preserved (provenance contract). Previously the post-hoc regex replace
+    // had nothing to match and source was silently dropped.
+    fs.writeFileSync(path.join(tmp, 'skills/needs-source.md'),
+        `---\nname: needs-source\nsource: user\nversion: "1.0.0"\n---\n\n# needs source\n`);
+    const patchNoSrcRes = await schoolWriteSkillHandler({
+        mode: 'patch', path: 'skills/needs-source.md',
+        body: `---\nname: needs-source\nversion: "1.0.0"\n---\n\n# updated body\n`,
+        evidence: 'refactor',
+    }, { workDir: tmp });
+    if (!patchNoSrcRes.ok) { console.error('FAIL patch-no-src', patchNoSrcRes); process.exit(1); }
+    const patchedNoSrc = fs.readFileSync(path.join(tmp, 'skills/needs-source.md'), 'utf8');
+    if (!patchedNoSrc.includes('source: user')) {
+        console.error('FAIL: patch-no-src must still inject source: user, got:\n', patchedNoSrc); process.exit(1);
+    }
+    console.log('  ✓ school_write_skill (patch) injects source when body omits it');
+
     // Evidence with YAML-hostile chars (newlines, colons, #) must be quoted so the
     // frontmatter stays parseable by readSchoolMd's simple regex.
     const nastyRes = await schoolWriteSkillHandler({
@@ -119,12 +136,48 @@ process.env.WORKDIR = tmp;
     if (!retiredFiles.some(f => f.includes('to-retire.md'))) { console.error('FAIL: no retired file found'); process.exit(1); }
     console.log('  ✓ school_retire_skill moves to retired/ reversibly');
 
+    // Seed SCHOOL.md in the state the handler will read from. After B4's /end
+    // earlier in this test, SCHOOL.md was deleted — reseed for the handler test.
+    const { writeSchoolMd: _writeSchoolMd } = require(
+        path.join(__dirname, '../../app/src/main/assets/nodejs-project/school.js')
+    );
+    _writeSchoolMd(tmp, {
+        session_id: 'hi-test', started_at: 1000, trigger: 'on_demand',
+        state: 'reviewing_<N>', window_days: 7, open_proposal_ns: [3],
+        reviewing_n: 3, reviewing_opened_at: 1000, rubric_version: '1.0.0',
+        proposals: [],
+    });
     const hiRes = await schoolHandleInputHandler({
-        session_id: 'test', state: { kind: 'reviewing_<N>', reviewing_n: 3, open_proposal_ns: [3], reviewing_opened_at: 1000 },
+        session_id: 'hi-test',
+        state: { kind: 'reviewing_<N>', reviewing_n: 3, open_proposal_ns: [3], reviewing_opened_at: 1000 },
         input: { kind: 'yes', proposal_n: 3, message_date: 1020, raw_text: 'YES 3' }
     }, { workDir: tmp });
     if (!hiRes.ok || hiRes.next_action.kind !== 'write_skill') { console.error('FAIL handle_input yes', hiRes); process.exit(1); }
     console.log('  ✓ school_handle_input returns write_skill next_action on YES');
+
+    // Verify state was persisted back to SCHOOL.md. YES on the only open
+    // proposal transitions to `done` with empty open_proposal_ns.
+    const { readSchoolMd: _readSchoolMd } = require(
+        path.join(__dirname, '../../app/src/main/assets/nodejs-project/school.js')
+    );
+    const fmAfter = _readSchoolMd(tmp);
+    if (!fmAfter || fmAfter.state !== 'done') {
+        console.error('FAIL handle_input must persist new state=done, got:', fmAfter && fmAfter.state); process.exit(1);
+    }
+    if (fmAfter.open_proposal_ns.length !== 0) {
+        console.error('FAIL handle_input must drain open_proposal_ns, got:', fmAfter.open_proposal_ns); process.exit(1);
+    }
+    console.log('  ✓ school_handle_input persists new state back to SCHOOL.md');
+
+    // No-session safety: delete SCHOOL.md + omit args.state; expect clean error.
+    try { fs.unlinkSync(path.join(tmp, 'SCHOOL.md')); } catch (_) {}
+    const hiNoSessRes = await schoolHandleInputHandler({
+        session_id: 'no-sess', input: { kind: 'yes', message_date: 1 }
+    }, { workDir: tmp });
+    if (hiNoSessRes.ok || hiNoSessRes.error !== 'no_session_state') {
+        console.error('FAIL no-session handle_input must return no_session_state, got:', hiNoSessRes); process.exit(1);
+    }
+    console.log('  ✓ school_handle_input rejects when no SCHOOL.md + no args.state');
 })().catch(e => { console.error('FAIL', e); process.exit(1); }).finally(() => {
     try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) {}
     if (fails > 0) process.exit(1);

@@ -216,6 +216,9 @@ function writeSchoolMd(workDir, sessionObj) {
         `window_days: ${sessionObj.window_days || 7}`,
         `open_proposal_ns: [${(sessionObj.open_proposal_ns || []).join(', ')}]`,
         `rubric_version: "${sessionObj.rubric_version || '1.0.0'}"`,
+        // reviewing_n tracks the proposal currently under /review N — needed
+        // for school_handle_input to reconstruct state between turns.
+        sessionObj.reviewing_n != null ? `reviewing_n: ${sessionObj.reviewing_n}` : '',
         sessionObj.reviewing_opened_at ? `reviewing_opened_at: ${sessionObj.reviewing_opened_at}` : '',
         '---',
         '',
@@ -226,6 +229,19 @@ function writeSchoolMd(workDir, sessionObj) {
         '',
     ].filter(Boolean).join('\n');
     fs.writeFileSync(schoolMdPath(workDir), frontmatter);
+}
+
+// Reconstruct the state-machine input shape expected by transition() from the
+// flat SCHOOL.md frontmatter. Returns { kind, open_proposal_ns, reviewing_n,
+// reviewing_opened_at } — the exact shape transition() reads.
+function schoolStateFromFrontmatter(fm) {
+    if (!fm) return null;
+    return {
+        kind: fm.state || 'scanning',
+        open_proposal_ns: fm.open_proposal_ns || [],
+        reviewing_n: (fm.reviewing_n != null && !isNaN(fm.reviewing_n)) ? fm.reviewing_n : undefined,
+        reviewing_opened_at: fm.reviewing_opened_at || null,
+    };
 }
 
 function readSchoolMd(workDir) {
@@ -241,7 +257,7 @@ function readSchoolMd(workDir) {
         const [, k, v] = kv;
         if (k === 'open_proposal_ns') {
             fm[k] = v.replace(/[\[\]]/g, '').split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n));
-        } else if (k === 'started_at' || k === 'reviewing_opened_at' || k === 'window_days') {
+        } else if (k === 'started_at' || k === 'reviewing_opened_at' || k === 'window_days' || k === 'reviewing_n') {
             fm[k] = parseInt(v, 10);
         } else {
             fm[k] = v.replace(/^["']|["']$/g, '');
@@ -324,10 +340,14 @@ async function writeSkillFile({ workDir, mode, relPath, body, evidence }) {
         const existing = fs.readFileSync(fullPath, 'utf8');
         const existingSourceMatch = existing.match(/^source:\s*(.+)$/m);
         const existingSource = existingSourceMatch ? existingSourceMatch[1].trim() : 'user';
+        // Inject existing source directly — if the patch body omits `source:`
+        // entirely, the post-hoc .replace() had nothing to match and provenance
+        // was silently lost. injectOrReplaceFrontmatterKeys now both overwrites
+        // an existing source AND adds it if missing.
         finalBody = injectOrReplaceFrontmatterKeys(body, {
+            source: existingSource,
             last_patched_by: 'school', last_patched_at: todayStr(), patch_evidence: evidence,
         });
-        finalBody = finalBody.replace(/^source:\s*.+$/m, `source: ${existingSource}`);
     } else {
         return { ok: false, error: 'invalid_mode' };
     }
@@ -337,4 +357,4 @@ async function writeSkillFile({ workDir, mode, relPath, body, evidence }) {
     return { ok: true, path: relPath, action: mode, sha256: sha };
 }
 
-module.exports = { normalizeTitle, signatureOf, transition, scanLogs, writeSchoolMd, readSchoolMd, appendLogLine, readPriorSessions, ensureSchoolDir, schoolMdPath, schoolLogPath, writeSkillFile };
+module.exports = { normalizeTitle, signatureOf, transition, scanLogs, writeSchoolMd, readSchoolMd, schoolStateFromFrontmatter, appendLogLine, readPriorSessions, ensureSchoolDir, schoolMdPath, schoolLogPath, writeSkillFile };
