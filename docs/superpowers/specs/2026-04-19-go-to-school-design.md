@@ -177,6 +177,8 @@ CREATE INDEX idx_tcl_turn    ON tool_call_log(turn_id);
 CREATE INDEX idx_tcl_skill   ON tool_call_log(triggered_by_skill, created_at);
 ```
 
+**PR-A scope (known limitation):** only `ok` and `error` are written in PR-A. Confirmation gating and rate limiting happen in `ai.js` *upstream* of `executeTool` — so `blocked_by_policy`, `blocked_by_confirmation`, and `timeout` require separate instrumentation at the gate sites. That work is deferred to PR-B, where the blocked/timeout values feed school_scan's pattern-mining.
+
 ### 6.2 `call_shape` — structural classifier (not a hash)
 
 Earlier drafts used `args_fingerprint = sha256(canonicalized_args)`. That broke the feature's own core signal: a user querying balances for 3 different wallets produces 3 unique fingerprints, so "repetition ≥ 3" never fires even though the behavior is clearly repeated. Pattern-mining needs **shape, not identity.**

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // error-classifier.test.js — verify classifyError maps common error patterns
-// to stable low-cardinality buckets, and that the fallback path is redacted
-// + truncated to 40 chars.
+// to stable low-cardinality buckets, and that the fallback is the constant
+// 'other' (no free-text, no user-derived strings).
 
 const path = require('path');
 const { classifyError } = require(path.join(
@@ -50,25 +50,11 @@ assertEq(classifyError('field is required'), 'validation_error', 'required');
 assertEq(classifyError('user did not confirm'), 'user_canceled', 'user_canceled');
 assertEq(classifyError('operation cancelled'), 'user_canceled', 'cancelled');
 
-// ── Fallback — redacted + truncated ─────────────────────────────────────────
-const fallback1 = classifyError('something totally unique and weird xyz abc def');
-if (fallback1.length > 40) {
-    console.error(`  FAIL fallback too long: ${fallback1.length} chars: ${fallback1}`);
-    fails++;
-} else {
-    console.log(`  ok   fallback truncated to ${fallback1.length} chars`);
-    passes++;
-}
-
-// Fallback with an API key — must be redacted before truncation
-const redacted = classifyError('boom sk-ant-abc123def456ghi789jklmn something else that is long');
-if (redacted.includes('sk-ant-abc123')) {
-    console.error(`  FAIL fallback leaked raw API key: ${redacted}`);
-    fails++;
-} else {
-    console.log(`  ok   fallback redacts sk-ant-*** before truncation (${redacted})`);
-    passes++;
-}
+// ── Fallback — must be the constant 'other', never leak input ───────────────
+assertEq(classifyError('something totally unique and weird xyz'), 'other', 'unclassified falls back to "other"');
+assertEq(classifyError('/Users/bob/secrets/private-key.pem'), 'other', 'path does not leak into error_kind');
+assertEq(classifyError('https://api.example.com/endpoint?key=abc123'), 'other', 'url query does not leak');
+assertEq(classifyError('some rare error AbC123XyZ'), 'other', 'random string maps to other');
 
 // ── Falsy inputs ────────────────────────────────────────────────────────────
 assertEq(classifyError(''), 'unknown', 'empty string');

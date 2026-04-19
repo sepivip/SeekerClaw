@@ -241,7 +241,12 @@ async function executeTool(name, input, chatId, messageId = null) {
                     tool_name: normalizedName,
                     triggered_by_skill: null,    // Task A6 will populate
                     call_shape: getShape(normalizedName, input),
-                    result_status: status,  // TODO(A6): classify 'timeout' / 'blocked_by_confirmation' upstream
+                    // result_status is 'ok' | 'error' only in PR-A. Spec §6.1 lists
+                    // 'timeout' | 'blocked_by_policy' | 'blocked_by_confirmation' which
+                    // happen upstream (ai.js confirmation gate, rate limiter) and need
+                    // separate instrumentation. Deferred to PR-B where blocked-tool
+                    // analytics feed school_scan; see spec §6.1 "known limitation".
+                    result_status: status,
                     error_kind: errorKind,
                     latency_ms: Date.now() - startedAt,
                     created_at: startedAt,

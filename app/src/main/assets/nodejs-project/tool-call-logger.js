@@ -61,16 +61,19 @@ class ToolCallLogger {
         this.flushing = true;
         if (this.buffer.length === 0) { this.flushing = false; return; }
         const batch = this.buffer.splice(0, this.buffer.length);
+        // Declare stmt outside the try so the finally can always free it, even
+        // if stmt.run() throws partway through the batch. Without this, repeated
+        // flush failures would leak SQL.js statement memory over time.
+        let stmt = null;
         try {
             this.db.run('BEGIN TRANSACTION');
-            const stmt = this.db.prepare(`INSERT INTO tool_call_log
+            stmt = this.db.prepare(`INSERT INTO tool_call_log
                 (turn_id, message_id, tool_name, triggered_by_skill, call_shape, result_status, error_kind, latency_ms, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
             for (const r of batch) {
                 stmt.run([r.turn_id, r.message_id, r.tool_name, r.triggered_by_skill,
                           r.call_shape, r.result_status, r.error_kind, r.latency_ms, r.created_at]);
             }
-            stmt.free();
             this.db.run('COMMIT');
             // Re-trigger ONLY on success: if buffer grew past threshold while we
             // were flushing, schedule another pass. On the failure path, we fall
@@ -89,6 +92,10 @@ class ToolCallLogger {
             // concurrently during the in-flight flush; enforce same policy as record().
             this._enforceHardCap();
         } finally {
+            // Always free the prepared statement — guards against leaks when
+            // stmt.run() throws mid-batch. Wrapped in try/catch because calling
+            // free() twice (or on an already-errored stmt) would throw.
+            if (stmt) { try { stmt.free(); } catch (_) {} }
             this.flushing = false;
         }
     }

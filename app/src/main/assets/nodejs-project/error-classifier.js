@@ -1,30 +1,9 @@
-// error-classifier.js — map tool error text to low-cardinality buckets for
-// tool_call_log.error_kind. Privacy: bucket labels are constants; free-text
-// fallback is redacted + truncated to 40 chars.
+// error-classifier.js — map tool error text to a low-cardinality, privacy-safe
+// bucket for tool_call_log.error_kind. All returns are constants from a fixed
+// enum of ~14 buckets + 'unknown' + 'other'. No free-text, no user-derived strings.
 //
-// Heuristic list intentionally small (~10 categories). Tune based on
-// real tool_call_log distributions after PR-A soaks in production.
-//
-// NOTE: uses a self-contained redaction helper (static regex patterns only) so
-// this module has no dependency on config.js and can be smoke-loaded in
-// isolation. The main redactSecrets() in security.js adds dynamic patterns
-// from config (API keys, MCP tokens) — we don't need those here because the
-// error-classifier fallback is already truncated to 40 chars, which limits the
-// leak surface independently.
-
-// Static redaction patterns — same known-secret shapes as security.js
-// (Anthropic/OpenAI/OpenRouter keys, Telegram bot tokens, Solana privkeys, etc.)
-// but without the dynamic config-derived keys. Good enough for a 40-char
-// fallback bucket.
-function redactStatic(msg) {
-    if (typeof msg !== 'string') return msg;
-    msg = msg.replace(/sk-ant-[a-zA-Z0-9_-]{10,}/g, 'sk-ant-***');
-    msg = msg.replace(/\d{8,}:[A-Za-z0-9_-]{20,}/g, '***:***');
-    msg = msg.replace(/BSA[a-zA-Z0-9_-]{10,}/g, 'BSA***');
-    msg = msg.replace(/sk-[a-zA-Z0-9_-]{20,}/g, 'sk-***');
-    msg = msg.replace(/sk-or-[a-zA-Z0-9_-]{10,}/g, 'sk-or-***');
-    return msg;
-}
+// Heuristic list intentionally small. Tune based on real tool_call_log
+// distributions after PR-A soaks in production.
 
 function classifyError(raw) {
     if (!raw) return 'unknown';
@@ -60,10 +39,13 @@ function classifyError(raw) {
     // Confirmation / user action
     if (/user did not confirm|canceled|cancelled/i.test(s)) return 'user_canceled';
 
-    // Fallback: redacted + truncated to 40 chars (tighter than the previous
-    // 60-char slice — bucket-by-bucket is preferred over free-text, so only
-    // truly novel errors should reach here).
-    return redactStatic(s).slice(0, 40);
+    // Fallback: constant bucket only. Never leak user-derived strings into
+    // error_kind — paths, URL query strings, wallet-like identifiers, or any
+    // other sensitive-but-non-key patterns would survive redactSecrets() and
+    // show up in analytics. 'other' is low-cardinality and privacy-safe.
+    // If a pattern keeps landing here, add a new bucket above, don't widen
+    // the fallback.
+    return 'other';
 }
 
 module.exports = { classifyError };
