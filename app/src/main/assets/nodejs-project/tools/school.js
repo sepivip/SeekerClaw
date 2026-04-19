@@ -5,8 +5,11 @@ const { writeSchoolMd, readSchoolMd, appendLogLine, readPriorSessions, schoolMdP
 
 function newSessionId() { return crypto.randomBytes(8).toString('hex'); }
 
+// workDir comes from trusted sources only: ctx (injected by tool dispatcher) or
+// WORKDIR env (set at app startup from config). args.workDir is deliberately NOT
+// honored — tool args are agent-controlled and must not steer filesystem roots.
 async function schoolBeginHandler(args, ctx) {
-    const workDir = (ctx && ctx.workDir) || (typeof args === 'object' && args.workDir) || process.env.WORKDIR;
+    const workDir = (ctx && ctx.workDir) || process.env.WORKDIR;
     const existing = readSchoolMd(workDir);
     if (existing) {
         return {
