@@ -17,14 +17,24 @@ const { SKILLS_DIR, log, config, SHELL_ALLOWLIST } = require('./config');
 
 let _stlDb = null;
 function setSkillTriggerDb(db) { _stlDb = db; }
+
+// Defer skill_trigger_log writes off the message hot path via setImmediate.
+// findMatchingSkills() runs synchronously during message handling; doing a
+// SQL.js run() inline adds ~0.5ms per match and can spike on burst traffic.
+// setImmediate yields to the next tick so the message's AI request starts
+// without waiting on telemetry. Errors are swallowed — telemetry MUST NEVER
+// break message delivery.
 function recordSkillTrigger(skillName, messageId, matchType, createdAt) {
     if (!_stlDb) return;
-    try {
-        _stlDb.run(
-            `INSERT OR IGNORE INTO skill_trigger_log (skill_name, message_id, match_type, created_at) VALUES (?, ?, ?, ?)`,
-            [skillName, messageId || null, matchType, createdAt]
-        );
-    } catch (e) { /* never fail a message on telemetry */ }
+    setImmediate(() => {
+        if (!_stlDb) return;  // DB may have been torn down between call and tick
+        try {
+            _stlDb.run(
+                `INSERT OR IGNORE INTO skill_trigger_log (skill_name, message_id, match_type, created_at) VALUES (?, ?, ?, ?)`,
+                [skillName, messageId || null, matchType, createdAt]
+            );
+        } catch (e) { /* never fail a message on telemetry */ }
+    });
 }
 
 // ============================================================================

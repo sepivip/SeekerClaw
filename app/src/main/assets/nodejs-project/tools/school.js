@@ -104,13 +104,17 @@ async function schoolBeginHandler(args, ctx) {
 async function schoolEndHandler(args, ctx) {
     const workDir = (ctx && ctx.workDir) || process.env.WORKDIR;
     const existing = readSchoolMd(workDir) || {};
+    // Preserve window_days + rubric_version from the active session record so
+    // /school log and dedup comparisons stay accurate across scan-window or
+    // rubric-version changes. Fall back to defaults only when SCHOOL.md is
+    // absent (e.g., mid-shutdown race).
     const entry = {
         session_id: args.session_id,
         started_at: existing.started_at || Date.now(),
         ended_at: Date.now(),
         trigger: existing.trigger || 'on_demand',
-        window_days: 7,
-        rubric_version: '1.0.0',
+        window_days: existing.window_days != null ? existing.window_days : 7,
+        rubric_version: existing.rubric_version != null ? existing.rubric_version : '1.0.0',
         proposals: args.summary && args.summary.approved
             ? [...(args.summary.approved || []), ...(args.summary.drafted_but_denied || []), ...(args.summary.skipped || []), ...(args.summary.ignored || []), ...(args.summary.rejected_by_rubric || []), ...(args.summary.rejected_as_duplicate || [])]
             : [],

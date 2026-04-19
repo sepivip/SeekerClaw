@@ -104,6 +104,55 @@ process.env.WORKDIR = tmp;
     }
     console.log('  ✓ school_write_skill (patch) injects source when body omits it');
 
+    // Test nested frontmatter preservation: requires: block + allowed-tools: list
+    // must survive a patch operation (issue: old code dropped nested YAML).
+    const nestedSkillBody = `---
+name: my-skill
+source: user
+version: "1.0.0"
+requires:
+  bins: []
+  env:
+    - OPENAI_KEY
+allowed-tools:
+  - file_read
+  - web_fetch
+---
+
+# My Skill
+
+Instructions.
+`;
+    fs.writeFileSync(path.join(tmp, 'skills/nested-fm.md'), nestedSkillBody);
+    const nestedPatchRes = await schoolWriteSkillHandler({
+        mode: 'patch', path: 'skills/nested-fm.md',
+        body: nestedSkillBody,  // Same shape, triggers injection of last_patched_by
+        evidence: 'fixing X',
+    }, { workDir: tmp });
+    if (!nestedPatchRes.ok) { console.error('FAIL nested patch', nestedPatchRes); process.exit(1); }
+    const nestedPatched = fs.readFileSync(path.join(tmp, 'skills/nested-fm.md'), 'utf8');
+
+    // Assert: requires block is still present
+    if (!/\nrequires:\n {2}bins:/m.test(nestedPatched)) {
+        console.error('FAIL: requires: block was dropped in nested patch, got:\n', nestedPatched); process.exit(1);
+    }
+    // Assert: allowed-tools list items are still present
+    if (!nestedPatched.includes('- file_read')) {
+        console.error('FAIL: allowed-tools list item "file_read" was dropped'); process.exit(1);
+    }
+    if (!nestedPatched.includes('- web_fetch')) {
+        console.error('FAIL: allowed-tools list item "web_fetch" was dropped'); process.exit(1);
+    }
+    // Assert: source: user still present
+    if (!nestedPatched.includes('source: user')) {
+        console.error('FAIL: source: user was not preserved in nested patch'); process.exit(1);
+    }
+    // Assert: last_patched_by: school was added
+    if (!nestedPatched.includes('last_patched_by: school')) {
+        console.error('FAIL: last_patched_by: school was not added'); process.exit(1);
+    }
+    console.log('  ✓ school_write_skill (patch) preserves nested YAML blocks and list items');
+
     // Evidence with YAML-hostile chars (newlines, colons, #) must be quoted so the
     // frontmatter stays parseable by readSchoolMd's simple regex.
     const nastyRes = await schoolWriteSkillHandler({

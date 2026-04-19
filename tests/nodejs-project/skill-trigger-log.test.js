@@ -44,6 +44,11 @@ async function main() {
     recordSkillTrigger('weather', 'msg-42', 'keyword', 1713614500000);
     recordSkillTrigger('weather', 'msg-42', 'keyword', 1713614500500);  // duplicate, should be ignored
 
+    // recordSkillTrigger defers the INSERT via setImmediate (off the hot path).
+    // Drain the queue before asserting so both writes have landed.
+    await new Promise(resolve => setImmediate(resolve));
+    await new Promise(resolve => setImmediate(resolve));
+
     const r2 = db.exec('SELECT COUNT(*) FROM skill_trigger_log WHERE message_id = ?', ['msg-42']);
     const c2 = r2[0].values[0][0];
     if (c2 !== 1) { console.error(`FAIL recordSkillTrigger dedup: expected 1, got ${c2}`); process.exit(1); }

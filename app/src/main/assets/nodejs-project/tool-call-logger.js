@@ -4,6 +4,12 @@
 // On persistent flush failure, buffer is capped at 10× maxBufferSize; oldest rows
 // dropped with WARN log (prevents unbounded growth when db is unusable).
 
+// After a failed flush, suppress size-triggered setImmediate flushes for at
+// least this long. The 5s interval still retries — the cooldown just prevents
+// a tight setImmediate loop when the DB is persistently unusable and record()
+// keeps firing (e.g., burst of tool calls during a DB-closed window).
+const FAILED_FLUSH_COOLDOWN_MS = 1000;
+
 class ToolCallLogger {
     constructor({ db, flushIntervalMs = 5000, maxBufferSize = 100, log = () => {} }) {
         this.db = db;
@@ -14,6 +20,7 @@ class ToolCallLogger {
         this.log = log;
         this.flushing = false;
         this.stopped = false;
+        this.lastFlushFailedAt = 0;  // ms; 0 = no recent failure
         this.timer = setInterval(() => { this.flushNow().catch(() => {}); }, flushIntervalMs);
         if (this.timer.unref) this.timer.unref();  // don't block Node exit on this timer
     }
@@ -36,8 +43,13 @@ class ToolCallLogger {
         this.buffer.push(row);
         this._enforceHardCap();
         if (this.buffer.length >= this.maxBufferSize) {
-            // Fire-and-forget; batch flush on next tick.
-            setImmediate(() => this.flushNow().catch(() => {}));
+            // Fire-and-forget; batch flush on next tick. Skip if a recent flush
+            // failed — the 5s interval handles retry, and without this gate a
+            // persistent DB failure + continued tool calls would spam
+            // setImmediate + ERROR logs on the hot path.
+            if (Date.now() - this.lastFlushFailedAt >= FAILED_FLUSH_COOLDOWN_MS) {
+                setImmediate(() => this.flushNow().catch(() => {}));
+            }
         }
     }
 
@@ -80,12 +92,14 @@ class ToolCallLogger {
             // through to the catch + finally — no re-trigger, letting the 5s
             // interval (or the next record() call) handle retry. This prevents
             // a CPU spin loop on persistent db failure.
+            this.lastFlushFailedAt = 0;  // clear cooldown on success
             if (!this.stopped && this.buffer.length >= this.maxBufferSize) {
                 setImmediate(() => this.flushNow().catch(() => {}));
             }
         } catch (e) {
             try { this.db.run('ROLLBACK'); } catch (_) {}
             this.log(`[ToolCallLogger] flush failed: ${e.message}`, 'ERROR');
+            this.lastFlushFailedAt = Date.now();  // start cooldown
             // Put the batch back at the head so we don't lose it silently
             this.buffer.unshift(...batch);
             // Failed unshift may push buffer over hard cap if records accumulated

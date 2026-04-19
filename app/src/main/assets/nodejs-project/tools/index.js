@@ -298,12 +298,16 @@ async function executeTool(name, input, chatId, messageId = null) {
         try {
             const logger = getLogger();
             if (logger) {
+                // Log sentinel for whitespace/empty/non-string tool names so
+                // aggregations stay pattern-mineable instead of collecting
+                // empty strings. User-facing error already returned above.
+                const loggedName = normalizedName || 'unknown_tool';
                 logger.record({
                     turn_id: chatId != null ? String(chatId) : 'unknown',
                     message_id: messageId != null ? String(messageId) : null,
-                    tool_name: normalizedName,
+                    tool_name: loggedName,
                     triggered_by_skill: null,    // Task A6 will populate
-                    call_shape: getShape(normalizedName, input),
+                    call_shape: getShape(loggedName, input),
                     // result_status is 'ok' | 'error' only in PR-A. Spec §6.1 lists
                     // 'timeout' | 'blocked_by_policy' | 'blocked_by_confirmation' which
                     // happen upstream (ai.js confirmation gate, rate limiter) and need

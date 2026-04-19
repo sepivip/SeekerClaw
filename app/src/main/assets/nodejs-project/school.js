@@ -289,9 +289,42 @@ function readSchoolMd(workDir) {
     return { ...fm, proposals, raw: content };
 }
 
+// Rolling retention for school/log.jsonl. Tool description + DIAGNOSTICS claim
+// 90 days; enforce it at append time by read-filter-rewrite. Normal usage is
+// a handful of /school sessions per month, so the log stays well under 1000
+// lines — the O(n) rewrite cost on each append is negligible.
+const SCHOOL_LOG_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
+
+function logEntryTimeMs(entry) {
+    if (!entry || typeof entry !== 'object') return null;
+    // Prefer ended_at (when the session finalized) over started_at. Both are
+    // written by schoolEndHandler; ended_at better reflects the retention cutoff.
+    for (const key of ['ended_at', 'started_at', 'logged_at', 'created_at']) {
+        if (entry[key] == null) continue;
+        const n = typeof entry[key] === 'number' ? entry[key] : Date.parse(String(entry[key]));
+        if (Number.isFinite(n)) return n;
+    }
+    return null;
+}
+
 function appendLogLine(workDir, obj) {
     ensureSchoolDir(workDir);
-    fs.appendFileSync(schoolLogPath(workDir), JSON.stringify(obj) + '\n');
+    const p = schoolLogPath(workDir);
+    const cutoff = Date.now() - SCHOOL_LOG_RETENTION_MS;
+    let kept = [];
+    if (fs.existsSync(p)) {
+        const lines = fs.readFileSync(p, 'utf8').split('\n').filter(Boolean);
+        for (const l of lines) {
+            let parsed;
+            try { parsed = JSON.parse(l); } catch (_) { continue; }  // drop malformed
+            const t = logEntryTimeMs(parsed);
+            // If entry has no recognizable timestamp, keep it (can't judge age).
+            // Otherwise keep only entries newer than the cutoff.
+            if (t == null || t >= cutoff) kept.push(parsed);
+        }
+    }
+    kept.push(obj);
+    fs.writeFileSync(p, kept.map(e => JSON.stringify(e)).join('\n') + '\n');
 }
 
 function readPriorSessions(workDir, limit = 10) {
@@ -319,18 +352,47 @@ function yamlScalar(val) {
 function injectOrReplaceFrontmatterKeys(body, keys) {
     const m = body.match(/^---\n([\s\S]+?)\n---/);
     if (!m) throw new Error('no_frontmatter');
-    const existing = m[1].split('\n');
-    const existingMap = {};
-    const order = [];
-    for (const line of existing) {
-        const kv = line.match(/^(\w[\w-]*):\s*(.+)$/);
-        if (kv) { existingMap[kv[1]] = kv[2]; if (!order.includes(kv[1])) order.push(kv[1]); }
+    const rawLines = m[1].split('\n');
+    const TOP_KEY_RE = /^([A-Za-z0-9_][\w-]*):\s*(.*)$/;
+
+    // Group rawLines into blocks: { key, lines[] }. A block owns the key line
+    // plus all indented/blank continuation lines until the next top-level key.
+    const blocks = [];
+    let current = null;
+    for (const line of rawLines) {
+        const km = line.match(TOP_KEY_RE);
+        if (km) {
+            if (current) blocks.push(current);
+            current = { key: km[1], lines: [line] };
+        } else {
+            if (current) current.lines.push(line);
+            // Line before the first key (shouldn't happen for well-formed YAML,
+            // but preserve it as an anonymous leading block if it does).
+            else blocks.push({ key: null, lines: [line] });
+        }
     }
+    if (current) blocks.push(current);
+
+    // Build output: for each block, if its key is in `keys`, replace the WHOLE
+    // block with a single "key: value" line (this is the intended semantic — we
+    // own these keys and we're setting them to scalar values). Otherwise keep
+    // the block verbatim to preserve nested structure.
+    const replaced = new Set();
+    const out = [];
+    for (const block of blocks) {
+        if (block.key && Object.prototype.hasOwnProperty.call(keys, block.key)) {
+            out.push(`${block.key}: ${yamlScalar(keys[block.key])}`);
+            replaced.add(block.key);
+        } else {
+            out.push(...block.lines);
+        }
+    }
+    // Append any keys in `keys` that didn't already exist.
     for (const k of Object.keys(keys)) {
-        existingMap[k] = yamlScalar(keys[k]);
-        if (!order.includes(k)) order.push(k);
+        if (!replaced.has(k)) out.push(`${k}: ${yamlScalar(keys[k])}`);
     }
-    const newFm = '---\n' + order.map(k => `${k}: ${existingMap[k]}`).join('\n') + '\n---';
+
+    const newFm = '---\n' + out.join('\n') + '\n---';
     return body.replace(/^---\n[\s\S]+?\n---/, newFm);
 }
 
