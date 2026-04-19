@@ -6,6 +6,7 @@ const channel = require('../channel');
 const { ToolCallLogger } = require('../tool-call-logger');
 const { getShape } = require('../call-shape');
 const { getDb } = require('../database');
+const { redactSecrets } = require('../security');
 
 // ── Domain modules ───────────────────────────────────────────────────────────
 
@@ -202,21 +203,27 @@ async function executeToolInner(name, input, chatId) {
 
 async function executeTool(name, input, chatId) {
     const startedAt = Date.now();
+    // Normalize once — executeToolInner also trims defensively, but we need the
+    // normalized name for consistent tool_name + call_shape in tool_call_log.
+    const normalizedName = typeof name === 'string' ? name.trim() : '';
     let status = 'ok';
     let errorKind = null;
     let result;
     try {
-        result = await executeToolInner(name, input, chatId);
+        result = await executeToolInner(normalizedName, input, chatId);
         // Some tool handlers return { error: '...' } on non-exception failures.
+        // redactSecrets masks API keys / wallet / token patterns; path-like strings may still appear.
+        // Low-cardinality bucketing (e.g. file_not_found, http_404) is a future enhancement.
         if (result && typeof result === 'object' && result.error) {
             status = 'error';
-            errorKind = String(result.error).slice(0, 60);
+            errorKind = redactSecrets(String(result.error)).slice(0, 60);
         }
     } catch (e) {
         status = 'error';
         // Prefer e.code → e.message → e.name for richer error kinds.
         // Without e.message, every `new Error('bridge unreachable')` collapses to 'Error'.
-        errorKind = (e && (e.code || e.message || e.name) || 'exception').toString().slice(0, 60);
+        const raw = (e && (e.code || e.message || e.name) || 'exception').toString();
+        errorKind = redactSecrets(raw).slice(0, 60);
         // Convert to the `{ error }` contract per ARCHITECTURE.md — callers expect no exceptions
         // to escape executeTool(). Returning a synthetic error result keeps the interface consistent.
         result = { error: `Tool execution failed: ${e && e.message ? e.message : 'exception'}` };
@@ -227,9 +234,9 @@ async function executeTool(name, input, chatId) {
                 logger.record({
                     turn_id: chatId != null ? String(chatId) : 'unknown',
                     message_id: null,           // Task A5 scope: message_id plumbing is future work
-                    tool_name: name,
+                    tool_name: normalizedName,
                     triggered_by_skill: null,    // Task A6 will populate
-                    call_shape: getShape(name, input),
+                    call_shape: getShape(normalizedName, input),
                     result_status: status,  // TODO(A6): classify 'timeout' / 'blocked_by_confirmation' upstream
                     error_kind: errorKind,
                     latency_ms: Date.now() - startedAt,

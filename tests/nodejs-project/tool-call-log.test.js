@@ -59,8 +59,9 @@ async function main() {
     // db operations, a single setImmediate-scheduled flush drains the whole buffer
     // in one pass (splice grabs everything), so this test can't distinguish the
     // re-trigger path from the happy path — but it's still a useful regression
-    // against "logger drops rows on burst load" in general. True re-trigger
-    // coverage lives in the unit-level reasoning; the code reviewer verifies it.
+    // against "logger drops rows on burst load". The re-trigger itself fires
+    // inside flushNow's try-after-COMMIT, NOT in finally, to avoid a CPU spin
+    // loop when COMMIT persistently fails (see commit 654e7b8).
     const burstLogger = new ToolCallLogger({ db, flushIntervalMs: 5000, maxBufferSize: 5 });
     for (let i = 0; i < 20; i++) {
         burstLogger.record({
@@ -70,7 +71,6 @@ async function main() {
         });
     }
     // Yield enough ticks for setImmediate cascades + async flushes to complete.
-    // The re-trigger in finally block should chain flushes until buffer drains.
     await new Promise(r => setTimeout(r, 200));
     await burstLogger.flushNow();
     await burstLogger.stop();

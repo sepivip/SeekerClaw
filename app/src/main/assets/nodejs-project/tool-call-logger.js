@@ -38,9 +38,24 @@ class ToolCallLogger {
     }
 
     async flushNow() {
-        if (this.flushing) return;
+        // Join an in-flight flush rather than returning immediately. This matters
+        // for shutdown: database.js's gracefulShutdown awaits flushLoggerNow before
+        // saveDatabase, and must not return while INSERTs are still in flight.
+        while (this._activeFlush) {
+            try { await this._activeFlush; } catch (_) {}
+        }
         if (this.buffer.length === 0) return;
+        const p = this._runFlush();
+        this._activeFlush = p;
+        try { await p; }
+        finally {
+            if (this._activeFlush === p) this._activeFlush = null;
+        }
+    }
+
+    async _runFlush() {
         this.flushing = true;
+        if (this.buffer.length === 0) { this.flushing = false; return; }
         const batch = this.buffer.splice(0, this.buffer.length);
         try {
             this.db.run('BEGIN TRANSACTION');
