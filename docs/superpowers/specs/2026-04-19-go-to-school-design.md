@@ -220,9 +220,11 @@ Skill-trigger capture for `triggered_by_skill`: when the skill matcher identifie
 
 ### 6.4 Retention
 
-- Rolling 30-day window. Auto-purge on service start.
-- Hard cap: 50,000 rows OR 10 MB file size (whichever first). Purges oldest first.
-- Both limits tunable via config.
+- Rolling 30-day window. Auto-purge on service start (off the boot critical path via `setImmediate`).
+- Hard caps (row-count only; file-size not probed because SQL.js doesn't expose DB-file size cheaply without materializing):
+  - `tool_call_log`: 50,000 rows. Can burst under heavy tool use; high cap accommodates that.
+  - `skill_trigger_log`: 20,000 rows. UNIQUE(skill_name, message_id) already bounds duplicates per-message, so the cap is mostly insurance against many distinct message IDs across 30 days.
+- Non-fatal purge failures log at WARN (`[DB] purge ... failed (non-fatal): ...`) instead of silently swallowing.
 
 ### 6.5 Integration with `api_request_log`
 
@@ -261,7 +263,7 @@ CREATE INDEX idx_stl_created       ON skill_trigger_log(created_at);
 
 **Instrumentation point:** [skills.js:548-568](app/src/main/assets/nodejs-project/skills.js#L548) `findMatchingSkills(message)` is the single skill-matching function. One-line append to `skill_trigger_log` after the `matched.push(skill)` call. Buffered the same way as tool-call log. Verified: no semantic or separate manual-invocation path currently exists — `match_type` is always `"keyword"` in v1.
 
-**Retention:** same 30-day window + same caps as tool-call log.
+**Retention:** same 30-day window. Row cap is 20,000 (not 50,000 like `tool_call_log`) — see §6.4 for rationale.
 
 **What school asks this for:** `SELECT skill_name FROM skill_trigger_log WHERE created_at > ? GROUP BY skill_name` → subtract from full workspace+bundled skill list → `unused_skills` candidates for retire proposals.
 

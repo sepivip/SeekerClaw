@@ -7,6 +7,7 @@ const { ToolCallLogger } = require('../tool-call-logger');
 const { getShape } = require('../call-shape');
 const { getDb } = require('../database');
 const { redactSecrets } = require('../security');
+const { classifyError } = require('../error-classifier');
 
 // ── Domain modules ───────────────────────────────────────────────────────────
 
@@ -212,18 +213,18 @@ async function executeTool(name, input, chatId, messageId = null) {
     try {
         result = await executeToolInner(normalizedName, input, chatId);
         // Some tool handlers return { error: '...' } on non-exception failures.
-        // redactSecrets masks API keys / wallet / token patterns; path-like strings may still appear.
-        // Low-cardinality bucketing (e.g. file_not_found, http_404) is a future enhancement.
+        // classifyError maps into low-cardinality buckets (file_not_found, http_404, etc.)
+        // so tool_call_log aggregations are pattern-mineable; fallback is redacted + truncated.
         if (result && typeof result === 'object' && result.error) {
             status = 'error';
-            errorKind = redactSecrets(String(result.error)).slice(0, 60);
+            errorKind = classifyError(String(result.error));
         }
     } catch (e) {
         status = 'error';
         // Prefer e.code → e.message → e.name for richer error kinds.
         // Without e.message, every `new Error('bridge unreachable')` collapses to 'Error'.
         const raw = (e && (e.code || e.message || e.name) || 'exception').toString();
-        errorKind = redactSecrets(raw).slice(0, 60);
+        errorKind = classifyError(raw);
         // Convert to the `{ error }` contract per ARCHITECTURE.md — callers expect no exceptions
         // to escape executeTool(). Returning a synthetic error result keeps the interface consistent.
         // Also redact the user-facing synthetic message — e.message can plausibly contain URLs

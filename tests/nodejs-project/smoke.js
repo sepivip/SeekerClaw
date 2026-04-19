@@ -61,6 +61,7 @@ const LOAD_TARGETS = [
     'loop-detector.js',
     'call-shape.js',
     'tool-call-logger.js',
+    'error-classifier.js',
 ];
 
 // Files skipped intentionally. Most modules depend on config.js (which
