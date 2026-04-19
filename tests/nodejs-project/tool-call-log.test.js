@@ -120,6 +120,28 @@ async function main() {
     console.log(`  ✓ buffered logger enforces hard cap (dropped ${60 - capLogger.buffer.length} oldest rows on persistent flush failure)`);
     // No stop() needed — capDb is closed; capLogger's interval is on a different timer that will no-op on next tick
 
+    // Retention purge test
+    const { purgeOldLogs } = require(
+        path.join(__dirname, '../../app/src/main/assets/nodejs-project/database.js')
+    );
+    const now = 1713614400000;
+    const oldMs = now - (31 * 24 * 60 * 60 * 1000);   // 31 days old
+    const recentMs = now - (5 * 24 * 60 * 60 * 1000); // 5 days old
+    db.run(`INSERT INTO tool_call_log
+        (turn_id, tool_name, call_shape, result_status, latency_ms, created_at)
+        VALUES ('old', 'web_fetch', 'web_fetch:x:GET', 'ok', 1, ?)`, [oldMs]);
+    db.run(`INSERT INTO tool_call_log
+        (turn_id, tool_name, call_shape, result_status, latency_ms, created_at)
+        VALUES ('recent', 'web_fetch', 'web_fetch:x:GET', 'ok', 1, ?)`, [recentMs]);
+
+    purgeOldLogs(db, now);
+
+    const oldCount = db.exec(`SELECT COUNT(*) FROM tool_call_log WHERE turn_id = 'old'`)[0].values[0][0];
+    const recentCount = db.exec(`SELECT COUNT(*) FROM tool_call_log WHERE turn_id = 'recent'`)[0].values[0][0];
+    if (oldCount !== 0) { console.error(`FAIL: old rows not purged, ${oldCount} remain`); process.exit(1); }
+    if (recentCount !== 1) { console.error(`FAIL: recent row purged, expected 1 got ${recentCount}`); process.exit(1); }
+    console.log('  ✓ purgeOldLogs removes rows > 30 days, keeps recent');
+
     console.log('all tests passed');
     process.exit(0);
 }

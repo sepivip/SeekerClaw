@@ -613,6 +613,16 @@ telegram('getMe')
 
             // Initialize SQL.js database before polling (non-fatal if WASM fails)
             await initDatabase();
+
+            // Retention purge runs async, off the boot critical path
+            setImmediate(() => {
+                try {
+                    const { purgeOldLogs, getDb } = require('./database');
+                    const db = getDb();
+                    if (db) purgeOldLogs(db);
+                } catch (e) { /* best-effort */ }
+            });
+
             indexMemoryFiles();
             backfillSessionsFromFiles(); // BAT-322: one-time migration for existing users
             seedHeartbeatMd();
