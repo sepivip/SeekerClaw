@@ -60,6 +60,7 @@ const LOAD_TARGETS = [
     'silent-reply.js',
     'loop-detector.js',
     'call-shape.js',
+    'tool-call-logger.js',
 ];
 
 // Files skipped intentionally. Most modules depend on config.js (which
