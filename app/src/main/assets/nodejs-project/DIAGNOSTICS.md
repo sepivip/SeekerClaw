@@ -349,3 +349,33 @@ grep -i "rate limit.*mcp\|rate limit.*exceeded" node_debug.log | tail -10
 1. For missing API keys: guide the user to configure them in Settings
 2. For missing binaries: explain the requirement and suggest alternatives
 3. Use `skill_diagnostics` (if available) to see all skill loading status
+
+## Go to School troubleshooting
+
+**Symptom: `/school` replies "School session already open"**
+- An active session exists (`workspace/SCHOOL.md`). Reply `/stop` to end it, or `/review N` / `/skip N` to resolve open proposals.
+- If truly stuck: `/school-reset` (then `/school-reset-confirm` within 60s).
+
+**Symptom: `/school` returns "Not enough signal to propose anything"**
+- Fewer than 20 tool calls recorded in the last 7-day window. Normal on a new install or after a quiet week. Use the agent for a few days, then try `/school` again.
+
+**Symptom: Proposal rejected with "fails GAP"**
+- An existing capability (tool, bundled skill, workspace skill) already covers the pattern. The rubric's `coverage_check` artifact in the rejection reason names which existing capability it considered.
+
+**Symptom: `/school` returns "Cannot patch bundled skill"**
+- Bundled skills (shipped in the APK under `default-skills/`) are read-only. File a GitHub issue for improvements to bundled skills.
+
+**Symptom: Stale-session message on service start**
+- A prior `/school` session crossed the 48h threshold without resolution. Normal cleanup — abandoned proposals are logged with `outcome: abandoned_stale`. Run `/school` to start fresh.
+
+**Symptom: Same proposal keeps appearing after I rejected it**
+- Check `workspace/school/log.jsonl`. The proposal's signature may differ across runs due to title drift (the dedup gate hashes `type + normalize(title)` — cosmetic changes shouldn't matter, but substantive wording changes do). If titles look identical but sigs differ, file a bug.
+
+**Symptom: "Ambiguous YES/NO — bare reply needs a number"**
+- More than 60 seconds elapsed since the last `/review N`, OR multiple reviews were opened in quick succession. Reply `YES N` or `NO N` with the specific proposal number.
+
+**Symptom: Write-skill failed — retry prompt**
+- Disk full, path-sandbox rejection, oversize body (> 64KB), or missing markdown heading. The error message names the cause. Resolve it (free disk, trim body, or reply `NO N` and start a new session), then retry `YES N`.
+
+**Symptom: `/school` throttled — "School ran recently"**
+- 5-minute cooldown between invocations, 10-per-day cap. Normal rate-limit. Message shows the next-available time.

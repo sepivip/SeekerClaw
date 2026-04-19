@@ -1,8 +1,13 @@
 // tools/index.js — Tool registry + executeTool() dispatcher (BAT-470)
 // Merges all domain modules, builds handler dispatch map, routes tool calls.
 
-const { log, CHANNEL } = require('../config');
+const { log, CHANNEL, workDir } = require('../config');
 const channel = require('../channel');
+const { ToolCallLogger } = require('../tool-call-logger');
+const { getShape } = require('../call-shape');
+const { getDb } = require('../database');
+const { redactSecrets } = require('../security');
+const { classifyError } = require('../error-classifier');
 
 // ── Domain modules ───────────────────────────────────────────────────────────
 
@@ -16,6 +21,54 @@ const androidMod  = require('./android');
 const solanaMod   = require('./solana');
 const telegramMod = CHANNEL === 'telegram' ? require('./telegram') : null;
 const systemMod   = require('./system');
+const schoolMod   = require('./school');
+
+// ── School tools ────────────────────────────────────────────────────────────
+
+const schoolTools = [
+    {
+        name: 'school_begin',
+        description: 'Start or resume a Go-to-School self-improvement session. Creates workspace/SCHOOL.md as a trigger file; if one already exists, returns its parsed state for resumption. Returns session_id + last 10 prior sessions from workspace/school/log.jsonl for dedup.',
+        input_schema: { type: 'object', properties: { reason: { type: 'string', enum: ['on_demand', 'cron', 'resumed'] } }, required: ['reason'] },
+    },
+    {
+        name: 'school_scan',
+        description: 'Pattern-mine the tool_call_log and skill_trigger_log SQL.js tables. Returns structured candidates: repeated_patterns (same call_shape ≥3×), failed_sequences (error_kind repeats), expensive_turns (≥8 tool calls), triggered_skills (for computing unused_skills retire candidates).',
+        input_schema: { type: 'object', properties: { window_days: { type: 'integer', minimum: 1, maximum: 30 }, min_repetition: { type: 'integer' } } },
+    },
+    {
+        name: 'school_write_skill',
+        description: 'Write a new SKILL.md (create mode) or patch an existing one. Tool auto-injects `source: school`, `created`, `evidence` frontmatter on create; preserves existing `source` field + appends `last_patched_by: school` on patch. Enforces path sandbox (workspace/skills/ only), 64KB size cap, valid YAML frontmatter, and non-empty markdown body.',
+        input_schema: { type: 'object', properties: {
+            mode: { type: 'string', enum: ['create', 'patch'] },
+            path: { type: 'string' },
+            body: { type: 'string' },
+            evidence: { type: 'string' },
+        }, required: ['mode', 'path', 'body', 'evidence'] },
+    },
+    {
+        name: 'school_retire_skill',
+        description: 'Move a workspace skill to workspace/school/retired/ (reversible archive, not delete). Bundled skills rejected. User can restore by moving the file back.',
+        input_schema: { type: 'object', properties: { path: { type: 'string' }, reason: { type: 'string' } }, required: ['path'] },
+    },
+    {
+        name: 'school_end',
+        description: 'Finalize a school session: append one JSON line to workspace/school/log.jsonl (rolling 90-day retention), then delete SCHOOL.md. Atomic ordering guarantees crash recovery never re-finalizes a session already logged.',
+        input_schema: { type: 'object', properties: {
+            session_id: { type: 'string' },
+            summary: { type: 'object' },
+        }, required: ['session_id', 'summary'] },
+    },
+    {
+        name: 'school_handle_input',
+        description: 'Advance the school session state machine. Agent calls this for school-relevant inputs (yes/no/review/skip/stop) after classifying user input via the classification rubric in the go-to-school skill. Returns the new state + next_action to execute. NOT called for unrelated messages — those route through normal message handling. `input.message_date` may be ms or unix-seconds (both accepted; normalized to ms internally). The handler reads authoritative state from workspace/SCHOOL.md; pass `state` only as a first-turn fallback when the session record is not yet written.',
+        input_schema: { type: 'object', properties: {
+            session_id: { type: 'string' },
+            state: { type: 'object' },
+            input: { type: 'object' },
+        }, required: ['session_id', 'input'] },
+    },
+];
 
 // ── Merged TOOLS array ───────────────────────────────────────────────────────
 
@@ -30,7 +83,14 @@ const TOOLS = [
     ...solanaMod.tools,
     ...(telegramMod ? telegramMod.tools : []),
     ...systemMod.tools,
+    ...schoolTools,
 ];
+
+// ── School context builder ──────────────────────────────────────────────────
+
+function _schoolCtx(chatId) {
+    return { chatId, workDir, db: getDb() };
+}
 
 // ── Handler dispatch map ─────────────────────────────────────────────────────
 
@@ -45,6 +105,14 @@ const handlerMap = Object.assign({},
     solanaMod.handlers,
     ...(telegramMod ? [telegramMod.handlers] : []),
     systemMod.handlers,
+    {
+        school_begin: (input, chatId) => schoolMod.schoolBeginHandler(input, _schoolCtx(chatId)),
+        school_scan: (input, chatId) => schoolMod.schoolScanHandler(input, _schoolCtx(chatId)),
+        school_write_skill: (input, chatId) => schoolMod.schoolWriteSkillHandler(input, _schoolCtx(chatId)),
+        school_retire_skill: (input, chatId) => schoolMod.schoolRetireSkillHandler(input, _schoolCtx(chatId)),
+        school_end: (input, chatId) => schoolMod.schoolEndHandler(input, _schoolCtx(chatId)),
+        school_handle_input: (input, chatId) => schoolMod.schoolHandleInputHandler(input, _schoolCtx(chatId)),
+    },
 );
 
 // ── Shared state ─────────────────────────────────────────────────────────────
@@ -162,9 +230,21 @@ function requestConfirmation(chatId, toolName, input) {
     });
 }
 
+// ── tool-call-log plumbing (see spec §6.3) ───────────────────────────────────
+let _logger = null;
+function getLogger() {
+    if (_logger) return _logger;
+    const db = getDb();
+    if (!db) return null;  // db not yet initialized at very early startup
+    _logger = new ToolCallLogger({ db, log });
+    return _logger;
+}
+async function flushLoggerNow() { const l = getLogger(); if (l) await l.flushNow(); }
+async function stopLogger() { if (_logger) { await _logger.stop(); _logger = null; } }
+
 // ── executeTool() dispatcher ─────────────────────────────────────────────────
 
-async function executeTool(name, input, chatId) {
+async function executeToolInner(name, input, chatId) {
     log(`Executing tool: ${name}`, 'DEBUG');
     // OpenClaw parity: normalize whitespace-padded tool names
     name = typeof name === 'string' ? name.trim() : '';
@@ -185,6 +265,65 @@ async function executeTool(name, input, chatId) {
     return { error: `Unknown tool: ${name}` };
 }
 
+async function executeTool(name, input, chatId, messageId = null) {
+    const startedAt = Date.now();
+    // Normalize once — executeToolInner also trims defensively, but we need the
+    // normalized name for consistent tool_name + call_shape in tool_call_log.
+    const normalizedName = typeof name === 'string' ? name.trim() : '';
+    let status = 'ok';
+    let errorKind = null;
+    let result;
+    try {
+        result = await executeToolInner(normalizedName, input, chatId);
+        // Some tool handlers return { error: '...' } on non-exception failures.
+        // classifyError maps into low-cardinality buckets (file_not_found, http_404, etc.)
+        // so tool_call_log aggregations are pattern-mineable; fallback is redacted + truncated.
+        if (result && typeof result === 'object' && result.error) {
+            status = 'error';
+            errorKind = classifyError(String(result.error));
+        }
+    } catch (e) {
+        status = 'error';
+        // Prefer e.code → e.message → e.name for richer error kinds.
+        // Without e.message, every `new Error('bridge unreachable')` collapses to 'Error'.
+        const raw = (e && (e.code || e.message || e.name) || 'exception').toString();
+        errorKind = classifyError(raw);
+        // Convert to the `{ error }` contract per ARCHITECTURE.md — callers expect no exceptions
+        // to escape executeTool(). Returning a synthetic error result keeps the interface consistent.
+        // Also redact the user-facing synthetic message — e.message can plausibly contain URLs
+        // with query strings, tokens, or file paths that would otherwise leak through to Telegram.
+        const safeMsg = e && e.message ? redactSecrets(String(e.message)) : 'exception';
+        result = { error: `Tool execution failed: ${safeMsg}` };
+    } finally {
+        try {
+            const logger = getLogger();
+            if (logger) {
+                // Log sentinel for whitespace/empty/non-string tool names so
+                // aggregations stay pattern-mineable instead of collecting
+                // empty strings. User-facing error already returned above.
+                const loggedName = normalizedName || 'unknown_tool';
+                logger.record({
+                    turn_id: chatId != null ? String(chatId) : 'unknown',
+                    message_id: messageId != null ? String(messageId) : null,
+                    tool_name: loggedName,
+                    triggered_by_skill: null,    // Task A6 will populate
+                    call_shape: getShape(loggedName, input),
+                    // result_status is 'ok' | 'error' only in PR-A. Spec §6.1 lists
+                    // 'timeout' | 'blocked_by_policy' | 'blocked_by_confirmation' which
+                    // happen upstream (ai.js confirmation gate, rate limiter) and need
+                    // separate instrumentation. Deferred to PR-B where blocked-tool
+                    // analytics feed school_scan; see spec §6.1 "known limitation".
+                    result_status: status,
+                    error_kind: errorKind,
+                    latency_ms: Date.now() - startedAt,
+                    created_at: startedAt,
+                });
+            }
+        } catch (_) { /* never let logging break a tool call */ }
+    }
+    return result;
+}
+
 // ── Re-exported helpers ──────────────────────────────────────────────────────
 
 const { listFilesRecursive, formatBytes } = fileMod;
@@ -199,4 +338,5 @@ module.exports = {
     pendingConfirmations, lastToolUseTime,
     listFilesRecursive, formatBytes,
     setMcpExecuteTool, setFullToolRegistry,
+    flushLoggerNow, stopLogger,   // NEW for tool-call-log
 };

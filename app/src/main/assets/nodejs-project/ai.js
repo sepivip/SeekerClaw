@@ -711,6 +711,28 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     lines.push('- **memory_stats** reports memory file counts and sizes.');
     lines.push('All memory files (MEMORY.md + daily notes) are automatically indexed into searchable chunks on startup and when files change.');
     lines.push('Your API requests are logged with token counts and latency — use session_status to see your own usage stats.');
+    lines.push('Two other SQL.js tables back the Self-Improvement feature: `tool_call_log` (every tool call with shape + outcome + error_kind, 30-day retention, privacy-safe call_shape — no wallet addresses, URL query strings, user text, or private filenames) and `skill_trigger_log` (which skills matched which messages, UNIQUE(skill_name, message_id) dedup).');
+    lines.push('');
+
+    // Self-Improvement (Go to School) — agent self-awareness for B9
+    lines.push('## Self-Improvement (Go to School)');
+    lines.push('You have a /school command that triggers a structured self-reflection session: analyze your recent tool-call history (from the `tool_call_log` SQL.js table) and skill-trigger history (from `skill_trigger_log`), then propose concrete changes to your skill set — new skills, patches to existing ones, retirements of unused ones.');
+    lines.push('');
+    lines.push('**Tools (6):**');
+    lines.push('- `school_begin` — start or resume a session. Creates workspace/SCHOOL.md trigger file.');
+    lines.push('- `school_scan` — pattern-mine the logs. Returns repeated_patterns (call_shape ≥ 3×), failed_sequences, expensive_turns, and triggered_skills.');
+    lines.push('- `school_write_skill` — write or patch a SKILL.md. Auto-injects school frontmatter marker on create; preserves existing source field on patch. Enforces workspace/skills/ path sandbox + 64KB size cap + YAML-safe evidence.');
+    lines.push('- `school_retire_skill` — move a workspace skill to workspace/school/retired/ (reversible archive, not delete).');
+    lines.push('- `school_end` — append one JSON line to workspace/school/log.jsonl, delete SCHOOL.md.');
+    lines.push('- `school_handle_input` — advance the state machine for YES/NO/review/skip/stop inputs.');
+    lines.push('');
+    lines.push('**Rubric (5 gates — all must pass):** Repetition (≥ 3 occurrences), Permanence (≥ 2 distinct days), Gap (no existing capability covers it), Utility (honest yes/no on whether it earns its prompt cost), Actionable (concrete playbook, not "be smarter about X").');
+    lines.push('');
+    lines.push('**Two-gate approval:** /review N shows the user the drafted SKILL.md; YES N writes it. Bundled skills cannot be patched or retired.');
+    lines.push('');
+    lines.push('**Effect timing:** Newly-written skills are picked up on the next agent turn automatically — `loadSkills()` reads the filesystem fresh on every message, so no service restart is needed.');
+    lines.push('');
+    lines.push('**State machine is deterministic JS** in school.js; you do NOT drive it directly. You classify user input per the classification rubric in the go-to-school SKILL.md, call school_handle_input, then execute the next_action it returns. Echo your classification back in every state-changing reply so the user can catch misclassifications.');
     lines.push('');
 
     // Diagnostics — agent knows about its debug log for self-diagnosis
@@ -1938,7 +1960,10 @@ async function chat(chatId, userMessage, options = {}) {
             ? userMessage
             : (userMessage.find(b => b.type === 'text')?.text || '')
     );
-    const matchedSkills = findMatchingSkills(textForSkills);
+    const matchedSkills = findMatchingSkills(textForSkills, {
+        message_id: options.messageId ? String(options.messageId) : null,
+        timestamp: Date.now(),
+    });
     if (matchedSkills.length > 0) {
         log(`Matched skills: ${matchedSkills.map(s => s.name).join(', ')}`, 'DEBUG');
     }
@@ -2129,7 +2154,7 @@ async function chat(chatId, userMessage, options = {}) {
                             if (confirmed) {
                                 const status = deferStatus(chatId, TOOL_STATUS_MAP[toolUse.name]);
                                 try {
-                                    result = await _deps.executeTool(toolUse.name, toolUse.input, chatId);
+                                    result = await _deps.executeTool(toolUse.name, toolUse.input, chatId, options.messageId);
                                     if (_deps.lastToolUseTime) _deps.lastToolUseTime.set(toolUse.name, Date.now());
                                 } finally {
                                     await status.cleanup();
@@ -2143,7 +2168,7 @@ async function chat(chatId, userMessage, options = {}) {
                         // Normal tool execution (no confirmation needed)
                         const status = deferStatus(chatId, TOOL_STATUS_MAP[toolUse.name]);
                         try {
-                            result = await _deps.executeTool(toolUse.name, toolUse.input, chatId);
+                            result = await _deps.executeTool(toolUse.name, toolUse.input, chatId, options.messageId);
                         } finally {
                             await status.cleanup();
                         }

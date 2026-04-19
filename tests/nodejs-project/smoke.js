@@ -59,6 +59,10 @@ const BUNDLE = path.join(REPO_ROOT, 'app', 'src', 'main', 'assets', 'nodejs-proj
 const LOAD_TARGETS = [
     'silent-reply.js',
     'loop-detector.js',
+    'call-shape.js',
+    'tool-call-logger.js',
+    'error-classifier.js',
+    'school.js',
 ];
 
 // Files skipped intentionally. Most modules depend on config.js (which
@@ -107,6 +111,7 @@ const SKIP_REASONS = {
     'tools/system.js': 'runs shell commands',
     'tools/telegram.js': 'requires telegram.js',
     'tools/web.js': 'requires web.js caches',
+    'tools/school.js': 'lazy-requires database.js which needs config.js fixture',
     'sql-wasm.js': 'third-party bundle (sql.js)',
     'markdown-it.min.js': 'third-party bundle (markdown-it)',
 };

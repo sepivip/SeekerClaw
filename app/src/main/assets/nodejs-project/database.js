@@ -32,6 +32,7 @@ let _shutdownDeps = {
     conversations: null,          // Map — from main.js (will move to ai.js in BAT-203)
     saveSessionSummary: null,     // async fn — from main.js (will move to ai.js in BAT-203)
     MIN_MESSAGES_FOR_SUMMARY: 3,  // constant — from main.js (will move to ai.js in BAT-203)
+    flushToolCallLog: null,       // async fn — flushes buffered tool-call log rows before saveDatabase()
 };
 
 /**
@@ -46,11 +47,73 @@ function setShutdownDeps(deps) {
     if (deps.conversations) _shutdownDeps.conversations = deps.conversations;
     if (typeof deps.saveSessionSummary === 'function') _shutdownDeps.saveSessionSummary = deps.saveSessionSummary;
     if (typeof deps.MIN_MESSAGES_FOR_SUMMARY === 'number') _shutdownDeps.MIN_MESSAGES_FOR_SUMMARY = deps.MIN_MESSAGES_FOR_SUMMARY;
+    if (typeof deps.flushToolCallLog === 'function') _shutdownDeps.flushToolCallLog = deps.flushToolCallLog;
 }
 
 // ============================================================================
 // INIT & PERSISTENCE
 // ============================================================================
+
+function createToolCallLogSchema(dbInstance) {
+    dbInstance.run(`CREATE TABLE IF NOT EXISTS tool_call_log (
+        id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+        turn_id            TEXT    NOT NULL,
+        message_id         TEXT,
+        tool_name          TEXT    NOT NULL,
+        triggered_by_skill TEXT,
+        call_shape         TEXT    NOT NULL,
+        result_status      TEXT    NOT NULL,
+        error_kind         TEXT,
+        latency_ms         INTEGER,
+        created_at         INTEGER NOT NULL
+    )`);
+    dbInstance.run(`CREATE INDEX IF NOT EXISTS idx_tcl_created ON tool_call_log(created_at)`);
+    dbInstance.run(`CREATE INDEX IF NOT EXISTS idx_tcl_tool    ON tool_call_log(tool_name, created_at)`);
+    dbInstance.run(`CREATE INDEX IF NOT EXISTS idx_tcl_shape   ON tool_call_log(call_shape, created_at)`);
+    dbInstance.run(`CREATE INDEX IF NOT EXISTS idx_tcl_turn    ON tool_call_log(turn_id)`);
+    dbInstance.run(`CREATE INDEX IF NOT EXISTS idx_tcl_skill   ON tool_call_log(triggered_by_skill, created_at)`);
+}
+
+// Cap applied on next startup; mid-session growth is bounded by mobile reboot cadence.
+const TOOL_CALL_LOG_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;  // 30 days
+// Row cap for tool_call_log (each row is larger + tool calls happen more frequently than triggers).
+const MAX_TOOL_CALL_LOG_ROWS = 50000;
+// Row cap for skill_trigger_log. UNIQUE(skill_name, message_id) bounds dup-per-message,
+// but the row count can still grow large over 30 days on a busy device.
+const MAX_SKILL_TRIGGER_LOG_ROWS = 20000;
+
+function purgeOldLogs(dbInstance, now = Date.now()) {
+    const cutoff = now - TOOL_CALL_LOG_RETENTION_MS;
+    // Each DELETE wrapped independently — tolerate missing tables on fresh installs.
+    try { dbInstance.run(`DELETE FROM tool_call_log WHERE created_at < ?`, [cutoff]); }
+    catch (e) { log(`[DB] purge tool_call_log by age failed (non-fatal): ${e.message}`, 'WARN'); }
+    try { dbInstance.run(`DELETE FROM skill_trigger_log WHERE created_at < ?`, [cutoff]); }
+    catch (e) { log(`[DB] purge skill_trigger_log by age failed (non-fatal): ${e.message}`, 'WARN'); }
+    // Cap row count
+    try {
+        dbInstance.run(`DELETE FROM tool_call_log WHERE id IN (
+            SELECT id FROM tool_call_log ORDER BY created_at DESC LIMIT -1 OFFSET ?
+        )`, [MAX_TOOL_CALL_LOG_ROWS]);
+    } catch (e) { log(`[DB] purge tool_call_log by row cap failed (non-fatal): ${e.message}`, 'WARN'); }
+    try {
+        dbInstance.run(`DELETE FROM skill_trigger_log WHERE id IN (
+            SELECT id FROM skill_trigger_log ORDER BY created_at DESC LIMIT -1 OFFSET ?
+        )`, [MAX_SKILL_TRIGGER_LOG_ROWS]);
+    } catch (e) { log(`[DB] purge skill_trigger_log by row cap failed (non-fatal): ${e.message}`, 'WARN'); }
+}
+
+function createSkillTriggerLogSchema(dbInstance) {
+    dbInstance.run(`CREATE TABLE IF NOT EXISTS skill_trigger_log (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        skill_name  TEXT    NOT NULL,
+        message_id  TEXT,
+        match_type  TEXT    NOT NULL,
+        created_at  INTEGER NOT NULL,
+        UNIQUE(skill_name, message_id)
+    )`);
+    dbInstance.run(`CREATE INDEX IF NOT EXISTS idx_stl_skill_created ON skill_trigger_log(skill_name, created_at)`);
+    dbInstance.run(`CREATE INDEX IF NOT EXISTS idx_stl_created       ON skill_trigger_log(created_at)`);
+}
 
 async function initDatabase() {
     try {
@@ -91,6 +154,15 @@ async function initDatabase() {
             retry_count INTEGER DEFAULT 0,
             duration_ms INTEGER
         )`);
+
+        // Tool call log — feeds "Go to School" self-improvement analysis
+        createToolCallLogSchema(db);
+
+        // Skill trigger log — feeds "Go to School" self-improvement analysis
+        createSkillTriggerLogSchema(db);
+        // Wire the db into skills.js so findMatchingSkills can record triggers.
+        const { setSkillTriggerDb } = require('./skills');
+        setSkillTriggerDb(db);
 
         // Memory indexing tables (BAT-25)
         db.run(`CREATE TABLE IF NOT EXISTS chunks (
@@ -467,6 +539,11 @@ async function gracefulShutdown(signal) {
     } catch (err) {
         log(`[Shutdown] Summary failed: ${err.message}`, 'ERROR');
     }
+    // Flush buffered tool-call log rows before persisting the db to disk (A5).
+    // Otherwise INSERTs hit the in-memory db AFTER saveDatabase() serializes it → rows lost.
+    if (_shutdownDeps.flushToolCallLog) {
+        try { await _shutdownDeps.flushToolCallLog(); } catch (e) { log(`[DB] tool-call log flush on shutdown failed: ${e.message}`, 'WARN'); }
+    }
     saveDatabase();
     process.exit(0);
 }
@@ -609,6 +686,9 @@ module.exports = {
     getDb,
     setShutdownDeps,
     initDatabase,
+    createToolCallLogSchema,
+    createSkillTriggerLogSchema,
+    purgeOldLogs,
     indexMemoryFiles,
     saveSession,
     getRecentSessions,
