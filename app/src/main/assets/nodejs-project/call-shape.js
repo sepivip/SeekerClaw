@@ -28,16 +28,19 @@ function hostOf(url) {
 
 function pathPattern(p) {
     if (!p || typeof p !== 'string') return 'unknown';
-    // memory/YYYY-MM-DD.md → memory/*.md
+    // Normalize: strip leading './', collapse repeated slashes.
+    p = p.replace(/^\.\//, '').replace(/\/+/g, '/');
+    // Known workspace buckets.
     if (/^memory\/\d{4}-\d{2}-\d{2}\.md$/.test(p)) return 'memory/*.md';
     if (/^memory\//.test(p)) return 'memory/*';
     if (/^skills\/[^/]+\.md$/.test(p)) return 'skills/*.md';
     if (/^skills\//.test(p)) return 'skills/*';
     if (/^workspace\/school\//.test(p)) return 'workspace/school/*';
-    // Root-level .md files expose filename (safe — SOUL/MEMORY/IDENTITY/USER/HEARTBEAT only)
-    if (/^[A-Z]+\.md$/.test(p)) return p;
-    // Everything else → bucket by depth
-    return p.split('/').slice(0, 2).join('/') + '/*';
+    // Root-level workspace identity/memory files — known allowlist only, exposed as-is.
+    if (/^(SOUL|MEMORY|IDENTITY|USER|HEARTBEAT)\.md$/.test(p)) return p;
+    // Everything else — collapse to a generic bucket with depth hint, never exposing segments.
+    const depth = p.split('/').length;
+    return `other:depth${depth}`;
 }
 
 const builders = {

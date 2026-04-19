@@ -29,6 +29,8 @@ assertEq(getShape('web_fetch', { url: 'https://api.anthropic.com/v1/messages?key
     'web_fetch:api.anthropic.com:POST', 'web_fetch shape: host+method');
 assertEq(getShape('web_fetch', { url: 'https://example.com/path' }),
     'web_fetch:example.com:GET', 'web_fetch shape: default GET');
+assertEq(getShape('web_fetch', { url: 'not-a-url' }),
+    'web_fetch:malformed:GET', 'web_fetch shape: malformed URL → malformed');
 
 // solana_swap: well-known mints are public; unknown mints → "other"
 assertEq(getShape('solana_swap', { inputMint: 'So11111111111111111111111111111111111111112', outputMint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v' }),
@@ -45,6 +47,16 @@ assertEq(getShape('file_read', { path: 'memory/2026-04-19.md' }), 'file_read:mem
 assertEq(getShape('file_read', { path: 'skills/weather.md' }), 'file_read:skills/*.md', 'file_read shape: skills');
 assertEq(getShape('file_read', { path: 'SOUL.md' }), 'file_read:SOUL.md', 'file_read shape: root md');
 
+// pathPattern fallback — unknown paths collapse to depth hint, no segment leak
+assertEq(getShape('file_read', { path: 'secret.md' }), 'file_read:other:depth1',
+    'file_read shape: lowercase root .md → depth hint (no filename leak)');
+assertEq(getShape('file_read', { path: 'private/user/file.txt' }), 'file_read:other:depth3',
+    'file_read shape: unknown subdir → depth hint');
+assertEq(getShape('file_read', { path: './memory/2026-04-19.md' }), 'file_read:memory/*.md',
+    'file_read shape: leading ./ normalized');
+assertEq(getShape('file_read', { path: 'TODO.md' }), 'file_read:other:depth1',
+    'file_read shape: TODO.md no longer matches root-md allowlist');
+
 // shell_exec: first token only
 assertEq(getShape('shell_exec', { cmd: 'ls -la /tmp' }), 'shell_exec:ls', 'shell_exec shape: first token');
 assertEq(getShape('shell_exec', { cmd: 'cat /etc/passwd' }), 'shell_exec:cat', 'shell_exec shape: cat');
@@ -60,15 +72,18 @@ assertNotContains(getShape('solana_balance', { address: wallet }), wallet, 'wall
 assertNotContains(getShape('web_fetch', { url: `https://example.com?key=${apiKey}` }), apiKey, 'api key not in shape');
 assertNotContains(getShape('file_read', { path: 'memory/private-name-here.md' }), 'private-name-here', 'filename not in shape');
 
-// Size cap — 64 chars max
-const huge = 'solana_swap';
-const longMint = 'X'.repeat(100);
-const shape = getShape('solana_swap', { inputMint: longMint, outputMint: longMint });
-if (shape.length > 64) {
-    console.error(`FAIL shape length ${shape.length} > 64: ${shape}`);
+// Size cap — shell_exec builder passes through user input after prefix, so it's the
+// one that can produce arbitrarily long raw shapes. Must truncate to 64 JS chars with
+// trailing '…' per the cap contract.
+const shellShape = getShape('shell_exec', { cmd: 'A'.repeat(200) });
+if (shellShape.length !== 64) {
+    console.error(`FAIL shape length ${shellShape.length} !== 64: ${shellShape}`);
+    fails++;
+} else if (!shellShape.endsWith('…')) {
+    console.error(`FAIL shape must end with '…', got: ${shellShape}`);
     fails++;
 } else {
-    console.log(`  ✓ shape length capped at 64 chars`);
+    console.log(`  ✓ shape length capped at 64 chars with trailing ellipsis`);
 }
 
 if (fails > 0) { console.error(`${fails} failures`); process.exit(1); }
