@@ -1,9 +1,12 @@
-// school.js — pure module for Go to School feature.
-// Provides state-machine transition, pattern mining, skill file writers,
-// and persistent-log helpers. No side effects at module load.
+// school.js — pure module for Go to School feature. No side effects at module load.
+// Grows over Phase B: B1 (this commit) = normalizeTitle + signatureOf.
+// B2+ adds state-machine transition, pattern mining, skill file writers, persistent-log helpers.
 
 const crypto = require('crypto');
 
+// normalizeTitle(raw: string) → kebab-case slug.
+// Non-ASCII chars (é, ñ, CJK) are dropped by the [^a-z0-9-] filter — acceptable
+// for v1 since titles are agent-generated and always English.
 function normalizeTitle(raw) {
     return String(raw || '')
         .toLowerCase()
