@@ -32,6 +32,7 @@ let _shutdownDeps = {
     conversations: null,          // Map — from main.js (will move to ai.js in BAT-203)
     saveSessionSummary: null,     // async fn — from main.js (will move to ai.js in BAT-203)
     MIN_MESSAGES_FOR_SUMMARY: 3,  // constant — from main.js (will move to ai.js in BAT-203)
+    flushToolCallLog: null,       // async fn — flushes buffered tool-call log rows before saveDatabase()
 };
 
 /**
@@ -46,6 +47,7 @@ function setShutdownDeps(deps) {
     if (deps.conversations) _shutdownDeps.conversations = deps.conversations;
     if (typeof deps.saveSessionSummary === 'function') _shutdownDeps.saveSessionSummary = deps.saveSessionSummary;
     if (typeof deps.MIN_MESSAGES_FOR_SUMMARY === 'number') _shutdownDeps.MIN_MESSAGES_FOR_SUMMARY = deps.MIN_MESSAGES_FOR_SUMMARY;
+    if (typeof deps.flushToolCallLog === 'function') _shutdownDeps.flushToolCallLog = deps.flushToolCallLog;
 }
 
 // ============================================================================
@@ -505,6 +507,11 @@ async function gracefulShutdown(signal) {
         }
     } catch (err) {
         log(`[Shutdown] Summary failed: ${err.message}`, 'ERROR');
+    }
+    // Flush buffered tool-call log rows before persisting the db to disk (A5).
+    // Otherwise INSERTs hit the in-memory db AFTER saveDatabase() serializes it → rows lost.
+    if (_shutdownDeps.flushToolCallLog) {
+        try { await _shutdownDeps.flushToolCallLog(); } catch (e) { log(`[DB] tool-call log flush on shutdown failed: ${e.message}`, 'WARN'); }
     }
     saveDatabase();
     process.exit(0);

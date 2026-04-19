@@ -618,7 +618,18 @@ telegram('getMe')
             seedHeartbeatMd();
 
             // Wire shutdown deps now that conversations + saveSessionSummary exist
-            setShutdownDeps({ conversations, saveSessionSummary, MIN_MESSAGES_FOR_SUMMARY });
+            setShutdownDeps({
+                conversations,
+                saveSessionSummary,
+                MIN_MESSAGES_FOR_SUMMARY,
+                flushToolCallLog: async () => {
+                    try {
+                        const { flushLoggerNow, stopLogger } = require('./tools');
+                        if (flushLoggerNow) await flushLoggerNow();
+                        if (stopLogger) await stopLogger();
+                    } catch (_) { /* best-effort */ }
+                },
+            });
 
             // Wire chat deps: inject main.js state into ai.js
             setChatDeps({
@@ -777,7 +788,18 @@ telegram('getMe')
         seedHeartbeatMd();
 
         // Wire shutdown deps
-        setShutdownDeps({ conversations, saveSessionSummary, MIN_MESSAGES_FOR_SUMMARY });
+        setShutdownDeps({
+            conversations,
+            saveSessionSummary,
+            MIN_MESSAGES_FOR_SUMMARY,
+            flushToolCallLog: async () => {
+                try {
+                    const { flushLoggerNow, stopLogger } = require('./tools');
+                    if (flushLoggerNow) await flushLoggerNow();
+                    if (stopLogger) await stopLogger();
+                } catch (_) { /* best-effort */ }
+            },
+        });
 
         // Wire chat deps: inject main.js state into ai.js
         setChatDeps({
@@ -879,18 +901,12 @@ telegram('getMe')
     });
 }
 
-// Graceful shutdown: stop the channel (close WebSocket for Discord, no-op for Telegram)
-// Runs before database.js's gracefulShutdown which handles session summaries + DB save.
-// Also flushes buffered tool-call log rows so they aren't lost on exit (A5).
-async function flushToolCallLogOnShutdown() {
-    try {
-        const { flushLoggerNow, stopLogger } = require('./tools');
-        if (flushLoggerNow) await flushLoggerNow();
-        if (stopLogger) await stopLogger();
-    } catch (_) { /* best-effort */ }
-}
-process.on('SIGTERM', () => { try { channel.stop(); } catch (_) {} flushToolCallLogOnShutdown(); });
-process.on('SIGINT', () => { try { channel.stop(); } catch (_) {} flushToolCallLogOnShutdown(); });
+// Graceful shutdown: stop the channel (close WebSocket for Discord, no-op for Telegram).
+// Tool-call log flush is handled inside database.js's gracefulShutdown via the
+// flushToolCallLog dep injected above — runs BEFORE saveDatabase() so buffered rows
+// make it into the serialized db (A5).
+process.on('SIGTERM', () => { try { channel.stop(); } catch (_) {} });
+process.on('SIGINT', () => { try { channel.stop(); } catch (_) {} });
 
 // Runtime status log (uptime/memory debug, every 5 min)
 setInterval(() => {

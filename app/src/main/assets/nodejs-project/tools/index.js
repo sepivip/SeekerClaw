@@ -212,22 +212,25 @@ async function executeTool(name, input, chatId) {
             status = 'error';
             errorKind = String(result.error).slice(0, 60);
         }
-        return result;
     } catch (e) {
         status = 'error';
-        errorKind = (e && (e.code || e.name) || 'exception').toString().slice(0, 60);
-        throw e;
+        // Prefer e.code → e.message → e.name for richer error kinds.
+        // Without e.message, every `new Error('bridge unreachable')` collapses to 'Error'.
+        errorKind = (e && (e.code || e.message || e.name) || 'exception').toString().slice(0, 60);
+        // Convert to the `{ error }` contract per ARCHITECTURE.md — callers expect no exceptions
+        // to escape executeTool(). Returning a synthetic error result keeps the interface consistent.
+        result = { error: `Tool execution failed: ${e && e.message ? e.message : 'exception'}` };
     } finally {
         try {
             const logger = getLogger();
             if (logger) {
                 logger.record({
-                    turn_id: chatId ? String(chatId) : 'unknown',
+                    turn_id: chatId != null ? String(chatId) : 'unknown',
                     message_id: null,           // Task A5 scope: message_id plumbing is future work
                     tool_name: name,
                     triggered_by_skill: null,    // Task A6 will populate
                     call_shape: getShape(name, input),
-                    result_status: status,
+                    result_status: status,  // TODO(A6): classify 'timeout' / 'blocked_by_confirmation' upstream
                     error_kind: errorKind,
                     latency_ms: Date.now() - startedAt,
                     created_at: startedAt,
@@ -235,6 +238,7 @@ async function executeTool(name, input, chatId) {
             }
         } catch (_) { /* never let logging break a tool call */ }
     }
+    return result;
 }
 
 // ── Re-exported helpers ──────────────────────────────────────────────────────
