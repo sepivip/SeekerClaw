@@ -120,6 +120,7 @@ function transition(state, input) {
 }
 
 const INSUFFICIENT_SIGNAL_MIN_CALLS = 20;
+const EXPENSIVE_TURN_MIN_TOOLS = 8;
 
 function scanLogs(db, { window_days = 7, min_repetition = 3, now_ms = Date.now(), caps = {} } = {}) {
     const capPatterns = caps.patterns ?? 5;
@@ -168,9 +169,9 @@ function scanLogs(db, { window_days = 7, min_repetition = 3, now_ms = Date.now()
         FROM tool_call_log
         WHERE created_at > ?
         GROUP BY turn_id
-        HAVING tool_count >= 8
+        HAVING tool_count >= ?
         ORDER BY tool_count DESC, latency_sum DESC
-        LIMIT ?`, [cutoff, capTurns]);
+        LIMIT ?`, [cutoff, EXPENSIVE_TURN_MIN_TOOLS, capTurns]);
     const expensive_turns = (exRows[0] ? exRows[0].values : []).map(r => ({
         turn_id: r[0], message_id: r[1], tool_count: r[2], latency_ms_total: r[3]
     }));
