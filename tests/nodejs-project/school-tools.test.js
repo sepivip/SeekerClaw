@@ -105,6 +105,26 @@ process.env.WORKDIR = tmp;
         console.error('FAIL: nasty evidence injected a phantom foo: key'); process.exit(1);
     }
     console.log('  ✓ school_write_skill quotes YAML-hostile evidence');
+
+    // ========== B6 Assertions (school_retire_skill + school_handle_input + school_scan) ==========
+    fs.writeFileSync(path.join(tmp, 'skills/to-retire.md'),
+        `---\nname: to-retire\nsource: school\n---\n\n# gone\n`);
+    const { schoolRetireSkillHandler, schoolHandleInputHandler } = require(
+        path.join(__dirname, '../../app/src/main/assets/nodejs-project/tools/school.js')
+    );
+    const retRes = await schoolRetireSkillHandler({ path: 'skills/to-retire.md', reason: 'unused' }, { workDir: tmp });
+    if (!retRes.ok) { console.error('FAIL retire', retRes); process.exit(1); }
+    if (fs.existsSync(path.join(tmp, 'skills/to-retire.md'))) { console.error('FAIL: file not moved'); process.exit(1); }
+    const retiredFiles = fs.readdirSync(path.join(tmp, 'school/retired'));
+    if (!retiredFiles.some(f => f.includes('to-retire.md'))) { console.error('FAIL: no retired file found'); process.exit(1); }
+    console.log('  ✓ school_retire_skill moves to retired/ reversibly');
+
+    const hiRes = await schoolHandleInputHandler({
+        session_id: 'test', state: { kind: 'reviewing_<N>', reviewing_n: 3, open_proposal_ns: [3], reviewing_opened_at: 1000 },
+        input: { kind: 'yes', proposal_n: 3, message_date: 1020, raw_text: 'YES 3' }
+    }, { workDir: tmp });
+    if (!hiRes.ok || hiRes.next_action.kind !== 'write_skill') { console.error('FAIL handle_input yes', hiRes); process.exit(1); }
+    console.log('  ✓ school_handle_input returns write_skill next_action on YES');
 })().catch(e => { console.error('FAIL', e); process.exit(1); }).finally(() => {
     try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) {}
     if (fails > 0) process.exit(1);

@@ -1,7 +1,8 @@
 // tools/school.js — Go-to-School tool handlers.
 const crypto = require('crypto');
 const fs = require('fs');
-const { writeSchoolMd, readSchoolMd, appendLogLine, readPriorSessions, schoolMdPath, writeSkillFile } = require('../school');
+const pathMod = require('path');
+const { writeSchoolMd, readSchoolMd, appendLogLine, readPriorSessions, schoolMdPath, writeSkillFile, transition, scanLogs } = require('../school');
 
 function newSessionId() { return crypto.randomBytes(8).toString('hex'); }
 
@@ -71,4 +72,48 @@ async function schoolWriteSkillHandler(args, ctx) {
     });
 }
 
-module.exports = { schoolBeginHandler, schoolEndHandler, schoolWriteSkillHandler };
+async function schoolRetireSkillHandler(args, ctx) {
+    const workDir = (ctx && ctx.workDir) || process.env.WORKDIR;
+    const relPath = args.path;
+    if (!relPath.startsWith('skills/') || relPath.includes('..')) {
+        return { ok: false, error: 'cannot_retire_bundled' };
+    }
+    const src = pathMod.join(workDir, relPath);
+    if (!fs.existsSync(src)) return { ok: false, error: 'target_missing' };
+    const name = pathMod.basename(relPath);
+    const ts = Date.now();
+    const dst = pathMod.join(workDir, 'school/retired', `${ts}-${name}`);
+    fs.mkdirSync(pathMod.dirname(dst), { recursive: true });
+    fs.renameSync(src, dst);
+    return { ok: true, restored_path: dst.replace(workDir + '/', ''), reason: args.reason || '' };
+}
+
+async function schoolHandleInputHandler(args, ctx) {
+    try {
+        const { nextState, nextAction } = transition(args.state, args.input);
+        return { ok: true, previous_state: args.state.kind, new_state: nextState.kind, next_action: nextAction, open_proposal_ns: nextState.open_proposal_ns || [] };
+    } catch (e) {
+        return { ok: false, error: 'transition_failed', hint: e.message };
+    }
+}
+
+async function schoolScanHandler(args, ctx) {
+    let db = (ctx && ctx.db);
+    if (!db) {
+        try {
+            const { getDb } = require('../database');
+            db = getDb();
+        } catch (_) {
+            db = null;
+        }
+    }
+    if (!db) return { ok: false, error: 'db_unavailable' };
+    try {
+        const res = scanLogs(db, { window_days: args.window_days || 7, min_repetition: args.min_repetition || 3 });
+        return { ok: true, ...res };
+    } catch (e) {
+        return { ok: false, error: 'scan_failed', hint: e.message };
+    }
+}
+
+module.exports = { schoolBeginHandler, schoolEndHandler, schoolWriteSkillHandler, schoolRetireSkillHandler, schoolHandleInputHandler, schoolScanHandler };
