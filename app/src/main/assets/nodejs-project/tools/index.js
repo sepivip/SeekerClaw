@@ -3,6 +3,9 @@
 
 const { log, CHANNEL } = require('../config');
 const channel = require('../channel');
+const { ToolCallLogger } = require('../tool-call-logger');
+const { getShape } = require('../call-shape');
+const { getDb } = require('../database');
 
 // ── Domain modules ───────────────────────────────────────────────────────────
 
@@ -162,9 +165,21 @@ function requestConfirmation(chatId, toolName, input) {
     });
 }
 
+// ── tool-call-log plumbing (see spec §6.3) ───────────────────────────────────
+let _logger = null;
+function getLogger() {
+    if (_logger) return _logger;
+    const db = getDb();
+    if (!db) return null;  // db not yet initialized at very early startup
+    _logger = new ToolCallLogger({ db, log });
+    return _logger;
+}
+async function flushLoggerNow() { const l = getLogger(); if (l) await l.flushNow(); }
+async function stopLogger() { if (_logger) { await _logger.stop(); _logger = null; } }
+
 // ── executeTool() dispatcher ─────────────────────────────────────────────────
 
-async function executeTool(name, input, chatId) {
+async function executeToolInner(name, input, chatId) {
     log(`Executing tool: ${name}`, 'DEBUG');
     // OpenClaw parity: normalize whitespace-padded tool names
     name = typeof name === 'string' ? name.trim() : '';
@@ -185,6 +200,43 @@ async function executeTool(name, input, chatId) {
     return { error: `Unknown tool: ${name}` };
 }
 
+async function executeTool(name, input, chatId) {
+    const startedAt = Date.now();
+    let status = 'ok';
+    let errorKind = null;
+    let result;
+    try {
+        result = await executeToolInner(name, input, chatId);
+        // Some tool handlers return { error: '...' } on non-exception failures.
+        if (result && typeof result === 'object' && result.error) {
+            status = 'error';
+            errorKind = String(result.error).slice(0, 60);
+        }
+        return result;
+    } catch (e) {
+        status = 'error';
+        errorKind = (e && (e.code || e.name) || 'exception').toString().slice(0, 60);
+        throw e;
+    } finally {
+        try {
+            const logger = getLogger();
+            if (logger) {
+                logger.record({
+                    turn_id: chatId ? String(chatId) : 'unknown',
+                    message_id: null,           // Task A5 scope: message_id plumbing is future work
+                    tool_name: name,
+                    triggered_by_skill: null,    // Task A6 will populate
+                    call_shape: getShape(name, input),
+                    result_status: status,
+                    error_kind: errorKind,
+                    latency_ms: Date.now() - startedAt,
+                    created_at: startedAt,
+                });
+            }
+        } catch (_) { /* never let logging break a tool call */ }
+    }
+}
+
 // ── Re-exported helpers ──────────────────────────────────────────────────────
 
 const { listFilesRecursive, formatBytes } = fileMod;
@@ -199,4 +251,5 @@ module.exports = {
     pendingConfirmations, lastToolUseTime,
     listFilesRecursive, formatBytes,
     setMcpExecuteTool, setFullToolRegistry,
+    flushLoggerNow, stopLogger,   // NEW for tool-call-log
 };

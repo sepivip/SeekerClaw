@@ -881,8 +881,16 @@ telegram('getMe')
 
 // Graceful shutdown: stop the channel (close WebSocket for Discord, no-op for Telegram)
 // Runs before database.js's gracefulShutdown which handles session summaries + DB save.
-process.on('SIGTERM', () => { try { channel.stop(); } catch (_) {} });
-process.on('SIGINT', () => { try { channel.stop(); } catch (_) {} });
+// Also flushes buffered tool-call log rows so they aren't lost on exit (A5).
+async function flushToolCallLogOnShutdown() {
+    try {
+        const { flushLoggerNow, stopLogger } = require('./tools');
+        if (flushLoggerNow) await flushLoggerNow();
+        if (stopLogger) await stopLogger();
+    } catch (_) { /* best-effort */ }
+}
+process.on('SIGTERM', () => { try { channel.stop(); } catch (_) {} flushToolCallLogOnShutdown(); });
+process.on('SIGINT', () => { try { channel.stop(); } catch (_) {} flushToolCallLogOnShutdown(); });
 
 // Runtime status log (uptime/memory debug, every 5 min)
 setInterval(() => {
