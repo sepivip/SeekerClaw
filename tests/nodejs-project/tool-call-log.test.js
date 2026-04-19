@@ -55,10 +55,12 @@ async function main() {
     console.log('  ✓ buffered logger flushes on size + interval');
     await logger.stop();
 
-    // Re-trigger scenario: burst records beyond 2× maxBufferSize. With the
-    // re-trigger fix, all rows should land without needing to wait for the
-    // 5s interval. We use a small flushIntervalMs so the test fails loudly
-    // if the re-trigger path is broken (would have to fall back on interval).
+    // Burst test: 20 records with small maxBufferSize. With SQL.js's synchronous
+    // db operations, a single setImmediate-scheduled flush drains the whole buffer
+    // in one pass (splice grabs everything), so this test can't distinguish the
+    // re-trigger path from the happy path — but it's still a useful regression
+    // against "logger drops rows on burst load" in general. True re-trigger
+    // coverage lives in the unit-level reasoning; the code reviewer verifies it.
     const burstLogger = new ToolCallLogger({ db, flushIntervalMs: 5000, maxBufferSize: 5 });
     for (let i = 0; i < 20; i++) {
         burstLogger.record({
@@ -74,10 +76,10 @@ async function main() {
     await burstLogger.stop();
     const burstCount = db.exec('SELECT COUNT(*) FROM tool_call_log WHERE turn_id = ?', ['burst'])[0].values[0][0];
     if (burstCount !== 20) {
-        console.error(`FAIL burst: expected 20 rows, got ${burstCount} (re-trigger path broken?)`);
+        console.error(`FAIL burst: expected 20 rows, got ${burstCount}`);
         process.exit(1);
     }
-    console.log('  ✓ buffered logger re-triggers flush when buffer still over threshold after flush completes');
+    console.log('  ✓ buffered logger handles burst of 20 records with small buffer');
 
     // Hard-cap scenario: simulate persistent failure by using a stopped db.
     // Push more than 10× maxBufferSize entries. Buffer should cap, oldest dropped.

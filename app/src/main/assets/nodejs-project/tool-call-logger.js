@@ -53,6 +53,14 @@ class ToolCallLogger {
             }
             stmt.free();
             this.db.run('COMMIT');
+            // Re-trigger ONLY on success: if buffer grew past threshold while we
+            // were flushing, schedule another pass. On the failure path, we fall
+            // through to the catch + finally — no re-trigger, letting the 5s
+            // interval (or the next record() call) handle retry. This prevents
+            // a CPU spin loop on persistent db failure.
+            if (!this.stopped && this.buffer.length >= this.maxBufferSize) {
+                setImmediate(() => this.flushNow().catch(() => {}));
+            }
         } catch (e) {
             try { this.db.run('ROLLBACK'); } catch (_) {}
             this.log(`[ToolCallLogger] flush failed: ${e.message}`, 'ERROR');
@@ -60,10 +68,6 @@ class ToolCallLogger {
             this.buffer.unshift(...batch);
         } finally {
             this.flushing = false;
-            // If the buffer grew past threshold while we were flushing, re-trigger.
-            if (!this.stopped && this.buffer.length >= this.maxBufferSize) {
-                setImmediate(() => this.flushNow().catch(() => {}));
-            }
         }
     }
 
