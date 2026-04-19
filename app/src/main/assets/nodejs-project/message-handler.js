@@ -604,7 +604,7 @@ async function handleMessage(normalized) {
             }
         }
 
-        let response = await deps.chat(chatId, userContent, { isResume, originalGoal: resumeGoal, statusReaction });
+        let response = await deps.chat(chatId, userContent, { isResume, originalGoal: resumeGoal, statusReaction, messageId });
 
         // Strip protocol tokens the agent may have mixed into content (BAT-279)
         // Uses centralized silent-reply.js helper (BAT-488) that also handles

@@ -132,6 +132,9 @@ async function initDatabase() {
 
         // Skill trigger log — feeds "Go to School" self-improvement analysis
         createSkillTriggerLogSchema(db);
+        // Wire the db into skills.js so findMatchingSkills can record triggers.
+        const { setSkillTriggerDb } = require('./skills');
+        setSkillTriggerDb(db);
 
         // Memory indexing tables (BAT-25)
         db.run(`CREATE TABLE IF NOT EXISTS chunks (

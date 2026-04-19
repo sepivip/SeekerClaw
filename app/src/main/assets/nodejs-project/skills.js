@@ -8,6 +8,26 @@ const path = require('path');
 const { SKILLS_DIR, log, config, SHELL_ALLOWLIST } = require('./config');
 
 // ============================================================================
+// SKILL TRIGGER TELEMETRY
+// ============================================================================
+// Wired into the SQL.js database from database.js:initDatabase() via
+// setSkillTriggerDb(). recordSkillTrigger() is called from findMatchingSkills()
+// whenever a skill matches. Feeds the "Go to School" self-improvement loop.
+// Telemetry failures MUST NEVER break message delivery.
+
+let _stlDb = null;
+function setSkillTriggerDb(db) { _stlDb = db; }
+function recordSkillTrigger(skillName, messageId, matchType, createdAt) {
+    if (!_stlDb) return;
+    try {
+        _stlDb.run(
+            `INSERT OR IGNORE INTO skill_trigger_log (skill_name, message_id, match_type, created_at) VALUES (?, ?, ?, ?)`,
+            [skillName, messageId || null, matchType, createdAt]
+        );
+    } catch (e) { /* never fail a message on telemetry */ }
+}
+
+// ============================================================================
 // SKILLS SYSTEM
 // ============================================================================
 
@@ -545,7 +565,7 @@ function loadSkills() {
 // SKILL MATCHING & PROMPT BUILDING
 // ============================================================================
 
-function findMatchingSkills(message) {
+function findMatchingSkills(message, ctx = {}) {
     const skills = loadSkills();
     const lowerMsg = message.toLowerCase();
 
@@ -561,7 +581,12 @@ function findMatchingSkills(message) {
             return regex.test(message);
         });
 
-        if (hasTrigger) matched.push(skill);
+        if (hasTrigger) {
+            matched.push(skill);
+            if (ctx.message_id) {
+                recordSkillTrigger(skill.name, ctx.message_id, 'keyword', ctx.timestamp || Date.now());
+            }
+        }
     }
 
     return matched;
@@ -602,4 +627,6 @@ module.exports = {
     loadSkills,
     findMatchingSkills,
     parseSkillFile,
+    recordSkillTrigger,
+    setSkillTriggerDb,
 };

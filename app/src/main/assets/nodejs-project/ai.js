@@ -1938,7 +1938,10 @@ async function chat(chatId, userMessage, options = {}) {
             ? userMessage
             : (userMessage.find(b => b.type === 'text')?.text || '')
     );
-    const matchedSkills = findMatchingSkills(textForSkills);
+    const matchedSkills = findMatchingSkills(textForSkills, {
+        message_id: options.messageId ? String(options.messageId) : null,
+        timestamp: Date.now(),
+    });
     if (matchedSkills.length > 0) {
         log(`Matched skills: ${matchedSkills.map(s => s.name).join(', ')}`, 'DEBUG');
     }

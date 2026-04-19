@@ -33,6 +33,22 @@ async function main() {
         process.exit(1);
     }
     console.log('  ✓ skill_trigger_log dedups on (skill_name, message_id)');
+
+    // Verify findMatchingSkills records matches.
+    // We call a helper that simulates the match-and-log path.
+    const { recordSkillTrigger, setSkillTriggerDb } = require(
+        path.join(__dirname, '../../app/src/main/assets/nodejs-project/skills.js')
+    );
+    setSkillTriggerDb(db);
+
+    recordSkillTrigger('weather', 'msg-42', 'keyword', 1713614500000);
+    recordSkillTrigger('weather', 'msg-42', 'keyword', 1713614500500);  // duplicate, should be ignored
+
+    const r2 = db.exec('SELECT COUNT(*) FROM skill_trigger_log WHERE message_id = ?', ['msg-42']);
+    const c2 = r2[0].values[0][0];
+    if (c2 !== 1) { console.error(`FAIL recordSkillTrigger dedup: expected 1, got ${c2}`); process.exit(1); }
+    console.log('  ✓ recordSkillTrigger uses INSERT OR IGNORE (no double-count)');
+
     console.log('all tests passed');
     process.exit(0);
 }
