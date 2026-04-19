@@ -86,6 +86,25 @@ process.env.WORKDIR = tmp;
     if (!patched.includes('source: user')) { console.error('FAIL: patch must preserve source: user'); process.exit(1); }
     if (!patched.includes('last_patched_by: school')) { console.error('FAIL: patch must add last_patched_by'); process.exit(1); }
     console.log('  ✓ school_write_skill (patch) preserves source + adds last_patched_by');
+
+    // Evidence with YAML-hostile chars (newlines, colons, #) must be quoted so the
+    // frontmatter stays parseable by readSchoolMd's simple regex.
+    const nastyRes = await schoolWriteSkillHandler({
+        mode: 'create', path: 'skills/nasty.md',
+        body: `---\nname: nasty\ndescription: "nasty"\nversion: "1.0.0"\n---\n\n# nasty\n`,
+        evidence: 'user: said\nfoo: bar # not-a-key',
+    }, { workDir: tmp });
+    if (!nastyRes.ok) { console.error('FAIL nasty', nastyRes); process.exit(1); }
+    const nastyText = fs.readFileSync(path.join(tmp, 'skills/nasty.md'), 'utf8');
+    const nastyFm = nastyText.match(/^---\n([\s\S]+?)\n---/)[1];
+    const evLine = nastyFm.split('\n').find(l => l.startsWith('evidence:'));
+    if (!evLine || !evLine.startsWith('evidence: "')) {
+        console.error('FAIL: nasty evidence must be quoted, got:', evLine); process.exit(1);
+    }
+    if (nastyFm.split('\n').some(l => l.startsWith('foo:'))) {
+        console.error('FAIL: nasty evidence injected a phantom foo: key'); process.exit(1);
+    }
+    console.log('  ✓ school_write_skill quotes YAML-hostile evidence');
 })().catch(e => { console.error('FAIL', e); process.exit(1); }).finally(() => {
     try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) {}
     if (fails > 0) process.exit(1);

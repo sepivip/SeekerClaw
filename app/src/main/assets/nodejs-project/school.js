@@ -269,6 +269,19 @@ function readPriorSessions(workDir, limit = 10) {
 
 const MAX_SKILL_BYTES = 64 * 1024;
 
+// Serialize a value as a YAML-safe scalar. Evidence is agent-generated and can
+// contain newlines, colons, # comments, or quotes — all of which would break
+// the simple regex-based frontmatter parser in readSchoolMd. Strip newlines
+// (collapse to spaces) and double-quote if the value contains any reserved
+// character; escape embedded double-quotes.
+function yamlScalar(val) {
+    const s = String(val == null ? '' : val).replace(/\r?\n/g, ' ').trim();
+    if (/[:#"'\[\]{}&*!|>%@`]/.test(s) || s === '' || /^[-?]/.test(s)) {
+        return `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+    }
+    return s;
+}
+
 function injectOrReplaceFrontmatterKeys(body, keys) {
     const m = body.match(/^---\n([\s\S]+?)\n---/);
     if (!m) throw new Error('no_frontmatter');
@@ -280,7 +293,7 @@ function injectOrReplaceFrontmatterKeys(body, keys) {
         if (kv) { existingMap[kv[1]] = kv[2]; if (!order.includes(kv[1])) order.push(kv[1]); }
     }
     for (const k of Object.keys(keys)) {
-        existingMap[k] = JSON.stringify(keys[k]).replace(/^"|"$/g, '');
+        existingMap[k] = yamlScalar(keys[k]);
         if (!order.includes(k)) order.push(k);
     }
     const newFm = '---\n' + order.map(k => `${k}: ${existingMap[k]}`).join('\n') + '\n---';
