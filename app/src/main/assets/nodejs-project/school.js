@@ -267,4 +267,61 @@ function readPriorSessions(workDir, limit = 10) {
     return lines.slice(-limit).map(l => { try { return JSON.parse(l); } catch (_) { return null; } }).filter(Boolean);
 }
 
-module.exports = { normalizeTitle, signatureOf, transition, scanLogs, writeSchoolMd, readSchoolMd, appendLogLine, readPriorSessions, ensureSchoolDir, schoolMdPath, schoolLogPath };
+const MAX_SKILL_BYTES = 64 * 1024;
+
+function injectOrReplaceFrontmatterKeys(body, keys) {
+    const m = body.match(/^---\n([\s\S]+?)\n---/);
+    if (!m) throw new Error('no_frontmatter');
+    const existing = m[1].split('\n');
+    const existingMap = {};
+    const order = [];
+    for (const line of existing) {
+        const kv = line.match(/^(\w[\w-]*):\s*(.+)$/);
+        if (kv) { existingMap[kv[1]] = kv[2]; if (!order.includes(kv[1])) order.push(kv[1]); }
+    }
+    for (const k of Object.keys(keys)) {
+        existingMap[k] = JSON.stringify(keys[k]).replace(/^"|"$/g, '');
+        if (!order.includes(k)) order.push(k);
+    }
+    const newFm = '---\n' + order.map(k => `${k}: ${existingMap[k]}`).join('\n') + '\n---';
+    return body.replace(/^---\n[\s\S]+?\n---/, newFm);
+}
+
+function todayStr() { return new Date().toISOString().slice(0, 10); }
+
+async function writeSkillFile({ workDir, mode, relPath, body, evidence }) {
+    if (!relPath.startsWith('skills/') || relPath.includes('..')) {
+        return { ok: false, error: 'path_outside_workspace_skills' };
+    }
+    if (Buffer.byteLength(body, 'utf8') > MAX_SKILL_BYTES) {
+        return { ok: false, error: 'oversize', limit_bytes: MAX_SKILL_BYTES };
+    }
+    if (!body.startsWith('---\n')) return { ok: false, error: 'missing_frontmatter' };
+    if (!/^#\s+.+/m.test(body.replace(/^---\n[\s\S]+?\n---\n/, ''))) {
+        return { ok: false, error: 'missing_body_heading' };
+    }
+    const fullPath = pathMod.join(workDir, relPath);
+    let finalBody;
+    if (mode === 'create') {
+        finalBody = injectOrReplaceFrontmatterKeys(body, {
+            source: 'school', created: todayStr(), evidence,
+        });
+    } else if (mode === 'patch') {
+        if (!fs.existsSync(fullPath)) return { ok: false, error: 'patch_target_missing' };
+        const existing = fs.readFileSync(fullPath, 'utf8');
+        const existingSourceMatch = existing.match(/^source:\s*(.+)$/m);
+        const existingSource = existingSourceMatch ? existingSourceMatch[1].trim() : 'user';
+        finalBody = injectOrReplaceFrontmatterKeys(body, {
+            last_patched_by: 'school', last_patched_at: todayStr(), patch_evidence: evidence,
+        });
+        finalBody = finalBody.replace(/^source:\s*.+$/m, `source: ${existingSource}`);
+    } else {
+        return { ok: false, error: 'invalid_mode' };
+    }
+    fs.mkdirSync(pathMod.dirname(fullPath), { recursive: true });
+    fs.writeFileSync(fullPath, finalBody);
+    const sha = crypto.createHash('sha256').update(finalBody).digest('hex');
+    return { ok: true, path: relPath, action: mode, sha256: sha };
+}
+
+module.exports = { normalizeTitle, signatureOf, transition, scanLogs, writeSchoolMd, readSchoolMd, appendLogLine, readPriorSessions, ensureSchoolDir, schoolMdPath, schoolLogPath, writeSkillFile };

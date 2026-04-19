@@ -1,7 +1,7 @@
 // tools/school.js — Go-to-School tool handlers.
 const crypto = require('crypto');
 const fs = require('fs');
-const { writeSchoolMd, readSchoolMd, appendLogLine, readPriorSessions, schoolMdPath } = require('../school');
+const { writeSchoolMd, readSchoolMd, appendLogLine, readPriorSessions, schoolMdPath, writeSkillFile } = require('../school');
 
 function newSessionId() { return crypto.randomBytes(8).toString('hex'); }
 
@@ -64,4 +64,11 @@ async function schoolEndHandler(args, ctx) {
     return { ok: true };
 }
 
-module.exports = { schoolBeginHandler, schoolEndHandler };
+async function schoolWriteSkillHandler(args, ctx) {
+    const workDir = (ctx && ctx.workDir) || process.env.WORKDIR;
+    return await writeSkillFile({
+        workDir, mode: args.mode, relPath: args.path, body: args.body, evidence: args.evidence,
+    });
+}
+
+module.exports = { schoolBeginHandler, schoolEndHandler, schoolWriteSkillHandler };
