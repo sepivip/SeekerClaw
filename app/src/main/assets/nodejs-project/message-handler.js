@@ -3,11 +3,54 @@
 // Uses init() dependency injection — all external dependencies received via init(deps).
 
 const fs = require('fs');
-const { CHANNEL } = require('./config');
+const path = require('path');
+const { CHANNEL, workDir } = require('./config');
 const { stripSilentReply, containsSilentReply } = require('./silent-reply');
 
 let deps = {};
 let initialized = false;
+
+// Go to School — Telegram command state.
+// Rate-limit: 1 /school per 5 min, 10/day. Two-step /school-reset with 60s TTL.
+const SCHOOL_MIN_INTERVAL_MS = 5 * 60 * 1000;
+const SCHOOL_DAILY_CAP = 10;
+const SCHOOL_RESET_TTL_MS = 60 * 1000;
+const schoolRateState = { lastInvokedAt: 0, invokesToday: 0, dayStart: 0 };
+let pendingSchoolReset = null;  // { expires_at: ms }
+
+function checkSchoolRateLimit(now = Date.now()) {
+    if (new Date(schoolRateState.dayStart).toDateString() !== new Date(now).toDateString()) {
+        schoolRateState.invokesToday = 0;
+        schoolRateState.dayStart = now;
+    }
+    if (now - schoolRateState.lastInvokedAt < SCHOOL_MIN_INTERVAL_MS) {
+        const nextAt = new Date(schoolRateState.lastInvokedAt + SCHOOL_MIN_INTERVAL_MS).toLocaleTimeString();
+        return { ok: false, message: `School ran recently. Next available at ${nextAt}.` };
+    }
+    if (schoolRateState.invokesToday >= SCHOOL_DAILY_CAP) {
+        return { ok: false, message: `School daily cap (${SCHOOL_DAILY_CAP}) reached. Try again tomorrow.` };
+    }
+    schoolRateState.lastInvokedAt = now;
+    schoolRateState.invokesToday++;
+    return { ok: true };
+}
+
+function renderSchoolLog(limit = 10) {
+    const logPath = path.join(workDir, 'school', 'log.jsonl');
+    if (!fs.existsSync(logPath)) return 'No school sessions yet.';
+    const lines = fs.readFileSync(logPath, 'utf8').trim().split('\n').filter(Boolean);
+    if (lines.length === 0) return 'No school sessions yet.';
+    const recent = lines.slice(-limit).reverse();
+    const rows = recent.map(l => {
+        try {
+            const e = JSON.parse(l);
+            const when = new Date(e.started_at || e.ended_at || 0).toISOString().slice(0, 10);
+            const n = (e.proposals || []).length;
+            return `• ${when} — ${e.trigger || 'on_demand'} · ${n} proposal${n === 1 ? '' : 's'}`;
+        } catch (_) { return '• (malformed entry)'; }
+    });
+    return `*Recent school sessions*\n\n${rows.join('\n')}`;
+}
 
 function init(d) {
     deps = d;
@@ -202,6 +245,40 @@ Use YAML frontmatter with \`name\`, \`description\`, and \`triggers\` fields.`;
             }
             response += `\nRun a skill: \`/skill name\``;
             return response;
+        }
+
+        case '/school': {
+            const arg = (args || '').trim().toLowerCase();
+            if (arg === 'log') return renderSchoolLog();
+            if (arg && arg !== '') return 'Unknown /school subcommand. Try `/school` (run) or `/school log` (history).';
+            const gate = checkSchoolRateLimit();
+            if (!gate.ok) return gate.message;
+            // Dispatch via the skill matcher — same pattern as /skill <name>.
+            // The bundled go-to-school SKILL.md declares 'go to school' as a trigger.
+            return { __skillFallthrough: true, trigger: 'go to school' };
+        }
+
+        case '/school-reset': {
+            pendingSchoolReset = { expires_at: Date.now() + SCHOOL_RESET_TTL_MS };
+            return 'This will discard the current open school session and any drafts. Reply `/school-reset-confirm` within 60s to proceed.';
+        }
+
+        case '/school-reset-confirm': {
+            if (!pendingSchoolReset || pendingSchoolReset.expires_at < Date.now()) {
+                pendingSchoolReset = null;
+                return 'No pending reset — type `/school-reset` first.';
+            }
+            pendingSchoolReset = null;
+            try { fs.unlinkSync(path.join(workDir, 'SCHOOL.md')); } catch (_) {}
+            try {
+                const draftsDir = path.join(workDir, 'school', 'drafts');
+                if (fs.existsSync(draftsDir)) {
+                    for (const f of fs.readdirSync(draftsDir)) {
+                        try { fs.unlinkSync(path.join(draftsDir, f)); } catch (_) {}
+                    }
+                }
+            } catch (_) {}
+            return 'School state cleared.';
         }
 
         case '/version': {
