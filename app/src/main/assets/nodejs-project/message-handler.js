@@ -562,7 +562,7 @@ async function handleMessage(normalized) {
                             try {
                                 const mdContent = fs.readFileSync(saved.localPath, 'utf8');
                                 if (mdContent.startsWith('---')) {
-                                    const installResult = await deps.executeTool('skill_install', { content: mdContent }, chatId);
+                                    const installResult = await deps.executeTool('skill_install', { content: mdContent }, chatId, messageId);
                                     if (installResult && installResult.result) {
                                         deps.log(`Skill auto-installed from attachment: ${installResult.result}`, 'INFO');
                                         // Set flag BEFORE sendMessage so a Telegram error can't cause a fall-through to chat()

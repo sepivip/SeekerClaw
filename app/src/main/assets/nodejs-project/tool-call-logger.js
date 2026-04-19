@@ -18,19 +18,23 @@ class ToolCallLogger {
         if (this.timer.unref) this.timer.unref();  // don't block Node exit on this timer
     }
 
-    record(row) {
-        if (this.stopped) return;
-        this.buffer.push(row);
+    _enforceHardCap() {
+        // Persistent flush failure (e.g. db closed / disk full) will accumulate
+        // unboundedly via unshift on the error path. Drop oldest to prevent
+        // memory leak. Honest tradeoff: we already accept 5s data loss on abrupt
+        // kill; persistent-failure loss is the same tradeoff at a different scale.
         const hardCap = this.maxBufferSize * this.MAX_BUFFER_HARD_CAP_MULTIPLIER;
         if (this.buffer.length > hardCap) {
-            // Persistent flush failure (e.g. db closed / disk full) will accumulate
-            // unboundedly via unshift on the error path. Drop oldest to prevent
-            // memory leak. Honest tradeoff: we already accept 5s data loss on abrupt
-            // kill; persistent-failure loss is the same tradeoff at a different scale.
             const drop = this.buffer.length - hardCap;
             this.buffer.splice(0, drop);
             this.log(`[ToolCallLogger] buffer hard-cap exceeded; dropped ${drop} oldest rows`, 'WARN');
         }
+    }
+
+    record(row) {
+        if (this.stopped) return;
+        this.buffer.push(row);
+        this._enforceHardCap();
         if (this.buffer.length >= this.maxBufferSize) {
             // Fire-and-forget; batch flush on next tick.
             setImmediate(() => this.flushNow().catch(() => {}));
@@ -81,6 +85,9 @@ class ToolCallLogger {
             this.log(`[ToolCallLogger] flush failed: ${e.message}`, 'ERROR');
             // Put the batch back at the head so we don't lose it silently
             this.buffer.unshift(...batch);
+            // Failed unshift may push buffer over hard cap if records accumulated
+            // concurrently during the in-flight flush; enforce same policy as record().
+            this._enforceHardCap();
         } finally {
             this.flushing = false;
         }

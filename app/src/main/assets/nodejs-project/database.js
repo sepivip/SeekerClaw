@@ -76,8 +76,11 @@ function createToolCallLogSchema(dbInstance) {
 
 // Cap applied on next startup; mid-session growth is bounded by mobile reboot cadence.
 const TOOL_CALL_LOG_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;  // 30 days
-// Row cap for tool_call_log only; skill_trigger_log is naturally bounded by UNIQUE(skill_name, message_id)
+// Row cap for tool_call_log (each row is larger + tool calls happen more frequently than triggers).
 const MAX_TOOL_CALL_LOG_ROWS = 50000;
+// Row cap for skill_trigger_log. UNIQUE(skill_name, message_id) bounds dup-per-message,
+// but the row count can still grow large over 30 days on a busy device.
+const MAX_SKILL_TRIGGER_LOG_ROWS = 20000;
 
 function purgeOldLogs(dbInstance, now = Date.now()) {
     const cutoff = now - TOOL_CALL_LOG_RETENTION_MS;
@@ -92,6 +95,11 @@ function purgeOldLogs(dbInstance, now = Date.now()) {
             SELECT id FROM tool_call_log ORDER BY created_at DESC LIMIT -1 OFFSET ?
         )`, [MAX_TOOL_CALL_LOG_ROWS]);
     } catch (e) { log(`[DB] purge tool_call_log by row cap failed (non-fatal): ${e.message}`, 'WARN'); }
+    try {
+        dbInstance.run(`DELETE FROM skill_trigger_log WHERE id IN (
+            SELECT id FROM skill_trigger_log ORDER BY created_at DESC LIMIT -1 OFFSET ?
+        )`, [MAX_SKILL_TRIGGER_LOG_ROWS]);
+    } catch (e) { log(`[DB] purge skill_trigger_log by row cap failed (non-fatal): ${e.message}`, 'WARN'); }
 }
 
 function createSkillTriggerLogSchema(dbInstance) {

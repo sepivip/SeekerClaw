@@ -2132,7 +2132,7 @@ async function chat(chatId, userMessage, options = {}) {
                             if (confirmed) {
                                 const status = deferStatus(chatId, TOOL_STATUS_MAP[toolUse.name]);
                                 try {
-                                    result = await _deps.executeTool(toolUse.name, toolUse.input, chatId);
+                                    result = await _deps.executeTool(toolUse.name, toolUse.input, chatId, options.messageId);
                                     if (_deps.lastToolUseTime) _deps.lastToolUseTime.set(toolUse.name, Date.now());
                                 } finally {
                                     await status.cleanup();
@@ -2146,7 +2146,7 @@ async function chat(chatId, userMessage, options = {}) {
                         // Normal tool execution (no confirmation needed)
                         const status = deferStatus(chatId, TOOL_STATUS_MAP[toolUse.name]);
                         try {
-                            result = await _deps.executeTool(toolUse.name, toolUse.input, chatId);
+                            result = await _deps.executeTool(toolUse.name, toolUse.input, chatId, options.messageId);
                         } finally {
                             await status.cleanup();
                         }
