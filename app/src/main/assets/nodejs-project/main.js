@@ -724,6 +724,7 @@ telegram('getMe')
                     { command: 'resume', description: 'Resume an interrupted task' },
                     { command: 'approve', description: 'Confirm pending action' },
                     { command: 'deny', description: 'Reject pending action' },
+                    { command: 'school', description: 'Self-improvement scan — propose skills' },
                     { command: 'help', description: 'List all commands' },
                     { command: 'commands', description: 'List all commands' },
                 ],
@@ -743,6 +744,30 @@ telegram('getMe')
                     log(`setMyCommands failed: ${JSON.stringify(r)}`, 'WARN');
                 }
             }).catch(e => log(`setMyCommands error: ${e.message}`, 'WARN'));
+
+            // Stale /school session cleanup on boot — if SCHOOL.md has been sitting
+            // open for > 48h (user walked away mid-review, or the app crashed during
+            // one), auto-end it and notify the owner. Fails open: any error is logged
+            // at WARN and does not block boot.
+            try {
+                const { SCHOOL_STALE_THRESHOLD_MS, buildStaleEndEntry } = require('./tools/school');
+                const { readSchoolMd, appendLogLine, schoolMdPath } = require('./school');
+                const pre = readSchoolMd(workDir);
+                if (pre && (Date.now() - (pre.started_at || 0)) > SCHOOL_STALE_THRESHOLD_MS) {
+                    appendLogLine(workDir, buildStaleEndEntry(pre, Date.now()));
+                    try { fs.unlinkSync(schoolMdPath(workDir)); } catch (_) {}
+                    const ownerChat = parseInt(getOwnerId(), 10);
+                    if (!isNaN(ownerChat)) {
+                        telegram('sendMessage', {
+                            chat_id: ownerChat,
+                            text: `Cleaned up a stale /school session from ${new Date(pre.started_at).toLocaleString()}.`,
+                            disable_notification: true,
+                        }).catch(e => log(`[school] stale-notice send failed: ${e.message}`, 'WARN'));
+                    }
+                }
+            } catch (e) {
+                log(`[school] stale cleanup failed: ${e.message}`, 'WARN');
+            }
 
             poll();
             startClaudeUsagePolling();
