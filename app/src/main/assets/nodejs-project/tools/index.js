@@ -61,12 +61,12 @@ const schoolTools = [
     },
     {
         name: 'school_handle_input',
-        description: 'Advance the school session state machine. Agent calls this for school-relevant inputs (yes/no/review/skip/stop) after classifying user input via the classification rubric in the go-to-school skill. Returns the new state + next_action to execute. NOT called for unrelated messages — those route through normal message handling.',
+        description: 'Advance the school session state machine. Agent calls this for school-relevant inputs (yes/no/review/skip/stop) after classifying user input via the classification rubric in the go-to-school skill. Returns the new state + next_action to execute. NOT called for unrelated messages — those route through normal message handling. `input.message_date` may be ms or unix-seconds (both accepted; normalized to ms internally). The handler reads authoritative state from workspace/SCHOOL.md; pass `state` only as a first-turn fallback when the session record is not yet written.',
         input_schema: { type: 'object', properties: {
             session_id: { type: 'string' },
             state: { type: 'object' },
             input: { type: 'object' },
-        }, required: ['session_id', 'state', 'input'] },
+        }, required: ['session_id', 'input'] },
     },
 ];
 

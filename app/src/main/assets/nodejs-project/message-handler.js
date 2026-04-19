@@ -67,6 +67,13 @@ function assertInit() {
 
 async function handleCommand(chatId, command, args) {
     assertInit();
+    // Auto-cancel any pending /school-reset confirmation on ANY other command.
+    // Without this, a user could /school-reset, chat for 50s, then accidentally
+    // wipe state by sending /school-reset-confirm within the 60s TTL. The
+    // confirmation should only apply to the immediately-following input.
+    if (command !== '/school-reset-confirm' && command !== '/school-reset' && pendingSchoolReset) {
+        pendingSchoolReset = null;
+    }
     switch (command) {
         case '/start': {
             // Templates defined in TEMPLATES.md — update there first, then sync here
@@ -501,6 +508,15 @@ async function handleMessage(normalized) {
         // P2.4: resume flag — set by /resume handler, passed to chat() as option
         let isResume = false;
         let resumeGoal = null;
+
+        // Auto-cancel any pending /school-reset confirmation on a NON-command
+        // message (plain chat). The confirmation window is intended for the
+        // immediately-following user action only. Command messages get the
+        // same treatment inside handleCommand (except /school-reset-confirm
+        // and /school-reset themselves).
+        if (!combinedText.startsWith('/') && pendingSchoolReset) {
+            pendingSchoolReset = null;
+        }
 
         // Check for commands (use combinedText so /commands work even in replies)
         if (combinedText.startsWith('/')) {

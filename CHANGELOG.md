@@ -3,11 +3,6 @@
 All notable changes to SeekerClaw are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
-
-### Added (internal — no user-facing change yet)
-- **Tool-call + skill-trigger logging infrastructure** — new `tool_call_log` and `skill_trigger_log` SQL.js tables record every tool invocation and skill-trigger match on-device. Buffered async logger (5s / 100-row flush, re-trigger on backlog, 10× hard cap on persistent failure) keeps writes off the tool-execution hot path. Per-tool `call_shape` structural classifier buckets calls without leaking sensitive values (wallet addresses, URL query strings, user text, private filenames). 30-day retention with 50,000-row cap, purged on service start off the boot critical path. Foundational for the upcoming **Go to School** self-improvement feature — no user-visible behavior change in this release.
-
 ## [1.9.0] - 2026-04-13
 
 ### Added

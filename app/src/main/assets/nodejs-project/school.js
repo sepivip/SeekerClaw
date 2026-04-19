@@ -24,12 +24,30 @@ function signatureOf(type, title) {
 }
 
 const STALE_BARE_YES_MS = 60 * 1000;
+// Unix-seconds timestamps are bounded by ~1e10 through year 2286; any ms
+// timestamp post-2001 is > 1e12. Use 1e12 as the dividing line — if a caller
+// hands us seconds (e.g. forwarded straight from Telegram's message.date),
+// normalize to ms so STALE_BARE_YES_MS stays meaningful.
+const MS_SECONDS_THRESHOLD = 1e12;
+function toMs(t) {
+    const n = Number(t);
+    if (!Number.isFinite(n)) return 0;
+    return n < MS_SECONDS_THRESHOLD ? n * 1000 : n;
+}
 
 // transition(state, input) — pure function, no I/O.
 // state: { kind: 'awaiting_approval' | 'reviewing_<N>' | 'done' | 'scanning', open_proposal_ns: int[], reviewing_n?: int, reviewing_opened_at?: ms }
-// input: { kind: 'yes'|'no'|'review'|'skip'|'stop', proposal_n?: int, message_date: ms, raw_text?: string }
+// input: { kind: 'yes'|'no'|'review'|'skip'|'stop', proposal_n?: int, message_date: ms-or-seconds, raw_text?: string }
+//   - message_date is normalized to ms at the boundary. Passing seconds (Telegram's
+//     message.date) or ms (Date.now()) both work; state is always stored in ms.
 // returns: { nextState, nextAction: { kind, ...details } }
 function transition(state, input) {
+    // Normalize time-bearing fields to ms so the state machine can compare
+    // against STALE_BARE_YES_MS uniformly regardless of caller's unit choice.
+    const normalizedInput = { ...input, message_date: toMs(input.message_date) };
+    const normalizedState = { ...state, reviewing_opened_at: toMs(state.reviewing_opened_at) };
+    input = normalizedInput;
+    state = normalizedState;
     const open = state.open_proposal_ns || [];
     const n = input.proposal_n;
     const lastAfterRemoval = (removeN) => open.filter(x => x !== removeN);

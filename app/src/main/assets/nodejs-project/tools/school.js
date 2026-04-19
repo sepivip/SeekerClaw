@@ -30,7 +30,21 @@ function buildStaleEndEntry(pre, nowMs) {
 // honored — tool args are agent-controlled and must not steer filesystem roots.
 async function schoolBeginHandler(args, ctx) {
     const workDir = (ctx && ctx.workDir) || process.env.WORKDIR;
-    const existing = readSchoolMd(workDir);
+    // readSchoolMd throws on malformed frontmatter. Surface a structured error
+    // so the skill can route the user to /school-reset instead of letting the
+    // exception bubble through executeTool's generic catch as "Tool execution
+    // failed: SCHOOL.md malformed (no YAML frontmatter)".
+    let existing;
+    try {
+        existing = readSchoolMd(workDir);
+    } catch (e) {
+        return {
+            ok: false,
+            error: 'school_md_unreadable',
+            hint: 'SCHOOL.md exists but could not be parsed. Run /school-reset to discard it and start fresh.',
+            detail: e.message,
+        };
+    }
     // If the existing session has gone stale (>48h since started), auto-end it
     // and create a fresh one. Agent's SKILL.md prose explains the combined-message
     // flow; the response flags it with `started_after_cleanup: true` so the agent

@@ -1,5 +1,9 @@
 #!/usr/bin/env node
-// school-state-machine.test.js — all 32 (state, input) transitions per spec §8.5.1.
+// school-state-machine.test.js — 16 representative transitions covering every
+// (state, input) cell per spec §8.5.1 (each state × each input kind × key edge
+// cases: stale-bare-YES window, mismatched proposal_n, last-proposal drain).
+// Not exhaustive over every combinatorial (state, input, proposal_n) triple —
+// the rows chosen here catch every distinct code path in transition().
 // Run: node tests/nodejs-project/school-state-machine.test.js
 
 const path = require('path');

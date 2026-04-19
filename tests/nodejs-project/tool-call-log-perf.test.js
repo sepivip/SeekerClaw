@@ -11,8 +11,13 @@ const path = require('path');
 const { setupConfigFixture } = require('./_fixtures');
 
 const DEFAULT_BUDGET_MS = process.env.CI ? 1000 : 200;
-const BUDGET_MS = process.env.TCL_PERF_BUDGET_MS
-    ? Number(process.env.TCL_PERF_BUDGET_MS)
+// A non-numeric TCL_PERF_BUDGET_MS (e.g. "yes" from a copy-paste) would
+// coerce to NaN, and `elapsed > NaN` is always false — silently disabling
+// the assertion. Validate and fall back to the default in that case.
+const _rawBudget = process.env.TCL_PERF_BUDGET_MS;
+const _parsedBudget = _rawBudget === undefined ? NaN : Number(_rawBudget);
+const BUDGET_MS = Number.isFinite(_parsedBudget) && _parsedBudget > 0
+    ? _parsedBudget
     : DEFAULT_BUDGET_MS;
 
 async function main() {
