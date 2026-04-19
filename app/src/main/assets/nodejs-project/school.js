@@ -3,6 +3,8 @@
 // B2+ adds state-machine transition, pattern mining, skill file writers, persistent-log helpers.
 
 const crypto = require('crypto');
+const fs = require('fs');
+const pathMod = require('path');
 
 // normalizeTitle(raw: string) → kebab-case slug.
 // Non-ASCII chars (é, ñ, CJK) are dropped by the [^a-z0-9-] filter — acceptable
@@ -192,4 +194,77 @@ function scanLogs(db, { window_days = 7, min_repetition = 3, now_ms = Date.now()
     };
 }
 
-module.exports = { normalizeTitle, signatureOf, transition, scanLogs };
+function schoolDir(workDir) { return pathMod.join(workDir, 'school'); }
+function schoolMdPath(workDir) { return pathMod.join(workDir, 'SCHOOL.md'); }
+function schoolLogPath(workDir) { return pathMod.join(workDir, 'school', 'log.jsonl'); }
+
+function ensureSchoolDir(workDir) {
+    const d = schoolDir(workDir);
+    fs.mkdirSync(d, { recursive: true });
+    fs.mkdirSync(pathMod.join(d, 'drafts'), { recursive: true });
+    fs.mkdirSync(pathMod.join(d, 'retired'), { recursive: true });
+}
+
+function writeSchoolMd(workDir, sessionObj) {
+    ensureSchoolDir(workDir);
+    const frontmatter = [
+        '---',
+        `session_id: ${sessionObj.session_id}`,
+        `started_at: ${sessionObj.started_at}`,
+        `trigger: ${sessionObj.trigger || 'on_demand'}`,
+        `state: ${sessionObj.state || 'scanning'}`,
+        `window_days: ${sessionObj.window_days || 7}`,
+        `open_proposal_ns: [${(sessionObj.open_proposal_ns || []).join(', ')}]`,
+        `rubric_version: "${sessionObj.rubric_version || '1.0.0'}"`,
+        sessionObj.reviewing_opened_at ? `reviewing_opened_at: ${sessionObj.reviewing_opened_at}` : '',
+        '---',
+        '',
+        `# School Session — ${new Date(sessionObj.started_at).toISOString()}`,
+        '',
+        '## Proposals',
+        JSON.stringify(sessionObj.proposals || [], null, 2),
+        '',
+    ].filter(Boolean).join('\n');
+    fs.writeFileSync(schoolMdPath(workDir), frontmatter);
+}
+
+function readSchoolMd(workDir) {
+    const p = schoolMdPath(workDir);
+    if (!fs.existsSync(p)) return null;
+    const content = fs.readFileSync(p, 'utf8');
+    const m = content.match(/^---\n([\s\S]+?)\n---/);
+    if (!m) throw new Error('SCHOOL.md malformed (no YAML frontmatter)');
+    const fm = {};
+    for (const line of m[1].split('\n')) {
+        const kv = line.match(/^(\w+):\s*(.+)$/);
+        if (!kv) continue;
+        const [, k, v] = kv;
+        if (k === 'open_proposal_ns') {
+            fm[k] = v.replace(/[\[\]]/g, '').split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n));
+        } else if (k === 'started_at' || k === 'reviewing_opened_at' || k === 'window_days') {
+            fm[k] = parseInt(v, 10);
+        } else {
+            fm[k] = v.replace(/^["']|["']$/g, '');
+        }
+    }
+    let proposals = [];
+    const pm = content.match(/## Proposals\n(\[[\s\S]*?\])\n/);
+    if (pm) {
+        try { proposals = JSON.parse(pm[1]); } catch (_) { proposals = []; }
+    }
+    return { ...fm, proposals, raw: content };
+}
+
+function appendLogLine(workDir, obj) {
+    ensureSchoolDir(workDir);
+    fs.appendFileSync(schoolLogPath(workDir), JSON.stringify(obj) + '\n');
+}
+
+function readPriorSessions(workDir, limit = 10) {
+    const p = schoolLogPath(workDir);
+    if (!fs.existsSync(p)) return [];
+    const lines = fs.readFileSync(p, 'utf8').trim().split('\n').filter(Boolean);
+    return lines.slice(-limit).map(l => { try { return JSON.parse(l); } catch (_) { return null; } }).filter(Boolean);
+}
+
+module.exports = { normalizeTitle, signatureOf, transition, scanLogs, writeSchoolMd, readSchoolMd, appendLogLine, readPriorSessions, ensureSchoolDir, schoolMdPath, schoolLogPath };
