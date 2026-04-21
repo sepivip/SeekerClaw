@@ -4,7 +4,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -652,42 +651,35 @@ private fun MessageActivityHeatmap(dailyActivity: List<DayActivity>) {
         } else {
             // Fixed 26-week window — no horizontal scroll. Cells size responsively
             // within a 6–16dp range; at typical phone widths they land around 10–12dp.
-            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-                val numWeeks = weeks.size
-                val availableWidth = maxWidth
-                val totalGaps = cellGap * (numWeeks - 1)
-                val cellSize = ((availableWidth - totalGaps) / numWeeks).coerceIn(6.dp, 16.dp)
-
-                Column {
-                    // Grid: 7 rows x 26 weeks
-                    for (dayOfWeek in 0..6) {
-                        Row {
-                            for (weekIndex in weeks.indices) {
-                                val date = weeks[weekIndex][dayOfWeek]
-                                // Past + today → normal heatmap color; future days in the
-                                // current week stay blank so "today" is visually the last
-                                // filled cell.
-                                val color = if (date <= today) {
-                                    heatmapColorForCount(dateCountMap[date] ?: 0, thresholds)
-                                } else {
-                                    Color.Transparent
-                                }
-                                Box(
-                                    modifier = Modifier
-                                        .size(cellSize)
-                                        .background(color, cellShape),
-                                )
-                                if (weekIndex < numWeeks - 1) {
-                                    Spacer(modifier = Modifier.width(cellGap))
-                                }
+            // Grid: 7 rows × 26 weeks. Weighted cells + spacedBy arrangement let
+            // Compose distribute the exact available width — no manual rounding,
+            // no right-edge clipping. aspectRatio(1f) keeps cells square.
+            Column(verticalArrangement = Arrangement.spacedBy(cellGap)) {
+                for (dayOfWeek in 0..6) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(cellGap),
+                    ) {
+                        for (weekIndex in weeks.indices) {
+                            val date = weeks[weekIndex][dayOfWeek]
+                            // Past + today → normal heatmap color; future days in the
+                            // current week stay blank so "today" is visually the last
+                            // filled cell.
+                            val color = if (date <= today) {
+                                heatmapColorForCount(dateCountMap[date] ?: 0, thresholds)
+                            } else {
+                                Color.Transparent
                             }
-                        }
-                        if (dayOfWeek < 6) {
-                            Spacer(modifier = Modifier.height(cellGap))
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .aspectRatio(1f)
+                                    .background(color, cellShape),
+                            )
                         }
                     }
                 }
-            } // BoxWithConstraints
+            }
 
             Spacer(modifier = Modifier.height(12.dp))
 
