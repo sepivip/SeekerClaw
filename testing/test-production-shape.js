@@ -14,8 +14,13 @@ if (!token) {
     process.exit(1);
 }
 
-// Approximate a realistic system prompt (SeekerClaw prompts are ~4-8k tokens).
-// 800 lines × 80 chars ≈ 64k chars ≈ 16k tokens — on the high side but realistic.
+// Approximate a realistic system prompt. Actual size here:
+//   50 × ~75 chars ≈  3.7k chars
+//  200 × ~40 chars ≈  8.0k chars
+//              sum ≈ 11.7k chars ≈ ~3k tokens (rough 4 chars/token).
+// SeekerClaw's real system prompt is ~4–8k tokens; 3k is on the low end but
+// enough to exercise the cache_control path + meet Anthropic's 1024-token
+// minimum for prompt caching.
 const STABLE_PROMPT = 'You are SeekerClaw, a personal AI agent running on a Solana Seeker phone.\n'.repeat(50) +
     'Be concise. Use tools when appropriate. '.repeat(200);
 
@@ -120,7 +125,10 @@ function summarize(res) {
 async function main() {
     console.log('🧪 Production-shape test (streaming + tools + cache)');
     console.log(`   Time: ${new Date().toISOString()}`);
-    console.log(`   Token: ${token.slice(0, 14)}... (len=${token.length})`);
+    // Only log the fixed, non-secret prefix (13 chars: "sk-ant-oat01-") — never
+    // bytes of the actual token, so CI logs/console scrollback can't leak it.
+    const prefix = token.startsWith('sk-ant-oat01-') ? 'sk-ant-oat01-' : '<unknown-prefix>';
+    console.log(`   Token: ${prefix}[REDACTED] (len=${token.length})`);
 
     const scenarios = [
         { label: 'A: stream=false, no tools, billing, system cache', opts: { stream: false, withTools: false, withBilling: true, cacheOnSystem: true }},
