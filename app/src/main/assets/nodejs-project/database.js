@@ -477,9 +477,11 @@ process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 // DB SUMMARY & STATS SERVER (BAT-31)
 // ============================================================================
 
-// Daily message counts for heatmap (up to 13 months of history)
-// Note: counts API requests (api_request_log rows) — each user message = 1+ API calls.
-// UI labels this as "messages" which is close enough for activity visualization.
+// Daily request counts for the Activity heatmap (up to 13 months of history).
+// Each row in api_request_log is one API call to the model — note that a single
+// user message can produce multiple API calls via tool-use loops, retries, or
+// background session summaries. The UI reflects this accurately: the section is
+// labeled "Activity" and the total reads "X requests" (not "messages").
 function getDailyActivity() {
     if (!db) return [];
     try {

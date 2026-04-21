@@ -177,7 +177,7 @@ fun SystemScreen(onBack: () -> Unit) {
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        // ==================== MESSAGE ACTIVITY ====================
+        // ==================== ACTIVITY ====================
         SectionLabel("Activity")
         Spacer(modifier = Modifier.height(8.dp))
 
