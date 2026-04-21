@@ -1618,6 +1618,7 @@ function sanitizeConversation(messages, turnId) {
 // Context window limits per model (input tokens). Conservative — actual limits may be
 // slightly higher, but underestimating is safer than overestimating.
 const MODEL_CONTEXT_LIMITS = {
+    'claude-opus-4-7':     200000,
     'claude-opus-4-6':     200000,
     'claude-sonnet-4-6':   200000,
     'claude-sonnet-4-5':   200000,

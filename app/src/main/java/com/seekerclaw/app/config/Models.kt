@@ -6,8 +6,9 @@ data class ModelInfo(
 )
 
 val availableModels = listOf(
-    ModelInfo("claude-sonnet-4-6", "Sonnet 4.6"),
+    ModelInfo("claude-opus-4-7", "Opus 4.7"),
     ModelInfo("claude-opus-4-6", "Opus 4.6"),
+    ModelInfo("claude-sonnet-4-6", "Sonnet 4.6"),
     ModelInfo("claude-haiku-4-5", "Haiku 4.5"),
 )
 

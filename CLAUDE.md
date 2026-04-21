@@ -168,9 +168,9 @@ REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, POST_NOTIFICATIONS
 ## Model List
 
 Available models for the dropdown (using API aliases — auto-resolve to latest snapshot):
-- `claude-opus-4-6` — smartest, most expensive (Opus 4.6)
+- `claude-opus-4-7` — smartest, newest (Opus 4.7) — **default for fresh installs**
+- `claude-opus-4-6` — previous flagship (Opus 4.6)
 - `claude-sonnet-4-6` — balanced, recommended (Sonnet 4.6)
-- `claude-sonnet-4-5` — previous gen, still solid (Sonnet 4.5)
 - `claude-haiku-4-5` — fast, cheapest (Haiku 4.5)
 
 Defined in `app/src/main/java/com/seekerclaw/app/config/Models.kt`.
@@ -197,7 +197,7 @@ Base64-encoded JSON:
   "anthropic_api_key": "sk-ant-api03-...",
   "telegram_bot_token": "123456789:ABCdefGHI...",
   "telegram_owner_id": "987654321",
-  "model": "claude-sonnet-4-5",
+  "model": "claude-opus-4-7",
   "agent_name": "MyAgent"
 }
 ```

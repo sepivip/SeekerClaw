@@ -1,6 +1,6 @@
 # WEBSITE.md — Website Content
 
-> Last updated: 2026-04-04 | Last deployed: _never_
+> Last updated: 2026-04-21 | Last deployed: _never_
 >
 > **Rule:** Every item must earn its screen space. Less is more.
 > Before deploying, review the Editorial Notes in each section.
@@ -37,8 +37,8 @@
 | Value | Label | Why this stat? |
 |-------|-------|---------------|
 | 150,000+ | Seeker Devices | Social proof — large addressable market |
-| 56+ | Built-in Tools | Shows depth — but consider "50+" for cleaner number |
-| 312+ | PRs Shipped | Shows velocity — but do users care about PRs? |
+| 60+ | Built-in Tools | Shows depth — but consider "50+" for cleaner number |
+| 320+ | PRs Shipped | Shows velocity — but do users care about PRs? |
 | 24/7 | Autonomous Agent | Key differentiator — always on |
 
 <!-- REVIEW: Is "PRs Shipped" the right 3rd stat? Alternatives:
@@ -185,7 +185,7 @@ reminders, research, and more. Export, import, and share skills as files.
 - Android device bridge (SMS, calls, GPS, camera, apps, contacts)
 - Solana wallet (balance, send, swap, limit orders, DCA)
 - Telegram with reactions, file sharing, and AI vision
-- 56 built-in tools with analytics
+- 60 built-in tools with analytics
 - Natural language cron scheduling
 - Multi-provider web search + page reading
 - MCP server support for extensible tools
@@ -194,11 +194,24 @@ reminders, research, and more. Export, import, and share skills as files.
 - NFT holdings viewer (Helius DAS API — regular + compressed NFTs)
 - Cron agent turns — scheduled jobs run full AI conversations
 - Session memory — agent remembers context across restarts
-- Multi-provider support (Claude + OpenAI + OpenRouter — 100+ models)
-- OpenClaw v2026.3.13 parity
+- Multi-provider support (Claude + OpenAI + OpenRouter + Custom OpenAI-compatible gateways)
+- OAuth / ChatGPT subscription auth — connect your Claude Max or ChatGPT plan instead of paying per token
+- User-managed env vars — skill `requires.env` gates unlocked, paste-`.env` bulk import
+- OpenClaw v2026.4.10 parity
 - Open-source: MIT license, CI/CD, community contribution ready
 - Self-aware agent: 100% SAB score (36/36 audit points)
 - Discord channel support — full feature parity with Telegram (tools, confirmations, reactions)
+
+<!-- REVIEW 2026-04-21: OAuth/ChatGPT-auth and Env Vars are new user-facing wins since last update.
+     OAuth lets users bring their existing Claude Max / ChatGPT subscriptions — strong hook.
+     Consider promoting OAuth to a Feature Card (replace "Modular Skill System" which is weaker)
+     or lead with it in the hero subheader. -->
+<!-- REVIEW 2026-04-21: Shipped list now 21 items — still too long. Candidates to cut for
+     user-facing deploy: "Open-source", "OpenClaw parity", "MCP server support".
+     Keep "Self-aware agent" — the 100% SAB is a tangible quality signal. -->
+<!-- REVIEW 2026-04-21: Consider replacing "Modular Skill System" feature card with
+     "Bring Your Own AI" — Claude / OpenAI / OpenRouter / Custom + OAuth flows. Many users
+     already have Claude Max or ChatGPT Plus; this removes a payment barrier. -->
 
 <!-- REVIEW: 10 items. Max ~8 for readability. Consider cutting:
    - "OpenClaw parity" — meaningless to users, internal metric

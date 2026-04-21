@@ -4,13 +4,13 @@ const fs = require('fs');
 const path = require('path');
 
 const ALL_MODELS = [
+    'claude-opus-4-7',
     'claude-opus-4-6',
     'claude-sonnet-4-6',
-    'claude-sonnet-4-5',
     'claude-haiku-4-5',
 ];
 
-const CC_BILLING_HEADER = 'x-anthropic-billing-header: cc_version=2.1.78; cc_entrypoint=cli; cch=00000;';
+const CC_BILLING_HEADER = 'x-anthropic-billing-header: cc_version=2.1.116; cc_entrypoint=cli; cch=00000;';
 
 function loadEnv() {
     const envPath = path.join(__dirname, '.env');

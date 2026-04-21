@@ -113,7 +113,7 @@ function fromApiResponse(raw) {
 
 // ── Billing attribution (required for OAuth/setup-token access to non-Haiku models) ─
 
-const CC_BILLING_HEADER = 'x-anthropic-billing-header: cc_version=2.1.78; cc_entrypoint=cli; cch=00000;';
+const CC_BILLING_HEADER = 'x-anthropic-billing-header: cc_version=2.1.116; cc_entrypoint=cli; cch=00000;';
 
 // ── System prompt ───────────────────────────────────────────────────────────
 

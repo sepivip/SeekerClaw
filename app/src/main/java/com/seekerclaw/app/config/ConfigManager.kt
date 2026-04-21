@@ -546,7 +546,7 @@ object ConfigManager {
             authType = resolveAuthType(p),
             telegramBotToken = botToken,
             telegramOwnerId = loadOwnerIdFromFile(context, "telegram"),
-            model = p.getString(KEY_MODEL, "claude-opus-4-6") ?: "claude-opus-4-6",
+            model = p.getString(KEY_MODEL, "claude-opus-4-7") ?: "claude-opus-4-7",
             agentName = p.getString(KEY_AGENT_NAME, "MyAgent") ?: "MyAgent",
             braveApiKey = braveApiKey,
             searchProvider = p.getString(KEY_SEARCH_PROVIDER, "brave") ?: "brave",
@@ -1206,7 +1206,7 @@ object ConfigManager {
             "claude" -> if (config?.authType == "setup_token") "Pro/Max Setup Token" else "API key"
             else -> "API key"
         }
-        val aiModel = config?.model ?: "claude-opus-4-6"
+        val aiModel = config?.model ?: "claude-opus-4-7"
 
         // Timestamp
         val sdf = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.US)

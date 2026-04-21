@@ -32,7 +32,7 @@ node test-headers.js    # Diagnose which header combos work per model
 ```env
 ANTHROPIC_API_KEY=          # Standard API key (sk-ant-api03-...)
 SETUP_TOKEN=                # Max Pro setup token (sk-ant-oat01-...)
-TEST_MODELS=all             # "all" or comma-separated: claude-opus-4-6,claude-haiku-4-5
+TEST_MODELS=all             # "all" or comma-separated: claude-opus-4-7,claude-haiku-4-5
 ```
 
 ## Test Results (2026-03-18)
@@ -62,7 +62,7 @@ tokens (`sk-ant-oat01-*`) to access non-Haiku models. This string identifies the
 request as originating from a Claude Code-compatible client:
 
 ```
-x-anthropic-billing-header: cc_version=2.1.78; cc_entrypoint=cli; cch=00000;
+x-anthropic-billing-header: cc_version=2.1.116; cc_entrypoint=cli; cch=00000;
 ```
 
 - Must be a **separate text block** in the `system` array (not concatenated)

@@ -8,7 +8,7 @@ SeekerClaw turns a Solana Seeker phone into a 24/7 personal AI agent you control
 
 ## Elevator Pitch
 
-SeekerClaw embeds a full Node.js runtime inside an Android app, running an OpenClaw-compatible AI gateway as a foreground service. Users interact with their agent through Telegram — the app itself is minimal (setup, status, logs, settings). The agent has 72 tools, 35 skills (20 bundled + 13 workspace + 2 user-created), ranked memory search, cron scheduling, Android device control, Solana wallet integration, and web intelligence — all running locally on the phone, 24/7. Supports both Telegram and Discord channels.
+SeekerClaw embeds a full Node.js runtime inside an Android app, running an OpenClaw-compatible AI gateway as a foreground service. Users interact with their agent through Telegram — the app itself is minimal (setup, status, logs, settings). The agent has 60 tools + MCP dynamic, 35 skills (20 bundled + 13 workspace + 2 user-created), ranked memory search, cron scheduling, Android device control, Solana wallet integration, and web intelligence — all running locally on the phone, 24/7. Supports both Telegram and Discord channels.
 
 ## What It Is
 
@@ -30,10 +30,10 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 | UI Framework | Jetpack Compose (Material 3) | — |
 | Min SDK | 34 (Android 14) | — |
 | Node.js Runtime | nodejs-mobile (community fork) | Node 18 LTS |
-| AI Provider | Anthropic Claude API + OpenAI Responses API + OpenRouter Chat Completions + Custom (any OpenAI-compatible gateway) | Claude Opus 4.6 default; OpenAI + OpenRouter + Custom via adapters |
+| AI Provider | Anthropic Claude API + OpenAI Responses API + OpenRouter Chat Completions + Custom (any OpenAI-compatible gateway) | Claude Opus 4.7 default; OpenAI + OpenRouter + Custom via adapters |
 | Messaging | Telegram Bot API (grammy) | — |
 | Database | SQL.js (WASM SQLite) | 1.12.0 |
-| OpenClaw Parity | OpenClaw gateway (ported) | 2026.3.24 |
+| OpenClaw Parity | OpenClaw gateway (ported) | 2026.4.10 |
 | Web Search | Brave, Perplexity, Exa, Tavily, Firecrawl (single-provider) | — |
 | Wallet | Solana Web3.js + Jupiter API | — |
 | Build | Gradle (Kotlin DSL) | — |
@@ -41,7 +41,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 ## Features — Shipped
 
 ### AI Agent Core
-- **Claude integration** — Opus 4.6 (default), Sonnet 4.6, Sonnet 4.5, Haiku 4.5 selectable. Prompt caching, retry with backoff, rate-limit throttling, user-friendly error messages. OAuth/setup token support for Claude Pro/Max users. Conversational API key setup flow.
+- **Claude integration** — Opus 4.7 (default), Opus 4.6, Sonnet 4.6, Haiku 4.5 selectable. Prompt caching, retry with backoff, rate-limit throttling, user-friendly error messages. OAuth/setup token support for Claude Pro/Max users. Conversational API key setup flow.
 - **Multi-provider architecture** — Provider adapter pattern (claude/openai/openrouter/custom) with unified internal message format. OpenAI Responses API support (`/v1/responses`) with SSE streaming, function_call items, vision. OpenRouter Chat Completions adapter with prompt caching, model fallbacks, error classification (401-503), vision support. Custom provider for any OpenAI-compatible gateway — user-configurable base URL, API key, custom headers, and Chat Completions or Responses API format. Provider-agnostic DB logging and usage tracking. Safe defaults — unknown provider falls back to Claude. Credential hygiene — only active provider's key written to config.json.
 - **Multi-turn task execution** — Reliable P2 multi-turn: tool budget management with validation-aware restore, silent turn stop prevention on budget exhaustion, MAX_TOOL_USES=25 for complex tasks
 - **API timeout hardening** — Configurable timeouts (replacing hardcoded 60s), bounded retry with backoff for timeout paths, turn-level tracing instrumentation, sanitized user-visible error messages, 429 retry jitter
@@ -236,9 +236,9 @@ User (Telegram/Discord) <--HTTPS/WSS--> Channel API <--polling/WS--> Node.js Gat
 
 | Metric | Count |
 |--------|-------|
-| Total commits | 495+ |
-| PRs merged | 312+ |
-| Tools | 72 (29 Solana/Jupiter, 13 Android bridge, 6 memory, 5 file, 5 cron, 4 telegram, 4 system, 2 web, 2 skill, 1 session, 1 env) + MCP dynamic |
+| Total commits | 522+ |
+| PRs merged | 320+ |
+| Tools | 60 (17 Solana/Jupiter, 13 Android bridge, 6 memory, 6 file, 5 cron, 4 telegram, 3 system, 2 web, 2 skill, 1 session, 1 env) + MCP dynamic |
 | Skills | 35 (20 bundled + 13 workspace + 2 user-created) |
 | Android Bridge endpoints | 18+ |
 | Telegram commands | 12 |
@@ -279,7 +279,18 @@ User (Telegram/Discord) <--HTTPS/WSS--> Channel API <--polling/WS--> Node.js Gat
 
 | Date | Feature | PR |
 |------|---------|-----|
+| 2026-04-21 | Feat: Add Claude Opus 4.7 + bump cc_version masquerade to 2.1.116 (BAT-498). Opus 4.7 becomes Anthropic default. Drop Sonnet 4.5 from dropdown/docs. | TBD |
 | 2026-04-17 | Feat: Env Vars — user-managed env var store (BAT-495). Feeds `process.env` + unlocks skill `requires.env` gates. New `env_list` tool (names only). Paste-`.env` bulk import. Skills screen inverse surfacing. | #332 |
+| 2026-04-15 | Fix: Settings defaults to OpenAI+OAuth + redesigned OAuth callback page (BAT-495) | #330 |
+| 2026-04-14 | Fix: foreground service keeps network alive during OAuth on Pixel 7 (BAT-494) | #328–329 |
+| 2026-04-14 | Fix: OAuth callback server survives Activity destruction on Pixel 7 (BAT-493) | #327 |
+| 2026-04-13 | Fix: rename silent-reply sentinel to `[[SILENT_REPLY]]` + V8-safe ASCII boundaries (BAT-491/492) | #324, #326 |
+| 2026-04-13 | Fix: OpenAI OAuth on Pixel 7 + fresh-install default (BAT-489) | #323 |
+| 2026-04-11 | Feat: OpenClaw parity port v2026.4.10 | #322 |
+| 2026-04-10 | Fix: graceful search fallback when no provider API key configured | #321 |
+| 2026-04-09 | Feat: Onboarding redesign + design system | #320 |
+| 2026-04-08 | Feat: OpenAI Codex OAuth — ChatGPT subscription auth (BAT-485); fix(BAT-486): SSE parser resolve output_index via item_id | #316, #319 |
+| 2026-04-07 | Refactor: Settings layout — move Quick Setup, extract McpConfigScreen | #313 |
 | 2026-04-04 | Chore: bump v1.8.1 (code 16) + changelog | direct |
 | 2026-04-04 | Fix: Google Play SMS — replace SEND_SMS with intent handoff, no permission required (BAT-484) | #312 |
 | 2026-04-03 | Docs: SAB-AUDIT-v18 — first v3 audit | direct |

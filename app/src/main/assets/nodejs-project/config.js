@@ -210,7 +210,7 @@ const OPENROUTER_FALLBACK_CONTEXT = parseInt(config.openrouterFallbackContext, 1
 const _defaultModel = PROVIDER === 'openai' ? 'gpt-5.2'
     : PROVIDER === 'openrouter' ? 'anthropic/claude-sonnet-4-6'
     : PROVIDER === 'custom' ? ''
-    : 'claude-opus-4-6';
+    : 'claude-opus-4-7';
 const MODEL = config.model || _defaultModel;
 const AGENT_NAME = config.agentName || 'SeekerClaw';
 let BRIDGE_TOKEN = normalizeSecret(config.bridgeToken || '');
