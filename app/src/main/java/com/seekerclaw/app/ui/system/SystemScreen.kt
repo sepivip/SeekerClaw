@@ -122,7 +122,9 @@ fun SystemScreen(onBack: () -> Unit) {
             delay(60_000)
         }
     }
-    // Fetch DB summary every 30s while running; clear on stop
+    // Fetch DB summary every 30s while running; one-shot read when stopped so the
+    // Activity heatmap keeps showing the last-written snapshot from disk instead
+    // of going blank. workspace/db_summary_state persists across service stops.
     LaunchedEffect(status) {
         if (status == ServiceStatus.RUNNING) {
             while (true) {
@@ -131,7 +133,7 @@ fun SystemScreen(onBack: () -> Unit) {
                 delay(if (result != null) 30_000L else 5_000L)
             }
         } else {
-            dbSummary = null
+            dbSummary = fetchDbSummary()
         }
     }
 
