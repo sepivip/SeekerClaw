@@ -2,7 +2,6 @@ package com.seekerclaw.app.ui.system
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -38,7 +37,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import com.seekerclaw.app.ui.theme.RethinkSans
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -61,8 +59,6 @@ import com.seekerclaw.app.util.ServiceStatus
 import com.seekerclaw.app.util.fetchDbSummary
 import java.time.DayOfWeek
 import java.time.LocalDate
-import java.time.format.TextStyle
-import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -181,6 +177,7 @@ fun SystemScreen(onBack: () -> Unit) {
 
         // ==================== MESSAGE ACTIVITY ====================
         SectionLabel("Activity")
+        Spacer(modifier = Modifier.height(8.dp))
 
         // Preserve last known activity data even when service stops
         val lastKnownActivity = remember { mutableStateOf<List<DayActivity>>(emptyList()) }
@@ -585,18 +582,17 @@ private fun StatCard(
 
 @Composable
 private fun MessageActivityHeatmap(dailyActivity: List<DayActivity>) {
-    val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
     val cellGap = 3.dp
     val cellShape = RoundedCornerShape(3.dp)
 
     val today = LocalDate.now()
-    // Current half-year anchored to today (Jan-Jun or Jul-Dec)
-    val halfYearStart = if (today.monthValue <= 6) {
-        LocalDate.of(today.year, 1, 1)
-    } else {
-        LocalDate.of(today.year, 7, 1)
-    }
-    val gridStart = halfYearStart.with(DayOfWeek.MONDAY)
+    // Rolling 26-week window ending with the current week (GitHub-style).
+    // Grid = Mon of 26 weeks ago → Sun of the current week. Today sits wherever
+    // its weekday falls in the rightmost column; later days in that column stay
+    // blank until the week completes.
+    val currentWeekMonday = today.with(DayOfWeek.MONDAY)
+    val gridStart = currentWeekMonday.minusWeeks(25)
+    val gridEnd = currentWeekMonday.plusDays(6) // Sunday of current week
 
     // Build date -> count map
     val dateCountMap = remember(dailyActivity) {
@@ -609,26 +605,12 @@ private fun MessageActivityHeatmap(dailyActivity: List<DayActivity>) {
         }.toMap()
     }
 
-    // End of current half-year (Jun 30 or Dec 31) — show full 6 months including future
-    val halfYearEnd = if (halfYearStart.monthValue == 1) {
-        LocalDate.of(halfYearStart.year, 6, 30)
-    } else {
-        LocalDate.of(halfYearStart.year, 12, 31)
-    }
-
-    // Build weeks grid: each week = 7 days (Mon-Sun), null for out-of-range
-    val weeks = remember(gridStart, halfYearStart, halfYearEnd) {
-        val result = mutableListOf<List<LocalDate?>>()
-        var current = gridStart
-        while (current <= halfYearEnd) {
-            val week = (0 until 7).map { dow ->
-                val day = current.plusDays(dow.toLong())
-                if (day > halfYearEnd || day < halfYearStart) null else day
-            }
-            result.add(week)
-            current = current.plusWeeks(1)
+    // Build weeks grid: 26 weeks × 7 days (Mon-Sun), every cell a real date.
+    val weeks = remember(gridStart) {
+        (0 until 26).map { weekIndex ->
+            val weekStart = gridStart.plusWeeks(weekIndex.toLong())
+            (0 until 7).map { dow -> weekStart.plusDays(dow.toLong()) }
         }
-        result
     }
 
     // Percentile thresholds from non-zero counts
@@ -649,30 +631,16 @@ private fun MessageActivityHeatmap(dailyActivity: List<DayActivity>) {
         }
     }
 
-    val totalMessages = remember(dateCountMap, halfYearStart, halfYearEnd) {
-        dateCountMap.filter { (date, _) -> date in halfYearStart..halfYearEnd }.values.sumOf { it.toLong() }
+    // All-time total across every day the query returned (database.js caps at
+    // 13 months, which comfortably covers SeekerClaw's entire install history).
+    val totalMessages = remember(dailyActivity) {
+        dailyActivity.sumOf { it.count.toLong() }
     }
 
-    // Month labels
-    val monthLabels = remember(weeks) {
-        val labels = mutableListOf<Pair<Int, String>>()
-        var lastMonth = -1
-        weeks.forEachIndexed { weekIndex, week ->
-            val firstDay = week.firstOrNull { it != null }
-            if (firstDay != null && firstDay.monthValue != lastMonth) {
-                lastMonth = firstDay.monthValue
-                labels.add(weekIndex to firstDay.month.getDisplayName(TextStyle.SHORT, Locale.ENGLISH))
-            }
-        }
-        labels
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(SeekerClawColors.Surface, shape)
-            .padding(16.dp)
-            .semantics { contentDescription = "Message activity heatmap showing $totalMessages messages" },
+    CardSurface(
+        modifier = Modifier.semantics {
+            contentDescription = "Message activity heatmap showing $totalMessages messages"
+        },
     ) {
         if (dailyActivity.isEmpty() || totalMessages == 0L) {
             Text(
@@ -682,64 +650,25 @@ private fun MessageActivityHeatmap(dailyActivity: List<DayActivity>) {
                 color = SeekerClawColors.TextDim,
             )
         } else {
-            // Cell size fits ~26 weeks (6 months) on screen; scrolls for longer history
-            BoxWithConstraints(
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                val visibleWeeks = 22 // Size cells for ~5 months visible; rest scrolls
-                val availableWidth = maxWidth
-                val totalGaps = cellGap * (visibleWeeks - 1)
-                val cellSize = ((availableWidth - totalGaps) / visibleWeeks).coerceIn(6.dp, 16.dp)
-
+            // Fixed 26-week window — no horizontal scroll. Cells size responsively
+            // within a 6–16dp range; at typical phone widths they land around 10–12dp.
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
                 val numWeeks = weeks.size
-                val scrollState = rememberScrollState()
-                // Left-aligned by default — shows first month of the half-year.
-                // User swipes left to see future months.
+                val availableWidth = maxWidth
+                val totalGaps = cellGap * (numWeeks - 1)
+                val cellSize = ((availableWidth - totalGaps) / numWeeks).coerceIn(6.dp, 16.dp)
 
                 Column {
-                    // Month labels + grid in a single scrollable row
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(scrollState),
-                    ) {
-                    Column {
-                    // Month labels
-                    Row {
-                        var labelIndex = 0
-                        for (weekIndex in weeks.indices) {
-                            val colWidth = cellSize + if (weekIndex < numWeeks - 1) cellGap else 0.dp
-                            if (labelIndex < monthLabels.size && monthLabels[labelIndex].first == weekIndex) {
-                                Box(
-                                    modifier = Modifier.width(colWidth),
-                                    contentAlignment = Alignment.CenterStart,
-                                ) {
-                                    Text(
-                                        text = monthLabels[labelIndex].second,
-                                        fontFamily = FontFamily.Monospace,
-                                        fontSize = 9.sp,
-                                        color = SeekerClawColors.TextDim,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Clip,
-                                    )
-                                }
-                                labelIndex++
-                            } else {
-                                Spacer(modifier = Modifier.width(colWidth))
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(4.dp))
-
-                    // Grid: 7 rows x N weeks
+                    // Grid: 7 rows x 26 weeks
                     for (dayOfWeek in 0..6) {
                         Row {
                             for (weekIndex in weeks.indices) {
-                                val date = weeks[weekIndex].getOrNull(dayOfWeek)
-                                val count = if (date != null) dateCountMap[date] ?: 0 else 0
-                                val color = if (date != null) {
-                                    heatmapColorForCount(count, thresholds)
+                                val date = weeks[weekIndex][dayOfWeek]
+                                // Past + today → normal heatmap color; future days in the
+                                // current week stay blank so "today" is visually the last
+                                // filled cell.
+                                val color = if (date <= today) {
+                                    heatmapColorForCount(dateCountMap[date] ?: 0, thresholds)
                                 } else {
                                     Color.Transparent
                                 }
@@ -757,9 +686,7 @@ private fun MessageActivityHeatmap(dailyActivity: List<DayActivity>) {
                             Spacer(modifier = Modifier.height(cellGap))
                         }
                     }
-                } // Column (labels + grid)
-                } // Row (horizontalScroll)
-                } // Column (scroll container)
+                }
             } // BoxWithConstraints
 
             Spacer(modifier = Modifier.height(12.dp))
@@ -775,9 +702,8 @@ private fun MessageActivityHeatmap(dailyActivity: List<DayActivity>) {
                     totalMessages >= 10_000 -> "%.0fK".format(totalMessages / 1_000f)
                     else -> "%,d".format(totalMessages)
                 }
-                val rangeLabel = "${halfYearStart.month.getDisplayName(TextStyle.SHORT, Locale.ENGLISH)}-${halfYearEnd.month.getDisplayName(TextStyle.SHORT, Locale.ENGLISH)} ${halfYearStart.year}"
                 Text(
-                    text = "$countText requests \u00B7 $rangeLabel",
+                    text = "$countText requests",
                     fontFamily = FontFamily.Monospace,
                     fontSize = 11.sp,
                     color = SeekerClawColors.TextDim,
