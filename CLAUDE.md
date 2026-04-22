@@ -373,6 +373,10 @@ The Self-Awareness Benchmark (SAB) catches drift between what the agent can do a
 
 **Discovered the hard way in PR #316 (BAT-485, OAuth):** the feature shipped functionally correct but with zero self-knowledge coverage. SAB-AUDIT-v19 caught 5 gaps after merge — they should have been caught before. Don't repeat.
 
+**Repeated in PR #304 (BAT-500, Activity Heatmap):** SAB-AUDIT-v23 caught 3 failed behavioral probes post-merge; pre-fix 93.6%, lowest since v19.
+
+**Enforcement:** `.github/PULL_REQUEST_TEMPLATE.md` has a **Self-Awareness Checklist** — check exactly one of "N/A" or "SAB-audited" on every PR. Unchecked = unreviewable. This is the honor-system gate version (BAT-503); if drift keeps happening, graduate to a CI trailer check.
+
 ---
 
 ## Key Implementation Details
