@@ -472,8 +472,15 @@ Does in ~5–10 seconds (incremental):
 
 The script auto-detects JDK 17+ (prefers Android Studio's bundled JBR at
 `jbr/`) and Android SDK (from main-repo `local.properties` or standard
-locations). Exits 1 on Node failure, 2 on Kotlin failure, 3 if JDK/SDK not
-found.
+locations).
+
+Exit codes:
+- `0` — all checks passed
+- `1` — Node smoke failed
+- `2` — Kotlin compile failed
+- `3` — JDK 17+ not found
+- `4` — Android SDK not found
+- `5` — couldn't cd to repo root (broken path / permissions)
 
 Catches the bug class from PR #334 (missing `aspectRatio` import passed
 Node smoke, failed CI after 4 minutes).
