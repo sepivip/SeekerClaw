@@ -26,7 +26,9 @@
 #   0 = all checks passed
 #   1 = Node smoke failed
 #   2 = Kotlin compile failed
-#   3 = JDK not found (see JDK_CANDIDATES below)
+#   3 = JDK 17+ not found (see JDK_CANDIDATES below)
+#   4 = Android SDK not found (ANDROID_HOME / local.properties / standard paths)
+#   5 = Script couldn't cd to repo root (broken path / permissions)
 #
 # Optional: wire this into `.git/hooks/pre-push` by symlinking:
 #   ln -s ../../scripts/pre-push-check.sh .git/hooks/pre-push
@@ -35,7 +37,7 @@
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$REPO_ROOT" || { echo "❌ can't cd to repo root: $REPO_ROOT"; exit 3; }
+cd "$REPO_ROOT" || { echo "❌ can't cd to repo root: $REPO_ROOT"; exit 5; }
 
 # ── Resolve JDK 17+ path ────────────────────────────────────────────────────
 # We look in several standard Windows + macOS + Linux locations so the script
@@ -105,8 +107,9 @@ if [ -z "${RESOLVED_JDK:-}" ]; then
             fi
             continue
         fi
-        # Glob expansion. compgen -G preserves whole matched paths (including
-        # spaces) one per line; xargs -d '\n' feeds them individually.
+        # Glob expansion. compgen -G emits whole matched paths (one per line,
+        # spaces preserved). The `while IFS= read -r path` loop consumes each
+        # line verbatim — no word-splitting, no subshell fork for xargs.
         while IFS= read -r path; do
             _jb=$(_resolve_java "$path")
             if _is_jdk17plus "$_jb"; then
@@ -132,7 +135,12 @@ fi
 echo "─── Pre-push check ──────────────────────────────"
 echo "  Repo: $REPO_ROOT"
 echo "  JDK:  $RESOLVED_JDK"
-"$RESOLVED_JDK/bin/java" -version 2>&1 | head -1 | sed 's/^/         /'
+
+# Re-resolve the java binary (may be `java` or `java.exe`) to print the version.
+# The JDK detection loop above tested executability of this binary already, so
+# this resolve always succeeds.
+RESOLVED_JAVA_BIN=$(_resolve_java "$RESOLVED_JDK")
+"$RESOLVED_JAVA_BIN" -version 2>&1 | head -1 | sed 's/^/         /'
 echo ""
 
 # ── Resolve ANDROID_HOME ───────────────────────────────────────────────────
@@ -147,8 +155,13 @@ if [ -z "${ANDROID_HOME:-}" ] && [ -n "${ANDROID_SDK_ROOT:-}" ]; then
 fi
 
 if [ -z "${ANDROID_HOME:-}" ]; then
-    # Main-repo's local.properties (works for worktrees — .git/ points back to main)
-    _main_repo="$(git rev-parse --git-common-dir 2>/dev/null | xargs -I{} dirname {} 2>/dev/null || true)"
+    # Main-repo's local.properties (works for worktrees — .git/ points back to main).
+    # Capture into a variable (no `xargs`) so paths with spaces don't get word-split.
+    _git_common_dir="$(git rev-parse --git-common-dir 2>/dev/null || true)"
+    _main_repo=""
+    if [ -n "$_git_common_dir" ]; then
+        _main_repo="$(dirname "$_git_common_dir")"
+    fi
     if [ -n "$_main_repo" ] && [ -f "$_main_repo/local.properties" ]; then
         # Java properties format escapes `:` and `\` — a line like
         #   sdk.dir=E\:\\AndroidSDK
@@ -187,7 +200,7 @@ fi
 if [ -z "${ANDROID_HOME:-}" ]; then
     echo "❌ Android SDK not found."
     echo "   Set ANDROID_HOME env var, or put sdk.dir=<path> in local.properties."
-    exit 3
+    exit 4
 fi
 
 echo "  SDK:  $ANDROID_HOME"
@@ -224,31 +237,39 @@ echo ""
 # dappStore catches every compile error at ~half the time of both flavors.
 echo "── 2/2  Kotlin compile (dappStoreDebug) ─────────"
 
+# Unique temp log per invocation — avoids races between concurrent runs and
+# symlink-clobber risk on multi-user systems. Path is printed below on failure.
+KOTLIN_LOG_FILE="$(mktemp "${TMPDIR:-/tmp}/pre-push-kotlin.XXXXXX.log")"
+
 # Run Gradle and capture both stdout+stderr to a tee'd log. Rely on
 # ${PIPESTATUS[0]} instead of `$?` since `tee|tail` masks the real exit code.
 # (We also have `set -o pipefail` above, but being explicit here is safer
 # against future refactors that might remove the set.)
 ./gradlew --console=plain compileDappStoreDebugKotlin 2>&1 \
-    | tee /tmp/pre-push-kotlin.log \
+    | tee "$KOTLIN_LOG_FILE" \
     | tail -20
 GRADLE_EXIT=${PIPESTATUS[0]}
 
 if [ "$GRADLE_EXIT" -ne 0 ]; then
     echo ""
     echo "❌ Kotlin compile failed (exit $GRADLE_EXIT) — don't push."
-    echo "   Full log: /tmp/pre-push-kotlin.log"
+    echo "   Full log: $KOTLIN_LOG_FILE"
     exit 2
 fi
 
 # Extra check: grep the tee'd log for any 'e:' (Kotlin error prefix) even if
 # the exit code was 0 (belt + suspenders for the "warnings treated as errors"
 # edge case).
-if grep -qE "^e: " /tmp/pre-push-kotlin.log; then
+if grep -qE "^e: " "$KOTLIN_LOG_FILE"; then
     echo ""
     echo "❌ Kotlin compile log contains errors (exit code was 0 but 'e:' lines found)."
-    grep -E "^e: " /tmp/pre-push-kotlin.log | head -5
+    grep -E "^e: " "$KOTLIN_LOG_FILE" | head -5
+    echo "   Full log: $KOTLIN_LOG_FILE"
     exit 2
 fi
+
+# Clean up on success — keep the log on failure for debugging.
+rm -f "$KOTLIN_LOG_FILE"
 
 echo ""
 echo "─── ALL CHECKS PASSED ───────────────────────────"
