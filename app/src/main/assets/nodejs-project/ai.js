@@ -2026,20 +2026,20 @@ async function chat(chatId, userMessage, options = {}) {
     // Call Claude API with tool use loop
     let response;
     let toolUseCount = 0;
-    // Read maxToolUsesPerTurn from agent_settings.json each turn so the user's
+    // Read maxStepsPerTurn from agent_settings.json each turn so the user's
     // Settings change takes effect on the next chat() call (no service restart).
     // Mirrors getHeartbeatIntervalMs() in main.js. Clamped to [10, 100]; invalid
-    // or missing values fall back to config.maxToolUsesPerTurn, then 35.
+    // or missing values fall back to config.maxStepsPerTurn, then 35.
     const MAX_TOOL_USES = (() => {
         try {
             const settingsPath = path.join(workDir, 'agent_settings.json');
             if (fs.existsSync(settingsPath)) {
                 const s = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-                const n = parseInt(s.maxToolUsesPerTurn, 10);
+                const n = parseInt(s.maxStepsPerTurn, 10);
                 if (n >= 10 && n <= 100) return n;
             }
         } catch (_) {}
-        const fallback = parseInt(_config && _config.maxToolUsesPerTurn, 10);
+        const fallback = parseInt(_config && _config.maxStepsPerTurn, 10);
         return (fallback >= 10 && fallback <= 100) ? fallback : 35;
     })();
     let _ctxCache = null; // Cached system/tools char counts — reset per chat() call

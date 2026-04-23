@@ -439,14 +439,14 @@ fun SettingsScreen(
                     info = SettingsHelpTexts.HEARTBEAT_INTERVAL,
                 )
                 ConfigField(
-                    label = "Max Tool Uses Per Turn",
-                    value = "${config?.maxToolUsesPerTurn ?: 35} tools",
+                    label = "Max Agent Steps Per Turn",
+                    value = "${config?.maxStepsPerTurn ?: 35} steps",
                     onClick = {
-                        editField = "maxToolUsesPerTurn"
-                        editLabel = "Max Tool Uses Per Turn (10–100)"
-                        editValue = (config?.maxToolUsesPerTurn ?: 35).toString()
+                        editField = "maxStepsPerTurn"
+                        editLabel = "Max Agent Steps Per Turn (10–100)"
+                        editValue = (config?.maxStepsPerTurn ?: 35).toString()
                     },
-                    info = SettingsHelpTexts.MAX_TOOL_USES_PER_TURN,
+                    info = SettingsHelpTexts.MAX_STEPS_PER_TURN,
                 )
                 ConfigField(
                     label = "Search Provider",

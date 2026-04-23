@@ -44,7 +44,7 @@ data class AppConfig(
     val heliusApiKey: String = "",
     val autoStartOnBoot: Boolean = true,
     val heartbeatIntervalMinutes: Int = 30,
-    val maxToolUsesPerTurn: Int = 35,
+    val maxStepsPerTurn: Int = 35,
     val provider: String = "claude", // "claude", "openai", or "openrouter"
     val openaiApiKey: String = "",
     val openrouterApiKey: String = "",
@@ -115,7 +115,7 @@ object ConfigManager {
     private const val KEY_MCP_SERVERS_ENC = "mcp_servers_enc"
     private const val KEY_ENV_VARS_ENC = "env_vars_enc"
     private const val KEY_HEARTBEAT_INTERVAL = "heartbeat_interval"
-    private const val KEY_MAX_TOOL_USES_PER_TURN = "max_tool_uses_per_turn"
+    private const val KEY_MAX_STEPS_PER_TURN = "max_steps_per_turn"
     private const val KEY_PROVIDER = "provider"
     private const val KEY_OPENAI_API_KEY_ENC = "openai_api_key_enc"
     private const val KEY_OPENROUTER_API_KEY_ENC = "openrouter_api_key_enc"
@@ -202,7 +202,7 @@ object ConfigManager {
             .putString(KEY_AUTH_TYPE, config.authType)
             .putBoolean(KEY_AUTO_START, config.autoStartOnBoot)
             .putInt(KEY_HEARTBEAT_INTERVAL, config.heartbeatIntervalMinutes)
-            .putInt(KEY_MAX_TOOL_USES_PER_TURN, config.maxToolUsesPerTurn)
+            .putInt(KEY_MAX_STEPS_PER_TURN, config.maxStepsPerTurn)
             .putBoolean(KEY_SETUP_COMPLETE, true)
 
         // Store setup token separately so switching auth type preserves both
@@ -561,7 +561,7 @@ object ConfigManager {
             heliusApiKey = heliusApiKey,
             autoStartOnBoot = p.getBoolean(KEY_AUTO_START, true),
             heartbeatIntervalMinutes = p.getInt(KEY_HEARTBEAT_INTERVAL, 30),
-            maxToolUsesPerTurn = p.getInt(KEY_MAX_TOOL_USES_PER_TURN, 35),
+            maxStepsPerTurn = p.getInt(KEY_MAX_STEPS_PER_TURN, 35),
             provider = p.getString(KEY_PROVIDER, "claude") ?: "claude",
             openaiApiKey = openaiApiKey,
             openrouterApiKey = openrouterApiKey,
@@ -682,8 +682,8 @@ object ConfigManager {
             "heartbeatIntervalMinutes" -> config.copy(
                 heartbeatIntervalMinutes = value.toIntOrNull()?.coerceIn(5, 120) ?: 30
             )
-            "maxToolUsesPerTurn" -> config.copy(
-                maxToolUsesPerTurn = value.toIntOrNull()?.coerceIn(10, 100) ?: 35
+            "maxStepsPerTurn" -> config.copy(
+                maxStepsPerTurn = value.toIntOrNull()?.coerceIn(10, 100) ?: 35
             )
             "provider" -> config.copy(provider = value)
             "openaiApiKey" -> config.copy(openaiApiKey = value)
@@ -826,7 +826,7 @@ object ConfigManager {
             put("model", config.model)
             put("agentName", config.agentName)
             put("heartbeatIntervalMinutes", config.heartbeatIntervalMinutes)
-            put("maxToolUsesPerTurn", config.maxToolUsesPerTurn)
+            put("maxStepsPerTurn", config.maxStepsPerTurn)
             put("bridgeToken", bridgeToken)
             if (config.braveApiKey.isNotBlank()) put("braveApiKey", config.braveApiKey)
             put("searchProvider", config.searchProvider)
@@ -902,7 +902,7 @@ object ConfigManager {
             }
             // Android-managed fields always overwrite
             existing.put("heartbeatIntervalMinutes", config.heartbeatIntervalMinutes)
-            existing.put("maxToolUsesPerTurn", config.maxToolUsesPerTurn)
+            existing.put("maxStepsPerTurn", config.maxStepsPerTurn)
             // Ensure apiKeys object exists (agent writes individual keys into it)
             if (!existing.has("apiKeys")) {
                 existing.put("apiKeys", JSONObject())
