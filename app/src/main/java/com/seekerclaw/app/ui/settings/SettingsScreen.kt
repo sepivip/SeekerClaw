@@ -439,6 +439,16 @@ fun SettingsScreen(
                     info = SettingsHelpTexts.HEARTBEAT_INTERVAL,
                 )
                 ConfigField(
+                    label = "Max Tool Uses Per Turn",
+                    value = "${config?.maxToolUsesPerTurn ?: 35} tools",
+                    onClick = {
+                        editField = "maxToolUsesPerTurn"
+                        editLabel = "Max Tool Uses Per Turn (10–100)"
+                        editValue = (config?.maxToolUsesPerTurn ?: 35).toString()
+                    },
+                    info = SettingsHelpTexts.MAX_TOOL_USES_PER_TURN,
+                )
+                ConfigField(
                     label = "Search Provider",
                     value = searchProviderById(config?.searchProvider ?: "brave").displayName +
                         if ((config?.activeSearchApiKey ?: "").isBlank()) " (not configured)" else "",
