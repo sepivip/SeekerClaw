@@ -2312,7 +2312,7 @@ async function chat(chatId, userMessage, options = {}) {
             }
 
             log(`[Trace] ${JSON.stringify({ turnId, taskId, chatId: String(chatId || ''), stepCount, maxSteps: MAX_STEPS, reason: 'tool_budget_exhausted', userFallbackSent: true })}`, 'WARN');
-            const fallback = `I hit the tool-call limit for this turn (task ${taskId}). Send 'continue' or /resume to pick up where I left off.`;
+            const fallback = `I hit the step limit for this turn (${MAX_STEPS} steps, task ${taskId}). Send 'continue' or /resume to pick up where I left off.`;
 
             // Add fallback to conversation BEFORE saving checkpoint so the
             // checkpoint slice ends with an assistant message. This ensures
@@ -2390,7 +2390,7 @@ async function chat(chatId, userMessage, options = {}) {
                         }
                     }
                 }
-                const fallback = `Done — used ${stepCount} tool${stepCount !== 1 ? 's' : ''} (${toolNames.join(', ') || 'various'}).`;
+                const fallback = `Done — took ${stepCount} step${stepCount !== 1 ? 's' : ''} (${toolNames.join(', ') || 'various'}).`;
                 clearActiveTask(chatId);
                 cleanupChatCheckpoints(chatId);
                 addToConversation(chatId, 'assistant', fallback);

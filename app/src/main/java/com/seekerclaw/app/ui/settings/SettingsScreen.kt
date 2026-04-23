@@ -358,10 +358,17 @@ fun SettingsScreen(
         }
     }
 
+    // Fields whose value is re-read live from agent_settings.json on the Node
+    // side (no service restart needed). Keep in sync with live-pickup readers
+    // in main.js (heartbeat) and ai.js (maxStepsPerTurn).
+    val liveUpdateFields = setOf("maxStepsPerTurn")
+
     fun saveField(field: String, value: String) {
         ConfigManager.updateConfigField(context, field, value)
         config = ConfigManager.loadConfig(context)
-        showRestartDialog = true
+        if (field !in liveUpdateFields) {
+            showRestartDialog = true
+        }
     }
 
     val authTypeLabel = if (config?.authType == "setup_token") "Pro/Max Setup Token" else "API Key"
