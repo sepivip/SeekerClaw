@@ -18,7 +18,7 @@
 | 6 | Owner ID | `OWNER_ID` | ✅ Good | Your Telegram user ID (a number, not your @username). This is who the agent obeys. Leave blank = first person to message becomes owner. Find yours: message @userinfobot on Telegram. |
 | 7 | Agent Name | `AGENT_NAME` | ✅ Good | What should we call your agent? Shows on the dashboard and in its personality. Totally cosmetic — go wild. |
 | 8 | Brave API Key | `BRAVE_API_KEY` | ✅ Good | Optional. Gives your agent Brave Search (better results). Free key at brave.com/search/api. |
-| 8a | Max Agent Steps Per Turn | `MAX_STEPS_PER_TURN` | ✅ Good | How many steps the agent can take in a single turn before it pauses and asks you to continue. Each step is one round where the agent thinks and may call one or more tools. Lower = shorter, cheaper runs. Higher = agent can finish longer tasks in one turn. 10–100. Takes effect on the next turn. |
+| 8a | Max Agent Steps Per Turn | `MAX_STEPS_PER_TURN` | ✅ Good | How many tool-use rounds the agent can take in a single turn before it pauses and asks you to continue. A step counts when the agent uses one or more tools. Lower = shorter, cheaper runs. Higher = agent can finish longer tasks in one turn. 10–100. Takes effect on the next turn. |
 
 ## Preferences
 

@@ -2121,7 +2121,13 @@ async function chat(chatId, userMessage, options = {}) {
                 break;
             }
 
-            // Execute tools and add results
+            // Execute tools and add results.
+            // stepCount counts *tool-use rounds* (model responses that request
+            // one or more tools). A text-only final response breaks out of the
+            // loop above and does NOT increment the counter — MAX_STEPS is the
+            // ceiling on tool-use rounds, matching the UI's "Max Agent Steps Per
+            // Turn" which is documented as "a model response that requests one
+            // or more tools".
             stepCount++;
 
             // Add assistant's response to history in neutral format

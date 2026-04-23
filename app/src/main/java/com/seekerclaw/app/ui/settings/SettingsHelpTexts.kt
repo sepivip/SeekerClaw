@@ -67,11 +67,10 @@ object SettingsHelpTexts {
         "5–120 minutes. Changes take effect automatically (usually within a minute)."
 
     const val MAX_STEPS_PER_TURN =
-        "How many steps the agent can take in a single turn before it pauses " +
-        "and asks you to continue. Each step is one round where the agent " +
-        "thinks and may call one or more tools. Lower = shorter, cheaper runs. " +
-        "Higher = agent can finish longer tasks in one turn. 10–100. " +
-        "Takes effect on the next turn."
+        "How many tool-use steps the agent can take in a single turn before it pauses " +
+        "and asks you to continue. Each step is a model response that requests " +
+        "one or more tools. Lower = shorter, cheaper runs. Higher = agent can " +
+        "finish longer tasks in one turn. 10–100. Takes effect on the next turn."
 
     const val BRAVE_API_KEY =
         "Required when Brave is selected as your search provider. " +
