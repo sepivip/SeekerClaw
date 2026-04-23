@@ -189,13 +189,13 @@ const MAX_HISTORY = 35;
 let sessionStartedAt = Date.now();
 
 // ── Active task tracking (P2.4) ─────────────────────────────────────────────
-// Maps chatId → { taskId, startedAt, toolUseCount, reason } or null.
+// Maps chatId → { taskId, startedAt, stepCount, reason } or null.
 // In-memory only — survives budget exhaustion but NOT process restarts.
 // P2.2 will add disk-backed checkpoints; P2.4b will add auto-resume.
 const activeTasks = new Map();
 
 function setActiveTask(chatId, taskId) {
-    activeTasks.set(String(chatId), { taskId, startedAt: Date.now(), toolUseCount: 0, reason: null });
+    activeTasks.set(String(chatId), { taskId, startedAt: Date.now(), stepCount: 0, reason: null });
 }
 
 function getActiveTask(chatId) {
@@ -2025,12 +2025,12 @@ async function chat(chatId, userMessage, options = {}) {
 
     // Call Claude API with tool use loop
     let response;
-    let toolUseCount = 0;
+    let stepCount = 0;
     // Read maxStepsPerTurn from agent_settings.json each turn so the user's
     // Settings change takes effect on the next chat() call (no service restart).
     // Mirrors getHeartbeatIntervalMs() in main.js. Clamped to [10, 100]; invalid
     // or missing values fall back to config.maxStepsPerTurn, then 35.
-    const MAX_TOOL_USES = (() => {
+    const MAX_STEPS = (() => {
         try {
             const settingsPath = path.join(workDir, 'agent_settings.json');
             if (fs.existsSync(settingsPath)) {
@@ -2049,7 +2049,7 @@ async function chat(chatId, userMessage, options = {}) {
 
     try { // BAT-253: catch network errors → sanitize before user output
 
-        while (toolUseCount < MAX_TOOL_USES) {
+        while (stepCount < MAX_STEPS) {
             // BAT-259: Age old tool results to reduce payload bloat
             ageToolResults(messages, turnId);
 
@@ -2095,7 +2095,7 @@ async function chat(chatId, userMessage, options = {}) {
             const apiMessages = adapter.toApiMessages(messages);
             const body = adapter.formatRequest(MODEL, 4096, systemBlocks, apiMessages, formattedTools);
 
-            const res = await claudeApiCall(body, chatId, { turnId, iteration: toolUseCount });
+            const res = await claudeApiCall(body, chatId, { turnId, iteration: stepCount });
 
             if (res.status !== 200) {
                 log(`API error: ${res.status} - ${JSON.stringify(res.data)}`, 'ERROR');
@@ -2122,7 +2122,7 @@ async function chat(chatId, userMessage, options = {}) {
             }
 
             // Execute tools and add results
-            toolUseCount++;
+            stepCount++;
 
             // Add assistant's response to history in neutral format
             messages.push({
@@ -2286,15 +2286,15 @@ async function chat(chatId, userMessage, options = {}) {
                 chatId: String(chatId),
                 turnId,
                 startedAt: getActiveTask(chatId)?.startedAt || Date.now(),
-                toolUseCount,
-                maxToolUses: MAX_TOOL_USES,
+                stepCount,
+                maxSteps: MAX_STEPS,
                 complete: false,
                 reason: null,
                 originalGoal,
                 conversationSlice: messages.slice(-8),
             });
             if (cpDuration >= 0) {
-                log(`[Trace] ${JSON.stringify({ turnId, taskId, checkpoint: 'saved', toolUseCount, durationMs: cpDuration })}`, 'DEBUG');
+                log(`[Trace] ${JSON.stringify({ turnId, taskId, checkpoint: 'saved', stepCount, durationMs: cpDuration })}`, 'DEBUG');
             }
         }
 
@@ -2303,15 +2303,15 @@ async function chat(chatId, userMessage, options = {}) {
         let textContent = parsed.text ? { text: parsed.text } : null;
 
         // Budget exhaustion explicit handling
-        if (toolUseCount >= MAX_TOOL_USES) {
+        if (stepCount >= MAX_STEPS) {
             // P2.4: Track exhaustion reason in activeTask
             const task = getActiveTask(chatId);
             if (task) {
-                task.toolUseCount = toolUseCount;
+                task.stepCount = stepCount;
                 task.reason = 'budget_exhausted';
             }
 
-            log(`[Trace] ${JSON.stringify({ turnId, taskId, chatId: String(chatId || ''), toolUseCount, maxToolCalls: MAX_TOOL_USES, reason: 'tool_budget_exhausted', userFallbackSent: true })}`, 'WARN');
+            log(`[Trace] ${JSON.stringify({ turnId, taskId, chatId: String(chatId || ''), stepCount, maxSteps: MAX_STEPS, reason: 'tool_budget_exhausted', userFallbackSent: true })}`, 'WARN');
             const fallback = `I hit the tool-call limit for this turn (task ${taskId}). Send 'continue' or /resume to pick up where I left off.`;
 
             // Add fallback to conversation BEFORE saving checkpoint so the
@@ -2325,8 +2325,8 @@ async function chat(chatId, userMessage, options = {}) {
                 chatId: String(chatId),
                 turnId,
                 startedAt: task?.startedAt || Date.now(),
-                toolUseCount,
-                maxToolUses: MAX_TOOL_USES,
+                stepCount,
+                maxSteps: MAX_STEPS,
                 complete: false,
                 reason: 'budget_exhausted',
                 originalGoal,
@@ -2349,7 +2349,7 @@ async function chat(chatId, userMessage, options = {}) {
 
         // If no text in final response but we ran tools, make one more call so Claude
         // can summarize the tool results for the user (e.g. after solana_send)
-        if (!textContent && toolUseCount > 0) {
+        if (!textContent && stepCount > 0) {
             log('No text in final tool response, requesting summary...', 'DEBUG');
 
             // Add explicit summary prompt — without this, the model may return no text
@@ -2362,7 +2362,7 @@ async function chat(chatId, userMessage, options = {}) {
 
             const summaryRes = await claudeApiCall(
                 adapter.formatRequest(MODEL, 4096, systemBlocks, summaryApiMsgs, []),
-                chatId, { turnId, iteration: toolUseCount + 1 }
+                chatId, { turnId, iteration: stepCount + 1 }
             );
 
             if (summaryRes.status === 200) {
@@ -2390,7 +2390,7 @@ async function chat(chatId, userMessage, options = {}) {
                         }
                     }
                 }
-                const fallback = `Done — used ${toolUseCount} tool${toolUseCount !== 1 ? 's' : ''} (${toolNames.join(', ') || 'various'}).`;
+                const fallback = `Done — used ${stepCount} tool${stepCount !== 1 ? 's' : ''} (${toolNames.join(', ') || 'various'}).`;
                 clearActiveTask(chatId);
                 cleanupChatCheckpoints(chatId);
                 addToConversation(chatId, 'assistant', fallback);
@@ -2404,7 +2404,7 @@ async function chat(chatId, userMessage, options = {}) {
             clearActiveTask(chatId);
             // Only clean up checkpoints if tools were used (task progressed).
             // A text-only response (e.g. failed resume attempt) should not wipe checkpoints.
-            if (toolUseCount > 0) cleanupChatCheckpoints(chatId);
+            if (stepCount > 0) cleanupChatCheckpoints(chatId);
             addToConversation(chatId, 'assistant', '[No response generated]');
             log(`No text content in response (no tools used), returning ${SILENT_REPLY_TOKEN}`, 'DEBUG');
             return SILENT_REPLY_TOKEN;
@@ -2416,7 +2416,7 @@ async function chat(chatId, userMessage, options = {}) {
         // P2.2: Only clean up checkpoints if tools were used (task actually progressed).
         // If Claude responded with text-only (e.g. treated resume as fresh chat),
         // the checkpoint must survive for a retry.
-        if (toolUseCount > 0) cleanupChatCheckpoints(chatId);
+        if (stepCount > 0) cleanupChatCheckpoints(chatId);
 
         // Update conversation history with final response
         addToConversation(chatId, 'assistant', assistantMessage);
