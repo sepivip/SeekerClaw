@@ -361,7 +361,7 @@ fun SettingsScreen(
     // Fields whose value is re-read live from agent_settings.json on the Node
     // side (no service restart needed). Keep in sync with live-pickup readers
     // in main.js (heartbeat) and ai.js (maxStepsPerTurn).
-    val liveUpdateFields = setOf("maxStepsPerTurn")
+    val liveUpdateFields = setOf("maxStepsPerTurn", "heartbeatIntervalMinutes")
 
     fun saveField(field: String, value: String) {
         ConfigManager.updateConfigField(context, field, value)
