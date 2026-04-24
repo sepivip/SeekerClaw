@@ -61,7 +61,7 @@ check('openai with bogus authType returns empty (strict)', mc.modelsForProvider(
 
 console.log();
 console.log('── displayNameForProvider (canonical brand casing) ─────');
-check('claude → Claude', mc.displayNameForProvider('claude'), 'Claude');
+check('claude → Anthropic (match Kotlin Settings displayName)', mc.displayNameForProvider('claude'), 'Anthropic');
 check('openai → OpenAI (not Openai)', mc.displayNameForProvider('openai'), 'OpenAI');
 check('openrouter → OpenRouter (not Openrouter)', mc.displayNameForProvider('openrouter'), 'OpenRouter');
 check('custom → Custom', mc.displayNameForProvider('custom'), 'Custom');

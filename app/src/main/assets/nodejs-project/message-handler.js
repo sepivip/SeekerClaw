@@ -627,22 +627,25 @@ async function handleProviderCommand(chatId, args, messageId = null) {
 
     const newModel = modelCatalog.defaultModelForProvider(newProvider, newAuthType);
 
-    // Always include `model` in the patch so the overlay stays internally
-    // consistent with `provider`. If the new provider has a concrete
-    // default (claude/openai/openrouter), write it. If not (custom →
-    // defaultModelForProvider returns '' because there's no sensible
-    // default URL-target), explicitly DELETE any prior overlay.model
-    // (undefined → delete, see writeAgentSettingsPatch): otherwise a
-    // previously-set `/model gpt-5.5` would carry over into a /provider
-    // custom switch and be sent verbatim to the custom endpoint, which
-    // almost certainly can't service it. Cleared overlay falls through
-    // to the post-restart startup MODEL — Kotlin's reconcile picks a
-    // provider-appropriate default model when the overlay omits one.
+    // Write `model` only when the new provider has a concrete default
+    // (claude/openai/openrouter). For freeform providers (custom) where
+    // defaultModelForProvider returns '' there's no sensible default, so
+    // we intentionally DON'T touch overlay.model — Kotlin's reconcile
+    // validates the effective model (overlay or prefs) against the new
+    // provider's allowlist and substitutes defaultModelForProvider if
+    // invalid. This aligns with Kotlin's preserve-then-validate
+    // semantics rather than diverging: clearing here would just leave
+    // overlay blank while prefs still holds the old model, and Node
+    // startup hard-exits on PROVIDER=custom + blank MODEL — so the
+    // clear-path would crash the service if Kotlin's fallback ever
+    // failed to write a non-blank model to prefs.
     const settingsPatch = {
         provider: newProvider,
         authType: newAuthType,
-        model: newModel || undefined,
     };
+    if (newModel) {
+        settingsPatch.model = newModel;
+    }
 
     // Snapshot pre-patch values of the fields we're about to mutate, so if
     // the restart bridge call fails we can restore the overlay to what it

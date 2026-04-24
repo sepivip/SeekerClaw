@@ -92,11 +92,18 @@ function defaultModelForProvider(providerId, authType) {
 const KNOWN_PROVIDERS = ['claude', 'openai', 'openrouter', 'custom'];
 
 // Canonical display names for user-facing messaging (Telegram replies,
-// TG command descriptions, etc). Keep in sync with Kotlin's
-// Providers.kt `availableProviders[].displayName`. NOT used for
-// identity/routing — that's always `providerId`.
+// TG command descriptions, etc). Mirrors Kotlin's Providers.kt
+// `availableProviders[].displayName` so Settings UI and Telegram
+// replies never disagree on branding. NOT used for identity/routing
+// — that's always `providerId`.
+//
+// Note: `claude` maps to "Anthropic" (the company making Claude) to
+// match Kotlin's Settings UI convention. Settings shows "Anthropic"
+// with the sk-ant-api03-… key hint, so the Telegram reply saying
+// "Switching to Anthropic" is consistent with where the user
+// configured credentials.
 const PROVIDER_DISPLAY_NAMES = {
-    claude: 'Claude',
+    claude: 'Anthropic',
     openai: 'OpenAI',
     openrouter: 'OpenRouter',
     custom: 'Custom',

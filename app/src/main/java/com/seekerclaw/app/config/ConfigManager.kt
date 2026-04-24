@@ -684,20 +684,32 @@ object ConfigManager {
         // provider's safe default when the old model isn't usable.
         val effectiveProviderAfter = validProvider ?: fromPrefs.provider
         val effectiveAuthAfter = validAuthType ?: fromPrefs.authType
+        // Unified validation for both overlay and prefs paths: any candidate
+        // model must be valid for the EFFECTIVE new provider+auth pair,
+        // else substitute the provider's safe default. For freeform
+        // providers (openrouter/custom), any non-blank string is "valid"
+        // — the user's prior model carries forward, possibly wrong for
+        // their endpoint but keeps Node alive (a /model <id> can fix it).
+        // For custom specifically, defaultModelForProvider returns ''; if
+        // the candidate is also blank, we return blank and Node startup
+        // will exit with a clear error. In practice prefs.model is never
+        // blank after a successful Setup flow, so this edge case is
+        // unreachable for normal users.
         val resolvedModel: String = when {
-            newModel != null -> newModel
+            newModel != null -> {
+                // Overlay model present — validate; substitute default if invalid.
+                if (isModelValidForProvider(effectiveProviderAfter, effectiveAuthAfter, newModel)) {
+                    newModel
+                } else {
+                    val providerDefault = defaultModelForProvider(effectiveProviderAfter, effectiveAuthAfter)
+                    if (providerDefault.isNotBlank()) providerDefault else newModel
+                }
+            }
             providerChanged -> {
-                val oldModelValidForNew = isModelValidForProvider(
-                    effectiveProviderAfter, effectiveAuthAfter, fromPrefs.model
-                )
-                if (oldModelValidForNew) {
+                // No overlay model but provider changed — validate prefs.model.
+                if (isModelValidForProvider(effectiveProviderAfter, effectiveAuthAfter, fromPrefs.model)) {
                     fromPrefs.model
                 } else {
-                    // defaultModelForProvider returns "" for custom. Node's
-                    // startup validation rejects blank MODEL for custom, so
-                    // the user sees a clear error and has to `/model <id>`
-                    // after the restart — better than silently routing a
-                    // claude/openai model ID to a custom endpoint.
                     val providerDefault = defaultModelForProvider(effectiveProviderAfter, effectiveAuthAfter)
                     if (providerDefault.isNotBlank()) providerDefault else fromPrefs.model
                 }
