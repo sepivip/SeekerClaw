@@ -202,13 +202,16 @@ if (PROVIDER === 'openai' && !_SUPPORTED_OPENAI_AUTH_TYPES.has(AUTH_TYPE)) {
 // fallback. The credential validation below will fail fast on missing OAuth token.
 const OPENAI_AUTH_TYPE = AUTH_TYPE === 'oauth' ? 'oauth' : 'api_key';
 
-// Now that AUTH_TYPE is known, pick the right Claude credential. Kotlin writes
-// both fields raw; `setupToken` may be absent (optional), so fall back to the
-// api key if the user is somehow on setup_token mode without one configured —
-// the startup validation below will still reject it.
+// Now that AUTH_TYPE is known, pick the right Claude credential. Kotlin
+// writes both fields raw. In setup_token mode, derive STRICTLY from
+// setupToken with no API-key fallback — otherwise a missing setup token
+// would silently boot the agent with an API key in the Bearer header
+// while it thinks it's in setup_token mode, causing every request to
+// fail confusingly at runtime. The startup validation below fails
+// loudly instead, which is what we want.
 const ANTHROPIC_KEY = normalizeSecret(
     (PROVIDER === 'claude' && AUTH_TYPE === 'setup_token')
-        ? (config.setupToken || config.anthropicApiKey || '')
+        ? (config.setupToken || '')
         : (config.anthropicApiKey || '')
 );
 
@@ -324,6 +327,7 @@ if (!_activeKey) {
     const keyName = PROVIDER === 'openai' ? 'openaiApiKey or openaiOAuthToken'
         : PROVIDER === 'openrouter' ? 'openrouterApiKey'
         : PROVIDER === 'custom' ? 'customApiKey'
+        : AUTH_TYPE === 'setup_token' ? 'setupToken'
         : 'anthropicApiKey';
     log(`ERROR: Missing required config (${keyName}) for provider "${PROVIDER}"`, 'ERROR');
     process.exit(1);
