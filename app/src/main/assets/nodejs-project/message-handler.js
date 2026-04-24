@@ -627,20 +627,22 @@ async function handleProviderCommand(chatId, args, messageId = null) {
 
     const newModel = modelCatalog.defaultModelForProvider(newProvider, newAuthType);
 
-    // Only write `model` when the provider has a concrete default. Freeform
-    // providers (custom, openrouter) return '' from defaultModelForProvider;
-    // writing an empty string would overwrite any prior /model choice and
-    // force resolveActiveModel() to fall back to the startup MODEL — which
-    // may not be valid for the new endpoint. Omitting the field preserves
-    // whatever overlay the user previously set. If no overlay exists, it
-    // falls back to startup MODEL and the user can `/model <id>` after.
+    // Always include `model` in the patch so the overlay stays internally
+    // consistent with `provider`. If the new provider has a concrete
+    // default (claude/openai/openrouter), write it. If not (custom →
+    // defaultModelForProvider returns '' because there's no sensible
+    // default URL-target), explicitly DELETE any prior overlay.model
+    // (undefined → delete, see writeAgentSettingsPatch): otherwise a
+    // previously-set `/model gpt-5.5` would carry over into a /provider
+    // custom switch and be sent verbatim to the custom endpoint, which
+    // almost certainly can't service it. Cleared overlay falls through
+    // to the post-restart startup MODEL — Kotlin's reconcile picks a
+    // provider-appropriate default model when the overlay omits one.
     const settingsPatch = {
         provider: newProvider,
         authType: newAuthType,
+        model: newModel || undefined,
     };
-    if (newModel) {
-        settingsPatch.model = newModel;
-    }
 
     // Snapshot pre-patch values of the fields we're about to mutate, so if
     // the restart bridge call fails we can restore the overlay to what it

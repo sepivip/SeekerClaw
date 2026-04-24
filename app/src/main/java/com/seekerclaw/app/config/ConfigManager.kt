@@ -676,28 +676,87 @@ object ConfigManager {
 
         val providerChanged = validProvider != null && validProvider != fromPrefs.provider
         val authChanged = validAuthType != null && validAuthType != fromPrefs.authType
-        val modelChanged = newModel != null && newModel != fromPrefs.model
+        // Decide the effective model. If the overlay supplies one, use it.
+        // Otherwise, if we're switching provider, the existing prefs.model
+        // is likely INVALID for the new provider (e.g. /provider openai
+        // while prefs.model is 'claude-opus-4-7' → OpenAI endpoint would
+        // reject the request). Validate and fall back to the new
+        // provider's safe default when the old model isn't usable.
+        val effectiveProviderAfter = validProvider ?: fromPrefs.provider
+        val effectiveAuthAfter = validAuthType ?: fromPrefs.authType
+        val resolvedModel: String = when {
+            newModel != null -> newModel
+            providerChanged -> {
+                val oldModelValidForNew = isModelValidForProvider(
+                    effectiveProviderAfter, effectiveAuthAfter, fromPrefs.model
+                )
+                if (oldModelValidForNew) {
+                    fromPrefs.model
+                } else {
+                    // defaultModelForProvider returns "" for custom. Node's
+                    // startup validation rejects blank MODEL for custom, so
+                    // the user sees a clear error and has to `/model <id>`
+                    // after the restart — better than silently routing a
+                    // claude/openai model ID to a custom endpoint.
+                    val providerDefault = defaultModelForProvider(effectiveProviderAfter, effectiveAuthAfter)
+                    if (providerDefault.isNotBlank()) providerDefault else fromPrefs.model
+                }
+            }
+            else -> fromPrefs.model
+        }
+        val modelChanged = resolvedModel != fromPrefs.model
 
         if (!providerChanged && !authChanged && !modelChanged) return fromPrefs
 
         val editor = prefs.edit()
         if (providerChanged) editor.putString(KEY_PROVIDER, validProvider)
         if (authChanged) editor.putString(KEY_AUTH_TYPE, validAuthType)
-        if (modelChanged) editor.putString(KEY_MODEL, newModel)
+        if (modelChanged) editor.putString(KEY_MODEL, resolvedModel)
         editor.apply()
 
         LogCollector.append(
             "[Config] Reconciled from agent_settings.json: " +
                 "provider=${if (providerChanged) "$validProvider (was ${fromPrefs.provider})" else fromPrefs.provider}, " +
                 "authType=${if (authChanged) "$validAuthType (was ${fromPrefs.authType})" else fromPrefs.authType}, " +
-                "model=${if (modelChanged) "$newModel (was ${fromPrefs.model})" else fromPrefs.model}"
+                "model=${if (modelChanged) "$resolvedModel (was ${fromPrefs.model})" else fromPrefs.model}"
         )
 
         return fromPrefs.copy(
             provider = if (providerChanged) validProvider!! else fromPrefs.provider,
             authType = if (authChanged) validAuthType!! else fromPrefs.authType,
-            model = if (modelChanged) newModel!! else fromPrefs.model,
+            model = if (modelChanged) resolvedModel else fromPrefs.model,
         )
+    }
+
+    /**
+     * Check whether a given model ID is valid for a provider+auth pair.
+     *
+     * For Claude/OpenAI, the allowlist from Providers.kt applies strictly.
+     * For OpenRouter/custom, any non-blank string is accepted (both
+     * providers are freeform — the user types the upstream model ID).
+     * Blank always returns false.
+     */
+    private fun isModelValidForProvider(
+        providerId: String,
+        authType: String,
+        modelId: String,
+    ): Boolean {
+        if (modelId.isBlank()) return false
+        return when (providerId) {
+            "openrouter", "custom" -> true
+            "openai" -> {
+                val list = try {
+                    modelsForProvider(providerId, authType)
+                } catch (_: Exception) { emptyList() }
+                list.any { it.id == modelId }
+            }
+            else -> {
+                val list = try {
+                    modelsForProvider(providerId, authType)
+                } catch (_: Exception) { emptyList() }
+                list.any { it.id == modelId }
+            }
+        }
     }
 
     fun getAutoStartOnBoot(context: Context): Boolean =
