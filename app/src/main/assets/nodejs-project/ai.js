@@ -1625,8 +1625,9 @@ const MODEL_CONTEXT_LIMITS = {
     'claude-sonnet-4-6':   200000,
     'claude-sonnet-4-5':   200000,
     'claude-haiku-4-5':    200000,
+    'gpt-5.5':             200000,
     'gpt-5.4':             200000,
-    'gpt-5.2':             200000,
+    'gpt-5.2':             200000, // kept for existing users with 5.2 still selected (removed from UI dropdown)
     'gpt-5.3-codex':       200000,
 };
 const DEFAULT_CONTEXT_LIMIT = 128000; // conservative fallback for unknown models

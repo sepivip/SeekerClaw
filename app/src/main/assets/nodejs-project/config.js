@@ -207,7 +207,7 @@ const CUSTOM_FORMAT = (typeof config.customFormat === 'string' ? config.customFo
 const OPENROUTER_FALLBACK_MODEL = (typeof config.openrouterFallbackModel === 'string' ? config.openrouterFallbackModel : '').trim();
 const OPENROUTER_MODEL_CONTEXT = parseInt(config.openrouterModelContext, 10) || 0;
 const OPENROUTER_FALLBACK_CONTEXT = parseInt(config.openrouterFallbackContext, 10) || 0;
-const _defaultModel = PROVIDER === 'openai' ? 'gpt-5.2'
+const _defaultModel = PROVIDER === 'openai' ? 'gpt-5.4'
     : PROVIDER === 'openrouter' ? 'anthropic/claude-sonnet-4-6'
     : PROVIDER === 'custom' ? ''
     : 'claude-opus-4-7';
