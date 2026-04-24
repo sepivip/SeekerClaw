@@ -654,6 +654,26 @@ object ConfigManager {
             return fromPrefs
         }
 
+        // If the overlay changes provider but omits authType, the old prefs
+        // authType may not be valid for the new provider (e.g. provider=openai
+        // + authType=setup_token would crash Node startup validation and
+        // trigger the crash-loop protection). /provider always writes
+        // authType alongside provider, so this path is only reachable via
+        // a tampered/partial agent_settings.json — reject defensively.
+        val providerChangingWithoutAuth =
+            validProvider != null &&
+            validProvider != fromPrefs.provider &&
+            validAuthType == null &&
+            fromPrefs.authType !in allowedAuthTypes
+        if (providerChangingWithoutAuth) {
+            LogCollector.append(
+                "[Config] agent_settings.json changes provider to '$validProvider' but omits authType; " +
+                    "current prefs authType='${fromPrefs.authType}' is not valid for the new provider — ignoring overlay",
+                LogLevel.WARN
+            )
+            return fromPrefs
+        }
+
         val providerChanged = validProvider != null && validProvider != fromPrefs.provider
         val authChanged = validAuthType != null && validAuthType != fromPrefs.authType
         val modelChanged = newModel != null && newModel != fromPrefs.model

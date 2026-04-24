@@ -199,7 +199,13 @@ class AndroidBridge(
             try {
                 Log.i(TAG, "[Bridge] /service/restart — scheduling clean restart")
                 scheduleServiceRestart(SERVICE_RESTART_DELAY_MS)
-                context.stopService(Intent(context, OpenClawService::class.java))
+                // OpenClawService.stop() is the canonical shutdown path: it
+                // clears any pending restart callbacks on the companion
+                // Handler (so a stale restart scheduled elsewhere can't race
+                // our AlarmManager one), updates ServiceState, and then
+                // delegates to stopService() which triggers onDestroy →
+                // full cleanup → Process.killProcess at the end.
+                OpenClawService.stop(context)
             } catch (e: Exception) {
                 Log.e(TAG, "[Bridge] /service/restart failed: ${e.message}", e)
             }
