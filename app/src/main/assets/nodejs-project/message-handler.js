@@ -426,13 +426,25 @@ function resolveActiveProviderState() {
     } catch (_) { overlay = {}; }
 
     const nonBlank = (v) => typeof v === 'string' && v.trim().length > 0;
-    const provider = nonBlank(overlay.provider) ? overlay.provider.trim() : PROVIDER;
-    let authType;
-    if (provider === 'openai') {
-        authType = nonBlank(overlay.authType) ? overlay.authType.trim() : OPENAI_AUTH_TYPE;
-    } else {
-        authType = nonBlank(overlay.authType) ? overlay.authType.trim() : AUTH_TYPE;
-    }
+
+    // Validate overlay values before adopting them. A partial/tampered
+    // agent_settings.json could carry, say, (provider='openai',
+    // authType='bogus') — without this guard, modelsForProvider() would
+    // return [] and /model would treat OpenAI as "freeform" in its
+    // no-args display, which is misleading. Fall through to the startup
+    // consts when the overlay is invalid.
+    const rawOverlayProvider = nonBlank(overlay.provider) ? overlay.provider.trim() : null;
+    const provider = (rawOverlayProvider && modelCatalog.KNOWN_PROVIDERS.includes(rawOverlayProvider))
+        ? rawOverlayProvider
+        : PROVIDER;
+
+    const validAuths = modelCatalog.authTypesForProvider(provider);
+    const startupAuth = provider === 'openai' ? OPENAI_AUTH_TYPE : AUTH_TYPE;
+    const rawOverlayAuth = nonBlank(overlay.authType) ? overlay.authType.trim() : null;
+    const authType = (rawOverlayAuth && validAuths.includes(rawOverlayAuth))
+        ? rawOverlayAuth
+        : startupAuth;
+
     return { provider, authType, model: resolveActiveModel() };
 }
 
