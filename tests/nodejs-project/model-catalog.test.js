@@ -55,6 +55,9 @@ check('claude list non-empty', mc.modelsForProvider('claude', 'api_key').length 
 check('openrouter is freeform (empty list)', mc.modelsForProvider('openrouter', 'api_key'), []);
 check('custom is freeform (empty list)', mc.modelsForProvider('custom', null), []);
 check('unknown provider returns empty list', mc.modelsForProvider('bogus', null), []);
+check('openai with null authType returns empty (strict)', mc.modelsForProvider('openai', null), []);
+check('openai with undefined authType returns empty (strict)', mc.modelsForProvider('openai', undefined), []);
+check('openai with bogus authType returns empty (strict)', mc.modelsForProvider('openai', 'bogus'), []);
 
 console.log();
 console.log('── defaultModelForProvider (decoupled from list order) ──');

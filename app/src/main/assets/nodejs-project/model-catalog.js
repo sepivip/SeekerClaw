@@ -49,6 +49,14 @@ const OPENAI_DEFAULT_MODEL = 'gpt-5.4'; // available on every ChatGPT tier + api
 /**
  * Resolve the model list for a given provider + auth.
  * Returns [] for freeform providers (openrouter, custom).
+ *
+ * For OpenAI, `authType` MUST be explicitly 'api_key' or 'oauth'.
+ * Passing null/undefined/anything else returns [] so callers
+ * (validateModelForProvider, /model display) surface a clear error
+ * rather than silently validating against the API-key allowlist.
+ * Mirrors Kotlin's modelsForProvider which throws on the same
+ * ambiguity — we return empty instead of throwing because a thrown
+ * error from inside a Node tool would crash the chat turn.
  */
 function modelsForProvider(providerId, authType) {
     switch (providerId) {
@@ -56,7 +64,8 @@ function modelsForProvider(providerId, authType) {
             return CLAUDE_MODELS;
         case 'openai':
             if (authType === 'oauth') return OPENAI_OAUTH_MODELS;
-            return OPENAI_API_KEY_MODELS;
+            if (authType === 'api_key') return OPENAI_API_KEY_MODELS;
+            return [];
         case 'openrouter':
         case 'custom':
             return [];

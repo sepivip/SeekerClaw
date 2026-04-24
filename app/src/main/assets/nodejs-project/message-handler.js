@@ -535,8 +535,19 @@ async function handleProviderCommand(chatId, args, messageId = null) {
         // Same-provider re-select — keep current auth
         newAuthType = state.authType;
     } else {
-        // Switching providers without explicit auth — use first valid for the provider
-        newAuthType = authTypes[0];
+        // Switching providers without explicit auth — pick the first authType
+        // that actually has credentials configured. authTypes[0] alone would
+        // wrongly reject users who only have the non-first option configured
+        // (e.g. /provider openai for an OAuth-only user, or /provider claude
+        // for a setup-token-only user — both get rejected by credential
+        // gating below because the default api_key isn't set). If NONE of
+        // the provider's auth modes have credentials, fall back to
+        // authTypes[0] so the gating below rejects with a clear "no API key"
+        // message rather than us picking silently.
+        const credentialedAuth = authTypes.find((at) =>
+            modelCatalog.hasCredentialsFor(_config, newProvider, at).ok
+        );
+        newAuthType = credentialedAuth || authTypes[0];
     }
 
     // Credential gating: reject if the user hasn't configured this provider/auth yet
