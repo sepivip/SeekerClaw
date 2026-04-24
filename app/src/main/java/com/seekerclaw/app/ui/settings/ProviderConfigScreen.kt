@@ -51,6 +51,7 @@ import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.config.availableModels
 import com.seekerclaw.app.config.availableProviders
 import com.seekerclaw.app.config.OPENROUTER_DEFAULT_MODEL
+import com.seekerclaw.app.config.defaultModelForProvider
 import com.seekerclaw.app.config.modelsForProvider
 import com.seekerclaw.app.config.providerById
 import com.seekerclaw.app.util.Analytics
@@ -214,7 +215,8 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
             } else if (savedModel != null && modelsForNew.any { it.id == savedModel }) {
                 savedModel
             } else {
-                modelsForNew.firstOrNull()?.id ?: ""
+                // Use safe default, NOT list order (newer models may be tier-gated).
+                defaultModelForProvider(newProviderId, effectiveAuthType)
             }
         }
 
@@ -590,7 +592,8 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
             mutableStateOf(
                 when {
                     current.isNotBlank() -> current
-                    else -> models.firstOrNull()?.id ?: ""
+                    // Use safe default, NOT list order (newer models may be tier-gated).
+                    else -> defaultModelForProvider(activeProvider, effectiveAuthType)
                 }
             )
         }
@@ -797,7 +800,8 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                             val currentModel = config?.model ?: ""
                             val allowedModels = modelsForProvider("openai", selectedAuth)
                             if (allowedModels.none { it.id == currentModel }) {
-                                val fallback = allowedModels.firstOrNull()?.id ?: "gpt-5.4"
+                                // Use safe default, NOT list order (newer models may be tier-gated).
+                                val fallback = defaultModelForProvider("openai", selectedAuth)
                                 saveField("model", fallback, needsRestart = false)
                             }
                             // If switching away from OAuth, clear any leftover OAuth UI state

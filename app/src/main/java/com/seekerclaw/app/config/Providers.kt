@@ -48,21 +48,20 @@ val availableProviders = listOf(
     ),
 )
 
-// Order matters — several flows use `firstOrNull()` to pick a default
-// model (fresh install via SetupScreen, provider/auth switches in
-// ProviderConfigScreen). Put 5.4 first: it's known-available across all
-// ChatGPT subscription tiers and API-key accounts. 5.5 is tier-gated
-// on some OAuth plans, so making it the list default would break
-// first-run flows for users whose plan doesn't include it yet.
+// Display order: freshest first for UX. Default selection is NOT tied
+// to list order — see defaultModelForProvider() below. Callers seeding
+// a default must use that helper, not `firstOrNull()`, so newer models
+// can appear at the top of the picker without accidentally becoming
+// the default for tier-gated users.
 val openaiModels = listOf(
-    ModelInfo("gpt-5.4", "GPT-5.4"),
     ModelInfo("gpt-5.5", "GPT-5.5"),
+    ModelInfo("gpt-5.4", "GPT-5.4"),
     ModelInfo("gpt-5.3-codex", "GPT-5.3 Codex"),
 )
 
 val openaiOAuthModels = listOf(
-    ModelInfo("gpt-5.4", "GPT-5.4"),
     ModelInfo("gpt-5.5", "GPT-5.5"),
+    ModelInfo("gpt-5.4", "GPT-5.4"),
     ModelInfo("gpt-5.4-mini", "GPT-5.4 Mini"),
     ModelInfo("gpt-5.3-codex", "GPT-5.3 Codex"),
 )
@@ -91,3 +90,24 @@ fun modelsForProvider(providerId: String, authType: String?): List<ModelInfo> = 
 
 fun providerById(id: String): ProviderInfo =
     availableProviders.find { it.id == id } ?: availableProviders[0]
+
+/**
+ * Recommended default model for a given provider/authType.
+ *
+ * Decoupled from list order (intentionally) so the display list can prioritize
+ * the newest/most-exciting model at the top while the default stays on a known-
+ * safe, broadly-available choice. Rule of thumb: if a brand-new model is added
+ * that's tier-gated (e.g. only available on ChatGPT Pro), leave this alone —
+ * users on lower tiers must never hit a default that their plan can't reach.
+ *
+ * Call sites that seed an initial model (SetupScreen, provider/auth switches)
+ * should use this helper instead of `modelsForProvider(...).firstOrNull()`.
+ */
+fun defaultModelForProvider(providerId: String, authType: String?): String = when (providerId) {
+    // GPT-5.4 is available on every ChatGPT subscription tier AND via API key.
+    // GPT-5.5 is tier-gated on some plans as of 2026-04 — don't pick it as a default.
+    "openai" -> "gpt-5.4"
+    "openrouter" -> OPENROUTER_DEFAULT_MODEL
+    "custom" -> ""
+    else -> availableModels.firstOrNull()?.id ?: ""
+}

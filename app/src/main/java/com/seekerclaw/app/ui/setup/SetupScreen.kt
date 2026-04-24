@@ -107,6 +107,7 @@ import com.seekerclaw.app.config.ConfigClaimImporter
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.config.OPENROUTER_DEFAULT_MODEL
 import com.seekerclaw.app.config.availableModels
+import com.seekerclaw.app.config.defaultModelForProvider
 import com.seekerclaw.app.config.availableProviders
 import com.seekerclaw.app.config.providerById
 import com.seekerclaw.app.config.modelsForProvider
@@ -198,11 +199,17 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
         // openai when authType is null, so we must pass it through.
         val modelAuthType = if (initialProvider == "openai") initialAuthType else "api_key"
         val models = modelsForProvider(initialProvider, modelAuthType)
+        // Use defaultModelForProvider() instead of models[0] / firstOrNull() so
+        // newly-listed-but-tier-gated models (e.g. gpt-5.5 on lower ChatGPT plans)
+        // can appear at the top of the picker without silently becoming the
+        // default for fresh installs or 5.2-migration paths.
+        val safeDefault = defaultModelForProvider(initialProvider, modelAuthType)
+            .ifBlank { availableModels[0].id }
         mutableStateOf(
             existingConfig?.model?.let { model ->
                 if (models.isEmpty() || models.any { it.id == model }) model
-                else models[0].id
-            } ?: models.firstOrNull()?.id ?: availableModels[0].id
+                else safeDefault
+            } ?: safeDefault
         )
     }
     var agentName by rememberSaveable { mutableStateOf(existingConfig?.agentName ?: "SeekerClaw") }

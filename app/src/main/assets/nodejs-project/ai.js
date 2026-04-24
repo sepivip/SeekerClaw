@@ -1627,6 +1627,7 @@ const MODEL_CONTEXT_LIMITS = {
     'claude-haiku-4-5':    200000,
     'gpt-5.5':             200000,
     'gpt-5.4':             200000,
+    'gpt-5.4-mini':        200000,
     'gpt-5.2':             200000, // kept for existing users with 5.2 still selected (removed from UI dropdown)
     'gpt-5.3-codex':       200000,
 };
