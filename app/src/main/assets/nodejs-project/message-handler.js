@@ -647,6 +647,19 @@ async function handleProviderCommand(chatId, args, messageId = null) {
     // startup hard-exits on PROVIDER=custom + blank MODEL — so the
     // clear-path would crash the service if Kotlin's fallback ever
     // failed to write a non-blank model to prefs.
+    // Guard: if switching to a provider whose default is blank (custom)
+    // AND there's no currently-effective model to carry forward, the
+    // post-restart Node would hard-exit at startup (config.js rejects
+    // PROVIDER=custom + blank MODEL) — trapping the user with no
+    // working agent to even run /model against. In any healthy setup
+    // state.model is non-blank (Node's own startup rejected blank so
+    // it must have had one), so this fires only for truly degenerate
+    // configurations. Belt-and-suspenders, since the cost of hitting
+    // it is a service crash-loop.
+    if (newProvider === 'custom' && !newModel && !state.model) {
+        return `❌ Cannot switch to \`custom\` — no model configured. Run \`/model <id>\` first, or set a model in Settings > AI Provider > Custom.`;
+    }
+
     const settingsPatch = {
         provider: newProvider,
         authType: newAuthType,
