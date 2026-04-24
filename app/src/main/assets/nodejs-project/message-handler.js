@@ -12,6 +12,18 @@ const { buildHelpLines } = require('./telegram-commands');
 let deps = {};
 let initialized = false;
 
+// Set when /provider triggers a service restart. Stays true for the ~2.5s
+// window between bridge call and process death — during that window any
+// interaction with /model or /provider would be unsafe:
+//   - resolveActiveProviderState shows the overlay's NEW provider while the
+//     running adapter is still the OLD one, so /model display is misleading
+//     (Copilot round 12 concern #1).
+//   - /model <id> writes overlay.model that'll be applied post-restart with
+//     the NEW provider; user could accept a model valid for the OLD provider
+//     but not the new one, corrupting post-restart state.
+// Naturally reset on process death (new process, fresh flag).
+let _restartPending = false;
+
 function init(d) {
     deps = d;
     initialized = true;
@@ -469,6 +481,9 @@ function resolveActiveProviderState() {
 // ============================================================================
 
 async function handleModelCommand(chatId, args) {
+    if (_restartPending) {
+        return `⏳ Restart in progress — try again in a moment.`;
+    }
     const state = resolveActiveProviderState();
     const trimmed = (args || '').trim();
     const models = modelCatalog.modelsForProvider(state.provider, state.authType);
@@ -521,6 +536,9 @@ async function handleModelCommand(chatId, args) {
 // ============================================================================
 
 async function handleProviderCommand(chatId, args, messageId = null) {
+    if (_restartPending) {
+        return `⏳ Restart in progress — try again in a moment.`;
+    }
     const state = resolveActiveProviderState();
     const parts = (args || '').trim().split(/\s+/).filter(Boolean);
 
@@ -622,6 +640,11 @@ async function handleProviderCommand(chatId, args, messageId = null) {
     const modelHint = newModel ? '' : '\nAfter restart, set a model with `/model <id>`.';
     const reply = `✓ Switching to **${displayProv}**${authSuffix}.${modelLine}${modelHint}\n\nRestarting agent, back in ~10s…`;
 
+    // Flip the restart-pending flag synchronously BEFORE the async cascade
+    // so any /model or /provider command arriving after this point is
+    // denied cleanly (see flag declaration for why).
+    _restartPending = true;
+
     // Send the TG reply first, THEN trigger the Kotlin service to kill
     // itself (which Android will respawn with the new config). Doing this
     // after sendMessage resolves avoids losing the reply if the process
@@ -631,9 +654,18 @@ async function handleProviderCommand(chatId, args, messageId = null) {
     // in the handleMessage dispatcher).
     deps.sendMessage(chatId, reply, messageId).then(() => {
         deps.androidBridgeCall('/service/restart', {}, 5000).catch((err) => {
+            _restartPending = false;
             deps.log(`[/provider] /service/restart bridge call failed: ${err && err.message}`, 'ERROR');
+            // Restart didn't fire — tell the user so they don't wait
+            // forever for a restart that never happens.
+            deps.sendMessage(
+                chatId,
+                `⚠️ Couldn't trigger the restart automatically. Please restart the SeekerClaw app manually to finish switching to ${displayProv}.`,
+                messageId,
+            ).catch((e) => deps.log(`[/provider] restart-fallback sendMessage failed: ${e && e.message}`, 'WARN'));
         });
     }).catch((err) => {
+        _restartPending = false;
         deps.log(`[/provider] sendMessage failed; skipping restart: ${err && err.message}`, 'ERROR');
     });
 
