@@ -685,9 +685,11 @@ async function handleProviderCommand(chatId, args, messageId = null) {
     const displayProv = modelCatalog.displayNameForProvider(newProvider);
     const authSuffix = authTypes.length > 1 ? ` (${newAuthType})` : '';
     const modelLine = newModel ? `\nModel: \`${newModel}\`` : '';
-    // Freeform providers (custom, openrouter) have a blank default model,
-    // so the /provider switch alone won't give them a working model —
-    // they need to pick one explicitly after restart. Tell them.
+    // Only `custom` has a blank default model (openrouter has a concrete
+    // OPENROUTER_DEFAULT_MODEL); when defaultModelForProvider returns ''
+    // the /provider switch alone won't give us a working model and the
+    // user needs to pick one explicitly after restart. Telling them
+    // here is the last chance before they hit the new endpoint.
     const modelHint = newModel ? '' : '\nAfter restart, set a model with `/model <id>`.';
     const reply = `✓ Switching to **${displayProv}**${authSuffix}.${modelLine}${modelHint}\n\nRestarting agent, back in ~10s…`;
 

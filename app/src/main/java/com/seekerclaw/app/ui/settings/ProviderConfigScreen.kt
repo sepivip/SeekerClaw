@@ -616,8 +616,17 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
         // model and back doesn't wipe what the user typed. Pattern mirrors
         // lastAuthType_<provider> / lastModel_<provider>.
         val customPrefsKey = "lastCustomModel_$activeProvider"
-        val localPrefs = context.getSharedPreferences("seekerclaw_prefs", android.content.Context.MODE_PRIVATE)
-        val rememberedCustom = localPrefs.getString(customPrefsKey, null).orEmpty()
+        // Wrap in remember(context) so getSharedPreferences doesn't run on
+        // every recomposition while the picker is open (cheap, but unnecessary
+        // work on the hot path). Keyed to context — stable for the Activity
+        // lifetime, so the handle is effectively cached once.
+        val localPrefs = remember(context) {
+            context.getSharedPreferences("seekerclaw_prefs", android.content.Context.MODE_PRIVATE)
+        }
+        // Re-read only when the per-provider key changes, not every recomposition.
+        val rememberedCustom = remember(localPrefs, customPrefsKey) {
+            localPrefs.getString(customPrefsKey, null).orEmpty()
+        }
         // Key to activeProvider so the custom-field state re-reads the correct
         // per-provider prefs entry when the provider changes mid-dialog.
         var customModelId by remember(activeProvider) {
