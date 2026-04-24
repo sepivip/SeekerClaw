@@ -601,6 +601,27 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
             )
         }
 
+        // Custom-model state hoisted to the picker's outer composable scope so
+        // persistCustomModelAndClose (wired into onDismissRequest / confirmButton /
+        // dismissButton below) can read it. Kotlin captures are by reference,
+        // so the helper reflects the latest typed value at dialog-close time.
+        val isCustomSelected = selectedModel == CUSTOM_MODEL_SENTINEL ||
+            (models.none { it.id == selectedModel } && selectedModel.isNotBlank())
+        // Persist the last-typed custom model per provider so switching to a predefined
+        // model and back doesn't wipe what the user typed. Pattern mirrors
+        // lastAuthType_<provider> / lastModel_<provider>.
+        val customPrefsKey = "lastCustomModel_$activeProvider"
+        val localPrefs = context.getSharedPreferences("seekerclaw_prefs", android.content.Context.MODE_PRIVATE)
+        val rememberedCustom = localPrefs.getString(customPrefsKey, null).orEmpty()
+        var customModelId by remember {
+            mutableStateOf(
+                when {
+                    isCustomSelected && selectedModel != CUSTOM_MODEL_SENTINEL -> selectedModel
+                    else -> rememberedCustom
+                }
+            )
+        }
+
         // Persist the custom field value on dialog close — once, not per keystroke.
         val persistCustomModelAndClose = {
             if (customModelId.isNotBlank()) {
@@ -621,25 +642,6 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
             },
             text = {
                 Column {
-                    // CUSTOM_MODEL_SENTINEL is a sentinel for "user wants to type a model ID" — never display
-                    // it as the model ID itself, and don't treat it as a real selection.
-                    val isCustomSelected = selectedModel == CUSTOM_MODEL_SENTINEL ||
-                        (models.none { it.id == selectedModel } && selectedModel.isNotBlank())
-                    // Persist the last-typed custom model per provider so switching to a predefined
-                    // model and back doesn't wipe what the user typed. Pattern mirrors
-                    // lastAuthType_<provider> / lastModel_<provider>.
-                    val customPrefsKey = "lastCustomModel_$activeProvider"
-                    val localPrefs = context.getSharedPreferences("seekerclaw_prefs", android.content.Context.MODE_PRIVATE)
-                    val rememberedCustom = localPrefs.getString(customPrefsKey, null).orEmpty()
-                    var customModelId by remember {
-                        mutableStateOf(
-                            when {
-                                isCustomSelected && selectedModel != CUSTOM_MODEL_SENTINEL -> selectedModel
-                                else -> rememberedCustom
-                            }
-                        )
-                    }
-
                     models.forEach { model ->
                         Row(
                             modifier = Modifier

@@ -176,7 +176,7 @@ class AndroidBridge(
      */
     private fun handleServiceRestart(): Response {
         android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-            LogCollector.append("[Bridge] /service/restart — killing process for Android respawn")
+            Log.i(TAG, "[Bridge] /service/restart — killing process for Android respawn")
             android.os.Process.killProcess(android.os.Process.myPid())
         }, RESTART_DELAY_MS)
         return jsonResponse(200, mapOf("status" to "restarting", "delayMs" to RESTART_DELAY_MS))
