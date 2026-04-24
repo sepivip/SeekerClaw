@@ -81,17 +81,20 @@ t('telegramFallbackMenu() is a subset of full menu', () => {
     assert.ok(fallback.length <= tc.COMMAND_REGISTRY.length);
 });
 
-t('buildHelpLines() excludes /help itself', () => {
+t('buildHelpLines() excludes self-referential entries (/help and /commands)', () => {
     const lines = tc.buildHelpLines();
     for (const line of lines) {
-        assert.ok(!/^\/help\b/.test(line), `help excludes itself; found: ${line}`);
+        assert.ok(!/^\/help\b/.test(line), `/help excludes itself; found: ${line}`);
+        assert.ok(!/^\/commands\b/.test(line), `/commands excludes itself; found: ${line}`);
     }
 });
 
-t('buildHelpLines() covers every non-help registry entry', () => {
+t('buildHelpLines() covers every non-self-ref registry entry', () => {
     const lines = tc.buildHelpLines();
-    const nonHelpCount = tc.COMMAND_REGISTRY.filter((c) => c.name !== 'help').length;
-    assert.strictEqual(lines.length, nonHelpCount);
+    const nonSelfRefCount = tc.COMMAND_REGISTRY
+        .filter((c) => c.name !== 'help' && c.name !== 'commands')
+        .length;
+    assert.strictEqual(lines.length, nonSelfRefCount);
 });
 
 // Commands that live as `case '/<name>':` in message-handler.js but
@@ -103,7 +106,6 @@ t('buildHelpLines() covers every non-help registry entry', () => {
 // commands are undiscoverable.
 const HANDLERS_NOT_IN_REGISTRY = new Set([
     'start',     // Telegram sends /start on first-contact; not useful as a menu item
-    'commands',  // alias — shares body with /help
     'skills',    // alias — shares body with /skill
 ]);
 

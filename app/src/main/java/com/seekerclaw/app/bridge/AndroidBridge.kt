@@ -183,14 +183,19 @@ class AndroidBridge(
      * Settings saves, OAuth token saves, etc.) rather than the stale
      * workspace/config.json snapshot that Node loaded at startup.
      *
-     * Security: credential VALUES never leave Kotlin — fields are
-     * returned as a short placeholder ("•") when set and "" when
+     * Security: credential VALUES never leave Kotlin — every field
+     * is returned as a short placeholder ("•") when set and "" when
      * unset, so Node's `nonBlank` credential-gating checks work
-     * unchanged without exposing secrets across the bridge. One
-     * exception is `customBaseUrl`, which is a URL (not a secret)
-     * and IS checked for non-blankness in hasCredentialsFor — we
-     * return its real value since Node may legitimately need it
-     * for user-facing messaging.
+     * unchanged without exposing secrets across the bridge.
+     *
+     * customBaseUrl is returned the same way. Even though it's a URL
+     * rather than a direct secret, URLs can legally embed credentials
+     * (https://user:pass@host) or tokens in query params (?token=…),
+     * so returning verbatim would risk accidental secret exposure to
+     * Node's logs / bridge caller. Presence is all Node's gating
+     * needs for the "is custom provider configured" check — the real
+     * URL is read from config.json at service start when Node
+     * actually needs to route requests.
      */
     private fun handleConfigCredentials(): Response {
         val config = ConfigManager.loadConfig(context)
@@ -205,7 +210,7 @@ class AndroidBridge(
             "openaiOAuthToken" to if (config.openaiOAuthToken.isNotBlank()) placeholder else "",
             "openrouterApiKey" to if (config.openrouterApiKey.isNotBlank()) placeholder else "",
             "customApiKey" to if (config.customApiKey.isNotBlank()) placeholder else "",
-            "customBaseUrl" to if (config.customBaseUrl.isNotBlank()) config.customBaseUrl else "",
+            "customBaseUrl" to if (config.customBaseUrl.isNotBlank()) placeholder else "",
         )
         return jsonResponse(200, mapOf("ok" to true, "credentials" to creds))
     }

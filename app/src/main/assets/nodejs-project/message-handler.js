@@ -403,7 +403,13 @@ function writeAgentSettingsPatch(patch) {
         deps.log(`[AgentSettings] existing file unreadable (${e.message}) — starting from {}`, 'WARN');
         current = {};
     }
-    const merged = { ...current, ...patch };
+    // `undefined` means "remove this key" (for revert paths). Any other
+    // value (including null, 0, '', false) is written as-is.
+    const merged = { ...current };
+    for (const [k, v] of Object.entries(patch)) {
+        if (v === undefined) delete merged[k];
+        else merged[k] = v;
+    }
     const tmp = settingsPath + '.tmp';
     fs.writeFileSync(tmp, JSON.stringify(merged, null, 2), 'utf8');
     fs.renameSync(tmp, settingsPath);
@@ -636,6 +642,32 @@ async function handleProviderCommand(chatId, args, messageId = null) {
         settingsPatch.model = newModel;
     }
 
+    // Snapshot pre-patch values of the fields we're about to mutate, so if
+    // the restart bridge call fails we can restore the overlay to what it
+    // was — otherwise the process keeps running on the OLD adapter but with
+    // overlay metadata suggesting the NEW one, leaving the app in a
+    // confusing half-switched state. `undefined` in the revert patch
+    // signals "this key was absent before — delete it" (see
+    // writeAgentSettingsPatch).
+    const prevOverlay = (() => {
+        try {
+            const settingsPath = path.join(workDir, 'agent_settings.json');
+            if (fs.existsSync(settingsPath)) {
+                const parsed = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+                if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                    return parsed;
+                }
+            }
+        } catch (_) {}
+        return {};
+    })();
+    const revertPatch = {};
+    for (const k of Object.keys(settingsPatch)) {
+        revertPatch[k] = Object.prototype.hasOwnProperty.call(prevOverlay, k)
+            ? prevOverlay[k]
+            : undefined;
+    }
+
     try {
         writeAgentSettingsPatch(settingsPatch);
     } catch (e) {
@@ -670,17 +702,32 @@ async function handleProviderCommand(chatId, args, messageId = null) {
         deps.androidBridgeCall('/service/restart', {}, 5000).catch((err) => {
             _restartPending = false;
             deps.log(`[/provider] /service/restart bridge call failed: ${err && err.message}`, 'ERROR');
+            // Revert the overlay so the process doesn't keep running with
+            // the OLD adapter while overlay metadata advertises the NEW
+            // one. Without this, `resolveActiveProviderState` (and any
+            // post-failure Kotlin-side reconcile on a manual restart)
+            // would diverge from the actually-active adapter.
+            try {
+                writeAgentSettingsPatch(revertPatch);
+            } catch (e) {
+                deps.log(`[/provider] overlay revert failed (${e && e.message}); agent_settings.json may be half-switched`, 'WARN');
+            }
             // Restart didn't fire — tell the user so they don't wait
             // forever for a restart that never happens.
             deps.sendMessage(
                 chatId,
-                `⚠️ Couldn't trigger the restart automatically. Please restart the SeekerClaw app manually to finish switching to ${displayProv}.`,
+                `⚠️ Couldn't trigger the restart automatically. Please restart the SeekerClaw app manually and run \`/provider ${newProvider}\` again to finish switching.`,
                 messageId,
             ).catch((e) => deps.log(`[/provider] restart-fallback sendMessage failed: ${e && e.message}`, 'WARN'));
         });
     }).catch((err) => {
         _restartPending = false;
         deps.log(`[/provider] sendMessage failed; skipping restart: ${err && err.message}`, 'ERROR');
+        try {
+            writeAgentSettingsPatch(revertPatch);
+        } catch (e) {
+            deps.log(`[/provider] overlay revert failed (${e && e.message})`, 'WARN');
+        }
     });
 
     // We've handled the reply ourselves — tell the dispatcher not to send it again.

@@ -41,6 +41,12 @@ const COMMAND_REGISTRY = [
     { name: 'approve',  description: 'Confirm pending action' },
     { name: 'deny',     description: 'Reject pending action' },
     { name: 'help',     description: 'List all commands',              fallback: true },
+    // /commands is an alias for /help (they stack on the same case block
+    // in message-handler.js). Kept in the registry so Telegram's `/`
+    // autocomplete surfaces it — some users type /commands instinctively.
+    // Filtered out of buildHelpLines to avoid listing the same help entry
+    // twice in the body.
+    { name: 'commands', description: 'List all commands' },
 ];
 
 // Map shape Telegram's setMyCommands expects.
@@ -55,12 +61,14 @@ function telegramFallbackMenu() {
         .map((c) => ({ command: c.name, description: c.description }));
 }
 
-// Body lines for /help and /commands. Excludes 'help' itself (self-
-// referential — the user obviously knows /help exists, they just typed
-// it). Format matches the existing /help style ("/cmd — description").
+// Body lines for /help and /commands. Excludes both 'help' and
+// 'commands' (the latter is just an alias stacked on the same case
+// block — listing it alongside /help would be redundant). Format
+// matches the existing /help style ("/cmd — description").
+const _HELP_EXCLUDE = new Set(['help', 'commands']);
 function buildHelpLines() {
     return COMMAND_REGISTRY
-        .filter((c) => c.name !== 'help')
+        .filter((c) => !_HELP_EXCLUDE.has(c.name))
         .map((c) => `/${c.name} — ${c.description}`);
 }
 

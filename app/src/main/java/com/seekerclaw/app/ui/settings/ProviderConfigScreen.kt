@@ -630,13 +630,14 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
         }
 
         // Persist the custom field value on dialog close — once, not per keystroke.
-        // If the user cleared the field, remove the prefs key rather than leaving
-        // a stale value to be re-loaded next time; otherwise there's no way to
-        // reset the remembered custom model without typing a new one.
+        // Trim before saving so a "  my-model  " doesn't round-trip differently
+        // between UI and Node (Node trims on read). Blank-after-trim clears the
+        // prefs key so the UI can truly reset this state.
         val persistCustomModelAndClose = {
             val editor = localPrefs.edit()
-            if (customModelId.isNotBlank()) {
-                editor.putString(customPrefsKey, customModelId)
+            val trimmedCustom = customModelId.trim()
+            if (trimmedCustom.isNotBlank()) {
+                editor.putString(customPrefsKey, trimmedCustom)
             } else {
                 editor.remove(customPrefsKey)
             }
@@ -742,14 +743,22 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                 }
             },
             confirmButton = {
-                val canSave = selectedModel.isNotBlank() && selectedModel != CUSTOM_MODEL_SENTINEL
+                // Trim before checking — a whitespace-only custom input would
+                // otherwise pass isNotBlank() on the pre-trim value and then
+                // save empty after trimming downstream.
+                val trimmedModel = selectedModel.trim()
+                val canSave = trimmedModel.isNotBlank() && trimmedModel != CUSTOM_MODEL_SENTINEL
                 TextButton(
                     onClick = {
                         if (canSave) {
                             // Model is live-read by Node from agent_settings.json on every
                             // chat() call — no service restart needed to pick up the change.
-                            saveField("model", selectedModel, needsRestart = false)
-                            Analytics.modelSelected(selectedModel)
+                            // Save the TRIMMED value so stored model IDs are normalized:
+                            // Node trims on read (agent_settings.json resolver), but the
+                            // UI doesn't, so a raw-saved "  gpt-5.4  " would display
+                            // differently in Settings than in /status / /model output.
+                            saveField("model", trimmedModel, needsRestart = false)
+                            Analytics.modelSelected(trimmedModel)
                             persistCustomModelAndClose()
                         }
                     },
