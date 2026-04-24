@@ -759,21 +759,6 @@ async function handleMessage(normalized) {
     const combinedText = (rawText || caption || '').trim();
     if (!combinedText && !media) return;
 
-    // A service restart is imminent (/provider committed, AlarmManager
-    // armed, process death in ~2s). Don't start a chat() turn we can't
-    // finish — tool calls + API requests would get interrupted mid-
-    // flight, potentially leaving the user with a half-written reply
-    // or orphaned tool state. handleCommand paths already gate on
-    // this via the per-command checks; this guard covers all the
-    // non-command chat-triggering paths.
-    if (_restartPending) {
-        await deps.sendMessage(chatId,
-            `⏳ Restart in progress — try again in a moment.`,
-            messageId,
-        ).catch((e) => deps.log(`[restart] sendMessage during restart-pending failed: ${e && e.message}`, 'DEBUG'));
-        return;
-    }
-
     // Build text with reply context (channel-agnostic)
     let text = combinedText;
     if (quoteText) {
@@ -803,6 +788,23 @@ async function handleMessage(normalized) {
     // Only respond to owner
     if (senderId !== deps.getOwnerId()) {
         deps.log(`Ignoring message from ${senderId} (not owner)`, 'WARN');
+        return;
+    }
+
+    // A service restart is imminent (/provider committed, AlarmManager
+    // armed, process death in ~2s). Don't start a chat() turn we can't
+    // finish — tool calls + API requests would get interrupted mid-
+    // flight, potentially leaving the user with a half-written reply
+    // or orphaned tool state. handleCommand paths already gate on
+    // this via the per-command checks; this guard covers all the
+    // non-command chat-triggering paths. Placed AFTER the owner gate
+    // so non-owner users still get silently ignored during the
+    // restart window (consistent with the rest of handleMessage).
+    if (_restartPending) {
+        await deps.sendMessage(chatId,
+            `⏳ Restart in progress — try again in a moment.`,
+            messageId,
+        ).catch((e) => deps.log(`[restart] sendMessage during restart-pending failed: ${e && e.message}`, 'DEBUG'));
         return;
     }
 
