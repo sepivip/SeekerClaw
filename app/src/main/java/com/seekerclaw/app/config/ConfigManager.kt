@@ -543,7 +543,7 @@ object ConfigManager {
             ""
         }
 
-        return AppConfig(
+        val fromPrefs = AppConfig(
             anthropicApiKey = apiKey,
             setupToken = setupToken,
             authType = resolveAuthType(p),
@@ -579,6 +579,69 @@ object ConfigManager {
             openaiOAuthRefresh = openaiOAuthRefresh,
             openaiOAuthEmail = openaiOAuthEmail,
             openaiOAuthExpiresAt = p.getString(KEY_OPENAI_OAUTH_EXPIRES_AT, "") ?: "",
+        )
+
+        // Reconcile with agent_settings.json so TG-initiated changes (via
+        // `/model` and `/provider` slash commands) survive a service
+        // restart. Node writes provider/authType/model directly to this
+        // file; we adopt them here and mirror back to SharedPreferences so
+        // the next loadConfig reads a consistent state.
+        return reconcileWithAgentSettings(context, p, fromPrefs)
+    }
+
+    private fun reconcileWithAgentSettings(
+        context: Context,
+        prefs: android.content.SharedPreferences,
+        fromPrefs: AppConfig,
+    ): AppConfig {
+        val settingsFile = File(File(context.filesDir, "workspace"), "agent_settings.json")
+        if (!settingsFile.exists()) return fromPrefs
+        val json = try {
+            JSONObject(settingsFile.readText())
+        } catch (e: Exception) {
+            LogCollector.append("[Config] agent_settings.json unreadable (${e.message}) — skipping reconciliation", LogLevel.WARN)
+            return fromPrefs
+        }
+
+        fun stringField(key: String): String? {
+            if (!json.has(key)) return null
+            val v = json.optString(key, "")
+            return if (v.isBlank()) null else v.trim()
+        }
+
+        val newProvider = stringField("provider")
+        val newAuthType = stringField("authType")
+        val newModel = stringField("model")
+
+        // No overlay fields present — nothing to reconcile
+        if (newProvider == null && newAuthType == null && newModel == null) return fromPrefs
+
+        // Ignore unrecognized providers (defensive — don't corrupt prefs from a bad write)
+        val validProvider = newProvider?.takeIf { it in listOf("claude", "openai", "openrouter", "custom") }
+
+        val providerChanged = validProvider != null && validProvider != fromPrefs.provider
+        val authChanged = newAuthType != null && newAuthType != fromPrefs.authType
+        val modelChanged = newModel != null && newModel != fromPrefs.model
+
+        if (!providerChanged && !authChanged && !modelChanged) return fromPrefs
+
+        val editor = prefs.edit()
+        if (providerChanged) editor.putString(KEY_PROVIDER, validProvider)
+        if (authChanged) editor.putString(KEY_AUTH_TYPE, newAuthType)
+        if (modelChanged) editor.putString(KEY_MODEL, newModel)
+        editor.apply()
+
+        LogCollector.append(
+            "[Config] Reconciled from agent_settings.json: " +
+                "provider=${if (providerChanged) "$validProvider (was ${fromPrefs.provider})" else fromPrefs.provider}, " +
+                "authType=${if (authChanged) "$newAuthType (was ${fromPrefs.authType})" else fromPrefs.authType}, " +
+                "model=${if (modelChanged) "$newModel (was ${fromPrefs.model})" else fromPrefs.model}"
+        )
+
+        return fromPrefs.copy(
+            provider = if (providerChanged) validProvider!! else fromPrefs.provider,
+            authType = if (authChanged) newAuthType!! else fromPrefs.authType,
+            model = if (modelChanged) newModel!! else fromPrefs.model,
         )
     }
 
@@ -900,9 +963,15 @@ object ConfigManager {
             } else {
                 JSONObject()
             }
-            // Android-managed fields always overwrite
+            // Android-managed fields always overwrite. The provider/authType/model
+            // triple is included so Node-initiated changes (via /model or /provider
+            // Telegram commands) have a single consistent source of truth, and a
+            // Settings UI save here publishes the canonical values.
             existing.put("heartbeatIntervalMinutes", config.heartbeatIntervalMinutes)
             existing.put("maxStepsPerTurn", config.maxStepsPerTurn)
+            existing.put("provider", config.provider)
+            existing.put("authType", config.authType)
+            existing.put("model", config.model)
             // Ensure apiKeys object exists (agent writes individual keys into it)
             if (!existing.has("apiKeys")) {
                 existing.put("apiKeys", JSONObject())

@@ -2044,6 +2044,23 @@ async function chat(chatId, userMessage, options = {}) {
         const fallback = parseInt(_config && _config.maxStepsPerTurn, 10);
         return (fallback >= 10 && fallback <= 100) ? fallback : 35;
     })();
+    // Read model live from agent_settings.json each turn so a /model change
+    // via Telegram (or Settings UI model switch) takes effect on the next
+    // chat() call without a service restart. Same provider+auth only —
+    // switching providers still requires a restart (PROVIDER is a module-
+    // level const). Falls back to the module-level MODEL (loaded from
+    // config.json at startup) if settings has no override.
+    const activeModel = (() => {
+        try {
+            const settingsPath = path.join(workDir, 'agent_settings.json');
+            if (fs.existsSync(settingsPath)) {
+                const s = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+                const m = typeof s.model === 'string' ? s.model.trim() : '';
+                if (m) return m;
+            }
+        } catch (_) {}
+        return MODEL;
+    })();
     let _ctxCache = null; // Cached system/tools char counts — reset per chat() call
     let _loopWarned = false;  // DeerFlow P1: loop detector flags
     let _loopBroken = false;
@@ -2075,19 +2092,19 @@ async function chat(chatId, userMessage, options = {}) {
 
             // DeerFlow P2: Summarize old messages before adaptive trim drops them.
             // Reuse ctx for both summarization check and trim check to avoid duplicate logging.
-            let ctx = checkContextUsage(systemBlocks, messages, formattedTools, MODEL, turnId, _ctxCache);
+            let ctx = checkContextUsage(systemBlocks, messages, formattedTools, activeModel, turnId, _ctxCache);
             if (ctx.usage >= CONTEXT_SUMMARIZE_THRESHOLD && !_summarizedThisTurn.has(chatId)) {
                 const summarized = await summarizeOldMessages(messages, chatId, turnId);
                 if (summarized) {
                     // Messages changed — recompute context usage
-                    ctx = checkContextUsage(systemBlocks, messages, formattedTools, MODEL, turnId, _ctxCache);
+                    ctx = checkContextUsage(systemBlocks, messages, formattedTools, activeModel, turnId, _ctxCache);
                 }
             }
             // Trim-recheck loop: keep trimming until safe or we hit the message floor
             let trimPasses = 0;
             while (ctx.usage >= CONTEXT_DANGER_THRESHOLD && messages.length > MIN_PRESERVED_MESSAGES && trimPasses < 3) {
                 adaptiveTrim(messages, ctx.usage, turnId);
-                ctx = checkContextUsage(systemBlocks, messages, formattedTools, MODEL, turnId, _ctxCache);
+                ctx = checkContextUsage(systemBlocks, messages, formattedTools, activeModel, turnId, _ctxCache);
                 trimPasses++;
             }
             // Defensive: re-sanitize after trim to fix any orphaned tool pairs
@@ -2095,7 +2112,7 @@ async function chat(chatId, userMessage, options = {}) {
 
             // Convert neutral messages to provider API format for the request
             const apiMessages = adapter.toApiMessages(messages);
-            const body = adapter.formatRequest(MODEL, 4096, systemBlocks, apiMessages, formattedTools);
+            const body = adapter.formatRequest(activeModel, 4096, systemBlocks, apiMessages, formattedTools);
 
             const res = await claudeApiCall(body, chatId, { turnId, iteration: stepCount });
 
@@ -2369,7 +2386,7 @@ async function chat(chatId, userMessage, options = {}) {
             const summaryApiMsgs = adapter.toApiMessages(summaryNeutral);
 
             const summaryRes = await claudeApiCall(
-                adapter.formatRequest(MODEL, 4096, systemBlocks, summaryApiMsgs, []),
+                adapter.formatRequest(activeModel, 4096, systemBlocks, summaryApiMsgs, []),
                 chatId, { turnId, iteration: stepCount + 1 }
             );
 

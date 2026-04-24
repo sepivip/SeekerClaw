@@ -563,7 +563,10 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                 val trimmedModel = orModelValue.trim()
                 val trimmedCtx = orContextValue.trim()
                 if (trimmedModel.isNotEmpty() || !isModel) {
-                    saveField(modelField, trimmedModel, needsRestart = true)
+                    // "model" is live-pickup; "openrouterFallbackModel" still requires a restart
+                    // (it's a module-level config in Node, not re-read per chat).
+                    val modelNeedsRestart = modelField != "model"
+                    saveField(modelField, trimmedModel, needsRestart = modelNeedsRestart)
                 }
                 // Validate + clamp context: empty is OK, otherwise 4096..2000000
                 if (trimmedCtx.isEmpty()) {
@@ -614,8 +617,19 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                     // it as the model ID itself, and don't treat it as a real selection.
                     val isCustomSelected = selectedModel == CUSTOM_MODEL_SENTINEL ||
                         (models.none { it.id == selectedModel } && selectedModel.isNotBlank())
+                    // Persist the last-typed custom model per provider so switching to a predefined
+                    // model and back doesn't wipe what the user typed. Pattern mirrors
+                    // lastAuthType_<provider> / lastModel_<provider>.
+                    val customPrefsKey = "lastCustomModel_$activeProvider"
+                    val localPrefs = context.getSharedPreferences("seekerclaw_prefs", android.content.Context.MODE_PRIVATE)
+                    val rememberedCustom = localPrefs.getString(customPrefsKey, null).orEmpty()
                     var customModelId by remember {
-                        mutableStateOf(if (isCustomSelected && selectedModel != CUSTOM_MODEL_SENTINEL) selectedModel else "")
+                        mutableStateOf(
+                            when {
+                                isCustomSelected && selectedModel != CUSTOM_MODEL_SENTINEL -> selectedModel
+                                else -> rememberedCustom
+                            }
+                        )
                     }
 
                     models.forEach { model ->
@@ -677,6 +691,9 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                                 value = customModelId,
                                 onValueChange = {
                                     customModelId = it
+                                    // Persist per-provider so switching to a predefined model and
+                                    // re-opening the picker still shows what the user typed.
+                                    localPrefs.edit().putString(customPrefsKey, it).apply()
                                     // Update selectedModel even when blank — point at the sentinel
                                     // so canSave (which excludes the sentinel) disables Save.
                                     selectedModel = it.ifBlank { CUSTOM_MODEL_SENTINEL }
@@ -704,7 +721,9 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                 TextButton(
                     onClick = {
                         if (canSave) {
-                            saveField("model", selectedModel, needsRestart = true)
+                            // Model is live-read by Node from agent_settings.json on every
+                            // chat() call — no service restart needed to pick up the change.
+                            saveField("model", selectedModel, needsRestart = false)
                             Analytics.modelSelected(selectedModel)
                             showModelPicker = false
                         }

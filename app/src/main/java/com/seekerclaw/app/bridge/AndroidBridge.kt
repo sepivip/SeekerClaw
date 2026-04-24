@@ -59,7 +59,12 @@ class AndroidBridge(
         "/contacts/add" to Pair(10, 60_000L),
         "/location" to Pair(10, 60_000L),
         "/openai/oauth/save-tokens" to Pair(5, 60_000L),
+        "/service/restart" to Pair(3, 60_000L),
     )
+
+    companion object {
+        private const val RESTART_DELAY_MS = 500L
+    }
 
     @Synchronized
     private fun isRateLimited(endpoint: String): Boolean {
@@ -145,6 +150,7 @@ class AndroidBridge(
                 "/solana/send" -> handleSolanaSend(params)
                 "/config/save-owner" -> handleConfigSaveOwner(params)
                 "/openai/oauth/save-tokens" -> handleOpenAIOAuthSaveTokens(params)
+                "/service/restart" -> handleServiceRestart()
                 "/stats/db-summary" -> proxyToNodeStats()
                 "/ping" -> jsonResponse(200, mapOf("status" to "ok", "bridge" to "AndroidBridge"))
                 else -> jsonResponse(404, mapOf("error" to "Unknown endpoint: $uri"))
@@ -153,6 +159,30 @@ class AndroidBridge(
             Log.e(TAG, "Error handling $uri", e)
             jsonResponse(500, mapOf("error" to e.message))
         }
+    }
+
+    // ==================== Service restart ====================
+
+    /**
+     * Schedules a self-kill of the :node service process so Android respawns
+     * it with a fresh config (reads new provider/authType/model from
+     * agent_settings.json during ConfigManager.loadConfig reconciliation).
+     *
+     * The kill is delayed by [RESTART_DELAY_MS] so the HTTP response can flush
+     * back to the Node caller (and Node can flush its Telegram reply) before
+     * the process dies.
+     *
+     * Used by the /provider Telegram slash command — changing provider or
+     * auth type requires re-initializing provider-specific module state
+     * (adapter selection, endpoint, auth headers) which are currently set
+     * at startup from module-level consts in config.js.
+     */
+    private fun handleServiceRestart(): Response {
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            LogCollector.append("[Bridge] /service/restart — killing process for Android respawn")
+            android.os.Process.killProcess(android.os.Process.myPid())
+        }, RESTART_DELAY_MS)
+        return jsonResponse(200, mapOf("status" to "restarting", "delayMs" to RESTART_DELAY_MS))
     }
 
     // ==================== Battery ====================

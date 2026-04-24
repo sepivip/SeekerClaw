@@ -3,8 +3,10 @@
 // Uses init() dependency injection — all external dependencies received via init(deps).
 
 const fs = require('fs');
-const { CHANNEL } = require('./config');
+const path = require('path');
+const { CHANNEL, workDir, PROVIDER, AUTH_TYPE, OPENAI_AUTH_TYPE, config: _config } = require('./config');
 const { stripSilentReply, containsSilentReply } = require('./silent-reply');
+const modelCatalog = require('./model-catalog');
 
 let deps = {};
 let initialized = false;
@@ -364,9 +366,218 @@ Platform: \`${platform}\``;
             return { __resumeFallthrough: true, originalGoal: full.originalGoal || null };
         }
 
+        case '/model': {
+            return await handleModelCommand(chatId, args);
+        }
+
+        case '/provider': {
+            return await handleProviderCommand(chatId, args);
+        }
+
         default:
             return null; // Not a command — falls through to agent
     }
+}
+
+// ============================================================================
+// AGENT_SETTINGS PATCHING — used by /model and /provider to persist
+// TG-initiated changes. Node reads `model` live from this file on every
+// chat() call (see ai.js activeModel resolver). On service restart,
+// Kotlin's ConfigManager.loadConfig() reconciles these fields into
+// SharedPreferences so they survive battery death / app kill.
+// ============================================================================
+
+function writeAgentSettingsPatch(patch) {
+    const settingsPath = path.join(workDir, 'agent_settings.json');
+    let current = {};
+    try {
+        if (fs.existsSync(settingsPath)) {
+            const raw = fs.readFileSync(settingsPath, 'utf8');
+            const parsed = JSON.parse(raw);
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                current = parsed;
+            }
+        }
+    } catch (e) {
+        deps.log(`[AgentSettings] existing file unreadable (${e.message}) — starting from {}`, 'WARN');
+        current = {};
+    }
+    const merged = { ...current, ...patch };
+    const tmp = settingsPath + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(merged, null, 2), 'utf8');
+    fs.renameSync(tmp, settingsPath);
+}
+
+// Resolve the currently-active provider/authType/model as seen by Node.
+// Prefers agent_settings.json overrides (which reflect in-session TG
+// changes) over the startup-loaded module consts from config.js.
+function resolveActiveProviderState() {
+    let overlay = {};
+    try {
+        const settingsPath = path.join(workDir, 'agent_settings.json');
+        if (fs.existsSync(settingsPath)) {
+            const parsed = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                overlay = parsed;
+            }
+        }
+    } catch (_) { overlay = {}; }
+
+    const nonBlank = (v) => typeof v === 'string' && v.trim().length > 0;
+    const provider = nonBlank(overlay.provider) ? overlay.provider.trim() : PROVIDER;
+    let authType;
+    if (provider === 'openai') {
+        authType = nonBlank(overlay.authType) ? overlay.authType.trim() : OPENAI_AUTH_TYPE;
+    } else {
+        authType = nonBlank(overlay.authType) ? overlay.authType.trim() : AUTH_TYPE;
+    }
+    const model = nonBlank(overlay.model) ? overlay.model.trim() : deps.MODEL;
+    return { provider, authType, model };
+}
+
+// ============================================================================
+// /model HANDLER
+// Shows current model + options (no args), or switches to a new model
+// within the current provider (with arg). Model is live-picked up on
+// the next chat() call — no service restart.
+// ============================================================================
+
+async function handleModelCommand(chatId, args) {
+    const state = resolveActiveProviderState();
+    const trimmed = (args || '').trim();
+    const models = modelCatalog.modelsForProvider(state.provider, state.authType);
+    const isFreeform = models.length === 0;
+
+    if (!trimmed) {
+        // No args — show current + options
+        const lines = [`**Current model:** \`${state.model}\``];
+        lines.push(`Provider: \`${state.provider}\`${state.authType ? ` (${state.authType})` : ''}`);
+        lines.push('');
+        if (isFreeform) {
+            lines.push(`\`${state.provider}\` accepts any model ID.`);
+            lines.push(`Usage: \`/model <model-id>\``);
+        } else {
+            lines.push('**Options:**');
+            models.forEach((m) => {
+                const marker = m.id === state.model ? '  ← current' : '';
+                lines.push(`• \`${m.id}\` — ${m.displayName}${marker}`);
+            });
+            lines.push('');
+            lines.push('Usage: `/model <model-id>`');
+        }
+        return lines.join('\n');
+    }
+
+    const v = modelCatalog.validateModelForProvider(state.provider, state.authType, trimmed);
+    if (!v.ok) {
+        const optLine = (v.options && v.options.length)
+            ? `\n\nOptions: ${v.options.map((o) => '`' + o + '`').join(', ')}`
+            : '';
+        return `❌ ${v.reason}${optLine}`;
+    }
+
+    try {
+        writeAgentSettingsPatch({ model: v.model });
+    } catch (e) {
+        deps.log(`[/model] Failed to write agent_settings.json: ${e.message}`, 'ERROR');
+        return `❌ Couldn't save — ${e.message}`;
+    }
+    deps.log(`[/model] Switched to ${v.model} (provider=${state.provider}, auth=${state.authType})`, 'INFO');
+    return `✓ Switched to \`${v.model}\`. Takes effect on your next message.`;
+}
+
+// ============================================================================
+// /provider HANDLER
+// Shows current provider + options (no args), or switches to a new
+// provider+auth (with args). Requires a service restart — provider
+// adapter, endpoint, and auth headers are set at Node startup from
+// module-level consts. Rejects if credentials aren't configured.
+// ============================================================================
+
+async function handleProviderCommand(chatId, args) {
+    const state = resolveActiveProviderState();
+    const parts = (args || '').trim().split(/\s+/).filter(Boolean);
+
+    if (parts.length === 0) {
+        const lines = [
+            `**Current:** \`${state.provider}\`${state.authType ? ` (${state.authType})` : ''}`,
+            `Model: \`${state.model}\``,
+            '',
+            '**Providers:**',
+        ];
+        modelCatalog.KNOWN_PROVIDERS.forEach((p) => {
+            const auths = modelCatalog.authTypesForProvider(p);
+            const authHint = auths.length > 1 ? ` (${auths.join(' | ')})` : '';
+            const marker = p === state.provider ? '  ← current' : '';
+            lines.push(`• \`${p}\`${authHint}${marker}`);
+        });
+        lines.push('');
+        lines.push('Switch: `/provider <id>` or `/provider openai <api_key|oauth>`');
+        lines.push('');
+        lines.push('_Changing provider restarts the agent (~10s)._');
+        return lines.join('\n');
+    }
+
+    const newProvider = parts[0].toLowerCase();
+    if (!modelCatalog.KNOWN_PROVIDERS.includes(newProvider)) {
+        return `❌ Unknown provider: \`${newProvider}\`\n\nOptions: ${modelCatalog.KNOWN_PROVIDERS.map((p) => '`' + p + '`').join(', ')}`;
+    }
+
+    const authTypes = modelCatalog.authTypesForProvider(newProvider);
+    let newAuthType;
+    if (parts[1]) {
+        newAuthType = parts[1].toLowerCase();
+        if (!authTypes.includes(newAuthType)) {
+            return `❌ Invalid auth type for ${newProvider}: \`${newAuthType}\`\n\nOptions: ${authTypes.map((a) => '`' + a + '`').join(', ')}`;
+        }
+    } else if (newProvider === state.provider && authTypes.includes(state.authType)) {
+        // Same-provider re-select — keep current auth
+        newAuthType = state.authType;
+    } else {
+        // Switching providers without explicit auth — use first valid for the provider
+        newAuthType = authTypes[0];
+    }
+
+    // Credential gating: reject if the user hasn't configured this provider/auth yet
+    const cred = modelCatalog.hasCredentialsFor(_config, newProvider, newAuthType);
+    if (!cred.ok) {
+        return `❌ ${cred.reason}`;
+    }
+
+    const newModel = modelCatalog.defaultModelForProvider(newProvider, newAuthType);
+
+    try {
+        writeAgentSettingsPatch({
+            provider: newProvider,
+            authType: newAuthType,
+            model: newModel,
+        });
+    } catch (e) {
+        deps.log(`[/provider] Failed to write agent_settings.json: ${e.message}`, 'ERROR');
+        return `❌ Couldn't save — ${e.message}`;
+    }
+
+    deps.log(`[/provider] Switching to ${newProvider}/${newAuthType} (model=${newModel}); restart pending`, 'INFO');
+
+    const displayProv = newProvider.charAt(0).toUpperCase() + newProvider.slice(1);
+    const authSuffix = authTypes.length > 1 ? ` (${newAuthType})` : '';
+    const modelLine = newModel ? `\nModel: \`${newModel}\`` : '';
+    const reply = `✓ Switching to **${displayProv}**${authSuffix}.${modelLine}\n\nRestarting agent, back in ~10s…`;
+
+    // Send the TG reply first, THEN trigger the Kotlin service to kill
+    // itself (which Android will respawn with the new config). Doing this
+    // after sendMessage resolves avoids losing the reply if the process
+    // gets killed before Telegram acks.
+    deps.sendMessage(chatId, reply).then(() => {
+        deps.androidBridgeCall('/service/restart', {}, 5000).catch((err) => {
+            deps.log(`[/provider] /service/restart bridge call failed: ${err && err.message}`, 'ERROR');
+        });
+    }).catch((err) => {
+        deps.log(`[/provider] sendMessage failed; skipping restart: ${err && err.message}`, 'ERROR');
+    });
+
+    // We've handled the reply ourselves — tell the dispatcher not to send it again.
+    return { __handled: true };
 }
 
 // ============================================================================
