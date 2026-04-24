@@ -2,7 +2,7 @@
 
 const {
     log, config, localDateStr,
-    AGENT_NAME, MODEL,
+    AGENT_NAME, resolveActiveModel,
 } = require('../config');
 
 const { getDb } = require('../database');
@@ -32,7 +32,7 @@ const handlers = {
 
         const result = {
             agent: AGENT_NAME,
-            model: MODEL,
+            model: resolveActiveModel(),
             uptime: {
                 seconds: uptime,
                 formatted: `${Math.floor(uptime / 3600)}h ${Math.floor((uptime % 3600) / 60)}m ${uptime % 60}s`

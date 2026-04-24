@@ -213,6 +213,33 @@ const _defaultModel = PROVIDER === 'openai' ? 'gpt-5.4'
     : 'claude-opus-4-7';
 const MODEL = config.model || _defaultModel;
 const AGENT_NAME = config.agentName || 'SeekerClaw';
+
+/**
+ * Resolve the currently-active model — the agent_settings.json overlay
+ * wins over the startup MODEL const. The `/model` Telegram command and
+ * the Settings UI model picker both write to agent_settings.json; this
+ * resolver is what lets those changes take effect live (no service
+ * restart). Called per chat() turn and by any self-report surface
+ * (/status, /version, session_status, system prompt) so the agent
+ * never reports a different model than the one handling the request.
+ *
+ * Falls back to the module-level MODEL if:
+ *   - agent_settings.json doesn't exist
+ *   - it can't be parsed
+ *   - `model` field is missing / non-string / blank
+ */
+function resolveActiveModel() {
+    try {
+        const settingsPath = path.join(workDir, 'agent_settings.json');
+        if (fs.existsSync(settingsPath)) {
+            const s = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+            const m = typeof s.model === 'string' ? s.model.trim() : '';
+            if (m) return m;
+        }
+    } catch (_) {}
+    return MODEL;
+}
+
 let BRIDGE_TOKEN = normalizeSecret(config.bridgeToken || '');
 const USER_AGENT = 'SeekerClaw/1.0 (Android; +https://seekerclaw.com)';
 
@@ -598,6 +625,7 @@ module.exports = {
     OPENROUTER_FALLBACK_CONTEXT,
     AUTH_TYPE,
     MODEL,
+    resolveActiveModel,
     AGENT_NAME,
     BRIDGE_TOKEN,
     USER_AGENT,

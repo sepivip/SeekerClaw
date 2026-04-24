@@ -8,7 +8,7 @@ const crypto = require('crypto');
 // ── Imports from other SeekerClaw modules ──────────────────────────────────
 
 const {
-    workDir, MODEL, PROVIDER, CHANNEL, ANTHROPIC_KEY, OPENAI_KEY, OPENROUTER_KEY, CUSTOM_KEY, CUSTOM_BASE_URL, OPENROUTER_FALLBACK_MODEL, OPENROUTER_MODEL_CONTEXT, OPENROUTER_FALLBACK_CONTEXT, AUTH_TYPE, OPENAI_AUTH_TYPE,
+    workDir, MODEL, resolveActiveModel, PROVIDER, CHANNEL, ANTHROPIC_KEY, OPENAI_KEY, OPENROUTER_KEY, CUSTOM_KEY, CUSTOM_BASE_URL, OPENROUTER_FALLBACK_MODEL, OPENROUTER_MODEL_CONTEXT, OPENROUTER_FALLBACK_CONTEXT, AUTH_TYPE, OPENAI_AUTH_TYPE,
     REACTION_GUIDANCE, REACTION_NOTIFICATIONS, MEMORY_DIR,
     CONFIRM_REQUIRED, TOOL_RATE_LIMITS, TOOL_STATUS_MAP,
     API_TIMEOUT_RETRIES, API_TIMEOUT_BACKOFF_MS, API_TIMEOUT_MAX_BACKOFF_MS,
@@ -90,7 +90,7 @@ async function visionAnalyzeImage(imageBase64, prompt, maxTokens = 400) {
     }];
     const apiMessages = adapter.toApiMessages(neutralMessages);
     const systemBlocks = adapter.formatSystemPrompt('You are a vision assistant.', '', AUTH_TYPE);
-    const body = adapter.formatRequest(MODEL, cappedMaxTokens, systemBlocks, apiMessages, []);
+    const body = adapter.formatRequest(resolveActiveModel(), cappedMaxTokens, systemBlocks, apiMessages, []);
 
     const res = await claudeApiCall(body, 'vision');
 
@@ -287,7 +287,7 @@ async function generateSessionSummary(chatId) {
         role: 'user',
         content: 'Summarize this conversation in 3-5 bullet points. Focus on: decisions made, tasks completed, new information learned, action items. Skip: greetings, small talk, repeated information. Format: markdown bullets, concise, factual.\n\n' + summaryInput
     }]);
-    const body = adapter.formatRequest(MODEL, 500, systemBlocks, summaryMessages, []);
+    const body = adapter.formatRequest(resolveActiveModel(), 500, systemBlocks, summaryMessages, []);
 
     const res = await claudeApiCall(body, chatId, { background: true });
     if (res.status !== 200) {
@@ -339,9 +339,11 @@ async function saveSessionSummary(chatId, trigger, { force = false, skipIndex = 
             } while (fs.existsSync(finalPath));
         }
 
-        // Write the summary file
+        // Write the summary file — tag it with whichever model actually
+        // handled this session, not the startup-time MODEL const.
+        const archiveModel = resolveActiveModel();
         const header = `# Session Summary — ${localTimestamp()}\n\n`;
-        const meta = `> Trigger: ${trigger} | Exchanges: ${track.messageCount} | Model: ${MODEL}\n\n`;
+        const meta = `> Trigger: ${trigger} | Exchanges: ${track.messageCount} | Model: ${archiveModel}\n\n`;
         fs.writeFileSync(finalPath, header + meta + redactSecrets(summary) + '\n', 'utf8');
 
         log(`[SessionSummary] Saved: ${path.basename(finalPath)} (trigger: ${trigger})`, 'DEBUG');
@@ -363,7 +365,7 @@ async function saveSessionSummary(chatId, trigger, { force = false, skipIndex = 
             summaryFile: path.basename(finalPath),
             summaryExcerpt,
             trigger,
-            model: MODEL,
+            model: archiveModel,
         });
 
         // Re-index memory files so new summary is immediately searchable
@@ -382,7 +384,7 @@ async function saveSessionSummary(chatId, trigger, { force = false, skipIndex = 
 // SYSTEM PROMPT
 // ============================================================================
 
-function buildSystemBlocks(matchedSkills = [], chatId = null) {
+function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODEL) {
     const soul = loadSoul();
     const memory = loadMemory();
     const dailyMemory = loadDailyMemory();
@@ -678,7 +680,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
 
     // Config Awareness — what settings the agent can introspect (BAT-232, BAT-235, BAT-236)
     lines.push('## Config Awareness');
-    lines.push(`Provider: ${PROVIDER}, Model: ${MODEL}`);
+    lines.push(`Provider: ${PROVIDER}, Model: ${activeModel}`);
     lines.push('To check current runtime settings, read **agent_settings.json** — it contains heartbeat interval, API keys, and other tunable values.');
     lines.push('API keys for services like Jupiter are configured in Android Settings for secure persistent storage. Search provider keys (Brave, Perplexity, Exa, Tavily, Firecrawl) — configure in Settings > Search Provider.');
     lines.push('**Custom provider:** If PROVIDER is "custom", you are running through a user-configured OpenAI-compatible gateway. The user set this up in Settings > AI Provider > Custom with a base URL, API key, optional custom headers, and a model ID. If the custom endpoint fails, guide the user to Settings > AI Provider to verify the base URL and credentials.');
@@ -1020,11 +1022,11 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     }
 
     // Model-specific instructions — different guidance per model
-    if (MODEL && MODEL.includes('haiku')) {
+    if (activeModel && activeModel.includes('haiku')) {
         lines.push('## Model Note');
         lines.push('You are running on a fast, lightweight model. Keep responses concise and focused.');
         lines.push('');
-    } else if (MODEL && MODEL.includes('opus')) {
+    } else if (activeModel && activeModel.includes('opus')) {
         lines.push('## Model Note');
         lines.push('You are running on the most capable model. Take time for thorough analysis when needed.');
         lines.push('');
@@ -1034,19 +1036,19 @@ function buildSystemBlocks(matchedSkills = [], chatId = null) {
     // OpenRouter provider info
     if (PROVIDER === 'openrouter') {
         lines.push('## Provider');
-        lines.push(`You are running via OpenRouter (model: ${MODEL}).`);
+        lines.push(`You are running via OpenRouter (model: ${activeModel}).`);
         if (OPENROUTER_FALLBACK_MODEL) {
             lines.push(`Fallback model configured: ${OPENROUTER_FALLBACK_MODEL} (auto-switches if primary is down).`);
         }
         lines.push('');
     } else if (PROVIDER === 'custom') {
         lines.push('## Provider');
-        lines.push(`You are running via a custom AI endpoint (model: ${MODEL}).`);
+        lines.push(`You are running via a custom AI endpoint (model: ${activeModel}).`);
         if (CUSTOM_BASE_URL) lines.push(`Custom endpoint: ${CUSTOM_BASE_URL}`);
         lines.push('');
     } else if (PROVIDER === 'openai') {
         lines.push('## Provider');
-        lines.push(`You are running on OpenAI (model: ${MODEL}, auth: ${OPENAI_AUTH_TYPE}).`);
+        lines.push(`You are running on OpenAI (model: ${activeModel}, auth: ${OPENAI_AUTH_TYPE}).`);
         if (OPENAI_AUTH_TYPE === 'oauth') {
             lines.push('Auth mode: **ChatGPT OAuth (Codex)** — the user signed in with their ChatGPT subscription instead of using a platform API key. Requests route through chatgpt.com/backend-api/codex/* (not api.openai.com). The OAuth token auto-refreshes when it expires; if refresh fails, the user must re-sign-in via Settings > AI Provider > OpenAI > Sign in with ChatGPT.');
         } else {
@@ -1973,7 +1975,17 @@ async function chat(chatId, userMessage, options = {}) {
         log(`Matched skills: ${matchedSkills.map(s => s.name).join(', ')}`, 'DEBUG');
     }
 
-    const { stable: stablePrompt, dynamic: dynamicPrompt } = buildSystemBlocks(matchedSkills, chatId);
+    // Resolve the active model BEFORE building the system prompt. Same
+    // overlay-over-startup-const semantics as maxStepsPerTurn above — the
+    // `/model` TG command and the Settings UI model picker write to
+    // agent_settings.json, and both the API request body AND the system
+    // prompt's self-reporting lines have to see the same value. Resolving
+    // only at formatRequest() time (earlier approach) caused split-brain:
+    // request went to the new model but the agent read the OLD model
+    // name out of its own system prompt.
+    const activeModel = resolveActiveModel();
+
+    const { stable: stablePrompt, dynamic: dynamicPrompt } = buildSystemBlocks(matchedSkills, chatId, activeModel);
 
     // P2.4: Resume directive — injected as a high-priority system block so Claude
     // cannot ignore it. User messages are suggestions; system directives are orders.
@@ -2044,23 +2056,10 @@ async function chat(chatId, userMessage, options = {}) {
         const fallback = parseInt(_config && _config.maxStepsPerTurn, 10);
         return (fallback >= 10 && fallback <= 100) ? fallback : 35;
     })();
-    // Read model live from agent_settings.json each turn so a /model change
-    // via Telegram (or Settings UI model switch) takes effect on the next
-    // chat() call without a service restart. Same provider+auth only —
-    // switching providers still requires a restart (PROVIDER is a module-
-    // level const). Falls back to the module-level MODEL (loaded from
-    // config.json at startup) if settings has no override.
-    const activeModel = (() => {
-        try {
-            const settingsPath = path.join(workDir, 'agent_settings.json');
-            if (fs.existsSync(settingsPath)) {
-                const s = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-                const m = typeof s.model === 'string' ? s.model.trim() : '';
-                if (m) return m;
-            }
-        } catch (_) {}
-        return MODEL;
-    })();
+    // NOTE: `activeModel` was already resolved above (before buildSystemBlocks)
+    // so the system prompt and the API request agree on the model. Don't
+    // re-resolve here — a mid-turn switch would mean the request goes to a
+    // different model than the system prompt was built for.
     let _ctxCache = null; // Cached system/tools char counts — reset per chat() call
     let _loopWarned = false;  // DeerFlow P1: loop detector flags
     let _loopBroken = false;

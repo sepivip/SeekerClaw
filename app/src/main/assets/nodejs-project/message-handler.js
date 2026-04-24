@@ -4,7 +4,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { CHANNEL, workDir, PROVIDER, AUTH_TYPE, OPENAI_AUTH_TYPE, config: _config } = require('./config');
+const { CHANNEL, workDir, PROVIDER, AUTH_TYPE, OPENAI_AUTH_TYPE, resolveActiveModel, config: _config } = require('./config');
 const { stripSilentReply, containsSilentReply } = require('./silent-reply');
 const modelCatalog = require('./model-catalog');
 
@@ -118,7 +118,7 @@ Send me anything to get started!`;
 ⏱️ Uptime: ${uptimeFormatted}
 💬 Messages: ${todayCount} today (${totalCount} in conversation)
 🧠 Memory: ${memoryFileCount} files
-📊 Model: \`${deps.MODEL}\`
+📊 Model: \`${resolveActiveModel()}\`
 🧩 Skills: ${skillCount}
 💾 RAM: ${heapMB} MB heap / ${rssMB} MB RSS`;
         }
@@ -224,7 +224,7 @@ Use YAML frontmatter with \`name\`, \`description\`, and \`triggers\` fields.`;
             return `**SeekerClaw**
 Agent: \`${deps.AGENT_NAME}\`
 Package: \`${pkgVersion}\`
-Model: \`${deps.MODEL}\`
+Model: \`${resolveActiveModel()}\`
 Node.js: \`${nodeVer}\`
 Platform: \`${platform}\``;
         }
@@ -410,7 +410,9 @@ function writeAgentSettingsPatch(patch) {
 
 // Resolve the currently-active provider/authType/model as seen by Node.
 // Prefers agent_settings.json overrides (which reflect in-session TG
-// changes) over the startup-loaded module consts from config.js.
+// changes) over the startup-loaded module consts from config.js. Model
+// resolution delegates to config.resolveActiveModel() so this surface
+// and ai.js / tools/session.js / /status / /version all agree.
 function resolveActiveProviderState() {
     let overlay = {};
     try {
@@ -431,8 +433,7 @@ function resolveActiveProviderState() {
     } else {
         authType = nonBlank(overlay.authType) ? overlay.authType.trim() : AUTH_TYPE;
     }
-    const model = nonBlank(overlay.model) ? overlay.model.trim() : deps.MODEL;
-    return { provider, authType, model };
+    return { provider, authType, model: resolveActiveModel() };
 }
 
 // ============================================================================
