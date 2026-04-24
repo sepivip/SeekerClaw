@@ -693,12 +693,23 @@ async function handleProviderCommand(chatId, args, messageId = null) {
     const displayProv = modelCatalog.displayNameForProvider(newProvider);
     const authSuffix = authTypes.length > 1 ? ` (${newAuthType})` : '';
     const modelLine = newModel ? `\nModel: \`${newModel}\`` : '';
-    // Only `custom` has a blank default model (openrouter has a concrete
-    // OPENROUTER_DEFAULT_MODEL); when defaultModelForProvider returns ''
-    // the /provider switch alone won't give us a working model and the
-    // user needs to pick one explicitly after restart. Telling them
-    // here is the last chance before they hit the new endpoint.
-    const modelHint = newModel ? '' : '\nAfter restart, set a model with `/model <id>`.';
+    // When defaultModelForProvider returns '' (currently just custom),
+    // we don't write overlay.model in the settingsPatch — Kotlin's
+    // reconcile then preserves prefs.model (non-blank is "valid" for
+    // freeform providers), so Node's post-restart MODEL is typically
+    // a carry-over from the previous provider. That carry-over is
+    // often WRONG for a custom endpoint (e.g. user was on OpenAI
+    // gpt-5.5, switching to a local Ollama instance). Surface the
+    // effective pre-switch model in the reply so the user can catch
+    // mismatches before the first request fails. Only fall back to
+    // the strong "After restart, set a model" hint in the rare case
+    // where there's no model at all (unreachable in normal Setup flow,
+    // but defensive).
+    const modelHint = newModel
+        ? ''
+        : state.model
+            ? `\nCurrent model: \`${state.model}\` — run \`/model <id>\` after restart if it's not valid for your custom endpoint.`
+            : '\nAfter restart, set a model with `/model <id>`.';
     const reply = `✓ Switching to **${displayProv}**${authSuffix}.${modelLine}${modelHint}\n\nRestarting agent, back in ~10s…`;
 
     // Flip the restart-pending flag synchronously BEFORE the async cascade
