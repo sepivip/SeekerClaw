@@ -24,7 +24,7 @@ function assertInit() {
 // COMMAND HANDLERS
 // ============================================================================
 
-async function handleCommand(chatId, command, args) {
+async function handleCommand(chatId, command, args, messageId = null) {
     assertInit();
     switch (command) {
         case '/start': {
@@ -371,7 +371,7 @@ Platform: \`${platform}\``;
         }
 
         case '/provider': {
-            return await handleProviderCommand(chatId, args);
+            return await handleProviderCommand(chatId, args, messageId);
         }
 
         default:
@@ -495,7 +495,7 @@ async function handleModelCommand(chatId, args) {
 // module-level consts. Rejects if credentials aren't configured.
 // ============================================================================
 
-async function handleProviderCommand(chatId, args) {
+async function handleProviderCommand(chatId, args, messageId = null) {
     const state = resolveActiveProviderState();
     const parts = (args || '').trim().split(/\s+/).filter(Boolean);
 
@@ -579,8 +579,11 @@ async function handleProviderCommand(chatId, args) {
     // Send the TG reply first, THEN trigger the Kotlin service to kill
     // itself (which Android will respawn with the new config). Doing this
     // after sendMessage resolves avoids losing the reply if the process
-    // gets killed before Telegram acks.
-    deps.sendMessage(chatId, reply).then(() => {
+    // gets killed before Telegram acks. messageId threads the reply to
+    // the originating /provider message for consistent UX with other
+    // command responses (which get replyTo via deps.sendMessage(_, _, messageId)
+    // in the handleMessage dispatcher).
+    deps.sendMessage(chatId, reply, messageId).then(() => {
         deps.androidBridgeCall('/service/restart', {}, 5000).catch((err) => {
             deps.log(`[/provider] /service/restart bridge call failed: ${err && err.message}`, 'ERROR');
         });
@@ -654,7 +657,7 @@ async function handleMessage(normalized) {
             const args = argParts.join(' ');
             // Strip @botusername suffix for group chat compatibility (e.g. /status@MyBot → /status)
             const command = commandToken.toLowerCase().replace(/@\w+$/, '');
-            const response = await handleCommand(chatId, command, args);
+            const response = await handleCommand(chatId, command, args, messageId);
             if (response?.__handled) {
                 // Command fully handled (e.g. /quick sent inline keyboard) — stop processing
                 await statusReaction.clear();

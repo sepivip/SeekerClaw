@@ -588,7 +588,12 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
     // Model picker dialog — shows models for active provider only (skip for freeform providers)
     if (showModelPicker && modelsForProvider(activeProvider, effectiveAuthType).isNotEmpty()) {
         val models = modelsForProvider(activeProvider, effectiveAuthType)
-        var selectedModel by remember {
+        // Key remember() to (activeProvider, effectiveAuthType) so the picker's
+        // state reinitializes when the active provider or its auth mode changes
+        // while the dialog is in composition. Without the keys, switching
+        // provider/auth with the picker open would leave selectedModel pointing
+        // at a model from the previous provider.
+        var selectedModel by remember(activeProvider, effectiveAuthType) {
             // Preserve the user's current model even when it's not in the known list —
             // otherwise opening the picker would silently overwrite a custom model ID.
             val current = config?.model.orEmpty()
@@ -613,7 +618,9 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
         val customPrefsKey = "lastCustomModel_$activeProvider"
         val localPrefs = context.getSharedPreferences("seekerclaw_prefs", android.content.Context.MODE_PRIVATE)
         val rememberedCustom = localPrefs.getString(customPrefsKey, null).orEmpty()
-        var customModelId by remember {
+        // Key to activeProvider so the custom-field state re-reads the correct
+        // per-provider prefs entry when the provider changes mid-dialog.
+        var customModelId by remember(activeProvider) {
             mutableStateOf(
                 when {
                     isCustomSelected && selectedModel != CUSTOM_MODEL_SENTINEL -> selectedModel

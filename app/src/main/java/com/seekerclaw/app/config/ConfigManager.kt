@@ -909,7 +909,14 @@ object ConfigManager {
         val json = JSONObject().apply {
             put("botToken", config.telegramBotToken)
             put("ownerId", config.telegramOwnerId)
-            put("anthropicApiKey", if (config.provider in listOf("openai", "openrouter", "custom")) "" else config.activeCredential)
+            // Write Claude credentials as separate raw fields regardless of active
+            // provider so Node's /provider credential-gating (model-catalog.hasCredentialsFor)
+            // can accurately answer "does the user have credentials for claude api_key
+            // AND/OR claude setup_token?" before we commit to a restart. Node derives
+            // its runtime ANTHROPIC_KEY from (authType==setup_token ? setupToken : anthropicApiKey)
+            // at config-load time, so the activeCredential logic lives in Node now.
+            put("anthropicApiKey", config.anthropicApiKey)
+            if (config.setupToken.isNotBlank()) put("setupToken", config.setupToken)
             // For OpenAI: if user has selected oauth but hasn't completed sign-in (token
             // is blank), write api_key to the workspace JSON so Node's strict validation
             // doesn't crash on startup. The UI keeps the user's intended "oauth" choice

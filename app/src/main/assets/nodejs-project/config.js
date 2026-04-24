@@ -168,7 +168,10 @@ let OWNER_ID = CHANNEL === 'discord'
 const _SUPPORTED_PROVIDERS = new Set(['claude', 'openai', 'openrouter', 'custom']);
 const _rawProvider = (typeof config.provider === 'string' && config.provider.trim()) ? config.provider.trim().toLowerCase() : 'claude';
 const PROVIDER = _SUPPORTED_PROVIDERS.has(_rawProvider) ? _rawProvider : 'claude';
-const ANTHROPIC_KEY = normalizeSecret(config.anthropicApiKey);
+// ANTHROPIC_KEY is derived after AUTH_TYPE is computed (below) so it can
+// pick the right credential field. Kotlin now writes raw `anthropicApiKey`
+// and `setupToken` as SEPARATE fields in config.json (the activeCredential
+// collapse used to happen Kotlin-side), so Node picks by auth mode here.
 const OPENAI_KEY = normalizeSecret(config.openaiApiKey || '');
 const OPENAI_OAUTH_TOKEN = normalizeSecret(config.openaiOAuthToken || '');
 const OPENAI_OAUTH_REFRESH = normalizeSecret(config.openaiOAuthRefresh || '');
@@ -198,6 +201,16 @@ if (PROVIDER === 'openai' && !_SUPPORTED_OPENAI_AUTH_TYPES.has(AUTH_TYPE)) {
 // OpenAI auth type strictly follows the (normalized, validated) authType — no silent
 // fallback. The credential validation below will fail fast on missing OAuth token.
 const OPENAI_AUTH_TYPE = AUTH_TYPE === 'oauth' ? 'oauth' : 'api_key';
+
+// Now that AUTH_TYPE is known, pick the right Claude credential. Kotlin writes
+// both fields raw; `setupToken` may be absent (optional), so fall back to the
+// api key if the user is somehow on setup_token mode without one configured —
+// the startup validation below will still reject it.
+const ANTHROPIC_KEY = normalizeSecret(
+    (PROVIDER === 'claude' && AUTH_TYPE === 'setup_token')
+        ? (config.setupToken || config.anthropicApiKey || '')
+        : (config.anthropicApiKey || '')
+);
 
 const OPENROUTER_KEY = normalizeSecret(config.openrouterApiKey || '');
 const CUSTOM_KEY = normalizeSecret(config.customApiKey || '');
