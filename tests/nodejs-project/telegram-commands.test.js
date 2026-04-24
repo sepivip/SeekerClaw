@@ -47,10 +47,11 @@ t('every registry entry has name + description as non-blank strings', () => {
             `entry missing name: ${JSON.stringify(entry)}`);
         assert.ok(typeof entry.description === 'string' && entry.description.length > 0,
             `entry missing description: ${JSON.stringify(entry)}`);
-        // Telegram's BotFather rejects names with non-lowercase letters,
+        // Telegram's BotFather only allows command names that start with
+        // a lowercase letter and then contain only lowercase letters,
         // digits, or underscores.
         assert.ok(/^[a-z][a-z0-9_]*$/.test(entry.name),
-            `invalid command name '${entry.name}' (must be lowercase alnum+underscore)`);
+            `invalid command name '${entry.name}' (must start with a lowercase letter and contain only lowercase letters, digits, or underscores)`);
     }
 });
 
