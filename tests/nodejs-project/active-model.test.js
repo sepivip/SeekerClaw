@@ -94,10 +94,13 @@ t('overlay model field missing → falls back', () => {
 });
 
 t('overlay model is blank string → falls back', () => {
-    // This is the exact shape /provider custom writes (defaultModelForProvider
-    // returns '' for custom). Behavior here ripples into the /provider custom
-    // UX — a follow-up fix for that path should either write a non-blank
-    // model or skip writing the model field entirely.
+    // Defensive edge case: even if agent_settings.json somehow ends up
+    // with `{ model: '' }` (tampering, partial write, older writer from
+    // a pre-fix build), resolveActiveModel() treats the empty string as
+    // "no overlay" and returns the startup MODEL. Current /provider
+    // custom behavior OMITS the model field entirely when the default
+    // is blank (not `model: ''`), so this test covers the safety net,
+    // not a path /provider currently exercises.
     const dir = makeTempDir();
     try {
         writeSettings(dir, { model: '' });

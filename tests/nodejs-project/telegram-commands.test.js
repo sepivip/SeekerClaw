@@ -94,21 +94,61 @@ t('buildHelpLines() covers every non-help registry entry', () => {
     assert.strictEqual(lines.length, nonHelpCount);
 });
 
-t('DRIFT-GUARD: every registered command has a case branch in message-handler.js', () => {
-    // The invariant this test exists to defend: if someone adds a command
-    // to the registry (exposing it in /help + setMyCommands) but forgets
-    // the handler, Telegram will show "/foo" in autocomplete, the user
-    // will type it, and the dispatcher will fall through to chat() — the
-    // agent will get a confused message starting with "/foo ...". Fail
-    // the build loudly instead.
+// Commands that live as `case '/<name>':` in message-handler.js but
+// intentionally stay out of the registry. These are either aliases
+// for another command (stacked cases sharing a body) or handlers
+// that predate the registry and aren't user-facing discoverable
+// commands (yet). If you add a new command, PREFER adding it to the
+// registry unless there's a specific reason not to — unfielded
+// commands are undiscoverable.
+const HANDLERS_NOT_IN_REGISTRY = new Set([
+    'start',     // Telegram sends /start on first-contact; not useful as a menu item
+    'commands',  // alias — shares body with /help
+    'skills',    // alias — shares body with /skill
+]);
+
+// Scan message-handler.js for every `case '/<name>':` once, reuse
+// below for both drift directions.
+function extractCaseBranches() {
     const src = fs.readFileSync(MESSAGE_HANDLER_JS, 'utf8');
+    const re = /case\s*['"]\/([a-z][a-z0-9_]*)['"]\s*:/g;
+    const names = new Set();
+    let m;
+    while ((m = re.exec(src)) !== null) {
+        names.add(m[1]);
+    }
+    return names;
+}
+
+t('DRIFT-GUARD A: every registered command has a case branch in message-handler.js', () => {
+    // If someone adds a command to the registry (exposing it in /help +
+    // setMyCommands) but forgets the handler, Telegram will show "/foo"
+    // in autocomplete, the user will type it, and the dispatcher will
+    // fall through to chat() — the agent will get a confused message
+    // starting with "/foo ...". Fail the build loudly instead.
+    const caseBranches = extractCaseBranches();
     for (const entry of tc.COMMAND_REGISTRY) {
-        // Match `case '/<name>':` with optional whitespace. Also accept the
-        // alias-style where multiple cases stack (e.g. `case '/help':\n case '/commands':`).
-        const pattern = new RegExp(`case\\s*['"]\\/${entry.name}['"]\\s*:`);
-        assert.ok(pattern.test(src),
+        assert.ok(caseBranches.has(entry.name),
             `Registered command '/${entry.name}' has no \`case '/${entry.name}':\` branch in message-handler.js. ` +
             `Add the handler or remove the registry entry.`);
+    }
+});
+
+t('DRIFT-GUARD B: every case branch is in the registry or the allow-list', () => {
+    // The inverse: if someone adds a `case '/foo':` handler but
+    // forgets the registry entry, /foo will work if typed but won't
+    // appear in /help or the `/` autocomplete menu — the exact bug
+    // that motivated this whole refactor (PR #339). Allow-list via
+    // HANDLERS_NOT_IN_REGISTRY covers aliases / Telegram built-ins.
+    const caseBranches = extractCaseBranches();
+    const registered = new Set(tc.COMMAND_REGISTRY.map((c) => c.name));
+    for (const branch of caseBranches) {
+        if (registered.has(branch)) continue;
+        if (HANDLERS_NOT_IN_REGISTRY.has(branch)) continue;
+        assert.fail(
+            `Handler \`case '/${branch}':\` exists in message-handler.js but /${branch} is not in COMMAND_REGISTRY. ` +
+            `Users won't see it in /help or '/' autocomplete. Either add it to the registry, or add '${branch}' to HANDLERS_NOT_IN_REGISTRY if it's intentionally undocumented.`
+        );
     }
 });
 

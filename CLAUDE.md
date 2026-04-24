@@ -381,18 +381,19 @@ The Self-Awareness Benchmark (SAB) catches drift between what the agent can do a
 
 ## Telegram Slash Command Registration (NEVER SKIP)
 
-> **RULE: When you add a new Telegram slash command (a new `case '/foo':` branch in `message-handler.js`), you MUST also register it in the `setMyCommands` payload in `main.js`. Otherwise Telegram's `/` autocomplete menu won't show it, and users won't discover the feature exists.**
+> **RULE: When you add a new Telegram slash command, add an entry to `telegram-commands.js` AND a `case '/foo':` branch in `message-handler.js`. The drift-guard test fails the build if either half is missing.**
 
-Handling a command is half the work. The other half is making it discoverable.
+Handling a command is half the work. The other half is making it discoverable. The single-source-of-truth registry in [telegram-commands.js](app/src/main/assets/nodejs-project/telegram-commands.js) drives both the BotFather `/` autocomplete menu AND the `/help` response, so one edit serves both surfaces.
 
 ### What to do
 
-1. **Handler** — new `case '/foo':` branch in `handleCommand` in [message-handler.js](app/src/main/assets/nodejs-project/message-handler.js).
-2. **Registration** — add the command to the `setMyCommands` payload in [main.js](app/src/main/assets/nodejs-project/main.js) (search for `setMyCommands` — there are two payloads, the full one and the degraded fallback for `BOT_COMMANDS_TOO_MUCH`):
+1. **Registry entry** — add one line to `COMMAND_REGISTRY` in [telegram-commands.js](app/src/main/assets/nodejs-project/telegram-commands.js). Order in the array determines display order in both `/` autocomplete and `/help`.
    ```js
-   { command: 'foo', description: 'Short imperative description' },
+   { name: 'foo', description: 'Short imperative description', fallback: true },
    ```
-3. **Help text** — if the command is user-facing (not just a debug hook), also add it to the `/help` response in [message-handler.js](app/src/main/assets/nodejs-project/message-handler.js) (search for `/help`) so users without autocomplete (old Telegram clients, web) can still find it.
+   Set `fallback: true` if the command should survive a Telegram `BOT_COMMANDS_TOO_MUCH` degradation (i.e., it's a must-have). Keep the fallback list short.
+
+2. **Handler** — new `case '/foo':` branch in `handleCommand` in [message-handler.js](app/src/main/assets/nodejs-project/message-handler.js).
 
 Description should be short (fits in Telegram's one-line UI), imperative ("Show bot status", not "Shows bot status"), and mention the affected thing so users can distinguish similar commands.
 
@@ -400,11 +401,19 @@ Description should be short (fits in Telegram's one-line UI), imperative ("Show 
 
 Telegram caps at ~100 total commands per bot but we cap OURSELVES at ~30 for usability. If adding a new one would push past that, merge two existing ones or prune before adding. A command menu that scrolls forever is no better than no menu.
 
-**If BotFather rejects with `BOT_COMMANDS_TOO_MUCH`:** the fallback payload kicks in automatically (essentials only). Keep the full payload trimmed so we never rely on the fallback in production.
+**If BotFather rejects with `BOT_COMMANDS_TOO_MUCH`:** the fallback payload kicks in automatically (only commands flagged `fallback: true`). Keep the full payload trimmed so we never rely on the fallback in production.
+
+### Enforcement
+
+[tests/nodejs-project/telegram-commands.test.js](tests/nodejs-project/telegram-commands.test.js) runs a **drift-guard** that fails the build if:
+- a command in `COMMAND_REGISTRY` has no matching `case '/<name>':` in message-handler.js, OR
+- a `case '/<name>':` in message-handler.js has no matching registry entry (internal aliases like `/commands` → `/help` handler stack on the same case block — fine).
+
+Run locally with `node tests/nodejs-project/telegram-commands.test.js` before pushing.
 
 ### Discovered the hard way in PR #339 (BAT-504, /model + /provider)
 
-The `/model` and `/provider` commands shipped functional but invisible — device testing found that typing `/` in Telegram didn't surface them in the autocomplete menu, so a user who didn't already know the command existed wouldn't find it. Don't repeat: EVERY `/foo` handler change needs the setMyCommands + /help parallel update in the same PR.
+The `/model` and `/provider` commands shipped functional but invisible — device testing found that typing `/` in Telegram didn't surface them in the autocomplete menu, so a user who didn't already know the command existed wouldn't find it. PR #339 also refactored the old hardcoded setMyCommands + inline /help text into the registry pattern + drift-guard so a human can't make the same mistake again.
 
 ---
 

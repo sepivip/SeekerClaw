@@ -459,14 +459,28 @@ function resolveActiveProviderState() {
     // no-args display, which is misleading. Fall through to the startup
     // consts when the overlay is invalid.
     const rawOverlayProvider = nonBlank(overlay.provider) ? overlay.provider.trim() : null;
-    const provider = (rawOverlayProvider && modelCatalog.KNOWN_PROVIDERS.includes(rawOverlayProvider))
+    const overlayProviderValid = rawOverlayProvider && modelCatalog.KNOWN_PROVIDERS.includes(rawOverlayProvider);
+
+    // Provider-scoping (mirrors resolveActiveModel in config.js): during
+    // the /provider restart window, overlay carries the NEW provider but
+    // the running adapter is still the OLD one. Returning the new
+    // provider from here would make /model display/validate against a
+    // provider we can't talk to yet. In practice /model and /provider
+    // short-circuit on _restartPending so this path is rarely reached,
+    // but keep the same-provider scoping for symmetry and defense in
+    // depth (e.g. a stale overlay left behind by a crashed pre-restart
+    // write).
+    const provider = (overlayProviderValid && rawOverlayProvider === PROVIDER)
         ? rawOverlayProvider
         : PROVIDER;
 
     const validAuths = modelCatalog.authTypesForProvider(provider);
     const startupAuth = provider === 'openai' ? OPENAI_AUTH_TYPE : AUTH_TYPE;
     const rawOverlayAuth = nonBlank(overlay.authType) ? overlay.authType.trim() : null;
-    const authType = (rawOverlayAuth && validAuths.includes(rawOverlayAuth))
+    // AuthType overlay is only honored when the overlay provider also
+    // matches — otherwise we'd adopt an authType scoped to a pending
+    // provider change that hasn't taken effect yet.
+    const authType = (rawOverlayAuth && validAuths.includes(rawOverlayAuth) && provider === PROVIDER)
         ? rawOverlayAuth
         : startupAuth;
 

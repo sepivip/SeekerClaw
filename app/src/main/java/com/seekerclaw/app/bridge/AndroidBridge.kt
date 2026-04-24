@@ -69,6 +69,11 @@ class AndroidBridge(
         "/contacts/add" to Pair(10, 60_000L),
         "/location" to Pair(10, 60_000L),
         "/openai/oauth/save-tokens" to Pair(5, 60_000L),
+        // /config/credentials loads AppConfig (Keystore decrypt +
+        // agent_settings reconciliation) on every call — rate-limit so
+        // a misbehaving Node caller can't spin it. 10/min is ample for
+        // normal /provider interactive use.
+        "/config/credentials" to Pair(10, 60_000L),
         "/service/restart" to Pair(3, 60_000L),
     )
 
