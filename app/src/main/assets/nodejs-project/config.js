@@ -239,16 +239,31 @@ const AGENT_NAME = config.agentName || 'SeekerClaw';
  * (/status, /version, session_status, system prompt) so the agent
  * never reports a different model than the one handling the request.
  *
+ * Provider-scoping: if the overlay specifies a provider, only adopt the
+ * overlay model when it matches the running provider. This closes a race
+ * where `/provider` writes `{provider: openai, model: gpt-5.4}` to
+ * agent_settings.json BEFORE the service restart completes (~2.5s
+ * window); without scoping, the still-running Claude adapter would pick
+ * up `gpt-5.4` and try to call Anthropic with an OpenAI model ID,
+ * causing immediate API failures for any message in that window.
+ *
  * Falls back to the module-level MODEL if:
  *   - agent_settings.json doesn't exist
  *   - it can't be parsed
  *   - `model` field is missing / non-string / blank
+ *   - overlay.provider is set AND differs from the startup PROVIDER
+ *     (provider switch is pending; old adapter can't use new model)
  */
 function resolveActiveModel() {
     try {
         const settingsPath = path.join(workDir, 'agent_settings.json');
         if (fs.existsSync(settingsPath)) {
             const s = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+            // Overlay is stale while a /provider restart is pending.
+            const overlayProvider = typeof s.provider === 'string' ? s.provider.trim() : '';
+            if (overlayProvider && overlayProvider !== PROVIDER) {
+                return MODEL;
+            }
             const m = typeof s.model === 'string' ? s.model.trim() : '';
             if (m) return m;
         }

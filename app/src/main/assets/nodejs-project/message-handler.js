@@ -627,7 +627,11 @@ async function handleProviderCommand(chatId, args, messageId = null) {
     const displayProv = newProvider.charAt(0).toUpperCase() + newProvider.slice(1);
     const authSuffix = authTypes.length > 1 ? ` (${newAuthType})` : '';
     const modelLine = newModel ? `\nModel: \`${newModel}\`` : '';
-    const reply = `✓ Switching to **${displayProv}**${authSuffix}.${modelLine}\n\nRestarting agent, back in ~10s…`;
+    // Freeform providers (custom, openrouter) have a blank default model,
+    // so the /provider switch alone won't give them a working model —
+    // they need to pick one explicitly after restart. Tell them.
+    const modelHint = newModel ? '' : '\nAfter restart, set a model with `/model <id>`.';
+    const reply = `✓ Switching to **${displayProv}**${authSuffix}.${modelLine}${modelHint}\n\nRestarting agent, back in ~10s…`;
 
     // Send the TG reply first, THEN trigger the Kotlin service to kill
     // itself (which Android will respawn with the new config). Doing this

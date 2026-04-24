@@ -36,11 +36,17 @@ const CONFIG_JS = path.join(__dirname, '..', '..', 'app', 'src', 'main',
     'assets', 'nodejs-project', 'config.js');
 
 // --- extracted pure function (must mirror config.js resolveActiveModel) ---
-function resolveActiveModel(workDir, fallbackModel) {
+// `activeProvider` param mirrors the startup PROVIDER const. Overlay model
+// is only honored when overlay.provider is absent OR matches activeProvider.
+function resolveActiveModel(workDir, fallbackModel, activeProvider = 'claude') {
     try {
         const settingsPath = path.join(workDir, 'agent_settings.json');
         if (fs.existsSync(settingsPath)) {
             const s = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+            const overlayProvider = typeof s.provider === 'string' ? s.provider.trim() : '';
+            if (overlayProvider && overlayProvider !== activeProvider) {
+                return fallbackModel;
+            }
             const m = typeof s.model === 'string' ? s.model.trim() : '';
             if (m) return m;
         }
@@ -149,6 +155,56 @@ t('JSON array (not object) → falls back', () => {
     } finally { cleanup(dir); }
 });
 
+// Provider-scoping: during the /provider restart window, overlay
+// can carry the NEW provider + NEW model but the running adapter
+// is still the OLD provider. Applying the new model would crash
+// the in-flight API call.
+
+t('overlay provider matches startup → model applied', () => {
+    const dir = makeTempDir();
+    try {
+        writeSettings(dir, { provider: 'openai', model: 'gpt-5.5' });
+        assert.strictEqual(resolveActiveModel(dir, 'gpt-5.4', 'openai'), 'gpt-5.5');
+    } finally { cleanup(dir); }
+});
+
+t('overlay provider mismatches startup → model IGNORED', () => {
+    // The key race-condition test: /provider openai write has happened,
+    // restart not yet complete, activeProvider still claude. We must NOT
+    // return gpt-5.4 — the Claude adapter can't call Anthropic with it.
+    const dir = makeTempDir();
+    try {
+        writeSettings(dir, { provider: 'openai', model: 'gpt-5.4' });
+        assert.strictEqual(
+            resolveActiveModel(dir, 'claude-opus-4-7', 'claude'),
+            'claude-opus-4-7'
+        );
+    } finally { cleanup(dir); }
+});
+
+t('overlay omits provider → model applied (plain /model switch)', () => {
+    // /model <id> writes just { model }, no provider — always honored.
+    const dir = makeTempDir();
+    try {
+        writeSettings(dir, { model: 'claude-sonnet-4-6' });
+        assert.strictEqual(
+            resolveActiveModel(dir, 'claude-opus-4-7', 'claude'),
+            'claude-sonnet-4-6'
+        );
+    } finally { cleanup(dir); }
+});
+
+t('overlay provider blank → model applied (treated as absent)', () => {
+    const dir = makeTempDir();
+    try {
+        writeSettings(dir, { provider: '   ', model: 'claude-sonnet-4-6' });
+        assert.strictEqual(
+            resolveActiveModel(dir, 'claude-opus-4-7', 'claude'),
+            'claude-sonnet-4-6'
+        );
+    } finally { cleanup(dir); }
+});
+
 t('config.js resolveActiveModel wiring still present (structural)', () => {
     const src = fs.readFileSync(CONFIG_JS, 'utf8');
     const code = src
@@ -161,7 +217,14 @@ t('config.js resolveActiveModel wiring still present (structural)', () => {
         'config.js resolveActiveModel must read from path.join(workDir, "agent_settings.json")');
     assert.ok(/typeof\s+[A-Za-z_$][\w$]*\.model\s*===?\s*['"]string['"]/.test(code),
         'config.js resolveActiveModel must type-check .model as string');
-    assert.ok(/return\s+MODEL\s*;?\s*\}/.test(code),
+    // Provider-scoping guard must be present — the race-condition fix
+    // that prevents applying a new provider's model before the adapter
+    // restart completes.
+    assert.ok(/typeof\s+[A-Za-z_$][\w$]*\.provider\s*===?\s*['"]string['"]/.test(code),
+        'config.js resolveActiveModel must type-check .provider as string (provider-scoping)');
+    assert.ok(/!==\s*PROVIDER/.test(code),
+        'config.js resolveActiveModel must compare overlay provider to startup PROVIDER');
+    assert.ok(/return\s+MODEL\s*;?/.test(code),
         'config.js resolveActiveModel must fall back to `return MODEL`');
     assert.ok(/module\.exports\s*=\s*\{[\s\S]*\bresolveActiveModel\b[\s\S]*\}/.test(code),
         'config.js is missing resolveActiveModel in module.exports');
