@@ -725,6 +725,8 @@ telegram('getMe')
                     telegram('setMyCommands', { commands: [
                         { command: 'quick', description: 'Quick actions' },
                         { command: 'status', description: 'Bot status' },
+                        { command: 'model', description: 'Show or switch model' },
+                        { command: 'provider', description: 'Show or switch provider' },
                         { command: 'new', description: 'New session' },
                         { command: 'skill', description: 'Run a skill' },
                         { command: 'help', description: 'Help' },

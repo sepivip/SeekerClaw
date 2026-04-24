@@ -156,6 +156,7 @@ class AndroidBridge(
                 "/solana/send" -> handleSolanaSend(params)
                 "/config/save-owner" -> handleConfigSaveOwner(params)
                 "/openai/oauth/save-tokens" -> handleOpenAIOAuthSaveTokens(params)
+                "/config/credentials" -> handleConfigCredentials()
                 "/service/restart" -> handleServiceRestart()
                 "/stats/db-summary" -> proxyToNodeStats()
                 "/ping" -> jsonResponse(200, mapOf("status" to "ok", "bridge" to "AndroidBridge"))
@@ -165,6 +166,43 @@ class AndroidBridge(
             Log.e(TAG, "Error handling $uri", e)
             jsonResponse(500, mapOf("error" to e.message))
         }
+    }
+
+    // ==================== Config credentials ====================
+
+    /**
+     * Returns credential PRESENCE (not values) for every provider auth
+     * mode that /provider credential-gating cares about. Used by the
+     * Node /provider handler so switching decisions reflect the
+     * runtime Kotlin SharedPreferences (which gets updated on
+     * Settings saves, OAuth token saves, etc.) rather than the stale
+     * workspace/config.json snapshot that Node loaded at startup.
+     *
+     * Security: credential VALUES never leave Kotlin — fields are
+     * returned as a short placeholder ("•") when set and "" when
+     * unset, so Node's `nonBlank` credential-gating checks work
+     * unchanged without exposing secrets across the bridge. One
+     * exception is `customBaseUrl`, which is a URL (not a secret)
+     * and IS checked for non-blankness in hasCredentialsFor — we
+     * return its real value since Node may legitimately need it
+     * for user-facing messaging.
+     */
+    private fun handleConfigCredentials(): Response {
+        val config = ConfigManager.loadConfig(context)
+        if (config == null) {
+            return jsonResponse(200, mapOf("ok" to true, "credentials" to emptyMap<String, String>()))
+        }
+        val placeholder = "•" // • — any non-blank string; values never leak.
+        val creds = mapOf(
+            "anthropicApiKey" to if (config.anthropicApiKey.isNotBlank()) placeholder else "",
+            "setupToken" to if (config.setupToken.isNotBlank()) placeholder else "",
+            "openaiApiKey" to if (config.openaiApiKey.isNotBlank()) placeholder else "",
+            "openaiOAuthToken" to if (config.openaiOAuthToken.isNotBlank()) placeholder else "",
+            "openrouterApiKey" to if (config.openrouterApiKey.isNotBlank()) placeholder else "",
+            "customApiKey" to if (config.customApiKey.isNotBlank()) placeholder else "",
+            "customBaseUrl" to if (config.customBaseUrl.isNotBlank()) config.customBaseUrl else "",
+        )
+        return jsonResponse(200, mapOf("ok" to true, "credentials" to creds))
     }
 
     // ==================== Service restart ====================

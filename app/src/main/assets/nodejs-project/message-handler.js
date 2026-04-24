@@ -408,6 +408,30 @@ function writeAgentSettingsPatch(patch) {
     fs.renameSync(tmp, settingsPath);
 }
 
+// Fetch current credential presence from Kotlin via the bridge. Used by
+// /provider credential gating so switching decisions reflect runtime
+// SharedPreferences (updated on Settings saves + OAuth token saves)
+// rather than the workspace/config.json snapshot Node loaded at startup.
+// Without this, /provider openai oauth would reject immediately after a
+// user completed OAuth sign-in (token in SharedPrefs but not yet in
+// config.json — writeConfigJson only runs at service start).
+// Kotlin returns placeholder strings for set fields and "" for unset, so
+// modelCatalog.hasCredentialsFor's nonBlank() checks work unchanged.
+// On bridge failure, falls back to the startup _config snapshot — degraded
+// (same stale behavior as before) but keeps /provider functional.
+async function fetchRuntimeCredentials() {
+    try {
+        const res = await deps.androidBridgeCall('/config/credentials', {}, 3000);
+        if (res && res.ok && res.credentials && typeof res.credentials === 'object') {
+            return res.credentials;
+        }
+        deps.log(`[/provider] bridge /config/credentials returned unexpected shape; using startup config`, 'WARN');
+    } catch (e) {
+        deps.log(`[/provider] bridge /config/credentials failed (${e && e.message}); using startup config`, 'WARN');
+    }
+    return _config;
+}
+
 // Resolve the currently-active provider/authType/model as seen by Node.
 // Prefers agent_settings.json overrides (which reflect in-session TG
 // changes) over the startup-loaded module consts from config.js. Model
@@ -536,6 +560,12 @@ async function handleProviderCommand(chatId, args, messageId = null) {
         return `❌ Unknown provider: \`${newProvider}\`\n\nOptions: ${modelCatalog.KNOWN_PROVIDERS.map((p) => '`' + p + '`').join(', ')}`;
     }
 
+    // Fetch runtime credential state from Kotlin BEFORE gating decisions.
+    // _config is the startup snapshot and misses anything saved since
+    // (e.g. OAuth tokens completed mid-session). Fall back to _config on
+    // bridge failure — degraded but /provider still works.
+    const runtimeConfig = await fetchRuntimeCredentials();
+
     const authTypes = modelCatalog.authTypesForProvider(newProvider);
     let newAuthType;
     if (parts[1]) {
@@ -557,13 +587,13 @@ async function handleProviderCommand(chatId, args, messageId = null) {
         // authTypes[0] so the gating below rejects with a clear "no API key"
         // message rather than us picking silently.
         const credentialedAuth = authTypes.find((at) =>
-            modelCatalog.hasCredentialsFor(_config, newProvider, at).ok
+            modelCatalog.hasCredentialsFor(runtimeConfig, newProvider, at).ok
         );
         newAuthType = credentialedAuth || authTypes[0];
     }
 
-    // Credential gating: reject if the user hasn't configured this provider/auth yet
-    const cred = modelCatalog.hasCredentialsFor(_config, newProvider, newAuthType);
+    // Credential gating: reject if the user hasn't configured this provider/auth yet.
+    const cred = modelCatalog.hasCredentialsFor(runtimeConfig, newProvider, newAuthType);
     if (!cred.ok) {
         return `❌ ${cred.reason}`;
     }
