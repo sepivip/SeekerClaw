@@ -547,12 +547,23 @@ async function handleProviderCommand(chatId, args) {
 
     const newModel = modelCatalog.defaultModelForProvider(newProvider, newAuthType);
 
+    // Only write `model` when the provider has a concrete default. Freeform
+    // providers (custom, openrouter) return '' from defaultModelForProvider;
+    // writing an empty string would overwrite any prior /model choice and
+    // force resolveActiveModel() to fall back to the startup MODEL — which
+    // may not be valid for the new endpoint. Omitting the field preserves
+    // whatever overlay the user previously set. If no overlay exists, it
+    // falls back to startup MODEL and the user can `/model <id>` after.
+    const settingsPatch = {
+        provider: newProvider,
+        authType: newAuthType,
+    };
+    if (newModel) {
+        settingsPatch.model = newModel;
+    }
+
     try {
-        writeAgentSettingsPatch({
-            provider: newProvider,
-            authType: newAuthType,
-            model: newModel,
-        });
+        writeAgentSettingsPatch(settingsPatch);
     } catch (e) {
         deps.log(`[/provider] Failed to write agent_settings.json: ${e.message}`, 'ERROR');
         return `❌ Couldn't save — ${e.message}`;

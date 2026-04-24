@@ -623,10 +623,17 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
         }
 
         // Persist the custom field value on dialog close — once, not per keystroke.
+        // If the user cleared the field, remove the prefs key rather than leaving
+        // a stale value to be re-loaded next time; otherwise there's no way to
+        // reset the remembered custom model without typing a new one.
         val persistCustomModelAndClose = {
+            val editor = localPrefs.edit()
             if (customModelId.isNotBlank()) {
-                localPrefs.edit().putString(customPrefsKey, customModelId).apply()
+                editor.putString(customPrefsKey, customModelId)
+            } else {
+                editor.remove(customPrefsKey)
             }
+            editor.apply()
             showModelPicker = false
         }
 

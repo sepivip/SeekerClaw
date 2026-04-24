@@ -603,10 +603,15 @@ object ConfigManager {
             return fromPrefs
         }
 
+        // Use opt() + cast rather than optString() — optString() coerces
+        // non-string JSON values (numbers, booleans, nested objects) into
+        // strings via .toString(), which would silently adopt a corrupted
+        // or tampered agent_settings.json value into SharedPreferences.
+        // Reject non-String values up front.
         fun stringField(key: String): String? {
-            if (!json.has(key)) return null
-            val v = json.optString(key, "")
-            return if (v.isBlank()) null else v.trim()
+            val raw = json.opt(key) ?: return null
+            val v = (raw as? String)?.trim() ?: return null
+            return if (v.isBlank()) null else v
         }
 
         val newProvider = stringField("provider")
@@ -616,8 +621,11 @@ object ConfigManager {
         // No overlay fields present — nothing to reconcile
         if (newProvider == null && newAuthType == null && newModel == null) return fromPrefs
 
-        // Ignore unrecognized providers (defensive — don't corrupt prefs from a bad write)
-        val validProviders = listOf("claude", "openai", "openrouter", "custom")
+        // Ignore unrecognized providers (defensive — don't corrupt prefs from a bad write).
+        // Derive from the Providers.kt registry so adding a provider there doesn't
+        // require updating this allowlist (which would silently drop TG-initiated
+        // settings for the new provider until this list was updated).
+        val validProviders = availableProviders.map { it.id }.toSet()
         val validProvider = newProvider?.takeIf { it in validProviders }
         // If provider is present but invalid, reject the WHOLE overlay — don't adopt
         // authType/model scoped to a bogus provider either.
