@@ -679,7 +679,7 @@ async function handleProviderCommand(chatId, args, messageId = null) {
 
     deps.log(`[/provider] Switching to ${newProvider}/${newAuthType} (model=${newModel}); restart pending`, 'INFO');
 
-    const displayProv = newProvider.charAt(0).toUpperCase() + newProvider.slice(1);
+    const displayProv = modelCatalog.displayNameForProvider(newProvider);
     const authSuffix = authTypes.length > 1 ? ` (${newAuthType})` : '';
     const modelLine = newModel ? `\nModel: \`${newModel}\`` : '';
     // Freeform providers (custom, openrouter) have a blank default model,
@@ -745,6 +745,21 @@ async function handleMessage(normalized) {
     const { chatId, senderId, text: rawText, caption, messageId, media, replyTo, quoteText } = normalized;
     const combinedText = (rawText || caption || '').trim();
     if (!combinedText && !media) return;
+
+    // A service restart is imminent (/provider committed, AlarmManager
+    // armed, process death in ~2s). Don't start a chat() turn we can't
+    // finish — tool calls + API requests would get interrupted mid-
+    // flight, potentially leaving the user with a half-written reply
+    // or orphaned tool state. handleCommand paths already gate on
+    // this via the per-command checks; this guard covers all the
+    // non-command chat-triggering paths.
+    if (_restartPending) {
+        await deps.sendMessage(chatId,
+            `⏳ Restart in progress — try again in a moment.`,
+            messageId,
+        ).catch((e) => deps.log(`[restart] sendMessage during restart-pending failed: ${e && e.message}`, 'DEBUG'));
+        return;
+    }
 
     // Build text with reply context (channel-agnostic)
     let text = combinedText;

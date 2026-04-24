@@ -60,6 +60,16 @@ check('openai with undefined authType returns empty (strict)', mc.modelsForProvi
 check('openai with bogus authType returns empty (strict)', mc.modelsForProvider('openai', 'bogus'), []);
 
 console.log();
+console.log('── displayNameForProvider (canonical brand casing) ─────');
+check('claude → Claude', mc.displayNameForProvider('claude'), 'Claude');
+check('openai → OpenAI (not Openai)', mc.displayNameForProvider('openai'), 'OpenAI');
+check('openrouter → OpenRouter (not Openrouter)', mc.displayNameForProvider('openrouter'), 'OpenRouter');
+check('custom → Custom', mc.displayNameForProvider('custom'), 'Custom');
+check('unknown provider → capitalized fallback', mc.displayNameForProvider('futurething'), 'Futurething');
+check('empty string → Unknown', mc.displayNameForProvider(''), 'Unknown');
+check('null → Unknown', mc.displayNameForProvider(null), 'Unknown');
+
+console.log();
 console.log('── defaultModelForProvider (decoupled from list order) ──');
 check('claude default explicit (NOT list[0])', mc.defaultModelForProvider('claude', 'api_key'), mc.CLAUDE_DEFAULT_MODEL);
 check('openai api_key default is gpt-5.4', mc.defaultModelForProvider('openai', 'api_key'), 'gpt-5.4');

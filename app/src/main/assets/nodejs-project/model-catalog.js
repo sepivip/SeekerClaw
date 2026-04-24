@@ -91,6 +91,29 @@ function defaultModelForProvider(providerId, authType) {
 
 const KNOWN_PROVIDERS = ['claude', 'openai', 'openrouter', 'custom'];
 
+// Canonical display names for user-facing messaging (Telegram replies,
+// TG command descriptions, etc). Keep in sync with Kotlin's
+// Providers.kt `availableProviders[].displayName`. NOT used for
+// identity/routing — that's always `providerId`.
+const PROVIDER_DISPLAY_NAMES = {
+    claude: 'Claude',
+    openai: 'OpenAI',
+    openrouter: 'OpenRouter',
+    custom: 'Custom',
+};
+
+/**
+ * Render a provider ID as a canonical brand name ("OpenAI", not
+ * "Openai"). Falls back to the raw ID (capitalized) for anything
+ * not in the registry so future providers don't crash the display
+ * path if someone forgets to update PROVIDER_DISPLAY_NAMES.
+ */
+function displayNameForProvider(providerId) {
+    if (PROVIDER_DISPLAY_NAMES[providerId]) return PROVIDER_DISPLAY_NAMES[providerId];
+    if (typeof providerId !== 'string' || !providerId) return 'Unknown';
+    return providerId.charAt(0).toUpperCase() + providerId.slice(1);
+}
+
 /**
  * Valid auth types per provider. OpenAI is the only one with multiple.
  */
@@ -177,9 +200,11 @@ module.exports = {
     OPENAI_DEFAULT_MODEL,
     OPENROUTER_DEFAULT_MODEL,
     KNOWN_PROVIDERS,
+    PROVIDER_DISPLAY_NAMES,
     modelsForProvider,
     defaultModelForProvider,
     authTypesForProvider,
     hasCredentialsFor,
     validateModelForProvider,
+    displayNameForProvider,
 };
