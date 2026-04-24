@@ -601,8 +601,16 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
             )
         }
 
+        // Persist the custom field value on dialog close — once, not per keystroke.
+        val persistCustomModelAndClose = {
+            if (customModelId.isNotBlank()) {
+                localPrefs.edit().putString(customPrefsKey, customModelId).apply()
+            }
+            showModelPicker = false
+        }
+
         AlertDialog(
-            onDismissRequest = { showModelPicker = false },
+            onDismissRequest = persistCustomModelAndClose,
             title = {
                 Text(
                     "Select Model",
@@ -691,11 +699,12 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                                 value = customModelId,
                                 onValueChange = {
                                     customModelId = it
-                                    // Persist per-provider so switching to a predefined model and
-                                    // re-opening the picker still shows what the user typed.
-                                    localPrefs.edit().putString(customPrefsKey, it).apply()
                                     // Update selectedModel even when blank — point at the sentinel
                                     // so canSave (which excludes the sentinel) disables Save.
+                                    // The in-memory `customModelId` persists for the lifetime of
+                                    // the dialog. The SharedPreferences write happens on Save or
+                                    // dialog dismiss (see confirmButton/onDismissRequest) so we
+                                    // don't hit disk on every keystroke.
                                     selectedModel = it.ifBlank { CUSTOM_MODEL_SENTINEL }
                                 },
                                 placeholder = { Text("e.g. gpt-5.4-pro", fontSize = 12.sp) },
@@ -725,7 +734,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                             // chat() call — no service restart needed to pick up the change.
                             saveField("model", selectedModel, needsRestart = false)
                             Analytics.modelSelected(selectedModel)
-                            showModelPicker = false
+                            persistCustomModelAndClose()
                         }
                     },
                     enabled = canSave,
@@ -735,7 +744,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showModelPicker = false }) {
+                TextButton(onClick = persistCustomModelAndClose) {
                     Text("Cancel", fontFamily = RethinkSans, color = SeekerClawColors.TextDim)
                 }
             },

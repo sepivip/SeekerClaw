@@ -44,6 +44,7 @@ class AndroidBridge(
     companion object {
         private const val TAG = "AndroidBridge"
         private const val AUTH_HEADER = "X-Bridge-Token"
+        private const val RESTART_DELAY_MS = 500L
     }
 
     private var tts: TextToSpeech? = null
@@ -61,10 +62,6 @@ class AndroidBridge(
         "/openai/oauth/save-tokens" to Pair(5, 60_000L),
         "/service/restart" to Pair(3, 60_000L),
     )
-
-    companion object {
-        private const val RESTART_DELAY_MS = 500L
-    }
 
     @Synchronized
     private fun isRateLimited(endpoint: String): Boolean {

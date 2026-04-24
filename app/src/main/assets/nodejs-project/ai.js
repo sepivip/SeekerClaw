@@ -1777,7 +1777,7 @@ const _summarizedThisTurn = new Set();
  * Replaces N oldest messages with a single summary message, preserving context.
  * Only fires once per turn to avoid cascading API calls.
  */
-async function summarizeOldMessages(messages, chatId, turnId) {
+async function summarizeOldMessages(messages, chatId, turnId, modelOverride) {
     if (_summarizedThisTurn.has(chatId)) return false;
     if (messages.length <= MIN_PRESERVED_MESSAGES + 4) return false; // Not enough to summarize
 
@@ -1849,7 +1849,7 @@ async function summarizeOldMessages(messages, chatId, turnId) {
             ? [{ type: 'text', text: summaryInstruction }]
             : summaryInstruction;
         const apiMessages = adapter.toApiMessages(summaryPrompt);
-        const body = adapter.formatRequest(MODEL, 256, summarySystem, apiMessages, []);
+        const body = adapter.formatRequest(modelOverride || MODEL, 256, summarySystem, apiMessages, []);
 
         // Select streaming function based on provider protocol
         const streamFn = adapter.streamProtocol === 'chat-completions'
@@ -2094,7 +2094,7 @@ async function chat(chatId, userMessage, options = {}) {
             // Reuse ctx for both summarization check and trim check to avoid duplicate logging.
             let ctx = checkContextUsage(systemBlocks, messages, formattedTools, activeModel, turnId, _ctxCache);
             if (ctx.usage >= CONTEXT_SUMMARIZE_THRESHOLD && !_summarizedThisTurn.has(chatId)) {
-                const summarized = await summarizeOldMessages(messages, chatId, turnId);
+                const summarized = await summarizeOldMessages(messages, chatId, turnId, activeModel);
                 if (summarized) {
                     // Messages changed — recompute context usage
                     ctx = checkContextUsage(systemBlocks, messages, formattedTools, activeModel, turnId, _ctxCache);

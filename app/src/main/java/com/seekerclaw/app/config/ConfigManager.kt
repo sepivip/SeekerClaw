@@ -617,30 +617,57 @@ object ConfigManager {
         if (newProvider == null && newAuthType == null && newModel == null) return fromPrefs
 
         // Ignore unrecognized providers (defensive — don't corrupt prefs from a bad write)
-        val validProvider = newProvider?.takeIf { it in listOf("claude", "openai", "openrouter", "custom") }
+        val validProviders = listOf("claude", "openai", "openrouter", "custom")
+        val validProvider = newProvider?.takeIf { it in validProviders }
+        // If provider is present but invalid, reject the WHOLE overlay — don't adopt
+        // authType/model scoped to a bogus provider either.
+        if (newProvider != null && validProvider == null) {
+            LogCollector.append(
+                "[Config] agent_settings.json has unrecognized provider='$newProvider' — ignoring overlay",
+                LogLevel.WARN
+            )
+            return fromPrefs
+        }
+
+        // Validate authType against the effective provider (existing or new).
+        // OpenAI supports api_key|oauth; others support api_key|setup_token (Claude) or api_key.
+        val effectiveProvider = validProvider ?: fromPrefs.provider
+        val allowedAuthTypes = when (effectiveProvider) {
+            "openai" -> setOf("api_key", "oauth")
+            "claude" -> setOf("api_key", "setup_token")
+            else -> setOf("api_key")
+        }
+        val validAuthType = newAuthType?.takeIf { it in allowedAuthTypes }
+        if (newAuthType != null && validAuthType == null) {
+            LogCollector.append(
+                "[Config] agent_settings.json has invalid authType='$newAuthType' for provider='$effectiveProvider' — ignoring overlay",
+                LogLevel.WARN
+            )
+            return fromPrefs
+        }
 
         val providerChanged = validProvider != null && validProvider != fromPrefs.provider
-        val authChanged = newAuthType != null && newAuthType != fromPrefs.authType
+        val authChanged = validAuthType != null && validAuthType != fromPrefs.authType
         val modelChanged = newModel != null && newModel != fromPrefs.model
 
         if (!providerChanged && !authChanged && !modelChanged) return fromPrefs
 
         val editor = prefs.edit()
         if (providerChanged) editor.putString(KEY_PROVIDER, validProvider)
-        if (authChanged) editor.putString(KEY_AUTH_TYPE, newAuthType)
+        if (authChanged) editor.putString(KEY_AUTH_TYPE, validAuthType)
         if (modelChanged) editor.putString(KEY_MODEL, newModel)
         editor.apply()
 
         LogCollector.append(
             "[Config] Reconciled from agent_settings.json: " +
                 "provider=${if (providerChanged) "$validProvider (was ${fromPrefs.provider})" else fromPrefs.provider}, " +
-                "authType=${if (authChanged) "$newAuthType (was ${fromPrefs.authType})" else fromPrefs.authType}, " +
+                "authType=${if (authChanged) "$validAuthType (was ${fromPrefs.authType})" else fromPrefs.authType}, " +
                 "model=${if (modelChanged) "$newModel (was ${fromPrefs.model})" else fromPrefs.model}"
         )
 
         return fromPrefs.copy(
             provider = if (providerChanged) validProvider!! else fromPrefs.provider,
-            authType = if (authChanged) newAuthType!! else fromPrefs.authType,
+            authType = if (authChanged) validAuthType!! else fromPrefs.authType,
             model = if (modelChanged) newModel!! else fromPrefs.model,
         )
     }

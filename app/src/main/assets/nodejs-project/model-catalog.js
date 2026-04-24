@@ -38,6 +38,14 @@ const OPENAI_OAUTH_MODELS = [
 
 const OPENROUTER_DEFAULT_MODEL = 'anthropic/claude-sonnet-4-6';
 
+// Explicit safe defaults per provider. Do NOT derive these from list order —
+// a new model inserted at the top of a display list shouldn't silently change
+// the default. Tier-gated models (eg. gpt-5.5 on some ChatGPT plans) must
+// never be listed here, or fresh installs / provider-switch fallbacks would
+// land users on a model their plan can't reach.
+const CLAUDE_DEFAULT_MODEL = 'claude-opus-4-7';
+const OPENAI_DEFAULT_MODEL = 'gpt-5.4'; // available on every ChatGPT tier + api key
+
 /**
  * Resolve the model list for a given provider + auth.
  * Returns [] for freeform providers (openrouter, custom).
@@ -64,8 +72,8 @@ function modelsForProvider(providerId, authType) {
  */
 function defaultModelForProvider(providerId, authType) {
     switch (providerId) {
-        case 'claude':     return CLAUDE_MODELS[0].id;
-        case 'openai':     return 'gpt-5.4'; // available on every tier + api key
+        case 'claude':     return CLAUDE_DEFAULT_MODEL;
+        case 'openai':     return OPENAI_DEFAULT_MODEL;
         case 'openrouter': return OPENROUTER_DEFAULT_MODEL;
         case 'custom':     return '';
         default:           return '';
@@ -156,6 +164,8 @@ module.exports = {
     CLAUDE_MODELS,
     OPENAI_API_KEY_MODELS,
     OPENAI_OAUTH_MODELS,
+    CLAUDE_DEFAULT_MODEL,
+    OPENAI_DEFAULT_MODEL,
     OPENROUTER_DEFAULT_MODEL,
     KNOWN_PROVIDERS,
     modelsForProvider,
