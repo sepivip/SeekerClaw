@@ -702,6 +702,8 @@ telegram('getMe')
                 commands: [
                     { command: 'quick', description: 'One-tap preset actions' },
                     { command: 'status', description: 'Bot status, uptime, model' },
+                    { command: 'model', description: 'Show or switch AI model' },
+                    { command: 'provider', description: 'Show or switch AI provider' },
                     { command: 'new', description: 'Archive session & start fresh' },
                     { command: 'reset', description: 'Wipe conversation (no backup)' },
                     { command: 'skill', description: 'List skills or run one by name' },

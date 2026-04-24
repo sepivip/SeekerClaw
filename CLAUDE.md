@@ -379,6 +379,35 @@ The Self-Awareness Benchmark (SAB) catches drift between what the agent can do a
 
 ---
 
+## Telegram Slash Command Registration (NEVER SKIP)
+
+> **RULE: When you add a new Telegram slash command (a new `case '/foo':` branch in `message-handler.js`), you MUST also register it in the `setMyCommands` payload in `main.js`. Otherwise Telegram's `/` autocomplete menu won't show it, and users won't discover the feature exists.**
+
+Handling a command is half the work. The other half is making it discoverable.
+
+### What to do
+
+1. **Handler** — new `case '/foo':` branch in `handleCommand` in [message-handler.js](app/src/main/assets/nodejs-project/message-handler.js).
+2. **Registration** — add the command to the `setMyCommands` payload in [main.js](app/src/main/assets/nodejs-project/main.js) (search for `setMyCommands` — there are two payloads, the full one and the degraded fallback for `BOT_COMMANDS_TOO_MUCH`):
+   ```js
+   { command: 'foo', description: 'Short imperative description' },
+   ```
+3. **Help text** — if the command is user-facing (not just a debug hook), also add it to the `/help` response in [message-handler.js](app/src/main/assets/nodejs-project/message-handler.js) (search for `/help`) so users without autocomplete (old Telegram clients, web) can still find it.
+
+Description should be short (fits in Telegram's one-line UI), imperative ("Show bot status", not "Shows bot status"), and mention the affected thing so users can distinguish similar commands.
+
+### Budget
+
+Telegram caps at ~100 total commands per bot but we cap OURSELVES at ~30 for usability. If adding a new one would push past that, merge two existing ones or prune before adding. A command menu that scrolls forever is no better than no menu.
+
+**If BotFather rejects with `BOT_COMMANDS_TOO_MUCH`:** the fallback payload kicks in automatically (essentials only). Keep the full payload trimmed so we never rely on the fallback in production.
+
+### Discovered the hard way in PR #339 (BAT-504, /model + /provider)
+
+The `/model` and `/provider` commands shipped functional but invisible — device testing found that typing `/` in Telegram didn't surface them in the autocomplete menu, so a user who didn't already know the command existed wouldn't find it. Don't repeat: EVERY `/foo` handler change needs the setMyCommands + /help parallel update in the same PR.
+
+---
+
 ## Key Implementation Details
 
 - **nodejs-mobile:** https://github.com/nodejs-mobile/nodejs-mobile — Node 18 LTS, ARM64. Adapted from React Native integration guide for pure Kotlin.
