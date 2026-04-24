@@ -695,6 +695,11 @@ object ConfigManager {
         // will exit with a clear error. In practice prefs.model is never
         // blank after a successful Setup flow, so this edge case is
         // unreachable for normal users.
+        //
+        // Auth changes matter too: OpenAI's oauth model list includes
+        // gpt-5.4-mini but the api_key list doesn't, so switching oauth→
+        // api_key on OpenAI must revalidate prefs.model against the new
+        // auth mode's allowlist even when provider stays the same.
         val resolvedModel: String = when {
             newModel != null -> {
                 // Overlay model present — validate; substitute default if invalid.
@@ -705,8 +710,9 @@ object ConfigManager {
                     if (providerDefault.isNotBlank()) providerDefault else newModel
                 }
             }
-            providerChanged -> {
-                // No overlay model but provider changed — validate prefs.model.
+            providerChanged || authChanged -> {
+                // No overlay model but provider or auth changed — validate
+                // prefs.model against the NEW effective provider+auth.
                 if (isModelValidForProvider(effectiveProviderAfter, effectiveAuthAfter, fromPrefs.model)) {
                     fromPrefs.model
                 } else {
