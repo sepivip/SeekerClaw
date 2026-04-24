@@ -753,26 +753,29 @@ object ConfigManager {
      * For OpenRouter/custom, any non-blank string is accepted (both
      * providers are freeform — the user types the upstream model ID).
      * Blank always returns false.
+     *
+     * Trims modelId before blank-check and allowlist comparison. The
+     * Settings UI and Node's overlay resolver both trim on read/write
+     * (see ProviderConfigScreen.persistCustomModelAndClose and
+     * config.js:resolveActiveModel), so a legacy prefs value with
+     * surrounding whitespace would otherwise be incorrectly rejected
+     * during reconciliation and silently overwritten with the provider
+     * default.
      */
     private fun isModelValidForProvider(
         providerId: String,
         authType: String,
         modelId: String,
     ): Boolean {
-        if (modelId.isBlank()) return false
+        val trimmed = modelId.trim()
+        if (trimmed.isBlank()) return false
         return when (providerId) {
             "openrouter", "custom" -> true
-            "openai" -> {
-                val list = try {
-                    modelsForProvider(providerId, authType)
-                } catch (_: Exception) { emptyList() }
-                list.any { it.id == modelId }
-            }
             else -> {
                 val list = try {
                     modelsForProvider(providerId, authType)
                 } catch (_: Exception) { emptyList() }
-                list.any { it.id == modelId }
+                list.any { it.id == trimmed }
             }
         }
     }
