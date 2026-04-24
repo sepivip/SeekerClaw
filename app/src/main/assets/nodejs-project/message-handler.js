@@ -480,15 +480,23 @@ function resolveActiveProviderState() {
         ? rawOverlayProvider
         : PROVIDER;
 
-    const validAuths = modelCatalog.authTypesForProvider(provider);
+    // authType is NOT live-pickup — OPENAI_AUTH_TYPE / AUTH_TYPE are
+    // module-level consts in config.js, set once from config.json at
+    // Node startup. The overlay in agent_settings.json carries the
+    // user's INTENDED authType (what Kotlin's Settings UI saved), but
+    // Kotlin's writeConfigJson can DOWNGRADE it before Node boots:
+    // e.g. "oauth selected with a blank token" gets written to
+    // config.json as authType=api_key so Node's strict validation
+    // doesn't crash on startup. If we honored overlay.authType here,
+    // /model would display + validate against the oauth allowlist
+    // (includes gpt-5.4-mini) while Node is actually running api_key
+    // mode (doesn't) — users could /model gpt-5.4-mini, see it
+    // accepted, and then every chat request would 422.
+    //
+    // Return the runtime startupAuth instead. Matches what Node
+    // actually sends to the provider API.
     const startupAuth = provider === 'openai' ? OPENAI_AUTH_TYPE : AUTH_TYPE;
-    const rawOverlayAuth = nonBlank(overlay.authType) ? overlay.authType.trim() : null;
-    // AuthType overlay is only honored when the overlay provider also
-    // matches — otherwise we'd adopt an authType scoped to a pending
-    // provider change that hasn't taken effect yet.
-    const authType = (rawOverlayAuth && validAuths.includes(rawOverlayAuth) && provider === PROVIDER)
-        ? rawOverlayAuth
-        : startupAuth;
+    const authType = startupAuth;
 
     return { provider, authType, model: resolveActiveModel() };
 }
