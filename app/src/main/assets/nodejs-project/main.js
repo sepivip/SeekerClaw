@@ -48,6 +48,7 @@ registerRedactedSecrets(
 
 const { androidBridgeCall } = require('./bridge');
 const { stripSilentReply, containsSilentReply } = require('./silent-reply');
+const { telegramCommandMenu, telegramFallbackMenu } = require('./telegram-commands');
 
 // ── MCP (Model Context Protocol) — Remote tool servers (BAT-168) ───
 const { MCPManager } = require('./mcp-client');
@@ -697,40 +698,15 @@ telegram('getMe')
             } catch (e) {
                 log(`Warning: Could not flush old updates: ${e.message}`, 'WARN');
             }
-            // Register slash commands with BotFather for Telegram autocomplete menu (BAT-211)
-            telegram('setMyCommands', {
-                commands: [
-                    { command: 'quick', description: 'One-tap preset actions' },
-                    { command: 'status', description: 'Bot status, uptime, model' },
-                    { command: 'model', description: 'Show or switch AI model' },
-                    { command: 'provider', description: 'Show or switch AI provider' },
-                    { command: 'new', description: 'Archive session & start fresh' },
-                    { command: 'reset', description: 'Wipe conversation (no backup)' },
-                    { command: 'skill', description: 'List skills or run one by name' },
-                    { command: 'soul', description: 'View SOUL.md' },
-                    { command: 'memory', description: 'View MEMORY.md' },
-                    { command: 'logs', description: 'Last 10 log entries' },
-                    { command: 'version', description: 'App & runtime versions' },
-                    { command: 'resume', description: 'Resume an interrupted task' },
-                    { command: 'approve', description: 'Confirm pending action' },
-                    { command: 'deny', description: 'Reject pending action' },
-                    { command: 'help', description: 'List all commands' },
-                    { command: 'commands', description: 'List all commands' },
-                ],
-            }).then(r => {
+            // Register slash commands with BotFather for Telegram autocomplete menu (BAT-211).
+            // Menu + fallback payloads come from telegram-commands.js so there's
+            // a single source of truth shared with /help and /commands.
+            telegram('setMyCommands', { commands: telegramCommandMenu() }).then(r => {
                 if (r.ok) log('Telegram command menu registered', 'DEBUG');
                 else if (r.description && /too.?m(any|uch)|BOT_COMMANDS/i.test(r.description)) {
                     // OpenClaw parity: degrade on BOT_COMMANDS_TOO_MUCH
                     log('Too many bot commands, retrying with essentials only', 'WARN');
-                    telegram('setMyCommands', { commands: [
-                        { command: 'quick', description: 'Quick actions' },
-                        { command: 'status', description: 'Bot status' },
-                        { command: 'model', description: 'Show or switch model' },
-                        { command: 'provider', description: 'Show or switch provider' },
-                        { command: 'new', description: 'New session' },
-                        { command: 'skill', description: 'Run a skill' },
-                        { command: 'help', description: 'Help' },
-                    ]}).catch(() => {});
+                    telegram('setMyCommands', { commands: telegramFallbackMenu() }).catch(() => {});
                 } else {
                     log(`setMyCommands failed: ${JSON.stringify(r)}`, 'WARN');
                 }

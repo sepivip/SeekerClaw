@@ -7,6 +7,7 @@ const path = require('path');
 const { CHANNEL, workDir, PROVIDER, AUTH_TYPE, OPENAI_AUTH_TYPE, resolveActiveModel, config: _config } = require('./config');
 const { stripSilentReply, containsSilentReply } = require('./silent-reply');
 const modelCatalog = require('./model-catalog');
+const { buildHelpLines } = require('./telegram-commands');
 
 let deps = {};
 let initialized = false;
@@ -60,23 +61,11 @@ Send me anything to get started!`;
 
         case '/help':
         case '/commands': {
+            // Body lines come from the central registry in telegram-commands.js
+            // so the same list drives setMyCommands + /help + drift-guard tests.
             const skillCount = deps.loadSkills().length;
-            return `**Commands**
-
-/quick — one-tap preset actions
-/status — bot status, uptime, model
-/new — archive session & start fresh
-/reset — wipe conversation (no backup)
-/resume — continue an interrupted task
-/skill — list skills (or \`/skill name\` to run one)
-/soul — view SOUL.md
-/memory — view MEMORY.md
-/logs — last 10 log entries
-/version — app & runtime versions
-/approve — confirm pending action
-/deny — reject pending action
-
-*${skillCount} skill${skillCount !== 1 ? 's' : ''} installed · /help to see this again*`;
+            const body = buildHelpLines().join('\n');
+            return `**Commands**\n\n${body}\n\n*${skillCount} skill${skillCount !== 1 ? 's' : ''} installed · /help to see this again*`;
         }
 
         case '/quick': {

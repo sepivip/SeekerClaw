@@ -59,6 +59,8 @@ const BUNDLE = path.join(REPO_ROOT, 'app', 'src', 'main', 'assets', 'nodejs-proj
 const LOAD_TARGETS = [
     'silent-reply.js',
     'loop-detector.js',
+    'model-catalog.js',
+    'telegram-commands.js',
 ];
 
 // Files skipped intentionally. Most modules depend on config.js (which
