@@ -48,15 +48,21 @@ val availableProviders = listOf(
     ),
 )
 
+// Order matters — several flows use `firstOrNull()` to pick a default
+// model (fresh install via SetupScreen, provider/auth switches in
+// ProviderConfigScreen). Put 5.4 first: it's known-available across all
+// ChatGPT subscription tiers and API-key accounts. 5.5 is tier-gated
+// on some OAuth plans, so making it the list default would break
+// first-run flows for users whose plan doesn't include it yet.
 val openaiModels = listOf(
-    ModelInfo("gpt-5.5", "GPT-5.5"),
     ModelInfo("gpt-5.4", "GPT-5.4"),
+    ModelInfo("gpt-5.5", "GPT-5.5"),
     ModelInfo("gpt-5.3-codex", "GPT-5.3 Codex"),
 )
 
 val openaiOAuthModels = listOf(
-    ModelInfo("gpt-5.5", "GPT-5.5"),
     ModelInfo("gpt-5.4", "GPT-5.4"),
+    ModelInfo("gpt-5.5", "GPT-5.5"),
     ModelInfo("gpt-5.4-mini", "GPT-5.4 Mini"),
     ModelInfo("gpt-5.3-codex", "GPT-5.3 Codex"),
 )
