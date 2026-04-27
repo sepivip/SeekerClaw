@@ -325,6 +325,52 @@ The agent's memory is sacred. These files live in the workspace directory and mu
 
 ---
 
+## Upgrade Safety for Existing Users (NEVER SKIP)
+
+> **RULE: For every PR that touches user-persisted state (SharedPreferences, files in `workspace/`, Keystore-encrypted blobs, SQL.js DB), explicitly verify upgrade safety BEFORE merging. Required AC, not a footnote.**
+
+SeekerClaw ships on the Solana dApp Store + Google Play. Real users have it installed. When they update from version N to N+1, their state must survive: API keys, Telegram tokens, MCP servers, memory, conversation history, agent personality. Anything else is an incident.
+
+### What to check on every state-touching PR
+
+Before merging, answer ALL of:
+
+1. **What state does this change touch?** SharedPreferences keys, files in `workspace/`, Keystore-encrypted blobs, SQL.js tables, or other.
+2. **What state does an existing user have when they update?** Walk through their device: prefs values, workspace files, keystore blobs.
+3. **What does the new code do on its first run after update?** Does it read existing data correctly? If schema changed, does it migrate? If a file moved, does it find the old location and copy?
+4. **What happens if migration fails partway?** Out of disk, corrupt source, Keystore decrypt failure, process killed mid-write. Is there a rollback? Does the user see anything intelligible, or just a broken agent?
+5. **Has the upgrade path been tested?** Not just fresh install — a real "install vN, populate state, install vN+1 with `adb install -r`" sequence. If you can't verify, say so explicitly in the PR.
+
+### Risk categorization (declare in PR description)
+
+| Category | When | Required mitigation |
+|---|---|---|
+| **None** | Additive code, no schema change | Note explicitly so reviewers don't have to re-derive |
+| **Low** | Re-reads existing data in same shape | Note it |
+| **Medium** | One-shot migration of non-critical state (UI prefs, search provider) | Migration code + test |
+| **High** | Loses something user can't easily recover (MCP servers, custom skills) | Medium + keep old store as fallback for 1–2 releases |
+| **CRITICAL** | Encrypted credentials, OAuth tokens — anything where re-entry costs the user real time/money | Atomic migration, dual-write phase, recovery path, manual rollback instructions in PR description |
+
+### Required AC for state-migration PRs
+
+Every PR that migrates state must include in its description:
+
+- [ ] Upgrade-safety analyzed (migration story documented in this PR)
+- [ ] Upgrade-safety tested (install vN, populate state, install vN+1, verify state preserved)
+- [ ] Risk category declared (None / Low / Medium / High / CRITICAL)
+
+Unchecked = unreviewable. Same honor-system gate as the SAB checklist.
+
+### When in doubt
+
+Ask: *"What happens to a user who has been running this app for 6 months when this code lands?"* If the answer isn't immediately confident, the migration story isn't complete yet.
+
+### Why this rule exists
+
+Discovered during BAT-509 / BAT-511 family planning (2026-04-27). User asked: *"Ok! All these are safe for existing users who will update right? you always check that?"* — and the honest answer was "I started doing it but not rigorously enough." Production-app migrations are too easy to get wrong silently. This rule is the fix.
+
+---
+
 ## Agent Self-Awareness (NEVER SKIP)
 
 > **RULE: When adding or changing features that affect what the agent can do, you MUST update the agent's system prompt and tool descriptions so the agent knows about its own capabilities.**
