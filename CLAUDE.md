@@ -371,6 +371,62 @@ Discovered during BAT-509 / BAT-511 family planning (2026-04-27). User asked: *"
 
 ---
 
+## Pre-Push Check (NEVER SKIP)
+
+> **RULE: Run `scripts/pre-push-check.sh` before EVERY `git push`. No exceptions for "tiny changes," "just a fix," or "I'm in a hurry." The script catches Kotlin compile errors that Node smoke can't see — in ~90 seconds locally vs. 3–5 minutes via CI plus a Copilot review round.**
+
+The script does in-process what CI catches with a slow round-trip:
+
+1. **Node smoke** (`tests/nodejs-project/smoke.js`) — syntax + module load, ~1s
+2. **Kotlin compile** (`compileDappStoreDebugKotlin`) — incremental, ~5–90s
+   - Auto-detects Android Studio's bundled JBR (`jbr/`) — works even if system Java is 8
+
+### Why this rule exists
+
+Discovered the hard way during BAT-518 phase 1 (PR #343, 2026-04-27): three FileObserver event-mask references (`MODIFY`, `CLOSE_WRITE`, etc.) were unqualified — they're Java static fields and don't auto-import into Kotlin function bodies, so the build would have failed. Copilot caught it on review (R1) but only after wasting a full review round and the user's mental cycles. The script would have caught it locally in ~90 seconds.
+
+User feedback that triggered this rule:
+
+> "Why we push fixes that throws compile errors? ... Always use it, it will safe tons of time! Wtf... add to i dont know, everywhere... dev workflow, claude.md etc."
+
+### Required workflow
+
+Before `git push`:
+
+```bash
+scripts/pre-push-check.sh
+```
+
+Wait for `─── ALL CHECKS PASSED ───` before pushing. Don't push and hope CI catches it.
+
+If it fails, fix the issue and re-run. Exit codes documented at the top of the script:
+- `0` — all checks passed
+- `1` — Node smoke failed
+- `2` — Kotlin compile failed
+- `3` — JDK 17+ not found (fix: install Android Studio for the bundled JBR)
+- `4` — Android SDK not found (fix: set `ANDROID_HOME` or `local.properties`)
+
+### No legitimate exceptions
+
+| Excuse | Why it's wrong |
+|---|---|
+| "It's just a tiny change" | Tiny changes are exactly when imports get forgotten. |
+| "It's docs-only" | If the diff includes ANY `.kt` file, run it. Docs-only is fine to skip; mixed isn't. |
+| "I'm in a hurry" | A failed Copilot round costs 3–5x longer than the 90s local check. |
+| "Node smoke passes" | Node smoke can't compile Kotlin. Run the full check. |
+| "Local Java is 8, can't compile JVM 17 code" | The script uses Android Studio's bundled JBR. Verify it works once, then never skip again. |
+
+### When to bypass
+
+Only when changing files that are 100% guaranteed not to affect compilation:
+- Pure markdown docs PRs
+- README updates
+- Linear ticket comments
+
+**Anything else: run the check.**
+
+---
+
 ## Agent Self-Awareness (NEVER SKIP)
 
 > **RULE: When adding or changing features that affect what the agent can do, you MUST update the agent's system prompt and tool descriptions so the agent knows about its own capabilities.**
