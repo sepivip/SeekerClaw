@@ -906,7 +906,13 @@ object ConfigManager {
             else -> return
         }
         saveConfig(context, updated)
-        writeAgentSettingsJson(context)
+        // Pass `updated` directly so the overlay reflects the user's
+        // just-saved Settings change. If we let writeAgentSettingsJson
+        // fall back to loadConfig(), reconcileWithAgentSettings would
+        // see a stale overlay (from a prior /provider Telegram command)
+        // and revert prefs.provider/authType/model back to the overlay's
+        // values — silently undoing the Settings UI save.
+        writeAgentSettingsJson(context, configOverride = updated)
     }
 
     fun saveOwnerId(context: Context, ownerId: String): Boolean {
@@ -1090,8 +1096,21 @@ object ConfigManager {
         File(workspaceDir, "config.json").writeText(json.toString(2))
     }
 
-    fun writeAgentSettingsJson(context: Context) {
-        val config = loadConfig(context)
+    /**
+     * Write the Android-managed slice of agent_settings.json (the file Node
+     * reads for live-pickup of model + heartbeat + maxSteps).
+     *
+     * @param configOverride if non-null, write THESE values to the overlay
+     *   without going through loadConfig. Used by saveField (Settings UI)
+     *   so the just-saved AppConfig lands directly in the overlay,
+     *   bypassing reconcileWithAgentSettings — otherwise the reconcile
+     *   would see the stale overlay (from a prior /provider command)
+     *   and revert prefs back to the overlay's value, undoing the
+     *   Settings UI save. Service-start callers omit this param to get
+     *   the default reconcile-then-publish behavior.
+     */
+    fun writeAgentSettingsJson(context: Context, configOverride: AppConfig? = null) {
+        val config = configOverride ?: loadConfig(context)
         if (config == null) {
             LogCollector.append("[Config] writeAgentSettingsJson: loadConfig returned null; skipping write", LogLevel.WARN)
             return
