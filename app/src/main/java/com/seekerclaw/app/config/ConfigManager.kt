@@ -2,6 +2,7 @@ package com.seekerclaw.app.config
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -88,8 +89,37 @@ data class McpServerConfig(
 )
 
 object ConfigManager {
-    /** Incremented on every saveConfig(); observe in `remember(configVersion)`. */
+    /** Incremented on every saveConfig(); observe in `remember(configVersion)`.
+     *
+     *  Per-process Compose state. The :node service process and the main UI
+     *  process each have their OWN copy of this counter. To bridge changes
+     *  across processes, saveConfig and reconcileWithAgentSettings emit
+     *  ACTION_CONFIG_CHANGED broadcasts after their writes; a receiver in
+     *  SeekerClawApplication (main process only) bumps this value on
+     *  receipt so UI screens recompose when the :node process writes prefs
+     *  (e.g., during a /provider Telegram switch's service-start reconcile).
+     */
     val configVersion = mutableIntStateOf(0)
+
+    /** Sent after any change to canonical SharedPreferences config state.
+     *  Receiver in SeekerClawApplication bumps configVersion in the main
+     *  process so UI screens auto-refresh after writes from the :node
+     *  service process. Same-process saves bump configVersion directly
+     *  AND fire this broadcast — the redundant bump is harmless and the
+     *  alternative (suppress same-process broadcasts) requires fragile
+     *  process detection. */
+    const val ACTION_CONFIG_CHANGED = "com.seekerclaw.app.action.CONFIG_CHANGED"
+
+    private fun broadcastConfigChanged(context: Context) {
+        try {
+            val intent = Intent(ACTION_CONFIG_CHANGED).setPackage(context.packageName)
+            context.sendBroadcast(intent)
+        } catch (e: Exception) {
+            // Non-fatal — main process UI just won't auto-refresh until
+            // user navigates away and back. Log and continue.
+            LogCollector.append("[Config] broadcastConfigChanged failed: ${e.message}", LogLevel.WARN)
+        }
+    }
 
     private const val PREFS_NAME = "seekerclaw_prefs"
     private const val KEY_API_KEY_ENC = "api_key_enc"
@@ -345,6 +375,11 @@ object ConfigManager {
             // round-trip (which would re-trigger the reconcile we're
             // trying to keep idle). See PR #339 device-test regression.
             writeAgentSettingsJson(context, configOverride = config)
+            // Notify the OTHER process — main-process UI relies on this
+            // to refresh after :node-process writes (e.g. /provider
+            // Telegram switch's service-start reconcile). Same-process
+            // observers already saw the configVersion bump above.
+            broadcastConfigChanged(context)
         } else {
             LogCollector.append("[Config] Failed to persist config (commit=false)", LogLevel.ERROR)
         }
@@ -745,6 +780,14 @@ object ConfigManager {
         if (authChanged) editor.putString(KEY_AUTH_TYPE, validAuthType)
         if (modelChanged) editor.putString(KEY_MODEL, resolvedModel)
         editor.apply()
+
+        // Bump same-process configVersion so any in-process UI observer
+        // recomposes. /provider Telegram → :node service-start reconcile
+        // is the canonical path here, where :node's ConfigManager.
+        // configVersion bumps but main-process UI needs the broadcast
+        // below to know.
+        configVersion.intValue++
+        broadcastConfigChanged(context)
 
         LogCollector.append(
             "[Config] Reconciled from agent_settings.json: " +

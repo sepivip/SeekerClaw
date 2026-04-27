@@ -3,6 +3,11 @@ package com.seekerclaw.app
 import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import androidx.core.content.ContextCompat
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.util.Analytics
 import com.seekerclaw.app.util.LogCollector
@@ -30,7 +35,44 @@ class SeekerClawApplication : Application() {
         if (isMainProcess) {
             ServiceState.startPolling(this)
             LogCollector.startPolling(this)
+            registerConfigChangedReceiver()
         }
+    }
+
+    /**
+     * Listen for cross-process config changes so the UI's configVersion
+     * counter (per-process Compose state) bumps when ANY process writes
+     * SharedPreferences via ConfigManager.saveConfig or
+     * reconcileWithAgentSettings. Without this, after a /provider Telegram
+     * switch (which runs in :node and triggers a service-start reconcile
+     * that writes prefs), the main-process UI screens hold the stale
+     * pre-switch values until the user manually navigates away and back —
+     * remounting the screen forces a fresh loadConfig() read.
+     *
+     * The broadcast is package-scoped (setPackage(packageName) in
+     * ConfigManager.broadcastConfigChanged) and the receiver is
+     * NOT_EXPORTED, so this is internal-only — no external app can
+     * trigger spurious recompositions or read our intent.
+     *
+     * Registered for the lifetime of the Application. No matching
+     * unregister: the Application instance lives as long as the process,
+     * so leaving the receiver registered is fine and avoids a missed-
+     * unregister hazard.
+     */
+    private fun registerConfigChangedReceiver() {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                if (intent.action == ConfigManager.ACTION_CONFIG_CHANGED) {
+                    ConfigManager.configVersion.intValue++
+                }
+            }
+        }
+        ContextCompat.registerReceiver(
+            this,
+            receiver,
+            IntentFilter(ConfigManager.ACTION_CONFIG_CHANGED),
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
     }
 
     private fun createNotificationChannel() {
