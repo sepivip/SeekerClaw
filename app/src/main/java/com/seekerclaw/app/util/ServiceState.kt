@@ -206,8 +206,15 @@ object ServiceState {
      * `service_state` and `bridge_token`) and one on `filesDir/workspace`
      * (for `agent_health_state` and `api_usage_state`). Each observer
      * dispatches by filename to the same single-file readers that the
-     * polling loop used to call directly. Initial reads run synchronously
-     * here so the StateFlow is populated before any observer fires.
+     * polling loop used to call directly.
+     *
+     * Initial reads are dispatched ASYNCHRONOUSLY to Dispatchers.IO
+     * (Copilot R2 — startWatching is invoked from Application.onCreate
+     * on the main thread; doing 4 disk reads there risks StrictMode
+     * violations + startup jank). UI screens that compose before the
+     * dispatched reads complete may see default StateFlow values
+     * (STOPPED / 0 / 0 / 0) briefly until the reads land — observers
+     * also fire on subsequent writes, so eventual consistency holds.
      */
     fun startWatching(context: Context) {
         init(context)

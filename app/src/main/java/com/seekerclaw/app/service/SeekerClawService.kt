@@ -124,57 +124,62 @@ class SeekerClawService : Service() {
                     if (newBytes[i] == 0x0A.toByte()) { lastNewlineIdx = i; break }
                 }
 
+                // Decide forward strategy based on three cases:
+                //   A) Found a newline in the chunk: forward complete
+                //      lines up to that boundary, leave trailing partial.
+                //   B) No newline AND we're chunking (delta > readSize):
+                //      means there's a line longer than 256KB. Force-
+                //      advance the chunk anyway to avoid wedging — better
+                //      to split a huge line than to never make progress.
+                //      (Copilot R3 caught this wedge case.)
+                //   C) No newline AND we read the whole delta (delta ==
+                //      readSize): file is mid-write with a partial line
+                //      and no chunking needed. Don't advance — the next
+                //      FileObserver event will give us more bytes that
+                //      hopefully include the newline.
                 val (forwardBytes, advanceBy) = if (lastNewlineIdx >= 0) {
-                    // Normal case: forward complete lines up to and including
-                    // the last newline. Leave the trailing partial line in
-                    // the file for the next read.
+                    // Case A
                     val complete = newBytes.copyOfRange(0, lastNewlineIdx + 1)
                     complete to complete.size
                 } else if (delta > readSize) {
-                    // We chunked AND the chunk has no newline → trailing
-                    // partial line OR genuinely huge line. Don't forward
-                    // anything yet; leave lastPos so the next call reads
-                    // a bigger window after Node writes more. The mutex
-                    // will be re-acquired by the recursive scope.launch
-                    // below, and we'll see more bytes next time.
-                    ByteArray(0) to 0
-                } else {
-                    // Single line larger than the entire delta (rare —
-                    // Node debug lines are normally <2KB). Forwarding
-                    // truncated is better than wedging in an infinite
-                    // re-read loop. Treat the full chunk as one line.
+                    // Case B — single line >256KB. Force advance to avoid
+                    // an infinite re-read loop. Forwarding a split line
+                    // as multiple entries is bad UX but bounded; wedging
+                    // forever is worse.
                     newBytes to newBytes.size
+                } else {
+                    // Case C — wait for more bytes via next event.
+                    return@withLock
                 }
                 nodeDebugLastPos = pos + advanceBy
 
-                if (forwardBytes.isNotEmpty()) {
-                    val lines = String(forwardBytes).lines().filter { it.isNotBlank() }
-                    for (line in lines) {
-                        val pipeIdx = line.indexOf('|')
-                        val (level, message) = if (pipeIdx > 0) {
-                            val lvl = line.substring(0, pipeIdx)
-                            val msg = line.substring(pipeIdx + 1)
-                            val parsed = when (lvl) {
-                                "ERROR" -> LogLevel.ERROR
-                                "WARN" -> LogLevel.WARN
-                                "DEBUG" -> LogLevel.DEBUG
-                                "INFO" -> LogLevel.INFO
-                                else -> null
-                            }
-                            if (parsed != null) parsed to msg
-                            else LogLevel.INFO to line  // unknown prefix — treat whole line as INFO
-                        } else {
-                            // Fallback for unparsed lines (old format, raw output)
-                            LogLevel.INFO to line
+                val lines = String(forwardBytes).lines().filter { it.isNotBlank() }
+                for (line in lines) {
+                    val pipeIdx = line.indexOf('|')
+                    val (level, message) = if (pipeIdx > 0) {
+                        val lvl = line.substring(0, pipeIdx)
+                        val msg = line.substring(pipeIdx + 1)
+                        val parsed = when (lvl) {
+                            "ERROR" -> LogLevel.ERROR
+                            "WARN" -> LogLevel.WARN
+                            "DEBUG" -> LogLevel.DEBUG
+                            "INFO" -> LogLevel.INFO
+                            else -> null
                         }
-                        LogCollector.append("[Node] $message", level)
+                        if (parsed != null) parsed to msg
+                        else LogLevel.INFO to line  // unknown prefix — treat whole line as INFO
+                    } else {
+                        // Fallback for unparsed lines (old format, raw output)
+                        LogLevel.INFO to line
                     }
+                    LogCollector.append("[Node] $message", level)
                 }
 
                 // If we capped the read and there's still more to consume,
-                // re-launch ourselves to drain the remainder. The mutex is
-                // released between calls so other writes don't block.
-                if (delta > readSize && advanceBy > 0) {
+                // re-launch ourselves to drain the remainder. Always
+                // applicable now that case B advances forward — the only
+                // path that doesn't advance (case C) returned above.
+                if (delta > readSize) {
                     scope.launch { forwardNewNodeDebugLines(debugLogFile) }
                 }
             } catch (_: Exception) {}

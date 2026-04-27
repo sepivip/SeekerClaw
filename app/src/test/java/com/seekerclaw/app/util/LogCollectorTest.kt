@@ -306,6 +306,91 @@ class LogCollectorTest {
     }
 
     @Test
+    fun `offset reader handles file truncation by resetting position`() = runBlocking {
+        // Simulates rotation: write content, read it, then replace the
+        // file with a smaller one (e.g. log rotated out). Without the
+        // `currentLength < pos` guard, lastReadPosition would stay at
+        // the old length and the new (smaller) file would never be read.
+        // (Copilot R3.)
+        val tmp = File.createTempFile("bat518-rotate", ".test")
+        try {
+            LogCollector.setLogFileForTest(tmp)
+            LogCollector.resetForTest()
+
+            val ts = System.currentTimeMillis()
+            // Initial 5 lines
+            tmp.writeText((0 until 5).joinToString("") { "${ts + it}|INFO|first-$it\n" })
+            LogCollector.readNewFromFileForTest()
+            assertEquals(5, LogCollector.logs.value.size)
+            val origPos = LogCollector.lastReadPositionForTest
+            assertTrue("offset should advance past initial write", origPos > 0)
+
+            // Simulate rotation: truncate file, write smaller content
+            tmp.writeText("${ts + 100}|WARN|after-rotate\n")
+            assertTrue("rotation must shrink file", tmp.length() < origPos)
+
+            LogCollector.readNewFromFileForTest()
+
+            // The rotated content was forwarded (in addition to the
+            // pre-rotation 5). Buffer holds 6 entries total.
+            assertEquals(6, LogCollector.logs.value.size)
+            assertEquals("after-rotate", LogCollector.logs.value.last().message)
+            assertEquals(LogLevel.WARN, LogCollector.logs.value.last().level)
+            // Offset now matches the rotated file's length.
+            assertEquals(tmp.length(), LogCollector.lastReadPositionForTest)
+        } finally {
+            LogCollector.setLogFileForTest(null)
+            LogCollector.resetForTest()
+            tmp.delete()
+        }
+    }
+
+    @Test
+    fun `offset reader leaves partial trailing line for next read`() = runBlocking {
+        // Simulates FileObserver firing CLOSE_WRITE while a writer is
+        // mid-line. Without line-boundary advancement, parseLine would
+        // drop the partial line AND lastReadPosition would skip past
+        // it — losing the rest of the line forever once the writer
+        // finishes. (Copilot R3.)
+        val tmp = File.createTempFile("bat518-partial", ".test")
+        try {
+            LogCollector.setLogFileForTest(tmp)
+            LogCollector.resetForTest()
+
+            val ts = System.currentTimeMillis()
+            // One complete line + partial trailing (no \n)
+            tmp.writeText("$ts|INFO|complete-line\n${ts + 1}|INFO|part-")
+            val partialEndPos = tmp.length()
+
+            LogCollector.readNewFromFileForTest()
+
+            // Only the complete line should be forwarded; partial held back.
+            assertEquals(1, LogCollector.logs.value.size)
+            assertEquals("complete-line", LogCollector.logs.value[0].message)
+            // Offset advanced only past the first complete line, NOT to EOF.
+            // (If we advanced to EOF, the partial line would be lost when
+            // the writer finishes.)
+            assertTrue(
+                "offset should be past first newline but before partial line end",
+                LogCollector.lastReadPositionForTest < partialEndPos,
+            )
+
+            // Writer finishes the partial line.
+            tmp.appendText("ial-line\n")
+            LogCollector.readNewFromFileForTest()
+
+            // The previously-partial line is now complete and forwarded.
+            assertEquals(2, LogCollector.logs.value.size)
+            assertEquals("part-ial-line", LogCollector.logs.value[1].message)
+            assertEquals(tmp.length(), LogCollector.lastReadPositionForTest)
+        } finally {
+            LogCollector.setLogFileForTest(null)
+            LogCollector.resetForTest()
+            tmp.delete()
+        }
+    }
+
+    @Test
     fun `offset reader skips writes already at EOF`() = runBlocking {
         val tmp = File.createTempFile("bat518-eof", ".test")
         try {

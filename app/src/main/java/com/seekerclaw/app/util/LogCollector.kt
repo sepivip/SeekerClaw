@@ -201,9 +201,26 @@ object LogCollector {
         readMutex.withLock {
             val file = logFile ?: return
             try {
-                if (!file.exists()) return
+                if (!file.exists()) {
+                    // File rotated out / deleted. Reset offset so next
+                    // CREATE event starts cleanly from 0.
+                    lastReadPosition = 0L
+                    return
+                }
                 val currentLength = file.length()
-                val pos = lastReadPosition
+                var pos = lastReadPosition
+
+                // Rotation/truncation: if file shrunk below our offset,
+                // it was either truncated in place or replaced with a
+                // smaller file. Without this guard, the early-return on
+                // `currentLength <= pos` would silently never forward
+                // again until the file grew past the stale offset.
+                // (Copilot R3.)
+                if (currentLength < pos) {
+                    pos = 0L
+                    lastReadPosition = 0L
+                }
+
                 if (currentLength <= pos) return
 
                 val delta = currentLength - pos
@@ -222,12 +239,33 @@ object LogCollector {
                     ByteArray(delta.toInt()).also { raf.readFully(it) }
                 }
 
-                val newLines = String(newBytes).lines().filter { it.isNotBlank() }
-                val newEntries = newLines.mapNotNull { parseLine(it) }
-                if (newEntries.isEmpty()) {
-                    lastReadPosition = currentLength
+                // Line-boundary safety (Copilot R3): if a CLOSE_WRITE event
+                // arrives mid-write, the trailing bytes may be a partial
+                // line. parseLine() returns null for it, but if we then
+                // advanced lastReadPosition to currentLength, the partial
+                // line would be lost forever once the rest arrives. Find
+                // the last newline byte (0x0A — same in ASCII and UTF-8,
+                // safe for multi-byte chars), forward only complete lines,
+                // and leave any trailing partial in the file for the next
+                // event to pick up.
+                var lastNewlineIdx = -1
+                for (i in newBytes.size - 1 downTo 0) {
+                    if (newBytes[i] == 0x0A.toByte()) { lastNewlineIdx = i; break }
+                }
+                if (lastNewlineIdx < 0) {
+                    // No complete line in this chunk. Leave lastReadPosition
+                    // untouched so the next event re-reads with more bytes
+                    // (which presumably include the newline).
                     return
                 }
+
+                val completeBytes = newBytes.copyOfRange(0, lastNewlineIdx + 1)
+                val newLines = String(completeBytes).lines().filter { it.isNotBlank() }
+                val newEntries = newLines.mapNotNull { parseLine(it) }
+                // Advance past the last complete line. Trailing partial
+                // bytes (if any) stay unread for next call.
+                lastReadPosition = pos + completeBytes.size
+                if (newEntries.isEmpty()) return
 
                 synchronized(logsLock) {
                     val current = _logs.value.toMutableList()
@@ -236,7 +274,6 @@ object LogCollector {
                         current.removeAt(0)
                     }
                     _logs.value = current
-                    lastReadPosition = currentLength
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to read new log entries from file", e)
