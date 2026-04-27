@@ -218,13 +218,6 @@ object ServiceState {
             return
         }
 
-        // Initial synchronous reads — populate StateFlow before any observer
-        // fires so UI screens that compose immediately have correct data.
-        readFromFile()
-        readBridgeToken()
-        readApiUsageFile()
-        readAgentHealthFile()
-
         val parent = stateFile?.parentFile
         if (parent == null) {
             Log.w(TAG, "startWatching: no parent dir, skipping")
@@ -233,10 +226,17 @@ object ServiceState {
 
         // workspace/ may not exist yet on a fresh install before the service
         // first starts. Create it so FileObserver can attach without racing
-        // service startup. Idempotent.
+        // service startup. Idempotent. mkdirs is fast (single stat) so OK
+        // on caller thread; the slow part is the file reads below, which
+        // are dispatched.
         val workspaceDir = File(parent, "workspace").apply { mkdirs() }
 
-        Log.d(TAG, "startWatching: attaching FileObservers")
+        Log.d(TAG, "startWatching: attaching FileObservers; initial reads dispatched")
+
+        // Attach observers FIRST so any write that lands between the
+        // attach and the initial read doesn't get missed (the observer
+        // reads on event regardless of initial-read state). Synchronous —
+        // FileObserver constructor does no disk I/O, just registers.
         filesDirObserver = makeDirObserver(parent) { path ->
             when (path) {
                 "service_state" -> readFromFile()
@@ -250,6 +250,21 @@ object ServiceState {
                 "api_usage_state" -> readApiUsageFile()
             }
         }.also { it.startWatching() }
+
+        // Initial reads on Dispatchers.IO — startWatching is invoked from
+        // Application.onCreate (main thread); doing 4 disk reads there
+        // risks StrictMode violations and startup jank. The StateFlow is
+        // pre-populated with sane defaults so UI screens that compose
+        // before the dispatched reads complete won't show garbage —
+        // they just see "STOPPED / 0 / 0 / 0" briefly until the IO
+        // dispatch lands a few ms later. Acceptable since the observers
+        // also fire on subsequent writes. (Copilot R2.)
+        scope.launch {
+            readFromFile()
+            readBridgeToken()
+            readApiUsageFile()
+            readAgentHealthFile()
+        }
     }
 
     /**

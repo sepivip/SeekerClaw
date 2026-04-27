@@ -61,22 +61,52 @@ class SeekerClawService : Service() {
      * Concurrency: serialized via `nodeDebugMutex`. FileObserver typically
      * delivers multiple events for a single write (MODIFY + CLOSE_WRITE);
      * without the mutex, two dispatches would read overlapping byte ranges
-     * and double-forward each line. Idempotent on lastPos: once a range
-     * is forwarded, subsequent calls find `lastPos == file.length` and
-     * return cleanly. (Copilot R1.)
+     * and double-forward each line. (Copilot R1.)
      *
      * OOM protection: caps the per-call read at `nodeDebugMaxDeltaBytes`.
      * If Node wrote a huge burst (or events were coalesced during Doze),
-     * we read up to the cap and let the next event drain the rest. Avoids
-     * the toInt() overflow + giant ByteArray allocation that the original
-     * unbounded read would hit on a large delta. (Copilot R1.)
+     * we read up to the cap and re-launch ourselves to drain the rest.
+     * Avoids the toInt() overflow + giant ByteArray allocation that the
+     * original unbounded read would hit on a large delta. (Copilot R1.)
+     *
+     * Line-boundary safety (Copilot R2): when chunked reads hit the
+     * 256KB cap mid-line, we'd otherwise emit half a line as one entry
+     * and the remainder as another, corrupting the log stream. Fix:
+     * find the last newline byte in the chunk and only advance lastPos
+     * to that boundary, leaving the partial trailing line for the next
+     * read to pick up. Pathological case (single line > 256KB): we
+     * forward the chunk anyway to avoid an infinite read loop — that
+     * line is genuinely too long to handle cleanly, taking the split
+     * is better than wedging.
+     *
+     * Rotation/truncation safety (Copilot R2): if Node rotates the log
+     * (replacement file + smaller length, or in-place truncate), the
+     * file's length will drop below lastPos. Without a reset, the early
+     * `length <= pos` guard would silently stop forwarding forever.
+     * Detect `length < pos` and reset to 0 so new content is forwarded.
      */
     private suspend fun forwardNewNodeDebugLines(debugLogFile: java.io.File) {
         nodeDebugMutex.withLock {
             try {
-                if (!debugLogFile.exists()) return
+                if (!debugLogFile.exists()) {
+                    // File doesn't exist yet (cold boot before Node writes,
+                    // OR rotation deleted it before re-creating). Reset
+                    // lastPos so the next CREATE event starts from 0.
+                    nodeDebugLastPos = 0L
+                    return
+                }
                 val length = debugLogFile.length()
-                val pos = nodeDebugLastPos
+                var pos = nodeDebugLastPos
+
+                // Rotation/truncation: file shrunk, reset to start. Either
+                // Node truncated in place or rotation replaced it with a
+                // smaller file — either way, lastPos points past the new
+                // EOF and we'd silently never forward again without this.
+                if (length < pos) {
+                    pos = 0L
+                    nodeDebugLastPos = 0L
+                }
+
                 if (length <= pos) return
 
                 val delta = length - pos
@@ -85,38 +115,66 @@ class SeekerClawService : Service() {
                     raf.seek(pos)
                     ByteArray(readSize).also { raf.readFully(it) }
                 }
-                // Advance by what we actually read; remainder picked up next event.
-                nodeDebugLastPos = pos + readSize
 
-                val lines = String(newBytes).lines().filter { it.isNotBlank() }
-                for (line in lines) {
-                    val pipeIdx = line.indexOf('|')
-                    val (level, message) = if (pipeIdx > 0) {
-                        val lvl = line.substring(0, pipeIdx)
-                        val msg = line.substring(pipeIdx + 1)
-                        val parsed = when (lvl) {
-                            "ERROR" -> LogLevel.ERROR
-                            "WARN" -> LogLevel.WARN
-                            "DEBUG" -> LogLevel.DEBUG
-                            "INFO" -> LogLevel.INFO
-                            else -> null
+                // Find the last complete line boundary. Newline is byte 0x0A
+                // in both ASCII and UTF-8, so byte-index scanning is safe
+                // regardless of multi-byte chars in the line content.
+                var lastNewlineIdx = -1
+                for (i in newBytes.size - 1 downTo 0) {
+                    if (newBytes[i] == 0x0A.toByte()) { lastNewlineIdx = i; break }
+                }
+
+                val (forwardBytes, advanceBy) = if (lastNewlineIdx >= 0) {
+                    // Normal case: forward complete lines up to and including
+                    // the last newline. Leave the trailing partial line in
+                    // the file for the next read.
+                    val complete = newBytes.copyOfRange(0, lastNewlineIdx + 1)
+                    complete to complete.size
+                } else if (delta > readSize) {
+                    // We chunked AND the chunk has no newline → trailing
+                    // partial line OR genuinely huge line. Don't forward
+                    // anything yet; leave lastPos so the next call reads
+                    // a bigger window after Node writes more. The mutex
+                    // will be re-acquired by the recursive scope.launch
+                    // below, and we'll see more bytes next time.
+                    ByteArray(0) to 0
+                } else {
+                    // Single line larger than the entire delta (rare —
+                    // Node debug lines are normally <2KB). Forwarding
+                    // truncated is better than wedging in an infinite
+                    // re-read loop. Treat the full chunk as one line.
+                    newBytes to newBytes.size
+                }
+                nodeDebugLastPos = pos + advanceBy
+
+                if (forwardBytes.isNotEmpty()) {
+                    val lines = String(forwardBytes).lines().filter { it.isNotBlank() }
+                    for (line in lines) {
+                        val pipeIdx = line.indexOf('|')
+                        val (level, message) = if (pipeIdx > 0) {
+                            val lvl = line.substring(0, pipeIdx)
+                            val msg = line.substring(pipeIdx + 1)
+                            val parsed = when (lvl) {
+                                "ERROR" -> LogLevel.ERROR
+                                "WARN" -> LogLevel.WARN
+                                "DEBUG" -> LogLevel.DEBUG
+                                "INFO" -> LogLevel.INFO
+                                else -> null
+                            }
+                            if (parsed != null) parsed to msg
+                            else LogLevel.INFO to line  // unknown prefix — treat whole line as INFO
+                        } else {
+                            // Fallback for unparsed lines (old format, raw output)
+                            LogLevel.INFO to line
                         }
-                        if (parsed != null) parsed to msg
-                        else LogLevel.INFO to line  // unknown prefix — treat whole line as INFO
-                    } else {
-                        // Fallback for unparsed lines (old format, raw output)
-                        LogLevel.INFO to line
+                        LogCollector.append("[Node] $message", level)
                     }
-                    LogCollector.append("[Node] $message", level)
                 }
 
                 // If we capped the read and there's still more to consume,
                 // re-launch ourselves to drain the remainder. The mutex is
-                // released between calls so other writes don't block, and
-                // the next call hits `length <= pos` and exits if Node has
-                // since written more (which the next FileObserver event
-                // will pick up cleanly).
-                if (delta > readSize) {
+                // released between calls so other writes don't block.
+                if (delta > readSize && advanceBy > 0) {
                     scope.launch { forwardNewNodeDebugLines(debugLogFile) }
                 }
             } catch (_: Exception) {}
@@ -274,11 +332,19 @@ class SeekerClawService : Service() {
         // when Node actually writes a log line.
         //
         // Append-aware: lastPos tracks bytes already forwarded; only new
-        // bytes are read on each event. Idempotent — if FileObserver
-        // coalesces multiple writes into one event, we still pick up
-        // every new line via the offset.
+        // bytes are read on each event.
         val debugLogFile = File(workDir, "node_debug.log")
+
+        // Guard: stop any existing observer before attaching a new one.
+        // onStartCommand can fire multiple times in the same service
+        // lifetime (START_STICKY redelivery, explicit start while already
+        // running, etc.). Without this, we'd attach multiple observers
+        // and each FileObserver event would dispatch N forwarders →
+        // duplicate log entries. (Copilot R2.)
+        nodeDebugObserver?.stopWatching()
+        nodeDebugObserver = null
         nodeDebugLastPos = 0L
+
         // Constants qualified (Java statics not auto-imported into Kotlin
         // function bodies). (Copilot R1.)
         nodeDebugObserver = object : FileObserver(

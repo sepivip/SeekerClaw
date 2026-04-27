@@ -1,5 +1,8 @@
 package com.seekerclaw.app.util
 
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -7,13 +10,15 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 /**
  * Pure JVM tests for LogCollector's in-memory behavior.
- * File I/O is skipped because logFile stays null (init() not called).
+ * Most tests run without file I/O (logFile stays null when init() isn't called).
+ * The offset-based reader tests use a temp file via setLogFileForTest().
  */
 class LogCollectorTest {
 
@@ -218,5 +223,110 @@ class LogCollectorTest {
         val filtered = logs.filter { it.message.contains(query, ignoreCase = true) }
 
         assertEquals(2, filtered.size)
+    }
+
+    // --- Offset-based reader (BAT-518 FileObserver path) ---
+    //
+    // FileObserver typically delivers MODIFY and CLOSE_WRITE for one
+    // write. Both events dispatch readNewFromFile concurrently via
+    // scope.launch. The Mutex must serialize them so no duplicate
+    // entries land in the buffer and lastReadPosition stays correct.
+
+    @Test
+    fun `offset reader picks up incremental writes correctly`() = runBlocking {
+        val tmp = File.createTempFile("bat518-log", ".test")
+        try {
+            LogCollector.setLogFileForTest(tmp)
+            LogCollector.resetForTest()
+
+            // First write
+            val ts1 = System.currentTimeMillis()
+            tmp.writeText("$ts1|INFO|first\n")
+            LogCollector.readNewFromFileForTest()
+
+            assertEquals(1, LogCollector.logs.value.size)
+            assertEquals("first", LogCollector.logs.value[0].message)
+            assertEquals(tmp.length(), LogCollector.lastReadPositionForTest)
+
+            // Second incremental write
+            val ts2 = ts1 + 1
+            tmp.appendText("$ts2|WARN|second\n")
+            LogCollector.readNewFromFileForTest()
+
+            assertEquals(2, LogCollector.logs.value.size)
+            assertEquals("second", LogCollector.logs.value[1].message)
+            assertEquals(LogLevel.WARN, LogCollector.logs.value[1].level)
+            assertEquals(tmp.length(), LogCollector.lastReadPositionForTest)
+        } finally {
+            LogCollector.setLogFileForTest(null)
+            LogCollector.resetForTest()
+            tmp.delete()
+        }
+    }
+
+    @Test
+    fun `concurrent readNewFromFile invocations don't duplicate entries`() = runBlocking {
+        // Simulates FileObserver's MODIFY + CLOSE_WRITE dual-dispatch:
+        // multiple coroutines all see the file in the same state and
+        // race to consume it. The Mutex must ensure exactly one of
+        // them does the work and the others find lastReadPosition
+        // already advanced.
+        val tmp = File.createTempFile("bat518-concurrent", ".test")
+        try {
+            LogCollector.setLogFileForTest(tmp)
+            LogCollector.resetForTest()
+
+            // Write 100 lines
+            val baseTs = System.currentTimeMillis()
+            val sb = StringBuilder()
+            for (i in 0 until 100) {
+                sb.append("${baseTs + i}|INFO|line-$i\n")
+            }
+            tmp.writeText(sb.toString())
+
+            // Launch 10 concurrent readers (mimics FileObserver dispatching
+            // multiple events to the same scope.launch handlers).
+            val tasks = List(10) {
+                async { LogCollector.readNewFromFileForTest() }
+            }
+            tasks.awaitAll()
+
+            // Exactly 100 entries, no duplicates, in order.
+            val logs = LogCollector.logs.value
+            assertEquals("Expected 100 entries; found ${logs.size}", 100, logs.size)
+            assertEquals("line-0", logs.first().message)
+            assertEquals("line-99", logs.last().message)
+            // Offset advanced to EOF.
+            assertEquals(tmp.length(), LogCollector.lastReadPositionForTest)
+        } finally {
+            LogCollector.setLogFileForTest(null)
+            LogCollector.resetForTest()
+            tmp.delete()
+        }
+    }
+
+    @Test
+    fun `offset reader skips writes already at EOF`() = runBlocking {
+        val tmp = File.createTempFile("bat518-eof", ".test")
+        try {
+            LogCollector.setLogFileForTest(tmp)
+            LogCollector.resetForTest()
+
+            tmp.writeText("${System.currentTimeMillis()}|INFO|once\n")
+            LogCollector.readNewFromFileForTest()
+            val sizeAfterFirst = LogCollector.logs.value.size
+            val posAfterFirst = LogCollector.lastReadPositionForTest
+
+            // Spurious second call with no new content (FileObserver may
+            // emit duplicate events for a single write).
+            LogCollector.readNewFromFileForTest()
+
+            assertEquals(sizeAfterFirst, LogCollector.logs.value.size)
+            assertEquals(posAfterFirst, LogCollector.lastReadPositionForTest)
+        } finally {
+            LogCollector.setLogFileForTest(null)
+            LogCollector.resetForTest()
+            tmp.delete()
+        }
     }
 }

@@ -251,4 +251,30 @@ object LogCollector {
         val level = try { LogLevel.valueOf(parts[1]) } catch (_: Exception) { LogLevel.INFO }
         return LogEntry(timestamp = timestamp, message = parts[2], level = level)
     }
+
+    // ── Testing hooks ────────────────────────────────────────────────
+    // Internal-visibility hooks for unit tests. Intentionally NOT marked
+    // @VisibleForTesting via androidx because that pulls in a runtime
+    // dep we don't otherwise need; the `internal` modifier already
+    // restricts call sites to the same module. (Copilot R2 asked for
+    // tests around the offset-based reader's concurrency behavior.)
+
+    /** TEST ONLY: inject a file path so concurrency tests can simulate cross-process writes. */
+    internal fun setLogFileForTest(file: File?) {
+        logFile = file
+    }
+
+    /** TEST ONLY: reset the singleton's offset + buffer between tests. */
+    internal fun resetForTest() {
+        synchronized(logsLock) {
+            _logs.value = emptyList()
+        }
+        lastReadPosition = 0L
+    }
+
+    /** TEST ONLY: invoke the offset-based reader directly (it's `private suspend` for production use). */
+    internal suspend fun readNewFromFileForTest() = readNewFromFile()
+
+    /** TEST ONLY: read the current offset to assert correct advancement. */
+    internal val lastReadPositionForTest: Long get() = lastReadPosition
 }
