@@ -372,17 +372,27 @@ object ServiceState {
         onChange: (path: String) -> Unit,
     ): FileObserver {
         // FileObserver(File) is API 29+; we target min SDK 34 so this is safe.
-        // Mask covers both `writeText`-style writes (CLOSE_WRITE / MODIFY)
-        // and atomic-rename writes (.tmp + rename → MOVED_TO), plus
-        // initial creation (CREATE) for files that don't exist yet when
-        // the observer attaches.
+        // Mask covers:
+        //   • CLOSE_WRITE / MODIFY: writeText / appendText style writes
+        //   • MOVED_TO: atomic .tmp + rename writes
+        //   • CREATE: initial creation when file didn't exist at attach
+        //   • DELETE: file removal in the watched dir. Critical for
+        //     bridge_token (clearBridgeToken() deletes the file on
+        //     service stop) — without this event, the main-process
+        //     in-memory bridgeToken would stay stale until next write.
+        //     (Copilot R12.) Also covers external removal of any of
+        //     the other watched files for defense-in-depth.
+        // MOVED_FROM is also covered by MOVED_TO + CREATE on the
+        // destination dir; we don't need it here.
         //
         // Constants are qualified (FileObserver.MODIFY etc.) because
         // they're Java static fields, not auto-importable into Kotlin
         // function bodies. (Copilot R1.)
         return object : FileObserver(
             dir,
-            FileObserver.MODIFY or FileObserver.CLOSE_WRITE or FileObserver.MOVED_TO or FileObserver.CREATE,
+            FileObserver.MODIFY or FileObserver.CLOSE_WRITE or
+                FileObserver.MOVED_TO or FileObserver.CREATE or
+                FileObserver.DELETE,
         ) {
             override fun onEvent(event: Int, path: String?) {
                 // Explicit null handling (Copilot R10): FileObserver's

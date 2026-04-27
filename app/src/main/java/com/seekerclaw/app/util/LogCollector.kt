@@ -143,12 +143,19 @@ object LogCollector {
         //
         // Watch the parent dir, dispatch on `service_logs` filename. Mask
         // covers append-style writes (MODIFY / CLOSE_WRITE), atomic-rename
-        // writes (MOVED_TO), and re-creation after clear() (CREATE).
-        // Constants are qualified (Java statics not auto-imported into
-        // Kotlin function bodies). (Copilot R1.)
+        // writes (MOVED_TO), re-creation after clear() (CREATE), and
+        // file removal (DELETE). DELETE is critical so the reader can
+        // reset lastReadPosition when the file is removed externally
+        // (cleanup, rotation, manual rm) — otherwise the offset would
+        // stay past the new EOF after recreation, missing initial
+        // writes until lastReadPosition's stale value was passed.
+        // (Copilot R12.) Constants are qualified (Java statics not
+        // auto-imported into Kotlin function bodies). (Copilot R1.)
         fileObserver = object : FileObserver(
             parent,
-            FileObserver.MODIFY or FileObserver.CLOSE_WRITE or FileObserver.MOVED_TO or FileObserver.CREATE,
+            FileObserver.MODIFY or FileObserver.CLOSE_WRITE or
+                FileObserver.MOVED_TO or FileObserver.CREATE or
+                FileObserver.DELETE,
         ) {
             override fun onEvent(event: Int, path: String?) {
                 if (path == LOG_FILE_NAME) {

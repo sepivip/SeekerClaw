@@ -410,10 +410,15 @@ class SeekerClawService : Service() {
                 nodeDebugObserver = null
 
                 // Constants qualified (Java statics not auto-imported into
-                // Kotlin function bodies). (Copilot R1.)
+                // Kotlin function bodies). (Copilot R1.) Mask includes
+                // DELETE (R12) so log rotation that removes
+                // node_debug.log triggers the reader's lastPos reset
+                // path, ensuring the next CREATE starts cleanly from 0.
                 nodeDebugObserver = object : FileObserver(
                     workDir,
-                    FileObserver.MODIFY or FileObserver.CLOSE_WRITE or FileObserver.MOVED_TO or FileObserver.CREATE,
+                    FileObserver.MODIFY or FileObserver.CLOSE_WRITE or
+                        FileObserver.MOVED_TO or FileObserver.CREATE or
+                        FileObserver.DELETE,
                 ) {
                     override fun onEvent(event: Int, path: String?) {
                         if (path == "node_debug.log") {
