@@ -779,7 +779,17 @@ object ConfigManager {
         if (providerChanged) editor.putString(KEY_PROVIDER, validProvider)
         if (authChanged) editor.putString(KEY_AUTH_TYPE, validAuthType)
         if (modelChanged) editor.putString(KEY_MODEL, resolvedModel)
-        editor.apply()
+        // commit() not apply(): the broadcast below races the async disk
+        // flush of apply(). Main process receives the broadcast → bumps
+        // configVersion → Compose recomposes screens that re-read
+        // prefs via loadConfig — but if the apply() write hasn't flushed
+        // yet, loadConfig sees STALE values and the UI displays the OLD
+        // provider/authType/model instead of the just-reconciled new
+        // ones. commit() is synchronous: blocks until disk write
+        // completes, so the broadcast can't outrun the data. Same
+        // class of bug as 76041c1 (apply→commit before killProcess in
+        // onDestroy); same fix.
+        editor.commit()
 
         // Bump same-process configVersion so any in-process UI observer
         // recomposes. /provider Telegram → :node service-start reconcile
