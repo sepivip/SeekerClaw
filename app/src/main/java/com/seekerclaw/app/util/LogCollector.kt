@@ -1,12 +1,10 @@
 package com.seekerclaw.app.util
 
 import android.content.Context
+import android.os.FileObserver
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -35,7 +33,7 @@ object LogCollector {
     val lastTimestamp: Long? get() = _logs.value.lastOrNull()?.timestamp
 
     private var logFile: File? = null
-    private var pollingJob: Job? = null
+    private var fileObserver: FileObserver? = null
     @Volatile private var lastReadPosition = 0L
     private val scope = CoroutineScope(Dispatchers.IO)
 
@@ -79,30 +77,67 @@ object LogCollector {
     }
 
     /**
-     * Start polling the log file for cross-process updates.
+     * Start watching the log file for cross-process updates.
      * Call this from the UI process (Application.onCreate).
+     *
+     * BAT-518: replaced the prior 1s coroutine polling loop with kernel-
+     * level inotify (`FileObserver`). Same external contract — the
+     * `_logs` StateFlow updates when the underlying file is appended —
+     * but with zero idle CPU cost. Previously this method ran 86,400
+     * disk reads per day in main process even when no new logs arrived.
+     *
+     * Append-aware: the existing `readNewFromFile` already tracks
+     * `lastReadPosition` and only reads new bytes from that offset.
+     * FileObserver triggers it; the byte-tracking logic is unchanged.
+     *
+     * Watching the parent directory rather than the file itself so we
+     * still receive events if the file is recreated (e.g. clear() →
+     * subsequent append from another process).
      */
-    fun startPolling(context: Context) {
+    fun startWatching(context: Context) {
         init(context)
 
-        // Guard: skip if a polling loop is already running (mirrors ServiceState BAT-217 fix).
-        if (pollingJob?.isActive == true) {
-            Log.d(TAG, "startPolling: already active, skipping")
+        // Guard: skip if observer already attached (mirrors the BAT-217 fix).
+        if (fileObserver != null) {
+            Log.d(TAG, "startWatching: already active, skipping")
             return
         }
 
         // Read existing logs from file so the UI has data immediately
         readAllFromFile()
-        Log.d(TAG, "startPolling: launched, loaded ${_logs.value.size} entries from file")
+        Log.d(TAG, "startWatching: loaded ${_logs.value.size} entries from file; attaching FileObserver")
 
-        pollingJob?.cancel()
-        pollingJob = scope.launch {
-            while (isActive) {
-                delay(1000)
-                readNewFromFile()
-            }
+        val parent = logFile?.parentFile ?: run {
+            Log.w(TAG, "startWatching: no parent dir, skipping FileObserver")
+            return
         }
+
+        // Watch the parent dir, dispatch on `service_logs` filename. Mask
+        // covers append-style writes (MODIFY / CLOSE_WRITE), atomic-rename
+        // writes (MOVED_TO), and re-creation after clear() (CREATE).
+        fileObserver = object : FileObserver(
+            parent,
+            MODIFY or CLOSE_WRITE or MOVED_TO or CREATE,
+        ) {
+            override fun onEvent(event: Int, path: String?) {
+                if (path == LOG_FILE_NAME) {
+                    // Dispatch off the FileObserver thread.
+                    scope.launch { readNewFromFile() }
+                }
+            }
+        }.also { it.startWatching() }
     }
+
+    /**
+     * Backwards-compat alias. Same behavior, FileObserver-driven instead
+     * of polling. Removable in a follow-up once all call sites are
+     * migrated to `startWatching`.
+     */
+    @Deprecated(
+        "Renamed to startWatching after BAT-518; this alias forwards for compat",
+        replaceWith = ReplaceWith("startWatching(context)"),
+    )
+    fun startPolling(context: Context) = startWatching(context)
 
     private fun writeToFile(entry: LogEntry) {
         val file = logFile ?: return

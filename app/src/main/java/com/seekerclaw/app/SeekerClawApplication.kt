@@ -27,14 +27,19 @@ class SeekerClawApplication : Application() {
         }
         Analytics.setUserProperty("has_wallet", (!ConfigManager.getWalletAddress(this).isNullOrBlank()).toString())
 
-        // Start cross-process polling so UI picks up state/logs from :node process.
-        // Guard: only the main UI process should poll. The :node process writes state
-        // files — if it also polled, both processes would detect health transitions
-        // and write duplicate log entries to the shared service_logs file (BAT-217).
+        // Start cross-process file watching so UI picks up state/logs from :node.
+        // Guard: only the main UI process should attach observers. The :node
+        // process writes state files — if it also watched, both processes would
+        // detect health transitions and write duplicate log entries to the shared
+        // service_logs file (BAT-217).
+        //
+        // BAT-518: switched from 1s coroutine polling to kernel-level FileObserver.
+        // Same external contract (StateFlow updates on file change), zero idle
+        // CPU cost when nothing's changing.
         val isMainProcess = getProcessName() == packageName
         if (isMainProcess) {
-            ServiceState.startPolling(this)
-            LogCollector.startPolling(this)
+            ServiceState.startWatching(this)
+            LogCollector.startWatching(this)
             registerConfigChangedReceiver()
         }
     }

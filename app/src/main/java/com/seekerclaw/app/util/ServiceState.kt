@@ -1,14 +1,12 @@
 package com.seekerclaw.app.util
 
 import android.content.Context
+import android.os.FileObserver
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.io.File
@@ -82,10 +80,11 @@ object ServiceState {
     val agentHealth: StateFlow<AgentHealth> = _agentHealth
 
     // Private lock for health transition logging.
-    // Prevents the TOCTOU where overlapping pollingJob coroutines (caused by cooperative
-    // cancellation in startPolling) both capture prevStale before the first write commits.
-    // lastLoggedStale tracks the last-logged direction so duplicate same-direction logs
-    // are suppressed even if two coroutines race to the synchronized block.
+    // Originally prevented TOCTOU between overlapping polling coroutines.
+    // Post-BAT-518 (FileObserver) the FileObserver thread serializes events,
+    // but multiple writes can still be coalesced into rapid back-to-back
+    // dispatches; lastLoggedStale tracks the last-logged direction so
+    // duplicate same-direction logs are suppressed even under that.
     private val healthTransitionLock = Any()
     @Volatile private var lastLoggedStale: Boolean? = null
 
@@ -99,7 +98,6 @@ object ServiceState {
 
     /** App files directory — exposed for cross-process file reads (e.g. stats). */
     val filesDir: File? get() = stateFile?.parentFile
-    private var pollingJob: Job? = null
     private val scope = CoroutineScope(Dispatchers.IO)
     private var initialized = false
 
@@ -193,27 +191,97 @@ object ServiceState {
     }
 
     /**
-     * Start polling the state file for cross-process updates.
+     * Start watching the state files for cross-process updates.
      * Call this from the UI process (Application.onCreate).
+     *
+     * BAT-518: replaced the prior 1s coroutine polling loop with kernel-
+     * level inotify (`FileObserver`). Same external contract — the
+     * StateFlow values still update when the underlying files change —
+     * but with zero idle CPU cost. Previously this method ran 86,400
+     * disk-read cycles per day even when nothing changed.
+     *
+     * Two FileObservers are attached: one on `filesDir` (for
+     * `service_state` and `bridge_token`) and one on `filesDir/workspace`
+     * (for `agent_health_state` and `api_usage_state`). Each observer
+     * dispatches by filename to the same single-file readers that the
+     * polling loop used to call directly. Initial reads run synchronously
+     * here so the StateFlow is populated before any observer fires.
      */
-    fun startPolling(context: Context) {
+    fun startWatching(context: Context) {
         init(context)
-        // Guard: skip if a polling loop is already running (BAT-217).
-        // Prevents overlapping coroutines that could both detect health transitions
-        // and emit duplicate log entries.
-        if (pollingJob?.isActive == true) {
-            Log.d(TAG, "startPolling: already active, skipping")
+        // Guard: skip if observers are already attached (BAT-217 — prevents
+        // duplicate event dispatch that could write duplicate log entries).
+        if (filesDirObserver != null || workspaceDirObserver != null) {
+            Log.d(TAG, "startWatching: already active, skipping")
             return
         }
-        Log.d(TAG, "startPolling: launching polling loop")
-        pollingJob?.cancel()
-        pollingJob = scope.launch {
-            while (isActive) {
-                readFromFile()
-                readBridgeToken()
-                readApiUsageFile()
-                readAgentHealthFile()
-                delay(1000)
+
+        // Initial synchronous reads — populate StateFlow before any observer
+        // fires so UI screens that compose immediately have correct data.
+        readFromFile()
+        readBridgeToken()
+        readApiUsageFile()
+        readAgentHealthFile()
+
+        val parent = stateFile?.parentFile
+        if (parent == null) {
+            Log.w(TAG, "startWatching: no parent dir, skipping")
+            return
+        }
+
+        // workspace/ may not exist yet on a fresh install before the service
+        // first starts. Create it so FileObserver can attach without racing
+        // service startup. Idempotent.
+        val workspaceDir = File(parent, "workspace").apply { mkdirs() }
+
+        Log.d(TAG, "startWatching: attaching FileObservers")
+        filesDirObserver = makeDirObserver(parent) { path ->
+            when (path) {
+                "service_state" -> readFromFile()
+                "bridge_token" -> readBridgeToken()
+            }
+        }.also { it.startWatching() }
+
+        workspaceDirObserver = makeDirObserver(workspaceDir) { path ->
+            when (path) {
+                "agent_health_state" -> readAgentHealthFile()
+                "api_usage_state" -> readApiUsageFile()
+            }
+        }.also { it.startWatching() }
+    }
+
+    /**
+     * Backwards-compat alias. Older call sites (and any external code)
+     * that still call `startPolling` continue to work — same behavior,
+     * just no actual polling underneath. Removable in a follow-up once
+     * all call sites are migrated.
+     */
+    @Deprecated(
+        "Renamed to startWatching after BAT-518; this alias forwards for compat",
+        replaceWith = ReplaceWith("startWatching(context)"),
+    )
+    fun startPolling(context: Context) = startWatching(context)
+
+    private var filesDirObserver: FileObserver? = null
+    private var workspaceDirObserver: FileObserver? = null
+
+    private fun makeDirObserver(dir: File, onChange: (path: String?) -> Unit): FileObserver {
+        // FileObserver(File) is API 29+; we target min SDK 34 so this is safe.
+        // Mask covers both `writeText`-style writes (CLOSE_WRITE / MODIFY)
+        // and atomic-rename writes (.tmp + rename → MOVED_TO), plus
+        // initial creation (CREATE) for files that don't exist yet when
+        // the observer attaches.
+        return object : FileObserver(
+            dir,
+            MODIFY or CLOSE_WRITE or MOVED_TO or CREATE,
+        ) {
+            override fun onEvent(event: Int, path: String?) {
+                // Dispatch to scope so the FileObserver thread (a single
+                // shared thread named "FileObserver" in Android) doesn't
+                // do file I/O. The reader functions are idempotent — if
+                // multiple events fire for the same write, re-reading is
+                // cheap and produces the same StateFlow values.
+                scope.launch { onChange(path) }
             }
         }
     }

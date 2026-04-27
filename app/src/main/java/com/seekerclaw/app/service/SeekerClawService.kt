@@ -5,6 +5,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.os.FileObserver
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
@@ -26,17 +27,61 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.File
-import java.io.RandomAccessFile
 import java.util.UUID
 
 class SeekerClawService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var screenWakeLock: PowerManager.WakeLock? = null
     private var uptimeJob: Job? = null
-    private var nodeDebugJob: Job? = null
+    // BAT-518: replaced nodeDebugJob (500ms polling coroutine) with
+    // FileObserver. lastPos tracks bytes already forwarded to LogCollector
+    // so each event reads only new bytes.
+    private var nodeDebugObserver: FileObserver? = null
+    @Volatile private var nodeDebugLastPos = 0L
     private val scope = CoroutineScope(Dispatchers.IO)
     private var startTimeMs = 0L
     private var androidBridge: AndroidBridge? = null
+
+    /**
+     * Read any bytes appended to `node_debug.log` since `nodeDebugLastPos`,
+     * parse each line's `LEVEL|message` prefix, and forward to LogCollector.
+     * Idempotent: if multiple FileObserver events fire for one write, only
+     * the first does work; subsequent calls find `lastPos == file.length`
+     * and return immediately. Called from the FileObserver dispatcher.
+     */
+    private fun forwardNewNodeDebugLines(debugLogFile: java.io.File) {
+        try {
+            if (!debugLogFile.exists()) return
+            val length = debugLogFile.length()
+            if (length <= nodeDebugLastPos) return
+            val newBytes = java.io.RandomAccessFile(debugLogFile, "r").use { raf ->
+                raf.seek(nodeDebugLastPos)
+                ByteArray((length - nodeDebugLastPos).toInt()).also { raf.readFully(it) }
+            }
+            nodeDebugLastPos = length
+            val lines = String(newBytes).lines().filter { it.isNotBlank() }
+            for (line in lines) {
+                val pipeIdx = line.indexOf('|')
+                val (level, message) = if (pipeIdx > 0) {
+                    val lvl = line.substring(0, pipeIdx)
+                    val msg = line.substring(pipeIdx + 1)
+                    val parsed = when (lvl) {
+                        "ERROR" -> LogLevel.ERROR
+                        "WARN" -> LogLevel.WARN
+                        "DEBUG" -> LogLevel.DEBUG
+                        "INFO" -> LogLevel.INFO
+                        else -> null
+                    }
+                    if (parsed != null) parsed to msg
+                    else LogLevel.INFO to line  // unknown prefix — treat whole line as INFO
+                } else {
+                    // Fallback for unparsed lines (old format, raw output)
+                    LogLevel.INFO to line
+                }
+                LogCollector.append("[Node] $message", level)
+            }
+        } catch (_: Exception) {}
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -180,45 +225,33 @@ class SeekerClawService : Service() {
             }
         )
 
-        // Poll Node.js debug log and forward to LogCollector
+        // Watch Node.js debug log and forward new lines to LogCollector.
+        //
+        // BAT-518: replaced the prior 500ms coroutine polling loop with
+        // kernel-level inotify (`FileObserver`). Previously this read
+        // 172,800 times per day in the :node process even when Node.js
+        // wrote nothing. Now: zero idle cost, sub-millisecond latency
+        // when Node actually writes a log line.
+        //
+        // Append-aware: lastPos tracks bytes already forwarded; only new
+        // bytes are read on each event. Idempotent — if FileObserver
+        // coalesces multiple writes into one event, we still pick up
+        // every new line via the offset.
         val debugLogFile = File(workDir, "node_debug.log")
-        nodeDebugJob = scope.launch {
-            var lastPos = 0L
-            while (isActive) {
-                try {
-                    if (debugLogFile.exists() && debugLogFile.length() > lastPos) {
-                        val raf = RandomAccessFile(debugLogFile, "r")
-                        raf.seek(lastPos)
-                        val newBytes = ByteArray((debugLogFile.length() - lastPos).toInt())
-                        raf.readFully(newBytes)
-                        raf.close()
-                        lastPos = debugLogFile.length()
-                        val lines = String(newBytes).lines().filter { it.isNotBlank() }
-                        for (line in lines) {
-                            val pipeIdx = line.indexOf('|')
-                            val (level, message) = if (pipeIdx > 0) {
-                                val lvl = line.substring(0, pipeIdx)
-                                val msg = line.substring(pipeIdx + 1)
-                                val parsed = when (lvl) {
-                                    "ERROR" -> LogLevel.ERROR
-                                    "WARN" -> LogLevel.WARN
-                                    "DEBUG" -> LogLevel.DEBUG
-                                    "INFO" -> LogLevel.INFO
-                                    else -> null
-                                }
-                                if (parsed != null) parsed to msg
-                                else LogLevel.INFO to line  // unknown prefix — treat whole line as INFO
-                            } else {
-                                // Fallback for unparsed lines (old format, raw output)
-                                LogLevel.INFO to line
-                            }
-                            LogCollector.append("[Node] $message", level)
-                        }
-                    }
-                } catch (_: Exception) {}
-                delay(500)
+        nodeDebugLastPos = 0L
+        nodeDebugObserver = object : FileObserver(
+            workDir,
+            MODIFY or CLOSE_WRITE or MOVED_TO or CREATE,
+        ) {
+            override fun onEvent(event: Int, path: String?) {
+                if (path == "node_debug.log") {
+                    // Dispatch off the FileObserver thread.
+                    scope.launch { forwardNewNodeDebugLines(debugLogFile) }
+                }
             }
-        }
+        }.also { it.startWatching() }
+        // Initial read in case Node has already written before we attach.
+        scope.launch { forwardNewNodeDebugLines(debugLogFile) }
 
         // Track uptime
         startTimeMs = System.currentTimeMillis()
@@ -237,7 +270,9 @@ class SeekerClawService : Service() {
 
     override fun onDestroy() {
         LogCollector.append("[Service] Stopping Claw Engine...")
-        nodeDebugJob?.cancel()
+        // Stop the node-debug FileObserver (BAT-518: was nodeDebugJob coroutine).
+        nodeDebugObserver?.stopWatching()
+        nodeDebugObserver = null
         uptimeJob?.cancel()
         Watchdog.stop()
         androidBridge?.shutdown()
