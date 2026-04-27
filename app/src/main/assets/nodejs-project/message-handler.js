@@ -4,7 +4,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { CHANNEL, workDir, PROVIDER, MODEL, AUTH_TYPE, OPENAI_AUTH_TYPE, resolveActiveModel, config: _config } = require('./config');
+const { CHANNEL, PROVIDER, MODEL, AUTH_TYPE, OPENAI_AUTH_TYPE, resolveActiveModel, config: _config } = require('./config');
 const { stripSilentReply, containsSilentReply } = require('./silent-reply');
 const modelCatalog = require('./model-catalog');
 const { buildHelpLines } = require('./telegram-commands');
@@ -220,7 +220,7 @@ Use YAML frontmatter with \`name\`, \`description\`, and \`triggers\` fields.`;
                 pkgVersion = process.env.AGENT_VERSION;
             } else {
                 try {
-                    const pkg = JSON.parse(fs.readFileSync(require('path').join(__dirname, 'package.json'), 'utf8'));
+                    const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
                     if (pkg.version) pkgVersion = pkg.version;
                 } catch (_) {}
             }
