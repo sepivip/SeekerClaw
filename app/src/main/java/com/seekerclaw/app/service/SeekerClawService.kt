@@ -23,6 +23,7 @@ import com.seekerclaw.app.util.ServiceStatus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -50,7 +51,14 @@ class SeekerClawService : Service() {
     // include verbose tool-call traces. Anything over the cap is read
     // in chunks across successive events.
     private val nodeDebugMaxDeltaBytes = 256 * 1024L  // 256 KB
-    private val scope = CoroutineScope(Dispatchers.IO)
+
+    // SupervisorJob so a single coroutine failure doesn't cancel the
+    // whole scope. Cancellable from onDestroy to ensure no in-flight
+    // forwardNewNodeDebugLines / reattach coroutines run after the
+    // observer is stopped — otherwise they'd race onDestroy's
+    // observer.stopWatching() + null-out. (Copilot R9.)
+    private val scopeJob = SupervisorJob()
+    private val scope = CoroutineScope(Dispatchers.IO + scopeJob)
     private var startTimeMs = 0L
     private var androidBridge: AndroidBridge? = null
 
@@ -442,6 +450,15 @@ class SeekerClawService : Service() {
 
     override fun onDestroy() {
         LogCollector.append("[Service] Stopping Claw Engine...")
+        // Cancel the service scope FIRST. This stops any in-flight
+        // forwardNewNodeDebugLines or observer reattach coroutines that
+        // would otherwise race the observer.stopWatching() below — they
+        // hold nodeDebugMutex while reading the file, and could land
+        // a stale lastPos write or trigger the now-stopped observer's
+        // unrelated event handler. cancel() is non-blocking and
+        // synchronous; in-flight launches reach a suspension point and
+        // exit. (Copilot R9.)
+        scopeJob.cancel()
         // Stop the node-debug FileObserver (BAT-518: was nodeDebugJob coroutine).
         nodeDebugObserver?.stopWatching()
         nodeDebugObserver = null

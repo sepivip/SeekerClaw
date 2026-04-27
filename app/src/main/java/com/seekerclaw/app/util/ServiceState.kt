@@ -101,7 +101,14 @@ object ServiceState {
     /** App files directory — exposed for cross-process file reads (e.g. stats). */
     val filesDir: File? get() = stateFile?.parentFile
     private val scope = CoroutineScope(Dispatchers.IO)
-    private var initialized = false
+    // @Volatile + check-then-set under initLock: ensures only one
+    // thread runs the disk-restore work even if init() / startWatching
+    // are called concurrently from main and Dispatchers.IO. Without
+    // this, the worker thread might not observe `initialized = true`
+    // set by another thread, OR the check-then-set could double-fire
+    // restoreFromDisk. (Copilot R9.)
+    @Volatile private var initialized = false
+    private val initLock = Any()
 
     /**
      * Initialize state file path AND restore persisted counters.
@@ -114,9 +121,7 @@ object ServiceState {
         // should prefer `startWatching` which moves the disk-I/O work
         // off the main thread.
         initFileRefs(context)
-        if (!initialized) {
-            restoreFromDisk()
-        }
+        restoreFromDisk()  // Idempotent — single-flight via initLock
     }
 
     /** Sync, no I/O. Sets the file path reference so disk reads can find it. */
@@ -124,13 +129,25 @@ object ServiceState {
         stateFile = File(context.filesDir, "service_state")
     }
 
-    /** Disk I/O — file restore + daily reset check. Idempotent on `initialized`. */
+    /**
+     * Disk I/O — file restore + daily reset check.
+     *
+     * Single-flight: takes `initLock` and double-checks `initialized`
+     * inside the lock so concurrent callers (e.g. `init()` on main
+     * thread + `startWatching()`'s scope.launch on Dispatchers.IO)
+     * run the restore exactly once, regardless of memory ordering.
+     * (Copilot R9 — was a non-volatile boolean check + set, vulnerable
+     * to lost updates between threads.)
+     */
     private fun restoreFromDisk() {
-        if (initialized) return
-        readFromFile()
-        checkDailyReset()
-        initialized = true
-        Log.i(TAG, "init: restored msgs=${_messageCount.value} today=${_messagesToday.value} tokens=${_tokensTotal.value}")
+        if (initialized) return  // Fast path — no lock if already done
+        synchronized(initLock) {
+            if (initialized) return  // Double-check inside lock
+            readFromFile()
+            checkDailyReset()
+            initialized = true
+            Log.i(TAG, "init: restored msgs=${_messageCount.value} today=${_messagesToday.value} tokens=${_tokensTotal.value}")
+        }
     }
 
     /**
