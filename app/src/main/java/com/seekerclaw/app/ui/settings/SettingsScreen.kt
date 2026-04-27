@@ -91,7 +91,7 @@ import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.config.availableModels
 import com.seekerclaw.app.config.searchProviderById
 import com.seekerclaw.app.qr.QrScannerActivity
-import com.seekerclaw.app.service.OpenClawService
+import com.seekerclaw.app.service.SeekerClawService
 import com.seekerclaw.app.solana.SolanaAuthActivity
 import com.seekerclaw.app.ui.theme.SeekerClawColors
 import com.seekerclaw.app.util.Analytics
@@ -1050,7 +1050,7 @@ fun SettingsScreen(
             },
             confirmButton = {
                 TextButton(onClick = {
-                    OpenClawService.stop(context)
+                    SeekerClawService.stop(context)
                     ConfigManager.clearConfig(context)
                     Analytics.featureUsed("config_reset")
                     showResetDialog = false
@@ -1280,7 +1280,7 @@ fun SettingsScreen(
             confirmButton = {
                 TextButton(onClick = {
                     showRunSetupDialog = false
-                    OpenClawService.stop(context)
+                    SeekerClawService.stop(context)
                     Analytics.featureUsed("setup_rerun")
                     onRunSetupAgain()
                 }) {

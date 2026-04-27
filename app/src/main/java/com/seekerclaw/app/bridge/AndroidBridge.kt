@@ -23,7 +23,7 @@ import android.util.Log
 import androidx.core.content.ContextCompat
 import com.seekerclaw.app.camera.CameraCaptureActivity
 import com.seekerclaw.app.config.ConfigManager
-import com.seekerclaw.app.service.OpenClawService
+import com.seekerclaw.app.service.SeekerClawService
 import com.seekerclaw.app.util.Analytics
 import com.seekerclaw.app.util.ServiceState
 import fi.iki.elonen.NanoHTTPD
@@ -226,7 +226,7 @@ class AndroidBridge(
      * from module-level consts in config.js.
      *
      * Why the two-step dance:
-     *   1. stopService triggers OpenClawService.onDestroy() which runs the
+     *   1. stopService triggers SeekerClawService.onDestroy() which runs the
      *      full shutdown sequence (Watchdog.stop, NodeBridge.stop, wake-lock
      *      release, crash-counter reset, and killProcess at the end). That's
      *      much cleaner than raw Process.killProcess from the bridge, which
@@ -247,13 +247,13 @@ class AndroidBridge(
             try {
                 Log.i(TAG, "[Bridge] /service/restart — scheduling clean restart")
                 scheduleServiceRestart(SERVICE_RESTART_DELAY_MS)
-                // OpenClawService.stop() is the canonical shutdown path: it
+                // SeekerClawService.stop() is the canonical shutdown path: it
                 // clears any pending restart callbacks on the companion
                 // Handler (so a stale restart scheduled elsewhere can't race
                 // our AlarmManager one), updates ServiceState, and then
                 // delegates to stopService() which triggers onDestroy →
                 // full cleanup → Process.killProcess at the end.
-                OpenClawService.stop(context)
+                SeekerClawService.stop(context)
             } catch (e: Exception) {
                 Log.e(TAG, "[Bridge] /service/restart failed: ${e.message}", e)
             }
@@ -266,7 +266,7 @@ class AndroidBridge(
 
     private fun scheduleServiceRestart(delayMs: Long) {
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        val intent = Intent(context, OpenClawService::class.java)
+        val intent = Intent(context, SeekerClawService::class.java)
         val pendingIntent = PendingIntent.getForegroundService(
             context,
             SERVICE_RESTART_REQUEST_CODE,

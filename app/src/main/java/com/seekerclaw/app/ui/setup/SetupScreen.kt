@@ -112,7 +112,7 @@ import com.seekerclaw.app.config.availableProviders
 import com.seekerclaw.app.config.providerById
 import com.seekerclaw.app.config.modelsForProvider
 import com.seekerclaw.app.qr.QrScannerActivity
-import com.seekerclaw.app.service.OpenClawService
+import com.seekerclaw.app.service.SeekerClawService
 import com.seekerclaw.app.util.Analytics
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -433,7 +433,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             }
             ConfigManager.saveConfig(context, config)
             ConfigManager.seedWorkspace(context)
-            OpenClawService.start(context)
+            SeekerClawService.start(context)
             ConfigManager.markFirstDeploymentDone(context)
             isStarting = false
             currentStep = SetupSteps.SUCCESS

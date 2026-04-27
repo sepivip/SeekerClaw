@@ -670,7 +670,7 @@ job execution and timer arm.
 
 **Scenario:** App crashes in a loop — 3 restarts in 30 seconds.
 
-**Handling:** Detection runs inline in the flush block (synchronous, fast). If the app crashes BEFORE the flush block runs, no notification is sent — the detection never happened. If it crashes AFTER, the notification was already sent to Telegram — done. No flag needed. Each process gets one shot at the flush block. The existing crash loop protection in `OpenClawService.kt` (>3 restarts in 30s → ERROR + stop) also prevents spam.
+**Handling:** Detection runs inline in the flush block (synchronous, fast). If the app crashes BEFORE the flush block runs, no notification is sent — the detection never happened. If it crashes AFTER, the notification was already sent to Telegram — done. No flag needed. Each process gets one shot at the flush block. The existing crash loop protection in `SeekerClawService.kt` (>3 restarts in 30s → ERROR + stop) also prevents spam.
 
 ### 6.3 Timezone drift
 

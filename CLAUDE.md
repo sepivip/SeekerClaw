@@ -76,7 +76,7 @@ seekerclaw/
 │   │   │   │   ├── logs/LogsScreen.kt        # Monospace scrollable log viewer
 │   │   │   │   └── settings/SettingsScreen.kt
 │   │   │   ├── service/
-│   │   │   │   ├── OpenClawService.kt        # Foreground Service — starts/manages Node.js
+│   │   │   │   ├── SeekerClawService.kt      # Foreground Service — starts/manages Node.js
 │   │   │   │   ├── NodeBridge.kt             # IPC wrapper for nodejs-mobile
 │   │   │   │   └── Watchdog.kt               # Monitors Node.js health, auto-restarts
 │   │   │   ├── receiver/
