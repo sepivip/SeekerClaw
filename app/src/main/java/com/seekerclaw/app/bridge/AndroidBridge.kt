@@ -326,12 +326,30 @@ class AndroidBridge(
             // default. This preserves the same protection
             // reconcileWithAgentSettings provided when the overlay-based
             // flow detected a provider/auth change.
+            // Validate against the EFFECTIVE auth type Node will run with
+            // after the restart, not the persisted intent the user just
+            // requested. The OAuth sign-in can't complete in the ~2.5s
+            // before service restart fires (browser redirect alone takes
+            // 10s+), so if user does `/provider openai oauth` with a
+            // blank token, writeConfigJson downgrades to api_key for
+            // Node startup. Validating against `oauth` here would let an
+            // oauth-only model (gpt-5.4-mini) carry over and then Node
+            // would 422 every chat() call. Copilot R9 caught the
+            // asymmetry vs handleConfigSaveModel (which already did this).
+            //
+            // We apply the downgrade rule using a hypothetical config
+            // where the user's NEW provider+authType are merged with the
+            // current credentials snapshot — that's what writeConfigJson
+            // will see at the next service start.
+            val effectiveAuth = ConfigManager.effectiveAuthTypeForRuntime(
+                current.copy(provider = provider, authType = authType)
+            )
             val effectiveModel: String = if (
-                ConfigManager.isModelValidForProvider(provider, authType, current.model)
+                ConfigManager.isModelValidForProvider(provider, effectiveAuth, current.model)
             ) {
                 current.model
             } else {
-                val def = defaultModelForProvider(provider, authType)
+                val def = defaultModelForProvider(provider, effectiveAuth)
                 if (def.isNotBlank()) def else current.model
             }
 
