@@ -23,7 +23,9 @@ import android.util.Log
 import androidx.core.content.ContextCompat
 import com.seekerclaw.app.camera.CameraCaptureActivity
 import com.seekerclaw.app.config.ConfigManager
+import com.seekerclaw.app.config.availableProviders
 import com.seekerclaw.app.config.defaultModelForProvider
+import com.seekerclaw.app.config.providerById
 import com.seekerclaw.app.service.SeekerClawService
 import com.seekerclaw.app.util.Analytics
 import com.seekerclaw.app.util.ServiceState
@@ -76,12 +78,16 @@ class AndroidBridge(
         // normal /provider interactive use.
         "/config/credentials" to Pair(10, 60_000L),
         "/service/restart" to Pair(3, 60_000L),
-        // /config/runtime is a hot path — Node calls it on every chat()
-        // turn from resolveActiveModel(). Keep the limit generous;
-        // localhost-only and read-only, the rate limit is purely a
-        // defense against a runaway loop spinning the endpoint, not a
-        // security control.
-        "/config/runtime" to Pair(120, 60_000L),
+        // /config/runtime is intentionally NOT rate-limited.
+        //   - Node calls it on every chat() turn from resolveActiveModel().
+        //     Tool-loop turns and any internal call site can push >2/sec.
+        //   - On 429, Node falls back to the startup MODEL const — which
+        //     reintroduces the model-reporting drift this whole refactor
+        //     was meant to kill. (Copilot R4 flagged exactly that.)
+        //   - It's localhost-only, read-only, returns no secrets, and
+        //     bypasses Keystore via loadRuntimeOnly. The only "abuse"
+        //     possible is a runaway Node loop hammering itself, which
+        //     a server-side limiter can't really fix.
         // /config/save-{provider,model} should only fire from interactive
         // user actions (Telegram /provider, /model, or Settings UI). 10/min
         // is generous; rapid-fire would also trip the crash-loop protection
@@ -293,19 +299,17 @@ class AndroidBridge(
         val provider = params.optString("provider", "").trim().lowercase()
         val authType = params.optString("authType", "").trim().lowercase()
 
-        // Validate provider
-        if (provider !in setOf("claude", "openai", "openrouter", "custom")) {
+        // Validate against the canonical provider registry in Providers.kt.
+        // Hardcoding KNOWN_PROVIDERS / authTypes here would diverge from
+        // the documented "Adding a new provider = 1 entry in
+        // availableProviders" convention — Copilot R4 caught this. Use
+        // the registry as the single source of truth so a new provider
+        // automatically becomes acceptable to the bridge handler too.
+        val knownProviderIds = availableProviders.map { it.id }.toSet()
+        if (provider !in knownProviderIds) {
             return jsonResponse(400, mapOf("error" to "Invalid provider: '$provider'"))
         }
-
-        // Validate authType against the provider's allowed set. Mirrors
-        // ConfigManager.reconcileWithAgentSettings's validation so we
-        // never accept e.g. (claude, oauth) or (openrouter, setup_token).
-        val allowedAuthTypes = when (provider) {
-            "openai" -> setOf("api_key", "oauth")
-            "claude" -> setOf("api_key", "setup_token")
-            else -> setOf("api_key")
-        }
+        val allowedAuthTypes = providerById(provider).authTypes.toSet()
         if (authType !in allowedAuthTypes) {
             return jsonResponse(400, mapOf(
                 "error" to "Invalid authType '$authType' for provider '$provider' " +

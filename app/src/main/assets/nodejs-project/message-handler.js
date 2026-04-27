@@ -624,57 +624,27 @@ async function handleProviderCommand(chatId, args, messageId = null) {
         return `❌ Cannot switch to \`custom\` — no model configured. Run \`/model <id>\` first, or set a model in Settings > AI Provider > Custom.`;
     }
 
-    // BAT-509 Part 1: persist provider+authType via bridge POST
-    // /config/save-provider. Kotlin atomically: validates, computes the
-    // effective model (substitutes provider default if current model is
-    // invalid for the new provider+auth pair), writes prefs, broadcasts
-    // ACTION_CONFIG_CHANGED, AND schedules the service restart. The
-    // bridge response includes the chosen model so we can show the user
-    // what they're switching to before the restart even fires.
-    //
-    // This replaces the prior flow of (overlay write → /service/restart
-    // → revert-overlay-on-failure). Atomic-or-nothing: if the bridge
-    // call rejects we never wrote any state, so there's nothing to revert.
-    let bridgeRes;
-    try {
-        bridgeRes = await deps.androidBridgeCall(
-            '/config/save-provider',
-            { provider: newProvider, authType: newAuthType },
-            5000,
-        );
-    } catch (e) {
-        deps.log(`[/provider] bridge /config/save-provider failed: ${e && e.message}`, 'ERROR');
-        return `❌ Couldn't switch — bridge unavailable (${e && e.message})`;
-    }
-    if (!bridgeRes || bridgeRes.error) {
-        const reason = (bridgeRes && bridgeRes.error) || 'unknown error';
-        deps.log(`[/provider] bridge /config/save-provider rejected: ${reason}`, 'ERROR');
-        return `❌ Couldn't switch — ${reason}`;
-    }
-    if (bridgeRes.ok !== true) {
-        deps.log(`[/provider] bridge /config/save-provider returned unexpected shape`, 'ERROR');
-        return `❌ Couldn't switch — bridge response invalid`;
-    }
-
-    // Kotlin's chosen model — may differ from previewModel if the prior
-    // model carried over (validated by isModelValidForProvider) or if
-    // Kotlin substituted the provider default.
-    const effectiveModel = (typeof bridgeRes.model === 'string' && bridgeRes.model.trim())
-        || previewModel
-        || state.model
-        || '';
-
-    deps.log(`[/provider] Switching to ${newProvider}/${newAuthType} (model=${effectiveModel}); restart scheduled by bridge`, 'INFO');
+    // Compute the model the user is switching TO so we can preview it in
+    // the TG reply BEFORE triggering the restart. Mirrors Kotlin's logic
+    // in handleConfigSaveProvider: if the current model is valid for the
+    // new (provider, authType) pair, carry it over; otherwise substitute
+    // the provider default. modelCatalog is the Node-side mirror of
+    // Providers.kt so this preview matches what Kotlin will persist.
+    const currentValidForNew = state.model
+        && modelCatalog.validateModelForProvider(newProvider, newAuthType, state.model).ok;
+    const previewEffectiveModel = currentValidForNew
+        ? state.model
+        : (previewModel || state.model || '');
 
     const displayProv = modelCatalog.displayNameForProvider(newProvider);
     const authSuffix = authTypes.length > 1 ? ` (${newAuthType})` : '';
-    const modelLine = effectiveModel ? `\nModel: \`${effectiveModel}\`` : '';
+    const modelLine = previewEffectiveModel ? `\nModel: \`${previewEffectiveModel}\`` : '';
     // For freeform providers (currently just custom) where the carried
     // model may be wrong for the user's endpoint (e.g. switching from
     // OpenAI gpt-5.5 to a local Ollama), surface a hint so they can
     // catch mismatches before the first request fails.
-    const modelHint = effectiveModel
-        ? (newProvider === 'custom'
+    const modelHint = previewEffectiveModel
+        ? (newProvider === 'custom' && !previewModel
             ? `\n_Carried over from your previous provider — run_ \`/model <id>\` _after restart if it's not valid for your custom endpoint._`
             : '')
         : '\nAfter restart, set a model with `/model <id>`.';
@@ -685,12 +655,71 @@ async function handleProviderCommand(chatId, args, messageId = null) {
     // denied cleanly (see flag declaration for why).
     _restartPending = true;
 
+    // BAT-509 Part 1, R4 fix: send the Telegram reply FIRST, awaiting
+    // its completion, BEFORE triggering the bridge call that schedules
+    // the service stop. The bridge schedules a 500ms postDelayed stop
+    // and ~2500ms AlarmManager restart from the moment it returns 200;
+    // if we called bridge first and fire-and-forgot sendMessage,
+    // mobile-network latency on the Telegram round-trip could exceed
+    // the stop window and the user would never see the confirmation.
+    // Order now matches the pre-Part-1 flow's UX guarantee.
+    try {
+        await deps.sendMessage(chatId, reply, messageId);
+    } catch (err) {
+        // sendMessage failed — abort the restart. Better to leave the
+        // user on the OLD provider with a hint to retry than to silently
+        // restart into a new provider they never confirmed.
+        _restartPending = false;
+        deps.log(`[/provider] sendMessage failed; aborting restart: ${err && err.message}`, 'ERROR');
+        return `❌ Telegram is unreachable right now — switch aborted. Try again in a moment.`;
+    }
+
+    // Telegram has acked. Now persist + restart via bridge. Kotlin
+    // atomically: validates, computes the effective model (substitutes
+    // provider default if current model is invalid for the new pair),
+    // writes prefs, broadcasts ACTION_CONFIG_CHANGED, schedules
+    // AlarmManager restart synchronously, and posts the stopService()
+    // delayed by RESTART_DELAY_MS so the HTTP response can flush.
+    let bridgeRes;
+    try {
+        bridgeRes = await deps.androidBridgeCall(
+            '/config/save-provider',
+            { provider: newProvider, authType: newAuthType },
+            5000,
+        );
+    } catch (e) {
+        _restartPending = false;
+        deps.log(`[/provider] bridge /config/save-provider failed: ${e && e.message}`, 'ERROR');
+        deps.sendMessage(
+            chatId,
+            `⚠️ Couldn't trigger the switch — bridge unavailable (${e && e.message}). Restart the SeekerClaw app and try again.`,
+            messageId,
+        ).catch((e2) => deps.log(`[/provider] follow-up sendMessage failed: ${e2 && e2.message}`, 'WARN'));
+        return { __handled: true };
+    }
+    if (!bridgeRes || bridgeRes.error || bridgeRes.ok !== true) {
+        _restartPending = false;
+        const reason = (bridgeRes && bridgeRes.error) || 'unexpected response';
+        deps.log(`[/provider] bridge /config/save-provider rejected: ${reason}`, 'ERROR');
+        deps.sendMessage(
+            chatId,
+            `⚠️ Couldn't apply the switch — ${reason}. Your previous provider/model is still active.`,
+            messageId,
+        ).catch((e2) => deps.log(`[/provider] follow-up sendMessage failed: ${e2 && e2.message}`, 'WARN'));
+        return { __handled: true };
+    }
+
+    deps.log(
+        `[/provider] Switched to ${newProvider}/${newAuthType} (effective model=${bridgeRes.model || previewEffectiveModel}); restart scheduled by bridge`,
+        'INFO',
+    );
+
     // Safety net: if the restart somehow fails to kill this process
     // (Kotlin exception during stop, AlarmManager rejected, OS denied),
     // we'd otherwise be stuck with `_restartPending = true` forever and
     // every subsequent /model and /provider command would be rejected
     // until the user reboots the app manually. Bridge response includes
-    // restartDelayMs; we wait that long + a generous 10s safety margin,
+    // restartDelayMs; wait that long + a generous 10s safety margin,
     // then assume the restart didn't happen and clear the flag so the
     // user can retry. If the restart DID happen, this setTimeout dies
     // with the process — no harm.
@@ -707,15 +736,6 @@ async function handleProviderCommand(chatId, args, messageId = null) {
             );
         }
     }, restartBudgetMs).unref?.();
-
-    // Send the TG reply. The bridge has already scheduled the restart on
-    // its side (AlarmManager + postDelayed stop). If sendMessage fails,
-    // the restart will still happen — the user just doesn't get the
-    // friendly preview. The prior flow's revert dance is no longer
-    // needed because the prefs write was atomic with the restart schedule.
-    deps.sendMessage(chatId, reply, messageId).catch((err) => {
-        deps.log(`[/provider] sendMessage failed; restart still pending: ${err && err.message}`, 'WARN');
-    });
 
     // We've handled the reply ourselves — tell the dispatcher not to send it again.
     return { __handled: true };
