@@ -418,12 +418,23 @@ class AndroidBridge(
             val current = ConfigManager.loadConfig(context)
                 ?: return jsonResponse(500, mapOf("error" to "config not loaded"))
 
-            // Validate against current provider+authType. Freeform providers
-            // (openrouter, custom) accept any non-blank model — the
-            // isModelValidForProvider helper handles that distinction.
-            if (!ConfigManager.isModelValidForProvider(current.provider, current.authType, model)) {
+            // Validate against the EFFECTIVE auth type Node will actually
+            // run with — not the persisted intent. For OpenAI's "oauth
+            // selected, token blank" case, writeConfigJson downgrades to
+            // api_key so Node startup doesn't crash. Without using the
+            // same downgrade rule here, this endpoint would happily accept
+            // an oauth-only model (gpt-5.4-mini) while Node is running
+            // api_key — every chat() call would 422 with an opaque error.
+            // Copilot R7 caught this gap. effectiveAuthTypeForRuntime is
+            // the single source of truth for the downgrade rule, also
+            // used by writeConfigJson.
+            val effectiveAuth = ConfigManager.effectiveAuthTypeForRuntime(current)
+
+            // Freeform providers (openrouter, custom) accept any non-blank
+            // model — isModelValidForProvider handles that distinction.
+            if (!ConfigManager.isModelValidForProvider(current.provider, effectiveAuth, model)) {
                 return jsonResponse(400, mapOf(
-                    "error" to "Model '$model' is not valid for ${current.provider}/${current.authType}"
+                    "error" to "Model '$model' is not valid for ${current.provider}/$effectiveAuth"
                 ))
             }
 

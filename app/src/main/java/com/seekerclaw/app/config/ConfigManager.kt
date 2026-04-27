@@ -715,7 +715,8 @@ object ConfigManager {
             legacyOverlayWarnedThisProcess = true
             LogCollector.append(
                 "[Config] Legacy overlay fields detected (${staleFields.joinToString(",")}) — " +
-                    "next saveConfig will migrate. Source of truth is now SharedPreferences.",
+                    "next writeAgentSettingsJson call will strip them (fires on Settings UI " +
+                    "saves AND service start). Source of truth is now SharedPreferences.",
                 LogLevel.WARN,
             )
         }
@@ -724,6 +725,38 @@ object ConfigManager {
 
     @Volatile
     private var legacyOverlayWarnedThisProcess = false
+
+    /**
+     * The authType Node will actually run with after the next service
+     * start, given a particular [AppConfig]. Mirrors the inline downgrade
+     * in [writeConfigJson]: OpenAI's "oauth selected but token blank" is
+     * a transient pre-sign-in state — writing `authType=oauth` to
+     * `config.json` would crash Node's strict startup validation, so we
+     * downgrade to `api_key` for the runtime view while leaving the
+     * user's intended choice in SharedPreferences.
+     *
+     * Used by:
+     *   * [writeConfigJson] — original site, kept as the source of
+     *     truth for the downgrade rule.
+     *   * `AndroidBridge.handleConfigSaveModel` — to validate models
+     *     against the auth mode Node will actually accept, not the
+     *     persisted intent. Without this, a user with `provider=openai
+     *     authType=oauth` and a blank token could save `gpt-5.4-mini`
+     *     (oauth-only model), then every chat would 422 because Node is
+     *     actually running api_key. Copilot R7 caught this gap.
+     *
+     * Extracted so the rule lives in exactly one place. If the downgrade
+     * logic ever expands (new auth types, new providers), update here
+     * and every call site stays correct.
+     */
+    fun effectiveAuthTypeForRuntime(config: AppConfig): String {
+        if (
+            config.provider == "openai" &&
+            config.authType == "oauth" &&
+            config.openaiOAuthToken.isBlank()
+        ) return "api_key"
+        return config.authType
+    }
 
     /**
      * Check whether a given model ID is valid for a provider+auth pair.
@@ -749,6 +782,14 @@ object ConfigManager {
      * landing (provider=openai, authType=oauth, model=gpt-5.4-mini) —
      * which the model-catalog allowlist rejects — into prefs, where it
      * would crash the next chat() with an opaque API error.
+     *
+     * Bridge callers that validate a model against the *runtime*
+     * effective auth type (rather than the persisted intent) should
+     * use `effectiveAuthTypeForRuntime(config)` to derive `authType`.
+     * The OpenAI oauth-token-blank downgrade case otherwise produces a
+     * persisted-vs-runtime mismatch where this function happily accepts
+     * an oauth-only model that Node will reject at request time.
+     * (Copilot R7.)
      */
     fun isModelValidForProvider(
         providerId: String,
@@ -1011,13 +1052,10 @@ object ConfigManager {
             // For OpenAI: if user has selected oauth but hasn't completed sign-in (token
             // is blank), write api_key to the workspace JSON so Node's strict validation
             // doesn't crash on startup. The UI keeps the user's intended "oauth" choice
-            // in SharedPreferences so the OAuth section remains visible.
-            val effectiveAuthType = if (
-                config.provider == "openai" &&
-                config.authType == "oauth" &&
-                config.openaiOAuthToken.isBlank()
-            ) "api_key" else config.authType
-            put("authType", effectiveAuthType)
+            // in SharedPreferences so the OAuth section remains visible. Logic shared
+            // with effectiveAuthTypeForRuntime so any future auth-downgrade rule (added
+            // there) automatically applies here too.
+            put("authType", effectiveAuthTypeForRuntime(config))
             put("provider", config.provider)
             put("model", config.model)
             put("agentName", config.agentName)
