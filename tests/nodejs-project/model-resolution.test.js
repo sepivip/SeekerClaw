@@ -239,9 +239,24 @@ t('config.js resolveActiveModel must NOT read agent_settings.json for model (sin
     // Allow agent_settings.json reads for OTHER fields (apiKeys, heartbeat)
     // by checking that resolveActiveModel's body specifically doesn't
     // touch the file. Extract the function body then check.
-    const fnMatch = src.match(/async\s+function\s+resolveActiveModel\s*\([^)]*\)\s*\{([\s\S]*?)\n\}/);
-    assert.ok(fnMatch, 'could not locate resolveActiveModel function body');
-    const body = fnMatch[1];
+    //
+    // The body extractor uses balanced-brace counting rather than regex so
+    // it survives reformatting (indented `}`, trailing whitespace, comments
+    // before the close, etc.) — Copilot R3 flagged the original regex as
+    // fragile because `\n\}` required the closing brace at column 0.
+    const declMatch = src.match(/async\s+function\s+resolveActiveModel\s*\([^)]*\)\s*\{/);
+    assert.ok(declMatch, 'could not locate resolveActiveModel declaration');
+    const bodyStart = declMatch.index + declMatch[0].length;
+    let depth = 1;
+    let bodyEnd = bodyStart;
+    while (depth > 0 && bodyEnd < src.length) {
+        const ch = src[bodyEnd];
+        if (ch === '{') depth++;
+        else if (ch === '}') depth--;
+        bodyEnd++;
+    }
+    assert.ok(depth === 0, 'unbalanced braces extracting resolveActiveModel body');
+    const body = src.slice(bodyStart, bodyEnd - 1);
     assert.ok(!/agent_settings\.json/.test(body),
         'resolveActiveModel body must NOT read agent_settings.json — provider/authType/model are bridge-mediated now');
     assert.ok(!/readFileSync|existsSync/.test(body),

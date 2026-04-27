@@ -685,12 +685,34 @@ async function handleProviderCommand(chatId, args, messageId = null) {
     // denied cleanly (see flag declaration for why).
     _restartPending = true;
 
-    // Send the TG reply. The bridge has ALREADY scheduled the restart on
-    // its side (postDelayed → AlarmManager); no follow-up bridge call
-    // needed. If sendMessage fails, the restart will still happen — the
-    // user just doesn't get the friendly preview. That's an acceptable
-    // degradation; the prior flow's revert dance is no longer needed
-    // because the prefs write was atomic with the restart schedule.
+    // Safety net: if the restart somehow fails to kill this process
+    // (Kotlin exception during stop, AlarmManager rejected, OS denied),
+    // we'd otherwise be stuck with `_restartPending = true` forever and
+    // every subsequent /model and /provider command would be rejected
+    // until the user reboots the app manually. Bridge response includes
+    // restartDelayMs; we wait that long + a generous 10s safety margin,
+    // then assume the restart didn't happen and clear the flag so the
+    // user can retry. If the restart DID happen, this setTimeout dies
+    // with the process — no harm.
+    // Copilot R3 flagged this hang scenario.
+    const restartBudgetMs = (typeof bridgeRes.restartDelayMs === 'number'
+        ? bridgeRes.restartDelayMs
+        : 2500) + 10_000;
+    setTimeout(() => {
+        if (_restartPending) {
+            _restartPending = false;
+            deps.log(
+                `[/provider] restart did not complete within ${restartBudgetMs}ms — clearing _restartPending so commands work again`,
+                'WARN',
+            );
+        }
+    }, restartBudgetMs).unref?.();
+
+    // Send the TG reply. The bridge has already scheduled the restart on
+    // its side (AlarmManager + postDelayed stop). If sendMessage fails,
+    // the restart will still happen — the user just doesn't get the
+    // friendly preview. The prior flow's revert dance is no longer
+    // needed because the prefs write was atomic with the restart schedule.
     deps.sendMessage(chatId, reply, messageId).catch((err) => {
         deps.log(`[/provider] sendMessage failed; restart still pending: ${err && err.message}`, 'WARN');
     });

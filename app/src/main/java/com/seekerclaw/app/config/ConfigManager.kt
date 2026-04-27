@@ -393,6 +393,41 @@ object ConfigManager {
     }
 
     /**
+     * BAT-509 Part 1 — lightweight runtime-only config read for the
+     * AndroidBridge `/config/runtime` hot path.
+     *
+     * `loadConfig` decrypts every encrypted field (Anthropic key, OAuth
+     * tokens, search-provider keys, etc.) and runs the legacy reconcile
+     * shim. None of that is needed for the per-chat-turn bridge call
+     * that just reads `provider`/`model` for `resolveActiveModel`. This
+     * method bypasses Keystore entirely — only plain-string SharedPrefs
+     * reads. ~10× cheaper than `loadConfig` and zero risk of Keystore
+     * exceptions interrupting a hot path.
+     *
+     * `authType` is intentionally NOT exposed here. Per Copilot R3:
+     * Kotlin's `writeConfigJson` can DOWNGRADE the persisted authType
+     * before Node boots (e.g. `oauth` selected with blank token →
+     * `api_key` written to config.json so Node's strict validation
+     * doesn't crash). Returning the persisted intent across the bridge
+     * could mislead callers into showing a model allowlist that
+     * disagrees with what Node will actually accept. Node's
+     * `resolveActiveProviderState` derives authType from its own
+     * runtime startup const (`OPENAI_AUTH_TYPE` / `AUTH_TYPE`) instead.
+     */
+    data class RuntimeConfig(val provider: String, val model: String) {
+        companion object { val EMPTY = RuntimeConfig(provider = "", model = "") }
+    }
+
+    fun loadRuntimeOnly(context: Context): RuntimeConfig {
+        if (!isSetupComplete(context)) return RuntimeConfig.EMPTY
+        val p = prefs(context)
+        return RuntimeConfig(
+            provider = p.getString(KEY_PROVIDER, "claude") ?: "claude",
+            model = p.getString(KEY_MODEL, "") ?: "",
+        )
+    }
+
+    /**
      * Loads whatever config fields are currently in SharedPreferences regardless
      * of whether the setup flow has completed. Use this in places that must work
      * mid-onboarding — specifically, the OpenAI OAuth controller (needs to show

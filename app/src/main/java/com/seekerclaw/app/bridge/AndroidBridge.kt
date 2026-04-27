@@ -234,39 +234,41 @@ class AndroidBridge(
     // ==================== Config runtime (BAT-509 Part 1) ====================
 
     /**
-     * Returns the currently-active runtime state — provider, authType, model
-     * — read fresh from SharedPreferences. Node calls this on every chat()
-     * turn from resolveActiveModel() so any change Kotlin made (Settings UI
+     * Returns the currently-active runtime state (provider + model) read
+     * fresh from SharedPreferences. Node calls this on every chat() turn
+     * from `resolveActiveModel()` so any Kotlin-side change (Settings UI
      * save, Telegram /provider via /config/save-provider, OAuth flow) is
-     * picked up without the agent_settings.json overlay file that was the
-     * single point of contention before this refactor.
+     * picked up without the agent_settings.json overlay file that was
+     * the single point of contention before BAT-509.
      *
-     * Why no secrets: this endpoint is hot (per-turn) and reasonable to
-     * call from any tool that wants to introspect the active config. It
-     * intentionally returns ONLY non-sensitive runtime metadata. For
-     * credential PRESENCE checks, use /config/credentials. For raw key
-     * material, Node reads from config.json at startup.
+     * Performance: uses `ConfigManager.loadRuntimeOnly` which bypasses
+     * Keystore decryption — only two plain-string SharedPrefs reads.
+     * Critical because this is a per-chat-turn hot path. (Copilot R3
+     * flagged the original `loadConfig` call as too heavy.)
      *
-     * On config-load failure (Keystore unavailable, prefs unreadable),
-     * returns ok=true with an empty runtime object so Node falls back
-     * to its startup MODEL const. This matches Node's defensive pattern
-     * of "bridge unreachable → use startup config" — degraded but never
-     * crashed.
+     * Security: this endpoint is hot and callable from any Node-side
+     * tool. It intentionally returns ONLY non-sensitive runtime metadata.
+     * For credential PRESENCE checks, see `/config/credentials`. For raw
+     * key material, Node reads from `config.json` at startup.
+     *
+     * `authType` is intentionally OMITTED — see `loadRuntimeOnly` for
+     * why (persisted authType may differ from runtime effective authType
+     * when Kotlin's writeConfigJson downgrades oauth → api_key on a
+     * blank-token state).
+     *
+     * On read failure / pre-setup state, returns ok=true with an empty
+     * runtime object so Node falls back to its startup MODEL const.
+     * Matches Node's defensive pattern of "bridge unreachable → use
+     * startup config" — degraded but never crashed.
      */
     private fun handleConfigRuntime(): Response {
-        val config = ConfigManager.loadConfig(context)
-        if (config == null) {
+        val rt = ConfigManager.loadRuntimeOnly(context)
+        if (rt.provider.isBlank() && rt.model.isBlank()) {
             return jsonResponse(200, mapOf("ok" to true, "runtime" to emptyMap<String, String>()))
         }
-        // For OpenAI, the displayable authType is whatever's persisted; for
-        // other providers it's the single value supported by that provider.
-        // Node's resolveActiveModel only consumes provider + model directly,
-        // but the field is exposed here for future Node-side surfaces (e.g.
-        // /status command displaying full runtime state).
         val runtime = mapOf(
-            "provider" to config.provider,
-            "authType" to config.authType,
-            "model" to config.model,
+            "provider" to rt.provider,
+            "model" to rt.model,
         )
         return jsonResponse(200, mapOf("ok" to true, "runtime" to runtime))
     }
@@ -337,16 +339,31 @@ class AndroidBridge(
                 )
             )
 
-            // Schedule clean restart (same dance as /service/restart — see
-            // that handler's comment for why we use stop+AlarmManager rather
-            // than raw Process.killProcess).
+            // Schedule the AlarmManager restart SYNCHRONOUSLY, before
+            // returning HTTP 200. The actual stopService() is still
+            // postDelayed (so the HTTP response can flush before the
+            // bridge dies along with the process), but if that postDelayed
+            // never fires for any reason — Looper queue starvation, app
+            // force-quit, etc. — the AlarmManager has already accepted
+            // our restart, so the new service will start as scheduled.
+            //
+            // Idempotency: AlarmManager.setAndAllowWhileIdle replaces any
+            // pending alarm with the same request code. Calling it before
+            // the postDelayed handler is safe — at worst we reschedule
+            // once at the same target time when the postDelayed eventually
+            // calls scheduleServiceRestart again. (We don't, because we
+            // moved the call out of the postDelayed; the postDelayed only
+            // does the stop() now.)
+            //
+            // Copilot R3 flagged the original ordering: success returned
+            // before restart was scheduled.
+            Log.i(TAG, "[Bridge] /config/save-provider → scheduling restart for $provider/$authType")
+            scheduleServiceRestart(RESTART_DELAY_MS + SERVICE_RESTART_DELAY_MS)
             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
                 try {
-                    Log.i(TAG, "[Bridge] /config/save-provider → scheduling restart for $provider/$authType")
-                    scheduleServiceRestart(SERVICE_RESTART_DELAY_MS)
                     SeekerClawService.stop(context)
                 } catch (e: Exception) {
-                    Log.e(TAG, "[Bridge] /config/save-provider restart failed: ${e.message}", e)
+                    Log.e(TAG, "[Bridge] /config/save-provider stop failed: ${e.message}", e)
                 }
             }, RESTART_DELAY_MS)
 

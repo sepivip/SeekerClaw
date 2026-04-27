@@ -30,9 +30,14 @@ const handlers = {
         let totalMessages = 0;
         conversations.forEach(conv => totalMessages += conv.length);
 
+        // resolveActiveModel is async (bridge call) since BAT-509 Part 1 —
+        // resolve once before building the result object so the field
+        // contains a string, not a Promise.
+        const activeModel = await resolveActiveModel();
+
         const result = {
             agent: AGENT_NAME,
-            model: resolveActiveModel(),
+            model: activeModel,
             uptime: {
                 seconds: uptime,
                 formatted: `${Math.floor(uptime / 3600)}h ${Math.floor((uptime % 3600) / 60)}m ${uptime % 60}s`
