@@ -59,7 +59,7 @@ import androidx.compose.ui.unit.sp
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.config.modelDisplayName
 import com.seekerclaw.app.config.providerById
-import com.seekerclaw.app.service.OpenClawService
+import com.seekerclaw.app.service.SeekerClawService
 import com.seekerclaw.app.ui.components.DashboardActionButton
 import com.seekerclaw.app.ui.components.DashboardActionState
 import com.seekerclaw.app.ui.components.WarningButton
@@ -729,13 +729,13 @@ fun DashboardScreen(
             onDeploy = {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 Analytics.serviceStarted(1)
-                OpenClawService.start(context)
+                SeekerClawService.start(context)
                 ConfigManager.markFirstDeploymentDone(context)
             },
             onStop = {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 Analytics.serviceStopped(uptime / 60000)
-                OpenClawService.stop(context)
+                SeekerClawService.stop(context)
             },
         )
         if (!deployEnabled) {

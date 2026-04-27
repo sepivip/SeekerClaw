@@ -4,7 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import com.seekerclaw.app.config.ConfigManager
-import com.seekerclaw.app.service.OpenClawService
+import com.seekerclaw.app.service.SeekerClawService
 import com.seekerclaw.app.util.LogCollector
 
 class BootReceiver : BroadcastReceiver() {
@@ -33,6 +33,6 @@ class BootReceiver : BroadcastReceiver() {
         }
 
         LogCollector.append("[Boot] Auto-starting Claw Engine...")
-        OpenClawService.start(context)
+        SeekerClawService.start(context)
     }
 }

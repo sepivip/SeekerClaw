@@ -29,7 +29,7 @@ import java.io.File
 import java.io.RandomAccessFile
 import java.util.UUID
 
-class OpenClawService : Service() {
+class SeekerClawService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var screenWakeLock: PowerManager.WakeLock? = null
     private var uptimeJob: Job? = null
@@ -319,7 +319,7 @@ class OpenClawService : Service() {
 
         fun start(context: Context) {
             restartHandler.removeCallbacksAndMessages(null)
-            val intent = Intent(context, OpenClawService::class.java)
+            val intent = Intent(context, SeekerClawService::class.java)
             context.startForegroundService(intent)
         }
 
@@ -333,7 +333,7 @@ class OpenClawService : Service() {
                 }
                 ServiceState.updateUptime(0)
             }
-            val intent = Intent(context, OpenClawService::class.java)
+            val intent = Intent(context, SeekerClawService::class.java)
             context.stopService(intent)
         }
 

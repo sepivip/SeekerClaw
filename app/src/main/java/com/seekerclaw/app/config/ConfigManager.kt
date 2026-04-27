@@ -1132,7 +1132,7 @@ object ConfigManager {
             // from Keystore on the same thread. Capped at 256 keys × 8 KB; typical
             // real-world size is a few keys × a few hundred bytes, so total work is
             // small. If `writeConfigJson` is ever migrated off the main thread,
-            // this block moves with it — see service/OpenClawService.kt caller.
+            // this block moves with it — see service/SeekerClawService.kt caller.
             val envVars = loadEnvVars(context)
             if (envVars.isNotEmpty()) {
                 val envObj = JSONObject()

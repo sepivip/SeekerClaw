@@ -663,7 +663,7 @@ Add corresponding encrypted storage keys and save/load methods following the sam
 
 - [ ] **Step 3: Generate Discord fields in config.json**
 
-In the config.json generation code (ConfigManager or OpenClawService), add the Discord fields:
+In the config.json generation code (ConfigManager or SeekerClawService), add the Discord fields:
 
 ```kotlin
 put("discordBotToken", config.discordBotToken)

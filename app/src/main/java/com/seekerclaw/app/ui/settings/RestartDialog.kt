@@ -9,7 +9,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
-import com.seekerclaw.app.service.OpenClawService
+import com.seekerclaw.app.service.SeekerClawService
 import com.seekerclaw.app.ui.theme.RethinkSans
 import com.seekerclaw.app.ui.theme.SeekerClawColors
 
@@ -38,7 +38,7 @@ fun RestartDialog(
         },
         confirmButton = {
             TextButton(onClick = {
-                OpenClawService.restart(context)
+                SeekerClawService.restart(context)
                 onDismiss()
                 Toast.makeText(context, "Agent restarting\u2026", Toast.LENGTH_SHORT).show()
             }) {

@@ -1457,7 +1457,7 @@ await loadToolGuardConfig();
 ```
 
 **Important timing:** `loadToolGuardConfig()` must run AFTER the AndroidBridge is
-available (bridge starts in OpenClawService.kt before Node.js). The bridge port
+available (bridge starts in SeekerClawService.kt before Node.js). The bridge port
 (8765) and auth token are passed via config.json at startup.
 
 #### `claude.js` — Confirmation Gate (line ~1616)
@@ -1791,7 +1791,7 @@ MCP patterns + rate limits.
 
 **Mitigation:**
 - Fallback to hardcoded defaults is already implemented (see 3.1)
-- OpenClawService starts bridge BEFORE Node.js (existing behavior)
+- SeekerClawService starts bridge BEFORE Node.js (existing behavior)
 - Add retry with backoff: try bridge 3x at 1s intervals before falling back
 - Log clearly when fallback is used so users can diagnose
 

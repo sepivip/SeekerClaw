@@ -51,7 +51,7 @@
         </activity>
 
         <service
-            android:name=".service.OpenClawService"
+            android:name=".service.SeekerClawService"
             android:process=":node"
             android:foregroundServiceType="specialUse"
             android:exported="false" />

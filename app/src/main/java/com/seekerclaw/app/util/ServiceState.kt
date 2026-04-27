@@ -90,7 +90,7 @@ object ServiceState {
     @Volatile private var lastLoggedStale: Boolean? = null
 
     // Per-boot bridge auth token — persisted to file for cross-process access.
-    // Set by OpenClawService (:node process), read by UI (main process) via polling.
+    // Set by SeekerClawService (:node process), read by UI (main process) via polling.
     @Volatile
     var bridgeToken: String? = null
         private set
@@ -119,7 +119,7 @@ object ServiceState {
 
     /**
      * Persist the bridge auth token to a file so the UI process can read it.
-     * Called by OpenClawService in the :node process after generating the token.
+     * Called by SeekerClawService in the :node process after generating the token.
      */
     fun writeBridgeToken(token: String) {
         bridgeToken = token
