@@ -269,9 +269,10 @@ class LogCollectorTest {
     fun `concurrent readNewFromFile invocations don't duplicate entries`() = runBlocking {
         // Simulates FileObserver's MODIFY + CLOSE_WRITE dual-dispatch:
         // multiple coroutines all see the file in the same state and
-        // race to consume it. The Mutex must ensure exactly one of
-        // them does the work and the others find lastReadPosition
-        // already advanced.
+        // race to consume it. synchronized(logsLock) must ensure exactly
+        // one of them does the work and the others find lastReadPosition
+        // already advanced. (R5 consolidated to synchronized; the
+        // production code no longer uses kotlinx.coroutines.Mutex.)
         val tmp = File.createTempFile("bat518-concurrent", ".test")
         try {
             LogCollector.setLogFileForTest(tmp)

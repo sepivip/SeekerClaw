@@ -108,6 +108,9 @@ object LogCollector {
      * subsequent append from another process).
      */
     fun startWatching(context: Context) {
+        // Sync setup — set logFile reference, no I/O. (R4 lesson: don't
+        // do disk reads on the caller thread; Application.onCreate is
+        // main thread.)
         init(context)
 
         // Guard: skip if observer already attached (mirrors the BAT-217 fix).
@@ -116,15 +119,21 @@ object LogCollector {
             return
         }
 
-        // Read existing logs from file so the UI has data immediately
-        readAllFromFile()
-        Log.d(TAG, "startWatching: loaded ${_logs.value.size} entries from file; attaching FileObserver")
-
         val parent = logFile?.parentFile ?: run {
             Log.w(TAG, "startWatching: no parent dir, skipping FileObserver")
             return
         }
 
+        // Attach observer FIRST, before the initial read (Copilot R6).
+        // If we read first and a write lands between read-completion and
+        // attach, that write's MODIFY/CLOSE_WRITE event fires before the
+        // observer exists — so it's not delivered, and lastReadPosition
+        // is set to the pre-write length. The missed bytes wouldn't be
+        // forwarded until the NEXT write triggers an event. Attaching
+        // first means any write during the catch-up read window fires
+        // an event we'll see (idempotent — observer-triggered read sees
+        // lastReadPosition was already advanced and is a no-op).
+        //
         // Watch the parent dir, dispatch on `service_logs` filename. Mask
         // covers append-style writes (MODIFY / CLOSE_WRITE), atomic-rename
         // writes (MOVED_TO), and re-creation after clear() (CREATE).
@@ -137,14 +146,22 @@ object LogCollector {
             override fun onEvent(event: Int, path: String?) {
                 if (path == LOG_FILE_NAME) {
                     // Dispatch off the FileObserver thread. readNewFromFile
-                    // serializes via readMutex internally so concurrent
-                    // dispatches (FileObserver often emits MODIFY +
-                    // CLOSE_WRITE for one write) don't double-read the
-                    // same byte range.
+                    // serializes via synchronized(logsLock) internally so
+                    // concurrent dispatches (FileObserver often emits
+                    // MODIFY + CLOSE_WRITE for one write) don't double-
+                    // read the same byte range. (R5 consolidated locks.)
                     scope.launch { readNewFromFile() }
                 }
             }
         }.also { it.startWatching() }
+
+        // Initial catch-up read on Dispatchers.IO so the main-thread
+        // caller (Application.onCreate) doesn't block on disk I/O.
+        // _logs StateFlow holds emptyList until this lands; UI screens
+        // that compose before see no log entries briefly. (Copilot R6
+        // — this was synchronous on main thread before.)
+        scope.launch { readAllFromFile() }
+        Log.d(TAG, "startWatching: FileObserver attached; initial read dispatched")
     }
 
     /**
@@ -319,12 +336,14 @@ object LogCollector {
         logFile = file
     }
 
-    /** TEST ONLY: reset the singleton's offset + buffer between tests. */
+    /** TEST ONLY: reset the singleton's offset + buffer between tests.
+     *  Must reset both fields under `logsLock` to match the production
+     *  contract — production reads/writes always hold the lock. (Copilot R6.) */
     internal fun resetForTest() {
         synchronized(logsLock) {
             _logs.value = emptyList()
+            lastReadPosition = 0L
         }
-        lastReadPosition = 0L
     }
 
     /** TEST ONLY: invoke the offset-based reader directly (it's `private` for production use). */
