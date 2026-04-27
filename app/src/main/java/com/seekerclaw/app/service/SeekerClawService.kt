@@ -26,6 +26,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.util.UUID
 
@@ -35,9 +37,19 @@ class SeekerClawService : Service() {
     private var uptimeJob: Job? = null
     // BAT-518: replaced nodeDebugJob (500ms polling coroutine) with
     // FileObserver. lastPos tracks bytes already forwarded to LogCollector
-    // so each event reads only new bytes.
+    // so each event reads only new bytes. nodeDebugMutex serializes
+    // overlapping reads (FileObserver often emits MODIFY + CLOSE_WRITE
+    // for one write; without the mutex both dispatches would read the
+    // same byte range and double-forward — Copilot R1).
     private var nodeDebugObserver: FileObserver? = null
     @Volatile private var nodeDebugLastPos = 0L
+    private val nodeDebugMutex = Mutex()
+    // Per-read cap to prevent OOM if events are batched (e.g. Doze mode
+    // releases queued events at once) or if Node writes a huge burst.
+    // Larger than LogCollector's budget because Node debug writes can
+    // include verbose tool-call traces. Anything over the cap is read
+    // in chunks across successive events.
+    private val nodeDebugMaxDeltaBytes = 256 * 1024L  // 256 KB
     private val scope = CoroutineScope(Dispatchers.IO)
     private var startTimeMs = 0L
     private var androidBridge: AndroidBridge? = null
@@ -45,42 +57,70 @@ class SeekerClawService : Service() {
     /**
      * Read any bytes appended to `node_debug.log` since `nodeDebugLastPos`,
      * parse each line's `LEVEL|message` prefix, and forward to LogCollector.
-     * Idempotent: if multiple FileObserver events fire for one write, only
-     * the first does work; subsequent calls find `lastPos == file.length`
-     * and return immediately. Called from the FileObserver dispatcher.
+     *
+     * Concurrency: serialized via `nodeDebugMutex`. FileObserver typically
+     * delivers multiple events for a single write (MODIFY + CLOSE_WRITE);
+     * without the mutex, two dispatches would read overlapping byte ranges
+     * and double-forward each line. Idempotent on lastPos: once a range
+     * is forwarded, subsequent calls find `lastPos == file.length` and
+     * return cleanly. (Copilot R1.)
+     *
+     * OOM protection: caps the per-call read at `nodeDebugMaxDeltaBytes`.
+     * If Node wrote a huge burst (or events were coalesced during Doze),
+     * we read up to the cap and let the next event drain the rest. Avoids
+     * the toInt() overflow + giant ByteArray allocation that the original
+     * unbounded read would hit on a large delta. (Copilot R1.)
      */
-    private fun forwardNewNodeDebugLines(debugLogFile: java.io.File) {
-        try {
-            if (!debugLogFile.exists()) return
-            val length = debugLogFile.length()
-            if (length <= nodeDebugLastPos) return
-            val newBytes = java.io.RandomAccessFile(debugLogFile, "r").use { raf ->
-                raf.seek(nodeDebugLastPos)
-                ByteArray((length - nodeDebugLastPos).toInt()).also { raf.readFully(it) }
-            }
-            nodeDebugLastPos = length
-            val lines = String(newBytes).lines().filter { it.isNotBlank() }
-            for (line in lines) {
-                val pipeIdx = line.indexOf('|')
-                val (level, message) = if (pipeIdx > 0) {
-                    val lvl = line.substring(0, pipeIdx)
-                    val msg = line.substring(pipeIdx + 1)
-                    val parsed = when (lvl) {
-                        "ERROR" -> LogLevel.ERROR
-                        "WARN" -> LogLevel.WARN
-                        "DEBUG" -> LogLevel.DEBUG
-                        "INFO" -> LogLevel.INFO
-                        else -> null
-                    }
-                    if (parsed != null) parsed to msg
-                    else LogLevel.INFO to line  // unknown prefix — treat whole line as INFO
-                } else {
-                    // Fallback for unparsed lines (old format, raw output)
-                    LogLevel.INFO to line
+    private suspend fun forwardNewNodeDebugLines(debugLogFile: java.io.File) {
+        nodeDebugMutex.withLock {
+            try {
+                if (!debugLogFile.exists()) return
+                val length = debugLogFile.length()
+                val pos = nodeDebugLastPos
+                if (length <= pos) return
+
+                val delta = length - pos
+                val readSize = minOf(delta, nodeDebugMaxDeltaBytes).toInt()
+                val newBytes = java.io.RandomAccessFile(debugLogFile, "r").use { raf ->
+                    raf.seek(pos)
+                    ByteArray(readSize).also { raf.readFully(it) }
                 }
-                LogCollector.append("[Node] $message", level)
-            }
-        } catch (_: Exception) {}
+                // Advance by what we actually read; remainder picked up next event.
+                nodeDebugLastPos = pos + readSize
+
+                val lines = String(newBytes).lines().filter { it.isNotBlank() }
+                for (line in lines) {
+                    val pipeIdx = line.indexOf('|')
+                    val (level, message) = if (pipeIdx > 0) {
+                        val lvl = line.substring(0, pipeIdx)
+                        val msg = line.substring(pipeIdx + 1)
+                        val parsed = when (lvl) {
+                            "ERROR" -> LogLevel.ERROR
+                            "WARN" -> LogLevel.WARN
+                            "DEBUG" -> LogLevel.DEBUG
+                            "INFO" -> LogLevel.INFO
+                            else -> null
+                        }
+                        if (parsed != null) parsed to msg
+                        else LogLevel.INFO to line  // unknown prefix — treat whole line as INFO
+                    } else {
+                        // Fallback for unparsed lines (old format, raw output)
+                        LogLevel.INFO to line
+                    }
+                    LogCollector.append("[Node] $message", level)
+                }
+
+                // If we capped the read and there's still more to consume,
+                // re-launch ourselves to drain the remainder. The mutex is
+                // released between calls so other writes don't block, and
+                // the next call hits `length <= pos` and exits if Node has
+                // since written more (which the next FileObserver event
+                // will pick up cleanly).
+                if (delta > readSize) {
+                    scope.launch { forwardNewNodeDebugLines(debugLogFile) }
+                }
+            } catch (_: Exception) {}
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -239,9 +279,11 @@ class SeekerClawService : Service() {
         // every new line via the offset.
         val debugLogFile = File(workDir, "node_debug.log")
         nodeDebugLastPos = 0L
+        // Constants qualified (Java statics not auto-imported into Kotlin
+        // function bodies). (Copilot R1.)
         nodeDebugObserver = object : FileObserver(
             workDir,
-            MODIFY or CLOSE_WRITE or MOVED_TO or CREATE,
+            FileObserver.MODIFY or FileObserver.CLOSE_WRITE or FileObserver.MOVED_TO or FileObserver.CREATE,
         ) {
             override fun onEvent(event: Int, path: String?) {
                 if (path == "node_debug.log") {

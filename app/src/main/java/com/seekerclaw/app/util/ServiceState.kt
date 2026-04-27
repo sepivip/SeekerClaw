@@ -81,10 +81,12 @@ object ServiceState {
 
     // Private lock for health transition logging.
     // Originally prevented TOCTOU between overlapping polling coroutines.
-    // Post-BAT-518 (FileObserver) the FileObserver thread serializes events,
-    // but multiple writes can still be coalesced into rapid back-to-back
-    // dispatches; lastLoggedStale tracks the last-logged direction so
-    // duplicate same-direction logs are suppressed even under that.
+    // Post-BAT-518 (FileObserver), inotify event delivery on the
+    // FileObserver thread is ordered, but the handler work is
+    // dispatched to Dispatchers.IO via scope.launch and CAN run
+    // concurrently. lastLoggedStale tracks the last-logged direction
+    // so duplicate same-direction logs are suppressed even when two
+    // dispatches race the synchronized block.
     private val healthTransitionLock = Any()
     @Volatile private var lastLoggedStale: Boolean? = null
 
@@ -271,9 +273,13 @@ object ServiceState {
         // and atomic-rename writes (.tmp + rename → MOVED_TO), plus
         // initial creation (CREATE) for files that don't exist yet when
         // the observer attaches.
+        //
+        // Constants are qualified (FileObserver.MODIFY etc.) because
+        // they're Java static fields, not auto-importable into Kotlin
+        // function bodies. (Copilot R1.)
         return object : FileObserver(
             dir,
-            MODIFY or CLOSE_WRITE or MOVED_TO or CREATE,
+            FileObserver.MODIFY or FileObserver.CLOSE_WRITE or FileObserver.MOVED_TO or FileObserver.CREATE,
         ) {
             override fun onEvent(event: Int, path: String?) {
                 // Dispatch to scope so the FileObserver thread (a single

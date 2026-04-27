@@ -5,9 +5,11 @@ import android.os.FileObserver
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.File
 
 data class LogEntry(
@@ -36,6 +38,14 @@ object LogCollector {
     private var fileObserver: FileObserver? = null
     @Volatile private var lastReadPosition = 0L
     private val scope = CoroutineScope(Dispatchers.IO)
+
+    // Serializes concurrent readNewFromFile invocations triggered by
+    // overlapping FileObserver events. FileObserver commonly emits both
+    // MODIFY and CLOSE_WRITE for a single write — without this mutex,
+    // both events would launch on Dispatchers.IO, both would read
+    // lastReadPosition, both would parse overlapping byte ranges,
+    // and append() would emit duplicate log entries. (Copilot R1.)
+    private val readMutex = Mutex()
 
     // Lock for all in-memory _logs mutations to prevent TOCTOU races.
     // Multiple threads (Watchdog IO, ServiceState IO, file polling IO) call append()
@@ -115,13 +125,19 @@ object LogCollector {
         // Watch the parent dir, dispatch on `service_logs` filename. Mask
         // covers append-style writes (MODIFY / CLOSE_WRITE), atomic-rename
         // writes (MOVED_TO), and re-creation after clear() (CREATE).
+        // Constants are qualified (Java statics not auto-imported into
+        // Kotlin function bodies). (Copilot R1.)
         fileObserver = object : FileObserver(
             parent,
-            MODIFY or CLOSE_WRITE or MOVED_TO or CREATE,
+            FileObserver.MODIFY or FileObserver.CLOSE_WRITE or FileObserver.MOVED_TO or FileObserver.CREATE,
         ) {
             override fun onEvent(event: Int, path: String?) {
                 if (path == LOG_FILE_NAME) {
-                    // Dispatch off the FileObserver thread.
+                    // Dispatch off the FileObserver thread. readNewFromFile
+                    // serializes via readMutex internally so concurrent
+                    // dispatches (FileObserver often emits MODIFY +
+                    // CLOSE_WRITE for one write) don't double-read the
+                    // same byte range.
                     scope.launch { readNewFromFile() }
                 }
             }
@@ -175,47 +191,56 @@ object LogCollector {
         }
     }
 
-    private fun readNewFromFile() {
-        val file = logFile ?: return
-        try {
-            if (!file.exists()) return
-            val currentLength = file.length()
-            val pos = lastReadPosition
-            if (currentLength <= pos) return
+    private suspend fun readNewFromFile() {
+        // Serialize concurrent invocations. FileObserver often delivers
+        // MODIFY and CLOSE_WRITE for a single write, and both dispatch
+        // through scope.launch independently. Without this mutex, both
+        // would read lastReadPosition, both would parse overlapping
+        // byte ranges, and append() would emit duplicate log entries.
+        // (Copilot R1.)
+        readMutex.withLock {
+            val file = logFile ?: return
+            try {
+                if (!file.exists()) return
+                val currentLength = file.length()
+                val pos = lastReadPosition
+                if (currentLength <= pos) return
 
-            val delta = currentLength - pos
-            // Cap per-poll read to prevent OOM after long background gaps.
-            // If delta exceeds our tail budget, fall back to full tail read.
-            val maxDelta = MAX_LINES * 200L
-            if (delta > maxDelta) {
-                readAllFromFile()
-                return
-            }
-
-            // Read only new bytes
-            val newBytes = java.io.RandomAccessFile(file, "r").use { raf ->
-                raf.seek(pos)
-                ByteArray(delta.toInt()).also { raf.readFully(it) }
-            }
-
-            val newLines = String(newBytes).lines().filter { it.isNotBlank() }
-            val newEntries = newLines.mapNotNull { parseLine(it) }
-            if (newEntries.isEmpty()) {
-                lastReadPosition = currentLength
-                return
-            }
-
-            synchronized(logsLock) {
-                val current = _logs.value.toMutableList()
-                current.addAll(newEntries)
-                while (current.size > MAX_LINES) {
-                    current.removeAt(0)
+                val delta = currentLength - pos
+                // Cap per-call read to prevent OOM after long background gaps
+                // (e.g. Doze mode coalesced events). If delta exceeds budget,
+                // fall back to full tail read.
+                val maxDelta = MAX_LINES * 200L
+                if (delta > maxDelta) {
+                    readAllFromFile()
+                    return
                 }
-                _logs.value = current
-                lastReadPosition = currentLength
+
+                // Read only new bytes
+                val newBytes = java.io.RandomAccessFile(file, "r").use { raf ->
+                    raf.seek(pos)
+                    ByteArray(delta.toInt()).also { raf.readFully(it) }
+                }
+
+                val newLines = String(newBytes).lines().filter { it.isNotBlank() }
+                val newEntries = newLines.mapNotNull { parseLine(it) }
+                if (newEntries.isEmpty()) {
+                    lastReadPosition = currentLength
+                    return
+                }
+
+                synchronized(logsLock) {
+                    val current = _logs.value.toMutableList()
+                    current.addAll(newEntries)
+                    while (current.size > MAX_LINES) {
+                        current.removeAt(0)
+                    }
+                    _logs.value = current
+                    lastReadPosition = currentLength
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to read new log entries from file", e)
             }
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to read new log entries from file", e)
         }
     }
 
