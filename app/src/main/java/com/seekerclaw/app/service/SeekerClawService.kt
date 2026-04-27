@@ -45,11 +45,14 @@ class SeekerClawService : Service() {
     private var nodeDebugObserver: FileObserver? = null
     @Volatile private var nodeDebugLastPos = 0L
     private val nodeDebugMutex = Mutex()
-    // Per-read cap to prevent OOM if events are batched (e.g. Doze mode
+    // Per-chunk cap to prevent OOM if events are batched (e.g. Doze mode
     // releases queued events at once) or if Node writes a huge burst.
     // Larger than LogCollector's budget because Node debug writes can
-    // include verbose tool-call traces. Anything over the cap is read
-    // in chunks across successive events.
+    // include verbose tool-call traces. forwardNewNodeDebugLines drains
+    // in a while loop within a single coroutine — each iteration reads
+    // up to this cap, releases + reacquires the mutex, then loops until
+    // either fully drained or the trailing partial-line case is hit.
+    // (R8 introduced the loop; was per-event recursive launch before.)
     private val nodeDebugMaxDeltaBytes = 256 * 1024L  // 256 KB
 
     // SupervisorJob so a single coroutine failure doesn't cancel the

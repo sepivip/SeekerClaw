@@ -113,13 +113,22 @@ object ServiceState {
     /**
      * Initialize state file path AND restore persisted counters.
      * Must be called before any updateStatus/incrementMessages/addTokens.
+     *
+     * Performs synchronous disk I/O on the calling thread (file read +
+     * daily-reset write). Acceptable for `SeekerClawService.onStartCommand`
+     * (the :node process's service main thread, no UI work) but main-
+     * process UI callers should prefer `startWatching` instead, which
+     * dispatches the I/O off-thread. Marked @WorkerThread to discourage
+     * main-thread invocation and surface in StrictMode if violated.
+     * (Copilot R14.)
      */
+    @androidx.annotation.WorkerThread
     fun init(context: Context) {
         // Synchronous bootstrap: file path + first-time restore from disk.
-        // Used by :node service callers (`SeekerClawService.onStartCommand`)
-        // where main-thread concerns don't apply. Main-process callers
-        // should prefer `startWatching` which moves the disk-I/O work
-        // off the main thread.
+        // The :node process's onStartCommand is technically also a main
+        // thread, but it's a Service main thread (no Choreographer / UI
+        // rendering) so a few ms of I/O during service start is fine.
+        // Main-process UI callers should use startWatching instead.
         initFileRefs(context)
         restoreFromDisk()  // Idempotent — single-flight via initLock
     }
