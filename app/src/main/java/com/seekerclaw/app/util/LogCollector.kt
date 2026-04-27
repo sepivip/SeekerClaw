@@ -267,10 +267,9 @@ object LogCollector {
                 val delta = currentLength - pos
                 // Cap per-call read to prevent OOM after long background gaps
                 // (e.g. Doze mode coalesced events). If delta exceeds budget,
-                // fall back to full tail read. readLock is non-reentrant
-                // (it's a regular Object monitor — synchronized blocks ARE
-                // reentrant in JVM, so the nested synchronized inside
-                // readAllFromFile is a no-op acquire).
+                // fall back to full tail read. JVM/Kotlin synchronized blocks
+                // are reentrant, so when readAllFromFile re-acquires readLock
+                // from inside this synchronized region, it's a no-op acquire.
                 val maxDelta = MAX_LINES * 200L
                 if (delta > maxDelta) {
                     readAllFromFile()

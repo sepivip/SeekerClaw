@@ -230,8 +230,11 @@ class LogCollectorTest {
     //
     // FileObserver typically delivers MODIFY and CLOSE_WRITE for one
     // write. Both events dispatch readNewFromFile concurrently via
-    // scope.launch. The Mutex must serialize them so no duplicate
-    // entries land in the buffer and lastReadPosition stays correct.
+    // scope.launch. `readLock` (R7+) serializes the file read +
+    // lastReadPosition update; `logsLock` is held only briefly inside
+    // for the in-memory _logs mutation. Together they ensure no
+    // duplicate entries land in the buffer and lastReadPosition
+    // stays correct.
 
     @Test
     fun `offset reader picks up incremental writes correctly`() = runBlocking {
@@ -269,10 +272,11 @@ class LogCollectorTest {
     fun `concurrent readNewFromFile invocations don't duplicate entries`() = runBlocking {
         // Simulates FileObserver's MODIFY + CLOSE_WRITE dual-dispatch:
         // multiple coroutines all see the file in the same state and
-        // race to consume it. synchronized(logsLock) must ensure exactly
-        // one of them does the work and the others find lastReadPosition
-        // already advanced. (R5 consolidated to synchronized; the
-        // production code no longer uses kotlinx.coroutines.Mutex.)
+        // race to consume it. `readLock` must ensure exactly one of
+        // them does the file read + lastReadPosition advance; the others
+        // find the offset already advanced and return cleanly.
+        // (Production locking: readLock guards file/offset, logsLock
+        // guards in-memory _logs only — see LogCollector header.)
         val tmp = File.createTempFile("bat518-concurrent", ".test")
         try {
             LogCollector.setLogFileForTest(tmp)
@@ -291,7 +295,7 @@ class LogCollectorTest {
             // dispatcher (single-threaded), `async { ... }` blocks all
             // run sequentially since readNewFromFileForTest does
             // synchronous file I/O — the test would be effectively
-            // serialized and wouldn't exercise the Mutex contract.
+            // serialized and wouldn't exercise the readLock contract.
             // (Copilot R4.)
             val tasks = List(10) {
                 async(Dispatchers.IO) { LogCollector.readNewFromFileForTest() }
