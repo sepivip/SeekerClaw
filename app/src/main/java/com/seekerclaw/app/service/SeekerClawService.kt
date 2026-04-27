@@ -153,7 +153,11 @@ class SeekerClawService : Service() {
                 }
                 nodeDebugLastPos = pos + advanceBy
 
-                val lines = String(forwardBytes).lines().filter { it.isNotBlank() }
+                // Explicit UTF-8 — Node writes UTF-8 to node_debug.log;
+                // platform-default decoding could mojibake non-ASCII
+                // messages on devices where the JVM default differs.
+                // (Copilot R4.)
+                val lines = String(forwardBytes, Charsets.UTF_8).lines().filter { it.isNotBlank() }
                 for (line in lines) {
                     val pipeIdx = line.indexOf('|')
                     val (level, message) = if (pipeIdx > 0) {
@@ -346,9 +350,20 @@ class SeekerClawService : Service() {
         // running, etc.). Without this, we'd attach multiple observers
         // and each FileObserver event would dispatch N forwarders →
         // duplicate log entries. (Copilot R2.)
+        //
+        // On reattach (had-existing-observer): set lastPos to the file's
+        // CURRENT length so we don't replay log entries we've already
+        // forwarded. On first attach (clean start): leave lastPos at 0
+        // so the initial-read scope.launch picks up anything Node may
+        // have written before we attached. (Copilot R4.)
+        val hadExistingObserver = nodeDebugObserver != null
         nodeDebugObserver?.stopWatching()
         nodeDebugObserver = null
-        nodeDebugLastPos = 0L
+        nodeDebugLastPos = if (hadExistingObserver && debugLogFile.exists()) {
+            debugLogFile.length()
+        } else {
+            0L
+        }
 
         // Constants qualified (Java statics not auto-imported into Kotlin
         // function bodies). (Copilot R1.)

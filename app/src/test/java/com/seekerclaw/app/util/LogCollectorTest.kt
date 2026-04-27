@@ -1,5 +1,6 @@
 package com.seekerclaw.app.util
 
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.runBlocking
@@ -284,10 +285,15 @@ class LogCollectorTest {
             }
             tmp.writeText(sb.toString())
 
-            // Launch 10 concurrent readers (mimics FileObserver dispatching
-            // multiple events to the same scope.launch handlers).
+            // Launch 10 concurrent readers on Dispatchers.IO so they can
+            // actually run in parallel. With the default runBlocking
+            // dispatcher (single-threaded), `async { ... }` blocks all
+            // run sequentially since readNewFromFileForTest does
+            // synchronous file I/O — the test would be effectively
+            // serialized and wouldn't exercise the Mutex contract.
+            // (Copilot R4.)
             val tasks = List(10) {
-                async { LogCollector.readNewFromFileForTest() }
+                async(Dispatchers.IO) { LogCollector.readNewFromFileForTest() }
             }
             tasks.awaitAll()
 

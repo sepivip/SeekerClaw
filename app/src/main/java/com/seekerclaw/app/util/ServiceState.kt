@@ -108,13 +108,29 @@ object ServiceState {
      * Must be called before any updateStatus/incrementMessages/addTokens.
      */
     fun init(context: Context) {
-        stateFile = File(context.filesDir, "service_state")
+        // Synchronous bootstrap: file path + first-time restore from disk.
+        // Used by :node service callers (`SeekerClawService.onStartCommand`)
+        // where main-thread concerns don't apply. Main-process callers
+        // should prefer `startWatching` which moves the disk-I/O work
+        // off the main thread.
+        initFileRefs(context)
         if (!initialized) {
-            readFromFile()
-            checkDailyReset()
-            initialized = true
-            Log.i(TAG, "init: restored msgs=${_messageCount.value} today=${_messagesToday.value} tokens=${_tokensTotal.value}")
+            restoreFromDisk()
         }
+    }
+
+    /** Sync, no I/O. Sets the file path reference so disk reads can find it. */
+    private fun initFileRefs(context: Context) {
+        stateFile = File(context.filesDir, "service_state")
+    }
+
+    /** Disk I/O — file restore + daily reset check. Idempotent on `initialized`. */
+    private fun restoreFromDisk() {
+        if (initialized) return
+        readFromFile()
+        checkDailyReset()
+        initialized = true
+        Log.i(TAG, "init: restored msgs=${_messageCount.value} today=${_messagesToday.value} tokens=${_tokensTotal.value}")
     }
 
     /**
@@ -209,15 +225,23 @@ object ServiceState {
      * polling loop used to call directly.
      *
      * Initial reads are dispatched ASYNCHRONOUSLY to Dispatchers.IO
-     * (Copilot R2 — startWatching is invoked from Application.onCreate
+     * (Copilot R2/R4 — startWatching is invoked from Application.onCreate
      * on the main thread; doing 4 disk reads there risks StrictMode
-     * violations + startup jank). UI screens that compose before the
-     * dispatched reads complete may see default StateFlow values
+     * violations + startup jank). The first-time restore (read from
+     * service_state, daily reset check) is also dispatched, so NO disk
+     * I/O happens on the caller thread. UI screens that compose before
+     * the dispatched reads complete may see default StateFlow values
      * (STOPPED / 0 / 0 / 0) briefly until the reads land — observers
      * also fire on subsequent writes, so eventual consistency holds.
      */
     fun startWatching(context: Context) {
-        init(context)
+        // Sync setup: just file path refs, no I/O. The actual disk reads
+        // (first-time restore, file content reads) happen in the launch
+        // block below so the main thread caller (Application.onCreate)
+        // returns fast. (Copilot R4: `init(context)` was previously
+        // called here and DID do sync disk I/O on first invocation.)
+        initFileRefs(context)
+
         // Guard: skip if observers are already attached (BAT-217 — prevents
         // duplicate event dispatch that could write duplicate log entries).
         if (filesDirObserver != null || workspaceDirObserver != null) {
@@ -244,14 +268,18 @@ object ServiceState {
         // attach and the initial read doesn't get missed (the observer
         // reads on event regardless of initial-read state). Synchronous —
         // FileObserver constructor does no disk I/O, just registers.
-        filesDirObserver = makeDirObserver(parent) { path ->
+        //
+        // Filter `path` BEFORE scope.launch so unrelated workspace writes
+        // (cron jobs, memory files, config snapshots, etc.) don't churn
+        // the coroutine scheduler with no-op launches. (Copilot R4.)
+        filesDirObserver = makeDirObserver(parent, watchedFiles = filesDirWatched) { path ->
             when (path) {
                 "service_state" -> readFromFile()
                 "bridge_token" -> readBridgeToken()
             }
         }.also { it.startWatching() }
 
-        workspaceDirObserver = makeDirObserver(workspaceDir) { path ->
+        workspaceDirObserver = makeDirObserver(workspaceDir, watchedFiles = workspaceWatched) { path ->
             when (path) {
                 "agent_health_state" -> readAgentHealthFile()
                 "api_usage_state" -> readApiUsageFile()
@@ -260,14 +288,17 @@ object ServiceState {
 
         // Initial reads on Dispatchers.IO — startWatching is invoked from
         // Application.onCreate (main thread); doing 4 disk reads there
-        // risks StrictMode violations and startup jank. The StateFlow is
-        // pre-populated with sane defaults so UI screens that compose
-        // before the dispatched reads complete won't show garbage —
-        // they just see "STOPPED / 0 / 0 / 0" briefly until the IO
-        // dispatch lands a few ms later. Acceptable since the observers
-        // also fire on subsequent writes. (Copilot R2.)
+        // risks StrictMode violations and startup jank. The first-time
+        // restore (readFromFile + checkDailyReset, gated on `initialized`)
+        // is also done here so we don't sneak sync I/O in via init().
+        // StateFlow is pre-populated with sane defaults so UI screens
+        // that compose before the dispatched reads complete won't show
+        // garbage — they just see "STOPPED / 0 / 0 / 0" briefly until
+        // the IO dispatch lands a few ms later. Observers also fire on
+        // subsequent writes, so eventual consistency holds.
+        // (Copilot R2 + R4.)
         scope.launch {
-            readFromFile()
+            restoreFromDisk()
             readBridgeToken()
             readApiUsageFile()
             readAgentHealthFile()
@@ -289,7 +320,19 @@ object ServiceState {
     private var filesDirObserver: FileObserver? = null
     private var workspaceDirObserver: FileObserver? = null
 
-    private fun makeDirObserver(dir: File, onChange: (path: String?) -> Unit): FileObserver {
+    // Sets of filenames each observer cares about. Anything else triggers
+    // the FileObserver but gets filtered out in onEvent before we launch
+    // a coroutine, so unrelated writes in the same directory (e.g. cron
+    // job state files, memory files, config snapshots — workspace/ holds
+    // a lot of them) cost zero coroutine launches.
+    private val filesDirWatched = setOf("service_state", "bridge_token")
+    private val workspaceWatched = setOf("agent_health_state", "api_usage_state")
+
+    private fun makeDirObserver(
+        dir: File,
+        watchedFiles: Set<String>,
+        onChange: (path: String?) -> Unit,
+    ): FileObserver {
         // FileObserver(File) is API 29+; we target min SDK 34 so this is safe.
         // Mask covers both `writeText`-style writes (CLOSE_WRITE / MODIFY)
         // and atomic-rename writes (.tmp + rename → MOVED_TO), plus
@@ -304,6 +347,9 @@ object ServiceState {
             FileObserver.MODIFY or FileObserver.CLOSE_WRITE or FileObserver.MOVED_TO or FileObserver.CREATE,
         ) {
             override fun onEvent(event: Int, path: String?) {
+                // Filter BEFORE launching to avoid coroutine churn for
+                // unrelated writes in the same directory. (Copilot R4.)
+                if (path !in watchedFiles) return
                 // Dispatch to scope so the FileObserver thread (a single
                 // shared thread named "FileObserver" in Android) doesn't
                 // do file I/O. The reader functions are idempotent — if

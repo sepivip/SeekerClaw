@@ -48,9 +48,10 @@ object LogCollector {
     private val readMutex = Mutex()
 
     // Lock for all in-memory _logs mutations to prevent TOCTOU races.
-    // Multiple threads (Watchdog IO, ServiceState IO, file polling IO) call append()
-    // concurrently — without this lock, concurrent read-modify-write on _logs.value
-    // silently drops entries (the primary cause of the "empty console" bug).
+    // Multiple threads (Watchdog IO, ServiceState IO, FileObserver-driven
+    // tail reads) call append() concurrently — without this lock, concurrent
+    // read-modify-write on _logs.value silently drops entries (the primary
+    // cause of the "empty console" bug).
     private val logsLock = Any()
 
     fun init(context: Context) {
@@ -178,7 +179,8 @@ object LogCollector {
                 ByteArray(tailBytes.toInt()).also { raf.readFully(it) }
             }
             val seekedMidFile = tailBytes < fileLength
-            val lines = String(bytes).lines()
+            // Explicit UTF-8 — see readNewFromFile note (Copilot R4).
+            val lines = String(bytes, Charsets.UTF_8).lines()
                 .filter { it.isNotBlank() }
                 .let { if (seekedMidFile) it.drop(1) else it } // drop partial first line only when we seeked mid-file
             val entries = lines.mapNotNull { parseLine(it) }.takeLast(MAX_LINES)
@@ -260,7 +262,11 @@ object LogCollector {
                 }
 
                 val completeBytes = newBytes.copyOfRange(0, lastNewlineIdx + 1)
-                val newLines = String(completeBytes).lines().filter { it.isNotBlank() }
+                // Explicit UTF-8 — File.appendText defaults to UTF-8 but
+                // String(bytes) without a charset uses the platform
+                // default, which can mojibake non-ASCII messages on
+                // devices where the JVM default differs. (Copilot R4.)
+                val newLines = String(completeBytes, Charsets.UTF_8).lines().filter { it.isNotBlank() }
                 val newEntries = newLines.mapNotNull { parseLine(it) }
                 // Advance past the last complete line. Trailing partial
                 // bytes (if any) stay unread for next call.
