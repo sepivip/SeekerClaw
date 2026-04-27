@@ -63,6 +63,15 @@ class SeekerClawApplication : Application() {
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
                 if (intent.action == ConfigManager.ACTION_CONFIG_CHANGED) {
+                    // Critical ordering: invalidate the cache BEFORE bumping
+                    // configVersion. The bump triggers Compose recompositions
+                    // that re-call `loadConfig` — without the prior cache
+                    // invalidation, those reads still hit the stale in-memory
+                    // map populated when main process first loaded prefs.
+                    // Cross-process writes from `:node` flush to disk but
+                    // don't propagate to other processes' SharedPreferences
+                    // caches. (BAT-509 Part 1 device-test regression.)
+                    ConfigManager.invalidatePrefsCache(context)
                     ConfigManager.configVersion.intValue++
                 }
             }

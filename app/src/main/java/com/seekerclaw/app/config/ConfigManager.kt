@@ -201,6 +201,34 @@ object ConfigManager {
     private fun prefs(context: Context): SharedPreferences =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
+    /**
+     * Force the SharedPreferences in-memory cache to re-read the on-disk
+     * .xml file. Necessary for cross-process write visibility:
+     * `SharedPreferences` is per-process cached, so when `:node` writes
+     * prefs (via the bridge `/config/save-{provider,model}` handlers
+     * running in the service process), the main-process loaded map
+     * stays stale until its instance is reloaded. Without this,
+     * `ACTION_CONFIG_CHANGED` bumps `configVersion` in main-process
+     * Compose state, screens recompose, but `loadConfig` returns cached
+     * values — the regression caught during BAT-509 Part 1 device test:
+     * `/status` showed gpt-5.4 via bridge while Dashboard/Settings still
+     * showed gpt-5.5.
+     *
+     * Implementation detail: `getSharedPreferences(name, MODE_MULTI_PROCESS)`
+     * is the documented (though deprecated) trigger for
+     * `SharedPreferencesImpl.startReloadIfChangedUnexpectedly`, which
+     * checks the file's mtime and re-reads on change. The deprecation
+     * concern is "no reconciliation across concurrent writes" — doesn't
+     * apply to our usage (one user, one writer per field at a time).
+     * Subsequent normal MODE_PRIVATE reads see the refreshed map.
+     * Called from `SeekerClawApplication`'s receiver on every
+     * `ACTION_CONFIG_CHANGED` broadcast.
+     */
+    @Suppress("DEPRECATION")
+    fun invalidatePrefsCache(context: Context) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_MULTI_PROCESS)
+    }
+
     fun isSetupComplete(context: Context): Boolean =
         prefs(context).getBoolean(KEY_SETUP_COMPLETE, false)
 
