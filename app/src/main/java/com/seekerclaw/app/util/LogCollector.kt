@@ -37,19 +37,7 @@ object LogCollector {
     @Volatile private var lastReadPosition = 0L
     private val scope = CoroutineScope(Dispatchers.IO)
 
-    // BAT-518 R5: lastReadPosition + the log file are guarded by the
-    // single shared `logsLock`. Three call sites mutate one or both:
-    // readNewFromFile (FileObserver-triggered), readAllFromFile
-    // (initial load + recovery from huge delta), and clear() (Settings
-    // UI "clear logs" button). The earlier R1 fix used a separate
-    // kotlinx.coroutines.Mutex for readNewFromFile, but that left
-    // readAllFromFile and clear() racing it on the offset. Consolidating
-    // to logsLock means: same lock everywhere, no possible offset drift.
-    // synchronized blocks are fine on Dispatchers.IO (which is designed
-    // for blocking I/O); the perf cost is identical to a Mutex but the
-    // call sites stay non-suspend.
-
-    // Locking scheme (Copilot R7/R8):
+    // Locking scheme (Copilot R7/R8/R10):
     // - `readLock` guards log-file reads (readNewFromFile, readAllFromFile),
     //   the file-truncating side of clear(), and all `lastReadPosition`
     //   updates. Held DURING disk I/O.

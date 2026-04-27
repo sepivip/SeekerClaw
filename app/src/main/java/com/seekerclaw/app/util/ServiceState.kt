@@ -369,7 +369,7 @@ object ServiceState {
     private fun makeDirObserver(
         dir: File,
         watchedFiles: Set<String>,
-        onChange: (path: String?) -> Unit,
+        onChange: (path: String) -> Unit,
     ): FileObserver {
         // FileObserver(File) is API 29+; we target min SDK 34 so this is safe.
         // Mask covers both `writeText`-style writes (CLOSE_WRITE / MODIFY)
@@ -385,9 +385,12 @@ object ServiceState {
             FileObserver.MODIFY or FileObserver.CLOSE_WRITE or FileObserver.MOVED_TO or FileObserver.CREATE,
         ) {
             override fun onEvent(event: Int, path: String?) {
-                // Filter BEFORE launching to avoid coroutine churn for
-                // unrelated writes in the same directory. (Copilot R4.)
-                if (path !in watchedFiles) return
+                // Explicit null handling (Copilot R10): FileObserver's
+                // path is `String?`; some events arrive with null path
+                // (e.g. directory-level OPEN). Filter explicitly before
+                // contains() to avoid the Set<String> nullability
+                // mismatch and short-circuit early.
+                if (path == null || path !in watchedFiles) return
                 // Dispatch to scope so the FileObserver thread (a single
                 // shared thread named "FileObserver" in Android) doesn't
                 // do file I/O. The reader functions are idempotent — if
