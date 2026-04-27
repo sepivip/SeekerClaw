@@ -232,10 +232,17 @@ const AGENT_NAME = config.agentName || 'SeekerClaw';
 
 /**
  * Resolve the currently-active model. After BAT-509 Part 1, this reads
- * provider/authType/model from the AndroidBridge `/config/runtime`
- * endpoint — Kotlin is the single source of truth for these fields,
- * exposed to Node via HTTP so the agent never reports a different model
- * than the one handling the request.
+ * provider/model from the AndroidBridge `/config/runtime` endpoint —
+ * Kotlin is the single source of truth for these fields, exposed to
+ * Node via HTTP so the agent never reports a different model than the
+ * one handling the request.
+ *
+ * Note: `/config/runtime` intentionally omits authType (Copilot R3 +
+ * the loadRuntimeOnly comment in ConfigManager.kt explain why —
+ * persisted authType may differ from runtime effective authType when
+ * Kotlin's writeConfigJson downgrades oauth → api_key on a blank
+ * token). Node uses its own startup AUTH_TYPE/OPENAI_AUTH_TYPE consts
+ * for that dimension.
  *
  * Called per chat() turn and by any self-report surface (/status,
  * /version, session_status, system prompt). The bridge call is a

@@ -208,48 +208,26 @@ t('bridge runtime.provider non-string → treated as absent → model applied', 
 });
 
 // ============================================================
-// STRUCTURAL DRIFT-GUARD — locks the live config.js wiring to the
+// STRUCTURAL DRIFT-GUARDS — lock the live config.js wiring to the
 // bridge-based contract. If anyone reverts to file-overlay reads,
-// or removes the async signature, or stops calling bridge, this
-// fails the build BEFORE the bug ships.
+// or removes the async signature, or stops calling bridge, these
+// fail the build BEFORE the bug ships.
+//
+// Both guards target ONLY resolveActiveModel's body via balanced-brace
+// extraction. The whole-file regex approach we started with would
+// false-positive on `return MODEL` / `module.exports` patterns that
+// legitimately appear elsewhere in config.js — Copilot R6 flagged
+// that. Extracting the body ensures every assertion fails for a real
+// reason.
 // ============================================================
-t('config.js resolveActiveModel wiring still bridge-based (structural)', () => {
-    const src = fs.readFileSync(CONFIG_JS, 'utf8');
-    const code = src
-        .replace(/\/\*[\s\S]*?\*\//g, '')
-        .replace(/(^|[^:])\/\/[^\n]*/g, '$1');
 
-    assert.ok(/async\s+function\s+resolveActiveModel\s*\(/.test(code),
-        'config.js resolveActiveModel must be ASYNC (bridge call is HTTP)');
-    assert.ok(/['"]\/config\/runtime['"]/.test(code),
-        'config.js resolveActiveModel must call bridge endpoint "/config/runtime"');
-    assert.ok(/typeof\s+[A-Za-z_$][\w$]*\.model\s*===?\s*['"]string['"]/.test(code),
-        'config.js resolveActiveModel must type-check runtime.model as string');
-    assert.ok(/typeof\s+[A-Za-z_$][\w$]*\.provider\s*===?\s*['"]string['"]/.test(code),
-        'config.js resolveActiveModel must type-check runtime.provider as string (provider-scoping)');
-    assert.ok(/!==\s*PROVIDER/.test(code),
-        'config.js resolveActiveModel must compare runtime.provider to startup PROVIDER (race protection)');
-    assert.ok(/return\s+MODEL\s*;?/.test(code),
-        'config.js resolveActiveModel must fall back to `return MODEL` on any failure path');
-    assert.ok(/module\.exports\s*=\s*\{[\s\S]*\bresolveActiveModel\b[\s\S]*\}/.test(code),
-        'config.js must export resolveActiveModel');
-});
-
-t('config.js resolveActiveModel must NOT read agent_settings.json for model (single-writer invariant)', () => {
-    // After BAT-509 Part 1, the overlay no longer carries provider/authType/model.
-    // If a future commit re-introduces a file read for those fields, the
-    // dual-source-of-truth bug class returns. This guard fails immediately.
+// Shared body extractor — same brace-balanced logic both guards use.
+// Throws via assert if extraction fails so the structural guards fail
+// loudly rather than silently green-lighting drift.
+function extractResolveActiveModelBody() {
     const src = fs.readFileSync(CONFIG_JS, 'utf8');
-    // Allow agent_settings.json reads for OTHER fields (apiKeys, heartbeat)
-    // by checking that resolveActiveModel's body specifically doesn't
-    // touch the file. Extract the function body then check.
-    //
-    // The body extractor uses balanced-brace counting rather than regex so
-    // it survives reformatting (indented `}`, trailing whitespace, comments
-    // before the close, etc.) — Copilot R3 flagged the original regex as
-    // fragile because `\n\}` required the closing brace at column 0.
     const declMatch = src.match(/async\s+function\s+resolveActiveModel\s*\([^)]*\)\s*\{/);
-    assert.ok(declMatch, 'could not locate resolveActiveModel declaration');
+    assert.ok(declMatch, 'could not locate resolveActiveModel declaration in config.js');
     const bodyStart = declMatch.index + declMatch[0].length;
     let depth = 1;
     let bodyEnd = bodyStart;
@@ -259,8 +237,46 @@ t('config.js resolveActiveModel must NOT read agent_settings.json for model (sin
         else if (ch === '}') depth--;
         bodyEnd++;
     }
-    assert.ok(depth === 0, 'unbalanced braces extracting resolveActiveModel body');
-    const body = src.slice(bodyStart, bodyEnd - 1);
+    assert.ok(depth === 0, 'unbalanced braces extracting resolveActiveModel body from config.js');
+    return { src, body: src.slice(bodyStart, bodyEnd - 1) };
+}
+
+t('config.js resolveActiveModel wiring still bridge-based (structural)', () => {
+    const { src, body } = extractResolveActiveModelBody();
+
+    // Signature MUST stay async — it lives at the function declaration,
+    // not inside the body — so check against the whole src for it.
+    assert.ok(/async\s+function\s+resolveActiveModel\s*\(/.test(src),
+        'config.js resolveActiveModel must be ASYNC (bridge call is HTTP)');
+
+    // Body-scoped assertions: the bridge endpoint name, type-checks,
+    // provider-scoping, and fallback all live inside the function body.
+    // Scoping the regex to the body prevents false positives from
+    // unrelated occurrences elsewhere in config.js.
+    assert.ok(/['"]\/config\/runtime['"]/.test(body),
+        'config.js resolveActiveModel must call bridge endpoint "/config/runtime"');
+    assert.ok(/typeof\s+[A-Za-z_$][\w$]*\.model\s*===?\s*['"]string['"]/.test(body),
+        'config.js resolveActiveModel must type-check runtime.model as string');
+    assert.ok(/typeof\s+[A-Za-z_$][\w$]*\.provider\s*===?\s*['"]string['"]/.test(body),
+        'config.js resolveActiveModel must type-check runtime.provider as string (provider-scoping)');
+    assert.ok(/!==\s*PROVIDER/.test(body),
+        'config.js resolveActiveModel must compare runtime.provider to startup PROVIDER (race protection)');
+    assert.ok(/return\s+MODEL\s*;?/.test(body),
+        'config.js resolveActiveModel must fall back to `return MODEL` on any failure path');
+
+    // Export check stays whole-file — exports live at module bottom.
+    assert.ok(/module\.exports\s*=\s*\{[\s\S]*\bresolveActiveModel\b[\s\S]*\}/.test(src),
+        'config.js must export resolveActiveModel');
+});
+
+t('config.js resolveActiveModel must NOT read agent_settings.json for model (single-writer invariant)', () => {
+    // After BAT-509 Part 1, the overlay no longer carries provider/authType/model.
+    // If a future commit re-introduces a file read for those fields, the
+    // dual-source-of-truth bug class returns. This guard fails immediately.
+    // Allow agent_settings.json reads for OTHER fields (apiKeys, heartbeat)
+    // by checking that resolveActiveModel's body specifically doesn't touch
+    // the file.
+    const { body } = extractResolveActiveModelBody();
     assert.ok(!/agent_settings\.json/.test(body),
         'resolveActiveModel body must NOT read agent_settings.json — provider/authType/model are bridge-mediated now');
     assert.ok(!/readFileSync|existsSync/.test(body),

@@ -4,7 +4,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { CHANNEL, workDir, PROVIDER, AUTH_TYPE, OPENAI_AUTH_TYPE, resolveActiveModel, config: _config } = require('./config');
+const { CHANNEL, workDir, PROVIDER, MODEL, AUTH_TYPE, OPENAI_AUTH_TYPE, resolveActiveModel, config: _config } = require('./config');
 const { stripSilentReply, containsSilentReply } = require('./silent-reply');
 const modelCatalog = require('./model-catalog');
 const { buildHelpLines } = require('./telegram-commands');
@@ -445,6 +445,11 @@ async function fetchRuntimeCredentials() {
 // keep the scoping for defense-in-depth (e.g. a stale write from a
 // crashed pre-restart attempt).
 async function resolveActiveProviderState() {
+    // Single bridge call — derive both `provider` and `model` from the
+    // same runtime payload to avoid a second roundtrip. Previously this
+    // function fetched /config/runtime AND then called resolveActiveModel
+    // (which fetches /config/runtime again), doubling bridge load on every
+    // /model and /provider command. Copilot R6 caught the duplication.
     let runtime = null;
     try {
         const res = await deps.androidBridgeCall('/config/runtime', {}, 3000);
@@ -457,12 +462,29 @@ async function resolveActiveProviderState() {
 
     const rawProvider = runtime && nonBlank(runtime.provider) ? runtime.provider.trim() : null;
     const providerValid = rawProvider && modelCatalog.KNOWN_PROVIDERS.includes(rawProvider);
-    const provider = (providerValid && rawProvider === PROVIDER) ? rawProvider : PROVIDER;
+    // Provider-scoping: during the /provider restart window, prefs may
+    // already carry the NEW provider but Node is still running the OLD
+    // adapter. Returning the new provider would make /model display +
+    // validate against an adapter we can't talk to yet. Same logic
+    // resolveActiveModel uses for its model-scoping fallback.
+    const providerMatchesStartup = providerValid && rawProvider === PROVIDER;
+    const provider = providerMatchesStartup ? rawProvider : PROVIDER;
+
+    // Model: when the bridge-reported provider matches startup, honor the
+    // bridge-reported model (Settings UI / Telegram /model writes). When
+    // it doesn't (mid-restart race) OR the bridge call failed, fall back
+    // to the startup MODEL const. Mirrors config.resolveActiveModel's
+    // logic so /status, /version, ai.js, and this all agree.
+    let model = MODEL;
+    if (providerMatchesStartup && runtime) {
+        const m = typeof runtime.model === 'string' ? runtime.model.trim() : '';
+        if (m) model = m;
+    }
 
     const startupAuth = provider === 'openai' ? OPENAI_AUTH_TYPE : AUTH_TYPE;
     const authType = startupAuth;
 
-    return { provider, authType, model: await resolveActiveModel() };
+    return { provider, authType, model };
 }
 
 // ============================================================================
