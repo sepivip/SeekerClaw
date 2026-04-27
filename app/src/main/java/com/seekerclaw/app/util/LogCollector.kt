@@ -8,8 +8,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import java.io.File
 
 data class LogEntry(
@@ -39,13 +37,17 @@ object LogCollector {
     @Volatile private var lastReadPosition = 0L
     private val scope = CoroutineScope(Dispatchers.IO)
 
-    // Serializes concurrent readNewFromFile invocations triggered by
-    // overlapping FileObserver events. FileObserver commonly emits both
-    // MODIFY and CLOSE_WRITE for a single write — without this mutex,
-    // both events would launch on Dispatchers.IO, both would read
-    // lastReadPosition, both would parse overlapping byte ranges,
-    // and append() would emit duplicate log entries. (Copilot R1.)
-    private val readMutex = Mutex()
+    // BAT-518 R5: lastReadPosition + the log file are guarded by the
+    // single shared `logsLock`. Three call sites mutate one or both:
+    // readNewFromFile (FileObserver-triggered), readAllFromFile
+    // (initial load + recovery from huge delta), and clear() (Settings
+    // UI "clear logs" button). The earlier R1 fix used a separate
+    // kotlinx.coroutines.Mutex for readNewFromFile, but that left
+    // readAllFromFile and clear() racing it on the offset. Consolidating
+    // to logsLock means: same lock everywhere, no possible offset drift.
+    // synchronized blocks are fine on Dispatchers.IO (which is designed
+    // for blocking I/O); the perf cost is identical to a Mutex but the
+    // call sites stay non-suspend.
 
     // Lock for all in-memory _logs mutations to prevent TOCTOU races.
     // Multiple threads (Watchdog IO, ServiceState IO, FileObserver-driven
@@ -166,41 +168,49 @@ object LogCollector {
     }
 
     private fun readAllFromFile() {
-        val file = logFile ?: return
-        try {
-            if (!file.exists()) return
-            val fileLength = file.length()
-            if (fileLength == 0L) return
-            // Only read the tail of the file to avoid OOM on large logs
-            // ~200 bytes per log line × MAX_LINES = ~60KB is plenty
-            val tailBytes = minOf(fileLength, MAX_LINES * 200L)
-            val bytes = java.io.RandomAccessFile(file, "r").use { raf ->
-                raf.seek(fileLength - tailBytes)
-                ByteArray(tailBytes.toInt()).also { raf.readFully(it) }
-            }
-            val seekedMidFile = tailBytes < fileLength
-            // Explicit UTF-8 — see readNewFromFile note (Copilot R4).
-            val lines = String(bytes, Charsets.UTF_8).lines()
-                .filter { it.isNotBlank() }
-                .let { if (seekedMidFile) it.drop(1) else it } // drop partial first line only when we seeked mid-file
-            val entries = lines.mapNotNull { parseLine(it) }.takeLast(MAX_LINES)
-            synchronized(logsLock) {
+        // R5: take logsLock to serialize against readNewFromFile and
+        // clear(). Re-entrant — readNewFromFile may already hold it
+        // when calling us as the "huge-delta fallback" path.
+        synchronized(logsLock) {
+            val file = logFile ?: return
+            try {
+                if (!file.exists()) {
+                    lastReadPosition = 0L
+                    return
+                }
+                val fileLength = file.length()
+                if (fileLength == 0L) {
+                    lastReadPosition = 0L
+                    return
+                }
+                // Only read the tail of the file to avoid OOM on large logs
+                // ~200 bytes per log line × MAX_LINES = ~60KB is plenty
+                val tailBytes = minOf(fileLength, MAX_LINES * 200L)
+                val bytes = java.io.RandomAccessFile(file, "r").use { raf ->
+                    raf.seek(fileLength - tailBytes)
+                    ByteArray(tailBytes.toInt()).also { raf.readFully(it) }
+                }
+                val seekedMidFile = tailBytes < fileLength
+                // Explicit UTF-8 — see readNewFromFile note (Copilot R4).
+                val lines = String(bytes, Charsets.UTF_8).lines()
+                    .filter { it.isNotBlank() }
+                    .let { if (seekedMidFile) it.drop(1) else it } // drop partial first line only when we seeked mid-file
+                val entries = lines.mapNotNull { parseLine(it) }.takeLast(MAX_LINES)
                 _logs.value = entries
+                lastReadPosition = fileLength
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to read log file (full)", e)
             }
-            lastReadPosition = fileLength
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to read log file (full)", e)
         }
     }
 
-    private suspend fun readNewFromFile() {
-        // Serialize concurrent invocations. FileObserver often delivers
-        // MODIFY and CLOSE_WRITE for a single write, and both dispatch
-        // through scope.launch independently. Without this mutex, both
-        // would read lastReadPosition, both would parse overlapping
-        // byte ranges, and append() would emit duplicate log entries.
-        // (Copilot R1.)
-        readMutex.withLock {
+    private fun readNewFromFile() {
+        // R5: serialize via logsLock — same lock used by readAllFromFile
+        // and clear(). Earlier R1 fix used a separate kotlinx Mutex but
+        // that left readAllFromFile and clear() racing on the offset.
+        // synchronized is fine here: this is invoked from
+        // Dispatchers.IO (FileObserver dispatch) which expects to block.
+        synchronized(logsLock) {
             val file = logFile ?: return
             try {
                 if (!file.exists()) {
@@ -231,6 +241,10 @@ object LogCollector {
                 // fall back to full tail read.
                 val maxDelta = MAX_LINES * 200L
                 if (delta > maxDelta) {
+                    // Note: readAllFromFile is called from inside the
+                    // synchronized block. logsLock is a regular monitor
+                    // (re-entrant) so the nested synchronized inside
+                    // readAllFromFile is a no-op acquire.
                     readAllFromFile()
                     return
                 }
@@ -273,14 +287,12 @@ object LogCollector {
                 lastReadPosition = pos + completeBytes.size
                 if (newEntries.isEmpty()) return
 
-                synchronized(logsLock) {
-                    val current = _logs.value.toMutableList()
-                    current.addAll(newEntries)
-                    while (current.size > MAX_LINES) {
-                        current.removeAt(0)
-                    }
-                    _logs.value = current
+                val current = _logs.value.toMutableList()
+                current.addAll(newEntries)
+                while (current.size > MAX_LINES) {
+                    current.removeAt(0)
                 }
+                _logs.value = current
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to read new log entries from file", e)
             }
@@ -315,8 +327,8 @@ object LogCollector {
         lastReadPosition = 0L
     }
 
-    /** TEST ONLY: invoke the offset-based reader directly (it's `private suspend` for production use). */
-    internal suspend fun readNewFromFileForTest() = readNewFromFile()
+    /** TEST ONLY: invoke the offset-based reader directly (it's `private` for production use). */
+    internal fun readNewFromFileForTest() = readNewFromFile()
 
     /** TEST ONLY: read the current offset to assert correct advancement. */
     internal val lastReadPositionForTest: Long get() = lastReadPosition

@@ -344,42 +344,62 @@ class SeekerClawService : Service() {
         // bytes are read on each event.
         val debugLogFile = File(workDir, "node_debug.log")
 
-        // Guard: stop any existing observer before attaching a new one.
+        // Guard: stop any existing observer + reset position + start a
+        // new observer atomically with respect to in-flight forwarders.
+        //
         // onStartCommand can fire multiple times in the same service
         // lifetime (START_STICKY redelivery, explicit start while already
-        // running, etc.). Without this, we'd attach multiple observers
+        // running, etc.). Without dedup we'd attach multiple observers
         // and each FileObserver event would dispatch N forwarders →
         // duplicate log entries. (Copilot R2.)
         //
-        // On reattach (had-existing-observer): set lastPos to the file's
-        // CURRENT length so we don't replay log entries we've already
-        // forwarded. On first attach (clean start): leave lastPos at 0
-        // so the initial-read scope.launch picks up anything Node may
-        // have written before we attached. (Copilot R4.)
-        val hadExistingObserver = nodeDebugObserver != null
-        nodeDebugObserver?.stopWatching()
-        nodeDebugObserver = null
-        nodeDebugLastPos = if (hadExistingObserver && debugLogFile.exists()) {
-            debugLogFile.length()
-        } else {
-            0L
-        }
-
-        // Constants qualified (Java statics not auto-imported into Kotlin
-        // function bodies). (Copilot R1.)
-        nodeDebugObserver = object : FileObserver(
-            workDir,
-            FileObserver.MODIFY or FileObserver.CLOSE_WRITE or FileObserver.MOVED_TO or FileObserver.CREATE,
-        ) {
-            override fun onEvent(event: Int, path: String?) {
-                if (path == "node_debug.log") {
-                    // Dispatch off the FileObserver thread.
-                    scope.launch { forwardNewNodeDebugLines(debugLogFile) }
+        // On reattach: set lastPos to the file's CURRENT length so we
+        // don't replay already-forwarded lines. On first attach: lastPos
+        // stays 0 so the initial read picks up pre-attach writes.
+        // (Copilot R4.)
+        //
+        // R5: ALL of the above must happen under nodeDebugMutex to
+        // serialize against any forwardNewNodeDebugLines coroutines
+        // from the previous observer that are still running. Without
+        // the mutex, an in-flight forwarder could see/clobber the new
+        // lastPos and either skip or duplicate the boundary lines.
+        // The whole sequence is dispatched to scope so onStartCommand
+        // returns fast (and the launch itself is also serialized
+        // against in-flight forwarders by the mutex).
+        scope.launch {
+            nodeDebugMutex.withLock {
+                val hadExistingObserver = nodeDebugObserver != null
+                nodeDebugObserver?.stopWatching()
+                nodeDebugObserver = null
+                nodeDebugLastPos = if (hadExistingObserver && debugLogFile.exists()) {
+                    debugLogFile.length()
+                } else {
+                    0L
                 }
+
+                // Constants qualified (Java statics not auto-imported into
+                // Kotlin function bodies). (Copilot R1.)
+                nodeDebugObserver = object : FileObserver(
+                    workDir,
+                    FileObserver.MODIFY or FileObserver.CLOSE_WRITE or FileObserver.MOVED_TO or FileObserver.CREATE,
+                ) {
+                    override fun onEvent(event: Int, path: String?) {
+                        if (path == "node_debug.log") {
+                            // Dispatch off the FileObserver thread.
+                            scope.launch { forwardNewNodeDebugLines(debugLogFile) }
+                        }
+                    }
+                }.also { it.startWatching() }
             }
-        }.also { it.startWatching() }
-        // Initial read in case Node has already written before we attach.
-        scope.launch { forwardNewNodeDebugLines(debugLogFile) }
+
+            // Initial read for any pre-attach writes (or to consume
+            // anything beyond the new lastPos on a reattach where Node
+            // wrote between our length-read and the new observer's
+            // startWatching call). The function takes the mutex
+            // internally; ordering with the attach above is preserved
+            // because both sequence through the same launch coroutine.
+            forwardNewNodeDebugLines(debugLogFile)
+        }
 
         // Track uptime
         startTimeMs = System.currentTimeMillis()
