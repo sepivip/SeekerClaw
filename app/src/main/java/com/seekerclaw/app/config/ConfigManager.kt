@@ -331,6 +331,20 @@ object ConfigManager {
         val persisted = editor.commit()
         if (persisted) {
             configVersion.intValue++
+            // Keep agent_settings.json overlay in sync with prefs we just
+            // wrote. Without this, prior `/provider` Telegram commands leave
+            // a stale provider/authType/model in the overlay; the next
+            // loadConfig's reconcileWithAgentSettings sees overlay≠prefs
+            // and adopts the STALE overlay back into prefs — silently
+            // reverting whatever Settings UI / Setup / OAuth flow just
+            // saved. By syncing here, the overlay is only "ahead" of
+            // prefs when the legitimate /provider Telegram flow wrote
+            // overlay without touching prefs (which is exactly when the
+            // reconcile is supposed to fire). Pass `configOverride=config`
+            // so writeAgentSettingsJson skips its own loadConfig
+            // round-trip (which would re-trigger the reconcile we're
+            // trying to keep idle). See PR #339 device-test regression.
+            writeAgentSettingsJson(context, configOverride = config)
         } else {
             LogCollector.append("[Config] Failed to persist config (commit=false)", LogLevel.ERROR)
         }
@@ -905,14 +919,11 @@ object ConfigManager {
             "openaiOAuthExpiresAt" -> config.copy(openaiOAuthExpiresAt = value)
             else -> return
         }
+        // saveConfig now syncs the agent_settings.json overlay
+        // automatically (writes prefs + overlay atomically), so the
+        // separate writeAgentSettingsJson call previously here is no
+        // longer needed. See saveConfig for the architectural fix.
         saveConfig(context, updated)
-        // Pass `updated` directly so the overlay reflects the user's
-        // just-saved Settings change. If we let writeAgentSettingsJson
-        // fall back to loadConfig(), reconcileWithAgentSettings would
-        // see a stale overlay (from a prior /provider Telegram command)
-        // and revert prefs.provider/authType/model back to the overlay's
-        // values — silently undoing the Settings UI save.
-        writeAgentSettingsJson(context, configOverride = updated)
     }
 
     fun saveOwnerId(context: Context, ownerId: String): Boolean {
