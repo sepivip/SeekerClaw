@@ -256,11 +256,20 @@ class OpenClawService : Service() {
         ServiceState.updateUptime(0)
 
         // Clean shutdown should clear crash-loop counters. Unexpected deaths won't hit this path.
+        // CRITICAL: use commit() not apply(). apply() is async — Android queues the disk
+        // write to a worker thread and returns immediately. The killProcess(myPid()) call
+        // below sends SIGKILL synchronously, terminating the process before the async
+        // write can flush. Result: the reset is LOST. Next process start reads stale
+        // crashCount, increments it, and after 3 rapid /provider switches the
+        // crash-loop protection in onStartCommand fires and the service stops itself —
+        // bricking the agent until the user restarts the app manually. commit() blocks
+        // until the disk write completes, guaranteeing the reset persists across the
+        // process kill.
         getSharedPreferences("seekerclaw_crash", MODE_PRIVATE)
             .edit()
             .putLong("last_start", 0L)
             .putInt("crash_count", 0)
-            .apply()
+            .commit()
 
         LogCollector.append("[Service] Claw Engine stopped")
         super.onDestroy()
