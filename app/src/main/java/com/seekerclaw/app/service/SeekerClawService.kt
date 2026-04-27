@@ -63,11 +63,17 @@ class SeekerClawService : Service() {
      * without the mutex, two dispatches would read overlapping byte ranges
      * and double-forward each line. (Copilot R1.)
      *
-     * OOM protection: caps the per-call read at `nodeDebugMaxDeltaBytes`.
-     * If Node wrote a huge burst (or events were coalesced during Doze),
-     * we read up to the cap and re-launch ourselves to drain the rest.
-     * Avoids the toInt() overflow + giant ByteArray allocation that the
-     * original unbounded read would hit on a large delta. (Copilot R1.)
+     * Drain loop (Copilot R8): for large deltas exceeding
+     * `nodeDebugMaxDeltaBytes`, we used to recursively `scope.launch`
+     * one coroutine per chunk. That added needless dispatcher overhead
+     * for huge backlogs (e.g. Doze release of queued events). Now: a
+     * `while` loop within a single coroutine, releasing + reacquiring
+     * the mutex between iterations so other writers don't block.
+     *
+     * OOM protection: caps the per-iteration read at
+     * `nodeDebugMaxDeltaBytes`. Avoids the toInt() overflow + giant
+     * ByteArray allocation that the original unbounded read would hit
+     * on a large delta. (Copilot R1.)
      *
      * Line-boundary safety (Copilot R2): when chunked reads hit the
      * 256KB cap mid-line, we'd otherwise emit half a line as one entry
@@ -84,109 +90,125 @@ class SeekerClawService : Service() {
      * file's length will drop below lastPos. Without a reset, the early
      * `length <= pos` guard would silently stop forwarding forever.
      * Detect `length < pos` and reset to 0 so new content is forwarded.
+     *
+     * Errors (Copilot R8): IO/parse failures surface as a WARN log via
+     * LogCollector rather than swallowed silently — "node debug log
+     * forwarding stopped" was previously invisible to production
+     * diagnostics.
      */
     private suspend fun forwardNewNodeDebugLines(debugLogFile: java.io.File) {
-        nodeDebugMutex.withLock {
-            try {
-                if (!debugLogFile.exists()) {
-                    // File doesn't exist yet (cold boot before Node writes,
-                    // OR rotation deleted it before re-creating). Reset
-                    // lastPos so the next CREATE event starts from 0.
-                    nodeDebugLastPos = 0L
-                    return
-                }
-                val length = debugLogFile.length()
-                var pos = nodeDebugLastPos
+        // Drain in a while loop, releasing+reacquiring the mutex between
+        // iterations so other writers don't block. Each iteration reads
+        // up to nodeDebugMaxDeltaBytes; loops until file is fully
+        // drained or we hit the "wait for newline" partial-line case.
+        // Replaces the prior recursive `scope.launch` per chunk which
+        // added unnecessary dispatcher overhead for big backlogs. (R8.)
+        var keepDraining = true
+        while (keepDraining) {
+            keepDraining = nodeDebugMutex.withLock {
+                drainOneNodeDebugChunk(debugLogFile)
+            }
+        }
+    }
 
-                // Rotation/truncation: file shrunk, reset to start. Either
-                // Node truncated in place or rotation replaced it with a
-                // smaller file — either way, lastPos points past the new
-                // EOF and we'd silently never forward again without this.
-                if (length < pos) {
-                    pos = 0L
-                    nodeDebugLastPos = 0L
-                }
+    /**
+     * Single iteration of the node-debug drain loop. Returns true if
+     * there's likely more content to drain (caller should re-invoke);
+     * false otherwise. Caller holds `nodeDebugMutex`.
+     */
+    private fun drainOneNodeDebugChunk(debugLogFile: java.io.File): Boolean {
+        try {
+            if (!debugLogFile.exists()) {
+                // File doesn't exist yet (cold boot before Node writes,
+                // OR rotation deleted it before re-creating). Reset
+                // lastPos so the next CREATE event starts from 0.
+                nodeDebugLastPos = 0L
+                return false
+            }
+            val length = debugLogFile.length()
+            var pos = nodeDebugLastPos
 
-                if (length <= pos) return
+            // Rotation/truncation: file shrunk, reset to start. Either
+            // Node truncated in place or rotation replaced it with a
+            // smaller file — either way, lastPos points past the new
+            // EOF and we'd silently never forward again without this.
+            if (length < pos) {
+                pos = 0L
+                nodeDebugLastPos = 0L
+            }
 
-                val delta = length - pos
-                val readSize = minOf(delta, nodeDebugMaxDeltaBytes).toInt()
-                val newBytes = java.io.RandomAccessFile(debugLogFile, "r").use { raf ->
-                    raf.seek(pos)
-                    ByteArray(readSize).also { raf.readFully(it) }
-                }
+            if (length <= pos) return false
 
-                // Find the last complete line boundary. Newline is byte 0x0A
-                // in both ASCII and UTF-8, so byte-index scanning is safe
-                // regardless of multi-byte chars in the line content.
-                var lastNewlineIdx = -1
-                for (i in newBytes.size - 1 downTo 0) {
-                    if (newBytes[i] == 0x0A.toByte()) { lastNewlineIdx = i; break }
-                }
+            val delta = length - pos
+            val readSize = minOf(delta, nodeDebugMaxDeltaBytes).toInt()
+            val newBytes = java.io.RandomAccessFile(debugLogFile, "r").use { raf ->
+                raf.seek(pos)
+                ByteArray(readSize).also { raf.readFully(it) }
+            }
 
-                // Decide forward strategy based on three cases:
-                //   A) Found a newline in the chunk: forward complete
-                //      lines up to that boundary, leave trailing partial.
-                //   B) No newline AND we're chunking (delta > readSize):
-                //      means there's a line longer than 256KB. Force-
-                //      advance the chunk anyway to avoid wedging — better
-                //      to split a huge line than to never make progress.
-                //      (Copilot R3 caught this wedge case.)
-                //   C) No newline AND we read the whole delta (delta ==
-                //      readSize): file is mid-write with a partial line
-                //      and no chunking needed. Don't advance — the next
-                //      FileObserver event will give us more bytes that
-                //      hopefully include the newline.
-                val (forwardBytes, advanceBy) = if (lastNewlineIdx >= 0) {
-                    // Case A
-                    val complete = newBytes.copyOfRange(0, lastNewlineIdx + 1)
-                    complete to complete.size
-                } else if (delta > readSize) {
-                    // Case B — single line >256KB. Force advance to avoid
-                    // an infinite re-read loop. Forwarding a split line
-                    // as multiple entries is bad UX but bounded; wedging
-                    // forever is worse.
-                    newBytes to newBytes.size
-                } else {
-                    // Case C — wait for more bytes via next event.
-                    return@withLock
-                }
-                nodeDebugLastPos = pos + advanceBy
+            // Find the last complete line boundary. Newline is byte 0x0A
+            // in both ASCII and UTF-8, so byte-index scanning is safe
+            // regardless of multi-byte chars in the line content.
+            var lastNewlineIdx = -1
+            for (i in newBytes.size - 1 downTo 0) {
+                if (newBytes[i] == 0x0A.toByte()) { lastNewlineIdx = i; break }
+            }
 
-                // Explicit UTF-8 — Node writes UTF-8 to node_debug.log;
-                // platform-default decoding could mojibake non-ASCII
-                // messages on devices where the JVM default differs.
-                // (Copilot R4.)
-                val lines = String(forwardBytes, Charsets.UTF_8).lines().filter { it.isNotBlank() }
-                for (line in lines) {
-                    val pipeIdx = line.indexOf('|')
-                    val (level, message) = if (pipeIdx > 0) {
-                        val lvl = line.substring(0, pipeIdx)
-                        val msg = line.substring(pipeIdx + 1)
-                        val parsed = when (lvl) {
-                            "ERROR" -> LogLevel.ERROR
-                            "WARN" -> LogLevel.WARN
-                            "DEBUG" -> LogLevel.DEBUG
-                            "INFO" -> LogLevel.INFO
-                            else -> null
-                        }
-                        if (parsed != null) parsed to msg
-                        else LogLevel.INFO to line  // unknown prefix — treat whole line as INFO
-                    } else {
-                        // Fallback for unparsed lines (old format, raw output)
-                        LogLevel.INFO to line
+            // Decide forward strategy:
+            //   A) Newline found: forward complete lines, keep trailing partial.
+            //   B) No newline + chunking: single line >256KB. Force-advance
+            //      to avoid infinite re-read. (Copilot R3.)
+            //   C) No newline + read whole delta: mid-write partial line.
+            //      Wait for next event with more bytes.
+            val (forwardBytes, advanceBy) = if (lastNewlineIdx >= 0) {
+                val complete = newBytes.copyOfRange(0, lastNewlineIdx + 1)
+                complete to complete.size
+            } else if (delta > readSize) {
+                newBytes to newBytes.size
+            } else {
+                return false  // Case C — wait for next event
+            }
+            nodeDebugLastPos = pos + advanceBy
+
+            // Explicit UTF-8 — Node writes UTF-8; platform-default
+            // decoding could mojibake non-ASCII messages on devices
+            // where the JVM default differs. (Copilot R4.)
+            val lines = String(forwardBytes, Charsets.UTF_8).lines().filter { it.isNotBlank() }
+            for (line in lines) {
+                val pipeIdx = line.indexOf('|')
+                val (level, message) = if (pipeIdx > 0) {
+                    val lvl = line.substring(0, pipeIdx)
+                    val msg = line.substring(pipeIdx + 1)
+                    val parsed = when (lvl) {
+                        "ERROR" -> LogLevel.ERROR
+                        "WARN" -> LogLevel.WARN
+                        "DEBUG" -> LogLevel.DEBUG
+                        "INFO" -> LogLevel.INFO
+                        else -> null
                     }
-                    LogCollector.append("[Node] $message", level)
+                    if (parsed != null) parsed to msg
+                    else LogLevel.INFO to line  // unknown prefix — treat whole line as INFO
+                } else {
+                    // Fallback for unparsed lines (old format, raw output)
+                    LogLevel.INFO to line
                 }
+                LogCollector.append("[Node] $message", level)
+            }
 
-                // If we capped the read and there's still more to consume,
-                // re-launch ourselves to drain the remainder. Always
-                // applicable now that case B advances forward — the only
-                // path that doesn't advance (case C) returned above.
-                if (delta > readSize) {
-                    scope.launch { forwardNewNodeDebugLines(debugLogFile) }
-                }
-            } catch (_: Exception) {}
+            // Capped the read and there's still more in the file? Tell
+            // caller to keep draining. The drain loop releases + reacquires
+            // the mutex between iterations so concurrent writers can
+            // interleave. (Copilot R8 — was a recursive scope.launch.)
+            return delta > readSize
+        } catch (e: Exception) {
+            // Surface failures so silent forwarding stops are diagnosable.
+            // Previously: catch (_) {} which made "Node logs stopped
+            // appearing" impossible to attribute. (Copilot R8.)
+            LogCollector.append(
+                "[Service] node_debug.log forward error: ${e.javaClass.simpleName}: ${e.message}",
+                LogLevel.WARN,
+            )
+            return false  // Don't loop on a persistent error
         }
     }
 

@@ -49,25 +49,24 @@ object LogCollector {
     // for blocking I/O); the perf cost is identical to a Mutex but the
     // call sites stay non-suspend.
 
-    // Lock for in-memory _logs mutations only. Held briefly during the
-    // append-to-list / take-snapshot operations. Multiple threads
-    // (Watchdog IO, ServiceState IO, FileObserver-driven tail reads,
-    // SettingsScreen append() calls from main thread) all need this —
-    // without it, concurrent read-modify-write on _logs.value silently
-    // drops entries (the primary cause of the "empty console" bug).
+    // Locking scheme (Copilot R7/R8):
+    // - `readLock` guards log-file reads (readNewFromFile, readAllFromFile),
+    //   the file-truncating side of clear(), and all `lastReadPosition`
+    //   updates. Held DURING disk I/O.
+    // - `logsLock` guards in-memory `_logs` read-modify-write sequences.
+    //   Held briefly during the append-to-list / take-snapshot only.
     //
-    // Critically: NEVER hold logsLock during disk I/O. UI code calls
-    // append() on the main thread — if logsLock were held during a long
-    // file read, append() would block the main thread → ANR / jank.
-    // (Copilot R7.) File operations use `readLock` instead.
+    // Lock order is ALWAYS readLock → logsLock when both are needed;
+    // never the reverse — no deadlock. Keep disk I/O OUT of logsLock so
+    // append() (called from main thread by SettingsScreen and other UI
+    // code) never blocks on a file read → no ANR / jank.
+    //
+    // Multiple threads call append() concurrently (Watchdog IO,
+    // ServiceState IO, FileObserver-driven tail reads, UI). Without
+    // logsLock, concurrent read-modify-write on `_logs.value` silently
+    // drops entries (the primary cause of the original "empty console"
+    // bug).
     private val logsLock = Any()
-
-    // Serializes file reads (readNewFromFile, readAllFromFile) and the
-    // file-truncating side of clear(). Held during disk I/O AND across
-    // the lastReadPosition update. This is a SEPARATE lock from
-    // logsLock so a slow file read doesn't block UI threads calling
-    // append(). Lock order is ALWAYS readLock → logsLock (when both
-    // needed); never the reverse — no deadlock. (Copilot R7.)
     private val readLock = Any()
 
     fun init(context: Context) {
@@ -166,10 +165,10 @@ object LogCollector {
             override fun onEvent(event: Int, path: String?) {
                 if (path == LOG_FILE_NAME) {
                     // Dispatch off the FileObserver thread. readNewFromFile
-                    // serializes via synchronized(logsLock) internally so
-                    // concurrent dispatches (FileObserver often emits
-                    // MODIFY + CLOSE_WRITE for one write) don't double-
-                    // read the same byte range. (R5 consolidated locks.)
+                    // serializes file reads + lastReadPosition updates via
+                    // `readLock` internally, so concurrent dispatches
+                    // (FileObserver often emits MODIFY + CLOSE_WRITE for
+                    // one write) don't double-read the same byte range.
                     scope.launch { readNewFromFile() }
                 }
             }
