@@ -49,12 +49,26 @@ object LogCollector {
     // for blocking I/O); the perf cost is identical to a Mutex but the
     // call sites stay non-suspend.
 
-    // Lock for all in-memory _logs mutations to prevent TOCTOU races.
-    // Multiple threads (Watchdog IO, ServiceState IO, FileObserver-driven
-    // tail reads) call append() concurrently — without this lock, concurrent
-    // read-modify-write on _logs.value silently drops entries (the primary
-    // cause of the "empty console" bug).
+    // Lock for in-memory _logs mutations only. Held briefly during the
+    // append-to-list / take-snapshot operations. Multiple threads
+    // (Watchdog IO, ServiceState IO, FileObserver-driven tail reads,
+    // SettingsScreen append() calls from main thread) all need this —
+    // without it, concurrent read-modify-write on _logs.value silently
+    // drops entries (the primary cause of the "empty console" bug).
+    //
+    // Critically: NEVER hold logsLock during disk I/O. UI code calls
+    // append() on the main thread — if logsLock were held during a long
+    // file read, append() would block the main thread → ANR / jank.
+    // (Copilot R7.) File operations use `readLock` instead.
     private val logsLock = Any()
+
+    // Serializes file reads (readNewFromFile, readAllFromFile) and the
+    // file-truncating side of clear(). Held during disk I/O AND across
+    // the lastReadPosition update. This is a SEPARATE lock from
+    // logsLock so a slow file read doesn't block UI threads calling
+    // append(). Lock order is ALWAYS readLock → logsLock (when both
+    // needed); never the reverse — no deadlock. (Copilot R7.)
+    private val readLock = Any()
 
     fun init(context: Context) {
         logFile = File(context.filesDir, LOG_FILE_NAME)
@@ -78,13 +92,19 @@ object LogCollector {
     }
 
     fun clear() {
-        synchronized(logsLock) {
-            _logs.value = emptyList()
+        // R7: take readLock for the file truncate + offset reset (serializes
+        // against any in-flight readNewFromFile / readAllFromFile). Take
+        // logsLock briefly inside for the in-memory list reset. Lock order
+        // matches readNewFromFile's: readLock outer, logsLock inner.
+        synchronized(readLock) {
             try {
                 logFile?.writeText("")
                 lastReadPosition = 0L
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to clear log file", e)
+            }
+            synchronized(logsLock) {
+                _logs.value = emptyList()
             }
         }
     }
@@ -185,10 +205,12 @@ object LogCollector {
     }
 
     private fun readAllFromFile() {
-        // R5: take logsLock to serialize against readNewFromFile and
-        // clear(). Re-entrant — readNewFromFile may already hold it
-        // when calling us as the "huge-delta fallback" path.
-        synchronized(logsLock) {
+        // R7: take readLock for the file read + offset update. Acquire
+        // logsLock briefly only for the in-memory list assignment.
+        // synchronized blocks are reentrant on JVM, so the readLock
+        // acquire here is a no-op when called from readNewFromFile's
+        // huge-delta fallback path (which already holds it).
+        synchronized(readLock) {
             val file = logFile ?: return
             try {
                 if (!file.exists()) {
@@ -213,8 +235,11 @@ object LogCollector {
                     .filter { it.isNotBlank() }
                     .let { if (seekedMidFile) it.drop(1) else it } // drop partial first line only when we seeked mid-file
                 val entries = lines.mapNotNull { parseLine(it) }.takeLast(MAX_LINES)
-                _logs.value = entries
                 lastReadPosition = fileLength
+                // Brief logsLock for the in-memory update only.
+                synchronized(logsLock) {
+                    _logs.value = entries
+                }
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to read log file (full)", e)
             }
@@ -222,12 +247,12 @@ object LogCollector {
     }
 
     private fun readNewFromFile() {
-        // R5: serialize via logsLock — same lock used by readAllFromFile
-        // and clear(). Earlier R1 fix used a separate kotlinx Mutex but
-        // that left readAllFromFile and clear() racing on the offset.
-        // synchronized is fine here: this is invoked from
-        // Dispatchers.IO (FileObserver dispatch) which expects to block.
-        synchronized(logsLock) {
+        // R7: serialize file ops via readLock. NEVER hold logsLock here —
+        // append() (called from UI / main thread) takes logsLock briefly,
+        // and would block on the file read otherwise → ANR / startup jank.
+        // logsLock is acquired only at the very end for the tiny in-memory
+        // list update.
+        synchronized(readLock) {
             val file = logFile ?: return
             try {
                 if (!file.exists()) {
@@ -255,18 +280,17 @@ object LogCollector {
                 val delta = currentLength - pos
                 // Cap per-call read to prevent OOM after long background gaps
                 // (e.g. Doze mode coalesced events). If delta exceeds budget,
-                // fall back to full tail read.
+                // fall back to full tail read. readLock is non-reentrant
+                // (it's a regular Object monitor — synchronized blocks ARE
+                // reentrant in JVM, so the nested synchronized inside
+                // readAllFromFile is a no-op acquire).
                 val maxDelta = MAX_LINES * 200L
                 if (delta > maxDelta) {
-                    // Note: readAllFromFile is called from inside the
-                    // synchronized block. logsLock is a regular monitor
-                    // (re-entrant) so the nested synchronized inside
-                    // readAllFromFile is a no-op acquire.
                     readAllFromFile()
                     return
                 }
 
-                // Read only new bytes
+                // Read only new bytes (still under readLock; logsLock NOT held)
                 val newBytes = java.io.RandomAccessFile(file, "r").use { raf ->
                     raf.seek(pos)
                     ByteArray(delta.toInt()).also { raf.readFully(it) }
@@ -304,12 +328,17 @@ object LogCollector {
                 lastReadPosition = pos + completeBytes.size
                 if (newEntries.isEmpty()) return
 
-                val current = _logs.value.toMutableList()
-                current.addAll(newEntries)
-                while (current.size > MAX_LINES) {
-                    current.removeAt(0)
+                // Brief logsLock acquire ONLY for the in-memory list mutation.
+                // append() can compete here, but the lock is held for
+                // microseconds — no main-thread jank. (Copilot R7.)
+                synchronized(logsLock) {
+                    val current = _logs.value.toMutableList()
+                    current.addAll(newEntries)
+                    while (current.size > MAX_LINES) {
+                        current.removeAt(0)
+                    }
+                    _logs.value = current
                 }
-                _logs.value = current
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to read new log entries from file", e)
             }
@@ -337,12 +366,14 @@ object LogCollector {
     }
 
     /** TEST ONLY: reset the singleton's offset + buffer between tests.
-     *  Must reset both fields under `logsLock` to match the production
-     *  contract — production reads/writes always hold the lock. (Copilot R6.) */
+     *  Mirrors production locking: readLock for the offset, logsLock
+     *  for the in-memory list. (Copilot R6 + R7.) */
     internal fun resetForTest() {
-        synchronized(logsLock) {
-            _logs.value = emptyList()
+        synchronized(readLock) {
             lastReadPosition = 0L
+            synchronized(logsLock) {
+                _logs.value = emptyList()
+            }
         }
     }
 

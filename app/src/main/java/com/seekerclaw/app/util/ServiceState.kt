@@ -228,11 +228,20 @@ object ServiceState {
      * (Copilot R2/R4 — startWatching is invoked from Application.onCreate
      * on the main thread; doing 4 disk reads there risks StrictMode
      * violations + startup jank). The first-time restore (read from
-     * service_state, daily reset check) is also dispatched, so NO disk
-     * I/O happens on the caller thread. UI screens that compose before
-     * the dispatched reads complete may see default StateFlow values
-     * (STOPPED / 0 / 0 / 0) briefly until the reads land — observers
-     * also fire on subsequent writes, so eventual consistency holds.
+     * service_state, daily reset check) is also dispatched.
+     *
+     * Caller-thread disk I/O caveat (Copilot R7): `workspaceDir.mkdirs()`
+     * still runs on the caller thread because the FileObserver attach
+     * needs the directory to exist BEFORE startWatching() returns.
+     * `mkdirs()` is a no-op stat on existing directories (the common
+     * case); only fresh installs incur an actual directory creation.
+     * StrictMode's diskIo policy may flag this; for a 24/7 service
+     * that runs onCreate exactly once per process, it's acceptable.
+     *
+     * UI screens that compose before the dispatched reads complete may
+     * see default StateFlow values (STOPPED / 0 / 0 / 0) briefly —
+     * observers also fire on subsequent writes, so eventual consistency
+     * holds.
      */
     fun startWatching(context: Context) {
         // Sync setup: just file path refs, no I/O. The actual disk reads
@@ -242,11 +251,23 @@ object ServiceState {
         // called here and DID do sync disk I/O on first invocation.)
         initFileRefs(context)
 
-        // Guard: skip if observers are already attached (BAT-217 — prevents
-        // duplicate event dispatch that could write duplicate log entries).
-        if (filesDirObserver != null || workspaceDirObserver != null) {
+        // Guard: skip if observers are already FULLY attached (BAT-217 —
+        // prevents duplicate event dispatch that could write duplicate
+        // log entries). Detect partial state explicitly: if exactly
+        // one observer is attached, the previous attempt failed mid-way;
+        // tear down the partial setup and reattach both. (Copilot R7.)
+        val filesAttached = filesDirObserver != null
+        val workspaceAttached = workspaceDirObserver != null
+        if (filesAttached && workspaceAttached) {
             Log.d(TAG, "startWatching: already active, skipping")
             return
+        }
+        if (filesAttached || workspaceAttached) {
+            Log.w(TAG, "startWatching: partial observer state (files=$filesAttached, workspace=$workspaceAttached) — tearing down + reattaching")
+            filesDirObserver?.stopWatching()
+            workspaceDirObserver?.stopWatching()
+            filesDirObserver = null
+            workspaceDirObserver = null
         }
 
         val parent = stateFile?.parentFile

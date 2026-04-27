@@ -344,8 +344,8 @@ class SeekerClawService : Service() {
         // bytes are read on each event.
         val debugLogFile = File(workDir, "node_debug.log")
 
-        // Guard: stop any existing observer + reset position + start a
-        // new observer atomically with respect to in-flight forwarders.
+        // Guard: stop any existing observer + start a new one atomically
+        // with respect to in-flight forwarders.
         //
         // onStartCommand can fire multiple times in the same service
         // lifetime (START_STICKY redelivery, explicit start while already
@@ -353,29 +353,31 @@ class SeekerClawService : Service() {
         // and each FileObserver event would dispatch N forwarders →
         // duplicate log entries. (Copilot R2.)
         //
-        // On reattach: set lastPos to the file's CURRENT length so we
-        // don't replay already-forwarded lines. On first attach: lastPos
-        // stays 0 so the initial read picks up pre-attach writes.
-        // (Copilot R4.)
+        // R7: nodeDebugLastPos is INTENTIONALLY NOT reset on reattach.
+        // My earlier R4 fix reset it to file.length() to "avoid replaying
+        // already-forwarded lines on reattach," but that was wrong: it
+        // could skip un-forwarded bytes that the previous observer had
+        // detected but whose forward coroutines hadn't yet run. The
+        // correct behavior is to leave nodeDebugLastPos at whatever the
+        // previous observer last advanced it to:
+        //   - First attach (clean process start): lastPos == 0 (default
+        //     field value), initial read forwards the entire log. This
+        //     is the same as the pre-BAT-518 polling code, which started
+        //     each onStartCommand with `var lastPos = 0L`.
+        //   - Within-process reattach: lastPos == previous value, so
+        //     initial read picks up exactly the bytes since the last
+        //     forward. No replay, no dropped bytes.
         //
-        // R5: ALL of the above must happen under nodeDebugMutex to
-        // serialize against any forwardNewNodeDebugLines coroutines
-        // from the previous observer that are still running. Without
-        // the mutex, an in-flight forwarder could see/clobber the new
-        // lastPos and either skip or duplicate the boundary lines.
-        // The whole sequence is dispatched to scope so onStartCommand
-        // returns fast (and the launch itself is also serialized
-        // against in-flight forwarders by the mutex).
+        // R5: the stop-existing + attach-new sequence happens under
+        // nodeDebugMutex to serialize against any forwardNewNodeDebugLines
+        // coroutines from the previous observer that are still running.
+        // Without the mutex, an in-flight forwarder could see/clobber
+        // the new state. The whole sequence is dispatched to scope so
+        // onStartCommand returns fast.
         scope.launch {
             nodeDebugMutex.withLock {
-                val hadExistingObserver = nodeDebugObserver != null
                 nodeDebugObserver?.stopWatching()
                 nodeDebugObserver = null
-                nodeDebugLastPos = if (hadExistingObserver && debugLogFile.exists()) {
-                    debugLogFile.length()
-                } else {
-                    0L
-                }
 
                 // Constants qualified (Java statics not auto-imported into
                 // Kotlin function bodies). (Copilot R1.)
@@ -392,12 +394,12 @@ class SeekerClawService : Service() {
                 }.also { it.startWatching() }
             }
 
-            // Initial read for any pre-attach writes (or to consume
-            // anything beyond the new lastPos on a reattach where Node
-            // wrote between our length-read and the new observer's
-            // startWatching call). The function takes the mutex
-            // internally; ordering with the attach above is preserved
-            // because both sequence through the same launch coroutine.
+            // Initial read drains any bytes from current lastPos to file
+            // end. On first attach (lastPos==0), forwards entire log.
+            // On reattach (lastPos > 0), forwards only what's new since
+            // the previous observer's last advance. Function takes the
+            // mutex internally; ordering with the attach above is
+            // preserved because both sequence through the same launch.
             forwardNewNodeDebugLines(debugLogFile)
         }
 
