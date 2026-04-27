@@ -115,20 +115,22 @@ object ServiceState {
      * Must be called before any updateStatus/incrementMessages/addTokens.
      *
      * Performs synchronous disk I/O on the calling thread (file read +
-     * daily-reset write). Acceptable for `SeekerClawService.onStartCommand`
-     * (the :node process's service main thread, no UI work) but main-
-     * process UI callers should prefer `startWatching` instead, which
-     * dispatches the I/O off-thread. Marked @WorkerThread to discourage
-     * main-thread invocation and surface in StrictMode if violated.
-     * (Copilot R14.)
+     * daily-reset write). Intentionally sync because the only known
+     * caller is `SeekerClawService.onStartCommand` (the :node process's
+     * service main thread, no UI work — a few ms of disk I/O during
+     * service start is fine). Main-process UI callers should NOT use
+     * this — they should call `startWatching` instead, which moves
+     * the disk I/O off the main thread.
+     *
+     * No `@WorkerThread` annotation: SeekerClawService.onStartCommand
+     * is a documented main-thread caller, and Android Lint correctly
+     * flags @WorkerThread mismatches for component callbacks. Marking
+     * this would force a SuppressLint at the call site without
+     * actually preventing misuse — the comment above is a clearer
+     * contract. (Copilot R14 + R16 — original R14 ask was for the
+     * annotation; R16 caught the resulting contradiction.)
      */
-    @androidx.annotation.WorkerThread
     fun init(context: Context) {
-        // Synchronous bootstrap: file path + first-time restore from disk.
-        // The :node process's onStartCommand is technically also a main
-        // thread, but it's a Service main thread (no Choreographer / UI
-        // rendering) so a few ms of I/O during service start is fine.
-        // Main-process UI callers should use startWatching instead.
         initFileRefs(context)
         restoreFromDisk()  // Idempotent — single-flight via initLock
     }
