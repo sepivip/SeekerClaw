@@ -412,6 +412,21 @@ class SeekerClawService : Service() {
                 nodeDebugObserver?.stopWatching()
                 nodeDebugObserver = null
 
+                // Defensive: only attach FileObserver if workDir is
+                // actually a directory. The earlier `mkdirs()` could have
+                // failed silently (filesystem error / permission / a
+                // non-directory file at the path). Without this check,
+                // FileObserver attachment to a missing or non-directory
+                // path silently no-ops and node debug forwarding stops
+                // working with no diagnostic. (Copilot R15.)
+                if (!workDir.isDirectory) {
+                    LogCollector.append(
+                        "[Service] workDir not a directory (${workDir.absolutePath}) — node debug log forwarding disabled",
+                        LogLevel.ERROR,
+                    )
+                    return@withLock
+                }
+
                 // Constants qualified (Java statics not auto-imported into
                 // Kotlin function bodies). (Copilot R1.) Mask includes
                 // DELETE (R12) so log rotation that removes

@@ -307,7 +307,17 @@ object ServiceState {
         // service startup. Idempotent. mkdirs is fast (single stat) so OK
         // on caller thread; the slow part is the file reads below, which
         // are dispatched.
-        val workspaceDir = File(parent, "workspace").apply { mkdirs() }
+        //
+        // Defensive: validate the result. mkdirs() returns false on failure
+        // (filesystem error, permission, OR a non-directory file at that
+        // path blocking creation). Without this check, FileObserver
+        // attachment to a missing/non-dir path silently no-ops and the UI
+        // never receives updates for the workspace files. (Copilot R15.)
+        val workspaceDir = File(parent, "workspace")
+        if (!workspaceDir.isDirectory) {
+            workspaceDir.mkdirs()
+        }
+        val workspaceUsable = workspaceDir.isDirectory
 
         Log.d(TAG, "startWatching: attaching FileObservers; initial reads dispatched")
 
@@ -326,12 +336,21 @@ object ServiceState {
             }
         }.also { it.startWatching() }
 
-        workspaceDirObserver = makeDirObserver(workspaceDir, watchedFiles = workspaceWatched) { path ->
-            when (path) {
-                "agent_health_state" -> readAgentHealthFile()
-                "api_usage_state" -> readApiUsageFile()
-            }
-        }.also { it.startWatching() }
+        if (workspaceUsable) {
+            workspaceDirObserver = makeDirObserver(workspaceDir, watchedFiles = workspaceWatched) { path ->
+                when (path) {
+                    "agent_health_state" -> readAgentHealthFile()
+                    "api_usage_state" -> readApiUsageFile()
+                }
+            }.also { it.startWatching() }
+        } else {
+            Log.w(
+                TAG,
+                "startWatching: workspace dir not usable (${workspaceDir.absolutePath}) — " +
+                    "skipping workspace FileObserver. agent_health_state and api_usage_state " +
+                    "will not auto-refresh; rely on initial dispatched read only.",
+            )
+        }
 
         // Initial reads on Dispatchers.IO — startWatching is invoked from
         // Application.onCreate (main thread); doing 4 disk reads there
