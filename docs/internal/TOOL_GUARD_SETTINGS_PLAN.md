@@ -1457,8 +1457,11 @@ await loadToolGuardConfig();
 ```
 
 **Important timing:** `loadToolGuardConfig()` must run AFTER the AndroidBridge is
-available (bridge starts in SeekerClawService.kt before Node.js). The bridge port
-(8765) and auth token are passed via config.json at startup.
+available. In the current `SeekerClawService.kt` startup sequence (~line 139–162),
+`NodeBridge.start()` runs first and `androidBridge.start()` runs after — so Node.js
+code can race the bridge on cold boot. The bridge port (8765) and auth token are
+passed via `config.json` at startup; `loadToolGuardConfig()` should retry with
+backoff (see Section 7.3) instead of assuming the bridge is up on first call.
 
 #### `claude.js` — Confirmation Gate (line ~1616)
 
@@ -1791,9 +1794,12 @@ MCP patterns + rate limits.
 
 **Mitigation:**
 - Fallback to hardcoded defaults is already implemented (see 3.1)
-- SeekerClawService starts bridge BEFORE Node.js (existing behavior)
-- Add retry with backoff: try bridge 3x at 1s intervals before falling back
-- Log clearly when fallback is used so users can diagnose
+- Current startup order in `SeekerClawService.kt` does NOT guarantee AndroidBridge
+  is ready before Node.js — `NodeBridge.start()` runs first, `androidBridge.start()`
+  runs after, so `/tool-guard` MUST tolerate bridge readiness lag on cold boot
+- Add retry with backoff: if the initial `/tool-guard` call fails because the
+  bridge is not yet listening, retry 3x at 1s intervals before falling back
+- Log clearly when retry/fallback is used so users can diagnose startup-timing issues
 
 ### 4. Config Corruption
 
