@@ -196,10 +196,14 @@ t('bridge runtime.provider is blank → treated as absent → model applied', as
     assert.strictEqual(await resolveActiveModel(bridge, 'claude-opus-4-7', 'claude'), 'claude-sonnet-4-6');
 });
 
-t('bridge runtime.provider non-string → falls back (defensive)', async () => {
-    // Defense against tampered or version-skewed bridge response.
+t('bridge runtime.provider non-string → treated as absent → model applied', async () => {
+    // Defensive contract: a tampered or version-skewed bridge response
+    // that returns a number/null/object for `provider` should be treated
+    // the same as the field being absent — the running provider hasn't
+    // changed, so the model field is honored. Only an explicit non-blank
+    // STRING that differs from startup PROVIDER triggers the race-window
+    // fallback. (Copilot R5 caught a name/behavior mismatch here.)
     const bridge = stubBridge({ ok: true, runtime: { provider: 42, model: 'gpt-5.5' } });
-    // provider=42 → trimmed to '' → treated as absent → model applied
     assert.strictEqual(await resolveActiveModel(bridge, 'gpt-5.4', 'openai'), 'gpt-5.5');
 });
 

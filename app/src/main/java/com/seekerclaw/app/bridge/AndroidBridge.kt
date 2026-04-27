@@ -335,6 +335,21 @@ class AndroidBridge(
                 if (def.isNotBlank()) def else current.model
             }
 
+            // Custom provider hard-exits Node startup on a blank model
+            // (config.js rejects PROVIDER=custom + blank MODEL), which
+            // would crash-loop the service into the 3-restarts-in-30s
+            // protection trip. Reject this combination at the bridge
+            // boundary so we never persist it. The Node-side /provider
+            // handler also guards this path before calling us, but a
+            // direct bridge caller (Settings UI, future automation,
+            // tampered client) could still hit it without the Node
+            // gate. Belt-and-suspenders. Copilot R5 caught this gap.
+            if (provider == "custom" && effectiveModel.isBlank()) {
+                return jsonResponse(400, mapOf(
+                    "error" to "custom provider requires a non-blank model — set one via /config/save-model first"
+                ))
+            }
+
             ConfigManager.saveConfig(
                 context, current.copy(
                     provider = provider,
