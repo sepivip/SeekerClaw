@@ -37,17 +37,21 @@ object LogCollector {
     @Volatile private var lastReadPosition = 0L
     private val scope = CoroutineScope(Dispatchers.IO)
 
-    // Locking scheme (Copilot R7/R8/R10):
-    // - `readLock` guards log-file reads (readNewFromFile, readAllFromFile),
-    //   the file-truncating side of clear(), and all `lastReadPosition`
-    //   updates. Held DURING disk I/O.
+    // Locking scheme (Copilot R7/R8/R10/R13):
+    // - `readLock` guards EVERY file operation: reads (readNewFromFile,
+    //   readAllFromFile), the file-truncating side of clear(), the
+    //   appendText() in writeToFile(), and all `lastReadPosition`
+    //   updates. Held DURING disk I/O. Ensures clear() can't race a
+    //   concurrent append and lose data.
     // - `logsLock` guards in-memory `_logs` read-modify-write sequences.
     //   Held briefly during the append-to-list / take-snapshot only.
     //
     // Lock order is ALWAYS readLock → logsLock when both are needed;
-    // never the reverse — no deadlock. Keep disk I/O OUT of logsLock so
-    // append() (called from main thread by SettingsScreen and other UI
-    // code) never blocks on a file read → no ANR / jank.
+    // never the reverse — no deadlock. logsLock is held briefly enough
+    // (microseconds for in-memory list ops) that holding readLock during
+    // a write doesn't block UI's append() append-to-list path
+    // measurably. The file write inside readLock is also fast
+    // (single open-write-close cycle).
     //
     // Multiple threads call append() concurrently (Watchdog IO,
     // ServiceState IO, FileObserver-driven tail reads, UI). Without
@@ -190,11 +194,32 @@ object LogCollector {
     fun startPolling(context: Context) = startWatching(context)
 
     private fun writeToFile(entry: LogEntry) {
-        val file = logFile ?: return
-        try {
-            file.appendText("${entry.timestamp}|${entry.level.name}|${entry.message}\n")
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to write log entry to file", e)
+        // Take readLock to serialize the append against:
+        //   • clear() — which truncates the file and resets
+        //     lastReadPosition. Without this lock, an append landing
+        //     between clear()'s writeText("") and the offset reset
+        //     would be lost (next read sees lastReadPosition=0 but
+        //     the file has been truncated to ""), or the file would
+        //     contain "X" while readers think it's empty.
+        //   • readAllFromFile / readNewFromFile — which depend on a
+        //     consistent file-length-vs-lastReadPosition relationship
+        //     while reading. An interleaved append between length-read
+        //     and seek+read could yield surprising mid-buffer writes.
+        // (Copilot R13.)
+        //
+        // append() is called from many threads (Watchdog IO,
+        // ServiceState IO, FileObserver dispatch, UI). file.appendText
+        // is a single open-write-close cycle (microseconds) so the
+        // contention envelope is small. JVM synchronized is reentrant,
+        // so re-entry from a path that already holds readLock is a
+        // no-op.
+        synchronized(readLock) {
+            val file = logFile ?: return
+            try {
+                file.appendText("${entry.timestamp}|${entry.level.name}|${entry.message}\n")
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to write log entry to file", e)
+            }
         }
     }
 
