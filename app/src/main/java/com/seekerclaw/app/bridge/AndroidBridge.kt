@@ -296,8 +296,20 @@ class AndroidBridge(
      * /service/restart so it's durable across :node process death.
      */
     private fun handleConfigSaveProvider(params: JSONObject): Response {
-        val provider = params.optString("provider", "").trim().lowercase()
-        val authType = params.optString("authType", "").trim().lowercase()
+        // Defensive parsing (Copilot R10):
+        //   - `params.opt(...) as? String` rejects non-string JSON values
+        //     instead of silently coercing via toString() — without this,
+        //     `{provider: {}}` would become "{}" and slip past the
+        //     allowlist check in the rare freeform-provider edge.
+        //   - `Locale.ROOT` lowercase avoids the Turkish-locale ASCII bug
+        //     where "I" becomes "ı", which would make a uppercase-typed
+        //     "OPENAI" fail the lowercase comparison against "openai".
+        val provider = ((params.opt("provider") as? String) ?: "")
+            .trim()
+            .lowercase(Locale.ROOT)
+        val authType = ((params.opt("authType") as? String) ?: "")
+            .trim()
+            .lowercase(Locale.ROOT)
 
         // Validate against the canonical provider registry in Providers.kt.
         // Hardcoding KNOWN_PROVIDERS / authTypes here would diverge from
@@ -427,7 +439,13 @@ class AndroidBridge(
      * Telegram /model used to do.
      */
     private fun handleConfigSaveModel(params: JSONObject): Response {
-        val model = params.optString("model", "").trim()
+        // Defensive: reject non-string JSON values explicitly. optString
+        // would coerce `{model: 42}` → "42" and freeform providers
+        // (openrouter/custom) would accept it as a valid model ID.
+        // (Copilot R10.)
+        val rawModel = params.opt("model")
+        val model = (rawModel as? String)?.trim()
+            ?: return jsonResponse(400, mapOf("error" to "model must be a string"))
         if (model.isBlank()) {
             return jsonResponse(400, mapOf("error" to "model is required"))
         }
