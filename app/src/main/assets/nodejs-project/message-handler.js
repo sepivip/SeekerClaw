@@ -462,21 +462,27 @@ async function resolveActiveProviderState() {
 
     const rawProvider = runtime && nonBlank(runtime.provider) ? runtime.provider.trim() : null;
     const providerValid = rawProvider && modelCatalog.KNOWN_PROVIDERS.includes(rawProvider);
-    // Provider-scoping: during the /provider restart window, prefs may
-    // already carry the NEW provider but Node is still running the OLD
-    // adapter. Returning the new provider would make /model display +
-    // validate against an adapter we can't talk to yet. Same logic
-    // resolveActiveModel uses for its model-scoping fallback.
+    // Provider field (used for /model display + allowlist gating): only
+    // adopt the bridge value when it's an explicit known provider AND
+    // matches startup PROVIDER. Otherwise fall back to startup so we
+    // never display/validate against an adapter Node can't actually
+    // talk to (mid-restart race window).
     const providerMatchesStartup = providerValid && rawProvider === PROVIDER;
     const provider = providerMatchesStartup ? rawProvider : PROVIDER;
 
-    // Model: when the bridge-reported provider matches startup, honor the
-    // bridge-reported model (Settings UI / Telegram /model writes). When
-    // it doesn't (mid-restart race) OR the bridge call failed, fall back
-    // to the startup MODEL const. Mirrors config.resolveActiveModel's
-    // logic so /status, /version, ai.js, and this all agree.
+    // Model-scoping is intentionally LOOSER than the provider field
+    // above — it mirrors config.resolveActiveModel's rule, so /status,
+    // /version, ai.js, and Telegram commands all agree on the same
+    // value. Honor runtime.model whenever runtime.provider is absent /
+    // blank / non-string (no scoping signal); ONLY fall back to startup
+    // MODEL when runtime.provider is an explicit non-blank string that
+    // differs from startup PROVIDER (the active scoping race). Without
+    // this looser rule, prefs corruption or version skew that returned
+    // a blank provider but a valid model would silently revert /status
+    // to the startup model. Copilot R12 caught the mismatch.
+    const providerScopesAway = !!(runtime && rawProvider && rawProvider !== PROVIDER);
     let model = MODEL;
-    if (providerMatchesStartup && runtime) {
+    if (runtime && !providerScopesAway) {
         const m = typeof runtime.model === 'string' ? runtime.model.trim() : '';
         if (m) model = m;
     }
