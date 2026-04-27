@@ -10,9 +10,27 @@ const { BRIDGE_TOKEN, log } = require('./config');
 // ANDROID BRIDGE HTTP CLIENT
 // ============================================================================
 
-// Helper for Android Bridge HTTP calls
-// timeoutMs: default 10s for quick calls, use longer for interactive flows (wallet approval)
-async function androidBridgeCall(endpoint, data = {}, timeoutMs = 10000) {
+// Helper for Android Bridge HTTP calls.
+//
+// Parameters:
+//   endpoint  — e.g. '/config/runtime'
+//   data      — POST body (defaults to {})
+//   timeoutMs — default 10s for quick calls, use longer for interactive
+//               flows (wallet approval). Pass 0 to disable timeout.
+//   options   — optional behavior flags:
+//                 silent: true  → don't log connection errors at ERROR.
+//                                 Use for hot-path callers where
+//                                 transient cold-boot / restart-window
+//                                 failures are EXPECTED (the caller
+//                                 falls back gracefully on `{error}`).
+//                                 The error string is still returned in
+//                                 the resolved value so the caller can
+//                                 distinguish failure from success.
+//                                 (Copilot R13: /config/runtime per
+//                                 chat turn would log ERROR during cold
+//                                 boot when bridge isn't up yet.)
+async function androidBridgeCall(endpoint, data = {}, timeoutMs = 10000, options = {}) {
+    const silent = options.silent === true;
     return new Promise((resolve) => {
         const postData = JSON.stringify(data);
 
@@ -41,7 +59,9 @@ async function androidBridgeCall(endpoint, data = {}, timeoutMs = 10000) {
         });
 
         req.on('error', (e) => {
-            log(`Android Bridge error: ${e.message}`, 'ERROR');
+            if (!silent) {
+                log(`Android Bridge error: ${e.message}`, 'ERROR');
+            }
             resolve({ error: `Android Bridge unavailable: ${e.message}` });
         });
 

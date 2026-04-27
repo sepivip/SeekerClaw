@@ -267,11 +267,29 @@ const AGENT_NAME = config.agentName || 'SeekerClaw';
  *   - runtime.provider is set AND differs from the startup PROVIDER
  *     (provider switch is pending; old adapter can't use new model)
  */
+// Lazy-cached bridge.androidBridgeCall reference. bridge.js requires
+// config.js, so we can't `require('./bridge')` at module top — that
+// would deadlock the circular import. Cache after first call so the
+// per-turn hot path doesn't re-resolve the require cache every time.
+// Copilot R13 caught this.
+let _cachedAndroidBridgeCall = null;
+function _getAndroidBridgeCall() {
+    if (_cachedAndroidBridgeCall) return _cachedAndroidBridgeCall;
+    _cachedAndroidBridgeCall = require('./bridge').androidBridgeCall;
+    return _cachedAndroidBridgeCall;
+}
+
 async function resolveActiveModel() {
     try {
-        // Lazy require to avoid circular imports — bridge.js requires config.js.
-        const { androidBridgeCall } = require('./bridge');
-        const res = await androidBridgeCall('/config/runtime', {}, 3000);
+        // `silent: true` — connection failures during cold boot (Node
+        // starts before AndroidBridge in SeekerClawService) and during
+        // /provider restart windows are EXPECTED and the caller falls
+        // back to startup MODEL gracefully. Without this flag, every
+        // chat() turn during the bridge's ~1s startup window would
+        // emit an ERROR-level log line. The error string still comes
+        // back in `res.error` so the failure path below stays correct.
+        const androidBridgeCall = _getAndroidBridgeCall();
+        const res = await androidBridgeCall('/config/runtime', {}, 3000, { silent: true });
         if (!res || res.error || !res.runtime || typeof res.runtime !== 'object') {
             return MODEL;
         }
