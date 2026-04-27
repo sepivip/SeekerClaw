@@ -90,7 +90,7 @@ async function visionAnalyzeImage(imageBase64, prompt, maxTokens = 400) {
     }];
     const apiMessages = adapter.toApiMessages(neutralMessages);
     const systemBlocks = adapter.formatSystemPrompt('You are a vision assistant.', '', AUTH_TYPE);
-    const body = adapter.formatRequest(resolveActiveModel(), cappedMaxTokens, systemBlocks, apiMessages, []);
+    const body = adapter.formatRequest(await resolveActiveModel(), cappedMaxTokens, systemBlocks, apiMessages, []);
 
     const res = await claudeApiCall(body, 'vision');
 
@@ -287,7 +287,7 @@ async function generateSessionSummary(chatId) {
         role: 'user',
         content: 'Summarize this conversation in 3-5 bullet points. Focus on: decisions made, tasks completed, new information learned, action items. Skip: greetings, small talk, repeated information. Format: markdown bullets, concise, factual.\n\n' + summaryInput
     }]);
-    const body = adapter.formatRequest(resolveActiveModel(), 500, systemBlocks, summaryMessages, []);
+    const body = adapter.formatRequest(await resolveActiveModel(), 500, systemBlocks, summaryMessages, []);
 
     const res = await claudeApiCall(body, chatId, { background: true });
     if (res.status !== 200) {
@@ -341,7 +341,7 @@ async function saveSessionSummary(chatId, trigger, { force = false, skipIndex = 
 
         // Write the summary file — tag it with whichever model actually
         // handled this session, not the startup-time MODEL const.
-        const archiveModel = resolveActiveModel();
+        const archiveModel = await resolveActiveModel();
         const header = `# Session Summary — ${localTimestamp()}\n\n`;
         const meta = `> Trigger: ${trigger} | Exchanges: ${track.messageCount} | Model: ${archiveModel}\n\n`;
         fs.writeFileSync(finalPath, header + meta + redactSecrets(summary) + '\n', 'utf8');
@@ -1977,13 +1977,15 @@ async function chat(chatId, userMessage, options = {}) {
 
     // Resolve the active model BEFORE building the system prompt. Same
     // overlay-over-startup-const semantics as maxStepsPerTurn above — the
-    // `/model` TG command and the Settings UI model picker write to
-    // agent_settings.json, and both the API request body AND the system
-    // prompt's self-reporting lines have to see the same value. Resolving
-    // only at formatRequest() time (earlier approach) caused split-brain:
+    // The `/model` TG command (via bridge POST /config/save-model) and the
+    // Settings UI model picker both write to SharedPreferences; Node reads
+    // back via bridge POST /config/runtime here. Both the API request body
+    // AND the system prompt's self-reporting lines have to see the same
+    // value — resolving only at formatRequest() time caused split-brain:
     // request went to the new model but the agent read the OLD model
-    // name out of its own system prompt.
-    const activeModel = resolveActiveModel();
+    // name out of its own system prompt. (BAT-509 Part 1: bridge replaces
+    // the agent_settings.json overlay that used to carry these fields.)
+    const activeModel = await resolveActiveModel();
 
     const { stable: stablePrompt, dynamic: dynamicPrompt } = buildSystemBlocks(matchedSkills, chatId, activeModel);
 

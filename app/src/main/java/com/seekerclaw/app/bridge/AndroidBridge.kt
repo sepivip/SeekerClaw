@@ -23,6 +23,7 @@ import android.util.Log
 import androidx.core.content.ContextCompat
 import com.seekerclaw.app.camera.CameraCaptureActivity
 import com.seekerclaw.app.config.ConfigManager
+import com.seekerclaw.app.config.defaultModelForProvider
 import com.seekerclaw.app.service.SeekerClawService
 import com.seekerclaw.app.util.Analytics
 import com.seekerclaw.app.util.ServiceState
@@ -75,6 +76,18 @@ class AndroidBridge(
         // normal /provider interactive use.
         "/config/credentials" to Pair(10, 60_000L),
         "/service/restart" to Pair(3, 60_000L),
+        // /config/runtime is a hot path — Node calls it on every chat()
+        // turn from resolveActiveModel(). Keep the limit generous;
+        // localhost-only and read-only, the rate limit is purely a
+        // defense against a runaway loop spinning the endpoint, not a
+        // security control.
+        "/config/runtime" to Pair(120, 60_000L),
+        // /config/save-{provider,model} should only fire from interactive
+        // user actions (Telegram /provider, /model, or Settings UI). 10/min
+        // is generous; rapid-fire would also trip the crash-loop protection
+        // since save-provider triggers a service restart.
+        "/config/save-provider" to Pair(10, 60_000L),
+        "/config/save-model" to Pair(20, 60_000L),
     )
 
     @Synchronized
@@ -162,6 +175,9 @@ class AndroidBridge(
                 "/config/save-owner" -> handleConfigSaveOwner(params)
                 "/openai/oauth/save-tokens" -> handleOpenAIOAuthSaveTokens(params)
                 "/config/credentials" -> handleConfigCredentials()
+                "/config/runtime" -> handleConfigRuntime()
+                "/config/save-provider" -> handleConfigSaveProvider(params)
+                "/config/save-model" -> handleConfigSaveModel(params)
                 "/service/restart" -> handleServiceRestart()
                 "/stats/db-summary" -> proxyToNodeStats()
                 "/ping" -> jsonResponse(200, mapOf("status" to "ok", "bridge" to "AndroidBridge"))
@@ -213,6 +229,174 @@ class AndroidBridge(
             "customBaseUrl" to if (config.customBaseUrl.isNotBlank()) placeholder else "",
         )
         return jsonResponse(200, mapOf("ok" to true, "credentials" to creds))
+    }
+
+    // ==================== Config runtime (BAT-509 Part 1) ====================
+
+    /**
+     * Returns the currently-active runtime state — provider, authType, model
+     * — read fresh from SharedPreferences. Node calls this on every chat()
+     * turn from resolveActiveModel() so any change Kotlin made (Settings UI
+     * save, Telegram /provider via /config/save-provider, OAuth flow) is
+     * picked up without the agent_settings.json overlay file that was the
+     * single point of contention before this refactor.
+     *
+     * Why no secrets: this endpoint is hot (per-turn) and reasonable to
+     * call from any tool that wants to introspect the active config. It
+     * intentionally returns ONLY non-sensitive runtime metadata. For
+     * credential PRESENCE checks, use /config/credentials. For raw key
+     * material, Node reads from config.json at startup.
+     *
+     * On config-load failure (Keystore unavailable, prefs unreadable),
+     * returns ok=true with an empty runtime object so Node falls back
+     * to its startup MODEL const. This matches Node's defensive pattern
+     * of "bridge unreachable → use startup config" — degraded but never
+     * crashed.
+     */
+    private fun handleConfigRuntime(): Response {
+        val config = ConfigManager.loadConfig(context)
+        if (config == null) {
+            return jsonResponse(200, mapOf("ok" to true, "runtime" to emptyMap<String, String>()))
+        }
+        // For OpenAI, the displayable authType is whatever's persisted; for
+        // other providers it's the single value supported by that provider.
+        // Node's resolveActiveModel only consumes provider + model directly,
+        // but the field is exposed here for future Node-side surfaces (e.g.
+        // /status command displaying full runtime state).
+        val runtime = mapOf(
+            "provider" to config.provider,
+            "authType" to config.authType,
+            "model" to config.model,
+        )
+        return jsonResponse(200, mapOf("ok" to true, "runtime" to runtime))
+    }
+
+    /**
+     * Persists provider+authType to SharedPreferences and schedules a clean
+     * service restart. Replaces the Node-side agent_settings.json overlay
+     * write that Telegram /provider used to do — that was the source of
+     * the dual-source-of-truth race in PR #339 (overlay write + UI save
+     * could clobber each other).
+     *
+     * Validates provider against KNOWN_PROVIDERS and authType against the
+     * provider's allowedAuthTypes. Substitutes the new provider's safe
+     * default model if the currently-persisted model is invalid for the
+     * new (provider, authType) pair — preserves the model-fallback safety
+     * that ConfigManager.reconcileWithAgentSettings used to handle.
+     *
+     * Restart is scheduled via the same AlarmManager mechanism as
+     * /service/restart so it's durable across :node process death.
+     */
+    private fun handleConfigSaveProvider(params: JSONObject): Response {
+        val provider = params.optString("provider", "").trim().lowercase()
+        val authType = params.optString("authType", "").trim().lowercase()
+
+        // Validate provider
+        if (provider !in setOf("claude", "openai", "openrouter", "custom")) {
+            return jsonResponse(400, mapOf("error" to "Invalid provider: '$provider'"))
+        }
+
+        // Validate authType against the provider's allowed set. Mirrors
+        // ConfigManager.reconcileWithAgentSettings's validation so we
+        // never accept e.g. (claude, oauth) or (openrouter, setup_token).
+        val allowedAuthTypes = when (provider) {
+            "openai" -> setOf("api_key", "oauth")
+            "claude" -> setOf("api_key", "setup_token")
+            else -> setOf("api_key")
+        }
+        if (authType !in allowedAuthTypes) {
+            return jsonResponse(400, mapOf(
+                "error" to "Invalid authType '$authType' for provider '$provider' " +
+                    "(allowed: ${allowedAuthTypes.joinToString(",")})"
+            ))
+        }
+
+        return try {
+            val current = ConfigManager.loadConfig(context)
+                ?: return jsonResponse(500, mapOf("error" to "config not loaded"))
+
+            // Compute effective model. If current model is invalid for the
+            // new (provider, authType) pair, substitute the provider's safe
+            // default. This preserves the same protection
+            // reconcileWithAgentSettings provided when the overlay-based
+            // flow detected a provider/auth change.
+            val effectiveModel: String = if (
+                ConfigManager.isModelValidForProvider(provider, authType, current.model)
+            ) {
+                current.model
+            } else {
+                val def = defaultModelForProvider(provider, authType)
+                if (def.isNotBlank()) def else current.model
+            }
+
+            ConfigManager.saveConfig(
+                context, current.copy(
+                    provider = provider,
+                    authType = authType,
+                    model = effectiveModel,
+                )
+            )
+
+            // Schedule clean restart (same dance as /service/restart — see
+            // that handler's comment for why we use stop+AlarmManager rather
+            // than raw Process.killProcess).
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                try {
+                    Log.i(TAG, "[Bridge] /config/save-provider → scheduling restart for $provider/$authType")
+                    scheduleServiceRestart(SERVICE_RESTART_DELAY_MS)
+                    SeekerClawService.stop(context)
+                } catch (e: Exception) {
+                    Log.e(TAG, "[Bridge] /config/save-provider restart failed: ${e.message}", e)
+                }
+            }, RESTART_DELAY_MS)
+
+            jsonResponse(200, mapOf(
+                "ok" to true,
+                "provider" to provider,
+                "authType" to authType,
+                "model" to effectiveModel,
+                "restartDelayMs" to (RESTART_DELAY_MS + SERVICE_RESTART_DELAY_MS),
+            ))
+        } catch (e: Exception) {
+            Log.w(TAG, "save-provider failed", e)
+            jsonResponse(500, mapOf("error" to "Failed to save provider"))
+        }
+    }
+
+    /**
+     * Persists model to SharedPreferences. Validates against the current
+     * provider+authType allowlist so an invalid model can never land in
+     * prefs. Does NOT restart the service — Node picks up the new model
+     * on the next chat() turn via /config/runtime.
+     *
+     * Replaces the Node-side agent_settings.json overlay write that
+     * Telegram /model used to do.
+     */
+    private fun handleConfigSaveModel(params: JSONObject): Response {
+        val model = params.optString("model", "").trim()
+        if (model.isBlank()) {
+            return jsonResponse(400, mapOf("error" to "model is required"))
+        }
+
+        return try {
+            val current = ConfigManager.loadConfig(context)
+                ?: return jsonResponse(500, mapOf("error" to "config not loaded"))
+
+            // Validate against current provider+authType. Freeform providers
+            // (openrouter, custom) accept any non-blank model — the
+            // isModelValidForProvider helper handles that distinction.
+            if (!ConfigManager.isModelValidForProvider(current.provider, current.authType, model)) {
+                return jsonResponse(400, mapOf(
+                    "error" to "Model '$model' is not valid for ${current.provider}/${current.authType}"
+                ))
+            }
+
+            ConfigManager.saveConfig(context, current.copy(model = model))
+            jsonResponse(200, mapOf("ok" to true, "model" to model))
+        } catch (e: Exception) {
+            Log.w(TAG, "save-model failed", e)
+            jsonResponse(500, mapOf("error" to "Failed to save model"))
+        }
     }
 
     // ==================== Service restart ====================

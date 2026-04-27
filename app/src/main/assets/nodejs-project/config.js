@@ -231,42 +231,53 @@ const MODEL = config.model || _defaultModel;
 const AGENT_NAME = config.agentName || 'SeekerClaw';
 
 /**
- * Resolve the currently-active model — the agent_settings.json overlay
- * wins over the startup MODEL const. The `/model` Telegram command and
- * the Settings UI model picker both write to agent_settings.json; this
- * resolver is what lets those changes take effect live (no service
- * restart). Called per chat() turn and by any self-report surface
- * (/status, /version, session_status, system prompt) so the agent
- * never reports a different model than the one handling the request.
+ * Resolve the currently-active model. After BAT-509 Part 1, this reads
+ * provider/authType/model from the AndroidBridge `/config/runtime`
+ * endpoint — Kotlin is the single source of truth for these fields,
+ * exposed to Node via HTTP so the agent never reports a different model
+ * than the one handling the request.
  *
- * Provider-scoping: if the overlay specifies a provider, only adopt the
- * overlay model when it matches the running provider. This closes a race
- * where `/provider` writes `{provider: openai, model: gpt-5.4}` to
- * agent_settings.json BEFORE the service restart completes (~2.5s
- * window); without scoping, the still-running Claude adapter would pick
- * up `gpt-5.4` and try to call Anthropic with an OpenAI model ID,
- * causing immediate API failures for any message in that window.
+ * Called per chat() turn and by any self-report surface (/status,
+ * /version, session_status, system prompt). The bridge call is a
+ * localhost HTTP roundtrip (~1ms typical, <10ms p99); 3s timeout makes
+ * a stalled bridge degrade gracefully to the startup MODEL const
+ * rather than blocking the user-facing turn.
+ *
+ * Async: bridge calls cannot be sync. Every caller MUST `await` this.
+ * Drift-guards in tests/nodejs-project/model-resolution.test.js lock
+ * the contract.
+ *
+ * Provider-scoping: if the bridge reports a provider that differs from
+ * the running PROVIDER const, we are inside the /provider restart
+ * window — the new provider's model would crash the old still-running
+ * adapter. Fall back to startup MODEL until the restart completes and
+ * the new process boots with fresh PROVIDER / MODEL consts.
  *
  * Falls back to the module-level MODEL if:
- *   - agent_settings.json doesn't exist
- *   - it can't be parsed
- *   - `model` field is missing / non-string / blank
- *   - overlay.provider is set AND differs from the startup PROVIDER
+ *   - bridge unreachable (process restarting, port not listening yet)
+ *   - bridge returns {error: ...} or unexpected shape
+ *   - runtime.model is missing / non-string / blank
+ *   - runtime.provider is set AND differs from the startup PROVIDER
  *     (provider switch is pending; old adapter can't use new model)
  */
-function resolveActiveModel() {
+async function resolveActiveModel() {
     try {
-        const settingsPath = path.join(workDir, 'agent_settings.json');
-        if (fs.existsSync(settingsPath)) {
-            const s = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-            // Overlay is stale while a /provider restart is pending.
-            const overlayProvider = typeof s.provider === 'string' ? s.provider.trim() : '';
-            if (overlayProvider && overlayProvider !== PROVIDER) {
-                return MODEL;
-            }
-            const m = typeof s.model === 'string' ? s.model.trim() : '';
-            if (m) return m;
+        // Lazy require to avoid circular imports — bridge.js requires config.js.
+        const { androidBridgeCall } = require('./bridge');
+        const res = await androidBridgeCall('/config/runtime', {}, 3000);
+        if (!res || res.error || !res.runtime || typeof res.runtime !== 'object') {
+            return MODEL;
         }
+        const runtime = res.runtime;
+        const overlayProvider = typeof runtime.provider === 'string' ? runtime.provider.trim() : '';
+        // Provider-scoping: prefs may already have new provider written but
+        // Node is still running old adapter. Returning new model would crash
+        // every in-flight API call.
+        if (overlayProvider && overlayProvider !== PROVIDER) {
+            return MODEL;
+        }
+        const m = typeof runtime.model === 'string' ? runtime.model.trim() : '';
+        if (m) return m;
     } catch (_) {}
     return MODEL;
 }

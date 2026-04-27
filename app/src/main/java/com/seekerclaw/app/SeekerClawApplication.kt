@@ -42,12 +42,12 @@ class SeekerClawApplication : Application() {
     /**
      * Listen for cross-process config changes so the UI's configVersion
      * counter (per-process Compose state) bumps when ANY process writes
-     * SharedPreferences via ConfigManager.saveConfig or
-     * reconcileWithAgentSettings. Without this, after a /provider Telegram
-     * switch (which runs in :node and triggers a service-start reconcile
-     * that writes prefs), the main-process UI screens hold the stale
+     * SharedPreferences via ConfigManager.saveConfig. Without this, after
+     * a /provider Telegram switch (which runs in :node and writes prefs
+     * via the bridge handler), the main-process UI screens hold the stale
      * pre-switch values until the user manually navigates away and back —
-     * remounting the screen forces a fresh loadConfig() read.
+     * remounting the screen forces a fresh loadConfig() read. Same
+     * applies to /model and any other bridge-mediated config write.
      *
      * The broadcast is package-scoped (setPackage(packageName) in
      * ConfigManager.broadcastConfigChanged) and the receiver is

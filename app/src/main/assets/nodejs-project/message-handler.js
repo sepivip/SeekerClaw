@@ -113,13 +113,15 @@ Send me anything to get started!`;
             const mem = process.memoryUsage();
             const heapMB = (mem.heapUsed / 1024 / 1024).toFixed(1);
             const rssMB = (mem.rss / 1024 / 1024).toFixed(1);
+            // resolveActiveModel is async (bridge call) since BAT-509 Part 1.
+            const activeModel = await resolveActiveModel();
 
             return `🟢 **Alive and kicking**
 
 ⏱️ Uptime: ${uptimeFormatted}
 💬 Messages: ${todayCount} today (${totalCount} in conversation)
 🧠 Memory: ${memoryFileCount} files
-📊 Model: \`${resolveActiveModel()}\`
+📊 Model: \`${activeModel}\`
 🧩 Skills: ${skillCount}
 💾 RAM: ${heapMB} MB heap / ${rssMB} MB RSS`;
         }
@@ -222,10 +224,12 @@ Use YAML frontmatter with \`name\`, \`description\`, and \`triggers\` fields.`;
                     if (pkg.version) pkgVersion = pkg.version;
                 } catch (_) {}
             }
+            // resolveActiveModel is async (bridge call) since BAT-509 Part 1.
+            const versionModel = await resolveActiveModel();
             return `**SeekerClaw**
 Agent: \`${deps.AGENT_NAME}\`
 Package: \`${pkgVersion}\`
-Model: \`${resolveActiveModel()}\`
+Model: \`${versionModel}\`
 Node.js: \`${nodeVer}\`
 Platform: \`${platform}\``;
         }
@@ -380,40 +384,16 @@ Platform: \`${platform}\``;
     }
 }
 
-// ============================================================================
-// AGENT_SETTINGS PATCHING — used by /model and /provider to persist
-// TG-initiated changes. Node reads `model` live from this file on every
-// chat() call (see ai.js activeModel resolver). On service restart,
-// Kotlin's ConfigManager.loadConfig() reconciles these fields into
-// SharedPreferences so they survive battery death / app kill.
-// ============================================================================
-
-function writeAgentSettingsPatch(patch) {
-    const settingsPath = path.join(workDir, 'agent_settings.json');
-    let current = {};
-    try {
-        if (fs.existsSync(settingsPath)) {
-            const raw = fs.readFileSync(settingsPath, 'utf8');
-            const parsed = JSON.parse(raw);
-            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-                current = parsed;
-            }
-        }
-    } catch (e) {
-        deps.log(`[AgentSettings] existing file unreadable (${e.message}) — starting from {}`, 'WARN');
-        current = {};
-    }
-    // `undefined` means "remove this key" (for revert paths). Any other
-    // value (including null, 0, '', false) is written as-is.
-    const merged = { ...current };
-    for (const [k, v] of Object.entries(patch)) {
-        if (v === undefined) delete merged[k];
-        else merged[k] = v;
-    }
-    const tmp = settingsPath + '.tmp';
-    fs.writeFileSync(tmp, JSON.stringify(merged, null, 2), 'utf8');
-    fs.renameSync(tmp, settingsPath);
-}
+// BAT-509 Part 1: writeAgentSettingsPatch removed. /model and /provider
+// previously used it to write {provider,authType,model} into the
+// agent_settings.json overlay; those fields are now Kotlin-owned and
+// written via bridge POST /config/save-{provider,model}. Removed here
+// because no other module in this codebase wrote provider/authType/
+// model to the overlay — agent-managed fields like apiKeys go through
+// the standard `file_write` tool, not this helper. If a future feature
+// needs atomic JSON patches against agent_settings.json (for Node-only
+// fields), restore the helper from git history (commit prior to the
+// BAT-509 Part 1 commit on feature/BAT-509).
 
 // Fetch current credential presence from Kotlin via the bridge. Used by
 // /provider credential gating so switching decisions reflect runtime
@@ -440,65 +420,49 @@ async function fetchRuntimeCredentials() {
 }
 
 // Resolve the currently-active provider/authType/model as seen by Node.
-// Prefers agent_settings.json overrides (which reflect in-session TG
-// changes) over the startup-loaded module consts from config.js. Model
-// resolution delegates to config.resolveActiveModel() so this surface
-// and ai.js / tools/session.js / /status / /version all agree.
-function resolveActiveProviderState() {
-    let overlay = {};
+//
+// BAT-509 Part 1 architecture:
+//   - provider is read from the bridge `/config/runtime` (Kotlin owns
+//     the canonical value in SharedPreferences, written by either the
+//     Settings UI or the bridge POST /config/save-provider handler).
+//   - authType is the runtime startup const, NOT live-pickup. Kotlin's
+//     writeConfigJson can DOWNGRADE the persisted authType before Node
+//     boots — e.g. "oauth selected with a blank token" gets written to
+//     config.json as authType=api_key so Node's strict validation
+//     doesn't crash on startup. If we honored prefs.authType here,
+//     /model would display + validate against the oauth allowlist
+//     (includes gpt-5.4-mini) while Node is actually running api_key
+//     mode (doesn't) — users could /model gpt-5.4-mini, see it
+//     accepted, and then every chat request would 422.
+//   - model delegates to config.resolveActiveModel() (also bridge-based
+//     now) so /status, /version, ai.js, and this all agree.
+//
+// Provider-scoping mirrors resolveActiveModel: during the /provider
+// restart window, prefs may carry the NEW provider but Node is still
+// running the OLD adapter. Returning the new provider from here would
+// make /model display + validate against a provider we can't talk to
+// yet. _restartPending normally short-circuits these handlers, but
+// keep the scoping for defense-in-depth (e.g. a stale write from a
+// crashed pre-restart attempt).
+async function resolveActiveProviderState() {
+    let runtime = null;
     try {
-        const settingsPath = path.join(workDir, 'agent_settings.json');
-        if (fs.existsSync(settingsPath)) {
-            const parsed = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-                overlay = parsed;
-            }
+        const res = await deps.androidBridgeCall('/config/runtime', {}, 3000);
+        if (res && !res.error && res.runtime && typeof res.runtime === 'object') {
+            runtime = res.runtime;
         }
-    } catch (_) { overlay = {}; }
+    } catch (_) { runtime = null; }
 
     const nonBlank = (v) => typeof v === 'string' && v.trim().length > 0;
 
-    // Validate overlay values before adopting them. A partial/tampered
-    // agent_settings.json could carry, say, (provider='openai',
-    // authType='bogus') — without this guard, modelsForProvider() would
-    // return [] and /model would treat OpenAI as "freeform" in its
-    // no-args display, which is misleading. Fall through to the startup
-    // consts when the overlay is invalid.
-    const rawOverlayProvider = nonBlank(overlay.provider) ? overlay.provider.trim() : null;
-    const overlayProviderValid = rawOverlayProvider && modelCatalog.KNOWN_PROVIDERS.includes(rawOverlayProvider);
+    const rawProvider = runtime && nonBlank(runtime.provider) ? runtime.provider.trim() : null;
+    const providerValid = rawProvider && modelCatalog.KNOWN_PROVIDERS.includes(rawProvider);
+    const provider = (providerValid && rawProvider === PROVIDER) ? rawProvider : PROVIDER;
 
-    // Provider-scoping (mirrors resolveActiveModel in config.js): during
-    // the /provider restart window, overlay carries the NEW provider but
-    // the running adapter is still the OLD one. Returning the new
-    // provider from here would make /model display/validate against a
-    // provider we can't talk to yet. In practice /model and /provider
-    // short-circuit on _restartPending so this path is rarely reached,
-    // but keep the same-provider scoping for symmetry and defense in
-    // depth (e.g. a stale overlay left behind by a crashed pre-restart
-    // write).
-    const provider = (overlayProviderValid && rawOverlayProvider === PROVIDER)
-        ? rawOverlayProvider
-        : PROVIDER;
-
-    // authType is NOT live-pickup — OPENAI_AUTH_TYPE / AUTH_TYPE are
-    // module-level consts in config.js, set once from config.json at
-    // Node startup. The overlay in agent_settings.json carries the
-    // user's INTENDED authType (what Kotlin's Settings UI saved), but
-    // Kotlin's writeConfigJson can DOWNGRADE it before Node boots:
-    // e.g. "oauth selected with a blank token" gets written to
-    // config.json as authType=api_key so Node's strict validation
-    // doesn't crash on startup. If we honored overlay.authType here,
-    // /model would display + validate against the oauth allowlist
-    // (includes gpt-5.4-mini) while Node is actually running api_key
-    // mode (doesn't) — users could /model gpt-5.4-mini, see it
-    // accepted, and then every chat request would 422.
-    //
-    // Return the runtime startupAuth instead. Matches what Node
-    // actually sends to the provider API.
     const startupAuth = provider === 'openai' ? OPENAI_AUTH_TYPE : AUTH_TYPE;
     const authType = startupAuth;
 
-    return { provider, authType, model: resolveActiveModel() };
+    return { provider, authType, model: await resolveActiveModel() };
 }
 
 // ============================================================================
@@ -512,7 +476,7 @@ async function handleModelCommand(chatId, args) {
     if (_restartPending) {
         return `⏳ Restart in progress — try again in a moment.`;
     }
-    const state = resolveActiveProviderState();
+    const state = await resolveActiveProviderState();
     const trimmed = (args || '').trim();
     const models = modelCatalog.modelsForProvider(state.provider, state.authType);
     const isFreeform = models.length === 0;
@@ -537,6 +501,9 @@ async function handleModelCommand(chatId, args) {
         return lines.join('\n');
     }
 
+    // Client-side validation gives a fast, friendly error before the
+    // round-trip; Kotlin re-validates server-side as the source of truth
+    // (defense in depth — a malicious client can't bypass us).
     const v = modelCatalog.validateModelForProvider(state.provider, state.authType, trimmed);
     if (!v.ok) {
         const optLine = (v.options && v.options.length)
@@ -545,11 +512,23 @@ async function handleModelCommand(chatId, args) {
         return `❌ ${v.reason}${optLine}`;
     }
 
+    // BAT-509 Part 1: persist via bridge POST /config/save-model rather
+    // than writing the agent_settings.json overlay. Kotlin saveConfig
+    // bumps configVersion + broadcasts ACTION_CONFIG_CHANGED, so the
+    // dashboard auto-refreshes without a manual reload.
     try {
-        writeAgentSettingsPatch({ model: v.model });
+        const res = await deps.androidBridgeCall('/config/save-model', { model: v.model }, 5000);
+        if (res && res.error) {
+            deps.log(`[/model] bridge /config/save-model rejected: ${res.error}`, 'ERROR');
+            return `❌ Couldn't save — ${res.error}`;
+        }
+        if (!res || res.ok !== true) {
+            deps.log(`[/model] bridge /config/save-model returned unexpected shape`, 'ERROR');
+            return `❌ Couldn't save — bridge unavailable`;
+        }
     } catch (e) {
-        deps.log(`[/model] Failed to write agent_settings.json: ${e.message}`, 'ERROR');
-        return `❌ Couldn't save — ${e.message}`;
+        deps.log(`[/model] bridge /config/save-model failed: ${e && e.message}`, 'ERROR');
+        return `❌ Couldn't save — ${e && e.message}`;
     }
     deps.log(`[/model] Switched to ${v.model} (provider=${state.provider}, auth=${state.authType})`, 'INFO');
     return `✓ Switched to \`${v.model}\`. Takes effect on your next message.`;
@@ -567,7 +546,7 @@ async function handleProviderCommand(chatId, args, messageId = null) {
     if (_restartPending) {
         return `⏳ Restart in progress — try again in a moment.`;
     }
-    const state = resolveActiveProviderState();
+    const state = await resolveActiveProviderState();
     const parts = (args || '').trim().split(/\s+/).filter(Boolean);
 
     if (parts.length === 0) {
@@ -633,96 +612,72 @@ async function handleProviderCommand(chatId, args, messageId = null) {
         return `❌ ${cred.reason}`;
     }
 
-    const newModel = modelCatalog.defaultModelForProvider(newProvider, newAuthType);
-
-    // Write `model` only when the new provider has a concrete default
-    // (claude/openai/openrouter). For freeform providers (custom) where
-    // defaultModelForProvider returns '' there's no sensible default, so
-    // we intentionally DON'T touch overlay.model — Kotlin's reconcile
-    // validates the effective model (overlay or prefs) against the new
-    // provider's allowlist and substitutes defaultModelForProvider if
-    // invalid. This aligns with Kotlin's preserve-then-validate
-    // semantics rather than diverging: clearing here would just leave
-    // overlay blank while prefs still holds the old model, and Node
-    // startup hard-exits on PROVIDER=custom + blank MODEL — so the
-    // clear-path would crash the service if Kotlin's fallback ever
-    // failed to write a non-blank model to prefs.
-    // Guard: if switching to a provider whose default is blank (custom)
-    // AND there's no currently-effective model to carry forward, the
-    // post-restart Node would hard-exit at startup (config.js rejects
-    // PROVIDER=custom + blank MODEL) — trapping the user with no
-    // working agent to even run /model against. In any healthy setup
-    // state.model is non-blank (Node's own startup rejected blank so
-    // it must have had one), so this fires only for truly degenerate
-    // configurations. Belt-and-suspenders, since the cost of hitting
-    // it is a service crash-loop.
-    if (newProvider === 'custom' && !newModel && !state.model) {
+    // Guard: switching to a provider whose default is blank (just custom)
+    // when there's no currently-effective model to carry forward — Node
+    // startup would hard-exit on PROVIDER=custom + blank MODEL, trapping
+    // the user with no working agent to even run /model against. In any
+    // healthy setup state.model is non-blank, so this fires only for
+    // truly degenerate configurations. Belt-and-suspenders, since the
+    // cost of hitting it is a service crash-loop.
+    const previewModel = modelCatalog.defaultModelForProvider(newProvider, newAuthType);
+    if (newProvider === 'custom' && !previewModel && !state.model) {
         return `❌ Cannot switch to \`custom\` — no model configured. Run \`/model <id>\` first, or set a model in Settings > AI Provider > Custom.`;
     }
 
-    const settingsPatch = {
-        provider: newProvider,
-        authType: newAuthType,
-    };
-    if (newModel) {
-        settingsPatch.model = newModel;
-    }
-
-    // Snapshot pre-patch values of the fields we're about to mutate, so if
-    // the restart bridge call fails we can restore the overlay to what it
-    // was — otherwise the process keeps running on the OLD adapter but with
-    // overlay metadata suggesting the NEW one, leaving the app in a
-    // confusing half-switched state. `undefined` in the revert patch
-    // signals "this key was absent before — delete it" (see
-    // writeAgentSettingsPatch).
-    const prevOverlay = (() => {
-        try {
-            const settingsPath = path.join(workDir, 'agent_settings.json');
-            if (fs.existsSync(settingsPath)) {
-                const parsed = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-                if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-                    return parsed;
-                }
-            }
-        } catch (_) {}
-        return {};
-    })();
-    const revertPatch = {};
-    for (const k of Object.keys(settingsPatch)) {
-        revertPatch[k] = Object.prototype.hasOwnProperty.call(prevOverlay, k)
-            ? prevOverlay[k]
-            : undefined;
-    }
-
+    // BAT-509 Part 1: persist provider+authType via bridge POST
+    // /config/save-provider. Kotlin atomically: validates, computes the
+    // effective model (substitutes provider default if current model is
+    // invalid for the new provider+auth pair), writes prefs, broadcasts
+    // ACTION_CONFIG_CHANGED, AND schedules the service restart. The
+    // bridge response includes the chosen model so we can show the user
+    // what they're switching to before the restart even fires.
+    //
+    // This replaces the prior flow of (overlay write → /service/restart
+    // → revert-overlay-on-failure). Atomic-or-nothing: if the bridge
+    // call rejects we never wrote any state, so there's nothing to revert.
+    let bridgeRes;
     try {
-        writeAgentSettingsPatch(settingsPatch);
+        bridgeRes = await deps.androidBridgeCall(
+            '/config/save-provider',
+            { provider: newProvider, authType: newAuthType },
+            5000,
+        );
     } catch (e) {
-        deps.log(`[/provider] Failed to write agent_settings.json: ${e.message}`, 'ERROR');
-        return `❌ Couldn't save — ${e.message}`;
+        deps.log(`[/provider] bridge /config/save-provider failed: ${e && e.message}`, 'ERROR');
+        return `❌ Couldn't switch — bridge unavailable (${e && e.message})`;
+    }
+    if (!bridgeRes || bridgeRes.error) {
+        const reason = (bridgeRes && bridgeRes.error) || 'unknown error';
+        deps.log(`[/provider] bridge /config/save-provider rejected: ${reason}`, 'ERROR');
+        return `❌ Couldn't switch — ${reason}`;
+    }
+    if (bridgeRes.ok !== true) {
+        deps.log(`[/provider] bridge /config/save-provider returned unexpected shape`, 'ERROR');
+        return `❌ Couldn't switch — bridge response invalid`;
     }
 
-    deps.log(`[/provider] Switching to ${newProvider}/${newAuthType} (model=${newModel}); restart pending`, 'INFO');
+    // Kotlin's chosen model — may differ from previewModel if the prior
+    // model carried over (validated by isModelValidForProvider) or if
+    // Kotlin substituted the provider default.
+    const effectiveModel = (typeof bridgeRes.model === 'string' && bridgeRes.model.trim())
+        || previewModel
+        || state.model
+        || '';
+
+    deps.log(`[/provider] Switching to ${newProvider}/${newAuthType} (model=${effectiveModel}); restart scheduled by bridge`, 'INFO');
 
     const displayProv = modelCatalog.displayNameForProvider(newProvider);
     const authSuffix = authTypes.length > 1 ? ` (${newAuthType})` : '';
-    const modelLine = newModel ? `\nModel: \`${newModel}\`` : '';
-    // When defaultModelForProvider returns '' (currently just custom),
-    // we don't write overlay.model in the settingsPatch — Kotlin's
-    // reconcile then preserves prefs.model (non-blank is "valid" for
-    // freeform providers), so Node's post-restart MODEL is typically
-    // a carry-over from the previous provider. That carry-over is
-    // often WRONG for a custom endpoint (e.g. user was on OpenAI
-    // gpt-5.5, switching to a local Ollama instance). Surface the
-    // effective pre-switch model in the reply so the user can catch
-    // mismatches before the first request fails. Only fall back to
-    // the strong "After restart, set a model" hint in the rare case
-    // where there's no model at all (unreachable in normal Setup flow,
-    // but defensive).
-    const modelHint = newModel
-        ? ''
-        : state.model
-            ? `\nCurrent model: \`${state.model}\` — run \`/model <id>\` after restart if it's not valid for your custom endpoint.`
-            : '\nAfter restart, set a model with `/model <id>`.';
+    const modelLine = effectiveModel ? `\nModel: \`${effectiveModel}\`` : '';
+    // For freeform providers (currently just custom) where the carried
+    // model may be wrong for the user's endpoint (e.g. switching from
+    // OpenAI gpt-5.5 to a local Ollama), surface a hint so they can
+    // catch mismatches before the first request fails.
+    const modelHint = effectiveModel
+        ? (newProvider === 'custom'
+            ? `\n_Carried over from your previous provider — run_ \`/model <id>\` _after restart if it's not valid for your custom endpoint._`
+            : '')
+        : '\nAfter restart, set a model with `/model <id>`.';
     const reply = `✓ Switching to **${displayProv}**${authSuffix}.${modelLine}${modelHint}\n\nRestarting agent, back in ~10s…`;
 
     // Flip the restart-pending flag synchronously BEFORE the async cascade
@@ -730,43 +685,14 @@ async function handleProviderCommand(chatId, args, messageId = null) {
     // denied cleanly (see flag declaration for why).
     _restartPending = true;
 
-    // Send the TG reply first, THEN trigger the Kotlin service to kill
-    // itself (which Android will respawn with the new config). Doing this
-    // after sendMessage resolves avoids losing the reply if the process
-    // gets killed before Telegram acks. messageId threads the reply to
-    // the originating /provider message for consistent UX with other
-    // command responses (which get replyTo via deps.sendMessage(_, _, messageId)
-    // in the handleMessage dispatcher).
-    deps.sendMessage(chatId, reply, messageId).then(() => {
-        deps.androidBridgeCall('/service/restart', {}, 5000).catch((err) => {
-            _restartPending = false;
-            deps.log(`[/provider] /service/restart bridge call failed: ${err && err.message}`, 'ERROR');
-            // Revert the overlay so the process doesn't keep running with
-            // the OLD adapter while overlay metadata advertises the NEW
-            // one. Without this, `resolveActiveProviderState` (and any
-            // post-failure Kotlin-side reconcile on a manual restart)
-            // would diverge from the actually-active adapter.
-            try {
-                writeAgentSettingsPatch(revertPatch);
-            } catch (e) {
-                deps.log(`[/provider] overlay revert failed (${e && e.message}); agent_settings.json may be half-switched`, 'WARN');
-            }
-            // Restart didn't fire — tell the user so they don't wait
-            // forever for a restart that never happens.
-            deps.sendMessage(
-                chatId,
-                `⚠️ Couldn't trigger the restart automatically. Please restart the SeekerClaw app manually and run \`/provider ${newProvider}\` again to finish switching.`,
-                messageId,
-            ).catch((e) => deps.log(`[/provider] restart-fallback sendMessage failed: ${e && e.message}`, 'WARN'));
-        });
-    }).catch((err) => {
-        _restartPending = false;
-        deps.log(`[/provider] sendMessage failed; skipping restart: ${err && err.message}`, 'ERROR');
-        try {
-            writeAgentSettingsPatch(revertPatch);
-        } catch (e) {
-            deps.log(`[/provider] overlay revert failed (${e && e.message})`, 'WARN');
-        }
+    // Send the TG reply. The bridge has ALREADY scheduled the restart on
+    // its side (postDelayed → AlarmManager); no follow-up bridge call
+    // needed. If sendMessage fails, the restart will still happen — the
+    // user just doesn't get the friendly preview. That's an acceptable
+    // degradation; the prior flow's revert dance is no longer needed
+    // because the prefs write was atomic with the restart schedule.
+    deps.sendMessage(chatId, reply, messageId).catch((err) => {
+        deps.log(`[/provider] sendMessage failed; restart still pending: ${err && err.message}`, 'WARN');
     });
 
     // We've handled the reply ourselves — tell the dispatcher not to send it again.
