@@ -239,49 +239,12 @@ object LogCollector {
                     // the Android SDK — null path is the only signal we
                     // get, so we trigger resync on any null-path event.
                     if ((path == LOG_FILE_NAME || path == null) && initialReadComplete) {
-                        // State-machine single-flight (see drainState
-                        // declaration). Transition: 0 -> 1 (launch),
-                        // 1 -> 2 (queue rerun), 2 -> 2 (no-op).
-                        // getAndUpdate returns OLD value; we launch only
-                        // when transitioning out of idle.
-                        //
                         // Gated on initialReadComplete: events that fire
                         // during initial catch-up are dropped here —
                         // readAllFromFile reads the full current file
                         // (incl. any in-flight writes) before flipping
                         // the flag, so no log lines are lost.
-                        val prev = drainState.getAndUpdate { current ->
-                            if (current == 0) 1 else 2
-                        }
-                        if (prev == 0) {
-                            scope.launch {
-                                while (true) {
-                                    // Inner do-while continues while EITHER
-                                    // bytes remain to read OR we made forward
-                                    // progress. Two break conditions:
-                                    //  1. No new bytes (file.length() <= pos)
-                                    //  2. lastReadPosition didn't advance
-                                    //     (partial-line case: read waited for
-                                    //     newline). Without (2), a partial
-                                    //     line would spin forever.
-                                    do {
-                                        val before = lastReadPosition
-                                        readNewFromFile()
-                                        val advanced = lastReadPosition > before
-                                        val moreBytes = (logFile?.length() ?: 0L) > lastReadPosition
-                                        if (!advanced || !moreBytes) break
-                                    } while (true)
-
-                                    // Settle: try 1 -> 0 (true idle). If it
-                                    // fails, state is 2 (event arrived
-                                    // during drain) — CAS 2 -> 1 and re-pass.
-                                    // Outer while loops until we successfully
-                                    // hit idle.
-                                    if (drainState.compareAndSet(1, 0)) break
-                                    if (drainState.compareAndSet(2, 1)) continue
-                                }
-                            }
-                        }
+                        launchDrainIfIdle()
                     }
                     // BAT-518 device-fix consolidation: ServiceState no
                     // longer owns its own filesDir observer (multi-observer-
@@ -314,28 +277,61 @@ object LogCollector {
             initialReadComplete = true
             // Trigger one drain in case writes landed between
             // readAllFromFile's read and the flag flip — those events
-            // were dropped by the gate above. Reading from
-            // lastReadPosition (= file end at readAllFromFile time) to
-            // current length picks them up. Idempotent if no new bytes.
-            val prev = drainState.getAndUpdate { current ->
-                if (current == 0) 1 else 2
-            }
-            if (prev == 0) {
-                scope.launch {
-                    while (true) {
-                        do {
-                            val before = lastReadPosition
-                            readNewFromFile()
-                            val advanced = lastReadPosition > before
-                            val moreBytes = (logFile?.length() ?: 0L) > lastReadPosition
-                            if (!advanced || !moreBytes) break
-                        } while (true)
-                        if (drainState.compareAndSet(1, 0)) break
-                        if (drainState.compareAndSet(2, 1)) continue
-                    }
-                }
-            }
+            // were dropped by the gate above. Idempotent if no new bytes.
+            launchDrainIfIdle()
             Log.d(TAG, "startWatching: initial read complete, drains enabled")
+        }
+    }
+
+    /**
+     * State-machine single-flight drain launcher.
+     *
+     * Transition on entry:  0 -> 1 (launch new drain),  1 -> 2 (queue
+     * rerun for the in-flight drain), 2 -> 2 (no-op, already queued).
+     *
+     * Drain coroutine settle: 1 -> 0 (true idle, exit) or 2 -> 1 (a
+     * rerun was queued; loop body again). Loops until successfully
+     * hitting idle so no event-driven request goes unserved.
+     *
+     * Inner do-while continues while EITHER bytes remain to read OR
+     * we made forward progress on the last read. Two break conditions:
+     *   1. No new bytes (file.length() <= lastReadPosition)
+     *   2. lastReadPosition didn't advance (partial-line case:
+     *      readNewFromFile read up to a mid-line position and is
+     *      waiting for the newline to arrive). Without (2), a partial
+     *      line would spin re-reading the same bytes forever.
+     *
+     * try/finally on drainState: if the drain coroutine is cancelled
+     * mid-flight (e.g. process tear-down or scope.cancel()), force-reset
+     * the state to 0 so future events can launch a fresh drain. Without
+     * this, the state could stick at 1 or 2 forever and ALL future log
+     * lines would be silently dropped from the in-memory buffer.
+     * Slight tradeoff: a queued rerun (state=2) at the moment of
+     * cancellation gets reset without serving the rerun, but the next
+     * FileObserver event re-fires drain from lastReadPosition forward,
+     * picking up any unread bytes still in the file.
+     */
+    private fun launchDrainIfIdle() {
+        val prev = drainState.getAndUpdate { current ->
+            if (current == 0) 1 else 2
+        }
+        if (prev != 0) return  // drain in flight; rerun queued (or already queued)
+        scope.launch {
+            try {
+                while (true) {
+                    do {
+                        val before = lastReadPosition
+                        readNewFromFile()
+                        val advanced = lastReadPosition > before
+                        val moreBytes = (logFile?.length() ?: 0L) > lastReadPosition
+                        if (!advanced || !moreBytes) break
+                    } while (true)
+                    if (drainState.compareAndSet(1, 0)) break
+                    if (drainState.compareAndSet(2, 1)) continue
+                }
+            } finally {
+                drainState.set(0)
+            }
         }
     }
 

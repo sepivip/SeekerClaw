@@ -485,19 +485,30 @@ class SeekerClawService : Service() {
                             // 2 -> 2 (no-op). getAndUpdate returns OLD
                             // value; we launch only when transitioning
                             // out of idle.
+                            //
+                            // try/finally on the state: if the drain
+                            // coroutine is cancelled mid-flight, force-
+                            // reset to 0 so future events can launch a
+                            // fresh drain. Without this the state could
+                            // stick at 1 or 2 and all future Node debug
+                            // forwarding would silently halt.
                             val prev = nodeDebugDrainState.getAndUpdate { current ->
                                 if (current == 0) 1 else 2
                             }
                             if (prev == 0) {
                                 scope.launch {
-                                    while (true) {
-                                        forwardNewNodeDebugLines(debugLogFile)
-                                        // Settle: 1 -> 0 (true idle) or
-                                        // 2 -> 1 (rerun for an event that
-                                        // landed during drain). Re-pass
-                                        // until we successfully hit idle.
-                                        if (nodeDebugDrainState.compareAndSet(1, 0)) break
-                                        if (nodeDebugDrainState.compareAndSet(2, 1)) continue
+                                    try {
+                                        while (true) {
+                                            forwardNewNodeDebugLines(debugLogFile)
+                                            // Settle: 1 -> 0 (true idle) or
+                                            // 2 -> 1 (rerun for an event
+                                            // that landed during drain).
+                                            // Re-pass until idle.
+                                            if (nodeDebugDrainState.compareAndSet(1, 0)) break
+                                            if (nodeDebugDrainState.compareAndSet(2, 1)) continue
+                                        }
+                                    } finally {
+                                        nodeDebugDrainState.set(0)
                                     }
                                 }
                             }
