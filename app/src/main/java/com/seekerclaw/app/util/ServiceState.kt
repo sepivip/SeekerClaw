@@ -599,7 +599,21 @@ object ServiceState {
         val parent = stateFile?.parentFile ?: return
         val file = File(parent, "workspace/agent_health_state")
         try {
-            if (!file.exists()) return
+            if (!file.exists()) {
+                // File deleted (rotation, cleanup, user wipe, etc.). Reset
+                // to default AgentHealth with isStale=true rather than
+                // silently leaving the UI showing the last known status —
+                // a missing source-of-truth file is itself a "stale"
+                // signal. (Copilot R-latest+6.)
+                val missing = AgentHealth(apiStatus = "stale", isStale = true)
+                synchronized(healthTransitionLock) {
+                    if (_agentHealth.value != missing) {
+                        _agentHealth.value = missing
+                        lastLoggedStale = true
+                    }
+                }
+                return
+            }
             val json = JSONObject(file.readText())
             val apiStatus = json.optString("apiStatus", "unknown")
             val updatedAt = json.optString("updatedAt", "")
@@ -647,7 +661,13 @@ object ServiceState {
         val parent = stateFile?.parentFile ?: return
         val file = File(parent, "workspace/api_usage_state")
         try {
-            if (!file.exists()) return
+            if (!file.exists()) {
+                // File deleted — clear the in-memory usage so the UI
+                // doesn't keep showing the last known counts. (Copilot
+                // R-latest+6.)
+                if (_apiUsage.value != null) _apiUsage.value = null
+                return
+            }
             val json = JSONObject(file.readText())
             val type = json.optString("type", "")
             val updatedAt = try {
