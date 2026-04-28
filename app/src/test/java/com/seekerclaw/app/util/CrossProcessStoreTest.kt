@@ -307,9 +307,26 @@ class CrossProcessStoreTest {
         assertTrue("FileObserver path must trySend on the channel, not launch directly",
             Regex("""reloadChannel\.trySend""").containsMatchIn(text))
         // Negative pin: the OLD pattern (launching reload directly
-        // from FileObserver / broadcast receiver) must be gone.
-        assertFalse("FileObserver / broadcast receiver must NOT launch reload directly anymore",
-            Regex("""coroutineScope\.launch\s*\{\s*reload\s*\(\s*\)\s*\}""").containsMatchIn(text))
+        // INSIDE FileObserver.onEvent / BroadcastReceiver.onReceive)
+        // must be gone — that's the path that introduced the
+        // concurrent-reload race.
+        //
+        // Round-6 added a launch{reload()} in the init block (deferred
+        // catch-up read off the caller thread); that's a different
+        // use case and is allowed. Pin scoped to the two callback
+        // bodies so init's pattern doesn't trip this guard.
+        val onEventBody = Regex("""override\s+fun\s+onEvent\b[\s\S]*?\n\s{12}\}""")
+            .find(text)?.value ?: error("FileObserver.onEvent body not found")
+        val onReceiveBody = Regex("""override\s+fun\s+onReceive\b[\s\S]*?\n\s{12}\}""")
+            .find(text)?.value ?: error("BroadcastReceiver.onReceive body not found")
+        assertFalse(
+            "FileObserver.onEvent must NOT launch reload directly",
+            Regex("""coroutineScope\.launch\s*\{\s*reload\s*\(\s*\)\s*\}""").containsMatchIn(onEventBody),
+        )
+        assertFalse(
+            "BroadcastReceiver.onReceive must NOT launch reload directly",
+            Regex("""coroutineScope\.launch\s*\{\s*reload\s*\(\s*\)\s*\}""").containsMatchIn(onReceiveBody),
+        )
     }
 
     @Test
@@ -359,6 +376,76 @@ class CrossProcessStoreTest {
         assertTrue(
             "write() must clone via cloneSafe(value) before assigning to _state",
             Regex("""_state\.value\s*=\s*cloneSafe\s*\(\s*value\s*\)""").containsMatchIn(writeBlock),
+        )
+    }
+
+    @Test
+    fun `drift initial reload is dispatched off the caller thread (round-6 threading)`() {
+        // BAT-512 (Copilot review fix round-6): the constructor must
+        // NOT call reload() synchronously — that does file I/O on
+        // whatever thread constructs the store, and BAT-513+ will
+        // construct from SeekerClawApplication.onCreate (main).
+        // Pin that the catch-up read goes through coroutineScope.
+        val src = locateLiveSource()
+        val text = src.readText()
+        // Find the trailing init block (the one with the drain
+        // coroutine, NOT the basename-validation init).
+        val initBlocks = Regex("""\binit\s*\{[\s\S]*?\n\s{4}\}""").findAll(text).map { it.value }.toList()
+        val mainInit = initBlocks.firstOrNull { it.contains("reloadChannel") || it.contains("reload()") }
+            ?: error("main init block not found")
+        // Direct sync `reload()` (no coroutineScope.launch) must not
+        // appear — would trip StrictMode on main thread.
+        assertFalse(
+            "init must NOT call reload() synchronously on the caller thread",
+            Regex("""(?<!launch\s\{\s)reload\s*\(\s*\)(?!\s*\})""").containsMatchIn(
+                mainInit.replace(Regex("""//[^\n]*"""), "")
+            ).let {
+                // Check there's at least one reload() call AT ALL,
+                // and that every one is wrapped in launch.
+                val wrapped = Regex("""coroutineScope\.launch\s*\{\s*reload\s*\(\s*\)""")
+                    .findAll(mainInit).count()
+                val total = Regex("""\breload\s*\(\s*\)""").findAll(mainInit).count()
+                // Allow `reload()` inside the drain loop (already
+                // wrapped in launch). Just assert there's at least
+                // one launch{reload()} for the catch-up.
+                wrapped < 1
+            },
+        )
+        assertTrue(
+            "init must dispatch initial catch-up via coroutineScope.launch { reload() }",
+            Regex("""coroutineScope\.launch\s*\{\s*reload\s*\(\s*\)\s*\}""").containsMatchIn(mainInit),
+        )
+    }
+
+    @Test
+    fun `drift broadcastChanged is invoked OUTSIDE synchronized writeLock (round-6 lock contention)`() {
+        // BAT-512 (Copilot review fix round-6): sendBroadcast is
+        // system IPC and shouldn't be inside the critical section.
+        // Pin that broadcastChanged is called AFTER the
+        // synchronized(writeLock) block, not inside it.
+        val src = locateLiveSource()
+        val text = src.readText()
+        val writeBlock = Regex(
+            """fun\s+write\s*\(\s*value\s*:\s*T\s*\)\s*\{[\s\S]*?(?=\n\s{4}\}\n)""",
+        ).find(text)?.value ?: error("write() body not found")
+        // Find the synchronized block boundaries.
+        val syncStart = writeBlock.indexOf("synchronized(writeLock)")
+        assertTrue("synchronized(writeLock) block must exist", syncStart >= 0)
+        // Locate the closing brace of the synchronized block — it's
+        // the `}` at the same indent depth as the `synchronized`
+        // line. Heuristic: find the line `        }` that follows the
+        // try/catch/finally and isn't followed by `.something`.
+        val syncBlockEnd = writeBlock.indexOf("\n        }\n", syncStart)
+        assertTrue("synchronized block close not found", syncBlockEnd >= 0)
+        val outsideTheLock = writeBlock.substring(syncBlockEnd)
+        assertTrue(
+            "broadcastChanged() must be called outside the synchronized block",
+            Regex("""broadcastChanged\s*\(\s*\)""").containsMatchIn(outsideTheLock),
+        )
+        val insideTheLock = writeBlock.substring(syncStart, syncBlockEnd)
+        assertFalse(
+            "broadcastChanged() must NOT remain inside the synchronized block",
+            Regex("""broadcastChanged\s*\(\s*\)""").containsMatchIn(insideTheLock),
         )
     }
 

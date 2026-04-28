@@ -225,14 +225,20 @@ class CrossProcessStore<T>(
 
     // Trailing init runs AFTER every `val` property above is
     // initialized — coroutineScope, _state, reloadChannel, etc. are
-    // all valid here. Hydrates _state from disk, starts the drain
-    // coroutine, and attaches observers.
+    // all valid here. Starts the drain coroutine, attaches observers,
+    // and dispatches the initial catch-up read.
     init {
-        // Synchronous catch-up read: if the file exists from a prior
-        // process, refresh _state immediately so the first
-        // `state.value` access returns the persisted value, not the
-        // initial seed.
-        reload()
+        // BAT-512 (Copilot review fix round-6): defer the initial
+        // catch-up read to coroutineScope (Dispatchers.IO) instead
+        // of calling reload() synchronously on the caller thread.
+        // BAT-513 onward will construct this store from
+        // SeekerClawApplication.onCreate (main thread); blocking
+        // disk I/O in the constructor would trip StrictMode and add
+        // startup jank. Same pattern LogCollector / ServiceState
+        // adopted post-BAT-518. Trade-off: `state.value` briefly
+        // holds `initialSnapshot` before the async hydrate lands —
+        // typically a few ms. Observers see eventual consistency.
+        coroutineScope.launch { reload() }
         // Single drain coroutine: bursts of FileObserver/broadcast
         // events collapse to a single re-read. Each re-read sees
         // whatever's on disk at that instant; a write that lands
@@ -324,6 +330,15 @@ class CrossProcessStore<T>(
      * `write()` returns can't change what observers see.
      */
     fun write(value: T) {
+        // BAT-512 (Copilot review fix round-6): broadcast OUTSIDE the
+        // critical section. sendBroadcast is a system IPC that can
+        // block briefly; holding writeLock across it amplifies
+        // contention for concurrent writers without protecting any
+        // additional invariant (the file move + _state update are
+        // already atomic w.r.t. observers). This flag tells the
+        // post-lock code whether the write succeeded so it can
+        // broadcast only after a real state change.
+        var didWrite = false
         synchronized(writeLock) {
             try {
                 val text = json.encodeToString(serializer, value)
@@ -369,7 +384,7 @@ class CrossProcessStore<T>(
                 // clone of the construction-time snapshot. See class-
                 // level "Mutation safety" KDoc.
                 _state.value = cloneSafe(value)
-                broadcastChanged()
+                didWrite = true
             } catch (e: Exception) {
                 Log.e(TAG, "[$fileName] write failed: ${e.message}", e)
             } finally {
@@ -379,6 +394,11 @@ class CrossProcessStore<T>(
                 if (tmpFile.exists()) tmpFile.delete()
             }
         }
+        // Broadcast OUTSIDE the lock — see the note above the
+        // synchronized block. Skipped on the failure path so a
+        // failed write doesn't tell other-process observers a
+        // change happened that didn't.
+        if (didWrite) broadcastChanged()
     }
 
     /**
