@@ -193,6 +193,13 @@ if (fs.existsSync(_runtimeState.filePath)) {
     try {
         const _raw = fs.readFileSync(_runtimeState.filePath, 'utf8');
         const _parsed = JSON.parse(_raw);
+        // Guard: JSON.parse can legitimately return non-objects (a file
+        // containing the literal `null`, or `42`, or `"string"` parses
+        // cleanly). Without this check, `_parsed.provider` on `null`
+        // crashes Node startup with TypeError. Treat any non-object
+        // (including null) the same as decode failure: log + fall
+        // through to config.json.
+        const _isObj = !!_parsed && typeof _parsed === 'object' && !Array.isArray(_parsed);
         // Defense-in-depth: validate the (provider, authType) pair
         // matches the matrix the write path enforces. A manually-
         // edited file (or a future build's value with a combo this
@@ -200,12 +207,14 @@ if (fs.existsSync(_runtimeState.filePath)) {
         // with an invalid combination instead of falling back.
         // Treat invalid content the same as decode failure: log,
         // discard, fall through to config.json.
-        if (typeof _parsed.provider === 'string' && typeof _parsed.authType === 'string'
+        if (_isObj && typeof _parsed.provider === 'string' && typeof _parsed.authType === 'string'
             && _runtimeStateModule.validateMatrix(_parsed.provider, _parsed.authType)) {
             _runtimeStateValues = _parsed;
             log(`[Config] Loaded runtime_state.json: provider=${_runtimeStateValues.provider} authType=${_runtimeStateValues.authType} model=${_runtimeStateValues.model}`, 'DEBUG');
         } else {
-            log(`[Config] runtime_state.json has invalid (provider=${_parsed.provider}, authType=${_parsed.authType}) — falling back to config.json`, 'WARN');
+            const _provider = _isObj ? _parsed.provider : '<not-an-object>';
+            const _authType = _isObj ? _parsed.authType : '<not-an-object>';
+            log(`[Config] runtime_state.json has invalid content (provider=${_provider}, authType=${_authType}) — falling back to config.json`, 'WARN');
             _runtimeStateValues = null;
         }
     } catch (e) {

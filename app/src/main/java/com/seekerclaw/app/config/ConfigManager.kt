@@ -295,10 +295,42 @@ object ConfigManager {
      * pre-BAT-513 fire-and-forget behaviour.
      */
     fun saveConfig(context: Context, config: AppConfig): Boolean {
+        // BAT-513: validate the (provider, authType) matrix BEFORE any
+        // persistence. Without this, the matrix gate inside
+        // RuntimeStateStore.write would only fire AFTER prefs.commit
+        // had already written the invalid combo to SharedPreferences,
+        // leaving prefs and runtime_state.json diverged. Up-front gate
+        // means an invalid combo never reaches disk anywhere.
+        if (!RuntimeStateStore.isValidPair(config.provider, config.authType)) {
+            LogCollector.append(
+                "[Config] saveConfig rejected invalid (provider=${config.provider}, " +
+                    "authType=${config.authType}) before persistence",
+                LogLevel.WARN,
+            )
+            return false
+        }
+
+        // BAT-513: snapshot the OLD runtime field values so we can roll
+        // back if RuntimeStateStore.write fails after prefs.commit
+        // succeeds. Without this, an FS error on the runtime-state path
+        // would leave prefs holding the new runtime fields (which the
+        // legacy code path reads) while runtime_state.json still has
+        // the old values — the two persistent stores would diverge,
+        // and a downgrade would land on the new prefs values that
+        // never reached the cross-process file. Rolling back on
+        // failure makes saveConfig atomic at the runtime-fields level
+        // (other fields commit unconditionally — they don't cross-
+        // process sync, so partial commit is the same as today's
+        // pre-BAT-513 behaviour).
+        val sp = prefs(context)
+        val oldProvider = sp.getString(KEY_PROVIDER, null)
+        val oldAuthType = sp.getString(KEY_AUTH_TYPE, null)
+        val oldModel = sp.getString(KEY_MODEL, null)
+
         val encApiKey = KeystoreHelper.encrypt(config.anthropicApiKey)
         val encBotToken = KeystoreHelper.encrypt(config.telegramBotToken)
 
-        val editor = prefs(context).edit()
+        val editor = sp.edit()
             .putString(KEY_API_KEY_ENC, Base64.encodeToString(encApiKey, Base64.NO_WRAP))
             .putString(KEY_BOT_TOKEN_ENC, Base64.encodeToString(encBotToken, Base64.NO_WRAP))
             .putString(KEY_OWNER_ID, config.telegramOwnerId)
@@ -459,21 +491,26 @@ object ConfigManager {
             LogCollector.append("[Config] Failed to persist config (commit=false)", LogLevel.ERROR)
             return false
         }
-        // BAT-513: also persist the cross-process runtime state file so
-        // the `:node` process picks up provider/authType/model via
+        // BAT-513: persist the cross-process runtime state file so the
+        // `:node` process picks up provider/authType/model via
         // runtime-state.js without waiting for a service restart. The
         // RuntimeStateStore.write also re-emits via its StateFlow, and
         // its observe-and-mirror collector will see the new value
         // already matches prefs (we wrote them above) and skip the
         // mirror — the redundancy guard is what makes the dual write
-        // free. If RuntimeStateStore.write fails (FS error), prefs are
-        // already up-to-date so the legacy code path still works; we
-        // surface the failure to the caller so UI can revert. An
-        // IllegalArgumentException on an invalid (provider, authType)
-        // pair is also caught and surfaced as `false` — programmer
-        // bug at the UI layer, but we don't want it to crash the
-        // saveConfig hot path.
-        return try {
+        // free.
+        //
+        // ATOMICITY: if RuntimeStateStore.write fails (FS error), roll
+        // back the prefs runtime fields to their pre-saveConfig values
+        // so prefs and runtime_state.json don't diverge on the runtime
+        // fields. Without rollback, prefs would hold the new runtime
+        // fields while runtime_state.json kept the old ones — a
+        // downgrade would land on prefs values that never reached the
+        // cross-process file. The IllegalArgumentException catch is
+        // now defense-in-depth (the up-front matrix gate at the top
+        // of saveConfig should have prevented invalid combos from
+        // reaching here); same rollback applies.
+        val runtimeWritten = try {
             RuntimeStateStore.write(
                 RuntimeState(
                     provider = config.provider,
@@ -483,12 +520,36 @@ object ConfigManager {
             )
         } catch (e: IllegalArgumentException) {
             LogCollector.append(
-                "[Config] saveConfig produced invalid RuntimeState — runtime_state.json " +
-                    "not updated (prefs still updated): ${e.message}",
+                "[Config] saveConfig produced invalid RuntimeState (defense-in-depth): " +
+                    "${e.message}",
                 LogLevel.WARN,
             )
             false
         }
+        if (!runtimeWritten) {
+            // Roll back prefs runtime fields to pre-save snapshot. apply()
+            // is async-safe here — the only reader is the legacy code
+            // path which always re-reads on configVersion bump.
+            val rollback = sp.edit()
+            if (oldProvider != null) rollback.putString(KEY_PROVIDER, oldProvider)
+            else rollback.remove(KEY_PROVIDER)
+            if (oldAuthType != null) rollback.putString(KEY_AUTH_TYPE, oldAuthType)
+            else rollback.remove(KEY_AUTH_TYPE)
+            if (oldModel != null) rollback.putString(KEY_MODEL, oldModel)
+            else rollback.remove(KEY_MODEL)
+            rollback.apply()
+            // Bump configVersion AGAIN so the UI recomposes with the
+            // rolled-back runtime fields (it already recomposed once
+            // post-commit with the failed-but-persisted values; a
+            // second bump corrects the snapshot).
+            bumpConfigVersionOnMain()
+            LogCollector.append(
+                "[Config] RuntimeStateStore.write failed — rolled back prefs runtime fields " +
+                    "to (provider=$oldProvider, authType=$oldAuthType, model=$oldModel)",
+                LogLevel.WARN,
+            )
+        }
+        return runtimeWritten
     }
 
     /**
