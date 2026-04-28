@@ -119,20 +119,31 @@ object ServiceState {
      * Must be called before any updateStatus/incrementMessages/addTokens.
      *
      * Performs synchronous disk I/O on the calling thread (file read +
-     * daily-reset write). Intentionally sync because the only known
-     * caller is `SeekerClawService.onStartCommand` (the :node process's
-     * service main thread, no UI work — a few ms of disk I/O during
-     * service start is fine). Main-process UI callers should NOT use
-     * this — they should call `startWatching` instead, which moves
-     * the disk I/O off the main thread.
+     * daily-reset write). `restoreFromDisk` is single-flighted via
+     * `initLock` and gated on `initialized`, so repeat calls within a
+     * process are no-ops after the first.
      *
-     * No `@WorkerThread` annotation: SeekerClawService.onStartCommand
-     * is a documented main-thread caller, and Android Lint correctly
-     * flags @WorkerThread mismatches for component callbacks. Marking
-     * this would force a SuppressLint at the call site without
-     * actually preventing misuse — the comment above is a clearer
-     * contract. (Copilot R14 + R16 — original R14 ask was for the
-     * annotation; R16 caught the resulting contradiction.)
+     * Known callers (treat as potentially blocking):
+     *   • `SeekerClawService.onStartCommand` — runs on :node process
+     *     main thread during service start. A few ms of disk I/O at
+     *     service start is fine.
+     *   • `SeekerClawService.stop(context)` companion — runs on whatever
+     *     process invoked stop (typically main UI when user taps Stop).
+     *     The first call from main UI may incur the disk I/O;
+     *     subsequent calls are no-ops since `initialized` is set.
+     *
+     * Main-process callers in latency-sensitive paths should prefer
+     * `startWatching`, which dispatches the restore work to
+     * `Dispatchers.IO`.
+     *
+     * No `@WorkerThread` annotation: both known callers are component
+     * callbacks that may run on the main thread, and Android Lint
+     * correctly flags @WorkerThread mismatches there. Marking this
+     * would force a SuppressLint at the call site without actually
+     * preventing misuse — this doc comment is the clearer contract.
+     * (Copilot R14 + R16 + R-latest+2 — original R14 ask was for the
+     * annotation; R16 caught the resulting contradiction; R-latest+2
+     * caught the inaccurate "only known caller" claim.)
      */
     fun init(context: Context) {
         initFileRefs(context)
@@ -247,21 +258,17 @@ object ServiceState {
      * BAT-518: replaced the prior 1s coroutine polling loop with kernel-
      * level inotify (`FileObserver`). Same external contract — the
      * StateFlow values still update when the underlying files change —
-     * but with zero idle CPU cost. Previously this method ran 86,400
-     * disk-read cycles per day even when nothing changed.
+     * but event-driven instead of 1Hz polling. Previously this method ran
+     * 86,400 disk-read cycles per day even when nothing changed.
      *
-     * Two FileObservers are attached: one on `filesDir` (for
-     * `service_state` and `bridge_token`) and one on `filesDir/workspace`
-     * (for `agent_health_state` and `api_usage_state`).
-     *
-     * BAT-518 device-fix update: ServiceState no longer attaches its own
-     * `filesDir` observer. Multiple FileObservers in the same process on
-     * the same directory proved fragile on the Solana Seeker (one of two
-     * silently never received events). Instead, `LogCollector`'s observer
-     * — which already watches `filesDir` for `service_logs` — calls
-     * `ServiceState.handleFilesDirEvent(path)` on every event, filtered
-     * to state-file paths only. This method now attaches a FileObserver
-     * ONLY on `filesDir/workspace`.
+     * One FileObserver is attached: on `filesDir/workspace`, for
+     * `agent_health_state` and `api_usage_state`. Updates for
+     * `service_state` and `bridge_token` (which live directly in
+     * `filesDir`) flow through `LogCollector`'s FileObserver via
+     * `handleFilesDirEvent(path)` — see that method's KDoc for why.
+     * Briefly: registering two FileObservers in the same process on the
+     * same directory proved fragile on the Solana Seeker (one of two
+     * silently never received events), so we consolidate onto one.
      *
      * Initial reads are dispatched ASYNCHRONOUSLY to Dispatchers.IO
      * (Copilot R2/R4 — startWatching is invoked from Application.onCreate
