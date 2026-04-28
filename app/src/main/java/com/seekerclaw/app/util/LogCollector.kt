@@ -111,6 +111,17 @@ object LogCollector {
     // Guarantees no missed bytes regardless of when an event arrives.
     private val drainState = java.util.concurrent.atomic.AtomicInteger(0)
 
+    // Owner token, incremented every time launchDrainIfIdle launches a
+    // new drain. The drain captures `myOwner = drainOwner.get()` at
+    // launch and re-checks it in `finally` before resetting drainState
+    // to 0. Without this check, a successful settle (CAS 1->0) followed
+    // by a new event (transition 0->1, launch drain B) followed by
+    // drain A's finally would clobber drain B's state and cause an
+    // infinite loop in drain B's settle CAS. The owner token lets a
+    // late-running finally cleanly skip the reset when ownership has
+    // already moved on.
+    private val drainOwner = java.util.concurrent.atomic.AtomicLong(0)
+
     fun init(context: Context) {
         logFile = File(context.filesDir, LOG_FILE_NAME)
     }
@@ -162,8 +173,13 @@ object LogCollector {
      * BAT-518: replaced the prior 1s coroutine polling loop with kernel-
      * level inotify (`FileObserver`). Same external contract — the
      * `_logs` StateFlow updates when the underlying file is appended —
-     * but with zero idle CPU cost. Previously this method ran 86,400
-     * disk reads per day in main process even when no new logs arrived.
+     * but now event-driven with near-zero idle disk I/O. Previously
+     * this method ran 86,400 disk reads per day in main process even
+     * when no new logs arrived; now work happens only on relevant
+     * filesystem events. The observer also dispatches ServiceState
+     * reads for cross-process state files in the same dir, so per-
+     * event work is non-zero — it's just no longer a constant 1Hz
+     * background poll.
      *
      * Append-aware: the existing `readNewFromFile` already tracks
      * `lastReadPosition` and only reads new bytes from that offset.
@@ -301,21 +317,22 @@ object LogCollector {
      *      waiting for the newline to arrive). Without (2), a partial
      *      line would spin re-reading the same bytes forever.
      *
-     * try/finally on drainState: if the drain coroutine is cancelled
-     * mid-flight (e.g. process tear-down or scope.cancel()), force-reset
-     * the state to 0 so future events can launch a fresh drain. Without
-     * this, the state could stick at 1 or 2 forever and ALL future log
-     * lines would be silently dropped from the in-memory buffer.
-     * Slight tradeoff: a queued rerun (state=2) at the moment of
-     * cancellation gets reset without serving the rerun, but the next
-     * FileObserver event re-fires drain from lastReadPosition forward,
-     * picking up any unread bytes still in the file.
+     * Cancellation safety: the drain coroutine wraps its loop in
+     * try/finally. The finally block resets drainState to 0 ONLY if
+     * we're still the active owner (drainOwner == myOwner). Without
+     * this owner check, a successful settle (CAS 1->0) followed
+     * immediately by a new event-driven launch could be clobbered: the
+     * old drain's finally would `set(0)` over the new drain's state=1,
+     * and the new drain's settle CAS would fail forever. With the
+     * check, a late finally on a drain that's been "succeeded" by a
+     * newer one cleanly skips its reset.
      */
     private fun launchDrainIfIdle() {
         val prev = drainState.getAndUpdate { current ->
             if (current == 0) 1 else 2
         }
         if (prev != 0) return  // drain in flight; rerun queued (or already queued)
+        val myOwner = drainOwner.incrementAndGet()
         scope.launch {
             try {
                 while (true) {
@@ -330,7 +347,14 @@ object LogCollector {
                     if (drainState.compareAndSet(2, 1)) continue
                 }
             } finally {
-                drainState.set(0)
+                // Only reset if no newer drain has taken over.
+                // Normal exit: state was already CAS'd to 0 inside the
+                // loop, this is a no-op. Cancellation exit: state may
+                // be 1 or 2, reset so future drains can launch.
+                if (drainOwner.get() == myOwner) {
+                    drainState.compareAndSet(1, 0)
+                    drainState.compareAndSet(2, 0)
+                }
             }
         }
     }

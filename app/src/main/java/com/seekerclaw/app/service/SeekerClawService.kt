@@ -66,6 +66,16 @@ class SeekerClawService : Service() {
     // decided "no more bytes" but before the drain coroutine has
     // settled to idle.
     private val nodeDebugDrainState = java.util.concurrent.atomic.AtomicInteger(0)
+
+    // Owner token, incremented every time a new drain launches. The
+    // drain captures `myOwner = nodeDebugDrainOwner.get()` at launch and
+    // re-checks it in finally before resetting nodeDebugDrainState to 0.
+    // Without this check, an unconditional reset in finally would race
+    // with a new event-driven drain that already transitioned state
+    // 0->1 — clobbering its state and stranding it in an infinite
+    // settle-CAS loop. With the check, a late finally on a drain that's
+    // been succeeded cleanly skips its reset.
+    private val nodeDebugDrainOwner = java.util.concurrent.atomic.AtomicLong(0)
     // Per-chunk cap to prevent OOM if events are batched (e.g. Doze mode
     // releases queued events at once) or if Node writes a huge burst.
     // Larger than LogCollector's budget because Node debug writes can
@@ -486,16 +496,17 @@ class SeekerClawService : Service() {
                             // value; we launch only when transitioning
                             // out of idle.
                             //
-                            // try/finally on the state: if the drain
-                            // coroutine is cancelled mid-flight, force-
-                            // reset to 0 so future events can launch a
-                            // fresh drain. Without this the state could
-                            // stick at 1 or 2 and all future Node debug
-                            // forwarding would silently halt.
+                            // Cancellation safety via owner token: the
+                            // finally block resets state only if no
+                            // newer drain has bumped the owner. Without
+                            // the check, an unconditional reset would
+                            // clobber a new drain's state=1 and strand
+                            // it in an infinite settle-CAS loop.
                             val prev = nodeDebugDrainState.getAndUpdate { current ->
                                 if (current == 0) 1 else 2
                             }
                             if (prev == 0) {
+                                val myOwner = nodeDebugDrainOwner.incrementAndGet()
                                 scope.launch {
                                     try {
                                         while (true) {
@@ -508,7 +519,12 @@ class SeekerClawService : Service() {
                                             if (nodeDebugDrainState.compareAndSet(2, 1)) continue
                                         }
                                     } finally {
-                                        nodeDebugDrainState.set(0)
+                                        // Owner check: only reset if no
+                                        // newer drain has taken over.
+                                        if (nodeDebugDrainOwner.get() == myOwner) {
+                                            nodeDebugDrainState.compareAndSet(1, 0)
+                                            nodeDebugDrainState.compareAndSet(2, 0)
+                                        }
                                     }
                                 }
                             }
