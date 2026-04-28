@@ -117,10 +117,19 @@ object LogCollector {
     // to 0. Without this check, a successful settle (CAS 1->0) followed
     // by a new event (transition 0->1, launch drain B) followed by
     // drain A's finally would clobber drain B's state and cause an
-    // infinite loop in drain B's settle CAS. The owner token lets a
-    // late-running finally cleanly skip the reset when ownership has
-    // already moved on.
+    // infinite loop in drain B's settle CAS.
     private val drainOwner = java.util.concurrent.atomic.AtomicLong(0)
+
+    // Gate that serializes launch-vs-finally ownership transitions.
+    // The owner+state pair must be observed atomically; without the
+    // gate, a race exists where a draining coroutine's finally reads
+    // owner=N (matches), gets pre-empted, and then a new launch
+    // bumps owner to N+1 + sets state=1 — only for the original
+    // finally to wake up and CAS state back to 0, clobbering the
+    // newly-launched drain. The gate is held only for the brief
+    // launch decision and finally check (microseconds, in-memory
+    // ops only), not during the drain loop itself.
+    private val drainGate = Any()
 
     fun init(context: Context) {
         logFile = File(context.filesDir, LOG_FILE_NAME)
@@ -318,21 +327,31 @@ object LogCollector {
      *      line would spin re-reading the same bytes forever.
      *
      * Cancellation safety: the drain coroutine wraps its loop in
-     * try/finally. The finally block resets drainState to 0 ONLY if
-     * we're still the active owner (drainOwner == myOwner). Without
-     * this owner check, a successful settle (CAS 1->0) followed
-     * immediately by a new event-driven launch could be clobbered: the
-     * old drain's finally would `set(0)` over the new drain's state=1,
-     * and the new drain's settle CAS would fail forever. With the
-     * check, a late finally on a drain that's been "succeeded" by a
-     * newer one cleanly skips its reset.
+     * try/finally. The finally block (under drainGate) resets
+     * drainState to 0 ONLY if we're still the active owner. Without
+     * the gate + owner check, race exists: drain A settles CAS(1, 0),
+     * pre-empts; drain A's finally checks owner (matches old N);
+     * drain A pre-empts; event B launches with owner=N+1 + state=1;
+     * drain A's CAS(1, 0) succeeds and clobbers state — drain B's
+     * settle CAS would fail forever. Gating launch+finally on the
+     * same monitor serializes the two so owner+state are always
+     * observed as a consistent pair.
      */
     private fun launchDrainIfIdle() {
-        val prev = drainState.getAndUpdate { current ->
-            if (current == 0) 1 else 2
+        var myOwner: Long = -1L
+        synchronized(drainGate) {
+            when (drainState.get()) {
+                0 -> {
+                    myOwner = drainOwner.incrementAndGet()
+                    drainState.set(1)
+                }
+                1 -> {
+                    drainState.set(2)
+                    return
+                }
+                else -> return  // already 2 (queued); no-op
+            }
         }
-        if (prev != 0) return  // drain in flight; rerun queued (or already queued)
-        val myOwner = drainOwner.incrementAndGet()
         scope.launch {
             try {
                 while (true) {
@@ -347,13 +366,17 @@ object LogCollector {
                     if (drainState.compareAndSet(2, 1)) continue
                 }
             } finally {
-                // Only reset if no newer drain has taken over.
+                // Owner+state checked atomically under the gate.
                 // Normal exit: state was already CAS'd to 0 inside the
-                // loop, this is a no-op. Cancellation exit: state may
-                // be 1 or 2, reset so future drains can launch.
-                if (drainOwner.get() == myOwner) {
-                    drainState.compareAndSet(1, 0)
-                    drainState.compareAndSet(2, 0)
+                // settle loop, this is a no-op. Cancellation exit:
+                // state may be 1 or 2, reset so future drains can
+                // launch. If a newer drain has taken over (owner !=
+                // myOwner), skip reset entirely so we don't clobber.
+                synchronized(drainGate) {
+                    if (drainOwner.get() == myOwner) {
+                        drainState.compareAndSet(1, 0)
+                        drainState.compareAndSet(2, 0)
+                    }
                 }
             }
         }

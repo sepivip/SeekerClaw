@@ -70,12 +70,15 @@ class SeekerClawService : Service() {
     // Owner token, incremented every time a new drain launches. The
     // drain captures `myOwner = nodeDebugDrainOwner.get()` at launch and
     // re-checks it in finally before resetting nodeDebugDrainState to 0.
-    // Without this check, an unconditional reset in finally would race
-    // with a new event-driven drain that already transitioned state
-    // 0->1 — clobbering its state and stranding it in an infinite
-    // settle-CAS loop. With the check, a late finally on a drain that's
-    // been succeeded cleanly skips its reset.
     private val nodeDebugDrainOwner = java.util.concurrent.atomic.AtomicLong(0)
+
+    // Gate that serializes launch-vs-finally ownership transitions for
+    // the node-debug drain. Same pattern as LogCollector.drainGate —
+    // without serialization, a finally that captured owner=N (matches)
+    // could pre-empt and a new launch could bump owner to N+1 + state=1,
+    // then the original finally wakes up and CAS-clobbers state back to
+    // 0, leaving the new drain stuck in an infinite settle loop.
+    private val nodeDebugDrainGate = Any()
     // Per-chunk cap to prevent OOM if events are batched (e.g. Doze mode
     // releases queued events at once) or if Node writes a huge burst.
     // Larger than LogCollector's budget because Node debug writes can
@@ -492,21 +495,24 @@ class SeekerClawService : Service() {
                             // State-machine single-flight (see
                             // nodeDebugDrainState declaration). Transition:
                             // 0 -> 1 (launch), 1 -> 2 (queue rerun),
-                            // 2 -> 2 (no-op). getAndUpdate returns OLD
-                            // value; we launch only when transitioning
-                            // out of idle.
-                            //
-                            // Cancellation safety via owner token: the
-                            // finally block resets state only if no
-                            // newer drain has bumped the owner. Without
-                            // the check, an unconditional reset would
-                            // clobber a new drain's state=1 and strand
-                            // it in an infinite settle-CAS loop.
-                            val prev = nodeDebugDrainState.getAndUpdate { current ->
-                                if (current == 0) 1 else 2
+                            // 2 -> 2 (no-op). Launch decision and finally
+                            // ownership check are both gated on
+                            // nodeDebugDrainGate so owner+state are
+                            // always observed as a consistent pair.
+                            var myOwner: Long = -1L
+                            var shouldLaunch = false
+                            synchronized(nodeDebugDrainGate) {
+                                when (nodeDebugDrainState.get()) {
+                                    0 -> {
+                                        myOwner = nodeDebugDrainOwner.incrementAndGet()
+                                        nodeDebugDrainState.set(1)
+                                        shouldLaunch = true
+                                    }
+                                    1 -> nodeDebugDrainState.set(2)
+                                    else -> { /* already 2 */ }
+                                }
                             }
-                            if (prev == 0) {
-                                val myOwner = nodeDebugDrainOwner.incrementAndGet()
+                            if (shouldLaunch) {
                                 scope.launch {
                                     try {
                                         while (true) {
@@ -519,11 +525,14 @@ class SeekerClawService : Service() {
                                             if (nodeDebugDrainState.compareAndSet(2, 1)) continue
                                         }
                                     } finally {
-                                        // Owner check: only reset if no
-                                        // newer drain has taken over.
-                                        if (nodeDebugDrainOwner.get() == myOwner) {
-                                            nodeDebugDrainState.compareAndSet(1, 0)
-                                            nodeDebugDrainState.compareAndSet(2, 0)
+                                        // Owner+state checked atomically
+                                        // under the gate so a late finally
+                                        // can't clobber a newer drain.
+                                        synchronized(nodeDebugDrainGate) {
+                                            if (nodeDebugDrainOwner.get() == myOwner) {
+                                                nodeDebugDrainState.compareAndSet(1, 0)
+                                                nodeDebugDrainState.compareAndSet(2, 0)
+                                            }
                                         }
                                     }
                                 }
