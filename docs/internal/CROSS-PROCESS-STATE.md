@@ -64,19 +64,35 @@ the same file.
 ```
 write(value) →
   1. writeText to "<filename>.tmp"
-  2. renameTo "<filename>"   ← atomic on ext4/F2FS, the only Android filesystems
+  2. Files.move(tmp → <filename>, REPLACE_EXISTING, ATOMIC_MOVE)
+     ← single-syscall atomic replace on ext4/F2FS (the filesystems
+       Android uses); no delete-then-rename window where observers
+       could briefly see the file absent
   3. update StateFlow
   4. broadcast ACTION_STORE_CHANGED with EXTRA_FILE_NAME
 ```
 
-A reader can never observe a half-written file because the rename is
-atomic. Concurrent writes from the same process serialize via an
-internal lock; cross-process concurrent writes are last-writer-wins
-(filesystem rename semantics).
+A reader can never observe a half-written file because the move is
+atomic. Critically, there is **no DELETE-event window** —
+`Files.move` with `REPLACE_EXISTING + ATOMIC_MOVE` replaces the target
+in a single filesystem operation, so FileObserver sees a single
+`MOVED_TO` (or `MODIFY`) transition, never a `DELETE` followed by a
+`CREATE`. This was a real bug in the first cut of this class:
+`tmpFile.renameTo(file)` with a `file.delete()` fallback opened a
+window where the file was absent, FileObserver fired `DELETE`,
+`reload()` published `initial`, and only the subsequent
+`CREATE`/`MOVED_TO` restored the correct value — observers briefly
+saw garbage. Files.move closes that window.
 
-The Node side (`cross-process-store.js`) uses the same tmp+rename
-contract, so a Node-side write is interchangeable with a Kotlin-side
-write from the reader's perspective.
+Concurrent writes from the same process serialize via an internal
+`synchronized(writeLock)` block; cross-process concurrent writes are
+last-writer-wins (filesystem move semantics).
+
+The Node side (`cross-process-store.js`) uses an equivalent
+`fs.writeFileSync(tmp) + fs.renameSync(tmp, file)` contract, so a
+Node-side write is interchangeable with a Kotlin-side write from the
+reader's perspective. (Node's renameSync is atomic on POSIX
+filesystems, which is what Android uses.)
 
 ### Refresh strategy (two layered mechanisms)
 

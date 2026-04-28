@@ -61,12 +61,14 @@ import java.io.File
  *
  * ## Atomicity
  *
- * Writes go through a `<filename>.tmp` then `renameTo(filename)`. The
- * rename is atomic on every Android-supported filesystem (ext4, F2FS),
- * so a reader can never observe a half-written file. No fsync —
- * Android-style mobile usage doesn't justify the latency cost; if the
- * device powers off mid-write, the worst case is the previous good
- * version stays on disk.
+ * Writes go through a `<filename>.tmp` and are then moved into place
+ * with `java.nio.file.Files.move(..., REPLACE_EXISTING, ATOMIC_MOVE)`.
+ * That move is atomic at the filesystem level on the filesystems
+ * Android uses (ext4, F2FS), so a reader can never observe a half-
+ * written file AND there is no DELETE-event window where observers
+ * could briefly see `initial`. No fsync — Android-style mobile usage
+ * doesn't justify the latency cost; if the device powers off mid-
+ * write, the worst case is the previous good version stays on disk.
  *
  * ## What this class does NOT do
  *
@@ -82,8 +84,11 @@ import java.io.File
  *
  * @param T type of the persisted value. Must be `@Serializable`-able
  *          via the supplied [serializer].
- * @param context any [Context] (process-scoped). Used for `filesDir`,
- *                broadcast send/register, and FileObserver attach.
+ * @param context any [Context] (process-scoped). Internally pinned to
+ *                `context.applicationContext` for `filesDir`, broadcast
+ *                send/register, and FileObserver attach so an Activity
+ *                or Service Context passed in by mistake can't leak the
+ *                receiver/observer for the lifetime of that component.
  * @param fileName basename of the JSON file relative to `filesDir`,
  *                 e.g. `"runtime_state.json"`. Avoid path separators —
  *                 only direct children of `filesDir` are supported.
@@ -97,29 +102,42 @@ import java.io.File
  *                       `Dispatchers.IO`.
  */
 class CrossProcessStore<T>(
-    private val context: Context,
+    context: Context,
     private val fileName: String,
     private val serializer: KSerializer<T>,
     private val initial: T,
-    private val coroutineScope: CoroutineScope = CoroutineScope(Dispatchers.IO),
+    parentScope: CoroutineScope? = null,
 ) {
     init {
-        // BAT-512 (Copilot review fix): fileName is documented as a
+        // BAT-512 (Copilot review fix #1): fileName is documented as a
         // basename relative to filesDir. Without enforcement, a caller
         // passing "../etc/passwd" or "subdir/file.json" would resolve
         // OUTSIDE filesDir — path traversal. Validate up-front so
         // misuse is caught at construction, not at first write.
-        require(fileName.isNotBlank()) { "fileName must not be blank" }
-        require(fileName == File(fileName).name) {
-            "fileName must be a basename (no path separators), got: '$fileName'"
-        }
-        require(!fileName.contains("..")) {
-            "fileName must not contain '..' (path traversal), got: '$fileName'"
+        require(isValidFileName(fileName)) {
+            "fileName must be a non-empty basename without path separators or '..': '$fileName'"
         }
     }
 
-    private val file: File = File(context.filesDir, fileName)
-    private val tmpFile: File = File(context.filesDir, "$fileName.tmp")
+    // BAT-512 (Copilot review fix #6): pin to applicationContext so a
+    // caller passing an Activity/Service Context can't leak the
+    // BroadcastReceiver / FileObserver for the lifetime of that
+    // component. The application context survives configuration
+    // changes and process boundaries cleanly.
+    private val appContext: Context = context.applicationContext
+
+    // BAT-512 (Copilot review fix #7): own a SupervisorJob so close()
+    // can cancel in-flight reload coroutines. The default fresh scope
+    // we create has its job here under our control; if the caller
+    // passes their own scope, we use it directly and they own
+    // cancellation. Either way, post-close reload work doesn't fire.
+    private val ownedJob: kotlinx.coroutines.CompletableJob? =
+        if (parentScope == null) kotlinx.coroutines.SupervisorJob() else null
+    private val coroutineScope: CoroutineScope = parentScope
+        ?: CoroutineScope(Dispatchers.IO + ownedJob!!)
+
+    private val file: File = File(appContext.filesDir, fileName)
+    private val tmpFile: File = File(appContext.filesDir, "$fileName.tmp")
     private val writeLock = Any()
     private val _state = MutableStateFlow(initial)
 
@@ -234,9 +252,9 @@ class CrossProcessStore<T>(
     private fun broadcastChanged() {
         try {
             val intent = Intent(ACTION_STORE_CHANGED)
-                .setPackage(context.packageName)
+                .setPackage(appContext.packageName)
                 .putExtra(EXTRA_FILE_NAME, fileName)
-            context.sendBroadcast(intent)
+            appContext.sendBroadcast(intent)
         } catch (e: Exception) {
             // Broadcast failure is non-fatal — FileObserver in the other
             // process will still pick up the file change.
@@ -287,7 +305,7 @@ class CrossProcessStore<T>(
             }
         }
         ContextCompat.registerReceiver(
-            context,
+            appContext,
             r,
             IntentFilter(ACTION_STORE_CHANGED),
             ContextCompat.RECEIVER_NOT_EXPORTED,
@@ -296,21 +314,30 @@ class CrossProcessStore<T>(
     }
 
     /**
-     * Release the FileObserver and broadcast receiver. Production
-     * stores live for the process lifetime — calling [close] is only
-     * meaningful for tests or hot-swap scenarios. Idempotent.
+     * Release the FileObserver, broadcast receiver, and any in-flight
+     * reload coroutines. Production stores live for the process
+     * lifetime — calling [close] is only meaningful for tests or hot-
+     * swap scenarios. Idempotent.
+     *
+     * BAT-512 (Copilot review fix #7): if this store created its own
+     * coroutine scope (no `parentScope` passed in), we cancel the
+     * SupervisorJob backing it so any reload work scheduled on the
+     * FileObserver / receiver thread can't fire after close. Stores
+     * given an external scope leave cancellation to the caller — they
+     * presumably own that scope's lifecycle.
      */
     fun close() {
         fileObserver?.stopWatching()
         fileObserver = null
         receiver?.let {
             try {
-                context.unregisterReceiver(it)
+                appContext.unregisterReceiver(it)
             } catch (_: Exception) {
                 // Already unregistered, or never registered (test paths).
             }
         }
         receiver = null
+        ownedJob?.cancel()
     }
 
     companion object {
@@ -326,5 +353,20 @@ class CrossProcessStore<T>(
 
         /** Intent extra carrying the basename of the changed store file. */
         const val EXTRA_FILE_NAME = "fileName"
+
+        /**
+         * BAT-512 (Copilot review fix #2): the same basename rule
+         * `init {}` enforces, exposed as a pure function so tests can
+         * target it without a Context. Returns true if [fileName] is a
+         * non-empty basename safe to resolve under `filesDir`.
+         */
+        @JvmStatic
+        fun isValidFileName(fileName: String): Boolean {
+            if (fileName.isEmpty()) return false
+            if (fileName != File(fileName).name) return false
+            if (fileName.contains("..")) return false
+            if (fileName.contains('/') || fileName.contains('\\')) return false
+            return true
+        }
     }
 }

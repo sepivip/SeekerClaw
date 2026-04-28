@@ -159,7 +159,7 @@ class CrossProcessStoreTest {
         // contract a real consumer relies on.
         //
         // Without the internal lock, one thread's `tmpFile.writeText`
-        // could clobber another's mid-rename, producing a final file
+        // could clobber another's mid-move, producing a final file
         // that doesn't match any writer's payload. With the lock, the
         // last writer to enter the critical section wins and the
         // final file is exactly that writer's value.
@@ -170,10 +170,16 @@ class CrossProcessStoreTest {
             synchronized(writeLock) {
                 val text = json.encodeToString(Sample.serializer(), value)
                 tmp.writeText(text)
-                if (!tmp.renameTo(file)) {
-                    file.delete()
-                    tmp.renameTo(file)
-                }
+                // Mirror the live class's atomic move (BAT-512 Copilot
+                // review fix): NIO Files.move with REPLACE_EXISTING +
+                // ATOMIC_MOVE, no delete+rename fallback that would
+                // open a DELETE-event window.
+                java.nio.file.Files.move(
+                    tmp.toPath(),
+                    file.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                    java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                )
             }
         }
 
@@ -243,23 +249,43 @@ class CrossProcessStoreTest {
         assertEquals(newer, readOrInitial(file, Sample()))
     }
 
-    // --- fileName validation (BAT-512 Copilot review fix #1) ---
+    // --- fileName validation (BAT-512 Copilot review fix #1, refined in fix #2) ---
 
     @Test
-    fun `mirrored fileName validation rejects path separators`() {
-        // We can't construct a real CrossProcessStore here without a
-        // Context, but we can pin the same basename rule the live
-        // class enforces in init {} via require(...) — the drift
-        // guard above asserts the live source has it.
-        assertFalse("subdir/file.json contains a separator and would escape filesDir",
-            "subdir/file.json" == File("subdir/file.json").name)
-        assertFalse("absolute paths likewise reject",
-            "/etc/passwd" == File("/etc/passwd").name)
-        assertFalse("backslash paths reject on JVM as part of the name on Windows",
-            "subdir\\file.json".contains("..") || "subdir\\file.json".contains("/"))
-        // Positive: a plain basename equals its File-derived name.
-        assertEquals("plain basename validates",
-            "runtime_state.json", File("runtime_state.json").name)
+    fun `isValidFileName accepts plain basenames`() {
+        // Pure-function validation lives in the companion as
+        // `CrossProcessStore.isValidFileName(...)`. Tests can target
+        // it directly without needing a Context, so the production
+        // contract is what's actually validated (not a tautological
+        // mirror).
+        assertTrue(CrossProcessStore.isValidFileName("runtime_state.json"))
+        assertTrue(CrossProcessStore.isValidFileName("config.json"))
+        assertTrue(CrossProcessStore.isValidFileName("dot.containing.name.json"))
+    }
+
+    @Test
+    fun `isValidFileName rejects empty input`() {
+        assertFalse(CrossProcessStore.isValidFileName(""))
+    }
+
+    @Test
+    fun `isValidFileName rejects path separators (forward and back slash)`() {
+        assertFalse("forward-slash separator escapes filesDir",
+            CrossProcessStore.isValidFileName("subdir/file.json"))
+        assertFalse("absolute path escapes filesDir",
+            CrossProcessStore.isValidFileName("/etc/passwd"))
+        assertFalse("backslash separator (Windows-style) rejected too",
+            CrossProcessStore.isValidFileName("subdir\\file.json"))
+    }
+
+    @Test
+    fun `isValidFileName rejects parent-directory traversal`() {
+        assertFalse("'..' anywhere is a traversal attempt",
+            CrossProcessStore.isValidFileName(".."))
+        assertFalse("'../foo.json' would escape filesDir",
+            CrossProcessStore.isValidFileName("../foo.json"))
+        assertFalse("'foo/..' would still be ambiguous; reject",
+            CrossProcessStore.isValidFileName("foo/.."))
     }
 
     // --- structural drift guard ---
@@ -303,10 +329,19 @@ class CrossProcessStoreTest {
         // future refactor that drops the lock fails this guard.
         assertTrue("write() must serialize via synchronized(writeLock)",
             Regex("""synchronized\s*\(\s*writeLock\s*\)""").containsMatchIn(text))
-        // BAT-512 (Copilot review fix): fileName must be validated as a
-        // basename to prevent path traversal.
-        assertTrue("fileName basename validation must remain in init",
-            text.contains("fileName == File(fileName).name"))
+        // BAT-512 (Copilot review fix #1+#2): fileName must be
+        // validated as a basename to prevent path traversal. After fix
+        // #2 the literal check moved into a `isValidFileName` companion
+        // function so tests can target it directly; the init block
+        // calls that helper. Pin both ends of the contract.
+        assertTrue("isValidFileName companion helper must remain (fix #2 — testability)",
+            Regex("""fun\s+isValidFileName\s*\(""").containsMatchIn(text))
+        assertTrue("init block must invoke isValidFileName(fileName)",
+            Regex("""require\s*\(\s*isValidFileName\s*\(\s*fileName\s*\)\s*\)""").containsMatchIn(text))
+        // The helper itself must compare against File(...).name — the
+        // canonical basename check.
+        assertTrue("isValidFileName must compare against File(fileName).name",
+            Regex("""fileName\s*!=\s*File\s*\(\s*fileName\s*\)\s*\.\s*name""").containsMatchIn(text))
     }
 
     // --- helpers (mirror the live class) ---
@@ -321,12 +356,19 @@ class CrossProcessStoreTest {
     }
 
     private fun atomicWrite(file: File, value: Sample) {
+        // Mirror the live class's atomic move (BAT-512 Copilot review
+        // fix): NIO Files.move with REPLACE_EXISTING + ATOMIC_MOVE.
+        // No delete+rename fallback — that path was rejected because
+        // it created a DELETE-event window where observers briefly
+        // saw `initial`.
         val tmp = File(file.parentFile, file.name + ".tmp")
         val text = json.encodeToString(Sample.serializer(), value)
         tmp.writeText(text)
-        if (!tmp.renameTo(file)) {
-            file.delete()
-            tmp.renameTo(file)
-        }
+        java.nio.file.Files.move(
+            tmp.toPath(),
+            file.toPath(),
+            java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+            java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+        )
     }
 }
