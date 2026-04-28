@@ -195,26 +195,25 @@ object LogCollector {
                     // the Android SDK — null path is the only signal we
                     // get, so we trigger resync on any null-path event.
                     if (path == LOG_FILE_NAME || path == null) {
-                        // Single-flight: keep the flag set for the entire
-                        // drain so bursts of FileObserver events arriving
-                        // during a slow read coalesce into the in-flight
-                        // drain instead of queueing additional coroutines.
-                        // Inner do-while loop handles the case where more
-                        // bytes arrive during readNewFromFile's lock-
-                        // released decode/parse phase: re-check file
-                        // length against lastReadPosition and loop until
-                        // no new bytes remain.
+                        // Single-flight drain: drainScheduled keeps the
+                        // flag set for the entire drain so bursts of
+                        // FileObserver events arriving during a slow
+                        // read coalesce into the in-flight drain instead
+                        // of queueing additional coroutines.
+                        //
+                        // Inner do-while continues while EITHER bytes
+                        // remain to read OR we made forward progress on
+                        // the last read. Two break conditions:
+                        //   1. No new bytes (file.length() ≤ lastReadPosition)
+                        //   2. We didn't advance lastReadPosition (partial-
+                        //      line case: readNewFromFile read up to a
+                        //      mid-line position and is waiting for the
+                        //      newline to arrive). Without (2), a partial
+                        //      line would cause the loop to spin re-
+                        //      reading the same bytes forever.
                         if (drainScheduled.compareAndSet(false, true)) {
                             scope.launch {
                                 try {
-                                    // Loop while bytes remain AND we made
-                                    // forward progress. Without the
-                                    // forward-progress guard, a partial-
-                                    // line case (readNewFromFile returns
-                                    // without advancing lastReadPosition
-                                    // because it's waiting for newline)
-                                    // would spin indefinitely re-reading
-                                    // the same bytes.
                                     do {
                                         val before = lastReadPosition
                                         readNewFromFile()
