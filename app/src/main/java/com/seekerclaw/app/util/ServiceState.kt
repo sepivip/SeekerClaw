@@ -110,6 +110,15 @@ object ServiceState {
     @Volatile private var initialized = false
     private val initLock = Any()
 
+    // Diagnostic counters — logged via LogCollector.append so the user
+    // can see them in the UI logs view without needing adb. Capped to
+    // avoid log spam: each counter logs the first N occurrences then
+    // stops. Removable once BAT-518 device-test debugging is complete.
+    @Volatile private var diagAttachLogged = false
+    private val diagEventCount = java.util.concurrent.atomic.AtomicInteger(0)
+    private val diagReadCount = java.util.concurrent.atomic.AtomicInteger(0)
+    private val DIAG_MAX_LOGS = 8
+
     /**
      * Initialize state file path AND restore persisted counters.
      * Must be called before any updateStatus/incrementMessages/addTokens.
@@ -350,13 +359,13 @@ object ServiceState {
         // dispatch did not fire for service_state. Root cause is most
         // likely event-path mismatch in some edge case; the read-all
         // defense sidesteps it without needing to fully diagnose.
-        filesDirObserver = makeDirObserver(parent) {
+        filesDirObserver = makeDirObserver(parent, "filesDir") {
             readFromFile()
             readBridgeToken()
         }.also { it.startWatching() }
 
         if (workspaceUsable) {
-            workspaceDirObserver = makeDirObserver(workspaceDir) {
+            workspaceDirObserver = makeDirObserver(workspaceDir, "workspace") {
                 readAgentHealthFile()
                 readApiUsageFile()
             }.also { it.startWatching() }
@@ -366,6 +375,19 @@ object ServiceState {
                 "startWatching: workspace dir not usable (${workspaceDir.absolutePath}) — " +
                     "skipping workspace FileObserver. agent_health_state and api_usage_state " +
                     "will not auto-refresh; rely on initial dispatched read only.",
+            )
+        }
+
+        // Diagnostic (BAT-518 device-test debugging): announce attach
+        // success in the UI logs view so we can confirm main UI's
+        // ServiceState observers actually got registered. One-shot.
+        if (!diagAttachLogged) {
+            diagAttachLogged = true
+            LogCollector.append(
+                "[ServiceState/diag] startWatching attached: " +
+                    "filesDirObserver=${filesDirObserver != null} " +
+                    "workspaceDirObserver=${workspaceDirObserver != null} " +
+                    "parent=${parent.absolutePath}",
             )
         }
 
@@ -405,6 +427,7 @@ object ServiceState {
 
     private fun makeDirObserver(
         dir: File,
+        diagTag: String,
         onChange: () -> Unit,
     ): FileObserver {
         // FileObserver(File) is API 29+; we target min SDK 34 so this is safe.
@@ -436,6 +459,15 @@ object ServiceState {
                 FileObserver.DELETE,
         ) {
             override fun onEvent(event: Int, path: String?) {
+                // Diagnostic (BAT-518 device-test debugging): rate-limited
+                // log of first DIAG_MAX_LOGS events so we can confirm in
+                // UI logs whether main UI's observer is actually firing.
+                val n = diagEventCount.incrementAndGet()
+                if (n <= DIAG_MAX_LOGS) {
+                    LogCollector.append(
+                        "[ServiceState/diag] event#$n on $diagTag: event=$event path=$path",
+                    )
+                }
                 // Dispatch to scope so the FileObserver thread (a single
                 // shared thread named "FileObserver" in Android) doesn't
                 // do file I/O. The reader functions are idempotent — if
@@ -504,6 +536,29 @@ object ServiceState {
                 val fileMsgCount = lines[2].toIntOrNull() ?: return
                 val fileMsgToday = lines[3].toIntOrNull() ?: return
                 val fileLastActivity = lines[4].toLongOrNull() ?: return
+
+                // Diagnostic (BAT-518 device-test debugging): rate-limited
+                // record of what readFromFile ACTUALLY parses from disk vs
+                // what's in StateFlow. Lets us see in UI logs whether the
+                // file genuinely says STOPPED + uptime=0 (writer-side bug)
+                // or whether the read is correct but assignment is being
+                // overridden somewhere (consumer-side bug). NOTE: appending
+                // to LogCollector here would recursively fire filesDir
+                // FileObserver → re-trigger readFromFile → infinite loop.
+                // So we only log when values would CHANGE from current
+                // StateFlow value (max DIAG_MAX_LOGS times).
+                val statusChanges = _status.value != fileStatus
+                val uptimeChanges = _uptime.value != fileUptime
+                if (statusChanges || uptimeChanges) {
+                    val n = diagReadCount.incrementAndGet()
+                    if (n <= DIAG_MAX_LOGS) {
+                        LogCollector.append(
+                            "[ServiceState/diag] readFromFile#$n: " +
+                                "FILE(status=$fileStatus uptime=$fileUptime msg=$fileMsgCount) " +
+                                "MEM(status=${_status.value} uptime=${_uptime.value} msg=${_messageCount.value})",
+                        )
+                    }
+                }
 
                 if (_status.value != fileStatus) _status.value = fileStatus
                 if (_uptime.value != fileUptime) _uptime.value = fileUptime
