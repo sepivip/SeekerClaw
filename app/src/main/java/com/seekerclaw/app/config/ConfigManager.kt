@@ -477,31 +477,22 @@ object ConfigManager {
         editor.putString(KEY_OPENAI_OAUTH_EXPIRES_AT, config.openaiOAuthExpiresAt)
 
         val persisted = editor.commit()
-        if (persisted) {
-            bumpConfigVersionOnMain()
-            // Keep agent_settings.json overlay in sync with prefs we just
-            // wrote. Without this, prior `/provider` Telegram commands leave
-            // a stale provider/authType/model in the overlay; the next
-            // loadConfig's reconcileWithAgentSettings sees overlay≠prefs
-            // and adopts the STALE overlay back into prefs — silently
-            // reverting whatever Settings UI / Setup / OAuth flow just
-            // saved. By syncing here, the overlay is only "ahead" of
-            // prefs when the legitimate /provider Telegram flow wrote
-            // overlay without touching prefs (which is exactly when the
-            // reconcile is supposed to fire). Pass `configOverride=config`
-            // so writeAgentSettingsJson skips its own loadConfig
-            // round-trip (which would re-trigger the reconcile we're
-            // trying to keep idle). See PR #339 device-test regression.
-            writeAgentSettingsJson(context, configOverride = config)
-            // Notify the OTHER process — main-process UI relies on this
-            // to refresh after :node-process writes (e.g. /provider
-            // Telegram switch's service-start reconcile). Same-process
-            // observers already saw the configVersion bump above.
-            broadcastConfigChanged(context)
-        } else {
+        if (!persisted) {
             LogCollector.append("[Config] Failed to persist config (commit=false)", LogLevel.ERROR)
             return false
         }
+        bumpConfigVersionOnMain()
+        // BAT-513 round-9: writeAgentSettingsJson DEFERRED to after
+        // RuntimeStateStore.write succeeds. The overlay also persists
+        // provider/authType/model, and reconcileWithAgentSettings would
+        // re-adopt a NEW overlay back into prefs on the next loadConfig
+        // — undoing the rollback we do below if RuntimeStateStore.write
+        // fails. By moving the overlay write past the
+        // RuntimeStateStore.write success gate, the failure path simply
+        // doesn't write the overlay, so there's nothing to roll back
+        // there. broadcastConfigChanged also moves to the success path
+        // so other-process observers don't get a "config changed"
+        // signal for a save that's about to be reverted.
         // BAT-513: persist the cross-process runtime state file so the
         // `:node` process picks up provider/authType/model via
         // runtime-state.js without waiting for a service restart. The
@@ -539,15 +530,19 @@ object ConfigManager {
         }
         if (!runtimeWritten) {
             // Roll back prefs runtime fields AND KEY_SETUP_COMPLETE to
-            // pre-save snapshot. apply() is async-safe here — the only
-            // reader is the legacy code path which always re-reads on
-            // configVersion bump. Rolling back KEY_SETUP_COMPLETE
-            // matters for the first-install failure case: SetupScreen
-            // blocks on `false`, but without rollback prefs would say
-            // "setup complete" → MainActivity would skip Setup on next
-            // launch, leaving the user stranded with an unconfigured
-            // agent. For existing users (snapshot already true), the
-            // rollback is a no-op.
+            // pre-save snapshot. Use commit() (synchronous, returns
+            // success) rather than apply() (async, fire-and-forget) so
+            // saveConfig can't return false to the caller while the
+            // rollback is still pending on disk — a quick process kill
+            // between return and disk flush would otherwise leave
+            // KEY_SETUP_COMPLETE stuck `true` on first-install failures
+            // or runtime fields half-rolled-back. Rolling back
+            // KEY_SETUP_COMPLETE matters for the first-install failure
+            // case: SetupScreen blocks on `false`, but without rollback
+            // prefs would say "setup complete" → MainActivity would
+            // skip Setup on next launch, leaving the user stranded
+            // with an unconfigured agent. For existing users (snapshot
+            // already true), the rollback is a no-op.
             val rollback = sp.edit()
             if (oldProvider != null) rollback.putString(KEY_PROVIDER, oldProvider)
             else rollback.remove(KEY_PROVIDER)
@@ -556,7 +551,19 @@ object ConfigManager {
             if (oldModel != null) rollback.putString(KEY_MODEL, oldModel)
             else rollback.remove(KEY_MODEL)
             rollback.putBoolean(KEY_SETUP_COMPLETE, oldSetupComplete)
-            rollback.apply()
+            val rollbackOk = rollback.commit()
+            if (!rollbackOk) {
+                // Synchronous commit failed (rare — usually means the
+                // disk is genuinely full). Log loudly; the partial
+                // rollback may have landed depending on which fields
+                // SharedPreferences flushed before failing. The caller
+                // still gets `false` so the UI surfaces the failure.
+                LogCollector.append(
+                    "[Config] Rollback commit() returned false — prefs may be in inconsistent state " +
+                        "(some runtime fields possibly half-rolled-back)",
+                    LogLevel.ERROR,
+                )
+            }
             // Bump configVersion AGAIN so the UI recomposes with the
             // rolled-back runtime fields (it already recomposed once
             // post-commit with the failed-but-persisted values; a
@@ -565,11 +572,32 @@ object ConfigManager {
             LogCollector.append(
                 "[Config] RuntimeStateStore.write failed — rolled back prefs runtime fields " +
                     "to (provider=$oldProvider, authType=$oldAuthType, model=$oldModel) " +
-                    "and KEY_SETUP_COMPLETE to $oldSetupComplete",
+                    "and KEY_SETUP_COMPLETE to $oldSetupComplete (commit_ok=$rollbackOk)",
                 LogLevel.WARN,
             )
+            return false
         }
-        return runtimeWritten
+        // BAT-513 round-9: write the overlay AND broadcast the change
+        // ONLY after both prefs commit + RuntimeStateStore.write
+        // succeeded. The overlay persists provider/authType/model too;
+        // writing it before the runtime-state write would mean a
+        // failure-path rollback would also need to revert the
+        // overlay (and the next loadConfig's reconcileWithAgentSettings
+        // would re-adopt the unreverted overlay back into prefs).
+        // Deferring keeps all three persistent stores (prefs, overlay,
+        // runtime_state.json) atomic at the runtime-fields level —
+        // either all updated together or all left at the prior values.
+        //
+        // configOverride=config: skip the loadConfig round-trip
+        // writeAgentSettingsJson would otherwise do, which would
+        // re-trigger reconcile (PR #339 device-test regression fix).
+        writeAgentSettingsJson(context, configOverride = config)
+        // Notify the OTHER process — main-process UI relies on this
+        // to refresh after :node-process writes (e.g. /provider
+        // Telegram switch's service-start reconcile). Same-process
+        // observers already saw the configVersion bump above.
+        broadcastConfigChanged(context)
+        return true
     }
 
     /**
