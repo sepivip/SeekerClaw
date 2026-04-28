@@ -347,34 +347,77 @@ class CrossProcessStoreTest {
 
     @Test
     fun `drift live source deep-clones the initial value on read`() {
-        // BAT-512 (Copilot review fix #4): if T is mutable, returning
-        // the constructor's `initial` reference would let a caller's
-        // mutation poison the store. read() must clone via JSON
-        // round-trip — same defensive contract the Node helper
-        // already provides.
+        // BAT-512 (Copilot review fix #4 + round-5 + round-7): if T is
+        // mutable, returning the constructor's `initial` reference
+        // (or the in-class `initialSnapshot` reference directly)
+        // would let a caller's mutation poison the store. The
+        // production contract is:
+        //   1) clone `initial` once into `initialSnapshot` at
+        //      construction (round-5)
+        //   2) read() returns `cloneSafe(initialSnapshot)` on
+        //      missing/malformed paths so each caller gets a fresh
+        //      copy
+        // Pin both ends of the contract — and scope the read() check
+        // to the read() function body so an unrelated mention of
+        // `cloneSafe(initialSnapshot)` elsewhere can't satisfy the
+        // assertion (the round-7 broken-guard lesson applies here too).
         val src = locateLiveSource()
         val text = src.readText()
-        assertTrue("read() must call cloneSafe(initial) on missing/malformed paths",
-            Regex("""cloneSafe\s*\(\s*initial\s*\)""").containsMatchIn(text))
-        assertTrue("cloneSafe must round-trip via JSON encode/decode",
-            Regex("""json\.decodeFromString\s*\(\s*serializer\s*,\s*json\.encodeToString""").containsMatchIn(text))
+        assertTrue(
+            "store must snapshot the constructor initial via cloneSafe(initial)",
+            Regex("""initialSnapshot\s*:\s*T\s*=\s*cloneSafe\s*\(\s*initial\s*\)""").containsMatchIn(text),
+        )
+        val readBlock = Regex(
+            """fun\s+read\s*\(\s*\)\s*:\s*T\s*\{[\s\S]*?(?=\n\s{4}\}\n)""",
+        ).find(text)?.value ?: error("read() function body not found")
+        assertTrue(
+            "read() must call cloneSafe(initialSnapshot) on missing/malformed paths",
+            Regex("""cloneSafe\s*\(\s*initialSnapshot\s*\)""").containsMatchIn(readBlock),
+        )
+        assertTrue(
+            "cloneSafe must round-trip via JSON encode/decode",
+            Regex("""json\.decodeFromString\s*\(\s*serializer\s*,\s*json\.encodeToString""").containsMatchIn(text),
+        )
     }
 
     @Test
     fun `drift live source clones T on the WRITE boundary too (mutation symmetry)`() {
-        // BAT-512 (Copilot review fix #4 round-4): write() previously
-        // assigned `_state.value = value` (the caller's reference).
-        // If T is mutable and the caller mutates `value` after
-        // `write()` returns, observers would see mutations that
-        // weren't persisted. Symmetric with the read-side cloneSafe
-        // contract.
+        // BAT-512 (Copilot review fixes #4 + round-4 + round-7):
+        // write() must clone `value` ONCE up-front and use the
+        // resulting `snapshot` for both `encodeToString` (the disk
+        // write) AND `_state.value` (the in-memory publish). Without
+        // the up-front clone, a caller mutating `value` from another
+        // thread between the encode and the assignment could cause
+        // disk and `_state` to publish different snapshots.
+        //
+        // Pin the production contract:
+        //   1) `val snapshot: T = cloneSafe(value)` at top of write
+        //   2) `_state.value = snapshot` (NOT `cloneSafe(value)` again,
+        //      which would cost an extra round-trip and re-introduce
+        //      the race window)
+        //   3) `encodeToString(serializer, snapshot)` uses the same
+        //      stable snapshot for the disk write
         val src = locateLiveSource()
         val text = src.readText()
         val writeBlock = Regex(
             """fun\s+write\s*\(\s*value\s*:\s*T\s*\)\s*\{[\s\S]*?(?=\n\s{4}\}\n)""",
         ).find(text)?.value ?: error("write() function body not found")
         assertTrue(
-            "write() must clone via cloneSafe(value) before assigning to _state",
+            "write() must capture `val snapshot: T = cloneSafe(value)` up-front",
+            Regex("""val\s+snapshot\s*:\s*T\s*=\s*cloneSafe\s*\(\s*value\s*\)""").containsMatchIn(writeBlock),
+        )
+        assertTrue(
+            "_state.value must be assigned the up-front snapshot (not re-cloned)",
+            Regex("""_state\.value\s*=\s*snapshot\b""").containsMatchIn(writeBlock),
+        )
+        assertTrue(
+            "disk encode must use the same `snapshot`, not the raw `value`",
+            Regex("""encodeToString\s*\(\s*serializer\s*,\s*snapshot\s*\)""").containsMatchIn(writeBlock),
+        )
+        // Negative pin: the OLD pattern (re-cloning value at the
+        // _state assignment) must be gone.
+        assertFalse(
+            "_state assignment must NOT re-clone value (round-7 fix consolidated to single up-front clone)",
             Regex("""_state\.value\s*=\s*cloneSafe\s*\(\s*value\s*\)""").containsMatchIn(writeBlock),
         )
     }
@@ -393,23 +436,25 @@ class CrossProcessStoreTest {
         val initBlocks = Regex("""\binit\s*\{[\s\S]*?\n\s{4}\}""").findAll(text).map { it.value }.toList()
         val mainInit = initBlocks.firstOrNull { it.contains("reloadChannel") || it.contains("reload()") }
             ?: error("main init block not found")
-        // Direct sync `reload()` (no coroutineScope.launch) must not
-        // appear — would trip StrictMode on main thread.
+        // BAT-512 (Copilot review fix round-7): the previous version
+        // of this guard discarded the regex's match result and
+        // returned `wrapped < 1`, which only enforced "at least one
+        // launched reload" — NOT "no synchronous reload". Rewritten
+        // to actually check what the message claims.
+        //
+        // Strategy: strip every `coroutineScope.launch { ... reload()
+        // ... }` block (including the drain loop's launch) from the
+        // init source, then assert no `reload()` call survives in
+        // the residue. Anything left is a synchronous call on the
+        // caller thread — the regression we're guarding against.
+        val mainInitSansComments = mainInit.replace(Regex("""//[^\n]*"""), "")
+        val mainInitSansLaunches = mainInitSansComments.replace(
+            Regex("""coroutineScope\.launch\s*\{[\s\S]*?\breload\s*\(\s*\)[\s\S]*?\}"""),
+            "",
+        )
         assertFalse(
             "init must NOT call reload() synchronously on the caller thread",
-            Regex("""(?<!launch\s\{\s)reload\s*\(\s*\)(?!\s*\})""").containsMatchIn(
-                mainInit.replace(Regex("""//[^\n]*"""), "")
-            ).let {
-                // Check there's at least one reload() call AT ALL,
-                // and that every one is wrapped in launch.
-                val wrapped = Regex("""coroutineScope\.launch\s*\{\s*reload\s*\(\s*\)""")
-                    .findAll(mainInit).count()
-                val total = Regex("""\breload\s*\(\s*\)""").findAll(mainInit).count()
-                // Allow `reload()` inside the drain loop (already
-                // wrapped in launch). Just assert there's at least
-                // one launch{reload()} for the catch-up.
-                wrapped < 1
-            },
+            Regex("""\breload\s*\(\s*\)""").containsMatchIn(mainInitSansLaunches),
         )
         assertTrue(
             "init must dispatch initial catch-up via coroutineScope.launch { reload() }",

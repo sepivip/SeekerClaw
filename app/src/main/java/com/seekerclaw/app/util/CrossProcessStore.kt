@@ -257,9 +257,10 @@ class CrossProcessStore<T>(
 
     /**
      * Synchronously parse the JSON file and return the value. Idempotent
-     * and side-effect-free. Returns a freshly cloned copy of [initial]
-     * on missing file or malformed JSON (logged at WARN — never
-     * throws).
+     * and side-effect-free. Returns a freshly cloned copy of the
+     * construction-time `initialSnapshot` (which itself was a clone of
+     * the constructor's `initial` argument) on missing file or
+     * malformed JSON (logged at WARN — never throws).
      *
      * BAT-512 (Copilot review fixes #4 + round-5): the returned value
      * goes through `cloneSafe(initialSnapshot)` on missing/malformed
@@ -330,6 +331,16 @@ class CrossProcessStore<T>(
      * `write()` returns can't change what observers see.
      */
     fun write(value: T) {
+        // BAT-512 (Copilot review fix round-7): clone `value` ONCE
+        // up-front into a stable snapshot, then derive both the
+        // serialized text and the `_state` update from that snapshot.
+        // Without this, the disk encode and the _state.value clone
+        // each see whatever `value` looks like at their respective
+        // moment — if a caller mutates `value` from another thread
+        // mid-write, disk and `_state` could publish different
+        // snapshots. Cloning once also avoids the extra encode/decode
+        // round-trip cloneSafe used to do for the in-memory copy.
+        val snapshot: T = cloneSafe(value)
         // BAT-512 (Copilot review fix round-6): broadcast OUTSIDE the
         // critical section. sendBroadcast is a system IPC that can
         // block briefly; holding writeLock across it amplifies
@@ -341,7 +352,7 @@ class CrossProcessStore<T>(
         var didWrite = false
         synchronized(writeLock) {
             try {
-                val text = json.encodeToString(serializer, value)
+                val text = json.encodeToString(serializer, snapshot)
                 tmpFile.writeText(text)
                 // BAT-512 (Copilot review fix): use NIO `Files.move`
                 // with REPLACE_EXISTING + ATOMIC_MOVE so the rename is
@@ -377,13 +388,16 @@ class CrossProcessStore<T>(
                         java.nio.file.StandardCopyOption.REPLACE_EXISTING,
                     )
                 }
-                // BAT-512 (Copilot review fix #4 round-4): clone before
-                // publishing so a caller mutating their `value`
-                // reference after this returns cannot mutate what
-                // StateFlow observers see. Symmetric with read()'s
-                // clone of the construction-time snapshot. See class-
-                // level "Mutation safety" KDoc.
-                _state.value = cloneSafe(value)
+                // BAT-512 (Copilot review fix #4 round-4 + round-7):
+                // publish the same snapshot we just wrote to disk. A
+                // caller mutating their `value` reference after this
+                // returns cannot mutate what StateFlow observers see
+                // (because `snapshot` was cloned at function entry
+                // and is no longer reachable from the caller). And
+                // disk + _state are guaranteed to publish the SAME
+                // snapshot — no race where they diverge if the
+                // caller mutates mid-write.
+                _state.value = snapshot
                 didWrite = true
             } catch (e: Exception) {
                 Log.e(TAG, "[$fileName] write failed: ${e.message}", e)
