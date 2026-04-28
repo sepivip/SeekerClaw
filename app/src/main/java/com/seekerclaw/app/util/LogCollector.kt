@@ -37,14 +37,14 @@ object LogCollector {
     @Volatile private var lastReadPosition = 0L
     private val scope = CoroutineScope(Dispatchers.IO)
 
-    // Locking scheme (Copilot R7/R8/R10/R13):
+    // Locking scheme :
     // - `readLock` guards EVERY file operation: reads (readNewFromFile,
-    //   readAllFromFile), the file-truncating side of clear(), the
-    //   appendText() in writeToFile(), and all `lastReadPosition`
-    //   updates. Held DURING disk I/O. Ensures clear() can't race a
-    //   concurrent append and lose data.
+    // readAllFromFile), the file-truncating side of clear(), the
+    // appendText() in writeToFile(), and all `lastReadPosition`
+    // updates. Held DURING disk I/O. Ensures clear() can't race a
+    // concurrent append and lose data.
     // - `logsLock` guards in-memory `_logs` read-modify-write sequences.
-    //   Held briefly during the append-to-list / take-snapshot only.
+    // Held briefly during the append-to-list / take-snapshot only.
     //
     // Lock order is ALWAYS readLock → logsLock when both are needed;
     // never the reverse — no deadlock. logsLock is held briefly enough
@@ -62,8 +62,7 @@ object LogCollector {
     private val readLock = Any()
     private val startWatchingLock = Any()
 
-    // Single-flight gate for FileObserver-driven reads (Copilot R-latest+8
-    // C2): under heavy logging, FileObserver fires MODIFY + CLOSE_WRITE
+    // Single-flight gate for FileObserver-driven reads : under heavy logging, FileObserver fires MODIFY + CLOSE_WRITE
     // per write — easily 100+ events/sec. Without this gate, each event
     // launched its own coroutine that all queued on readLock; most then
     // found nothing to read and exited, but the scheduling cost was
@@ -95,7 +94,7 @@ object LogCollector {
     }
 
     fun clear() {
-        // R7: take readLock for the file truncate + offset reset (serializes
+        // Take readLock for the file truncate + offset reset (serializes
         // against any in-flight readNewFromFile / readAllFromFile). Take
         // logsLock briefly inside for the in-memory list reset. Lock order
         // matches readNewFromFile's: readLock outer, logsLock inner.
@@ -131,12 +130,12 @@ object LogCollector {
      * subsequent append from another process).
      */
     fun startWatching(context: Context) {
-        // Sync setup — set logFile reference, no I/O. (R4 lesson: don't
-        // do disk reads on the caller thread; Application.onCreate is
-        // main thread.)
+        // Sync setup — set logFile reference, no I/O. Don't do disk
+        // reads on the caller thread; Application.onCreate is main
+        // thread.
         init(context)
 
-        // Guard + attach inside startWatchingLock (Copilot R-latest+1):
+        // Guard + attach inside startWatchingLock :
         // synchronized check-then-set so concurrent callers can't race
         // and attach two observers. uncontended in practice — only
         // Application.onCreate calls this — but the cost is nil and
@@ -153,7 +152,7 @@ object LogCollector {
                 return
             }
 
-            // Attach observer FIRST, before the initial read (Copilot R6).
+            // Attach observer FIRST, before the initial read .
             // If we read first and a write lands between read-completion and
             // attach, that write's MODIFY/CLOSE_WRITE event fires before the
             // observer exists — so it's not delivered, and lastReadPosition
@@ -171,14 +170,14 @@ object LogCollector {
             // (cleanup, rotation, manual rm) — otherwise the offset would
             // stay past the new EOF after recreation, missing initial
             // writes until lastReadPosition's stale value was passed.
-            // (Copilot R12.) Constants are qualified (Java statics not
-            // auto-imported into Kotlin function bodies). (Copilot R1.)
+            // Constants are qualified (Java statics not
+            // auto-imported into Kotlin function bodies).
             fileObserver = object : FileObserver(
                 parent,
                 FileObserver.MODIFY or FileObserver.CLOSE_WRITE or
                     FileObserver.MOVED_TO or FileObserver.CREATE or
                     FileObserver.DELETE,
-            ) {
+) {
                 override fun onEvent(event: Int, path: String?) {
                     // path == null signals either Q_OVERFLOW (kernel inotify
                     // queue overflowed and some events were dropped) or a
@@ -186,7 +185,7 @@ object LogCollector {
                     // treat as forced resync — drain from current
                     // lastReadPosition. Without this, log lines could go
                     // unforwarded until the next write happens to fire a
-                    // normal named event. (Copilot R-latest+7.) NOTE:
+                    // normal named event. NOTE:
                     // Q_OVERFLOW is not a public FileObserver constant in
                     // the Android SDK — null path is the only signal we
                     // get, so we trigger resync on any null-path event.
@@ -197,7 +196,7 @@ object LogCollector {
                         // the read can schedule a fresh drain (the read
                         // is to current EOF, so the new event's bytes get
                         // picked up). Worst case: 2 concurrent drain
-                        // coroutines. (Copilot R-latest+8 C2.)
+                        // coroutines.
                         if (drainScheduled.compareAndSet(false, true)) {
                             scope.launch {
                                 drainScheduled.set(false)
@@ -213,7 +212,7 @@ object LogCollector {
                     // inside handleFilesDirEvent) means every service_logs
                     // append doesn't even launch a coroutine on the
                     // ServiceState side, preserving BAT-518's I/O savings.
-                    // (Copilot R-latest+1 C6.)
+                    //
                     if (path == null || path == "service_state" || path == "bridge_token") {
                         ServiceState.handleFilesDirEvent(path)
                     }
@@ -224,8 +223,7 @@ object LogCollector {
         // Initial catch-up read on Dispatchers.IO so the main-thread
         // caller (Application.onCreate) doesn't block on disk I/O.
         // _logs StateFlow holds emptyList until this lands; UI screens
-        // that compose before see no log entries briefly. (Copilot R6
-        // — this was synchronous on main thread before.)
+        // that compose before see no log entries briefly.
         scope.launch { readAllFromFile() }
         Log.d(TAG, "startWatching: FileObserver attached; initial read dispatched")
     }
@@ -238,22 +236,22 @@ object LogCollector {
     @Deprecated(
         "Renamed to startWatching after BAT-518; this alias forwards for compat",
         replaceWith = ReplaceWith("startWatching(context)"),
-    )
+)
     fun startPolling(context: Context) = startWatching(context)
 
     private fun writeToFile(entry: LogEntry) {
         // Take readLock to serialize the append against:
-        //   • clear() — which truncates the file and resets
-        //     lastReadPosition. Without this lock, an append landing
-        //     between clear()'s writeText("") and the offset reset
-        //     would be lost (next read sees lastReadPosition=0 but
-        //     the file has been truncated to ""), or the file would
-        //     contain "X" while readers think it's empty.
-        //   • readAllFromFile / readNewFromFile — which depend on a
-        //     consistent file-length-vs-lastReadPosition relationship
-        //     while reading. An interleaved append between length-read
-        //     and seek+read could yield surprising mid-buffer writes.
-        // (Copilot R13.)
+        // • clear() — which truncates the file and resets
+        // lastReadPosition. Without this lock, an append landing
+        // between clear()'s writeText("") and the offset reset
+        // would be lost (next read sees lastReadPosition=0 but
+        // the file has been truncated to ""), or the file would
+        // contain "X" while readers think it's empty.
+        // • readAllFromFile / readNewFromFile — which depend on a
+        // consistent file-length-vs-lastReadPosition relationship
+        // while reading. An interleaved append between length-read
+        // and seek+read could yield surprising mid-buffer writes.
+        //
         //
         // append() is called from many threads (Watchdog IO,
         // ServiceState IO, FileObserver dispatch, UI). file.appendText
@@ -272,7 +270,7 @@ object LogCollector {
     }
 
     private fun readAllFromFile() {
-        // Lock-narrowing pattern (Copilot R-latest+5): same as
+        // Lock-narrowing pattern : same as
         // readNewFromFile — readLock holds the file ops + offset
         // advancement only; UTF-8 decode + parsing happen outside the
         // lock as pure-CPU work. Keeps the readLock critical section
@@ -336,13 +334,13 @@ object LogCollector {
         }
 
         // Decode + parse OUTSIDE readLock — pure CPU.
-        // Explicit UTF-8 — see readNewFromFile note (Copilot R4).
+        // Explicit UTF-8 — see readNewFromFile note .
         val bytes = capturedBytes ?: return
         val entries = String(bytes, Charsets.UTF_8).lines()
-            .filter { it.isNotBlank() }
-            .let { if (capturedSeekedMidFile) it.drop(1) else it } // drop partial first line only when we seeked mid-file
-            .mapNotNull { parseLine(it) }
-            .takeLast(MAX_LINES)
+.filter { it.isNotBlank() }
+.let { if (capturedSeekedMidFile) it.drop(1) else it } // drop partial first line only when we seeked mid-file
+.mapNotNull { parseLine(it) }
+.takeLast(MAX_LINES)
 
         // Brief logsLock for the in-memory update only.
         synchronized(logsLock) {
@@ -351,7 +349,7 @@ object LogCollector {
     }
 
     private fun readNewFromFile() {
-        // Lock-narrowing pattern (Copilot R-latest+5): readLock guards
+        // Lock-narrowing pattern : readLock guards
         // ONLY the file ops + offset advancement (microsecond critical
         // section). UTF-8 decoding and line parsing happen OUTSIDE the
         // lock — they're pure CPU and can be ms-scale on big chunks.
@@ -376,7 +374,7 @@ object LogCollector {
                 // smaller file. Without this guard, the early-return on
                 // `currentLength <= pos` would silently never forward
                 // again until the file grew past the stale offset.
-                // (Copilot R3.)
+                //
                 if (currentLength < pos) {
                     pos = 0L
                     lastReadPosition = 0L
@@ -402,7 +400,7 @@ object LogCollector {
                     ByteArray(delta.toInt()).also { raf.readFully(it) }
                 }
 
-                // Line-boundary safety (Copilot R3): if a CLOSE_WRITE event
+                // Line-boundary safety : if a CLOSE_WRITE event
                 // arrives mid-write, the trailing bytes may be a partial
                 // line. parseLine() returns null for it, but if we then
                 // advanced lastReadPosition to currentLength, the partial
@@ -436,16 +434,16 @@ object LogCollector {
         // Explicit UTF-8 — File.appendText defaults to UTF-8 but String(bytes)
         // without a charset uses the platform default, which can mojibake
         // non-ASCII messages on devices where the JVM default differs.
-        // (Copilot R4.)
+        //
         val bytes = capturedBytes ?: return
         val newEntries = String(bytes, Charsets.UTF_8).lines()
-            .filter { it.isNotBlank() }
-            .mapNotNull { parseLine(it) }
+.filter { it.isNotBlank() }
+.mapNotNull { parseLine(it) }
         if (newEntries.isEmpty()) return
 
         // Brief logsLock acquire ONLY for the in-memory list mutation.
         // append() can compete here, but the lock is held for
-        // microseconds — no main-thread jank. (Copilot R7.)
+        // microseconds — no main-thread jank.
         synchronized(logsLock) {
             val current = _logs.value.toMutableList()
             current.addAll(newEntries)
@@ -468,8 +466,7 @@ object LogCollector {
     // Internal-visibility hooks for unit tests. Intentionally NOT marked
     // @VisibleForTesting via androidx because that pulls in a runtime
     // dep we don't otherwise need; the `internal` modifier already
-    // restricts call sites to the same module. (Copilot R2 asked for
-    // tests around the offset-based reader's concurrency behavior.)
+    // restricts call sites to the same module.
 
     /** TEST ONLY: inject a file path so concurrency tests can simulate cross-process writes. */
     internal fun setLogFileForTest(file: File?) {
@@ -477,8 +474,8 @@ object LogCollector {
     }
 
     /** TEST ONLY: reset the singleton's offset + buffer between tests.
-     *  Mirrors production locking: readLock for the offset, logsLock
-     *  for the in-memory list. (Copilot R6 + R7.) */
+     * Mirrors production locking: readLock for the offset, logsLock
+     * for the in-memory list. */
     internal fun resetForTest() {
         synchronized(readLock) {
             lastReadPosition = 0L

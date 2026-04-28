@@ -41,11 +41,11 @@ class SeekerClawService : Service() {
     // so each event reads only new bytes. nodeDebugMutex serializes
     // overlapping reads (FileObserver often emits MODIFY + CLOSE_WRITE
     // for one write; without the mutex both dispatches would read the
-    // same byte range and double-forward — Copilot R1).
+    // same byte range and double-forward).
     private var nodeDebugObserver: FileObserver? = null
     @Volatile private var nodeDebugLastPos = 0L
     private val nodeDebugMutex = Mutex()
-    // Single-flight gate (Copilot R-latest+8 C3): under heavy Node logging,
+    // Single-flight gate : under heavy Node logging,
     // FileObserver fires MODIFY + CLOSE_WRITE per write — the mutex
     // prevented double-reads but coroutine launches still piled up
     // contending on it. With this gate, at most one drain coroutine is
@@ -60,14 +60,14 @@ class SeekerClawService : Service() {
     // in a while loop within a single coroutine — each iteration reads
     // up to this cap, releases + reacquires the mutex, then loops until
     // either fully drained or the trailing partial-line case is hit.
-    // (R8 introduced the loop; was per-event recursive launch before.)
-    private val nodeDebugMaxDeltaBytes = 256 * 1024L  // 256 KB
+    // The loop replaces a prior per-event recursive launch.
+    private val nodeDebugMaxDeltaBytes = 256 * 1024L // 256 KB
 
     // SupervisorJob so a single coroutine failure doesn't cancel the
     // whole scope. Cancellable from onDestroy to ensure no in-flight
     // forwardNewNodeDebugLines / reattach coroutines run after the
     // observer is stopped — otherwise they'd race onDestroy's
-    // observer.stopWatching() + null-out. (Copilot R9.)
+    // observer.stopWatching() + null-out.
     private val scopeJob = SupervisorJob()
     private val scope = CoroutineScope(Dispatchers.IO + scopeJob)
     private var startTimeMs = 0L
@@ -80,9 +80,9 @@ class SeekerClawService : Service() {
      * Concurrency: serialized via `nodeDebugMutex`. FileObserver typically
      * delivers multiple events for a single write (MODIFY + CLOSE_WRITE);
      * without the mutex, two dispatches would read overlapping byte ranges
-     * and double-forward each line. (Copilot R1.)
+     * and double-forward each line.
      *
-     * Drain loop (Copilot R8): for large deltas exceeding
+     * Drain loop : for large deltas exceeding
      * `nodeDebugMaxDeltaBytes`, we used to recursively `scope.launch`
      * one coroutine per chunk. That added needless dispatcher overhead
      * for huge backlogs (e.g. Doze release of queued events). Now: a
@@ -97,9 +97,9 @@ class SeekerClawService : Service() {
      * OOM protection: caps the per-iteration read at
      * `nodeDebugMaxDeltaBytes`. Avoids the toInt() overflow + giant
      * ByteArray allocation that the original unbounded read would hit
-     * on a large delta. (Copilot R1.)
+     * on a large delta.
      *
-     * Line-boundary safety (Copilot R2): when chunked reads hit the
+     * Line-boundary safety : when chunked reads hit the
      * 256KB cap mid-line, we'd otherwise emit half a line as one entry
      * and the remainder as another, corrupting the log stream. Fix:
      * find the last newline byte in the chunk and only advance lastPos
@@ -109,13 +109,13 @@ class SeekerClawService : Service() {
      * line is genuinely too long to handle cleanly, taking the split
      * is better than wedging.
      *
-     * Rotation/truncation safety (Copilot R2): if Node rotates the log
+     * Rotation/truncation safety : if Node rotates the log
      * (replacement file + smaller length, or in-place truncate), the
      * file's length will drop below lastPos. Without a reset, the early
      * `length <= pos` guard would silently stop forwarding forever.
      * Detect `length < pos` and reset to 0 so new content is forwarded.
      *
-     * Errors (Copilot R8): IO/parse failures surface as a WARN log via
+     * Errors : IO/parse failures surface as a WARN log via
      * LogCollector rather than swallowed silently — "node debug log
      * forwarding stopped" was previously invisible to production
      * diagnostics.
@@ -128,7 +128,7 @@ class SeekerClawService : Service() {
         // loops until file is fully drained or we hit the "wait for
         // newline" partial-line case. Replaces the prior recursive
         // `scope.launch` per chunk which added unnecessary dispatcher
-        // overhead for big backlogs. (R8.)
+        // overhead for big backlogs.
         var keepDraining = true
         while (keepDraining) {
             keepDraining = nodeDebugMutex.withLock {
@@ -181,24 +181,24 @@ class SeekerClawService : Service() {
             }
 
             // Decide forward strategy:
-            //   A) Newline found: forward complete lines, keep trailing partial.
-            //   B) No newline + chunking: single line >256KB. Force-advance
-            //      to avoid infinite re-read. (Copilot R3.)
-            //   C) No newline + read whole delta: mid-write partial line.
-            //      Wait for next event with more bytes.
+            // A) Newline found: forward complete lines, keep trailing partial.
+            // B) No newline + chunking: single line >256KB. Force-advance
+            // to avoid infinite re-read.
+            // C) No newline + read whole delta: mid-write partial line.
+            // Wait for next event with more bytes.
             val (forwardBytes, advanceBy) = if (lastNewlineIdx >= 0) {
                 val complete = newBytes.copyOfRange(0, lastNewlineIdx + 1)
                 complete to complete.size
             } else if (delta > readSize) {
                 newBytes to newBytes.size
             } else {
-                return false  // Case C — wait for next event
+                return false // Case C — wait for next event
             }
             nodeDebugLastPos = pos + advanceBy
 
             // Explicit UTF-8 — Node writes UTF-8; platform-default
             // decoding could mojibake non-ASCII messages on devices
-            // where the JVM default differs. (Copilot R4.)
+            // where the JVM default differs.
             val lines = String(forwardBytes, Charsets.UTF_8).lines().filter { it.isNotBlank() }
             for (line in lines) {
                 val pipeIdx = line.indexOf('|')
@@ -213,7 +213,7 @@ class SeekerClawService : Service() {
                         else -> null
                     }
                     if (parsed != null) parsed to msg
-                    else LogLevel.INFO to line  // unknown prefix — treat whole line as INFO
+                    else LogLevel.INFO to line // unknown prefix — treat whole line as INFO
                 } else {
                     // Fallback for unparsed lines (old format, raw output)
                     LogLevel.INFO to line
@@ -224,17 +224,17 @@ class SeekerClawService : Service() {
             // Capped the read and there's still more in the file? Tell
             // caller to keep draining. The drain loop releases + reacquires
             // the mutex between iterations so concurrent writers can
-            // interleave. (Copilot R8 — was a recursive scope.launch.)
+            // interleave.
             return delta > readSize
         } catch (e: Exception) {
             // Surface failures so silent forwarding stops are diagnosable.
             // Previously: catch (_) {} which made "Node logs stopped
-            // appearing" impossible to attribute. (Copilot R8.)
+            // appearing" impossible to attribute.
             LogCollector.append(
                 "[Service] node_debug.log forward error: ${e.javaClass.simpleName}: ${e.message}",
                 LogLevel.WARN,
-            )
-            return false  // Don't loop on a persistent error
+)
+            return false // Don't loop on a persistent error
         }
     }
 
@@ -259,7 +259,7 @@ class SeekerClawService : Service() {
             LogCollector.append(
                 "[Service] Owner ID not configured — first Telegram message will claim ownership.",
                 LogLevel.WARN,
-            )
+)
         }
 
         // Acquire partial wake lock (CPU stays on)
@@ -378,7 +378,7 @@ class SeekerClawService : Service() {
                 // Kill this process so Android restarts the :node service process
                 android.os.Process.killProcess(android.os.Process.myPid())
             }
-        )
+)
 
         // Watch Node.js debug log and forward new lines to LogCollector.
         //
@@ -400,24 +400,24 @@ class SeekerClawService : Service() {
         // lifetime (START_STICKY redelivery, explicit start while already
         // running, etc.). Without dedup we'd attach multiple observers
         // and each FileObserver event would dispatch N forwarders →
-        // duplicate log entries. (Copilot R2.)
+        // duplicate log entries.
         //
-        // R7: nodeDebugLastPos is INTENTIONALLY NOT reset on reattach.
-        // My earlier R4 fix reset it to file.length() to "avoid replaying
-        // already-forwarded lines on reattach," but that was wrong: it
+        // nodeDebugLastPos is INTENTIONALLY NOT reset on reattach.
+        // An earlier iteration reset it to file.length() to "avoid
+        // replaying already-forwarded lines," but that was wrong: it
         // could skip un-forwarded bytes that the previous observer had
         // detected but whose forward coroutines hadn't yet run. The
         // correct behavior is to leave nodeDebugLastPos at whatever the
         // previous observer last advanced it to:
-        //   - First attach (clean process start): lastPos == 0 (default
-        //     field value), initial read forwards the entire log. This
-        //     is the same as the pre-BAT-518 polling code, which started
-        //     each onStartCommand with `var lastPos = 0L`.
-        //   - Within-process reattach: lastPos == previous value, so
-        //     initial read picks up exactly the bytes since the last
-        //     forward. No replay, no dropped bytes.
+        // - First attach (clean process start): lastPos == 0 (default
+        // field value), initial read forwards the entire log. This
+        // is the same as the pre-BAT-518 polling code, which started
+        // each onStartCommand with `var lastPos = 0L`.
+        // - Within-process reattach: lastPos == previous value, so
+        // initial read picks up exactly the bytes since the last
+        // forward. No replay, no dropped bytes.
         //
-        // R5: the stop-existing + attach-new sequence happens under
+        // The stop-existing + attach-new sequence happens under
         // nodeDebugMutex to serialize against any forwardNewNodeDebugLines
         // coroutines from the previous observer that are still running.
         // Without the mutex, an in-flight forwarder could see/clobber
@@ -434,18 +434,18 @@ class SeekerClawService : Service() {
                 // non-directory file at the path). Without this check,
                 // FileObserver attachment to a missing or non-directory
                 // path silently no-ops and node debug forwarding stops
-                // working with no diagnostic. (Copilot R15.)
+                // working with no diagnostic.
                 if (!workDir.isDirectory) {
                     LogCollector.append(
                         "[Service] workDir not a directory (${workDir.absolutePath}) — node debug log forwarding disabled",
                         LogLevel.ERROR,
-                    )
+)
                     return@withLock
                 }
 
                 // Constants qualified (Java statics not auto-imported into
-                // Kotlin function bodies). (Copilot R1.) Mask includes
-                // DELETE (R12) so log rotation that removes
+                // Kotlin function bodies). Mask includes
+                // DELETE so log rotation that removes
                 // node_debug.log triggers the reader's lastPos reset
                 // path, ensuring the next CREATE starts cleanly from 0.
                 nodeDebugObserver = object : FileObserver(
@@ -453,14 +453,14 @@ class SeekerClawService : Service() {
                     FileObserver.MODIFY or FileObserver.CLOSE_WRITE or
                         FileObserver.MOVED_TO or FileObserver.CREATE or
                         FileObserver.DELETE,
-                ) {
+) {
                     override fun onEvent(event: Int, path: String?) {
                         // path == null signals either Q_OVERFLOW (kernel
                         // inotify queue overflow — events dropped) or a
                         // directory-level event without filename. Either
                         // way, treat as forced resync from nodeDebugLastPos
                         // so we don't silently miss bytes until the next
-                        // write fires a named event. (Copilot R-latest+7.)
+                        // write fires a named event.
                         // Q_OVERFLOW isn't a public FileObserver constant
                         // in the Android SDK — null path is the only
                         // signal we get.
@@ -469,7 +469,7 @@ class SeekerClawService : Service() {
                             // is in flight. The flag clears BEFORE the
                             // drain so events arriving during it can
                             // schedule a fresh drain (which reads to
-                            // current EOF). (Copilot R-latest+8 C3.)
+                            // current EOF).
                             if (nodeDebugDrainScheduled.compareAndSet(false, true)) {
                                 scope.launch {
                                     nodeDebugDrainScheduled.set(false)
@@ -514,7 +514,7 @@ class SeekerClawService : Service() {
         // a stale lastPos write or trigger the now-stopped observer's
         // unrelated event handler. cancel() is non-blocking and
         // synchronous; in-flight launches reach a suspension point and
-        // exit. (Copilot R9.)
+        // exit.
         scopeJob.cancel()
         // Stop the node-debug FileObserver (BAT-518: was nodeDebugJob coroutine).
         nodeDebugObserver?.stopWatching()
@@ -547,10 +547,10 @@ class SeekerClawService : Service() {
         // until the disk write completes, guaranteeing the reset persists across the
         // process kill.
         getSharedPreferences("seekerclaw_crash", MODE_PRIVATE)
-            .edit()
-            .putLong("last_start", 0L)
-            .putInt("crash_count", 0)
-            .commit()
+.edit()
+.putLong("last_start", 0L)
+.putInt("crash_count", 0)
+.commit()
 
         LogCollector.append("[Service] Claw Engine stopped")
         super.onDestroy()
@@ -564,16 +564,16 @@ class SeekerClawService : Service() {
             this, 0,
             Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
+)
 
         return NotificationCompat.Builder(this, SeekerClawApplication.CHANNEL_ID)
-            .setContentTitle("SeekerClaw")
-            .setContentText(text)
-            .setSmallIcon(R.drawable.ic_notification)
-            .setContentIntent(pendingIntent)
-            .setOngoing(true)
-            .setSilent(true)
-            .build()
+.setContentTitle("SeekerClaw")
+.setContentText(text)
+.setSmallIcon(R.drawable.ic_notification)
+.setContentIntent(pendingIntent)
+.setOngoing(true)
+.setSilent(true)
+.build()
     }
 
     // Dismissible notification for actionable setup errors (not tied to service lifetime).
@@ -583,14 +583,14 @@ class SeekerClawService : Service() {
             this, 0,
             Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
+)
         return NotificationCompat.Builder(this, SeekerClawApplication.ERROR_CHANNEL_ID)
-            .setContentTitle("SeekerClaw")
-            .setContentText(text)
-            .setSmallIcon(R.drawable.ic_notification)
-            .setContentIntent(pendingIntent)
-            .setOngoing(false) // dismissible — user can swipe away once they open the app
-            .build()
+.setContentTitle("SeekerClaw")
+.setContentText(text)
+.setSmallIcon(R.drawable.ic_notification)
+.setContentIntent(pendingIntent)
+.setOngoing(false) // dismissible — user can swipe away once they open the app
+.build()
     }
 
     companion object {
@@ -623,7 +623,7 @@ class SeekerClawService : Service() {
             restartHandler.postDelayed(
                 { start(context) },
                 delayMs,
-            )
+)
         }
     }
 }

@@ -230,7 +230,7 @@ class LogCollectorTest {
     //
     // FileObserver typically delivers MODIFY and CLOSE_WRITE for one
     // write. Both events dispatch readNewFromFile concurrently via
-    // scope.launch. `readLock` (R7+) serializes the file read +
+    // scope.launch. `readLock` serializes the file read +
     // lastReadPosition update; `logsLock` is held only briefly inside
     // for the in-memory _logs mutation. Together they ensure no
     // duplicate entries land in the buffer and lastReadPosition
@@ -296,7 +296,7 @@ class LogCollectorTest {
             // run sequentially since readNewFromFileForTest does
             // synchronous file I/O — the test would be effectively
             // serialized and wouldn't exercise the readLock contract.
-            // (Copilot R4.)
+            //
             val tasks = List(10) {
                 async(Dispatchers.IO) { LogCollector.readNewFromFileForTest() }
             }
@@ -322,7 +322,7 @@ class LogCollectorTest {
         // file with a smaller one (e.g. log rotated out). Without the
         // `currentLength < pos` guard, lastReadPosition would stay at
         // the old length and the new (smaller) file would never be read.
-        // (Copilot R3.)
+        //
         val tmp = File.createTempFile("bat518-rotate", ".test")
         try {
             LogCollector.setLogFileForTest(tmp)
@@ -362,7 +362,7 @@ class LogCollectorTest {
         // mid-line. Without line-boundary advancement, parseLine would
         // drop the partial line AND lastReadPosition would skip past
         // it — losing the rest of the line forever once the writer
-        // finishes. (Copilot R3.)
+        // finishes.
         val tmp = File.createTempFile("bat518-partial", ".test")
         try {
             LogCollector.setLogFileForTest(tmp)
@@ -384,7 +384,7 @@ class LogCollectorTest {
             assertTrue(
                 "offset should be past first newline but before partial line end",
                 LogCollector.lastReadPositionForTest < partialEndPos,
-            )
+)
 
             // Writer finishes the partial line.
             tmp.appendText("ial-line\n")

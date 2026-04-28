@@ -20,9 +20,9 @@ enum class ServiceStatus { STOPPED, STARTING, RUNNING, ERROR }
 
 /** Agent API health state read from Node.js health file (BAT-134). */
 data class AgentHealth(
-    val apiStatus: String = "unknown",      // unknown, healthy, degraded, error, stale
-    val lastErrorType: String? = null,      // auth, billing, rate_limit, server, network, etc.
-    val lastErrorStatus: Int? = null,       // HTTP status code (-1 for network)
+    val apiStatus: String = "unknown", // unknown, healthy, degraded, error, stale
+    val lastErrorType: String? = null, // auth, billing, rate_limit, server, network, etc.
+    val lastErrorStatus: Int? = null, // HTTP status code (-1 for network)
     val lastErrorMessage: String? = null,
     val consecutiveFailures: Int = 0,
     val isStale: Boolean = false,
@@ -39,7 +39,7 @@ sealed class ApiUsageData {
         val sevenDayResetsAt: String,
         override val updatedAt: Long,
         override val error: String? = null,
-    ) : ApiUsageData()
+) : ApiUsageData()
 
     data class ApiKeyUsage(
         val requestsLimit: Int,
@@ -50,7 +50,7 @@ sealed class ApiUsageData {
         val tokensReset: String,
         override val updatedAt: Long,
         override val error: String? = null,
-    ) : ApiUsageData()
+) : ApiUsageData()
 }
 
 object ServiceState {
@@ -108,7 +108,7 @@ object ServiceState {
     // are called concurrently from main and Dispatchers.IO. Without
     // this, the worker thread might not observe `initialized = true`
     // set by another thread, OR the check-then-set could double-fire
-    // restoreFromDisk. (Copilot R9.)
+    // restoreFromDisk.
     @Volatile private var initialized = false
     private val initLock = Any()
     private val startWatchingLock = Any()
@@ -124,13 +124,13 @@ object ServiceState {
      * process are no-ops after the first.
      *
      * Known callers (treat as potentially blocking):
-     *   • `SeekerClawService.onStartCommand` — runs on :node process
-     *     main thread during service start. A few ms of disk I/O at
-     *     service start is fine.
-     *   • `SeekerClawService.stop(context)` companion — runs on whatever
-     *     process invoked stop (typically main UI when user taps Stop).
-     *     The first call from main UI may incur the disk I/O;
-     *     subsequent calls are no-ops since `initialized` is set.
+     * • `SeekerClawService.onStartCommand` — runs on :node process
+     * main thread during service start. A few ms of disk I/O at
+     * service start is fine.
+     * • `SeekerClawService.stop(context)` companion — runs on whatever
+     * process invoked stop (typically main UI when user taps Stop).
+     * The first call from main UI may incur the disk I/O;
+     * subsequent calls are no-ops since `initialized` is set.
      *
      * Main-process callers in latency-sensitive paths should prefer
      * `startWatching`, which dispatches the restore work to
@@ -141,13 +141,11 @@ object ServiceState {
      * correctly flags @WorkerThread mismatches there. Marking this
      * would force a SuppressLint at the call site without actually
      * preventing misuse — this doc comment is the clearer contract.
-     * (Copilot R14 + R16 + R-latest+2 — original R14 ask was for the
-     * annotation; R16 caught the resulting contradiction; R-latest+2
-     * caught the inaccurate "only known caller" claim.)
+     *
      */
     fun init(context: Context) {
         initFileRefs(context)
-        restoreFromDisk()  // Idempotent — single-flight via initLock
+        restoreFromDisk() // Idempotent — single-flight via initLock
     }
 
     /** Sync, no I/O. Sets the file path reference so disk reads can find it. */
@@ -162,13 +160,12 @@ object ServiceState {
      * inside the lock so concurrent callers (e.g. `init()` on main
      * thread + `startWatching()`'s scope.launch on Dispatchers.IO)
      * run the restore exactly once, regardless of memory ordering.
-     * (Copilot R9 — was a non-volatile boolean check + set, vulnerable
-     * to lost updates between threads.)
+     *
      */
     private fun restoreFromDisk() {
-        if (initialized) return  // Fast path — no lock if already done
+        if (initialized) return // Fast path — no lock if already done
         synchronized(initLock) {
-            if (initialized) return  // Double-check inside lock
+            if (initialized) return // Double-check inside lock
             readFromFile()
             checkDailyReset()
             initialized = true
@@ -271,12 +268,10 @@ object ServiceState {
      * silently never received events), so we consolidate onto one.
      *
      * Initial reads are dispatched ASYNCHRONOUSLY to Dispatchers.IO
-     * (Copilot R2/R4 — startWatching is invoked from Application.onCreate
-     * on the main thread; doing 4 disk reads there risks StrictMode
-     * violations + startup jank). The first-time restore (read from
+     * . The first-time restore (read from
      * service_state, daily reset check) is also dispatched.
      *
-     * Caller-thread disk I/O caveat (Copilot R7): `workspaceDir.mkdirs()`
+     * Caller-thread disk I/O caveat : `workspaceDir.mkdirs()`
      * still runs on the caller thread because the FileObserver attach
      * needs the directory to exist BEFORE startWatching() returns.
      * `mkdirs()` is a no-op stat on existing directories (the common
@@ -293,11 +288,11 @@ object ServiceState {
         // Sync setup: just file path refs, no I/O. The actual disk reads
         // (first-time restore, file content reads) happen in the launch
         // block below so the main thread caller (Application.onCreate)
-        // returns fast. (Copilot R4: `init(context)` was previously
+        // returns fast. ` was previously
         // called here and DID do sync disk I/O on first invocation.)
         initFileRefs(context)
 
-        // Guard + attach are wrapped in startWatchingLock (Copilot R-latest+1):
+        // Guard + attach are wrapped in startWatchingLock :
         // even though Application.onCreate is the only intended caller and
         // runs once on the main thread, the synchronized block costs nothing
         // for an uncontended lock and documents the contract — future callers
@@ -329,7 +324,7 @@ object ServiceState {
             // (filesystem error, permission, OR a non-directory file at that
             // path blocking creation). Without this check, FileObserver
             // attachment to a missing/non-dir path silently no-ops and the UI
-            // never receives updates for the workspace files. (Copilot R15.)
+            // never receives updates for the workspace files.
             val workspaceDir = File(parent, "workspace")
             if (!workspaceDir.isDirectory) {
                 workspaceDir.mkdirs()
@@ -349,8 +344,7 @@ object ServiceState {
             // single working observer. workspaceDir is a different directory
             // and remains observed separately here — no conflict.
             if (workspaceUsable) {
-                // Filter by basename in onEvent (Copilot R-latest+3 C1
-                // and R-latest+8 C1): workspace/ also contains high-
+                // Filter by basename in onEvent : workspace/ also contains high-
                 // frequency files (node_debug.log from :node, daily
                 // memory files, etc.) that aren't ours. Filtering at
                 // makeDirObserver's onEvent — BEFORE coroutine launch —
@@ -359,7 +353,7 @@ object ServiceState {
                 workspaceDirObserver = makeDirObserver(
                     workspaceDir,
                     watchedFiles = setOf("agent_health_state", "api_usage_state"),
-                ) { path ->
+) { path ->
                     when (path) {
                         "agent_health_state" -> readAgentHealthFile()
                         "api_usage_state" -> readApiUsageFile()
@@ -374,7 +368,7 @@ object ServiceState {
                     "startWatching: workspace dir not usable (${workspaceDir.absolutePath}) — " +
                         "skipping workspace FileObserver. agent_health_state and api_usage_state " +
                         "will not auto-refresh; rely on initial dispatched read only.",
-                )
+)
             }
         } // end synchronized(startWatchingLock)
 
@@ -388,7 +382,7 @@ object ServiceState {
         // garbage — they just see "STOPPED / 0 / 0 / 0" briefly until
         // the IO dispatch lands a few ms later. Observers also fire on
         // subsequent writes, so eventual consistency holds.
-        // (Copilot R2 + R4.)
+        //
         scope.launch {
             restoreFromDisk()
             readBridgeToken()
@@ -475,7 +469,7 @@ object ServiceState {
     @Deprecated(
         "Renamed to startWatching after BAT-518; this alias forwards for compat",
         replaceWith = ReplaceWith("startWatching(context)"),
-    )
+)
     fun startPolling(context: Context) = startWatching(context)
 
     private var workspaceDirObserver: FileObserver? = null
@@ -484,38 +478,38 @@ object ServiceState {
         dir: File,
         watchedFiles: Set<String>,
         onChange: (path: String?) -> Unit,
-    ): FileObserver {
+): FileObserver {
         // FileObserver(File) is API 29+; we target min SDK 34 so this is safe.
         // Mask covers:
-        //   • CLOSE_WRITE / MODIFY: writeText / appendText style writes
-        //   • MOVED_TO: atomic .tmp + rename writes
-        //   • CREATE: initial creation when file didn't exist at attach
-        //   • DELETE: file removal in the watched dir, so the reader
-        //     refreshes when one of the watched files disappears (not
-        //     only on create/write). Defense-in-depth against external
-        //     removal — covers the cases the polling code used to catch
-        //     by re-stat'ing every tick. (Copilot R12 + R-latest+3 C2.)
+        // • CLOSE_WRITE / MODIFY: writeText / appendText style writes
+        // • MOVED_TO: atomic .tmp + rename writes
+        // • CREATE: initial creation when file didn't exist at attach
+        // • DELETE: file removal in the watched dir, so the reader
+        // refreshes when one of the watched files disappears (not
+        // only on create/write). Defense-in-depth against external
+        // removal — covers the cases the polling code used to catch
+        // by re-stat'ing every tick.
         // MOVED_FROM is also covered by MOVED_TO + CREATE on the
         // destination dir; we don't need it here.
         //
         // Constants are qualified (FileObserver.MODIFY etc.) because
         // they're Java static fields, not auto-importable into Kotlin
-        // function bodies. (Copilot R1.)
+        // function bodies.
         //
         // The callback receives `path` (basename of changed file, or
         // null for directory-level events). The caller is responsible
         // for filtering — the workspace observer in particular needs
         // it because workspace/ contains high-frequency files like
         // node_debug.log that would otherwise launch a no-op coroutine
-        // per event. (Copilot R-latest+3 C1.)
+        // per event.
         return object : FileObserver(
             dir,
             FileObserver.MODIFY or FileObserver.CLOSE_WRITE or
                 FileObserver.MOVED_TO or FileObserver.CREATE or
                 FileObserver.DELETE,
-        ) {
+) {
             override fun onEvent(event: Int, path: String?) {
-                // Filter BEFORE launching (Copilot R-latest+8 C1): the
+                // Filter BEFORE launching : the
                 // watched dir contains high-frequency files (e.g. node_debug.log
                 // in workspace/, written multiple times per second by :node)
                 // that aren't ours. Filtering inside the coroutine wastes
@@ -618,7 +612,7 @@ object ServiceState {
                 // to default AgentHealth with isStale=true rather than
                 // silently leaving the UI showing the last known status —
                 // a missing source-of-truth file is itself a "stale"
-                // signal. (Copilot R-latest+6.)
+                // signal.
                 val missing = AgentHealth(apiStatus = "stale", isStale = true)
                 synchronized(healthTransitionLock) {
                     if (_agentHealth.value != missing) {
@@ -650,7 +644,7 @@ object ServiceState {
                 lastErrorMessage = lastErr?.optString("message"),
                 consecutiveFailures = json.optInt("consecutiveFailures", 0),
                 isStale = stale,
-            )
+)
             // Determine log entry inside a private lock (state mutation only, no I/O).
             // Lock hold time is kept short; LogCollector.append() is called after release.
             var logEntry: Pair<String, LogLevel>? = null
@@ -678,7 +672,7 @@ object ServiceState {
             if (!file.exists()) {
                 // File deleted — clear the in-memory usage so the UI
                 // doesn't keep showing the last known counts. (Copilot
-                // R-latest+6.)
+                //.)
                 if (_apiUsage.value != null) _apiUsage.value = null
                 return
             }
@@ -701,7 +695,7 @@ object ServiceState {
                     sevenDayResetsAt = sd?.optString("resets_at", "") ?: "",
                     updatedAt = updatedAt,
                     error = error,
-                )
+)
             } else if (type == "api_key") {
                 val req = json.optJSONObject("requests")
                 val tok = json.optJSONObject("tokens")
@@ -714,7 +708,7 @@ object ServiceState {
                     tokensReset = tok?.optString("reset", "") ?: "",
                     updatedAt = updatedAt,
                     error = error,
-                )
+)
             } else {
                 return
             }
