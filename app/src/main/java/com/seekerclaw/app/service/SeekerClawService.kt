@@ -79,7 +79,12 @@ class SeekerClawService : Service() {
      * one coroutine per chunk. That added needless dispatcher overhead
      * for huge backlogs (e.g. Doze release of queued events). Now: a
      * `while` loop within a single coroutine, releasing + reacquiring
-     * the mutex between iterations so other writers don't block.
+     * the mutex between iterations so cancellation and other in-process
+     * coroutines waiting on `nodeDebugMutex` (e.g. observer reattach
+     * from a re-fired onStartCommand) can interleave while a large
+     * backlog drains. The mutex serializes coroutines within :node
+     * only — it does not (and cannot) block the :node Node.js writer
+     * itself.
      *
      * OOM protection: caps the per-iteration read at
      * `nodeDebugMaxDeltaBytes`. Avoids the toInt() overflow + giant
@@ -109,11 +114,13 @@ class SeekerClawService : Service() {
      */
     private suspend fun forwardNewNodeDebugLines(debugLogFile: java.io.File) {
         // Drain in a while loop, releasing+reacquiring the mutex between
-        // iterations so other writers don't block. Each iteration reads
-        // up to nodeDebugMaxDeltaBytes; loops until file is fully
-        // drained or we hit the "wait for newline" partial-line case.
-        // Replaces the prior recursive `scope.launch` per chunk which
-        // added unnecessary dispatcher overhead for big backlogs. (R8.)
+        // iterations so cancellation and other in-process coroutines
+        // waiting on nodeDebugMutex can interleave while a backlog
+        // drains. Each iteration reads up to nodeDebugMaxDeltaBytes;
+        // loops until file is fully drained or we hit the "wait for
+        // newline" partial-line case. Replaces the prior recursive
+        // `scope.launch` per chunk which added unnecessary dispatcher
+        // overhead for big backlogs. (R8.)
         var keepDraining = true
         while (keepDraining) {
             keepDraining = nodeDebugMutex.withLock {
