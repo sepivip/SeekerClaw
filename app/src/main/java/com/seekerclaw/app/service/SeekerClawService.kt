@@ -447,14 +447,16 @@ class SeekerClawService : Service() {
                         FileObserver.DELETE,
                 ) {
                     override fun onEvent(event: Int, path: String?) {
-                        // Q_OVERFLOW: kernel inotify queue overflowed and
-                        // events were dropped (delivered with path == null).
-                        // Treat as forced resync from nodeDebugLastPos so we
-                        // don't silently miss bytes until the next write.
-                        // path == null also covers other directory-level
-                        // events without a filename — drain defensively.
-                        // (Copilot R-latest+7.)
-                        if (path == "node_debug.log" || path == null || (event and FileObserver.Q_OVERFLOW) != 0) {
+                        // path == null signals either Q_OVERFLOW (kernel
+                        // inotify queue overflow — events dropped) or a
+                        // directory-level event without filename. Either
+                        // way, treat as forced resync from nodeDebugLastPos
+                        // so we don't silently miss bytes until the next
+                        // write fires a named event. (Copilot R-latest+7.)
+                        // Q_OVERFLOW isn't a public FileObserver constant
+                        // in the Android SDK — null path is the only
+                        // signal we get.
+                        if (path == "node_debug.log" || path == null) {
                             // Dispatch off the FileObserver thread.
                             scope.launch { forwardNewNodeDebugLines(debugLogFile) }
                         }

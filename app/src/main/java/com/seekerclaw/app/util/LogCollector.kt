@@ -169,16 +169,17 @@ object LogCollector {
                     FileObserver.DELETE,
             ) {
                 override fun onEvent(event: Int, path: String?) {
-                    // Q_OVERFLOW: the kernel inotify queue overflowed and
-                    // some events were dropped. Android delivers this with
-                    // path == null. Treat as a forced resync — drain from
-                    // current lastReadPosition so we don't silently miss
-                    // log lines until the next write happens to fire an
-                    // event. (Copilot R-latest+7.) Path == null also covers
-                    // some other directory-level events that don't carry a
-                    // filename; treating those as "something might have
-                    // changed in service_logs" is defensive and cheap.
-                    if (path == LOG_FILE_NAME || path == null || (event and FileObserver.Q_OVERFLOW) != 0) {
+                    // path == null signals either Q_OVERFLOW (kernel inotify
+                    // queue overflowed and some events were dropped) or a
+                    // directory-level event without a filename. Either way,
+                    // treat as forced resync — drain from current
+                    // lastReadPosition. Without this, log lines could go
+                    // unforwarded until the next write happens to fire a
+                    // normal named event. (Copilot R-latest+7.) NOTE:
+                    // Q_OVERFLOW is not a public FileObserver constant in
+                    // the Android SDK — null path is the only signal we
+                    // get, so we trigger resync on any null-path event.
+                    if (path == LOG_FILE_NAME || path == null) {
                         // Dispatch off the FileObserver thread. readNewFromFile
                         // serializes file reads + lastReadPosition updates via
                         // `readLock` internally, so concurrent dispatches
