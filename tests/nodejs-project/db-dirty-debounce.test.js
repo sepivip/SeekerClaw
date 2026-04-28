@@ -44,9 +44,16 @@ function makeHarness({ debounceMs = 60_000 } = {}) {
     let saveTimer = null;
     let saveCount = 0;
     let forcedSaveCount = 0;
+    // Synthetic-failure injection for the retry-on-save-error test.
+    // Real code throws when fs.writeFileSync / fs.renameSync fail; we
+    // mirror only the throw path because the rescheduling logic is
+    // what we're testing, not the FS plumbing.
+    let saveShouldFail = false;
+    let saveAttempts = 0;
 
     function attachDb(stub) { db = stub; }
     function detachDb() { db = null; }
+    function setSaveShouldFail(v) { saveShouldFail = v; }
 
     function markDbDirty() {
         if (!db) return;
@@ -61,40 +68,71 @@ function makeHarness({ debounceMs = 60_000 } = {}) {
     function saveDatabase({ force = false } = {}) {
         if (!db) return;
         if (!dirty && !force) return;
-        saveCount++;
-        if (force) forcedSaveCount++;
-        dirty = false;
-        if (saveTimer) {
-            clearTimeout(saveTimer);
-            saveTimer = null;
+        saveAttempts++;
+        try {
+            if (saveShouldFail) throw new Error('synthetic save failure');
+            saveCount++;
+            if (force) forcedSaveCount++;
+            dirty = false;
+            if (saveTimer) {
+                clearTimeout(saveTimer);
+                saveTimer = null;
+            }
+        } catch (err) {
+            // Mirrors database.js retry-on-failure: if dirty is still
+            // true and no timer is already armed, schedule a fresh one
+            // SAVE_DEBOUNCE_MS later. Bounded retry, no tight loop.
+            if (dirty && !saveTimer) {
+                saveTimer = setTimeout(() => {
+                    saveTimer = null;
+                    saveDatabase();
+                }, debounceMs);
+            }
         }
     }
 
     return {
-        attachDb, detachDb, markDbDirty, saveDatabase,
+        attachDb, detachDb, markDbDirty, saveDatabase, setSaveShouldFail,
         get dirty() { return dirty; },
         get saveCount() { return saveCount; },
+        get saveAttempts() { return saveAttempts; },
         get forcedSaveCount() { return forcedSaveCount; },
         get hasPendingTimer() { return saveTimer !== null; },
     };
 }
 
 // --- tests ---
+//
+// Tests are collected first then run sequentially via an async loop —
+// Copilot caught (correctly) that the original synchronous runner ran
+// `try { fn() }` without awaiting, so any test returning a Promise
+// recorded PASS based on the synchronous prologue and the assertions
+// inside setTimeout callbacks never ran. Async tests are needed here
+// because debounce/coalescing is inherently time-based.
 
+const tests = [];
 let pass = 0;
 let fail = 0;
 
 function test(name, fn) {
-    try {
-        fn();
-        pass++;
-        console.log(`PASS  ${name}`);
-    } catch (e) {
-        fail++;
-        console.log(`FAIL  ${name}`);
-        console.log(`  ${e.message}`);
-        if (e.stack) console.log(e.stack.split('\n').slice(1, 4).join('\n'));
+    tests.push({ name, fn });
+}
+
+async function run() {
+    for (const { name, fn } of tests) {
+        try {
+            await fn();
+            pass++;
+            console.log(`PASS  ${name}`);
+        } catch (e) {
+            fail++;
+            console.log(`FAIL  ${name}`);
+            console.log(`  ${e.message}`);
+            if (e.stack) console.log(e.stack.split('\n').slice(1, 4).join('\n'));
+        }
     }
+    console.log(`\n${pass} passed, ${fail} failed`);
+    process.exit(fail === 0 ? 0 : 1);
 }
 
 test('markDbDirty is a no-op when db is null (init failed / not loaded)', () => {
@@ -113,24 +151,18 @@ test('markDbDirty sets dirty + schedules a timer when db is loaded', () => {
     h.saveDatabase({ force: true }); // tear down the timer
 });
 
-test('multiple markDbDirty within debounce window coalesce into ONE save', (done) => {
-    return new Promise((resolve, reject) => {
-        const h = makeHarness({ debounceMs: 50 });
-        h.attachDb({});
-        // Burst: 50 mutations in ~10ms — pre-BAT-523 setInterval-based
-        // approach would still be 1 save (waiting for the next 60s tick),
-        // but the NEW debounce must show the same coalescing behaviour.
-        for (let i = 0; i < 50; i++) h.markDbDirty();
-        assert.strictEqual(h.saveCount, 0, 'no save yet — debounce in flight');
-        setTimeout(() => {
-            try {
-                assert.strictEqual(h.saveCount, 1, 'exactly one save after debounce window');
-                assert.strictEqual(h.dirty, false, 'dirty cleared post-save');
-                assert.strictEqual(h.hasPendingTimer, false, 'no timer pending after save');
-                resolve();
-            } catch (e) { reject(e); }
-        }, 100);
-    });
+test('multiple markDbDirty within debounce window coalesce into ONE save', async () => {
+    const h = makeHarness({ debounceMs: 50 });
+    h.attachDb({});
+    // Burst: 50 mutations in ~10ms — pre-BAT-523 setInterval-based
+    // approach would still be 1 save (waiting for the next 60s tick),
+    // but the NEW debounce must show the same coalescing behaviour.
+    for (let i = 0; i < 50; i++) h.markDbDirty();
+    assert.strictEqual(h.saveCount, 0, 'no save yet — debounce in flight');
+    await new Promise(r => setTimeout(r, 100));
+    assert.strictEqual(h.saveCount, 1, 'exactly one save after debounce window');
+    assert.strictEqual(h.dirty, false, 'dirty cleared post-save');
+    assert.strictEqual(h.hasPendingTimer, false, 'no timer pending after save');
 });
 
 test('saveDatabase() is a no-op when not dirty', () => {
@@ -169,21 +201,61 @@ test('saveDatabase clears dirty so subsequent !force calls are no-ops', () => {
     assert.strictEqual(h.saveCount, 1, 'only the original force save');
 });
 
-test('mark + save + mark again schedules a NEW debounced save', (done) => {
-    return new Promise((resolve, reject) => {
-        const h = makeHarness({ debounceMs: 50 });
-        h.attachDb({});
-        h.markDbDirty();
-        h.saveDatabase({ force: true }); // flush eagerly — saveCount=1, timer cancelled
-        h.markDbDirty(); // a new mutation arrives later
-        assert.strictEqual(h.hasPendingTimer, true, 'fresh timer for the new dirty cycle');
-        setTimeout(() => {
-            try {
-                assert.strictEqual(h.saveCount, 2, 'second save fired from the new debounce');
-                resolve();
-            } catch (e) { reject(e); }
-        }, 100);
-    });
+test('mark + save + mark again schedules a NEW debounced save', async () => {
+    const h = makeHarness({ debounceMs: 50 });
+    h.attachDb({});
+    h.markDbDirty();
+    h.saveDatabase({ force: true }); // flush eagerly — saveCount=1, timer cancelled
+    h.markDbDirty(); // a new mutation arrives later
+    assert.strictEqual(h.hasPendingTimer, true, 'fresh timer for the new dirty cycle');
+    await new Promise(r => setTimeout(r, 100));
+    assert.strictEqual(h.saveCount, 2, 'second save fired from the new debounce');
+});
+
+test('save failure during debounce reschedules a retry timer (no tight loop)', async () => {
+    const h = makeHarness({ debounceMs: 30 });
+    h.attachDb({});
+    h.setSaveShouldFail(true);
+
+    // First mutation schedules a debounced save 30ms out. Wait long
+    // enough for the timer to fire — it should attempt + fail + arm a
+    // new retry timer.
+    h.markDbDirty();
+    assert.strictEqual(h.hasPendingTimer, true, 'initial debounce armed');
+
+    await new Promise(r => setTimeout(r, 50));
+    // The timer fired, called saveDatabase, which threw inside try
+    // (saveShouldFail=true). Catch must have rescheduled — bounded by
+    // debounceMs, NOT a tight loop.
+    assert.strictEqual(h.saveCount, 0, 'no successful save');
+    assert.strictEqual(h.dirty, true, 'still dirty after failure');
+    assert.strictEqual(h.hasPendingTimer, true, 'retry timer rescheduled');
+    assert.ok(h.saveAttempts >= 1, 'save was attempted');
+
+    // Now flip the failure flag and let the retry succeed.
+    h.setSaveShouldFail(false);
+    await new Promise(r => setTimeout(r, 50));
+    assert.strictEqual(h.saveCount, 1, 'retry succeeded once flag cleared');
+    assert.strictEqual(h.dirty, false, 'dirty cleared after successful save');
+    assert.strictEqual(h.hasPendingTimer, false, 'no pending timer post-success');
+});
+
+test('save failure does NOT tight-loop (one attempt per debounce window)', async () => {
+    // Spec phrasing: "Fix failed-save retry/re-arm without tight loop."
+    // If the catch branch ran a synchronous retry, saveAttempts would
+    // explode. With a setTimeout-based retry, saveAttempts grows by 1
+    // per debounceMs window — bounded.
+    const h = makeHarness({ debounceMs: 25 });
+    h.attachDb({});
+    h.setSaveShouldFail(true);
+    h.markDbDirty();
+
+    await new Promise(r => setTimeout(r, 100));
+    // 100ms / 25ms ≈ 4 windows. Allow some scheduler jitter — assert
+    // a loose upper bound. A tight loop would be in the 100,000+ range
+    // (synchronous JS in a 100ms window).
+    assert.ok(h.saveAttempts >= 1, 'at least one attempt');
+    assert.ok(h.saveAttempts <= 10, `saveAttempts ${h.saveAttempts} suggests tight loop`);
 });
 
 test('shutdown-style force save flushes pending mutations', () => {
@@ -232,5 +304,32 @@ test('drift: live database.js declares a dirty flag', () => {
         'database.js must declare a `dirty` flag to drive markDbDirty');
 });
 
-console.log(`\n${pass} passed, ${fail} failed`);
-process.exit(fail === 0 ? 0 : 1);
+test('drift: saveDatabase catch path reschedules on failure (retry guard)', () => {
+    // Pin the retry behaviour so a future refactor cannot silently
+    // remove the bounded-retry property. A tight grep on
+    // "saveTimer = setTimeout" inside the catch clause is enough — the
+    // exact wording can drift, but the structural shape must remain.
+    const src = fs.readFileSync(DATABASE_JS, 'utf8');
+    const catchMatch = src.match(/}\s*catch\s*\(\s*err\s*\)\s*\{[\s\S]*?\}\s*\}\s*\n\}/);
+    assert.ok(catchMatch, 'saveDatabase catch block not found');
+    const catchBody = catchMatch[0];
+    assert.ok(/saveTimer\s*=\s*setTimeout/.test(catchBody),
+        'saveDatabase catch block must reschedule a retry timer (BAT-523 — bounded retry on transient I/O failures)');
+});
+
+test('drift: indexMemoryFiles marks dirty unconditionally', () => {
+    const src = fs.readFileSync(DATABASE_JS, 'utf8');
+    // The bug was: `if (indexed > 0) markDbDirty();` left the
+    // unconditional `meta.last_indexed` INSERT unsaved when no files
+    // were re-indexed. Reject any code that gates markDbDirty inside
+    // indexMemoryFiles on a length/count condition.
+    const fnMatch = src.match(/function\s+indexMemoryFiles\s*\(\s*\)[\s\S]*?\n\}/);
+    assert.ok(fnMatch, 'indexMemoryFiles function body not found');
+    const body = fnMatch[0];
+    assert.ok(/markDbDirty\s*\(\s*\)/.test(body),
+        'indexMemoryFiles must call markDbDirty()');
+    assert.ok(!/if\s*\(\s*indexed\s*>\s*0\s*\)\s*markDbDirty/.test(body),
+        'markDbDirty must NOT be gated on indexed > 0 (BAT-523 fix — meta.last_indexed always mutates)');
+});
+
+run();

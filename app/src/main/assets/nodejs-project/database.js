@@ -227,7 +227,22 @@ function saveDatabase({ force = false } = {}) {
             saveTimer = null;
         }
     } catch (err) {
-        log(`[DB] Save error: ${err.message}`, 'ERROR');
+        log(`[DB] Save error (retry scheduled in ${SAVE_DEBOUNCE_MS / 1000}s): ${err.message}`, 'ERROR');
+        // BAT-523: transient I/O failures during the timer-driven path
+        // would otherwise leave dirty=true with no scheduled retry —
+        // the timer callback nulled saveTimer before calling us, and
+        // the success-path clear above didn't run. Without this branch
+        // the DB stays dirty until the next mutation (or shutdown)
+        // happens to schedule another save, which can be unbounded on
+        // an idle agent. Scheduling a fresh retry preserves the
+        // intended max-staleness bound of SAVE_DEBOUNCE_MS even when
+        // the disk write fails.
+        if (dirty && !saveTimer) {
+            saveTimer = setTimeout(() => {
+                saveTimer = null;
+                saveDatabase();
+            }, SAVE_DEBOUNCE_MS);
+        }
     }
 }
 
@@ -302,13 +317,18 @@ function indexMemoryFiles() {
             indexed++;
         }
 
-        // Update meta
+        // Update meta — runs unconditionally on every indexer pass, so it
+        // mutates the DB even when every file was skipped. markDbDirty()
+        // below must therefore also fire unconditionally; gating it on
+        // `indexed > 0` (as the original `if (indexed > 0) saveDatabase()`
+        // did) would leak the meta update past the BAT-523 60s debounce
+        // bound now that the periodic-save safety net is gone.
         db.run(`INSERT OR REPLACE INTO meta (key, value) VALUES ('last_indexed', ?)`,
             [localTimestamp()]);
 
-        // BAT-523: schedule a debounced save instead of writing every batch
-        // immediately. Coalesces with concurrent mutations from other sites.
-        if (indexed > 0) markDbDirty();
+        // BAT-523: schedule a debounced save. Unconditional because the
+        // meta INSERT above always mutates the DB (see comment).
+        markDbDirty();
         log(`[Memory] Indexed ${indexed} files, skipped ${skipped} unchanged`, 'DEBUG');
     } catch (err) {
         log(`[Memory] Indexing error (non-fatal): ${err.message}`, 'WARN');
