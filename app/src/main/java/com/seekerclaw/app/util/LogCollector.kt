@@ -244,11 +244,15 @@ object LogCollector {
     }
 
     private fun readAllFromFile() {
-        // R7: take readLock for the file read + offset update. Acquire
-        // logsLock briefly only for the in-memory list assignment.
-        // synchronized blocks are reentrant on JVM, so the readLock
-        // acquire here is a no-op when called from readNewFromFile's
-        // huge-delta fallback path (which already holds it).
+        // Lock-narrowing pattern (Copilot R-latest+5): same as
+        // readNewFromFile — readLock holds the file ops + offset
+        // advancement only; UTF-8 decode + parsing happen outside the
+        // lock as pure-CPU work. Keeps the readLock critical section
+        // microsecond-scale so UI-thread append() (which contends on
+        // readLock to serialize against clear()) doesn't wait through
+        // a parse.
+        var capturedBytes: ByteArray? = null
+        var capturedSeekedMidFile = false
         synchronized(readLock) {
             val file = logFile ?: return
             try {
@@ -270,20 +274,10 @@ object LogCollector {
                 }
                 val seekedMidFile = tailBytes < fileLength
 
-                // Line-boundary safety (mirrors readNewFromFile, Copilot R-latest):
-                // a concurrent writer may leave the file ending mid-line. If we
-                // advance lastReadPosition to fileLength, the partial trailing
-                // line gets lost forever once the rest arrives. Find the last
-                // newline byte (0x0A — same in ASCII and UTF-8 due to single-
-                // byte encoding for that codepoint) and only advance to that
-                // boundary. Three cases:
-                //   A) Newline found: forward complete lines, leave any partial
-                //      trailing line for next read.
-                //   B) No newline + buffer covers whole file (small file mid-
-                //      write): wait for next event. Don't advance.
-                //   C) No newline + buffer is tail of bigger file (single line
-                //      > 60KB tail buffer, pathological): force-advance to
-                //      avoid wedging — accept that the line gets split.
+                // Line-boundary safety: same three-case logic as
+                // readNewFromFile. (A) newline found, (B) small file
+                // mid-write — wait, (C) pathological huge single line —
+                // force-advance.
                 var lastNewlineIdx = -1
                 for (i in bytes.size - 1 downTo 0) {
                     if (bytes[i] == 0x0A.toByte()) { lastNewlineIdx = i; break }
@@ -305,28 +299,38 @@ object LogCollector {
                     }
                 }
 
-                // Explicit UTF-8 — see readNewFromFile note (Copilot R4).
-                val lines = String(completeBytes, Charsets.UTF_8).lines()
-                    .filter { it.isNotBlank() }
-                    .let { if (seekedMidFile) it.drop(1) else it } // drop partial first line only when we seeked mid-file
-                val entries = lines.mapNotNull { parseLine(it) }.takeLast(MAX_LINES)
                 lastReadPosition = advanceTo
-                // Brief logsLock for the in-memory update only.
-                synchronized(logsLock) {
-                    _logs.value = entries
-                }
+                capturedBytes = completeBytes
+                capturedSeekedMidFile = seekedMidFile
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to read log file (full)", e)
             }
         }
+
+        // Decode + parse OUTSIDE readLock — pure CPU.
+        // Explicit UTF-8 — see readNewFromFile note (Copilot R4).
+        val bytes = capturedBytes ?: return
+        val entries = String(bytes, Charsets.UTF_8).lines()
+            .filter { it.isNotBlank() }
+            .let { if (capturedSeekedMidFile) it.drop(1) else it } // drop partial first line only when we seeked mid-file
+            .mapNotNull { parseLine(it) }
+            .takeLast(MAX_LINES)
+
+        // Brief logsLock for the in-memory update only.
+        synchronized(logsLock) {
+            _logs.value = entries
+        }
     }
 
     private fun readNewFromFile() {
-        // R7: serialize file ops via readLock. NEVER hold logsLock here —
-        // append() (called from UI / main thread) takes logsLock briefly,
-        // and would block on the file read otherwise → ANR / startup jank.
-        // logsLock is acquired only at the very end for the tiny in-memory
-        // list update.
+        // Lock-narrowing pattern (Copilot R-latest+5): readLock guards
+        // ONLY the file ops + offset advancement (microsecond critical
+        // section). UTF-8 decoding and line parsing happen OUTSIDE the
+        // lock — they're pure CPU and can be ms-scale on big chunks.
+        // Holding readLock during decode would force a UI-thread
+        // append() (which also takes readLock to serialize against
+        // clear()) to wait through the parse, causing potential UI jank.
+        var capturedBytes: ByteArray? = null
         synchronized(readLock) {
             val file = logFile ?: return
             try {
@@ -390,32 +394,37 @@ object LogCollector {
                     return
                 }
 
-                val completeBytes = newBytes.copyOfRange(0, lastNewlineIdx + 1)
-                // Explicit UTF-8 — File.appendText defaults to UTF-8 but
-                // String(bytes) without a charset uses the platform
-                // default, which can mojibake non-ASCII messages on
-                // devices where the JVM default differs. (Copilot R4.)
-                val newLines = String(completeBytes, Charsets.UTF_8).lines().filter { it.isNotBlank() }
-                val newEntries = newLines.mapNotNull { parseLine(it) }
+                val complete = newBytes.copyOfRange(0, lastNewlineIdx + 1)
                 // Advance past the last complete line. Trailing partial
                 // bytes (if any) stay unread for next call.
-                lastReadPosition = pos + completeBytes.size
-                if (newEntries.isEmpty()) return
-
-                // Brief logsLock acquire ONLY for the in-memory list mutation.
-                // append() can compete here, but the lock is held for
-                // microseconds — no main-thread jank. (Copilot R7.)
-                synchronized(logsLock) {
-                    val current = _logs.value.toMutableList()
-                    current.addAll(newEntries)
-                    while (current.size > MAX_LINES) {
-                        current.removeAt(0)
-                    }
-                    _logs.value = current
-                }
+                lastReadPosition = pos + complete.size
+                capturedBytes = complete
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to read new log entries from file", e)
             }
+        }
+
+        // Decode + parse OUTSIDE readLock — pure CPU, no shared state needed.
+        // Explicit UTF-8 — File.appendText defaults to UTF-8 but String(bytes)
+        // without a charset uses the platform default, which can mojibake
+        // non-ASCII messages on devices where the JVM default differs.
+        // (Copilot R4.)
+        val bytes = capturedBytes ?: return
+        val newEntries = String(bytes, Charsets.UTF_8).lines()
+            .filter { it.isNotBlank() }
+            .mapNotNull { parseLine(it) }
+        if (newEntries.isEmpty()) return
+
+        // Brief logsLock acquire ONLY for the in-memory list mutation.
+        // append() can compete here, but the lock is held for
+        // microseconds — no main-thread jank. (Copilot R7.)
+        synchronized(logsLock) {
+            val current = _logs.value.toMutableList()
+            current.addAll(newEntries)
+            while (current.size > MAX_LINES) {
+                current.removeAt(0)
+            }
+            _logs.value = current
         }
     }
 
