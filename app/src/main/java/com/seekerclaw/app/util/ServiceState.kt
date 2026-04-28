@@ -328,22 +328,37 @@ object ServiceState {
         // reads on event regardless of initial-read state). Synchronous —
         // FileObserver constructor does no disk I/O, just registers.
         //
-        // Filter `path` BEFORE scope.launch so unrelated workspace writes
-        // (cron jobs, memory files, config snapshots, etc.) don't churn
-        // the coroutine scheduler with no-op launches. (Copilot R4.)
-        filesDirObserver = makeDirObserver(parent, watchedFiles = filesDirWatched) { path ->
-            when (path) {
-                "service_state" -> readFromFile()
-                "bridge_token" -> readBridgeToken()
-            }
+        // Defensive read pattern (BAT-518 device-test fix): on ANY event
+        // in the watched directory, re-read ALL files we care about.
+        // Previously this filtered by `path` basename and only re-read
+        // the matching file. The basename filter has a known fragile
+        // surface area — events can arrive with `path=null` (directory-
+        // level), with mixed batched events, or be missed entirely if
+        // the kernel coalesces multi-file writes. Reading all files on
+        // any event eliminates the entire class of "wrong basename
+        // matched, no read fired" bugs at a cost of ~µs per cycle (the
+        // files are 80 bytes each). This pattern is the recommended
+        // approach for robust FileObserver use per Android dev research
+        // (StackOverflow + Google IO 2022 talks): trust the event to
+        // mean "something changed in this dir" and re-read your state,
+        // rather than relying on which-file-changed dispatch.
+        //
+        // Symptom this fixes: device test 2026-04-28 — :node wrote
+        // STARTING then RUNNING to service_state file, LogCollector
+        // observer in same dir picked up service_logs writes (logs
+        // appeared live in UI), but ServiceState observer's per-basename
+        // dispatch did not fire for service_state. Root cause is most
+        // likely event-path mismatch in some edge case; the read-all
+        // defense sidesteps it without needing to fully diagnose.
+        filesDirObserver = makeDirObserver(parent) {
+            readFromFile()
+            readBridgeToken()
         }.also { it.startWatching() }
 
         if (workspaceUsable) {
-            workspaceDirObserver = makeDirObserver(workspaceDir, watchedFiles = workspaceWatched) { path ->
-                when (path) {
-                    "agent_health_state" -> readAgentHealthFile()
-                    "api_usage_state" -> readApiUsageFile()
-                }
+            workspaceDirObserver = makeDirObserver(workspaceDir) {
+                readAgentHealthFile()
+                readApiUsageFile()
             }.also { it.startWatching() }
         } else {
             Log.w(
@@ -388,18 +403,9 @@ object ServiceState {
     private var filesDirObserver: FileObserver? = null
     private var workspaceDirObserver: FileObserver? = null
 
-    // Sets of filenames each observer cares about. Anything else triggers
-    // the FileObserver but gets filtered out in onEvent before we launch
-    // a coroutine, so unrelated writes in the same directory (e.g. cron
-    // job state files, memory files, config snapshots — workspace/ holds
-    // a lot of them) cost zero coroutine launches.
-    private val filesDirWatched = setOf("service_state", "bridge_token")
-    private val workspaceWatched = setOf("agent_health_state", "api_usage_state")
-
     private fun makeDirObserver(
         dir: File,
-        watchedFiles: Set<String>,
-        onChange: (path: String) -> Unit,
+        onChange: () -> Unit,
     ): FileObserver {
         // FileObserver(File) is API 29+; we target min SDK 34 so this is safe.
         // Mask covers:
@@ -418,6 +424,11 @@ object ServiceState {
         // Constants are qualified (FileObserver.MODIFY etc.) because
         // they're Java static fields, not auto-importable into Kotlin
         // function bodies. (Copilot R1.)
+        //
+        // No basename filter: any event in this dir → re-read all files
+        // we care about. See startWatching's call site for the rationale
+        // (BAT-518 device-test fix). The reads are µs-cheap, idempotent,
+        // and only update StateFlow when values actually change.
         return object : FileObserver(
             dir,
             FileObserver.MODIFY or FileObserver.CLOSE_WRITE or
@@ -425,18 +436,12 @@ object ServiceState {
                 FileObserver.DELETE,
         ) {
             override fun onEvent(event: Int, path: String?) {
-                // Explicit null handling (Copilot R10): FileObserver's
-                // path is `String?`; some events arrive with null path
-                // (e.g. directory-level OPEN). Filter explicitly before
-                // contains() to avoid the Set<String> nullability
-                // mismatch and short-circuit early.
-                if (path == null || path !in watchedFiles) return
                 // Dispatch to scope so the FileObserver thread (a single
                 // shared thread named "FileObserver" in Android) doesn't
                 // do file I/O. The reader functions are idempotent — if
                 // multiple events fire for the same write, re-reading is
                 // cheap and produces the same StateFlow values.
-                scope.launch { onChange(path) }
+                scope.launch { onChange() }
             }
         }
     }
