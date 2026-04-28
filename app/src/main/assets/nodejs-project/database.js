@@ -34,9 +34,16 @@ function getDb() { return db; }
 // for no behavioural reason.
 //
 // Now: a single in-memory `dirty` flag is set by every mutation site
-// (markDbDirty), which schedules a trailing-debounce save to fire
-// SAVE_DEBOUNCE_MS after the FIRST mutation in any new dirty window.
-// Subsequent mutations within that window coalesce into the same save.
+// (markDbDirty), which arms a one-shot setTimeout to fire
+// SAVE_DEBOUNCE_MS after the FIRST mutation in a clean window.
+// Subsequent mutations that arrive while the timer is pending coalesce
+// into the same save — the timer is NOT reset per mutation. This is
+// deliberate: a true trailing debounce (where every mutation pushes the
+// timer back) could be starved indefinitely under continuous writes,
+// breaking the staleness bound. The behaviour we want is bounded-delay
+// coalescing: at most SAVE_DEBOUNCE_MS between any mutation and its
+// disk save, regardless of mutation rate.
+//
 // `saveDatabase({ force: true })` skips both the dirty check and the
 // timer (used by init and graceful shutdown to flush synchronously).
 //
@@ -185,8 +192,9 @@ async function initDatabase() {
         // BAT-523 (BAT-518 phase 3A): the prior unconditional 60s
         // periodic save is gone. Saves are now triggered by
         // `markDbDirty()` from mutation sites and coalesced via
-        // SAVE_DEBOUNCE_MS trailing debounce. Idle agent → zero
-        // periodic writes.
+        // SAVE_DEBOUNCE_MS bounded-delay debounce (see file-top
+        // comment block for why this isn't a true trailing debounce).
+        // Idle agent → zero periodic writes.
 
     } catch (err) {
         log(`[DB] Failed to initialize SQL.js (non-fatal): ${err.message}`, 'ERROR');
@@ -227,20 +235,36 @@ function saveDatabase({ force = false } = {}) {
             saveTimer = null;
         }
     } catch (err) {
-        log(`[DB] Save error (retry scheduled in ${SAVE_DEBOUNCE_MS / 1000}s): ${err.message}`, 'ERROR');
-        // BAT-523: transient I/O failures during the timer-driven path
-        // would otherwise leave dirty=true with no scheduled retry —
-        // the timer callback nulled saveTimer before calling us, and
-        // the success-path clear above didn't run. Without this branch
-        // the DB stays dirty until the next mutation (or shutdown)
-        // happens to schedule another save, which can be unbounded on
-        // an idle agent. Scheduling a fresh retry preserves the
-        // intended max-staleness bound of SAVE_DEBOUNCE_MS even when
-        // the disk write fails.
-        if (dirty && !saveTimer) {
+        // BAT-523: transient I/O failures must reschedule a retry.
+        //
+        // Two failure shapes need it:
+        //
+        // 1. Debounced path failure (dirty=true, force=false). The
+        //    timer callback nulled saveTimer before calling us; the
+        //    success-path clear above didn't run. Without a fresh
+        //    timer, dirty stays true with no scheduled retry — the
+        //    DB sits unsaved until the next mutation or shutdown,
+        //    which can be unbounded on an idle agent.
+        //
+        // 2. Forced path failure (force=true, dirty=false). Init's
+        //    bootstrap write — "ensure file exists on disk right
+        //    away" — fails. dirty is false, so a `dirty &&` guard
+        //    would skip the retry. The init contract is broken for
+        //    arbitrarily long if we don't re-arm. Same applies to
+        //    shutdown's force-flush, except shutdown is process-
+        //    exit-bound and has no future to retry into; the
+        //    re-arm is a no-op there.
+        //
+        // The retry callback re-uses the same `force` flag so a
+        // forced bootstrap write that failed retries WITH force,
+        // preserving the original semantics. Bounded by
+        // SAVE_DEBOUNCE_MS — explicitly NOT a tight loop.
+        const willRetry = (dirty || force) && !saveTimer;
+        log(`[DB] Save error${willRetry ? ` (retry in ${SAVE_DEBOUNCE_MS / 1000}s)` : ''}: ${err.message}`, 'ERROR');
+        if (willRetry) {
             saveTimer = setTimeout(() => {
                 saveTimer = null;
-                saveDatabase();
+                saveDatabase({ force });
             }, SAVE_DEBOUNCE_MS);
         }
     }

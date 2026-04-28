@@ -9,7 +9,8 @@
 // --------------------
 // Phase 3A of BAT-518 replaces the prior unconditional
 // `setInterval(saveDatabase, 60000)` in database.js with a dirty-flag +
-// trailing-debounce model. The change has two correctness invariants
+// dirty-flag + bounded-delay debounce model. The change has two
+// correctness invariants
 // that aren't visible from a plain code read:
 //
 //   1. Multiple mutations within the debounce window must coalesce into
@@ -79,13 +80,16 @@ function makeHarness({ debounceMs = 60_000 } = {}) {
                 saveTimer = null;
             }
         } catch (err) {
-            // Mirrors database.js retry-on-failure: if dirty is still
-            // true and no timer is already armed, schedule a fresh one
-            // SAVE_DEBOUNCE_MS later. Bounded retry, no tight loop.
-            if (dirty && !saveTimer) {
+            // Mirrors database.js retry-on-failure. Two failure shapes
+            // need re-arming: dirty-driven (debounce path) AND
+            // force-driven (init bootstrap or shutdown flush, where
+            // dirty may be false). The retry preserves `force` so a
+            // forced write that failed retries WITH force.
+            const willRetry = (dirty || force) && !saveTimer;
+            if (willRetry) {
                 saveTimer = setTimeout(() => {
                     saveTimer = null;
-                    saveDatabase();
+                    saveDatabase({ force });
                 }, debounceMs);
             }
         }
@@ -240,6 +244,29 @@ test('save failure during debounce reschedules a retry timer (no tight loop)', a
     assert.strictEqual(h.hasPendingTimer, false, 'no pending timer post-success');
 });
 
+test('forced save failure (init bootstrap path) re-arms a retry even when dirty=false', async () => {
+    // The init contract — "ensure file exists on disk right away" —
+    // calls saveDatabase({ force: true }) before any mutations. If
+    // that write fails, dirty is false, and a `dirty && !saveTimer`
+    // guard would skip the retry. Without re-arming, the agent runs
+    // without a DB file at all.
+    const h = makeHarness({ debounceMs: 30 });
+    h.attachDb({});
+    h.setSaveShouldFail(true);
+    assert.strictEqual(h.dirty, false, 'dirty=false going in (init path)');
+
+    h.saveDatabase({ force: true });
+    assert.strictEqual(h.saveCount, 0, 'forced save attempt failed');
+    assert.strictEqual(h.dirty, false, 'still dirty=false (no mutations)');
+    assert.strictEqual(h.hasPendingTimer, true, 'retry timer scheduled despite dirty=false');
+
+    h.setSaveShouldFail(false);
+    await new Promise(r => setTimeout(r, 50));
+    assert.strictEqual(h.saveCount, 1, 'retry succeeded once flag cleared');
+    assert.strictEqual(h.forcedSaveCount, 1, 'retry preserved the force flag');
+    assert.strictEqual(h.hasPendingTimer, false, 'no pending timer post-success');
+});
+
 test('save failure does NOT tight-loop (one attempt per debounce window)', async () => {
     // Spec phrasing: "Fix failed-save retry/re-arm without tight loop."
     // If the catch branch ran a synchronous retry, saveAttempts would
@@ -306,15 +333,26 @@ test('drift: live database.js declares a dirty flag', () => {
 
 test('drift: saveDatabase catch path reschedules on failure (retry guard)', () => {
     // Pin the retry behaviour so a future refactor cannot silently
-    // remove the bounded-retry property. A tight grep on
-    // "saveTimer = setTimeout" inside the catch clause is enough — the
-    // exact wording can drift, but the structural shape must remain.
+    // remove the bounded-retry property. The earlier version of this
+    // guard greped for any catch-block in database.js, which would
+    // false-pass on an unrelated catch added elsewhere. Scope the
+    // search to saveDatabase's function body first, then check its
+    // catch block for the retry timer.
     const src = fs.readFileSync(DATABASE_JS, 'utf8');
-    const catchMatch = src.match(/}\s*catch\s*\(\s*err\s*\)\s*\{[\s\S]*?\}\s*\}\s*\n\}/);
+    const fnMatch = src.match(/function\s+saveDatabase\s*\([^)]*\)\s*\{[\s\S]*?\n\}/);
+    assert.ok(fnMatch, 'saveDatabase function body not found');
+    const fnBody = fnMatch[0];
+    assert.ok(/}\s*catch\s*\(/.test(fnBody),
+        'saveDatabase must have a catch block');
+    const catchMatch = fnBody.match(/}\s*catch\s*\(\s*\w+\s*\)\s*\{[\s\S]*$/);
     assert.ok(catchMatch, 'saveDatabase catch block not found');
     const catchBody = catchMatch[0];
     assert.ok(/saveTimer\s*=\s*setTimeout/.test(catchBody),
-        'saveDatabase catch block must reschedule a retry timer (BAT-523 — bounded retry on transient I/O failures)');
+        'saveDatabase catch must reschedule a retry timer (BAT-523 — bounded retry on transient I/O failures)');
+    // Also pin: retry condition includes `force` so init/shutdown
+    // bootstrap writes that fail with dirty=false still re-arm.
+    assert.ok(/(dirty\s*\|\|\s*force|force\s*\|\|\s*dirty)/.test(catchBody),
+        'retry condition must include `force` so init bootstrap failures retry (post-Copilot review fix)');
 });
 
 test('drift: indexMemoryFiles marks dirty unconditionally', () => {
