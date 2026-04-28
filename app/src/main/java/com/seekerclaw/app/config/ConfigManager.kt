@@ -326,6 +326,17 @@ object ConfigManager {
         val oldProvider = sp.getString(KEY_PROVIDER, null)
         val oldAuthType = sp.getString(KEY_AUTH_TYPE, null)
         val oldModel = sp.getString(KEY_MODEL, null)
+        // Also snapshot KEY_SETUP_COMPLETE: saveConfig sets it to `true`
+        // unconditionally (it's the entry point for both fresh setup and
+        // post-setup re-saves). If the runtime-state write later fails on
+        // a fresh setup, leaving KEY_SETUP_COMPLETE flipped to `true`
+        // would let MainActivity skip Setup on next launch even though
+        // the user's setup screen blocked them on the failure. For an
+        // existing user mid-edit, the snapshot is already `true` so the
+        // rollback is a no-op (true → true). The only behavioural change
+        // is on first-install failures, which now correctly stay in the
+        // "setup not complete" state until a successful retry.
+        val oldSetupComplete = sp.getBoolean(KEY_SETUP_COMPLETE, false)
 
         val encApiKey = KeystoreHelper.encrypt(config.anthropicApiKey)
         val encBotToken = KeystoreHelper.encrypt(config.telegramBotToken)
@@ -527,9 +538,16 @@ object ConfigManager {
             false
         }
         if (!runtimeWritten) {
-            // Roll back prefs runtime fields to pre-save snapshot. apply()
-            // is async-safe here — the only reader is the legacy code
-            // path which always re-reads on configVersion bump.
+            // Roll back prefs runtime fields AND KEY_SETUP_COMPLETE to
+            // pre-save snapshot. apply() is async-safe here — the only
+            // reader is the legacy code path which always re-reads on
+            // configVersion bump. Rolling back KEY_SETUP_COMPLETE
+            // matters for the first-install failure case: SetupScreen
+            // blocks on `false`, but without rollback prefs would say
+            // "setup complete" → MainActivity would skip Setup on next
+            // launch, leaving the user stranded with an unconfigured
+            // agent. For existing users (snapshot already true), the
+            // rollback is a no-op.
             val rollback = sp.edit()
             if (oldProvider != null) rollback.putString(KEY_PROVIDER, oldProvider)
             else rollback.remove(KEY_PROVIDER)
@@ -537,6 +555,7 @@ object ConfigManager {
             else rollback.remove(KEY_AUTH_TYPE)
             if (oldModel != null) rollback.putString(KEY_MODEL, oldModel)
             else rollback.remove(KEY_MODEL)
+            rollback.putBoolean(KEY_SETUP_COMPLETE, oldSetupComplete)
             rollback.apply()
             // Bump configVersion AGAIN so the UI recomposes with the
             // rolled-back runtime fields (it already recomposed once
@@ -545,7 +564,8 @@ object ConfigManager {
             bumpConfigVersionOnMain()
             LogCollector.append(
                 "[Config] RuntimeStateStore.write failed — rolled back prefs runtime fields " +
-                    "to (provider=$oldProvider, authType=$oldAuthType, model=$oldModel)",
+                    "to (provider=$oldProvider, authType=$oldAuthType, model=$oldModel) " +
+                    "and KEY_SETUP_COMPLETE to $oldSetupComplete",
                 LogLevel.WARN,
             )
         }
