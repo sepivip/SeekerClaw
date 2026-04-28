@@ -73,6 +73,28 @@ import java.util.concurrent.atomic.AtomicBoolean
  * doesn't justify the latency cost; if the device powers off mid-
  * write, the worst case is the previous good version stays on disk.
  *
+ * ## Mutation safety (the boundary contract)
+ *
+ * The store treats T as a value type. Both [read] and [write]
+ * defensively clone T at the boundary via [cloneSafe] so:
+ *
+ *  - **Caller mutates after write()**: the store's internal `_state`
+ *    + StateFlow observers see the snapshot the caller intended at
+ *    write-time, not whatever the caller's reference morphs into
+ *    afterward. Without this, observers could see "writes" that were
+ *    never persisted to disk and that diverge from what [read]
+ *    returns.
+ *  - **Caller mutates after read()**: the store's `initial` default
+ *    and StateFlow backing field are unaffected. Without this, a
+ *    mutable T (a class with var properties, or a MutableMap) could
+ *    let caller-side mutation poison the store.
+ *
+ * The clone is JSON encode/decode round-trip — cheap on small
+ * `@Serializable` data classes (the only realistic T for this store)
+ * and produces a fresh object graph with no shared references. The
+ * Node parity helper (`cross-process-store.js`) implements the same
+ * boundary contract via `JSON.parse(JSON.stringify(value))`.
+ *
  * ## What this class does NOT do
  *
  *  - Does not migrate any existing field. New code only — sibling
@@ -193,8 +215,12 @@ class CrossProcessStore<T>(
         // initial seed.
         reload()
         // Single drain coroutine: bursts of FileObserver/broadcast
-        // events collapse to a single re-read that always sees the
-        // latest file contents.
+        // events collapse to a single re-read. Each re-read sees
+        // whatever's on disk at that instant; a write that lands
+        // DURING a re-read triggers a fresh channel signal, so the
+        // NEXT iteration picks it up. Convergence-to-latest, not
+        // strict snapshot-of-latest — but no out-of-order publish
+        // because there's only ever one in-flight reader.
         coroutineScope.launch {
             for (signal in reloadChannel) {
                 if (!isActive || closed.get()) break
@@ -210,13 +236,18 @@ class CrossProcessStore<T>(
      * on missing file or malformed JSON (logged at WARN — never
      * throws).
      *
-     * BAT-512 (Copilot review fix #4): the returned value is always a
-     * fresh instance, never a shared reference to the constructor's
-     * [initial] argument. Without this, a mutable T (e.g. a class
-     * with mutable fields, or a pre-Kotlin data type with var
-     * properties) could let a caller's accidental mutation poison the
-     * store's default and the StateFlow's backing field. The Node
-     * helper has the same defensive clone.
+     * BAT-512 (Copilot review fix #4): the returned value goes through
+     * `cloneSafe(initial)` on missing/malformed paths, which JSON-
+     * round-trips to produce a fresh instance with no shared
+     * references. Without this, a mutable T (e.g. a class with
+     * mutable fields, or a pre-Kotlin data type with var properties)
+     * could let a caller's accidental mutation poison the store's
+     * default and the StateFlow's backing field. The Node helper has
+     * the same defensive clone. Edge case: if the JSON round-trip
+     * itself throws (only possible for a misconfigured `@Serializable`
+     * type — the live cases this store targets are all valid), we
+     * fall back to returning the original `initial` reference and log
+     * a WARN; in that scenario the caller MUST treat T as immutable.
      */
     fun read(): T {
         if (!file.exists()) return cloneSafe(initial)
@@ -233,6 +264,12 @@ class CrossProcessStore<T>(
      * `@Serializable` data classes this store deals with; safe for
      * mutable types because the round-trip produces a fresh object
      * graph with no shared references.
+     *
+     * Called from BOTH [read] (clone defaults before returning) AND
+     * [write] (clone the caller's value before publishing to
+     * [_state]) — the symmetric boundary contract that keeps
+     * caller-side mutation from leaking through the store. See the
+     * class-level "Mutation safety" KDoc.
      */
     private fun cloneSafe(value: T): T {
         return try {
@@ -253,10 +290,18 @@ class CrossProcessStore<T>(
      * broadcast).
      *
      * Concurrent writes from the same process serialize via [writeLock]
-     * — `writeText` + `renameTo` is a critical section. Cross-process
-     * concurrent writes are last-writer-wins (filesystem rename
-     * semantics); callers that need stronger ordering must coordinate
-     * separately.
+     * — `writeText` to the `.tmp` file plus the
+     * `Files.move(..., REPLACE_EXISTING, ATOMIC_MOVE)` (with a non-
+     * atomic `REPLACE_EXISTING` fallback on
+     * `AtomicMoveNotSupportedException`) are the critical section.
+     * Cross-process concurrent writes are last-writer-wins (filesystem
+     * move semantics); callers that need stronger ordering must
+     * coordinate separately.
+     *
+     * Mutation safety: see the class-level "Mutation safety" doc
+     * block. [value] is JSON-cloned via [cloneSafe] before being
+     * stored in [_state] so a caller mutating their reference after
+     * `write()` returns can't change what observers see.
      */
     fun write(value: T) {
         synchronized(writeLock) {
@@ -297,7 +342,13 @@ class CrossProcessStore<T>(
                         java.nio.file.StandardCopyOption.REPLACE_EXISTING,
                     )
                 }
-                _state.value = value
+                // BAT-512 (Copilot review fix #4 round-4): clone before
+                // publishing so a caller mutating their `value`
+                // reference after this returns cannot mutate what
+                // StateFlow observers see. Symmetric with read()'s
+                // cloneSafe(initial). See class-level "Mutation
+                // safety" KDoc.
+                _state.value = cloneSafe(value)
                 broadcastChanged()
             } catch (e: Exception) {
                 Log.e(TAG, "[$fileName] write failed: ${e.message}", e)
@@ -350,8 +401,12 @@ class CrossProcessStore<T>(
         }
         // Same FileObserver pattern LogCollector / ServiceState use post-
         // BAT-518: watch the parent dir, filter by basename in onEvent.
-        // Mask covers every way the file can change in this codebase
-        // (writeText, atomic .tmp+rename, delete, first-time create).
+        // Mask covers every way the file can change in this codebase:
+        //   - MODIFY / CLOSE_WRITE for the .tmp `writeText` step
+        //   - MOVED_TO for the `Files.move(..., ATOMIC_MOVE)` step
+        //     (and for atomic .tmp+rename writes from Node)
+        //   - CREATE for first-time creation
+        //   - DELETE for removal (e.g. user-initiated wipe)
         fileObserver = object : FileObserver(
             parent,
             FileObserver.MODIFY or FileObserver.CLOSE_WRITE or

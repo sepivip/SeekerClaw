@@ -52,12 +52,26 @@ async function run() {
         }
     }
     console.log(`\n${pass} passed, ${fail} failed`);
+    cleanupScratchDirs();
     process.exit(fail === 0 ? 0 : 1);
 }
 
-// Per-test scratch directory so parallel/sequential runs don't collide.
+// Per-test scratch directories — track every mkdtemp we create so the
+// runner can rmSync them at the end. Without this, repeated CI runs
+// accumulate `bat512-store-*` directories under the OS temp dir
+// indefinitely (Copilot round-4 review fix). Same cleanup pattern
+// active-model.test.js uses.
+const _scratchDirs = [];
 function tmpDir() {
-    return fs.mkdtempSync(path.join(os.tmpdir(), 'bat512-store-'));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bat512-store-'));
+    _scratchDirs.push(dir);
+    return dir;
+}
+function cleanupScratchDirs() {
+    for (const dir of _scratchDirs) {
+        try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) {}
+    }
+    _scratchDirs.length = 0;
 }
 
 // --- behavioural tests ---
@@ -208,6 +222,19 @@ test('drift: live source uses tmp + rename for atomicity', () => {
         'write path must go through writeFileSync(tmpPath, ...)');
     assert.ok(/renameSync\s*\(\s*tmpPath\s*,\s*filePath\s*\)/.test(src),
         'write path must call renameSync(tmpPath, filePath)');
+});
+
+test('drift: this test file cleans up scratch dirs after running (Copilot round-4)', () => {
+    // Pin that the cleanup helper exists so a future refactor that
+    // drops it can't silently leak `bat512-store-*` dirs into
+    // os.tmpdir() on every CI run.
+    const self = fs.readFileSync(__filename, 'utf8');
+    assert.ok(/_scratchDirs/.test(self),
+        'must track scratch dirs in _scratchDirs for cleanup');
+    assert.ok(/cleanupScratchDirs\s*\(\s*\)/.test(self),
+        'must call cleanupScratchDirs() in run()');
+    assert.ok(/fs\.rmSync\s*\(\s*dir\s*,\s*\{\s*recursive\s*:\s*true/.test(self),
+        'cleanup must rmSync recursively');
 });
 
 test('drift: live source defensively unlinks leaked .tmp on failure', () => {

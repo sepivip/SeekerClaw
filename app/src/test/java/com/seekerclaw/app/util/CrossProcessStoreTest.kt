@@ -344,6 +344,38 @@ class CrossProcessStoreTest {
     }
 
     @Test
+    fun `drift live source clones T on the WRITE boundary too (mutation symmetry)`() {
+        // BAT-512 (Copilot review fix #4 round-4): write() previously
+        // assigned `_state.value = value` (the caller's reference).
+        // If T is mutable and the caller mutates `value` after
+        // `write()` returns, observers would see mutations that
+        // weren't persisted. Symmetric with the read-side cloneSafe
+        // contract.
+        val src = locateLiveSource()
+        val text = src.readText()
+        val writeBlock = Regex(
+            """fun\s+write\s*\(\s*value\s*:\s*T\s*\)\s*\{[\s\S]*?(?=\n\s{4}\}\n)""",
+        ).find(text)?.value ?: error("write() function body not found")
+        assertTrue(
+            "write() must clone via cloneSafe(value) before assigning to _state",
+            Regex("""_state\.value\s*=\s*cloneSafe\s*\(\s*value\s*\)""").containsMatchIn(writeBlock),
+        )
+    }
+
+    @Test
+    fun `drift class-level KDoc declares Mutation safety contract`() {
+        // BAT-512 (Copilot review fix round-4 contract): the boundary
+        // contract is explicit at the class level so a future
+        // maintainer can't accidentally drop one side of the symmetry.
+        val src = locateLiveSource()
+        val text = src.readText()
+        assertTrue(
+            "class KDoc must contain the 'Mutation safety' section",
+            text.contains("## Mutation safety"),
+        )
+    }
+
+    @Test
     fun `read returns a fresh instance on missing file (mutating it does not contaminate next read)`() {
         // Mirrors the Node-side contract test. We can't call the live
         // class without a Context, but we can verify the JSON round-
