@@ -45,18 +45,27 @@ class SeekerClawService : Service() {
     private var nodeDebugObserver: FileObserver? = null
     @Volatile private var nodeDebugLastPos = 0L
     private val nodeDebugMutex = Mutex()
-    // Single-flight gate: under heavy Node logging, FileObserver fires
-    // MODIFY + CLOSE_WRITE per write — the mutex prevented double-reads
-    // but coroutine launches still piled up contending on it. With this
-    // gate, at most one drain coroutine is in flight at a time. The
-    // flag remains set until the drain completes (cleared in finally),
-    // so events arriving during the drain are intentionally coalesced
-    // rather than scheduling a concurrent second drain. forwardNew
-    // NodeDebugLines internally re-reads file length on each iteration
-    // and loops until exhausted, so events arriving during it ARE
-    // picked up by the in-flight drain. Once the flag clears, a later
-    // event can schedule another pass.
-    private val nodeDebugDrainScheduled = java.util.concurrent.atomic.AtomicBoolean(false)
+    // Drain state machine — replaces the prior boolean gate which had a
+    // window race: an event arriving between the drain coroutine's last
+    // length check and its flag clear was dropped (the next CAS still
+    // saw the flag true) with no subsequent event guaranteed to re-
+    // trigger a drain. The state machine guarantees no missed bytes:
+    //
+    //   0 = idle.
+    //   1 = drain running.
+    //   2 = drain running with a rerun queued.
+    //
+    // Event arrival: 0 -> 1 (launch), 1 -> 2, 2 -> 2 (no-op).
+    // Drain settle:  1 -> 0 (true idle), 2 -> 1 (re-pass).
+    //
+    // Single-flight is preserved (only one drain coroutine in flight)
+    // and forwardNewNodeDebugLines still drains its inner while loop
+    // until exhausted, so most bursts are coalesced into the in-flight
+    // drain. The state-machine pattern only fires the rerun for events
+    // that land in the narrow trailing window after the inner loop has
+    // decided "no more bytes" but before the drain coroutine has
+    // settled to idle.
+    private val nodeDebugDrainState = java.util.concurrent.atomic.AtomicInteger(0)
     // Per-chunk cap to prevent OOM if events are batched (e.g. Doze mode
     // releases queued events at once) or if Node writes a huge burst.
     // Larger than LogCollector's budget because Node debug writes can
@@ -469,19 +478,25 @@ class SeekerClawService : Service() {
                         // in the Android SDK — null path is the only
                         // signal we get.
                         if (path == "node_debug.log" || path == null) {
-                            // Single-flight: keep the flag set for the
-                            // entire drain so events arriving during a
-                            // slow drain coalesce into it. forwardNew
-                            // NodeDebugLines internally re-reads file
-                            // length on each iteration and loops until
-                            // exhausted, so events arriving during it
-                            // are picked up by the existing drain.
-                            if (nodeDebugDrainScheduled.compareAndSet(false, true)) {
+                            // State-machine single-flight (see
+                            // nodeDebugDrainState declaration). Transition:
+                            // 0 -> 1 (launch), 1 -> 2 (queue rerun),
+                            // 2 -> 2 (no-op). getAndUpdate returns OLD
+                            // value; we launch only when transitioning
+                            // out of idle.
+                            val prev = nodeDebugDrainState.getAndUpdate { current ->
+                                if (current == 0) 1 else 2
+                            }
+                            if (prev == 0) {
                                 scope.launch {
-                                    try {
+                                    while (true) {
                                         forwardNewNodeDebugLines(debugLogFile)
-                                    } finally {
-                                        nodeDebugDrainScheduled.set(false)
+                                        // Settle: 1 -> 0 (true idle) or
+                                        // 2 -> 1 (rerun for an event that
+                                        // landed during drain). Re-pass
+                                        // until we successfully hit idle.
+                                        if (nodeDebugDrainState.compareAndSet(1, 0)) break
+                                        if (nodeDebugDrainState.compareAndSet(2, 1)) continue
                                     }
                                 }
                             }

@@ -267,8 +267,8 @@ object ServiceState {
      * same directory proved fragile on the Solana Seeker (one of two
      * silently never received events), so we consolidate onto one.
      *
-     * Initial reads are dispatched ASYNCHRONOUSLY to Dispatchers.IO
-     * . The first-time restore (read from
+     * Initial reads are dispatched ASYNCHRONOUSLY to Dispatchers.IO.
+     * The first-time restore (read from
      * service_state, daily reset check) is also dispatched.
      *
      * Caller-thread disk I/O caveat : `workspaceDir.mkdirs()`
