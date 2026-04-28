@@ -40,6 +40,66 @@ const AI_JS = path.join(__dirname, '..', '..', 'app', 'src', 'main',
 const MAIN_JS = path.join(__dirname, '..', '..', 'app', 'src', 'main',
     'assets', 'nodejs-project', 'main.js');
 
+// Strip JS comments before drift-guard matching. Without this, every
+// regex below could false-pass on a comment that happens to contain
+// the symbol it's looking for — the same trap that burned the BAT-523
+// setInterval drift guard ("Pre-BAT-523, the DB was saved every 60s
+// via setInterval(saveDatabase)" in a comment matched the regex
+// looking for the live setInterval call).
+//
+// String literals are deliberately NOT masked: real strings like
+// `process.on('SIGTERM', ...)` need the literal to match. Drift
+// guards instead use `\b<identifier>\s*\(` patterns that match a
+// function call site — a string containing an identifier never has
+// a `(` immediately after its closing quote, so the false-positive
+// surface is eliminated by anchoring on the call form rather than
+// by masking strings.
+function stripJsComments(src) {
+    let out = '';
+    let i = 0;
+    while (i < src.length) {
+        const c = src[i];
+        const next = src[i + 1];
+        if (c === '/' && next === '/') {
+            // Line comment — skip to end of line.
+            const eol = src.indexOf('\n', i);
+            i = eol === -1 ? src.length : eol;
+        } else if (c === '/' && next === '*') {
+            // Block comment — skip to */.
+            const end = src.indexOf('*/', i + 2);
+            i = end === -1 ? src.length : end + 2;
+        } else if (c === '"' || c === "'" || c === '`') {
+            // String literal — copy verbatim, skipping over its body
+            // so an inner `//` or `/*` can't be misread as a comment
+            // boundary.
+            const quote = c;
+            out += quote;
+            i++;
+            while (i < src.length && src[i] !== quote) {
+                out += src[i];
+                if (src[i] === '\\' && i + 1 < src.length) {
+                    out += src[i + 1];
+                    i += 2;
+                } else {
+                    i++;
+                }
+            }
+            if (i < src.length) {
+                out += src[i];
+                i++;
+            }
+        } else {
+            out += c;
+            i++;
+        }
+    }
+    return out;
+}
+
+function readJsSource(filePath) {
+    return stripJsComments(fs.readFileSync(filePath, 'utf8'));
+}
+
 // --- mirrored logic (must match ai.js scheduleIdleSummary / cancelIdleSummary) ---
 function makeHarness({ idleTimeoutMs = 60_000, minMessagesForSummary = 3 } = {}) {
     const conversations = new Map();   // chatId → array of messages
@@ -230,49 +290,82 @@ test('only ONE summary fires even after a burst of (re)schedules', async () => {
 // --- structural drift guards ---
 
 test('drift: ai.js exports the per-chat timer helpers', () => {
-    const src = fs.readFileSync(AI_JS, 'utf8');
-    assert.ok(/scheduleIdleSummary/.test(src), 'scheduleIdleSummary must exist in ai.js');
-    assert.ok(/cancelIdleSummary/.test(src), 'cancelIdleSummary must exist in ai.js');
-    assert.ok(/cancelAllIdleSummaries/.test(src), 'cancelAllIdleSummaries must exist in ai.js');
-    // The export block must reference all three.
+    // Use readJsSource so comments / string literals can't satisfy
+    // the regex by substring presence — pin to actual code.
+    const src = readJsSource(AI_JS);
+    // The export block must reference all three. Match each as an
+    // identifier followed by `,` or `}` so a long substring inside
+    // an unrelated context can't false-pass.
     const exportMatch = src.match(/module\.exports\s*=\s*\{[\s\S]*?\};/);
     assert.ok(exportMatch, 'module.exports block not found');
     const exportBody = exportMatch[0];
-    assert.ok(/scheduleIdleSummary/.test(exportBody), 'export must include scheduleIdleSummary');
-    assert.ok(/cancelIdleSummary/.test(exportBody), 'export must include cancelIdleSummary');
-    assert.ok(/cancelAllIdleSummaries/.test(exportBody), 'export must include cancelAllIdleSummaries');
+    for (const sym of ['scheduleIdleSummary', 'cancelIdleSummary', 'cancelAllIdleSummaries']) {
+        const re = new RegExp(`\\b${sym}\\s*[,}]`);
+        assert.ok(re.test(exportBody), `module.exports must include ${sym}`);
+    }
 });
 
 test('drift: main.js no longer has the idle-session sweep setInterval', () => {
-    const src = fs.readFileSync(MAIN_JS, 'utf8');
-    // The pre-BAT-524 sweep iterated sessionTracking.forEach inside a
-    // setInterval. Reject any reappearance.
+    // Comments now stripped — the BAT-524 explanatory comments in
+    // main.js mention the old pattern but stripped source contains
+    // only live code.
+    const src = readJsSource(MAIN_JS);
     assert.ok(!/setInterval[\s\S]*sessionTracking\.forEach/.test(src),
         'main.js must not contain a setInterval that sweeps sessionTracking (BAT-524 — replaced with per-chat setTimeouts)');
 });
 
 test('drift: clearConversation in ai.js cancels the idle timer', () => {
-    const src = fs.readFileSync(AI_JS, 'utf8');
+    const src = readJsSource(AI_JS);
     const fnMatch = src.match(/function\s+clearConversation\s*\(\s*chatId\s*\)\s*\{[\s\S]*?\n\}/);
     assert.ok(fnMatch, 'clearConversation function body not found');
     const body = fnMatch[0];
-    assert.ok(/cancelIdleSummary\s*\(\s*chatId\s*\)/.test(body),
-        'clearConversation must cancel the idle-summary timer (BAT-524 — prevents post-clear fire)');
+    assert.ok(/\bcancelIdleSummary\s*\(\s*chatId\s*\)/.test(body),
+        'clearConversation must call cancelIdleSummary(chatId) (BAT-524 — prevents post-clear fire)');
 });
 
 test('drift: SIGTERM/SIGINT handlers in main.js cancel all idle timers', () => {
-    const src = fs.readFileSync(MAIN_JS, 'utf8');
-    // Both signal handlers must invoke cancelAllIdleSummaries so
-    // dangling setTimeouts don't keep the event loop alive past
-    // process.exit().
+    const src = readJsSource(MAIN_JS);
+    // Both signal handlers must INVOKE cancelAllIdleSummaries — match
+    // the call form `cancelAllIdleSummaries(...)` not just the
+    // identifier, so a stray reference can't satisfy the guard.
     const sigtermMatch = src.match(/process\.on\(['"]SIGTERM['"][\s\S]*?\}\);/);
     const sigintMatch = src.match(/process\.on\(['"]SIGINT['"][\s\S]*?\}\);/);
     assert.ok(sigtermMatch, 'SIGTERM handler not found');
     assert.ok(sigintMatch, 'SIGINT handler not found');
-    assert.ok(/cancelAllIdleSummaries/.test(sigtermMatch[0]),
-        'SIGTERM handler must call cancelAllIdleSummaries');
-    assert.ok(/cancelAllIdleSummaries/.test(sigintMatch[0]),
-        'SIGINT handler must call cancelAllIdleSummaries');
+    assert.ok(/\bcancelAllIdleSummaries\s*\(/.test(sigtermMatch[0]),
+        'SIGTERM handler must call cancelAllIdleSummaries(...)');
+    assert.ok(/\bcancelAllIdleSummaries\s*\(/.test(sigintMatch[0]),
+        'SIGINT handler must call cancelAllIdleSummaries(...)');
+});
+
+test('drift: stripJsComments actually removes comments without breaking strings', () => {
+    // Sanity check on the helper itself — without this the other
+    // drift guards' "comment immunity" claim is unverified. If
+    // stripping breaks, the rest of the suite would still pass on
+    // raw source and silently lose the immunity.
+    const sample = `
+        // line comment with setInterval(saveDatabase, 60000)
+        const x = 1; /* block comment with cancelIdleSummary(chatId) */
+        const sig = process.on('SIGTERM', () => {});
+        const tpl = \`/* not a comment */ literal\`;
+        function liveCall() { cancelIdleSummary(99); }
+    `;
+    const stripped = stripJsComments(sample);
+    // Comments removed.
+    assert.ok(!/setInterval\(saveDatabase, 60000\)/.test(stripped),
+        'line comment content removed');
+    assert.ok(!/cancelIdleSummary\(chatId\)/.test(stripped),
+        'block comment content removed');
+    // Strings preserved (the SIGTERM drift guard depends on this).
+    assert.ok(/'SIGTERM'/.test(stripped),
+        'string literal SIGTERM preserved');
+    assert.ok(/literal/.test(stripped),
+        'template literal body preserved');
+    assert.ok(!/not a comment/.test(stripped) === false,
+        'block-comment-looking content INSIDE a template literal is preserved');
+    // Live calls preserved.
+    assert.ok(/cancelIdleSummary\(99\)/.test(stripped),
+        'live function call preserved');
 });
 
 run();
