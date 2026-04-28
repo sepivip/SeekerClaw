@@ -144,6 +144,43 @@ const tools = [
             required: ['package']
         }
     },
+    {
+        name: 'flipper_scan',
+        description: 'Scan nearby Bluetooth LE devices and return likely Flipper Zero devices. Requires BLUETOOTH_SCAN and BLUETOOTH_CONNECT permissions.',
+        input_schema: {
+            type: 'object',
+            properties: {
+                timeoutMs: { type: 'number', description: 'Scan timeout in milliseconds, 1000-30000 (default 8000)' }
+            }
+        }
+    },
+    {
+        name: 'flipper_connect',
+        description: 'Connect to the user-owned paired Flipper Zero over Bluetooth LE. Use an address from flipper_scan, or omit address to connect to the strongest detected Flipper.',
+        input_schema: {
+            type: 'object',
+            properties: {
+                address: { type: 'string', description: 'BLE MAC address from flipper_scan. Optional.' },
+                timeoutMs: { type: 'number', description: 'Connect timeout in milliseconds, 3000-45000 (default 15000)' }
+            }
+        }
+    },
+    {
+        name: 'flipper_status',
+        description: 'Return the current Flipper Zero Bluetooth connection status and discovered GATT service UUIDs.',
+        input_schema: {
+            type: 'object',
+            properties: {}
+        }
+    },
+    {
+        name: 'flipper_disconnect',
+        description: 'Disconnect the current Flipper Zero Bluetooth LE connection.',
+        input_schema: {
+            type: 'object',
+            properties: {}
+        }
+    },
 ];
 
 const handlers = {
@@ -262,6 +299,27 @@ const handlers = {
 
     async android_apps_launch(input, chatId) {
         return await androidBridgeCall('/apps/launch', { package: input.package });
+    },
+
+    async flipper_scan(input, chatId) {
+        return await androidBridgeCall('/flipper/scan', {
+            timeoutMs: input.timeoutMs || 8000
+        }, (input.timeoutMs || 8000) + 5000);
+    },
+
+    async flipper_connect(input, chatId) {
+        return await androidBridgeCall('/flipper/connect', {
+            address: input.address || '',
+            timeoutMs: input.timeoutMs || 15000
+        }, (input.timeoutMs || 15000) + 5000);
+    },
+
+    async flipper_status(input, chatId) {
+        return await androidBridgeCall('/flipper/status');
+    },
+
+    async flipper_disconnect(input, chatId) {
+        return await androidBridgeCall('/flipper/disconnect');
     },
 };
 

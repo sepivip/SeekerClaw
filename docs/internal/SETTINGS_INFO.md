@@ -38,6 +38,7 @@
 | 14 | Contacts | `CONTACTS` | ✅ Good | Lets the agent read your contacts list. This allows it to look up names and phone numbers when you ask, for example "text Mom" or "call John". Your contacts are never sent to the cloud — only used on-device to resolve names. |
 | 15 | SMS | `SMS` | ✅ Good | Lets the agent send text messages on your behalf. The agent will always tell you who it's texting and what it's sending before it acts. Standard carrier SMS rates may apply. |
 | 16 | Phone Calls | `PHONE_CALLS` | ✅ Good | Lets the agent make phone calls for you. It will always confirm the number with you before dialing. Useful for quick calls like "call the pizza place". |
+| 17 | Bluetooth devices | `BLUETOOTH_DEVICES` | ✅ Good | Lets the agent scan for and connect to nearby Bluetooth LE devices you own, starting with Flipper Zero. The first version exposes scan, connect, disconnect, and status only. Higher-level Flipper actions will be added behind narrow tools after the connection path is proven. |
 
 ## Solana Wallet
 

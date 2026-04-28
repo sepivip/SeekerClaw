@@ -163,12 +163,23 @@ fun SettingsScreen(
     var hasCallPermission by remember {
         mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED)
     }
+    var hasBluetoothPermission by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED &&
+                ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+        )
+    }
 
     val locationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { hasLocationPermission = it }
     val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { hasCameraPermission = it }
     val contactsLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { hasContactsPermission = it }
     val smsLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { hasSmsPermission = it }
     val callLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { hasCallPermission = it }
+    val bluetoothLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
+        hasBluetoothPermission =
+            result[Manifest.permission.BLUETOOTH_SCAN] == true &&
+            result[Manifest.permission.BLUETOOTH_CONNECT] == true
+    }
 
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
@@ -182,6 +193,9 @@ fun SettingsScreen(
                 hasContactsPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED
                 hasSmsPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED
                 hasCallPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED
+                hasBluetoothPermission =
+                    ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED &&
+                    ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -531,7 +545,8 @@ fun SettingsScreen(
                     info = SettingsHelpTexts.SERVER_MODE,
                 )
                 val allPermissionsOff = !hasCameraPermission && !hasLocationPermission &&
-                    !hasContactsPermission && !hasSmsPermission && !hasCallPermission
+                    !hasContactsPermission && !hasSmsPermission && !hasCallPermission &&
+                    !hasBluetoothPermission
                 if (allPermissionsOff) {
                     Text(
                         text = "Enable permissions to unlock device features (camera, GPS, SMS, etc.)",
@@ -589,6 +604,20 @@ fun SettingsScreen(
                     },
                     onOpenSettings = { openAppSettings(context) },
                     info = SettingsHelpTexts.PHONE_CALLS,
+                )
+                PermissionRow(
+                    label = "Bluetooth devices",
+                    granted = hasBluetoothPermission,
+                    onRequest = {
+                        bluetoothLauncher.launch(
+                            arrayOf(
+                                Manifest.permission.BLUETOOTH_SCAN,
+                                Manifest.permission.BLUETOOTH_CONNECT,
+                            )
+                        )
+                    },
+                    onOpenSettings = { openAppSettings(context) },
+                    info = SettingsHelpTexts.BLUETOOTH_DEVICES,
                 )
             }
         }

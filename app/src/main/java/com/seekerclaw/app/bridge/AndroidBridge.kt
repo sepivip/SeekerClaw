@@ -23,6 +23,9 @@ import android.util.Log
 import androidx.core.content.ContextCompat
 import com.seekerclaw.app.camera.CameraCaptureActivity
 import com.seekerclaw.app.config.ConfigManager
+import com.seekerclaw.app.flipper.FlipperBleManager
+import com.seekerclaw.app.flipper.FlipperConnectionStatus
+import com.seekerclaw.app.flipper.FlipperScanDevice
 import com.seekerclaw.app.service.SeekerClawService
 import com.seekerclaw.app.util.Analytics
 import com.seekerclaw.app.util.ServiceState
@@ -68,6 +71,8 @@ class AndroidBridge(
         "/contacts/search" to Pair(20, 60_000L),
         "/contacts/add" to Pair(10, 60_000L),
         "/location" to Pair(10, 60_000L),
+        "/flipper/scan" to Pair(10, 60_000L),
+        "/flipper/connect" to Pair(5, 60_000L),
         "/openai/oauth/save-tokens" to Pair(5, 60_000L),
         // /config/credentials loads AppConfig (Keystore decrypt +
         // agent_settings reconciliation) on every call — rate-limit so
@@ -150,6 +155,10 @@ class AndroidBridge(
                 "/location" -> handleLocation()
                 "/tts" -> handleTts(params)
                 "/camera/capture" -> handleCameraCapture(params)
+                "/flipper/scan" -> handleFlipperScan(params)
+                "/flipper/connect" -> handleFlipperConnect(params)
+                "/flipper/disconnect" -> handleFlipperDisconnect()
+                "/flipper/status" -> handleFlipperStatus()
                 "/apps/list" -> handleAppsList()
                 "/apps/launch" -> handleAppsLaunch(params)
                 "/stats/message" -> handleStatsMessage()
@@ -604,6 +613,82 @@ class AndroidBridge(
 
         return jsonResponse(408, mapOf("error" to "Camera capture timed out"))
     }
+
+    // ==================== Flipper Zero BLE ====================
+
+    private fun handleFlipperScan(params: JSONObject): Response {
+        val permissionError = requireBluetoothPermissions(scan = true, connect = true)
+        if (permissionError != null) return permissionError
+
+        val timeoutMs = params.optLong("timeoutMs", 8_000L).coerceIn(1_000L, 30_000L)
+        return try {
+            val devices = FlipperBleManager.scan(context, timeoutMs)
+            jsonResponse(
+                200,
+                mapOf(
+                    "success" to true,
+                    "devices" to devices.map { it.toJsonMap() },
+                ),
+            )
+        } catch (e: Exception) {
+            jsonResponse(400, mapOf("error" to (e.message ?: "Flipper scan failed")))
+        }
+    }
+
+    private fun handleFlipperConnect(params: JSONObject): Response {
+        val permissionError = requireBluetoothPermissions(scan = true, connect = true)
+        if (permissionError != null) return permissionError
+
+        val address = params.optString("address", "").trim().ifBlank { null }
+        val timeoutMs = params.optLong("timeoutMs", 15_000L).coerceIn(3_000L, 45_000L)
+        return try {
+            val status = FlipperBleManager.connect(context, address, timeoutMs)
+            jsonResponse(200, status.toJsonMap(success = true))
+        } catch (e: Exception) {
+            jsonResponse(400, mapOf("error" to (e.message ?: "Flipper connect failed")))
+        }
+    }
+
+    private fun handleFlipperDisconnect(): Response {
+        val permissionError = requireBluetoothPermissions(scan = false, connect = true)
+        if (permissionError != null) return permissionError
+
+        val status = FlipperBleManager.disconnect()
+        return jsonResponse(200, status.toJsonMap(success = true))
+    }
+
+    private fun handleFlipperStatus(): Response {
+        val permissionError = requireBluetoothPermissions(scan = false, connect = true)
+        if (permissionError != null) return permissionError
+
+        val status = FlipperBleManager.status(context)
+        return jsonResponse(200, status.toJsonMap(success = true))
+    }
+
+    private fun requireBluetoothPermissions(scan: Boolean, connect: Boolean): Response? {
+        if (scan && !hasPermission(Manifest.permission.BLUETOOTH_SCAN)) {
+            return jsonResponse(403, mapOf("error" to "BLUETOOTH_SCAN permission not granted"))
+        }
+        if (connect && !hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) {
+            return jsonResponse(403, mapOf("error" to "BLUETOOTH_CONNECT permission not granted"))
+        }
+        return null
+    }
+
+    private fun FlipperScanDevice.toJsonMap(): Map<String, Any?> = mapOf(
+        "name" to name,
+        "address" to address,
+        "rssi" to rssi,
+        "bonded" to bonded,
+    )
+
+    private fun FlipperConnectionStatus.toJsonMap(success: Boolean): Map<String, Any?> = mapOf(
+        "success" to success,
+        "connected" to connected,
+        "name" to name,
+        "address" to address,
+        "serviceUuids" to serviceUuids,
+    )
 
     // ==================== Apps ====================
 

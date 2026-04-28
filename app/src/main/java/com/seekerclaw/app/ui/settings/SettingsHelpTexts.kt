@@ -145,6 +145,11 @@ object SettingsHelpTexts {
         "It will always confirm the number with you before dialing. " +
         "Useful for quick calls like \"call the pizza place\"."
 
+    const val BLUETOOTH_DEVICES =
+        "Lets the agent scan for and connect to nearby Bluetooth LE devices you own, starting with Flipper Zero. " +
+        "The first version exposes scan, connect, disconnect, and status only. " +
+        "Higher-level Flipper actions will be added behind narrow tools after the connection path is proven."
+
     // ── MCP Servers ─────────────────────────────────────────────────
 
     const val MCP_SERVERS =
