@@ -47,9 +47,13 @@ function getDb() { return db; }
 // `saveDatabase({ force: true })` skips both the dirty check and the
 // timer (used by init and graceful shutdown to flush synchronously).
 //
-// Durability guarantee: any mutation that markDbDirty() is called for is
-// persisted to disk within at most SAVE_DEBOUNCE_MS, matching the
-// pre-BAT-523 60s upper bound. Idle periods produce zero writes.
+// Best-effort persistence bound: barring save/I/O failures, any
+// mutation that markDbDirty() is called for is normally persisted to
+// disk within at most SAVE_DEBOUNCE_MS — the same 60s upper bound the
+// pre-BAT-523 setInterval offered. Save failures retry on a
+// SAVE_DEBOUNCE_MS cadence (see the catch block in saveDatabase),
+// except during gracefulShutdown which opts out so dead retries don't
+// fire post-process-exit. Idle periods produce zero writes.
 const SAVE_DEBOUNCE_MS = 60_000;
 let dirty = false;
 let saveTimer = null;
@@ -288,6 +292,16 @@ function saveDatabase({ force = false, scheduleRetry = true } = {}) {
 // Index memory files into chunks table for search
 function indexMemoryFiles() {
     if (!db) return;
+    // BAT-523 (Copilot round-4): track whether ANY db.run mutation
+    // happened in this pass so the finally block below can mark the
+    // DB dirty even if a later step throws. Without this, a chunk
+    // INSERT that throws mid-loop would jump over the markDbDirty()
+    // at the end of the try block, leaving partially-applied
+    // mutations in memory with no scheduled save (the periodic
+    // setInterval safety net is gone). The flag is set BEFORE the
+    // first mutation in each path so any subsequent throw is
+    // covered.
+    let mutated = false;
     try {
         const crypto = require('crypto');
         const filesToIndex = [];
@@ -330,6 +344,10 @@ function indexMemoryFiles() {
             const hash = crypto.createHash('md5').update(content).digest('hex');
             const chunks = chunkMarkdown(content);
 
+            // About to mutate — set the flag BEFORE the first db.run
+            // so any throw inside this iteration is still recorded.
+            mutated = true;
+
             // Delete old chunks for this path
             db.run(`DELETE FROM chunks WHERE path = ?`, [file.path]);
 
@@ -353,20 +371,26 @@ function indexMemoryFiles() {
         }
 
         // Update meta — runs unconditionally on every indexer pass, so it
-        // mutates the DB even when every file was skipped. markDbDirty()
-        // below must therefore also fire unconditionally; gating it on
-        // `indexed > 0` (as the original `if (indexed > 0) saveDatabase()`
-        // did) would leak the meta update past the BAT-523 60s debounce
-        // bound now that the periodic-save safety net is gone.
+        // mutates the DB even when every file was skipped. mutated must
+        // therefore become true here too so the all-skipped path
+        // (which never entered the in-loop mutation block) still gets
+        // a markDbDirty in the finally below.
+        mutated = true;
         db.run(`INSERT OR REPLACE INTO meta (key, value) VALUES ('last_indexed', ?)`,
             [localTimestamp()]);
 
-        // BAT-523: schedule a debounced save. Unconditional because the
-        // meta INSERT above always mutates the DB (see comment).
-        markDbDirty();
         log(`[Memory] Indexed ${indexed} files, skipped ${skipped} unchanged`, 'DEBUG');
     } catch (err) {
         log(`[Memory] Indexing error (non-fatal): ${err.message}`, 'WARN');
+    } finally {
+        // BAT-523 (Copilot round-4): mark dirty in finally so partial
+        // mutations from a mid-loop throw still get scheduled for
+        // persistence within the SAVE_DEBOUNCE_MS bound. Without this,
+        // an INSERT that fails after some chunks have already been
+        // DELETEd/INSERTed would leave the DB in a partially-modified
+        // state with no save scheduled — those mutations would sit
+        // until the next unrelated mutation or shutdown.
+        if (mutated) markDbDirty();
     }
 }
 

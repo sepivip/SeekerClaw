@@ -421,4 +421,23 @@ test('drift: indexMemoryFiles marks dirty unconditionally', () => {
         'markDbDirty must NOT be gated on indexed > 0 (BAT-523 fix — meta.last_indexed always mutates)');
 });
 
+test('drift: indexMemoryFiles uses finally { markDbDirty } for partial-progress recovery', () => {
+    const src = fs.readFileSync(DATABASE_JS, 'utf8');
+    // Round-4 Copilot fix: a throw inside the for-loop (e.g. an
+    // INSERT failure mid-batch) used to skip the markDbDirty at the
+    // end of the try block. Now markDbDirty lives in a finally so
+    // partial mutations are still scheduled for persistence within
+    // SAVE_DEBOUNCE_MS.
+    const fnMatch = src.match(/function\s+indexMemoryFiles\s*\(\s*\)[\s\S]*?\n\}/);
+    assert.ok(fnMatch, 'indexMemoryFiles function body not found');
+    const body = fnMatch[0];
+    assert.ok(/}\s*finally\s*\{[\s\S]*?markDbDirty/.test(body),
+        'indexMemoryFiles must call markDbDirty in a finally block (Copilot round-4 — partial-progress on throw)');
+    // The finally is gated on a `mutated` flag so all-skipped passes
+    // (where no DB mutation happened) don't trigger a no-op save
+    // attempt. Pin the flag's existence.
+    assert.ok(/let\s+mutated\s*=\s*false/.test(body),
+        'indexMemoryFiles must declare a `mutated` tracker so finally only fires when something actually changed');
+});
+
 run();
