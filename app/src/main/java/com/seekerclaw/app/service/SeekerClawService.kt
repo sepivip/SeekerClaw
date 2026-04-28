@@ -45,13 +45,17 @@ class SeekerClawService : Service() {
     private var nodeDebugObserver: FileObserver? = null
     @Volatile private var nodeDebugLastPos = 0L
     private val nodeDebugMutex = Mutex()
-    // Single-flight gate : under heavy Node logging,
-    // FileObserver fires MODIFY + CLOSE_WRITE per write — the mutex
-    // prevented double-reads but coroutine launches still piled up
-    // contending on it. With this gate, at most one drain coroutine is
-    // in flight; the flag clears BEFORE the drain so events arriving
-    // during the drain can schedule a fresh one (drain reads to current
-    // EOF). Worst case: 2 concurrent drain coroutines.
+    // Single-flight gate: under heavy Node logging, FileObserver fires
+    // MODIFY + CLOSE_WRITE per write — the mutex prevented double-reads
+    // but coroutine launches still piled up contending on it. With this
+    // gate, at most one drain coroutine is in flight at a time. The
+    // flag remains set until the drain completes (cleared in finally),
+    // so events arriving during the drain are intentionally coalesced
+    // rather than scheduling a concurrent second drain. forwardNew
+    // NodeDebugLines internally re-reads file length on each iteration
+    // and loops until exhausted, so events arriving during it ARE
+    // picked up by the in-flight drain. Once the flag clears, a later
+    // event can schedule another pass.
     private val nodeDebugDrainScheduled = java.util.concurrent.atomic.AtomicBoolean(false)
     // Per-chunk cap to prevent OOM if events are batched (e.g. Doze mode
     // releases queued events at once) or if Node writes a huge burst.

@@ -62,14 +62,19 @@ object LogCollector {
     private val readLock = Any()
     private val startWatchingLock = Any()
 
-    // Single-flight gate for FileObserver-driven reads : under heavy logging, FileObserver fires MODIFY + CLOSE_WRITE
-    // per write — easily 100+ events/sec. Without this gate, each event
-    // launched its own coroutine that all queued on readLock; most then
-    // found nothing to read and exited, but the scheduling cost was
+    // Single-flight gate for FileObserver-driven reads: under heavy
+    // logging, FileObserver fires MODIFY + CLOSE_WRITE per write —
+    // easily 100+ events/sec. Without this gate, each event launched
+    // its own coroutine that all queued on readLock; most then found
+    // nothing to read and exited, but the scheduling cost was
     // proportional to the event rate. With the gate, at most one drain
-    // coroutine is in flight at a time. The flag clears BEFORE the read
-    // starts, so any event arriving after that point can launch a fresh
-    // drain — bounded to ~2 concurrent coroutines in worst case.
+    // coroutine is in flight at a time. The flag remains set for the
+    // entire drain and is cleared only when the coroutine finishes
+    // (in a finally block), so events that arrive while a drain is
+    // running are coalesced into the in-flight drain rather than
+    // scheduling a concurrent second one. The drain itself loops on
+    // file.length() vs lastReadPosition to pick up bytes that landed
+    // during decode/parse.
     private val drainScheduled = java.util.concurrent.atomic.AtomicBoolean(false)
 
     fun init(context: Context) {
