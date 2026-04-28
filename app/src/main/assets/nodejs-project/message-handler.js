@@ -835,7 +835,7 @@ async function handleMessage(normalized) {
     // Note: confirmation YES/NO interception is in enqueueMessage() (main.js),
     // not here — must happen BEFORE queuing to prevent deadlock.
 
-    deps.log(`Message: ${combinedText ? combinedText.slice(0, 100) + (combinedText.length > 100 ? '...' : '') : '(no text)'}${media ? ` [${media.type}]` : ''}${replyTo ? ' [reply]' : ''}`, 'DEBUG');
+    deps.log(`Message: ${combinedText ? combinedText.slice(0, 100) + (combinedText.length > 100 ? '...' : '') : '(no text)'}${media ? ` [${media.type}]` : ''}${replyTo ? ' [reply]' : ''}`, 'INFO');
 
     // Status reactions — lifecycle emoji on the user's message (OpenClaw parity)
     const statusReaction = deps.createStatusReactionController(chatId, messageId);

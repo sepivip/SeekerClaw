@@ -214,6 +214,7 @@ object LogCollector {
                     FileObserver.DELETE,
 ) {
                 override fun onEvent(event: Int, path: String?) {
+                    val fileName = fileNameFromObserverPath(path)
                     // path == null signals either Q_OVERFLOW (kernel inotify
                     // queue overflowed and some events were dropped) or a
                     // directory-level event without a filename. Either way,
@@ -224,7 +225,7 @@ object LogCollector {
                     // Q_OVERFLOW is not a public FileObserver constant in
                     // the Android SDK — null path is the only signal we
                     // get, so we trigger resync on any null-path event.
-                    if ((path == LOG_FILE_NAME || path == null) && initialReadComplete) {
+                    if ((fileName == LOG_FILE_NAME || path == null) && initialReadComplete) {
                         // Gated on initialReadComplete: events that fire
                         // during initial catch-up are dropped here —
                         // readAllFromFile reads the full current file
@@ -241,8 +242,8 @@ object LogCollector {
                     // append doesn't even launch a coroutine on the
                     // ServiceState side, preserving BAT-518's I/O savings.
                     //
-                    if (path == null || path == "service_state" || path == "bridge_token") {
-                        ServiceState.handleFilesDirEvent(path)
+                    if (path == null || fileName == "service_state" || fileName == "bridge_token") {
+                        ServiceState.handleFilesDirEvent(fileName)
                     }
                 }
             }.also { it.startWatching() }
@@ -594,6 +595,9 @@ object LogCollector {
         val level = try { LogLevel.valueOf(parts[1]) } catch (_: Exception) { LogLevel.INFO }
         return LogEntry(timestamp = timestamp, message = parts[2], level = level)
     }
+
+    internal fun fileNameFromObserverPath(path: String?): String? =
+        path?.substringAfterLast('/')
 
     // ── Testing hooks ────────────────────────────────────────────────
     // Internal-visibility hooks for unit tests. Intentionally NOT marked

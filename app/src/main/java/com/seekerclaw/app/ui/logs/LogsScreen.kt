@@ -108,11 +108,11 @@ fun LogsScreen() {
     // change re-fires the scroll immediately.
     val lastLog = filteredLogs.lastOrNull()
     LaunchedEffect(
-        lastLog?.timestamp, lastLog?.message, autoScroll,
+        filteredLogs.size, lastLog?.timestamp, lastLog?.message, autoScroll,
         showDebug, showInfo, showWarn, showError, searchQuery,
     ) {
         if (autoScroll && filteredLogs.isNotEmpty()) {
-            listState.animateScrollToItem(filteredLogs.size - 1)
+            listState.scrollToItem(filteredLogs.size - 1)
         }
     }
 

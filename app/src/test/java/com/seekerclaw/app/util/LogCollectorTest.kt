@@ -450,4 +450,15 @@ class LogCollectorTest {
             tmp.delete()
         }
     }
+
+    @Test
+    fun `observer path normalization accepts relative and absolute paths`() {
+        assertEquals("service_logs", LogCollector.fileNameFromObserverPath("service_logs"))
+        assertEquals(
+            "service_logs",
+            LogCollector.fileNameFromObserverPath("/data/user/0/com.seekerclaw.app/files/service_logs"),
+        )
+        assertEquals("agent_health_state", LogCollector.fileNameFromObserverPath("workspace/agent_health_state"))
+        assertNull(LogCollector.fileNameFromObserverPath(null))
+    }
 }

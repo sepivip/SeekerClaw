@@ -509,6 +509,7 @@ object ServiceState {
                 FileObserver.DELETE,
 ) {
             override fun onEvent(event: Int, path: String?) {
+                val fileName = LogCollector.fileNameFromObserverPath(path)
                 // Filter BEFORE launching : the
                 // watched dir contains high-frequency files (e.g. node_debug.log
                 // in workspace/, written multiple times per second by :node)
@@ -516,13 +517,13 @@ object ServiceState {
                 // scheduling. path == null is always forwarded — that's the
                 // only signal Android gives us for inotify queue overflow,
                 // and we want a forced resync in that case.
-                if (path != null && path !in watchedFiles) return
+                if (fileName != null && fileName !in watchedFiles) return
                 // Dispatch to scope so the FileObserver thread (a single
                 // shared thread named "FileObserver" in Android) doesn't
                 // do file I/O. The reader functions are idempotent — if
                 // multiple events fire for the same write, re-reading is
                 // cheap and produces the same StateFlow values.
-                scope.launch { onChange(path) }
+                scope.launch { onChange(fileName) }
             }
         }
     }
