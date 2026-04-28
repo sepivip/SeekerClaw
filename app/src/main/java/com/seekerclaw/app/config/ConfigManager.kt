@@ -1043,7 +1043,18 @@ object ConfigManager {
         // storage etc.) surfaces — without this, runtime_state.json
         // could go stale relative to prefs without any signal,
         // hiding the divergence until the next successful write.
-        try {
+        //
+        // Gate on RuntimeStateStore.isInitialized: reconcile fires in
+        // BOTH the main process and `:node`, but RuntimeStateStore.init
+        // is only called in the main process. In `:node`, write() would
+        // always return false (store is null) — that would produce a
+        // misleading WARN every reconcile call there. The :node side
+        // doesn't need this mirror anyway: Telegram-originated
+        // /provider/model commands write runtime_state.json directly
+        // via runtime-state.js, so the reconcile→runtime_state path
+        // is a genuinely main-process-only sync of the legacy overlay
+        // back into the new file.
+        if (RuntimeStateStore.isInitialized) try {
             val runtimeWritten = RuntimeStateStore.write(
                 RuntimeState(
                     provider = reconciled.provider,

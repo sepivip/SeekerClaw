@@ -95,6 +95,18 @@ object RuntimeStateStore {
      */
     val state: StateFlow<RuntimeState> = _state.asStateFlow()
 
+    /**
+     * `true` once [init] has wired up the cross-process store. Callers
+     * that run in BOTH processes (e.g. ConfigManager.reconcileWithAgentSettings
+     * fires in main AND `:node`) can gate work that's main-only — the
+     * `:node` process never calls [init], so [write] would always
+     * return `false` there, producing log noise + a no-op write.
+     * Telegram-originated writes from `:node` go directly to
+     * runtime_state.json via runtime-state.js, so the reconcile path
+     * is genuinely a main-process-only mirror.
+     */
+    val isInitialized: Boolean get() = store != null
+
     private var ownedScope: CoroutineScope? = null
     private var store: CrossProcessStore<RuntimeState>? = null
     private var prefs: SharedPreferences? = null

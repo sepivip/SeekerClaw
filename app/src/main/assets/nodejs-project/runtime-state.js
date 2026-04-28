@@ -56,16 +56,30 @@ const DEFAULTS = Object.freeze({
 // Provider / authType matrix — must mirror
 // RuntimeStateStore.isValidPair (Kotlin). Tests in
 // tests/nodejs-project keep the two in sync.
-const VALID_AUTH_TYPES = Object.freeze({
-    claude: new Set(['api_key', 'setup_token']),
-    openai: new Set(['api_key', 'oauth']),
-    openrouter: new Set(['api_key']),
-    custom: new Set(['api_key']),
-});
+//
+// Object.create(null) gives a null prototype so a property lookup
+// like `VALID_AUTH_TYPES['constructor']` or `['__proto__']` returns
+// undefined (instead of falling back to Object.prototype's actual
+// `constructor` function or `Object.prototype` itself, which would
+// then crash `.has(...)` with a TypeError). Plain object literals
+// inherit from Object.prototype; `validateMatrix('constructor', ...)`
+// would otherwise throw before the matrix gate ran, taking out the
+// caller (e.g. /provider, /model write paths) instead of returning
+// false and surfacing a clean "invalid combo" message.
+const _VALID_AUTH_TYPES = Object.create(null);
+_VALID_AUTH_TYPES.claude = new Set(['api_key', 'setup_token']);
+_VALID_AUTH_TYPES.openai = new Set(['api_key', 'oauth']);
+_VALID_AUTH_TYPES.openrouter = new Set(['api_key']);
+_VALID_AUTH_TYPES.custom = new Set(['api_key']);
+const VALID_AUTH_TYPES = Object.freeze(_VALID_AUTH_TYPES);
 
 function validateMatrix(provider, authType) {
     const allowed = VALID_AUTH_TYPES[provider];
-    return allowed != null && allowed.has(authType);
+    // Defense-in-depth: even with the null-prototype map above, an
+    // `instanceof Set` check guards future maintainers who replace
+    // the structure (e.g. switching to a Map<string, string[]>) —
+    // the gate stays correct without a coordinated rewrite.
+    return allowed instanceof Set && allowed.has(authType);
 }
 
 /**
