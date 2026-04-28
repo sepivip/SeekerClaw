@@ -349,9 +349,19 @@ object ServiceState {
             // single working observer. workspaceDir is a different directory
             // and remains observed separately here — no conflict.
             if (workspaceUsable) {
-                workspaceDirObserver = makeDirObserver(workspaceDir) {
-                    readAgentHealthFile()
-                    readApiUsageFile()
+                // Filter by basename in onEvent: workspace/ also contains
+                // high-frequency files (node_debug.log writes from :node,
+                // workspace/config.json, daily memory files, etc.) that
+                // would otherwise launch a coroutine per event just to
+                // re-read tiny health/usage files. (Copilot R-latest+3 C1.)
+                workspaceDirObserver = makeDirObserver(workspaceDir) { path ->
+                    when (path) {
+                        "agent_health_state" -> readAgentHealthFile()
+                        "api_usage_state" -> readApiUsageFile()
+                        // null = directory-level event without filename;
+                        // re-read both defensively.
+                        null -> { readAgentHealthFile(); readApiUsageFile() }
+                    }
                 }.also { it.startWatching() }
             } else {
                 Log.w(
@@ -467,19 +477,18 @@ object ServiceState {
 
     private fun makeDirObserver(
         dir: File,
-        onChange: () -> Unit,
+        onChange: (path: String?) -> Unit,
     ): FileObserver {
         // FileObserver(File) is API 29+; we target min SDK 34 so this is safe.
         // Mask covers:
         //   • CLOSE_WRITE / MODIFY: writeText / appendText style writes
         //   • MOVED_TO: atomic .tmp + rename writes
         //   • CREATE: initial creation when file didn't exist at attach
-        //   • DELETE: file removal in the watched dir. Critical for
-        //     bridge_token (clearBridgeToken() deletes the file on
-        //     service stop) — without this event, the main-process
-        //     in-memory bridgeToken would stay stale until next write.
-        //     (Copilot R12.) Also covers external removal of any of
-        //     the other watched files for defense-in-depth.
+        //   • DELETE: file removal in the watched dir, so the reader
+        //     refreshes when one of the watched files disappears (not
+        //     only on create/write). Defense-in-depth against external
+        //     removal — covers the cases the polling code used to catch
+        //     by re-stat'ing every tick. (Copilot R12 + R-latest+3 C2.)
         // MOVED_FROM is also covered by MOVED_TO + CREATE on the
         // destination dir; we don't need it here.
         //
@@ -487,10 +496,12 @@ object ServiceState {
         // they're Java static fields, not auto-importable into Kotlin
         // function bodies. (Copilot R1.)
         //
-        // No basename filter: any event in this dir → re-read all files
-        // we care about. See startWatching's call site for the rationale
-        // (BAT-518 device-test fix). The reads are µs-cheap, idempotent,
-        // and only update StateFlow when values actually change.
+        // The callback receives `path` (basename of changed file, or
+        // null for directory-level events). The caller is responsible
+        // for filtering — the workspace observer in particular needs
+        // it because workspace/ contains high-frequency files like
+        // node_debug.log that would otherwise launch a no-op coroutine
+        // per event. (Copilot R-latest+3 C1.)
         return object : FileObserver(
             dir,
             FileObserver.MODIFY or FileObserver.CLOSE_WRITE or
@@ -503,7 +514,7 @@ object ServiceState {
                 // do file I/O. The reader functions are idempotent — if
                 // multiple events fire for the same write, re-reading is
                 // cheap and produces the same StateFlow values.
-                scope.launch { onChange() }
+                scope.launch { onChange(path) }
             }
         }
     }
