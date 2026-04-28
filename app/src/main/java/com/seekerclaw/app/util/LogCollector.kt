@@ -190,17 +190,24 @@ object LogCollector {
                     // the Android SDK — null path is the only signal we
                     // get, so we trigger resync on any null-path event.
                     if (path == LOG_FILE_NAME || path == null) {
-                        // Single-flight: only launch a coroutine if no
-                        // drain is currently scheduled. The flag clears
-                        // BEFORE the read so a new event arriving during
-                        // the read can schedule a fresh drain (the read
-                        // is to current EOF, so the new event's bytes get
-                        // picked up). Worst case: 2 concurrent drain
-                        // coroutines.
+                        // Single-flight: keep the flag set for the entire
+                        // drain so bursts of FileObserver events arriving
+                        // during a slow read coalesce into the in-flight
+                        // drain instead of queueing additional coroutines.
+                        // Inner do-while loop handles the case where more
+                        // bytes arrive during readNewFromFile's lock-
+                        // released decode/parse phase: re-check file
+                        // length against lastReadPosition and loop until
+                        // no new bytes remain.
                         if (drainScheduled.compareAndSet(false, true)) {
                             scope.launch {
-                                drainScheduled.set(false)
-                                readNewFromFile()
+                                try {
+                                    do {
+                                        readNewFromFile()
+                                    } while ((logFile?.length() ?: 0L) > lastReadPosition)
+                                } finally {
+                                    drainScheduled.set(false)
+                                }
                             }
                         }
                     }
@@ -357,6 +364,7 @@ object LogCollector {
         // append() (which also takes readLock to serialize against
         // clear()) to wait through the parse, causing potential UI jank.
         var capturedBytes: ByteArray? = null
+        var needFullRead = false
         synchronized(readLock) {
             val file = logFile ?: return
             try {
@@ -385,12 +393,14 @@ object LogCollector {
                 val delta = currentLength - pos
                 // Cap per-call read to prevent OOM after long background gaps
                 // (e.g. Doze mode coalesced events). If delta exceeds budget,
-                // fall back to full tail read. JVM/Kotlin synchronized blocks
-                // are reentrant, so when readAllFromFile re-acquires readLock
-                // from inside this synchronized region, it's a no-op acquire.
+                // signal that the caller should dispatch readAllFromFile
+                // OUTSIDE the readLock — calling it here would hold our
+                // outer readLock through readAllFromFile's decode/parse
+                // phase (synchronized is reentrant), undermining the
+                // lock-narrowing goal.
                 val maxDelta = MAX_LINES * 200L
                 if (delta > maxDelta) {
-                    readAllFromFile()
+                    needFullRead = true
                     return
                 }
 
@@ -428,6 +438,14 @@ object LogCollector {
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to read new log entries from file", e)
             }
+        }
+
+        // Huge-delta fallback: dispatched OUTSIDE the readLock so
+        // readAllFromFile takes its own (separate) critical section
+        // rather than reentering ours and holding it through decode.
+        if (needFullRead) {
+            readAllFromFile()
+            return
         }
 
         // Decode + parse OUTSIDE readLock — pure CPU, no shared state needed.

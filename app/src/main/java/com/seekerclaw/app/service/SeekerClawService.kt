@@ -465,15 +465,20 @@ class SeekerClawService : Service() {
                         // in the Android SDK — null path is the only
                         // signal we get.
                         if (path == "node_debug.log" || path == null) {
-                            // Single-flight: only launch a drain if none
-                            // is in flight. The flag clears BEFORE the
-                            // drain so events arriving during it can
-                            // schedule a fresh drain (which reads to
-                            // current EOF).
+                            // Single-flight: keep the flag set for the
+                            // entire drain so events arriving during a
+                            // slow drain coalesce into it. forwardNew
+                            // NodeDebugLines internally re-reads file
+                            // length on each iteration and loops until
+                            // exhausted, so events arriving during it
+                            // are picked up by the existing drain.
                             if (nodeDebugDrainScheduled.compareAndSet(false, true)) {
                                 scope.launch {
-                                    nodeDebugDrainScheduled.set(false)
-                                    forwardNewNodeDebugLines(debugLogFile)
+                                    try {
+                                        forwardNewNodeDebugLines(debugLogFile)
+                                    } finally {
+                                        nodeDebugDrainScheduled.set(false)
+                                    }
                                 }
                             }
                         }

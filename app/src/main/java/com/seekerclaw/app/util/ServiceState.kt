@@ -288,8 +288,8 @@ object ServiceState {
         // Sync setup: just file path refs, no I/O. The actual disk reads
         // (first-time restore, file content reads) happen in the launch
         // block below so the main thread caller (Application.onCreate)
-        // returns fast. ` was previously
-        // called here and DID do sync disk I/O on first invocation.)
+        // returns fast. Previously, `init(context)` was called here and
+        // did synchronous disk I/O on its first invocation.
         initFileRefs(context)
 
         // Guard + attach are wrapped in startWatchingLock :
@@ -670,9 +670,9 @@ object ServiceState {
         val file = File(parent, "workspace/api_usage_state")
         try {
             if (!file.exists()) {
-                // File deleted — clear the in-memory usage so the UI
-                // doesn't keep showing the last known counts. (Copilot
-                //.)
+                // File deleted (cleanup, rotation, user wipe). Clear
+                // the in-memory usage so the UI doesn't continue showing
+                // stale counts that no longer have a backing source.
                 if (_apiUsage.value != null) _apiUsage.value = null
                 return
             }
