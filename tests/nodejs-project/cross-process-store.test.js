@@ -113,13 +113,44 @@ test('write is atomic — only renamed file is the visible one', () => {
     assert.ok(fs.existsSync(file + '.tmp'), 'leaked tmp is observable but harmless');
 });
 
-test('write cleans up .tmp on rename failure (defensive)', () => {
+test('write cleans up .tmp on rename failure (defensive, monkey-patched failure path)', () => {
+    // BAT-512 (Copilot review fix): the original test only asserted
+    // the SUCCESS path leaves no .tmp behind, which doesn't actually
+    // exercise the catch-block cleanup. Monkey-patch renameSync so
+    // the live code's failure handling runs, then verify .tmp is
+    // gone and the real file is untouched.
     const dir = tmpDir();
     const file = path.join(dir, 'fail.json');
-    // We can't easily force renameSync to fail without monkey-patching
-    // fs. Instead, verify the success path leaves no .tmp behind —
-    // which proves the cleanup happens (renameSync moves the inode,
-    // source path becomes invalid; .tmp must not exist post-write).
+    const tmpFile = file + '.tmp';
+    const store = createStore(file, {});
+
+    const originalRenameSync = fs.renameSync;
+    fs.renameSync = (from, to) => {
+        if (from === tmpFile && to === file) {
+            throw new Error('simulated rename failure');
+        }
+        return originalRenameSync.call(fs, from, to);
+    };
+
+    let ok;
+    try {
+        ok = store.write({ a: 1 });
+    } finally {
+        fs.renameSync = originalRenameSync;
+    }
+
+    assert.strictEqual(ok, false, 'write returns false on rename failure');
+    assert.ok(!fs.existsSync(file), 'real file not written when rename fails');
+    assert.ok(!fs.existsSync(tmpFile), '.tmp removed by defensive cleanup');
+    assert.ok(logCalls.some(l => l.level === 'ERROR'),
+        'failure must produce an ERROR log');
+});
+
+test('write success path also leaves no .tmp behind (rename consumed it)', () => {
+    // Sanity check on the happy path — separated from the failure
+    // test above so each one validates exactly one thing.
+    const dir = tmpDir();
+    const file = path.join(dir, 'happy.json');
     const store = createStore(file, {});
     store.write({ a: 1 });
     assert.ok(fs.existsSync(file), 'real file written');

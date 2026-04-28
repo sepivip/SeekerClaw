@@ -103,6 +103,21 @@ class CrossProcessStore<T>(
     private val initial: T,
     private val coroutineScope: CoroutineScope = CoroutineScope(Dispatchers.IO),
 ) {
+    init {
+        // BAT-512 (Copilot review fix): fileName is documented as a
+        // basename relative to filesDir. Without enforcement, a caller
+        // passing "../etc/passwd" or "subdir/file.json" would resolve
+        // OUTSIDE filesDir — path traversal. Validate up-front so
+        // misuse is caught at construction, not at first write.
+        require(fileName.isNotBlank()) { "fileName must not be blank" }
+        require(fileName == File(fileName).name) {
+            "fileName must be a basename (no path separators), got: '$fileName'"
+        }
+        require(!fileName.contains("..")) {
+            "fileName must not contain '..' (path traversal), got: '$fileName'"
+        }
+    }
+
     private val file: File = File(context.filesDir, fileName)
     private val tmpFile: File = File(context.filesDir, "$fileName.tmp")
     private val writeLock = Any()
@@ -159,17 +174,39 @@ class CrossProcessStore<T>(
             try {
                 val text = json.encodeToString(serializer, value)
                 tmpFile.writeText(text)
-                if (!tmpFile.renameTo(file)) {
-                    // On some filesystems the rename can fail when the
-                    // destination already exists (older Android +
-                    // exotic FS combos). Fall back to delete + rename.
-                    // This widens the atomicity window slightly but
-                    // keeps the write going through.
-                    file.delete()
-                    if (!tmpFile.renameTo(file)) {
-                        Log.w(TAG, "[$fileName] rename fallback also failed")
-                        return
-                    }
+                // BAT-512 (Copilot review fix): use NIO `Files.move`
+                // with REPLACE_EXISTING + ATOMIC_MOVE so the rename is
+                // atomic AT THE FILESYSTEM LEVEL even when the
+                // destination already exists. The earlier delete +
+                // renameTo fallback opened a window in which
+                // FileObserver fired DELETE, the corresponding reload
+                // landed `initial` in `_state`, and only the
+                // subsequent CREATE/MOVED_TO restored the correct
+                // value — observers briefly saw garbage.
+                //
+                // ATOMIC_MOVE + REPLACE_EXISTING is supported on the
+                // filesystems Android uses (ext4, F2FS). Min SDK 34 so
+                // java.nio.file is available. AtomicMoveNotSupported
+                // can occur on cross-device moves only, which doesn't
+                // happen here (both files are under filesDir on the
+                // same partition); we still degrade gracefully if it
+                // does.
+                try {
+                    java.nio.file.Files.move(
+                        tmpFile.toPath(),
+                        file.toPath(),
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                        java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                    )
+                } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
+                    // Fall back to non-atomic REPLACE_EXISTING — still
+                    // single-syscall (no DELETE event), just not
+                    // strictly atomic if the kernel decides otherwise.
+                    java.nio.file.Files.move(
+                        tmpFile.toPath(),
+                        file.toPath(),
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                    )
                 }
                 _state.value = value
                 broadcastChanged()
@@ -177,9 +214,8 @@ class CrossProcessStore<T>(
                 Log.e(TAG, "[$fileName] write failed: ${e.message}", e)
             } finally {
                 // Defensive: clean up a leftover .tmp on the failure path
-                // so we don't accumulate cruft. No-op when rename
-                // succeeded (renameTo moves the inode, source path is
-                // gone).
+                // so we don't accumulate cruft. No-op when the move
+                // succeeded (the source inode is gone).
                 if (tmpFile.exists()) tmpFile.delete()
             }
         }

@@ -179,7 +179,7 @@ need to. Kotlin's `FileObserver` picks up the file change automatically.
 ## Migration order (BAT-511 family)
 
 Each migration is a separate ticket so each one ships small, reviewable,
-and independently revertable.
+and independently revertible.
 
 | Ticket | Field(s) | Status |
 |---|---|---|
