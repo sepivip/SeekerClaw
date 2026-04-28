@@ -111,6 +111,8 @@ object ServiceState {
     // restoreFromDisk. (Copilot R9.)
     @Volatile private var initialized = false
     private val initLock = Any()
+    private val startWatchingLock = Any()
+    private val stalenessTickerStarted = java.util.concurrent.atomic.AtomicBoolean(false)
 
     /**
      * Initialize state file path AND restore persisted counters.
@@ -288,70 +290,71 @@ object ServiceState {
         // called here and DID do sync disk I/O on first invocation.)
         initFileRefs(context)
 
-        // Guard: skip if workspace observer is already attached. After
-        // BAT-518 device-fix consolidation, filesDir is no longer
-        // independently observed by ServiceState — LogCollector's
-        // observer drives those reads via handleFilesDirEvent(). So
-        // the only ServiceState-owned observer is the workspace one.
-        if (workspaceDirObserver != null) {
-            Log.d(TAG, "startWatching: workspace observer already active, skipping")
-            return
-        }
+        // Guard + attach are wrapped in startWatchingLock (Copilot R-latest+1):
+        // even though Application.onCreate is the only intended caller and
+        // runs once on the main thread, the synchronized block costs nothing
+        // for an uncontended lock and documents the contract — future callers
+        // can't race the field check + assignment to attach two observers.
+        synchronized(startWatchingLock) {
+            // Guard: skip if workspace observer is already attached. After
+            // BAT-518 device-fix consolidation, filesDir is no longer
+            // independently observed by ServiceState — LogCollector's
+            // observer drives those reads via handleFilesDirEvent(). So
+            // the only ServiceState-owned observer is the workspace one.
+            if (workspaceDirObserver != null) {
+                Log.d(TAG, "startWatching: workspace observer already active, skipping")
+                return
+            }
 
-        val parent = stateFile?.parentFile
-        if (parent == null) {
-            Log.w(TAG, "startWatching: no parent dir, skipping")
-            return
-        }
+            val parent = stateFile?.parentFile
+            if (parent == null) {
+                Log.w(TAG, "startWatching: no parent dir, skipping")
+                return
+            }
 
-        // workspace/ may not exist yet on a fresh install before the service
-        // first starts. Create it so FileObserver can attach without racing
-        // service startup. Idempotent. mkdirs is fast (single stat) so OK
-        // on caller thread; the slow part is the file reads below, which
-        // are dispatched.
-        //
-        // Defensive: validate the result. mkdirs() returns false on failure
-        // (filesystem error, permission, OR a non-directory file at that
-        // path blocking creation). Without this check, FileObserver
-        // attachment to a missing/non-dir path silently no-ops and the UI
-        // never receives updates for the workspace files. (Copilot R15.)
-        val workspaceDir = File(parent, "workspace")
-        if (!workspaceDir.isDirectory) {
-            workspaceDir.mkdirs()
-        }
-        val workspaceUsable = workspaceDir.isDirectory
+            // workspace/ may not exist yet on a fresh install before the service
+            // first starts. Create it so FileObserver can attach without racing
+            // service startup. Idempotent. mkdirs is fast (single stat) so OK
+            // on caller thread; the slow part is the file reads below, which
+            // are dispatched.
+            //
+            // Defensive: validate the result. mkdirs() returns false on failure
+            // (filesystem error, permission, OR a non-directory file at that
+            // path blocking creation). Without this check, FileObserver
+            // attachment to a missing/non-dir path silently no-ops and the UI
+            // never receives updates for the workspace files. (Copilot R15.)
+            val workspaceDir = File(parent, "workspace")
+            if (!workspaceDir.isDirectory) {
+                workspaceDir.mkdirs()
+            }
+            val workspaceUsable = workspaceDir.isDirectory
 
-        Log.d(TAG, "startWatching: attaching FileObservers; initial reads dispatched")
+            Log.d(TAG, "startWatching: attaching workspace FileObserver")
 
-        // Attach observers FIRST so any write that lands between the
-        // attach and the initial read doesn't get missed (the observer
-        // reads on event regardless of initial-read state). Synchronous —
-        // FileObserver constructor does no disk I/O, just registers.
-        //
-        // BAT-518 device-fix: do NOT register a separate FileObserver for
-        // filesDir. LogCollector already watches that directory for
-        // service_logs and its observer fires reliably; on the Solana
-        // Seeker, registering a SECOND FileObserver in the same process
-        // on the same directory caused this observer to silently never
-        // receive events even though API 29+ docs claim List<WeakReference>
-        // supports it. LogCollector now calls ServiceState.handleFilesDirEvent()
-        // on every event, keeping cross-process state in sync via the
-        // single working observer. workspaceDir is a different directory
-        // and remains observed separately here — no conflict.
-
-        if (workspaceUsable) {
-            workspaceDirObserver = makeDirObserver(workspaceDir) {
-                readAgentHealthFile()
-                readApiUsageFile()
-            }.also { it.startWatching() }
-        } else {
-            Log.w(
-                TAG,
-                "startWatching: workspace dir not usable (${workspaceDir.absolutePath}) — " +
-                    "skipping workspace FileObserver. agent_health_state and api_usage_state " +
-                    "will not auto-refresh; rely on initial dispatched read only.",
-            )
-        }
+            // BAT-518 device-fix: do NOT register a separate FileObserver for
+            // filesDir. LogCollector already watches that directory for
+            // service_logs and its observer fires reliably; on the Solana
+            // Seeker, registering a SECOND FileObserver in the same process
+            // on the same directory caused this observer to silently never
+            // receive events even though API 29+ docs claim List<WeakReference>
+            // supports it. LogCollector now calls ServiceState.handleFilesDirEvent()
+            // on every event, keeping cross-process state in sync via the
+            // single working observer. workspaceDir is a different directory
+            // and remains observed separately here — no conflict.
+            if (workspaceUsable) {
+                workspaceDirObserver = makeDirObserver(workspaceDir) {
+                    readAgentHealthFile()
+                    readApiUsageFile()
+                }.also { it.startWatching() }
+            } else {
+                Log.w(
+                    TAG,
+                    "startWatching: workspace dir not usable (${workspaceDir.absolutePath}) — " +
+                        "skipping workspace FileObserver. agent_health_state and api_usage_state " +
+                        "will not auto-refresh; rely on initial dispatched read only.",
+                )
+            }
+        } // end synchronized(startWatchingLock)
 
         // Initial reads on Dispatchers.IO — startWatching is invoked from
         // Application.onCreate (main thread); doing 4 disk reads there
@@ -374,25 +377,27 @@ object ServiceState {
         startStalenessTicker()
     }
 
-    private var stalenessTickerStarted = false
-
     /**
-     * Re-evaluate `_agentHealth.isStale` every 30s without reading the
-     * file. Necessary because BAT-518 replaced 1s polling with FileObserver
-     * — the previous polling loop ALSO refreshed staleness on every tick
-     * even when the file hadn't changed. Without this ticker, an agent
-     * that crashes and stops writing `agent_health_state` would never
-     * trigger the UI's "stale" transition: no file event → no read →
-     * `isStale` stuck at its last value (false, if the agent was healthy
-     * before crashing). That's a safety-relevant regression: the user
-     * would think the agent is healthy when it has actually died.
+     * Re-evaluate `_agentHealth.isStale` every 30s by re-reading
+     * `agent_health_state` from disk. Necessary because BAT-518 replaced
+     * 1s polling with FileObserver — the previous polling loop ALSO
+     * refreshed staleness on every tick even when the file hadn't changed.
+     * Without this ticker, an agent that crashes and stops writing
+     * `agent_health_state` would never trigger the UI's "stale" transition:
+     * no file event → no read → `isStale` stuck at its last value (false,
+     * if the agent was healthy before crashing). That's a safety-relevant
+     * regression: the user would think the agent is healthy when it has
+     * actually died.
      *
-     * Cost is negligible: one comparison + StateFlow update every 30s,
-     * no I/O. Singleton-scoped, started once per process from startWatching.
+     * Cost: 1 small file read every 30s (~2,880/day) — vastly cheaper than
+     * the prior 1Hz poll's 86,400/day, but not "no I/O" as an earlier
+     * iteration of this comment claimed.
+     *
+     * Once-only via AtomicBoolean.compareAndSet so concurrent startWatching
+     * calls (theoretical, defensive) don't double-start the ticker.
      */
     private fun startStalenessTicker() {
-        if (stalenessTickerStarted) return
-        stalenessTickerStarted = true
+        if (!stalenessTickerStarted.compareAndSet(false, true)) return
         scope.launch {
             while (isActive) {
                 delay(30_000L)
@@ -409,15 +414,15 @@ object ServiceState {
     }
 
     /**
-     * Called by LogCollector's FileObserver when an event in `filesDir`
-     * is for one of ServiceState's files (BAT-518 device-fix consolidation).
+     * Called by LogCollector's FileObserver for events in `filesDir`
+     * matching ServiceState's files (BAT-518 device-fix consolidation).
      *
-     * Path filter is critical: without it, every `service_logs` append
-     * (potentially many per second) would re-read `service_state` and
-     * `bridge_token`, partially undoing the I/O savings BAT-518 set out
-     * to win. LogCollector now only invokes this when path matches one
-     * of these basenames, or when path is null (directory-level events
-     * with no attributable filename — rare but harmless to re-read on).
+     * LogCollector filters by basename BEFORE calling this — only
+     * `service_state`, `bridge_token`, or `null` (directory-level events
+     * with no attributable filename) reach here. That filter is critical:
+     * without it, every `service_logs` append would launch a coroutine
+     * just to no-op on the `when`, partially undoing the I/O savings
+     * BAT-518 set out to win.
      *
      * Idempotent + cheap: each re-read is ~80 bytes; StateFlow only
      * emits when values actually change.
@@ -433,7 +438,8 @@ object ServiceState {
                     readFromFile()
                     readBridgeToken()
                 }
-                // Any other filename (e.g. service_logs) is not ours; ignore.
+                // Any other path means LogCollector's filter let something
+                // through unexpectedly — silently ignore.
             }
         }
     }

@@ -370,8 +370,9 @@ class SeekerClawService : Service() {
         // BAT-518: replaced the prior 500ms coroutine polling loop with
         // kernel-level inotify (`FileObserver`). Previously this read
         // 172,800 times per day in the :node process even when Node.js
-        // wrote nothing. Now: zero idle cost, sub-millisecond latency
-        // when Node actually writes a log line.
+        // wrote nothing. Now event-driven — typical forwarding latency is
+        // scheduler-scale (often well under 100ms, but not guaranteed;
+        // Doze mode can batch deliveries).
         //
         // Append-aware: lastPos tracks bytes already forwarded; only new
         // bytes are read on each event.

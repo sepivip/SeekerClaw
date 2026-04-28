@@ -34,8 +34,11 @@ class SeekerClawApplication : Application() {
         // service_logs file (BAT-217).
         //
         // BAT-518: switched from 1s coroutine polling to kernel-level FileObserver.
-        // Same external contract (StateFlow updates on file change), zero idle
-        // CPU cost when nothing's changing.
+        // Same external contract (StateFlow updates on file change), event-driven
+        // with a large reduction in idle work. Not literally zero idle cost: a
+        // 30s staleness ticker re-reads agent_health_state to keep the time-based
+        // stale predicate live (see ServiceState.startStalenessTicker), and Doze
+        // mode can batch FileObserver delivery.
         val isMainProcess = getProcessName() == packageName
         if (isMainProcess) {
             ServiceState.startWatching(this)

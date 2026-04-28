@@ -60,6 +60,7 @@ object LogCollector {
     // bug).
     private val logsLock = Any()
     private val readLock = Any()
+    private val startWatchingLock = Any()
 
     fun init(context: Context) {
         logFile = File(context.filesDir, LOG_FILE_NAME)
@@ -124,62 +125,73 @@ object LogCollector {
         // main thread.)
         init(context)
 
-        // Guard: skip if observer already attached (mirrors the BAT-217 fix).
-        if (fileObserver != null) {
-            Log.d(TAG, "startWatching: already active, skipping")
-            return
-        }
-
-        val parent = logFile?.parentFile ?: run {
-            Log.w(TAG, "startWatching: no parent dir, skipping FileObserver")
-            return
-        }
-
-        // Attach observer FIRST, before the initial read (Copilot R6).
-        // If we read first and a write lands between read-completion and
-        // attach, that write's MODIFY/CLOSE_WRITE event fires before the
-        // observer exists — so it's not delivered, and lastReadPosition
-        // is set to the pre-write length. The missed bytes wouldn't be
-        // forwarded until the NEXT write triggers an event. Attaching
-        // first means any write during the catch-up read window fires
-        // an event we'll see (idempotent — observer-triggered read sees
-        // lastReadPosition was already advanced and is a no-op).
-        //
-        // Watch the parent dir, dispatch on `service_logs` filename. Mask
-        // covers append-style writes (MODIFY / CLOSE_WRITE), atomic-rename
-        // writes (MOVED_TO), re-creation after clear() (CREATE), and
-        // file removal (DELETE). DELETE is critical so the reader can
-        // reset lastReadPosition when the file is removed externally
-        // (cleanup, rotation, manual rm) — otherwise the offset would
-        // stay past the new EOF after recreation, missing initial
-        // writes until lastReadPosition's stale value was passed.
-        // (Copilot R12.) Constants are qualified (Java statics not
-        // auto-imported into Kotlin function bodies). (Copilot R1.)
-        fileObserver = object : FileObserver(
-            parent,
-            FileObserver.MODIFY or FileObserver.CLOSE_WRITE or
-                FileObserver.MOVED_TO or FileObserver.CREATE or
-                FileObserver.DELETE,
-        ) {
-            override fun onEvent(event: Int, path: String?) {
-                if (path == LOG_FILE_NAME) {
-                    // Dispatch off the FileObserver thread. readNewFromFile
-                    // serializes file reads + lastReadPosition updates via
-                    // `readLock` internally, so concurrent dispatches
-                    // (FileObserver often emits MODIFY + CLOSE_WRITE for
-                    // one write) don't double-read the same byte range.
-                    scope.launch { readNewFromFile() }
-                }
-                // BAT-518 device-fix consolidation: ServiceState no longer
-                // owns its own filesDir observer (multi-observer-per-dir
-                // is fragile on this device). LogCollector dispatches to
-                // ServiceState for events on its files. Pass `path` so
-                // ServiceState can filter — without filtering, every log
-                // append (high frequency) would re-read service_state +
-                // bridge_token, partially undoing the I/O savings.
-                ServiceState.handleFilesDirEvent(path)
+        // Guard + attach inside startWatchingLock (Copilot R-latest+1):
+        // synchronized check-then-set so concurrent callers can't race
+        // and attach two observers. uncontended in practice — only
+        // Application.onCreate calls this — but the cost is nil and
+        // documents the contract for future callers.
+        synchronized(startWatchingLock) {
+            // Guard: skip if observer already attached (mirrors the BAT-217 fix).
+            if (fileObserver != null) {
+                Log.d(TAG, "startWatching: already active, skipping")
+                return
             }
-        }.also { it.startWatching() }
+
+            val parent = logFile?.parentFile ?: run {
+                Log.w(TAG, "startWatching: no parent dir, skipping FileObserver")
+                return
+            }
+
+            // Attach observer FIRST, before the initial read (Copilot R6).
+            // If we read first and a write lands between read-completion and
+            // attach, that write's MODIFY/CLOSE_WRITE event fires before the
+            // observer exists — so it's not delivered, and lastReadPosition
+            // is set to the pre-write length. The missed bytes wouldn't be
+            // forwarded until the NEXT write triggers an event. Attaching
+            // first means any write during the catch-up read window fires
+            // an event we'll see (idempotent — observer-triggered read sees
+            // lastReadPosition was already advanced and is a no-op).
+            //
+            // Watch the parent dir, dispatch on `service_logs` filename. Mask
+            // covers append-style writes (MODIFY / CLOSE_WRITE), atomic-rename
+            // writes (MOVED_TO), re-creation after clear() (CREATE), and
+            // file removal (DELETE). DELETE is critical so the reader can
+            // reset lastReadPosition when the file is removed externally
+            // (cleanup, rotation, manual rm) — otherwise the offset would
+            // stay past the new EOF after recreation, missing initial
+            // writes until lastReadPosition's stale value was passed.
+            // (Copilot R12.) Constants are qualified (Java statics not
+            // auto-imported into Kotlin function bodies). (Copilot R1.)
+            fileObserver = object : FileObserver(
+                parent,
+                FileObserver.MODIFY or FileObserver.CLOSE_WRITE or
+                    FileObserver.MOVED_TO or FileObserver.CREATE or
+                    FileObserver.DELETE,
+            ) {
+                override fun onEvent(event: Int, path: String?) {
+                    if (path == LOG_FILE_NAME) {
+                        // Dispatch off the FileObserver thread. readNewFromFile
+                        // serializes file reads + lastReadPosition updates via
+                        // `readLock` internally, so concurrent dispatches
+                        // (FileObserver often emits MODIFY + CLOSE_WRITE for
+                        // one write) don't double-read the same byte range.
+                        scope.launch { readNewFromFile() }
+                    }
+                    // BAT-518 device-fix consolidation: ServiceState no
+                    // longer owns its own filesDir observer (multi-observer-
+                    // per-dir is fragile on this device). LogCollector
+                    // dispatches to ServiceState ONLY for paths that are
+                    // ServiceState's files. Filtering here (instead of
+                    // inside handleFilesDirEvent) means every service_logs
+                    // append doesn't even launch a coroutine on the
+                    // ServiceState side, preserving BAT-518's I/O savings.
+                    // (Copilot R-latest+1 C6.)
+                    if (path == null || path == "service_state" || path == "bridge_token") {
+                        ServiceState.handleFilesDirEvent(path)
+                    }
+                }
+            }.also { it.startWatching() }
+        } // end synchronized(startWatchingLock)
 
         // Initial catch-up read on Dispatchers.IO so the main-thread
         // caller (Application.onCreate) doesn't block on disk I/O.
