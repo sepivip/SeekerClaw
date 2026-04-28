@@ -1196,7 +1196,6 @@ fun SettingsScreen(
                         channel = importedConfig.channel.ifBlank { existing.channel },
                     ) else importedConfig
                     val savedOk = ConfigManager.saveConfig(context, merged)
-                    val savedConfig = ConfigManager.loadConfig(context)
                     if (!savedOk) {
                         // BAT-513: saveConfig returned false — could be prefs
                         // commit failure OR RuntimeStateStore.write failure
@@ -1223,6 +1222,12 @@ fun SettingsScreen(
                         ).show()
                         return@TextButton
                     }
+                    // Read prefs only after the save is confirmed — avoids
+                    // an extra prefs read on the failure path AND avoids
+                    // briefly observing a rolled-back intermediate state
+                    // (rollback uses commit(), so the read here always
+                    // reflects the post-success state).
+                    val savedConfig = ConfigManager.loadConfig(context)
                     LogCollector.append(
                         "[ConfigImport] Saved snapshot: ${ConfigManager.redactedSnapshot(savedConfig)}"
                     )

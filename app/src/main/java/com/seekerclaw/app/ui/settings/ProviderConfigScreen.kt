@@ -155,9 +155,22 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                 authType = lastValid.authType,
                 model = lastValid.model,
             )
+            // Map the internal field key to a user-facing label so the
+            // Toast doesn't surface implementation identifiers like
+            // "authType". Falls back to the raw key for any non-runtime
+            // field that hits this branch (defensive — only runtime
+            // fields are gated above, but a future caller adding a
+            // new runtime field should get a readable default until
+            // they wire up a label).
+            val fieldLabel = when (field) {
+                "provider" -> "provider"
+                "authType" -> "auth type"
+                "model" -> "model"
+                else -> field
+            }
             android.widget.Toast.makeText(
                 context,
-                "Couldn't save $field. Try again or free up storage.",
+                "Couldn't save $fieldLabel. Try again or free up storage.",
                 android.widget.Toast.LENGTH_LONG,
             ).show()
             return
