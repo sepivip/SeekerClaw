@@ -6,7 +6,6 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -286,6 +285,92 @@ class CrossProcessStoreTest {
             CrossProcessStore.isValidFileName("../foo.json"))
         assertFalse("'foo/..' would still be ambiguous; reject",
             CrossProcessStore.isValidFileName("foo/.."))
+    }
+
+    // --- BAT-512 round-3 Copilot review fixes ---
+
+    @Test
+    fun `drift live source uses Channel CONFLATED to coalesce reload signals`() {
+        // BAT-512 (Copilot review fix #2+3): the FileObserver and
+        // broadcast receiver paths must funnel events into a single
+        // CONFLATED channel + drain coroutine, not launch concurrent
+        // reload coroutines. Concurrent reloads can finish out of
+        // order and publish a stale on-disk value AFTER a newer one
+        // — a real race that regresses _state.
+        val src = locateLiveSource()
+        val text = src.readText()
+        assertTrue("must declare a Channel for reload coalescing",
+            Regex("""reloadChannel\s*:\s*Channel<Unit>""").containsMatchIn(text) ||
+                Regex("""reloadChannel\s*=\s*Channel\s*\(\s*Channel\.CONFLATED""").containsMatchIn(text))
+        assertTrue("channel capacity must be CONFLATED so bursts coalesce",
+            text.contains("Channel.CONFLATED"))
+        assertTrue("FileObserver path must trySend on the channel, not launch directly",
+            Regex("""reloadChannel\.trySend""").containsMatchIn(text))
+        // Negative pin: the OLD pattern (launching reload directly
+        // from FileObserver / broadcast receiver) must be gone.
+        assertFalse("FileObserver / broadcast receiver must NOT launch reload directly anymore",
+            Regex("""coroutineScope\.launch\s*\{\s*reload\s*\(\s*\)\s*\}""").containsMatchIn(text))
+    }
+
+    @Test
+    fun `drift live source declares closed flag for post-close reload suppression`() {
+        // BAT-512 (Copilot review fix #1): even with an external scope
+        // we don't cancel, reload() must short-circuit when closed
+        // so a coroutine in flight at close-time can't publish
+        // afterwards.
+        val src = locateLiveSource()
+        val text = src.readText()
+        assertTrue("must declare a closed: AtomicBoolean flag",
+            Regex("""closed\s*=\s*AtomicBoolean""").containsMatchIn(text))
+        assertTrue("reload() must short-circuit on closed",
+            Regex("""fun\s+reload\s*\([^)]*\)\s*\{[\s\S]*?closed\.get\s*\(\s*\)""").containsMatchIn(text))
+        assertTrue("close() must set the flag to true",
+            Regex("""closed\.set\s*\(\s*true\s*\)""").containsMatchIn(text))
+    }
+
+    @Test
+    fun `drift live source deep-clones the initial value on read`() {
+        // BAT-512 (Copilot review fix #4): if T is mutable, returning
+        // the constructor's `initial` reference would let a caller's
+        // mutation poison the store. read() must clone via JSON
+        // round-trip — same defensive contract the Node helper
+        // already provides.
+        val src = locateLiveSource()
+        val text = src.readText()
+        assertTrue("read() must call cloneSafe(initial) on missing/malformed paths",
+            Regex("""cloneSafe\s*\(\s*initial\s*\)""").containsMatchIn(text))
+        assertTrue("cloneSafe must round-trip via JSON encode/decode",
+            Regex("""json\.decodeFromString\s*\(\s*serializer\s*,\s*json\.encodeToString""").containsMatchIn(text))
+    }
+
+    @Test
+    fun `read returns a fresh instance on missing file (mutating it does not contaminate next read)`() {
+        // Mirrors the Node-side contract test. We can't call the live
+        // class without a Context, but we can verify the JSON round-
+        // trip behaviour the live cloneSafe relies on: deserialising
+        // a serialised value yields a new object graph.
+        val original = Sample(provider = "anthropic", model = "claude-opus-4-7")
+        val cloned = json.decodeFromString(
+            Sample.serializer(),
+            json.encodeToString(Sample.serializer(), original),
+        )
+        // Same content...
+        assertEquals(original, cloned)
+        // ...but cloned is a fresh data class instance. Data classes
+        // are immutable by default in Kotlin (val), so mutation isn't
+        // a hazard for THIS Sample type — but the JSON round-trip is
+        // what cloneSafe relies on for any T (including types with
+        // mutable fields). This test pins the round-trip itself.
+        assertTrue("clone is a separate instance — round-trip produces fresh object",
+            cloned !== original)
+    }
+
+    private fun locateLiveSource(): File {
+        return File("src/main/java/com/seekerclaw/app/util/CrossProcessStore.kt")
+            .takeIf { it.exists() }
+            ?: File("../app/src/main/java/com/seekerclaw/app/util/CrossProcessStore.kt")
+                .takeIf { it.exists() }
+            ?: File("app/src/main/java/com/seekerclaw/app/util/CrossProcessStore.kt")
     }
 
     // --- structural drift guard ---

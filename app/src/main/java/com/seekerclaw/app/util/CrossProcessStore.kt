@@ -9,13 +9,16 @@ import android.util.Log
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.json.Json
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Generic JSON-backed store for state shared between the main UI process
@@ -127,10 +130,12 @@ class CrossProcessStore<T>(
     private val appContext: Context = context.applicationContext
 
     // BAT-512 (Copilot review fix #7): own a SupervisorJob so close()
-    // can cancel in-flight reload coroutines. The default fresh scope
-    // we create has its job here under our control; if the caller
-    // passes their own scope, we use it directly and they own
-    // cancellation. Either way, post-close reload work doesn't fire.
+    // can cancel in-flight reload coroutines for the default fresh
+    // scope we create. If the caller passes their own scope, we use
+    // it directly and they retain cancellation ownership; this class
+    // does NOT cancel external scopes. The `closed` flag (declared
+    // below) guards reload() so post-close updates are suppressed
+    // even on external scopes that we can't cancel.
     private val ownedJob: kotlinx.coroutines.CompletableJob? =
         if (parentScope == null) kotlinx.coroutines.SupervisorJob() else null
     private val coroutineScope: CoroutineScope = parentScope
@@ -139,40 +144,106 @@ class CrossProcessStore<T>(
     private val file: File = File(appContext.filesDir, fileName)
     private val tmpFile: File = File(appContext.filesDir, "$fileName.tmp")
     private val writeLock = Any()
-    private val _state = MutableStateFlow(initial)
-
-    /** Observable state. Emits new values on every successful write or reload. */
-    val state: StateFlow<T> = _state.asStateFlow()
 
     private val json = Json {
         ignoreUnknownKeys = true
         encodeDefaults = true
     }
 
+    // Initialize _state with a deep-cloned seed so a caller mutating
+    // the returned value can't poison the StateFlow's backing field.
+    // Declared after `json` because cloneSafe() uses it.
+    private val _state = MutableStateFlow(cloneSafe(initial))
+
+    /** Observable state. Emits new values on every successful write or reload. */
+    val state: StateFlow<T> = _state.asStateFlow()
+
     private var fileObserver: FileObserver? = null
     private var receiver: BroadcastReceiver? = null
 
+    // BAT-512 (Copilot review fix #1): suppress reload work after close.
+    // Required even with an external scope (we don't own its
+    // cancellation), and useful as a fast-path bailout for the owned-
+    // scope case so a reload coroutine that was already in-flight
+    // doesn't publish a value after close().
+    private val closed = AtomicBoolean(false)
+
+    // BAT-512 (Copilot review fix #2+3): coalesce reload work via a
+    // CONFLATED channel + single drain coroutine. Without this,
+    // FileObserver.onEvent fires multiple events per write (MODIFY +
+    // CLOSE_WRITE per writeText, CREATE + MODIFY per atomic move) and
+    // each one previously launched its own reload coroutine on
+    // Dispatchers.IO. Concurrent reloads can complete out of order
+    // and publish a stale on-disk value AFTER a newer one — a real
+    // race that regresses _state. CONFLATED capacity-1 means: senders
+    // never block, an extra signal arriving while one is already
+    // queued is dropped (no work to coalesce — a single re-read
+    // covers all pending change events), and the drain coroutine
+    // reads them one at a time.
+    private val reloadChannel: Channel<Unit> = Channel(Channel.CONFLATED)
+
+    // Trailing init runs AFTER every `val` property above is
+    // initialized — coroutineScope, _state, reloadChannel, etc. are
+    // all valid here. Hydrates _state from disk, starts the drain
+    // coroutine, and attaches observers.
     init {
-        // Synchronous catch-up read: if the file already exists from a
-        // prior process, hydrate _state immediately so the first
-        // `state.value` access returns the persisted value, not
-        // `initial`.
-        _state.value = read()
+        // Synchronous catch-up read: if the file exists from a prior
+        // process, refresh _state immediately so the first
+        // `state.value` access returns the persisted value, not the
+        // initial seed.
+        reload()
+        // Single drain coroutine: bursts of FileObserver/broadcast
+        // events collapse to a single re-read that always sees the
+        // latest file contents.
+        coroutineScope.launch {
+            for (signal in reloadChannel) {
+                if (!isActive || closed.get()) break
+                runCatching { reload() }
+            }
+        }
         startWatching()
     }
 
     /**
      * Synchronously parse the JSON file and return the value. Idempotent
-     * and side-effect-free. Returns [initial] on missing file or
-     * malformed JSON (logged at WARN — never throws).
+     * and side-effect-free. Returns a freshly cloned copy of [initial]
+     * on missing file or malformed JSON (logged at WARN — never
+     * throws).
+     *
+     * BAT-512 (Copilot review fix #4): the returned value is always a
+     * fresh instance, never a shared reference to the constructor's
+     * [initial] argument. Without this, a mutable T (e.g. a class
+     * with mutable fields, or a pre-Kotlin data type with var
+     * properties) could let a caller's accidental mutation poison the
+     * store's default and the StateFlow's backing field. The Node
+     * helper has the same defensive clone.
      */
     fun read(): T {
-        if (!file.exists()) return initial
+        if (!file.exists()) return cloneSafe(initial)
         return try {
             json.decodeFromString(serializer, file.readText())
         } catch (e: Exception) {
             Log.w(TAG, "[$fileName] decode failed, returning initial: ${e.message}")
-            initial
+            cloneSafe(initial)
+        }
+    }
+
+    /**
+     * Deep-clone a T via JSON round-trip. Cheap on the small
+     * `@Serializable` data classes this store deals with; safe for
+     * mutable types because the round-trip produces a fresh object
+     * graph with no shared references.
+     */
+    private fun cloneSafe(value: T): T {
+        return try {
+            json.decodeFromString(serializer, json.encodeToString(serializer, value))
+        } catch (e: Exception) {
+            // Should never happen for a valid `@Serializable` type, but
+            // if encodeToString throws we fall back to the original
+            // reference rather than crashing the store. Logged so a
+            // misuse is detectable.
+            Log.w(TAG, "[$fileName] cloneSafe round-trip failed: ${e.message}")
+            value
         }
     }
 
@@ -241,12 +312,17 @@ class CrossProcessStore<T>(
 
     /**
      * Re-read the file from disk and update [state]. Called from the
-     * FileObserver and broadcast receiver — public so tests and
+     * single drain coroutine (which receives signals from the
+     * FileObserver and broadcast receiver) — public so tests and
      * pull-style consumers can force a refresh.
+     *
+     * BAT-512 (Copilot review fix #1): no-op when the store is
+     * [closed] so a coroutine in flight on a caller-owned scope
+     * (which we don't cancel) can't publish a value after close().
      */
     fun reload() {
-        val current = read()
-        _state.value = current
+        if (closed.get()) return
+        _state.value = read()
     }
 
     private fun broadcastChanged() {
@@ -288,7 +364,13 @@ class CrossProcessStore<T>(
                 // for inotify queue overflow). Reload on either.
                 val basename = path?.substringAfterLast('/')
                 if (basename == null || basename == fileName) {
-                    coroutineScope.launch { reload() }
+                    // BAT-512 (Copilot review fix #2+3): coalesce via
+                    // CONFLATED channel — one drain coroutine handles
+                    // all events sequentially, no out-of-order
+                    // publication risk. trySend never fails for a
+                    // CONFLATED channel and is non-blocking on the
+                    // FileObserver thread.
+                    if (!closed.get()) reloadChannel.trySend(Unit)
                 }
             }
         }.also { it.startWatching() }
@@ -300,7 +382,13 @@ class CrossProcessStore<T>(
                 if (intent.action != ACTION_STORE_CHANGED) return
                 val name = intent.getStringExtra(EXTRA_FILE_NAME)
                 if (name == fileName) {
-                    coroutineScope.launch { reload() }
+                    // BAT-512 (Copilot review fix #2+3): same
+                    // CONFLATED-channel coalescing as the
+                    // FileObserver path — single drain serializes
+                    // reloads across BOTH trigger sources, so two
+                    // simultaneous events (file event + broadcast
+                    // for the same write) don't race.
+                    if (!closed.get()) reloadChannel.trySend(Unit)
                 }
             }
         }
@@ -315,18 +403,36 @@ class CrossProcessStore<T>(
 
     /**
      * Release the FileObserver, broadcast receiver, and any in-flight
-     * reload coroutines. Production stores live for the process
-     * lifetime — calling [close] is only meaningful for tests or hot-
-     * swap scenarios. Idempotent.
+     * reload work owned by this store. Production stores live for
+     * the process lifetime — calling [close] is only meaningful for
+     * tests or hot-swap scenarios. Idempotent.
      *
-     * BAT-512 (Copilot review fix #7): if this store created its own
-     * coroutine scope (no `parentScope` passed in), we cancel the
-     * SupervisorJob backing it so any reload work scheduled on the
-     * FileObserver / receiver thread can't fire after close. Stores
-     * given an external scope leave cancellation to the caller — they
-     * presumably own that scope's lifecycle.
+     * Behaviour by scope ownership (BAT-512 Copilot review fixes #1, #7):
+     *
+     *  - **Owned scope** (no `parentScope` passed to the constructor):
+     *    we own the [SupervisorJob] inside [coroutineScope] and
+     *    cancel it here, so the drain coroutine + any pending reload
+     *    work stop cleanly.
+     *  - **External scope** (`parentScope` passed in): we do NOT
+     *    cancel the caller's scope — they own its lifecycle. A
+     *    reload coroutine that was already in flight on that scope
+     *    can still execute, but it bails out of [reload] via the
+     *    `closed` flag check before mutating `_state`. Same for the
+     *    drain coroutine: the `closed` check inside its for-loop
+     *    body causes it to exit on the next signal.
+     *
+     * The FileObserver and BroadcastReceiver are released
+     * unconditionally — neither depends on scope ownership.
      */
     fun close() {
+        // Set closed FIRST so any in-flight reload that wakes up
+        // post-close immediately bails out instead of publishing a
+        // stale value.
+        closed.set(true)
+        // Stop accepting new reload signals; already-queued ones
+        // (max one for CONFLATED) drain into the for-loop's closed
+        // check and exit.
+        reloadChannel.close()
         fileObserver?.stopWatching()
         fileObserver = null
         receiver?.let {
