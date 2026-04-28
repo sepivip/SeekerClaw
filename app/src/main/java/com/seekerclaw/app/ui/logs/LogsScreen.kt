@@ -95,8 +95,18 @@ fun LogsScreen() {
     // Use last entry timestamp+message (not list size) so auto-scroll still works
     // when the buffer is full and size stays constant at MAX_LINES. Including message
     // handles timestamp collisions from bursty logging.
+    //
+    // Also include filter state (level toggles + search query) as keys: when the user
+    // toggles a level filter, the filtered list changes but if the new tail entry
+    // happens to match the previous tail (common when toggling adds entries above the
+    // current tail), the effect wouldn't re-fire and the user would have to wait for
+    // the next log event to scroll. With filter state in the keys, every filter
+    // change re-fires the scroll immediately.
     val lastLog = filteredLogs.lastOrNull()
-    LaunchedEffect(lastLog?.timestamp, lastLog?.message, autoScroll) {
+    LaunchedEffect(
+        lastLog?.timestamp, lastLog?.message, autoScroll,
+        showDebug, showInfo, showWarn, showError, searchQuery,
+    ) {
         if (autoScroll && filteredLogs.isNotEmpty()) {
             listState.animateScrollToItem(filteredLogs.size - 1)
         }
