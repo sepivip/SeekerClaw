@@ -4,7 +4,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { CHANNEL, workDir, PROVIDER, AUTH_TYPE, OPENAI_AUTH_TYPE, resolveActiveModel, config: _config } = require('./config');
+const { CHANNEL, workDir, PROVIDER, AUTH_TYPE, OPENAI_AUTH_TYPE, resolveActiveModel, runtimeState: _runtimeState, config: _config } = require('./config');
 const { stripSilentReply, containsSilentReply } = require('./silent-reply');
 const modelCatalog = require('./model-catalog');
 const { buildHelpLines } = require('./telegram-commands');
@@ -551,8 +551,33 @@ async function handleModelCommand(chatId, args) {
         deps.log(`[/model] Failed to write agent_settings.json: ${e.message}`, 'ERROR');
         return `❌ Couldn't save — ${e.message}`;
     }
-    deps.log(`[/model] Switched to ${v.model} (provider=${state.provider}, auth=${state.authType})`, 'INFO');
-    return `✓ Switched to \`${v.model}\`. Takes effect on your next message.`;
+    // BAT-513: also persist to runtime_state.json so the main UI process
+    // picks up the change via FileObserver and the prefs shadow stays
+    // in sync for rollback. Write the full state (provider+authType+model)
+    // because the BAT-513 file is a single object — leaving model out
+    // of a /model write would mean the file's other fields could go
+    // stale relative to the overlay. False return is logged but doesn't
+    // block the success reply: the overlay write above is the primary
+    // live-update mechanism (the per-turn ai.js resolver reads it),
+    // so the UI/cross-process sync degrading to next-restart isn't a
+    // correctness regression — just a UX one we surface as a warning.
+    let runtimeOk = true;
+    try {
+        runtimeOk = _runtimeState.write({
+            provider: state.provider,
+            authType: state.authType,
+            model: v.model,
+        });
+    } catch (e) {
+        runtimeOk = false;
+        deps.log(`[/model] runtime_state.json write threw: ${e.message}`, 'ERROR');
+    }
+    if (!runtimeOk) {
+        deps.log(`[/model] runtime_state.json write returned false — UI may show stale model until restart`, 'WARN');
+    }
+    deps.log(`[/model] Switched to ${v.model} (provider=${state.provider}, auth=${state.authType}, runtime_state_ok=${runtimeOk})`, 'INFO');
+    const warningSuffix = runtimeOk ? '' : '\n⚠ App settings UI may show stale model until next service restart.';
+    return `✓ Switched to \`${v.model}\`. Takes effect on your next message.${warningSuffix}`;
 }
 
 // ============================================================================
@@ -701,6 +726,34 @@ async function handleProviderCommand(chatId, args, messageId = null) {
         return `❌ Couldn't save — ${e.message}`;
     }
 
+    // BAT-513: snapshot runtime_state.json BEFORE the write so a failed
+    // restart later (bridge fail / sendMessage fail) can revert it
+    // alongside the overlay revert. Without this, the overlay reverts
+    // but runtime_state.json keeps the new (provider, authType, model)
+    // — the main UI Settings screen would then show the NEW provider
+    // while the running Node process is still on the OLD one, a
+    // half-switched state worse than today's overlay-only revert.
+    const prevRuntimeState = (() => {
+        try { return _runtimeState.read(); } catch (_) { return null; }
+    })();
+    const runtimeStateModelToWrite = newModel || state.model;
+    try {
+        const ok = _runtimeState.write({
+            provider: newProvider,
+            authType: newAuthType,
+            model: runtimeStateModelToWrite,
+        });
+        if (!ok) {
+            try { writeAgentSettingsPatch(revertPatch); } catch (_) {}
+            deps.log(`[/provider] runtime_state.json write returned false — reverting overlay, no restart`, 'ERROR');
+            return `❌ Couldn't save provider/model. State unchanged.`;
+        }
+    } catch (e) {
+        try { writeAgentSettingsPatch(revertPatch); } catch (_) {}
+        deps.log(`[/provider] runtime_state.json write threw (${e.message}) — reverting overlay, no restart`, 'ERROR');
+        return `❌ Couldn't save — ${e.message}. State unchanged.`;
+    }
+
     deps.log(`[/provider] Switching to ${newProvider}/${newAuthType} (model=${newModel}); restart pending`, 'INFO');
 
     const displayProv = modelCatalog.displayNameForProvider(newProvider);
@@ -741,15 +794,24 @@ async function handleProviderCommand(chatId, args, messageId = null) {
         deps.androidBridgeCall('/service/restart', {}, 5000).catch((err) => {
             _restartPending = false;
             deps.log(`[/provider] /service/restart bridge call failed: ${err && err.message}`, 'ERROR');
-            // Revert the overlay so the process doesn't keep running with
-            // the OLD adapter while overlay metadata advertises the NEW
-            // one. Without this, `resolveActiveProviderState` (and any
-            // post-failure Kotlin-side reconcile on a manual restart)
-            // would diverge from the actually-active adapter.
+            // Revert BOTH the overlay AND runtime_state.json so the
+            // process doesn't keep running with the OLD adapter while
+            // either file's metadata advertises the NEW one. Without
+            // this, `resolveActiveProviderState` (overlay) and the
+            // main UI Settings screen (runtime_state.json) would each
+            // diverge from the actually-active adapter and from each
+            // other.
             try {
                 writeAgentSettingsPatch(revertPatch);
             } catch (e) {
                 deps.log(`[/provider] overlay revert failed (${e && e.message}); agent_settings.json may be half-switched`, 'WARN');
+            }
+            // BAT-513: also revert runtime_state.json so the UI shows
+            // the OLD provider, matching the still-running adapter.
+            if (prevRuntimeState) {
+                try { _runtimeState.write(prevRuntimeState); } catch (e) {
+                    deps.log(`[/provider] runtime_state revert failed (${e && e.message}); UI may show stale provider`, 'WARN');
+                }
             }
             // Restart didn't fire — tell the user so they don't wait
             // forever for a restart that never happens.
@@ -766,6 +828,11 @@ async function handleProviderCommand(chatId, args, messageId = null) {
             writeAgentSettingsPatch(revertPatch);
         } catch (e) {
             deps.log(`[/provider] overlay revert failed (${e && e.message})`, 'WARN');
+        }
+        if (prevRuntimeState) {
+            try { _runtimeState.write(prevRuntimeState); } catch (e) {
+                deps.log(`[/provider] runtime_state revert failed (${e && e.message})`, 'WARN');
+            }
         }
     });
 

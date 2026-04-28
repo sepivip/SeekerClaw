@@ -1,5 +1,10 @@
 package com.seekerclaw.app.util
 
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import org.junit.After
@@ -400,7 +405,7 @@ class CrossProcessStoreTest {
         val src = locateLiveSource()
         val text = src.readText()
         val writeBlock = Regex(
-            """fun\s+write\s*\(\s*value\s*:\s*T\s*\)\s*\{[\s\S]*?(?=\n\s{4}\}\n)""",
+            """fun\s+write\s*\(\s*value\s*:\s*T\s*\)(?:\s*:\s*Boolean)?\s*\{[\s\S]*?(?=\n\s{4}\}\n)""",
         ).find(text)?.value ?: error("write() function body not found")
         assertTrue(
             "write() must capture `val snapshot: T = cloneSafe(value)` up-front",
@@ -471,7 +476,7 @@ class CrossProcessStoreTest {
         val src = locateLiveSource()
         val text = src.readText()
         val writeBlock = Regex(
-            """fun\s+write\s*\(\s*value\s*:\s*T\s*\)\s*\{[\s\S]*?(?=\n\s{4}\}\n)""",
+            """fun\s+write\s*\(\s*value\s*:\s*T\s*\)(?:\s*:\s*Boolean)?\s*\{[\s\S]*?(?=\n\s{4}\}\n)""",
         ).find(text)?.value ?: error("write() body not found")
         // Find the synchronized block boundaries.
         val syncStart = writeBlock.indexOf("synchronized(writeLock)")
@@ -624,6 +629,103 @@ class CrossProcessStoreTest {
         // canonical basename check.
         assertTrue("isValidFileName must compare against File(fileName).name",
             Regex("""fileName\s*!=\s*File\s*\(\s*fileName\s*\)\s*\.\s*name""").containsMatchIn(text))
+    }
+
+    // --- BAT-513 Boolean return + Mutex-protected update() ---
+
+    @Test
+    fun `drift write returns Boolean (BAT-513 — failure visibility for callers)`() {
+        // BAT-513 amends the BAT-512 store: `write()` must return Boolean
+        // so callers (Settings UI, Telegram /provider, /model) can
+        // distinguish persisted-success from caught-failure and surface
+        // the difference (snackbar + revert / "couldn't save" reply)
+        // instead of leaving silent optimistic UI state.
+        //
+        // Pin both ends of the contract:
+        //   1) the function signature returns Boolean,
+        //   2) `return didWrite` is the actual return statement (so a
+        //      future refactor that flips the success flag without
+        //      returning it can't sneak through).
+        val src = locateLiveSource()
+        val text = src.readText()
+        assertTrue(
+            "write() must return Boolean (was Unit pre-BAT-513)",
+            Regex("""fun\s+write\s*\(\s*value\s*:\s*T\s*\)\s*:\s*Boolean\s*\{""")
+                .containsMatchIn(text),
+        )
+        assertTrue(
+            "write() body must end by returning the didWrite flag",
+            Regex("""return\s+didWrite\b""").containsMatchIn(text),
+        )
+    }
+
+    @Test
+    fun `drift update is suspend Mutex-protected RMW (BAT-513)`() {
+        // BAT-513 adds `suspend fun update(transform: (T) -> T): Boolean`.
+        // The whole point is to serialize read-modify-write so two
+        // concurrent `update {}` calls in the same process can't lose an
+        // interleaved change (their `read()` and `write()` would
+        // otherwise interleave under the existing writeLock, which only
+        // covers the file move).
+        //
+        // Pin the structural contract: declared as `suspend`, takes a
+        // `(T) -> T` transform, returns Boolean, and the body uses
+        // `updateMutex.withLock`.
+        val src = locateLiveSource()
+        val text = src.readText()
+        assertTrue(
+            "update must be declared suspend with the (T) -> T transform shape",
+            Regex(
+                """suspend\s+fun\s+update\s*\(\s*transform\s*:\s*\(\s*T\s*\)\s*->\s*T\s*\)\s*:\s*Boolean\b""",
+            ).containsMatchIn(text),
+        )
+        assertTrue(
+            "update must declare a Mutex for RMW serialization",
+            Regex("""updateMutex\s*=\s*Mutex\s*\(\s*\)""").containsMatchIn(text),
+        )
+        assertTrue(
+            "update body must serialize via updateMutex.withLock",
+            Regex("""updateMutex\.withLock""").containsMatchIn(text),
+        )
+    }
+
+    @Test
+    fun `mirror — Mutex-protected RMW under contention preserves all increments`() {
+        // BAT-513: `update {}` must serialize same-process read-modify-
+        // write so 10 concurrent `update { it + 1 }` calls collapse to a
+        // final value of +10, not some lower number reflecting lost
+        // updates between unsynchronized read/write pairs.
+        //
+        // Pure-JVM mirror: build a tiny store-shaped harness that mimics
+        // the live class's two locks (writeLock for the file move,
+        // updateMutex for the RMW). The atomicWrite helper at the bottom
+        // of this file gives us file-level atomicity; here we layer the
+        // Mutex on top to verify the contract.
+        val file = File(workDir, "rmw.json")
+        atomicWrite(file, Sample(model = "0"))
+        val mutex = Mutex()
+        suspend fun update(transform: (Sample) -> Sample): Boolean {
+            return mutex.withLock {
+                val current = readOrInitial(file, Sample(model = "0"))
+                val next = transform(current)
+                atomicWrite(file, next)
+                true
+            }
+        }
+        runBlocking {
+            val deferreds = (1..10).map {
+                async {
+                    update { s -> s.copy(model = (s.model.toInt() + 1).toString()) }
+                }
+            }
+            assertTrue("all updates report success", deferreds.awaitAll().all { it })
+        }
+        val finalValue = readOrInitial(file, Sample())
+        assertEquals(
+            "Mutex-serialized RMW must preserve all 10 increments — no lost updates",
+            "10",
+            finalValue.model,
+        )
     }
 
     // --- helpers (mirror the live class) ---

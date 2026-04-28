@@ -165,8 +165,36 @@ const DISCORD_OWNER_ID = config.discordOwnerId ? String(config.discordOwnerId).t
 let OWNER_ID = CHANNEL === 'discord'
     ? (config.discordOwnerId ? String(config.discordOwnerId).trim() : '')
     : (config.ownerId ? String(config.ownerId).trim() : '');
+// BAT-513: load the cross-process runtime state file (provider /
+// authType / model). This is the new source of truth — Telegram
+// `/provider` and `/model` write to it, the main UI process's
+// RuntimeStateStore mirrors it back to SharedPreferences. config.json
+// is the cold-start fallback (Kotlin regenerates it on every service
+// start from prefs + Keystore), so a fresh install with no
+// runtime_state.json yet still boots correctly.
+const _runtimeState = require('./runtime-state').open(workDir);
+let _runtimeStateValues = null;
+try {
+    if (fs.existsSync(_runtimeState.filePath)) {
+        _runtimeStateValues = _runtimeState.read();
+        log(`[Config] Loaded runtime_state.json: provider=${_runtimeStateValues.provider} authType=${_runtimeStateValues.authType} model=${_runtimeStateValues.model}`, 'DEBUG');
+    } else {
+        log('[Config] runtime_state.json not present — falling back to config.json values', 'DEBUG');
+    }
+} catch (e) {
+    log(`[Config] runtime_state.json load failed (${e.message}) — falling back to config.json`, 'WARN');
+}
+
 const _SUPPORTED_PROVIDERS = new Set(['claude', 'openai', 'openrouter', 'custom']);
-const _rawProvider = (typeof config.provider === 'string' && config.provider.trim()) ? config.provider.trim().toLowerCase() : 'claude';
+// Resolution order: runtime_state.json (live, BAT-513) → config.json (cold-start).
+// Fall back to 'claude' if neither has a valid value.
+const _runtimeProvider = (_runtimeStateValues && typeof _runtimeStateValues.provider === 'string')
+    ? _runtimeStateValues.provider.trim().toLowerCase()
+    : '';
+const _configProvider = (typeof config.provider === 'string' && config.provider.trim())
+    ? config.provider.trim().toLowerCase()
+    : '';
+const _rawProvider = _runtimeProvider || _configProvider || 'claude';
 const PROVIDER = _SUPPORTED_PROVIDERS.has(_rawProvider) ? _rawProvider : 'claude';
 // ANTHROPIC_KEY is derived after AUTH_TYPE is computed (below) so it can
 // pick the right credential field. Kotlin now writes raw `anthropicApiKey`
@@ -185,7 +213,15 @@ const _SUPPORTED_OPENAI_AUTH_TYPES = new Set(['api_key', 'oauth']);
 const _LEGACY_OPENAI_AUTH_TYPE_ALIASES = new Map([
     ['setup_token', 'api_key'],
 ]);
-const _rawAuthType = typeof config.authType === 'string' ? config.authType.trim().toLowerCase() : '';
+// BAT-513: authType resolves from runtime_state.json first, then
+// config.json. Same fallback chain as PROVIDER above.
+const _runtimeAuthType = (_runtimeStateValues && typeof _runtimeStateValues.authType === 'string')
+    ? _runtimeStateValues.authType.trim().toLowerCase()
+    : '';
+const _configAuthType = typeof config.authType === 'string'
+    ? config.authType.trim().toLowerCase()
+    : '';
+const _rawAuthType = _runtimeAuthType || _configAuthType;
 let AUTH_TYPE = _rawAuthType || 'api_key';
 
 if (PROVIDER === 'openai' && _LEGACY_OPENAI_AUTH_TYPE_ALIASES.has(AUTH_TYPE)) {
@@ -227,7 +263,17 @@ const _defaultModel = PROVIDER === 'openai' ? 'gpt-5.4'
     : PROVIDER === 'openrouter' ? 'anthropic/claude-sonnet-4-6'
     : PROVIDER === 'custom' ? ''
     : 'claude-opus-4-7';
-const MODEL = config.model || _defaultModel;
+// BAT-513: model resolves from runtime_state.json first, then
+// config.json, then the per-provider safe default. The agent_settings.json
+// overlay path (resolveActiveModel) still applies AFTER this for live
+// `/model` updates within a process lifetime; once the BAT-511 family
+// fully migrates, the overlay path can be retired in favour of
+// runtime-state.js per-turn reads.
+const _runtimeModel = (_runtimeStateValues && typeof _runtimeStateValues.model === 'string'
+    && _runtimeStateValues.model.trim())
+    ? _runtimeStateValues.model.trim()
+    : '';
+const MODEL = _runtimeModel || config.model || _defaultModel;
 const AGENT_NAME = config.agentName || 'SeekerClaw';
 
 /**
@@ -636,6 +682,11 @@ module.exports = {
 
     // Config object (for accessing optional API keys etc.)
     config,
+
+    // BAT-513: handle on the cross-process runtime state file so
+    // command handlers (`/model`, `/provider` in message-handler.js)
+    // can write live updates without re-deriving the file path.
+    runtimeState: _runtimeState,
 
     // Primary constants
     BOT_TOKEN,

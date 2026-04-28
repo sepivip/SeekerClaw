@@ -1195,8 +1195,19 @@ fun SettingsScreen(
                         discordOwnerId = importedConfig.discordOwnerId.ifBlank { existing.discordOwnerId },
                         channel = importedConfig.channel.ifBlank { existing.channel },
                     ) else importedConfig
-                    ConfigManager.saveConfig(context, merged)
+                    val savedOk = ConfigManager.saveConfig(context, merged)
                     val savedConfig = ConfigManager.loadConfig(context)
+                    if (!savedOk) {
+                        // BAT-513: prefs persisted but RuntimeStateStore.write
+                        // failed — runtime fields may not have reached the
+                        // cross-process file. Surface to user; the legacy
+                        // prefs path still works so the import isn't lost.
+                        Toast.makeText(
+                            context,
+                            "Imported but couldn't sync runtime config — restart the service.",
+                            Toast.LENGTH_LONG,
+                        ).show()
+                    }
                     LogCollector.append(
                         "[ConfigImport] Saved snapshot: ${ConfigManager.redactedSnapshot(savedConfig)}"
                     )

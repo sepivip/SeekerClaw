@@ -15,6 +15,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.json.Json
 import java.io.File
@@ -173,6 +175,15 @@ class CrossProcessStore<T>(
     private val tmpFile: File = File(appContext.filesDir, "$fileName.tmp")
     private val writeLock = Any()
 
+    // BAT-513: serializes [update] read-modify-write. Same-process callers
+    // performing concurrent `update { ... }` would otherwise race between
+    // their `read()` and `write()` and silently lose increments. The
+    // existing `writeLock` synchronizes the file move only — it does not
+    // span the read step. Cross-process `update` is still last-writer-wins
+    // (filesystem move semantics); no caller in the BAT-511 family needs
+    // cross-process RMW.
+    private val updateMutex = Mutex()
+
     private val json = Json {
         ignoreUnknownKeys = true
         encodeDefaults = true
@@ -316,6 +327,13 @@ class CrossProcessStore<T>(
      * (via [state]) and other-process observers (via FileObserver +
      * broadcast).
      *
+     * Returns `true` IFF the file was persisted AND [_state] published
+     * the new value. Returns `false` on a caught failure (full FS,
+     * permission, IO error, encode failure) — callers translate this
+     * into user-visible feedback (toast / snackbar / Telegram reply);
+     * the store itself never throws so a hot path can't be killed by
+     * a transient FS error. The failure is also logged at ERROR.
+     *
      * Concurrent writes from the same process serialize via [writeLock]
      * — `writeText` to the `.tmp` file plus the
      * `Files.move(..., REPLACE_EXISTING, ATOMIC_MOVE)` (with a non-
@@ -330,7 +348,7 @@ class CrossProcessStore<T>(
      * stored in [_state] so a caller mutating their reference after
      * `write()` returns can't change what observers see.
      */
-    fun write(value: T) {
+    fun write(value: T): Boolean {
         // BAT-512 (Copilot review fix round-7): clone `value` ONCE
         // up-front into a stable snapshot, then derive both the
         // serialized text and the `_state` update from that snapshot.
@@ -413,6 +431,30 @@ class CrossProcessStore<T>(
         // failed write doesn't tell other-process observers a
         // change happened that didn't.
         if (didWrite) broadcastChanged()
+        return didWrite
+    }
+
+    /**
+     * Read-modify-write under an internal [Mutex] so two concurrent
+     * `update {}` calls in the same process can't lose an interleaved
+     * change between their respective `read()` and `write()` steps.
+     *
+     * Returns the underlying [write]'s result — `true` if the
+     * transformed value persisted, `false` on caught failure.
+     *
+     * The [transform] callback is invoked under the lock with the
+     * current persisted value (a fresh deserialized instance from
+     * [read]) and must return the value to persist. Keep transforms
+     * cheap and pure — the lock is held for the duration of the call.
+     *
+     * Cross-process `update` is still last-writer-wins per filesystem
+     * move semantics; this Mutex is same-process only. No caller in
+     * the BAT-511 family needs cross-process RMW.
+     */
+    suspend fun update(transform: (T) -> T): Boolean = updateMutex.withLock {
+        val current = read()
+        val next = transform(current)
+        write(next)
     }
 
     /**

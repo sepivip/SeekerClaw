@@ -129,6 +129,17 @@ android {
         buildConfig = true
     }
 
+    testOptions {
+        // BAT-513: pure-JVM unit tests need android.util.Log calls to
+        // resolve to no-op default returns instead of the stub's
+        // "Method not mocked" RuntimeException. Existing tests don't
+        // hit any android API where the default return shape would
+        // surprise them; new RuntimeStateStoreTest assertions on the
+        // collector's invalid-emission path require this setting to
+        // exercise the WARN-then-skip branch.
+        unitTests.isReturnDefaultValues = true
+    }
+
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")

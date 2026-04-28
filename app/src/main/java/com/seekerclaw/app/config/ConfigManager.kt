@@ -13,6 +13,8 @@ import android.util.Log
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.core.content.ContextCompat
 import com.seekerclaw.app.BuildConfig
+import com.seekerclaw.app.state.RuntimeState
+import com.seekerclaw.app.state.RuntimeStateStore
 import com.seekerclaw.app.util.LogCollector
 import com.seekerclaw.app.util.LogLevel
 import org.json.JSONArray
@@ -121,6 +123,21 @@ object ConfigManager {
         }
     }
 
+    /**
+     * Public facade over [broadcastConfigChanged] + [configVersion]
+     * bump for callers that updated config-relevant state by a path
+     * other than [saveConfig] / [reconcileWithAgentSettings] (e.g.
+     * BAT-513's [com.seekerclaw.app.state.RuntimeStateStore]
+     * collector mirror, which writes prefs from the cross-process
+     * file). Without this, a cross-process write of runtime fields
+     * lands in prefs but in-process Compose screens that read via
+     * [loadConfig] don't recompose until manual remount.
+     */
+    fun signalConfigChanged(context: Context) {
+        configVersion.intValue++
+        broadcastConfigChanged(context)
+    }
+
     private const val PREFS_NAME = "seekerclaw_prefs"
     private const val KEY_API_KEY_ENC = "api_key_enc"
     private const val KEY_BOT_TOKEN_ENC = "bot_token_enc"
@@ -219,7 +236,27 @@ object ConfigManager {
             .apply()
     }
 
-    fun saveConfig(context: Context, config: AppConfig) {
+    /**
+     * Persist [config] to [SharedPreferences] (encrypted fields via
+     * [KeystoreHelper]) AND mirror the runtime fields
+     * (provider/authType/model) into [com.seekerclaw.app.state.RuntimeStateStore]
+     * so the `:node` process picks them up via the cross-process file
+     * (BAT-513). The runtime-state write is what determines this
+     * function's return value:
+     *
+     *  - `true` — prefs persisted AND the runtime-state file write
+     *    returned `true`. UI flows can navigate forward / clear
+     *    optimistic state.
+     *  - `false` — prefs commit failed OR the runtime-state file
+     *    write failed. UI flows should surface a Toast/Snackbar and
+     *    revert any optimistic UI state via
+     *    [com.seekerclaw.app.state.RuntimeStateStore.read].
+     *
+     * Pre-BAT-513 callers that ignore the return value continue to
+     * compile (Boolean values can be discarded) — they retain the
+     * pre-BAT-513 fire-and-forget behaviour.
+     */
+    fun saveConfig(context: Context, config: AppConfig): Boolean {
         val encApiKey = KeystoreHelper.encrypt(config.anthropicApiKey)
         val encBotToken = KeystoreHelper.encrypt(config.telegramBotToken)
 
@@ -382,6 +419,37 @@ object ConfigManager {
             broadcastConfigChanged(context)
         } else {
             LogCollector.append("[Config] Failed to persist config (commit=false)", LogLevel.ERROR)
+            return false
+        }
+        // BAT-513: also persist the cross-process runtime state file so
+        // the `:node` process picks up provider/authType/model via
+        // runtime-state.js without waiting for a service restart. The
+        // RuntimeStateStore.write also re-emits via its StateFlow, and
+        // its observe-and-mirror collector will see the new value
+        // already matches prefs (we wrote them above) and skip the
+        // mirror — the redundancy guard is what makes the dual write
+        // free. If RuntimeStateStore.write fails (FS error), prefs are
+        // already up-to-date so the legacy code path still works; we
+        // surface the failure to the caller so UI can revert. An
+        // IllegalArgumentException on an invalid (provider, authType)
+        // pair is also caught and surfaced as `false` — programmer
+        // bug at the UI layer, but we don't want it to crash the
+        // saveConfig hot path.
+        return try {
+            RuntimeStateStore.write(
+                RuntimeState(
+                    provider = config.provider,
+                    authType = config.authType,
+                    model = config.model,
+                ),
+            )
+        } catch (e: IllegalArgumentException) {
+            LogCollector.append(
+                "[Config] saveConfig produced invalid RuntimeState — runtime_state.json " +
+                    "not updated (prefs still updated): ${e.message}",
+                LogLevel.WARN,
+            )
+            false
         }
     }
 
@@ -806,11 +874,39 @@ object ConfigManager {
                 "model=${if (modelChanged) "$resolvedModel (was ${fromPrefs.model})" else fromPrefs.model}"
         )
 
-        return fromPrefs.copy(
+        val reconciled = fromPrefs.copy(
             provider = if (providerChanged) validProvider!! else fromPrefs.provider,
             authType = if (authChanged) validAuthType!! else fromPrefs.authType,
             model = if (modelChanged) resolvedModel else fromPrefs.model,
         )
+        // BAT-513: keep runtime_state.json in sync with the prefs we just
+        // reconciled. Without this, the legacy agent_settings.json overlay
+        // path could update prefs while the new RuntimeStateStore-backed
+        // file goes stale, and the next `:node` startup would read the
+        // stale file via runtime-state.js and overwrite our reconciled
+        // prefs back. RuntimeStateStore.write is a no-op (returns false)
+        // if init() hasn't run yet — that's fine for the `:node` process,
+        // which doesn't init RuntimeStateStore. The collector's
+        // redundancy guard ensures prefs aren't double-mirrored. Wrap
+        // in try/catch so a (theoretically unreachable) invalid combo
+        // out of reconcile doesn't crash this hot path; the prefs side
+        // is already updated and the agent stays operational.
+        try {
+            RuntimeStateStore.write(
+                RuntimeState(
+                    provider = reconciled.provider,
+                    authType = reconciled.authType,
+                    model = reconciled.model,
+                ),
+            )
+        } catch (e: IllegalArgumentException) {
+            LogCollector.append(
+                "[Config] Reconcile produced invalid RuntimeState — runtime_state.json " +
+                    "left untouched (prefs still updated): ${e.message}",
+                LogLevel.WARN,
+            )
+        }
+        return reconciled
     }
 
     /**

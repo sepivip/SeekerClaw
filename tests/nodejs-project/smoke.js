@@ -112,6 +112,8 @@ const SKIP_REASONS = {
     'tools/web.js': 'requires web.js caches',
     'sql-wasm.js': 'third-party bundle (sql.js)',
     'markdown-it.min.js': 'third-party bundle (markdown-it)',
+    'cross-process-store.js': 'requires config-aware filesystem path (BAT-512 store helper, fixture-only)',
+    'runtime-state.js': 'requires workDir to derive filesDir (BAT-513 helper, fixture-only)',
 };
 
 const GREEN = '\x1b[32m';

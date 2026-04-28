@@ -220,8 +220,10 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
             }
         }
 
-        // Single atomic save.
-        ConfigManager.saveConfig(
+        // Single atomic save. saveConfig returns false (BAT-513) when
+        // RuntimeStateStore.write fails — surface to the user and skip
+        // the restart dialog so we don't restart on a no-op change.
+        val saved = ConfigManager.saveConfig(
             context,
             current.copy(
                 provider = newProviderId,
@@ -230,7 +232,15 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
             )
         )
         config = ConfigManager.loadConfig(context)
-        showRestartDialog = true
+        if (saved) {
+            showRestartDialog = true
+        } else {
+            android.widget.Toast.makeText(
+                context,
+                "Couldn't save provider change. Try again.",
+                android.widget.Toast.LENGTH_LONG,
+            ).show()
+        }
     }
 
     SeekerClawScaffold(title = "AI Provider", onBack = onBack) { padding ->
