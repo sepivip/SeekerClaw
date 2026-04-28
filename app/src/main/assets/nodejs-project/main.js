@@ -851,10 +851,18 @@ telegram('getMe')
     });
 }
 
-// Graceful shutdown: stop the channel (close WebSocket for Discord, no-op for Telegram).
-// Runs before database.js's gracefulShutdown which handles session summaries + DB save.
-// BAT-524: also cancel all pending idle-summary timers so dangling
-// setTimeouts don't keep the event loop alive past process.exit().
+// Channel + timer cleanup on signal: closes the Discord WebSocket if
+// active (no-op for Telegram long-poll), and cancels all pending
+// idle-summary timers so dangling setTimeouts don't keep the event
+// loop alive past process.exit() (BAT-524).
+//
+// Ordering note: database.js registers its own SIGTERM/SIGINT handler
+// at require-time near the top of this file, so gracefulShutdown is
+// INVOKED first. Because gracefulShutdown is async (awaits session-
+// summary work), it returns a suspended promise — Node then dispatches
+// the next listener (this one), whose synchronous body completes
+// while gracefulShutdown's tail (saveDatabase + process.exit(0))
+// is still pending.
 process.on('SIGTERM', () => { try { channel.stop(); } catch (_) {} cancelAllIdleSummaries(); });
 process.on('SIGINT', () => { try { channel.stop(); } catch (_) {} cancelAllIdleSummaries(); });
 
