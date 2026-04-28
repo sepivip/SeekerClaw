@@ -455,12 +455,26 @@ class CrossProcessStore<T>(
         }
         // Same FileObserver pattern LogCollector / ServiceState use post-
         // BAT-518: watch the parent dir, filter by basename in onEvent.
-        // Mask covers every way the file can change in this codebase:
-        //   - MODIFY / CLOSE_WRITE for the .tmp `writeText` step
-        //   - MOVED_TO for the `Files.move(..., ATOMIC_MOVE)` step
-        //     (and for atomic .tmp+rename writes from Node)
-        //   - CREATE for first-time creation
-        //   - DELETE for removal (e.g. user-initiated wipe)
+        // The mask is on the parent dir; the OS delivers events for
+        // EVERY file in that dir. onEvent below filters by basename
+        // so only events on `fileName` itself trigger reload — events
+        // on the sibling `<fileName>.tmp` are ignored. The mask
+        // therefore needs to cover every way `fileName` can change:
+        //   - MOVED_TO is the primary trigger: both Kotlin's
+        //     `Files.move(.tmp → fileName, REPLACE_EXISTING,
+        //     ATOMIC_MOVE)` and Node's `fs.renameSync(.tmp, fileName)`
+        //     deliver MOVED_TO on the destination basename.
+        //   - CREATE fires when fileName is created for the first
+        //     time (no prior file existed at this path).
+        //   - DELETE fires when fileName is removed (e.g. user-
+        //     initiated wipe).
+        //   - MODIFY / CLOSE_WRITE are defensive: they cover any
+        //     hypothetical writer that bypasses the tmp+rename
+        //     contract and writes directly to fileName. Current
+        //     callers all use atomic move, so these fire on `.tmp`
+        //     in practice and onEvent filters them out — keeping
+        //     them in the mask costs nothing and guards against
+        //     future direct-write callers.
         fileObserver = object : FileObserver(
             parent,
             FileObserver.MODIFY or FileObserver.CLOSE_WRITE or
