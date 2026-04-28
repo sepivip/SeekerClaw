@@ -607,8 +607,7 @@ function backfillSessionsFromFiles() {
 // GRACEFUL SHUTDOWN (BAT-57)
 // ============================================================================
 
-// Registered outside initDatabase so shutdown hooks work even if DB init fails
-async function gracefulShutdown(signal) {
+async function flushForShutdown(signal, { summaryTimeoutMs = 5000 } = {}) {
     log(`[Shutdown] ${signal} received, saving session summary...`, 'INFO');
     // BAT-524: cancel pending idle-summary timers FIRST. Without this,
     // a timer that's about to fire could call saveSessionSummary
@@ -622,7 +621,7 @@ async function gracefulShutdown(signal) {
     try {
         const { conversations, saveSessionSummary, MIN_MESSAGES_FOR_SUMMARY } = _shutdownDeps;
         if (conversations && saveSessionSummary) {
-            const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 5000));
+            const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), summaryTimeoutMs));
             const summaries = [];
             for (const [chatId, conv] of conversations) {
                 if (conv.length >= MIN_MESSAGES_FOR_SUMMARY) {
@@ -639,10 +638,16 @@ async function gracefulShutdown(signal) {
     }
     // BAT-523: force-flush any pending debounced mutations before the
     // process exits — otherwise dirty in-memory rows would be lost.
-    // scheduleRetry=false because the very next instruction is
-    // process.exit(0) — a queued retry timer would never run, and the
+    // scheduleRetry=false because shutdown callers are immediately
+    // followed by either normal Node termination or Android
+    // killProcess(); a queued retry timer would never run, and the
     // "retry in 60s" log line would be a lie.
     saveDatabase({ force: true, scheduleRetry: false });
+}
+
+// Registered outside initDatabase so shutdown hooks work even if DB init fails
+async function gracefulShutdown(signal) {
+    await flushForShutdown(signal);
     process.exit(0);
 }
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
@@ -781,7 +786,10 @@ function startDbSummaryInterval() {
 // `internal-control-server.js` so MCP control endpoints
 // (`POST /mcp/reconcile`, `POST /healthz`) can share the same port.
 // `getDbSummary` below is the only export the new server needs from
-// this module — main.js wires the dependency.
+// this module — main.js wires the dependency. BAT-525 adds
+// `flushForShutdown` to that wired-callback set so the new
+// `POST /shutdown/flush` endpoint can drive it without an import
+// cycle (database -> internal-control-server -> database).
 
 // ============================================================================
 // EXPORTS
@@ -798,6 +806,7 @@ module.exports = {
     writeDbSummaryFile,
     markDbSummaryDirty,
     markDbDirty, // BAT-523 (BAT-518 phase 3A) — call after every db.run() that mutates state
+    flushForShutdown,
     startDbSummaryInterval,
     getDbSummary,
 };

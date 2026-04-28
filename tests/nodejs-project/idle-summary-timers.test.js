@@ -351,17 +351,27 @@ test('drift: scheduleIdleSummary calls .unref() on the timer', () => {
         'scheduleIdleSummary must call timer.unref() so a pending idle timer cannot block clean process exit');
 });
 
-test('drift: gracefulShutdown receives cancelAllIdleSummaries via setShutdownDeps', () => {
+test('drift: shutdown flush helper receives cancelAllIdleSummaries via setShutdownDeps', () => {
     const dbSrc = readJsSource(path.join(__dirname, '..', '..', 'app', 'src', 'main',
         'assets', 'nodejs-project', 'database.js'));
     // The shutdown-deps record must declare cancelAllIdleSummaries.
     assert.ok(/cancelAllIdleSummaries\s*:/.test(dbSrc),
-        'database.js _shutdownDeps must declare cancelAllIdleSummaries (BAT-524 — gracefulShutdown can call process.exit before main.js SIGTERM listener runs)');
-    // gracefulShutdown must invoke it.
-    const fnMatch = dbSrc.match(/async\s+function\s+gracefulShutdown[\s\S]*?\n\}/);
-    assert.ok(fnMatch, 'gracefulShutdown function body not found');
+        'database.js _shutdownDeps must declare cancelAllIdleSummaries (BAT-524 — shutdown can call process.exit before main.js SIGTERM listener runs)');
+    // BAT-525: the cancel call moved from `gracefulShutdown` directly
+    // into the shared `flushForShutdown` helper (so the new
+    // POST /shutdown/flush HTTP endpoint also benefits, not just the
+    // signal path). The invariant — "shutdown path cancels idle
+    // timers" — is preserved; just inspect the new home.
+    const fnMatch = dbSrc.match(/async\s+function\s+flushForShutdown[\s\S]*?\n\}/);
+    assert.ok(fnMatch, 'flushForShutdown function body not found');
     assert.ok(/_shutdownDeps\.cancelAllIdleSummaries\s*\(\s*\)/.test(fnMatch[0]),
-        'gracefulShutdown must call _shutdownDeps.cancelAllIdleSummaries() so timers are released even when main.js SIGTERM listener is bypassed');
+        'flushForShutdown must call _shutdownDeps.cancelAllIdleSummaries() so timers are released on every shutdown path (signal handlers AND user-Stop HTTP flush)');
+    // gracefulShutdown must delegate to flushForShutdown so the
+    // SIGTERM/SIGINT path inherits the cancel.
+    const gsMatch = dbSrc.match(/async\s+function\s+gracefulShutdown[\s\S]*?\n\}/);
+    assert.ok(gsMatch, 'gracefulShutdown function body not found');
+    assert.ok(/await\s+flushForShutdown\s*\(/.test(gsMatch[0]),
+        'gracefulShutdown must await flushForShutdown so signal-driven shutdown also cancels idle timers');
     // main.js must pass cancelAllIdleSummaries when wiring deps.
     const mainSrc = readJsSource(MAIN_JS);
     assert.ok(/setShutdownDeps\s*\(\s*\{[^}]*cancelAllIdleSummaries/.test(mainSrc),

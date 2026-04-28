@@ -142,6 +142,11 @@ const {
     setShutdownDeps,
     initDatabase, indexMemoryFiles, backfillSessionsFromFiles,
     startDbSummaryInterval, getDbSummary,
+    // BAT-525: wired through internalControlServer.start() so the new
+    // POST /shutdown/flush endpoint can drive the same shutdown path
+    // SIGTERM/SIGINT use, without internal-control-server having to
+    // require('./database') and create a circular import.
+    flushForShutdown,
 } = require('./database');
 
 // BAT-514: extracted from database.js. Loopback server on :8766 hosts
@@ -753,6 +758,7 @@ telegram('getMe')
                 bridgeToken: BRIDGE_TOKEN,
                 getDbSummary,
                 requestReconcile: (id) => mcpManager.requestReconcile(id),
+                flushShutdown: flushForShutdown,
                 logFn: log,
             });
             startMcpFileWatch();
@@ -893,6 +899,7 @@ telegram('getMe')
             bridgeToken: BRIDGE_TOKEN,
             getDbSummary,
             requestReconcile: (id) => mcpManager.requestReconcile(id),
+            flushShutdown: flushForShutdown,
             logFn: log,
         });
         startMcpFileWatch();

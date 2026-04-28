@@ -393,17 +393,17 @@ test('drift: saveDatabase catch path reschedules on failure (retry guard)', () =
         'retry condition must include `force` so init bootstrap failures retry (post-Copilot review fix)');
 });
 
-test('drift: gracefulShutdown calls saveDatabase with scheduleRetry=false', () => {
+test('drift: shutdown flush calls saveDatabase with scheduleRetry=false', () => {
     // Pin that the shutdown path opts out of retry scheduling. If a
     // future refactor drops this option, shutdown failures would
     // schedule timers that never fire (process exits immediately) and
     // the log line would falsely promise a retry.
     const src = fs.readFileSync(DATABASE_JS, 'utf8');
-    const fnMatch = src.match(/async\s+function\s+gracefulShutdown[\s\S]*?\n\}/);
-    assert.ok(fnMatch, 'gracefulShutdown function body not found');
+    const fnMatch = src.match(/async\s+function\s+flushForShutdown[\s\S]*?\n\}/);
+    assert.ok(fnMatch, 'flushForShutdown function body not found');
     const body = fnMatch[0];
     assert.ok(/saveDatabase\s*\(\s*\{[^}]*scheduleRetry\s*:\s*false/.test(body),
-        'gracefulShutdown must pass scheduleRetry=false to saveDatabase (BAT-523 — process exits immediately, retry would be dead)');
+        'shutdown flush must pass scheduleRetry=false to saveDatabase (BAT-523/BAT-525 — retry timer would be dead)');
 });
 
 test('drift: indexMemoryFiles marks dirty unconditionally', () => {

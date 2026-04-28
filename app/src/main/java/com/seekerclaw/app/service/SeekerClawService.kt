@@ -27,9 +27,14 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
 import java.util.UUID
 
 class SeekerClawService : Service() {
@@ -549,6 +554,7 @@ class SeekerClawService : Service() {
 
     override fun onDestroy() {
         LogCollector.append("[Service] Stopping Claw Engine...")
+        flushNodeBeforeProcessKill()
         // Cancel the service scope FIRST. This stops any in-flight
         // forwardNewNodeDebugLines or observer reattach coroutines that
         // would otherwise race the observer.stopWatching() below — they
@@ -600,6 +606,46 @@ class SeekerClawService : Service() {
 
         // Service is isolated in :node process. Kill process so Node runtime cannot linger.
         android.os.Process.killProcess(android.os.Process.myPid())
+    }
+
+    private fun flushNodeBeforeProcessKill(timeoutMs: Long = 2_000L) {
+        if (!NodeBridge.isAlive()) return
+        val flushed = runBlocking {
+            withTimeoutOrNull(timeoutMs) {
+                withContext(Dispatchers.IO) {
+                    postNodeShutdownFlush(timeoutMs)
+                }
+            }
+        } == true
+
+        if (flushed) {
+            LogCollector.append("[Shutdown] Node flush acknowledged")
+        } else {
+            LogCollector.append(
+                "[Shutdown] Node flush timed out or failed; continuing process kill",
+                LogLevel.WARN,
+            )
+        }
+    }
+
+    private fun postNodeShutdownFlush(timeoutMs: Long): Boolean {
+        var conn: HttpURLConnection? = null
+        return try {
+            conn = (URL("http://127.0.0.1:8766/shutdown/flush").openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 250
+                readTimeout = (timeoutMs - 250L).coerceAtLeast(250L).toInt()
+                doOutput = true
+                setRequestProperty("Content-Type", "application/json")
+            }
+            conn.outputStream.use { it.write("{}".toByteArray(Charsets.UTF_8)) }
+            conn.responseCode in 200..299
+        } catch (e: Exception) {
+            LogCollector.append("[Shutdown] Node flush request failed: ${e.message}", LogLevel.WARN)
+            false
+        } finally {
+            conn?.disconnect()
+        }
     }
 
     private fun createNotification(text: String): Notification {

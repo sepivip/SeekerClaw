@@ -66,28 +66,34 @@ function _readBody(req, maxBytes) {
         // `done` guard so a single oversized chunk doesn't fire both
         // reject() AND resolve() via subsequent `end`/`error` events.
         let done = false;
+        const finish = (settle) => {
+            if (done) return;
+            done = true;
+            settle();
+        };
         req.on('data', (chunk) => {
             if (done) return;
             len += Buffer.byteLength(chunk);
             if (len > maxBytes) {
-                done = true;
                 const err = new Error('body too large');
                 err.code = _BODY_TOO_LARGE;
-                reject(err);
+                finish(() => reject(err));
                 return;
             }
             data += chunk;
         });
-        req.on('end', () => {
-            if (done) return;
-            done = true;
-            resolve(data);
-        });
-        req.on('error', (err) => {
-            if (done) return;
-            done = true;
-            reject(err);
-        });
+        req.on('end', () => finish(() => resolve(data)));
+        req.on('error', (err) => finish(() => reject(err)));
+        // BAT-525 R3 Copilot: if the client (typically Kotlin's
+        // SeekerClawService) times out and closes the socket before
+        // sending `end`, neither `end` nor `error` fires — the await
+        // would hang forever, leaking the request handler. Listen for
+        // `aborted` (legacy) and `close` (always emitted on socket
+        // disconnect) and reject so the route handler can return.
+        // The `done` guard makes this safe to fire alongside an
+        // already-resolved `end`/`error` (no-op if already settled).
+        req.on('aborted', () => finish(() => reject(Object.assign(new Error('client aborted'), { code: 'ECONNABORTED' }))));
+        req.on('close', () => finish(() => reject(Object.assign(new Error('client closed'), { code: 'ECONNCLOSED' }))));
     });
 }
 
@@ -101,6 +107,13 @@ let _server = null;
 let _bridgeToken = null;
 let _getDbSummary = null;
 let _requestReconcile = null;
+// BAT-525: flushShutdown is an async callback that drives Node's
+// graceful-shutdown sequence (session summaries + dirty-DB flush)
+// before Kotlin's `killProcess()`. Wired in main.js as
+// `database.flushForShutdown` so this module doesn't need a direct
+// `require('./database')` (which would create a circular import:
+// database -> ... -> internal-control-server -> database).
+let _flushShutdown = null;
 let _logFn = console.log;
 
 /**
@@ -118,6 +131,7 @@ function start(options) {
     _bridgeToken = typeof options.bridgeToken === 'string' ? options.bridgeToken : '';
     _getDbSummary = typeof options.getDbSummary === 'function' ? options.getDbSummary : null;
     _requestReconcile = typeof options.requestReconcile === 'function' ? options.requestReconcile : null;
+    _flushShutdown = typeof options.flushShutdown === 'function' ? options.flushShutdown : null;
     _logFn = typeof options.logFn === 'function' ? options.logFn : console.log;
 
     if (_server) return _server;
@@ -218,6 +232,54 @@ async function _route(req, res) {
             return _json(res, 429, { error: 'rate limit exceeded' }, { 'Retry-After': '60' });
         }
         return _json(res, 200, { ok: true });
+    }
+
+    if (url === '/shutdown/flush') {
+        // BAT-525: Android user-Stop kills :node via `killProcess()`,
+        // which bypasses Node's SIGTERM/SIGINT handlers (nodejs-mobile
+        // runs Node in-process via JNI). Kotlin calls this endpoint
+        // first and waits ≤2s, giving Node a chance to flush pending
+        // session summaries + debounced SQL.js mutations before the
+        // unavoidable kill. Without this hook, the last ~60s of
+        // `api_request_log` rows in the BAT-523 debounce window are
+        // lost on every user-Stop.
+        if (!_flushShutdown) {
+            return _json(res, 503, { error: 'flush unavailable' });
+        }
+        // R1 Copilot: drain the request body before awaiting the
+        // flush. Body is currently expected to be `{}` (≤256 bytes
+        // is generous). Leaving it unread can cause keep-alive
+        // connection issues and unnecessary buffering on the
+        // listener. The shared _readBody also handles abort/close
+        // (R3) so a Kotlin-side timeout doesn't leak this handler.
+        try {
+            await _readBody(req, 256);
+        } catch (err) {
+            // Body-too-large is unlikely (Kotlin sends `{}`) but
+            // surface as 413 for symmetry with the other endpoints.
+            // Other transport errors (abort/close) reach here too —
+            // the client is gone, but we still attempt the flush
+            // because the user-Stop intent is to persist state.
+            // Log and continue rather than abort the flush.
+            if (err && err.code === _BODY_TOO_LARGE) {
+                return _json(res, 413, { error: 'request body too large' });
+            }
+            _logFn(`[ControlServer] /shutdown/flush body read failed (${err.code || 'UNKNOWN'}): ${err.message}`, 'WARN');
+        }
+        // R2 Copilot: surface flush failures to the caller. Pre-fix
+        // returned 200 even when `flushForShutdown` threw (the
+        // original PR caught and logged but returned `{ok:true}`).
+        // Kotlin's "flush acknowledged" log would lie in exactly the
+        // failure mode this endpoint exists to handle. Now: 200 +
+        // `{ok:true}` only on clean success; 500 + `{ok:false,
+        // error:...}` if `flushShutdown` rejects.
+        try {
+            await _flushShutdown('USER_STOP', { summaryTimeoutMs: 1500 });
+            return _json(res, 200, { ok: true });
+        } catch (err) {
+            _logFn(`[ControlServer] /shutdown/flush failed: ${err.message}`, 'ERROR');
+            return _json(res, 500, { ok: false, error: err.message });
+        }
     }
 
     return _json(res, 404, { error: 'not found' });
