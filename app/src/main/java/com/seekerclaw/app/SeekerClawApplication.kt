@@ -41,12 +41,15 @@ class SeekerClawApplication : Application() {
         // mode can batch FileObserver delivery.
         // Order matters: LogCollector's FileObserver also dispatches
         // ServiceState reads for filesDir state files (BAT-518 device-fix
-        // consolidation). Attaching LogCollector FIRST means the observer
-        // is live before ServiceState's initial async read runs — without
-        // this order, a CREATE event for `bridge_token` landing in the
-        // narrow window between ServiceState's dispatched read and
-        // LogCollector's attach would be missed, and the UI wouldn't see
-        // the token until another file change.
+        // consolidation). LogCollector activates its FileObserver
+        // synchronously inside startWatching() — but its log-drain dispatch
+        // is gated on `initialReadComplete` until the dispatched
+        // readAllFromFile finishes. Cross-process state events
+        // (service_state, bridge_token) ARE dispatched immediately,
+        // independent of that gate, so attaching LogCollector first
+        // guarantees its observer is live before ServiceState's initial
+        // async read runs — a bridge_token CREATE landing during the
+        // catch-up window is delivered to ServiceState without delay.
         val isMainProcess = getProcessName() == packageName
         if (isMainProcess) {
             LogCollector.startWatching(this)

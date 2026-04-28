@@ -71,6 +71,14 @@ object LogCollector {
     // to _logs after _logs was reset to empty.
     @Volatile private var clearGeneration = 0L
 
+    // Set true after the initial readAllFromFile completes. Until then,
+    // FileObserver-driven log drains are skipped to avoid racing
+    // readAllFromFile's REPLACE semantics. ServiceState dispatches still
+    // fire immediately — they have their own StateFlow ordering and
+    // depend on observer-liveness for cross-process state events
+    // (e.g. bridge_token CREATE).
+    @Volatile private var initialReadComplete = false
+
     // Single-flight gate for FileObserver-driven reads: under heavy
     // logging, FileObserver fires MODIFY + CLOSE_WRITE per write —
     // easily 100+ events/sec. Without this gate, each event launched
@@ -188,27 +196,20 @@ object LogCollector {
                 return
             }
 
-            // Construct observer FIRST but DEFER startWatching() until the
-            // initial readAllFromFile completes (R-latest+5 fix). Reason:
-            // readAllFromFile uses a tail read (up to MAX_LINES * 200 bytes)
-            // and publishes by REPLACING `_logs.value`. If a FileObserver-
-            // driven drain (`readNewFromFile`) ran concurrently with the
-            // initial readAllFromFile, the drain's APPEND could be
-            // overwritten by readAllFromFile's REPLACE — and on files
-            // larger than the tail budget, entries in the file but
-            // outside the tail would silently disappear from the in-
-            // memory buffer (since lastReadPosition is shared and may
-            // already have advanced past them).
+            // Activate observer IMMEDIATELY at construction (R-latest+6 fix).
+            // ServiceState's cross-process state files (service_state,
+            // bridge_token) are watched via THIS observer too — a
+            // bridge_token CREATE that lands before observer activation
+            // would be permanently missed (no later writes guaranteed
+            // to re-trigger).
             //
-            // Trade-off: while startWatching is deferred, writes that
-            // land between readAllFromFile's read and startWatching's
-            // activation produce no event. Their bytes are still in
-            // the file though, and the next write triggers a drain
-            // that reads from lastReadPosition (= file end at time
-            // of readAllFromFile) to current length, picking up both
-            // the missed write and the new one. On a live agent log
-            // where writes happen frequently this gap closes within
-            // milliseconds.
+            // To still avoid the readAllFromFile (REPLACE) vs
+            // readNewFromFile (APPEND) race on the log file itself,
+            // we gate ONLY the log-drain dispatch on `initialReadComplete`,
+            // set true after the initial readAllFromFile publishes.
+            // Events arriving before that flag flips drop the LOG_FILE_NAME
+            // drain (readAllFromFile will read everything currently in
+            // the file anyway) but STILL fire ServiceState dispatches.
             //
             // Watch the parent dir, dispatch on `service_logs` filename. Mask
             // covers append-style writes (MODIFY / CLOSE_WRITE), atomic-rename
@@ -237,12 +238,18 @@ object LogCollector {
                     // Q_OVERFLOW is not a public FileObserver constant in
                     // the Android SDK — null path is the only signal we
                     // get, so we trigger resync on any null-path event.
-                    if (path == LOG_FILE_NAME || path == null) {
+                    if ((path == LOG_FILE_NAME || path == null) && initialReadComplete) {
                         // State-machine single-flight (see drainState
                         // declaration). Transition: 0 -> 1 (launch),
                         // 1 -> 2 (queue rerun), 2 -> 2 (no-op).
                         // getAndUpdate returns OLD value; we launch only
                         // when transitioning out of idle.
+                        //
+                        // Gated on initialReadComplete: events that fire
+                        // during initial catch-up are dropped here —
+                        // readAllFromFile reads the full current file
+                        // (incl. any in-flight writes) before flipping
+                        // the flag, so no log lines are lost.
                         val prev = drainState.getAndUpdate { current ->
                             if (current == 0) 1 else 2
                         }
@@ -289,9 +296,7 @@ object LogCollector {
                         ServiceState.handleFilesDirEvent(path)
                     }
                 }
-            }
-            // Note: NO .also { startWatching() } here — deferred until
-            // initial read completes (see scope.launch below).
+            }.also { it.startWatching() }
         } // end synchronized(startWatchingLock)
 
         // Initial catch-up read on Dispatchers.IO so the main-thread
@@ -299,16 +304,38 @@ object LogCollector {
         // _logs StateFlow holds emptyList until this lands; UI screens
         // that compose before see no log entries briefly.
         //
-        // After the read publishes, activate the observer. Order matters:
-        // doing observer.startWatching() AFTER readAllFromFile guarantees
-        // no FileObserver-driven drain can race the initial REPLACE-
-        // semantics publish (R-latest+5 fix).
+        // After the read publishes, flip initialReadComplete = true so
+        // FileObserver-driven log drains start firing. Observer is
+        // already live (activated synchronously above) so cross-process
+        // state-file events (bridge_token, service_state) have been
+        // dispatching to ServiceState all along.
         scope.launch {
             readAllFromFile()
-            synchronized(startWatchingLock) {
-                fileObserver?.startWatching()
+            initialReadComplete = true
+            // Trigger one drain in case writes landed between
+            // readAllFromFile's read and the flag flip — those events
+            // were dropped by the gate above. Reading from
+            // lastReadPosition (= file end at readAllFromFile time) to
+            // current length picks them up. Idempotent if no new bytes.
+            val prev = drainState.getAndUpdate { current ->
+                if (current == 0) 1 else 2
             }
-            Log.d(TAG, "startWatching: initial read complete, FileObserver activated")
+            if (prev == 0) {
+                scope.launch {
+                    while (true) {
+                        do {
+                            val before = lastReadPosition
+                            readNewFromFile()
+                            val advanced = lastReadPosition > before
+                            val moreBytes = (logFile?.length() ?: 0L) > lastReadPosition
+                            if (!advanced || !moreBytes) break
+                        } while (true)
+                        if (drainState.compareAndSet(1, 0)) break
+                        if (drainState.compareAndSet(2, 1)) continue
+                    }
+                }
+            }
+            Log.d(TAG, "startWatching: initial read complete, drains enabled")
         }
     }
 
