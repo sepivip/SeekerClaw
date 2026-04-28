@@ -891,14 +891,26 @@ object ConfigManager {
         // in try/catch so a (theoretically unreachable) invalid combo
         // out of reconcile doesn't crash this hot path; the prefs side
         // is already updated and the agent stays operational.
+        //
+        // Capture and log the Boolean so a transient FS failure (full
+        // storage etc.) surfaces — without this, runtime_state.json
+        // could go stale relative to prefs without any signal,
+        // hiding the divergence until the next successful write.
         try {
-            RuntimeStateStore.write(
+            val runtimeWritten = RuntimeStateStore.write(
                 RuntimeState(
                     provider = reconciled.provider,
                     authType = reconciled.authType,
                     model = reconciled.model,
                 ),
             )
+            if (!runtimeWritten) {
+                LogCollector.append(
+                    "[Config] Reconcile: RuntimeStateStore.write returned false — " +
+                        "runtime_state.json may be stale vs prefs until next successful write",
+                    LogLevel.WARN,
+                )
+            }
         } catch (e: IllegalArgumentException) {
             LogCollector.append(
                 "[Config] Reconcile produced invalid RuntimeState — runtime_state.json " +

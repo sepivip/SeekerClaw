@@ -20,12 +20,17 @@
 //  - `read()` — synchronous, returns the current `RuntimeState` value
 //    or the seeded defaults on missing file / decode failure.
 //  - `write(value)` — atomic temp+rename via cross-process-store.
-//    Returns `true` on persisted, `false` on caught FS failure
-//    (logged at ERROR; never throws).
+//    THROWS `Error` synchronously when (provider, authType) violates
+//    the matrix — caller bug, surface to the user. Returns `true` on
+//    persisted, `false` on caught FS failure (logged at ERROR by the
+//    underlying cross-process-store, never re-thrown). Callers must
+//    handle BOTH the throw (matrix violation) AND the false return
+//    (transient FS error) — see `message-handler.js:/provider` for
+//    the canonical try/catch + Boolean-check pattern.
 //  - `update(transform)` — read-modify-write, no built-in mutex on
 //    the Node side because Node is single-threaded for our purposes
-//    (no worker threads touch this file). Same shape as Kotlin's
-//    suspend `update` so call sites are symmetric.
+//    (no worker threads touch this file). Same throw/Boolean shape
+//    as `write` since it ends in a `write` call.
 //  - `validateMatrix(provider, authType)` — same provider/authType
 //    matrix the Kotlin side enforces. Calling code in
 //    message-handler.js should validate BEFORE calling write so an

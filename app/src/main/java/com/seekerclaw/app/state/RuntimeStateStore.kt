@@ -126,8 +126,21 @@ object RuntimeStateStore {
         // Migration: if no file exists yet, seed it from the prefs we
         // just read. The redundancy guard inside the collector will
         // skip the corresponding mirror call (file value == prefs).
+        // Surface a failed migration write so it's diagnosable: the
+        // app proceeds with the seeded in-memory state (UI works), but
+        // the `:node` side will fall back to config.json values until
+        // a later write succeeds. Without the log, this divergence is
+        // silent. Common failure mode would be transient FS pressure
+        // (full storage) — recoverable on next user-initiated save.
         val file = File(app.filesDir, FILE_NAME)
-        if (!file.exists()) cps.write(seeded)
+        if (!file.exists() && !cps.write(seeded)) {
+            Log.w(
+                TAG,
+                "first-launch migration write to $FILE_NAME failed — " +
+                    "app proceeds with in-memory seed; :node will fall back to config.json " +
+                    "until a later write succeeds (Settings save / Telegram /provider /model)",
+            )
+        }
         // Start observe-and-mirror collector AFTER the migration so
         // its first observed emission matches prefs and produces no
         // spurious apply().
@@ -225,12 +238,20 @@ object RuntimeStateStore {
 
     /**
      * Pure helper: build the seed [RuntimeState] from the legacy
-     * pref keys. If the persisted (provider, authType) is invalid
-     * (corrupt prefs from an unknown source), fall back to the
-     * default `RuntimeState()` instead of seeding bad state into
-     * the file. The model field always survives — invalid model
-     * IDs are accepted at this layer (Node's per-provider default-
-     * model logic handles unknown IDs at startup).
+     * pref keys. If the persisted (provider, authType) pair is
+     * invalid (corrupt prefs from an unknown source), fall back to
+     * the FULL default `RuntimeState()` — including resetting model
+     * to the build's default — rather than seeding bad state into
+     * the file. Resetting model in this case is intentional: the
+     * persisted model is likely tied to the now-rejected provider
+     * and would itself be invalid for the new default provider.
+     * Users who hit this path are recovering from corrupt prefs;
+     * a clean default is the safer landing.
+     *
+     * Note: invalid model IDs alone (with a valid provider/authType
+     * pair) are accepted at this layer — Node's per-provider
+     * default-model logic handles unknown IDs at startup, and the
+     * UI's model picker normalizes them on next save.
      */
     internal fun seedFromPrefs(prefs: SharedPreferences): RuntimeState {
         val provider = prefs.getString(KEY_PROVIDER, "claude") ?: "claude"

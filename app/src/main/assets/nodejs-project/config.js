@@ -172,17 +172,36 @@ let OWNER_ID = CHANNEL === 'discord'
 // is the cold-start fallback (Kotlin regenerates it on every service
 // start from prefs + Keystore), so a fresh install with no
 // runtime_state.json yet still boots correctly.
+//
+// IMPORTANT: read here via raw `JSON.parse(fs.readFileSync(...))` instead
+// of `_runtimeState.read()`. The cross-process-store helper deliberately
+// SWALLOWS decode errors and returns defaults — that's correct for the
+// per-store hot read path (reader gets a usable value, never crashes),
+// but WRONG for our fallback chain. If `runtime_state.json` is corrupt,
+// `_runtimeState.read()` would return `runtime-state.DEFAULTS`
+// (`{claude, api_key, claude-opus-4-7}`) which would silently OVERRIDE
+// whatever `config.json` has — masking the corruption AND leaking
+// defaults into a user's actual config. Inline JSON.parse so we can
+// distinguish "decoded cleanly" from "fell back to defaults" and treat
+// the failure case as "file effectively missing → fall back to
+// config.json". The store handle is still kept for write paths
+// (createStore preserved its own atomicity contract).
 const _runtimeState = require('./runtime-state').open(workDir);
 let _runtimeStateValues = null;
-try {
-    if (fs.existsSync(_runtimeState.filePath)) {
-        _runtimeStateValues = _runtimeState.read();
+if (fs.existsSync(_runtimeState.filePath)) {
+    try {
+        const _raw = fs.readFileSync(_runtimeState.filePath, 'utf8');
+        _runtimeStateValues = JSON.parse(_raw);
         log(`[Config] Loaded runtime_state.json: provider=${_runtimeStateValues.provider} authType=${_runtimeStateValues.authType} model=${_runtimeStateValues.model}`, 'DEBUG');
-    } else {
-        log('[Config] runtime_state.json not present — falling back to config.json values', 'DEBUG');
+    } catch (e) {
+        // Decode failure (corrupt JSON, partial write surviving rename
+        // failure, manual edit gone wrong). Fall back to config.json
+        // — DO NOT silently substitute the runtime-state DEFAULTS.
+        log(`[Config] runtime_state.json decode failed (${e.message}) — falling back to config.json`, 'WARN');
+        _runtimeStateValues = null;
     }
-} catch (e) {
-    log(`[Config] runtime_state.json load failed (${e.message}) — falling back to config.json`, 'WARN');
+} else {
+    log('[Config] runtime_state.json not present — falling back to config.json values', 'DEBUG');
 }
 
 const _SUPPORTED_PROVIDERS = new Set(['claude', 'openai', 'openrouter', 'custom']);
