@@ -8,6 +8,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.io.File
@@ -110,15 +111,6 @@ object ServiceState {
     // restoreFromDisk. (Copilot R9.)
     @Volatile private var initialized = false
     private val initLock = Any()
-
-    // Diagnostic counters — logged via LogCollector.append so the user
-    // can see them in the UI logs view without needing adb. Capped to
-    // avoid log spam: each counter logs the first N occurrences then
-    // stops. Removable once BAT-518 device-test debugging is complete.
-    @Volatile private var diagAttachLogged = false
-    private val diagEventCount = java.util.concurrent.atomic.AtomicInteger(0)
-    private val diagReadCount = java.util.concurrent.atomic.AtomicInteger(0)
-    private val DIAG_MAX_LOGS = 8
 
     /**
      * Initialize state file path AND restore persisted counters.
@@ -329,46 +321,19 @@ object ServiceState {
         // reads on event regardless of initial-read state). Synchronous —
         // FileObserver constructor does no disk I/O, just registers.
         //
-        // Defensive read pattern (BAT-518 device-test fix): on ANY event
-        // in the watched directory, re-read ALL files we care about.
-        // Previously this filtered by `path` basename and only re-read
-        // the matching file. The basename filter has a known fragile
-        // surface area — events can arrive with `path=null` (directory-
-        // level), with mixed batched events, or be missed entirely if
-        // the kernel coalesces multi-file writes. Reading all files on
-        // any event eliminates the entire class of "wrong basename
-        // matched, no read fired" bugs at a cost of ~µs per cycle (the
-        // files are 80 bytes each). This pattern is the recommended
-        // approach for robust FileObserver use per Android dev research
-        // (StackOverflow + Google IO 2022 talks): trust the event to
-        // mean "something changed in this dir" and re-read your state,
-        // rather than relying on which-file-changed dispatch.
-        //
-        // Symptom this fixes: device test 2026-04-28 — :node wrote
-        // STARTING then RUNNING to service_state file, LogCollector
-        // observer in same dir picked up service_logs writes (logs
-        // appeared live in UI), but ServiceState observer's per-basename
-        // dispatch did not fire for service_state. Root cause is most
-        // likely event-path mismatch in some edge case; the read-all
-        // defense sidesteps it without needing to fully diagnose.
-        // BAT-518 device-test debugging: do NOT register a separate
-        // FileObserver for filesDir. The LogCollector observer already
-        // watches this directory and works reliably (logs flow live in
-        // UI). Multiple FileObservers on the same directory in the same
-        // process is a known fragile pattern (API 29 fixed the static-map
-        // collision via List<WeakReference>, but in practice users have
-        // reported edge cases). Instead, LogCollector dispatches both
-        // its own reads AND a call to ServiceState.handleFilesDirEvent()
+        // BAT-518 device-fix: do NOT register a separate FileObserver for
+        // filesDir. LogCollector already watches that directory for
+        // service_logs and its observer fires reliably; on the Solana
+        // Seeker, registering a SECOND FileObserver in the same process
+        // on the same directory caused this observer to silently never
+        // receive events even though API 29+ docs claim List<WeakReference>
+        // supports it. LogCollector now calls ServiceState.handleFilesDirEvent()
         // on every event, keeping cross-process state in sync via the
-        // single working observer. This eliminates the multi-observer
-        // hypothesis as a variable.
-        //
-        // NOTE: filesDirObserver field is retained as null so the
-        // partial-state guard above doesn't false-trigger. workspaceDir
-        // remains a separate observer (different directory, no overlap).
+        // single working observer. workspaceDir is a different directory
+        // and remains observed separately here — no conflict.
 
         if (workspaceUsable) {
-            workspaceDirObserver = makeDirObserver(workspaceDir, "workspace") {
+            workspaceDirObserver = makeDirObserver(workspaceDir) {
                 readAgentHealthFile()
                 readApiUsageFile()
             }.also { it.startWatching() }
@@ -379,43 +344,6 @@ object ServiceState {
                     "skipping workspace FileObserver. agent_health_state and api_usage_state " +
                     "will not auto-refresh; rely on initial dispatched read only.",
             )
-        }
-
-        // Diagnostic (BAT-518 device-test debugging): announce attach
-        // success in the UI logs view so we can confirm main UI's
-        // ServiceState observers actually got registered. One-shot.
-        if (!diagAttachLogged) {
-            diagAttachLogged = true
-            LogCollector.append(
-                "[ServiceState/diag] startWatching attached: " +
-                    "filesDir=via-LogCollector " +
-                    "workspaceDirObserver=${workspaceDirObserver != null} " +
-                    "parent=${parent.absolutePath}",
-            )
-        }
-
-        // Heartbeat diagnostic: log current StateFlow + file values every
-        // 5s for the first 30s. Guarantees we get visible state in the UI
-        // logs even if the 300-line buffer evicts startup-time diagnostics.
-        // After 6 ticks, stops. Removable once root cause is identified.
-        scope.launch {
-            for (i in 1..6) {
-                delay(5_000L)
-                val file = stateFile
-                val fileSnapshot = try {
-                    if (file != null && file.exists()) {
-                        val lines = file.readLines()
-                        if (lines.size >= 5) {
-                            "FILE(status=${lines[0]} uptime=${lines[1]} msg=${lines[2]})"
-                        } else "FILE(<${lines.size} lines>)"
-                    } else "FILE(<missing>)"
-                } catch (e: Exception) { "FILE(<read-err: ${e.message}>)" }
-                LogCollector.append(
-                    "[ServiceState/diag] heartbeat#$i: " +
-                        "MEM(status=${_status.value} uptime=${_uptime.value} msg=${_messageCount.value}) " +
-                        fileSnapshot,
-                )
-            }
         }
 
         // Initial reads on Dispatchers.IO — startWatching is invoked from
@@ -434,6 +362,42 @@ object ServiceState {
             readBridgeToken()
             readApiUsageFile()
             readAgentHealthFile()
+        }
+
+        startStalenessTicker()
+    }
+
+    private var stalenessTickerStarted = false
+
+    /**
+     * Re-evaluate `_agentHealth.isStale` every 30s without reading the
+     * file. Necessary because BAT-518 replaced 1s polling with FileObserver
+     * — the previous polling loop ALSO refreshed staleness on every tick
+     * even when the file hadn't changed. Without this ticker, an agent
+     * that crashes and stops writing `agent_health_state` would never
+     * trigger the UI's "stale" transition: no file event → no read →
+     * `isStale` stuck at its last value (false, if the agent was healthy
+     * before crashing). That's a safety-relevant regression: the user
+     * would think the agent is healthy when it has actually died.
+     *
+     * Cost is negligible: one comparison + StateFlow update every 30s,
+     * no I/O. Singleton-scoped, started once per process from startWatching.
+     */
+    private fun startStalenessTicker() {
+        if (stalenessTickerStarted) return
+        stalenessTickerStarted = true
+        scope.launch {
+            while (isActive) {
+                delay(30_000L)
+                // readAgentHealthFile re-derives `stale = (now - fileTime
+                // > 120_000)` on every call, so a 30s tick converges
+                // staleness within ≤30s of the 120s threshold even when
+                // no file events fire. Reading a ~few-hundred-byte file
+                // every 30s is 2,880 reads/day — 30× less than the prior
+                // 1Hz poll's 86,400 — so we keep most of BAT-518's I/O
+                // savings while restoring the safety property.
+                readAgentHealthFile()
+            }
         }
     }
 
@@ -471,7 +435,6 @@ object ServiceState {
 
     private fun makeDirObserver(
         dir: File,
-        diagTag: String,
         onChange: () -> Unit,
     ): FileObserver {
         // FileObserver(File) is API 29+; we target min SDK 34 so this is safe.
@@ -503,15 +466,6 @@ object ServiceState {
                 FileObserver.DELETE,
         ) {
             override fun onEvent(event: Int, path: String?) {
-                // Diagnostic (BAT-518 device-test debugging): rate-limited
-                // log of first DIAG_MAX_LOGS events so we can confirm in
-                // UI logs whether main UI's observer is actually firing.
-                val n = diagEventCount.incrementAndGet()
-                if (n <= DIAG_MAX_LOGS) {
-                    LogCollector.append(
-                        "[ServiceState/diag] event#$n on $diagTag: event=$event path=$path",
-                    )
-                }
                 // Dispatch to scope so the FileObserver thread (a single
                 // shared thread named "FileObserver" in Android) doesn't
                 // do file I/O. The reader functions are idempotent — if
@@ -580,29 +534,6 @@ object ServiceState {
                 val fileMsgCount = lines[2].toIntOrNull() ?: return
                 val fileMsgToday = lines[3].toIntOrNull() ?: return
                 val fileLastActivity = lines[4].toLongOrNull() ?: return
-
-                // Diagnostic (BAT-518 device-test debugging): rate-limited
-                // record of what readFromFile ACTUALLY parses from disk vs
-                // what's in StateFlow. Lets us see in UI logs whether the
-                // file genuinely says STOPPED + uptime=0 (writer-side bug)
-                // or whether the read is correct but assignment is being
-                // overridden somewhere (consumer-side bug). NOTE: appending
-                // to LogCollector here would recursively fire filesDir
-                // FileObserver → re-trigger readFromFile → infinite loop.
-                // So we only log when values would CHANGE from current
-                // StateFlow value (max DIAG_MAX_LOGS times).
-                val statusChanges = _status.value != fileStatus
-                val uptimeChanges = _uptime.value != fileUptime
-                if (statusChanges || uptimeChanges) {
-                    val n = diagReadCount.incrementAndGet()
-                    if (n <= DIAG_MAX_LOGS) {
-                        LogCollector.append(
-                            "[ServiceState/diag] readFromFile#$n: " +
-                                "FILE(status=$fileStatus uptime=$fileUptime msg=$fileMsgCount) " +
-                                "MEM(status=${_status.value} uptime=${_uptime.value} msg=${_messageCount.value})",
-                        )
-                    }
-                }
 
                 if (_status.value != fileStatus) _status.value = fileStatus
                 if (_uptime.value != fileUptime) _uptime.value = fileUptime
