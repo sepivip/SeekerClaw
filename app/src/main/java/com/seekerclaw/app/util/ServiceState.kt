@@ -5,6 +5,7 @@ import android.os.FileObserver
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -288,23 +289,14 @@ object ServiceState {
         // called here and DID do sync disk I/O on first invocation.)
         initFileRefs(context)
 
-        // Guard: skip if observers are already FULLY attached (BAT-217 —
-        // prevents duplicate event dispatch that could write duplicate
-        // log entries). Detect partial state explicitly: if exactly
-        // one observer is attached, the previous attempt failed mid-way;
-        // tear down the partial setup and reattach both. (Copilot R7.)
-        val filesAttached = filesDirObserver != null
-        val workspaceAttached = workspaceDirObserver != null
-        if (filesAttached && workspaceAttached) {
-            Log.d(TAG, "startWatching: already active, skipping")
+        // Guard: skip if workspace observer is already attached. After
+        // BAT-518 device-fix consolidation, filesDir is no longer
+        // independently observed by ServiceState — LogCollector's
+        // observer drives those reads via handleFilesDirEvent(). So
+        // the only ServiceState-owned observer is the workspace one.
+        if (workspaceDirObserver != null) {
+            Log.d(TAG, "startWatching: workspace observer already active, skipping")
             return
-        }
-        if (filesAttached || workspaceAttached) {
-            Log.w(TAG, "startWatching: partial observer state (files=$filesAttached, workspace=$workspaceAttached) — tearing down + reattaching")
-            filesDirObserver?.stopWatching()
-            workspaceDirObserver?.stopWatching()
-            filesDirObserver = null
-            workspaceDirObserver = null
         }
 
         val parent = stateFile?.parentFile
@@ -359,10 +351,21 @@ object ServiceState {
         // dispatch did not fire for service_state. Root cause is most
         // likely event-path mismatch in some edge case; the read-all
         // defense sidesteps it without needing to fully diagnose.
-        filesDirObserver = makeDirObserver(parent, "filesDir") {
-            readFromFile()
-            readBridgeToken()
-        }.also { it.startWatching() }
+        // BAT-518 device-test debugging: do NOT register a separate
+        // FileObserver for filesDir. The LogCollector observer already
+        // watches this directory and works reliably (logs flow live in
+        // UI). Multiple FileObservers on the same directory in the same
+        // process is a known fragile pattern (API 29 fixed the static-map
+        // collision via List<WeakReference>, but in practice users have
+        // reported edge cases). Instead, LogCollector dispatches both
+        // its own reads AND a call to ServiceState.handleFilesDirEvent()
+        // on every event, keeping cross-process state in sync via the
+        // single working observer. This eliminates the multi-observer
+        // hypothesis as a variable.
+        //
+        // NOTE: filesDirObserver field is retained as null so the
+        // partial-state guard above doesn't false-trigger. workspaceDir
+        // remains a separate observer (different directory, no overlap).
 
         if (workspaceUsable) {
             workspaceDirObserver = makeDirObserver(workspaceDir, "workspace") {
@@ -385,10 +388,34 @@ object ServiceState {
             diagAttachLogged = true
             LogCollector.append(
                 "[ServiceState/diag] startWatching attached: " +
-                    "filesDirObserver=${filesDirObserver != null} " +
+                    "filesDir=via-LogCollector " +
                     "workspaceDirObserver=${workspaceDirObserver != null} " +
                     "parent=${parent.absolutePath}",
             )
+        }
+
+        // Heartbeat diagnostic: log current StateFlow + file values every
+        // 5s for the first 30s. Guarantees we get visible state in the UI
+        // logs even if the 300-line buffer evicts startup-time diagnostics.
+        // After 6 ticks, stops. Removable once root cause is identified.
+        scope.launch {
+            for (i in 1..6) {
+                delay(5_000L)
+                val file = stateFile
+                val fileSnapshot = try {
+                    if (file != null && file.exists()) {
+                        val lines = file.readLines()
+                        if (lines.size >= 5) {
+                            "FILE(status=${lines[0]} uptime=${lines[1]} msg=${lines[2]})"
+                        } else "FILE(<${lines.size} lines>)"
+                    } else "FILE(<missing>)"
+                } catch (e: Exception) { "FILE(<read-err: ${e.message}>)" }
+                LogCollector.append(
+                    "[ServiceState/diag] heartbeat#$i: " +
+                        "MEM(status=${_status.value} uptime=${_uptime.value} msg=${_messageCount.value}) " +
+                        fileSnapshot,
+                )
+            }
         }
 
         // Initial reads on Dispatchers.IO — startWatching is invoked from
@@ -407,6 +434,23 @@ object ServiceState {
             readBridgeToken()
             readApiUsageFile()
             readAgentHealthFile()
+        }
+    }
+
+    /**
+     * Called by LogCollector's FileObserver on every event in filesDir
+     * (BAT-518 device-fix consolidation). Triggers reads of the cross-
+     * process state files that live in filesDir alongside the log file.
+     *
+     * Idempotent + cheap: file reads are small (~80 bytes each), parse
+     * and assignment to StateFlow are no-ops if values match. Multiple
+     * dispatches from rapid event bursts (MODIFY + CLOSE_WRITE on a
+     * single write) just re-read the same file — no harm done.
+     */
+    fun handleFilesDirEvent() {
+        scope.launch {
+            readFromFile()
+            readBridgeToken()
         }
     }
 

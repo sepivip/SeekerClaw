@@ -170,6 +170,13 @@ object LogCollector {
                     // one write) don't double-read the same byte range.
                     scope.launch { readNewFromFile() }
                 }
+                // BAT-518 device-fix consolidation: ServiceState no longer
+                // owns its own filesDir observer (multiple FileObservers
+                // on the same dir is fragile). On ANY event in filesDir,
+                // dispatch to ServiceState so cross-process state files
+                // (service_state, bridge_token) get re-read. Cost: ~µs
+                // per event for ~80-byte file reads.
+                ServiceState.handleFilesDirEvent()
             }
         }.also { it.startWatching() }
 
