@@ -57,6 +57,7 @@ import com.seekerclaw.app.util.DbSummary
 import com.seekerclaw.app.util.ServiceState
 import com.seekerclaw.app.util.ServiceStatus
 import com.seekerclaw.app.util.fetchDbSummary
+import com.seekerclaw.app.util.rememberUptime
 import java.time.DayOfWeek
 import java.time.LocalDate
 import kotlinx.coroutines.Dispatchers
@@ -86,7 +87,9 @@ private fun heatmapColorForCount(count: Int, thresholds: List<Int>): Color {
 fun SystemScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val status by ServiceState.status.collectAsState()
-    val uptime by ServiceState.uptime.collectAsState()
+    // BAT-522 (BAT-518 phase 2): uptime derived locally from the
+    // one-shot serviceStartTimeMs (no per-second StateFlow rewrite).
+    val uptime = rememberUptime()
     val messageCount by ServiceState.messageCount.collectAsState()
     val messagesToday by ServiceState.messagesToday.collectAsState()
     val tokensToday by ServiceState.tokensToday.collectAsState()

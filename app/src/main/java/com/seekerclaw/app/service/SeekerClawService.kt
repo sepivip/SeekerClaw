@@ -22,7 +22,6 @@ import com.seekerclaw.app.util.ServiceState
 import com.seekerclaw.app.util.ServiceStatus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
@@ -36,7 +35,11 @@ import java.util.UUID
 class SeekerClawService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var screenWakeLock: PowerManager.WakeLock? = null
-    private var uptimeJob: Job? = null
+    // BAT-522 (BAT-518 phase 2): the prior 1Hz `uptimeJob` coroutine that
+    // wrote `service_state` every second has been deleted. Uptime is now
+    // a derived quantity computed from `ServiceState.serviceStartTimeMs`,
+    // which the service writes ONCE on transition to RUNNING (and zeros
+    // on stop). UI ticks once per second for display only — no disk write.
     // BAT-518: replaced nodeDebugJob (500ms polling coroutine) with
     // FileObserver. lastPos tracks bytes already forwarded to LogCollector
     // so each event reads only new bytes. nodeDebugMutex serializes
@@ -64,7 +67,6 @@ class SeekerClawService : Service() {
     // observer.stopWatching() + null-out.
     private val scopeJob = SupervisorJob()
     private val scope = CoroutineScope(Dispatchers.IO + scopeJob)
-    private var startTimeMs = 0L
     private var androidBridge: AndroidBridge? = null
 
     /**
@@ -501,15 +503,11 @@ class SeekerClawService : Service() {
             }
         }
 
-        // Track uptime
-        startTimeMs = System.currentTimeMillis()
-        uptimeJob = scope.launch {
-            while (isActive) {
-                val elapsed = System.currentTimeMillis() - startTimeMs
-                ServiceState.updateUptime(elapsed)
-                delay(1000)
-            }
-        }
+        // BAT-522 (BAT-518 phase 2): persist a one-shot start timestamp
+        // instead of writing a recomputed uptime every second. UI derives
+        // displayed uptime as `now - serviceStartTimeMs` and ticks
+        // locally once per second for display only.
+        ServiceState.setServiceStartTimeMs(System.currentTimeMillis())
 
         LogCollector.append("[Service] Claw Engine started")
 
@@ -530,7 +528,6 @@ class SeekerClawService : Service() {
         // Stop the node-debug FileObserver (BAT-518: was nodeDebugJob coroutine).
         nodeDebugObserver?.stopWatching()
         nodeDebugObserver = null
-        uptimeJob?.cancel()
         Watchdog.stop()
         androidBridge?.shutdown()
         NodeBridge.stop()
@@ -545,7 +542,9 @@ class SeekerClawService : Service() {
         if (ServiceState.status.value != ServiceStatus.ERROR) {
             ServiceState.updateStatus(ServiceStatus.STOPPED)
         }
-        ServiceState.updateUptime(0)
+        // BAT-522: clear the persisted start timestamp so the next UI
+        // launch derives uptime=0 until the service is started again.
+        ServiceState.setServiceStartTimeMs(0L)
 
         // Clean shutdown should clear crash-loop counters. Unexpected deaths won't hit this path.
         // CRITICAL: use commit() not apply(). apply() is async — Android queues the disk
@@ -623,7 +622,9 @@ class SeekerClawService : Service() {
                 if (ServiceState.status.value != ServiceStatus.ERROR) {
                     ServiceState.updateStatus(ServiceStatus.STOPPED)
                 }
-                ServiceState.updateUptime(0)
+                // BAT-522: clear the persisted start timestamp so the next UI
+                // launch derives uptime=0 until the service is started again.
+                ServiceState.setServiceStartTimeMs(0L)
             }
             val intent = Intent(context, SeekerClawService::class.java)
             context.stopService(intent)

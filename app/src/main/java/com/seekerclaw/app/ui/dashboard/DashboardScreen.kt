@@ -71,6 +71,7 @@ import com.seekerclaw.app.util.LogLevel
 import com.seekerclaw.app.util.AgentHealth
 import com.seekerclaw.app.util.ServiceState
 import com.seekerclaw.app.util.ServiceStatus
+import com.seekerclaw.app.util.rememberUptime
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
@@ -96,7 +97,10 @@ fun DashboardScreen(
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
     val status by ServiceState.status.collectAsState()
-    val uptime by ServiceState.uptime.collectAsState()
+    // BAT-522 (BAT-518 phase 2): uptime is derived locally from the
+    // one-shot `serviceStartTimeMs`, not subscribed from a StateFlow
+    // that used to be re-written every second by the service.
+    val uptime = rememberUptime()
     val messageCount by ServiceState.messageCount.collectAsState()
     val messagesToday by ServiceState.messagesToday.collectAsState()
     val lastActivityTime by ServiceState.lastActivityTime.collectAsState()

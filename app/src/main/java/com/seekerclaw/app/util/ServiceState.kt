@@ -57,8 +57,13 @@ object ServiceState {
     private val _status = MutableStateFlow(ServiceStatus.STOPPED)
     val status: StateFlow<ServiceStatus> = _status
 
-    private val _uptime = MutableStateFlow(0L)
-    val uptime: StateFlow<Long> = _uptime
+    // BAT-522 (phase 2): replaces the old `_uptime` StateFlow that was
+    // re-written every 1s by SeekerClawService.uptimeJob. Now the service
+    // writes this once on transition to RUNNING and zeroes it on STOPPED.
+    // UI derives displayed uptime as `now - serviceStartTimeMs.value`,
+    // ticking once per second for display only (no disk write).
+    private val _serviceStartTimeMs = MutableStateFlow(0L)
+    val serviceStartTimeMs: StateFlow<Long> = _serviceStartTimeMs
 
     private val _messageCount = MutableStateFlow(0)
     val messageCount: StateFlow<Int> = _messageCount
@@ -214,8 +219,18 @@ object ServiceState {
         writeToFile()
     }
 
-    fun updateUptime(millis: Long) {
-        _uptime.value = millis
+    /**
+     * Persist the service start timestamp. Called once when the service
+     * transitions to RUNNING, and again with 0L on STOPPED/ERROR/shutdown.
+     *
+     * Replaces the BAT-518-era `updateUptime(millis)` writer that was
+     * called once per second from SeekerClawService.uptimeJob. The 1s
+     * write loop generated 86,400 disk writes/day even when nothing
+     * changed; deriving uptime from a one-shot start timestamp eliminates
+     * that I/O entirely (BAT-522, BAT-518 phase 2).
+     */
+    fun setServiceStartTimeMs(ms: Long) {
+        _serviceStartTimeMs.value = ms
         writeToFile()
     }
 
@@ -238,7 +253,7 @@ object ServiceState {
 
     fun reset() {
         _status.value = ServiceStatus.STOPPED
-        _uptime.value = 0L
+        _serviceStartTimeMs.value = 0L
         _messageCount.value = 0
         _messagesToday.value = 0
         _lastActivityTime.value = 0L
@@ -552,24 +567,36 @@ object ServiceState {
     /**
      * File format (one value per line):
      * 0: status name
-     * 1: uptime millis
+     * 1: (DEPRECATED, BAT-522) was uptime millis. Always written as 0
+     *    so old builds reading the new file see uptime=0 (acceptable
+     *    degradation — BAT-522 stops updating it; old build can't show
+     *    a live ticker anymore but won't misinterpret garbage).
      * 2: messageCount (all-time)
      * 3: messagesToday
      * 4: lastActivityTime
      * 5: tokensToday
      * 6: tokensTotal
+     * 7: serviceStartTimeMs (BAT-522, phase 2). New builds derive
+     *    displayed uptime as `now - serviceStartTimeMs` while RUNNING,
+     *    no live disk writes. Missing on pre-BAT-522 files → defaults
+     *    to 0L on read; the next service start populates it.
      */
     private fun writeToFile() {
         val file = stateFile ?: return
         try {
             val data = buildString {
                 appendLine(_status.value.name)
-                appendLine(_uptime.value)
+                // Line 1 is intentionally always 0L (BAT-522 — see file
+                // format docblock). Kept so old pre-BAT-522 builds
+                // running on a freshly-written file still find every
+                // line they expect at the same index.
+                appendLine(0L)
                 appendLine(_messageCount.value)
                 appendLine(_messagesToday.value)
                 appendLine(_lastActivityTime.value)
                 appendLine(_tokensToday.value)
-                append(_tokensTotal.value)
+                appendLine(_tokensTotal.value)
+                append(_serviceStartTimeMs.value)
             }
             file.writeText(data)
         } catch (_: Exception) {}
@@ -582,13 +609,13 @@ object ServiceState {
             val lines = file.readLines()
             if (lines.size >= 5) {
                 val fileStatus = try { ServiceStatus.valueOf(lines[0]) } catch (_: Exception) { return }
-                val fileUptime = lines[1].toLongOrNull() ?: return
+                // lines[1] is the deprecated uptime field — read but
+                // ignore. BAT-522 derives uptime from line 7 instead.
                 val fileMsgCount = lines[2].toIntOrNull() ?: return
                 val fileMsgToday = lines[3].toIntOrNull() ?: return
                 val fileLastActivity = lines[4].toLongOrNull() ?: return
 
                 if (_status.value != fileStatus) _status.value = fileStatus
-                if (_uptime.value != fileUptime) _uptime.value = fileUptime
                 if (_messageCount.value != fileMsgCount) _messageCount.value = fileMsgCount
                 if (_messagesToday.value != fileMsgToday) _messagesToday.value = fileMsgToday
                 if (_lastActivityTime.value != fileLastActivity) _lastActivityTime.value = fileLastActivity
@@ -600,6 +627,17 @@ object ServiceState {
                     if (_tokensToday.value != fileTokensToday) _tokensToday.value = fileTokensToday
                     if (_tokensTotal.value != fileTokensTotal) _tokensTotal.value = fileTokensTotal
                 }
+
+                // Service start time (BAT-522). Pre-BAT-522 files lack
+                // line 7 — default to 0L; the next service start writes
+                // a fresh value, after which uptime tracking resumes
+                // normally. While 0L is in effect, the UI shows
+                // "00h 00m 00s" — same as the STOPPED display, which
+                // matches user expectation for the moment of upgrade.
+                val fileStartTime = if (lines.size >= 8) {
+                    lines[7].toLongOrNull() ?: 0L
+                } else 0L
+                if (_serviceStartTimeMs.value != fileStartTime) _serviceStartTimeMs.value = fileStartTime
             }
         } catch (_: Exception) {}
     }
@@ -717,4 +755,32 @@ object ServiceState {
             if (_apiUsage.value != usage) _apiUsage.value = usage
         } catch (_: Exception) {}
     }
+
+    // ── Testing hooks ────────────────────────────────────────────────
+    // Internal-visibility hooks for unit tests. Same convention as
+    // LogCollector — kept in-class (not via androidx @VisibleForTesting)
+    // because we don't want to pull in the runtime dependency for what
+    // is fundamentally just a controlled test seam.
+
+    internal fun setStateFileForTest(file: File?) {
+        stateFile = file
+    }
+
+    internal fun resetForTest() {
+        _status.value = ServiceStatus.STOPPED
+        _serviceStartTimeMs.value = 0L
+        _messageCount.value = 0
+        _messagesToday.value = 0
+        _lastActivityTime.value = 0L
+        _tokensToday.value = 0L
+        _tokensTotal.value = 0L
+        _apiUsage.value = null
+        _agentHealth.value = AgentHealth()
+        bridgeToken = null
+        initialized = false
+    }
+
+    internal fun writeToFileForTest() = writeToFile()
+
+    internal fun readFromFileForTest() = readFromFile()
 }
