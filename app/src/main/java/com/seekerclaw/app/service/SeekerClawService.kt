@@ -45,6 +45,14 @@ class SeekerClawService : Service() {
     private var nodeDebugObserver: FileObserver? = null
     @Volatile private var nodeDebugLastPos = 0L
     private val nodeDebugMutex = Mutex()
+    // Single-flight gate (Copilot R-latest+8 C3): under heavy Node logging,
+    // FileObserver fires MODIFY + CLOSE_WRITE per write — the mutex
+    // prevented double-reads but coroutine launches still piled up
+    // contending on it. With this gate, at most one drain coroutine is
+    // in flight; the flag clears BEFORE the drain so events arriving
+    // during the drain can schedule a fresh one (drain reads to current
+    // EOF). Worst case: 2 concurrent drain coroutines.
+    private val nodeDebugDrainScheduled = java.util.concurrent.atomic.AtomicBoolean(false)
     // Per-chunk cap to prevent OOM if events are batched (e.g. Doze mode
     // releases queued events at once) or if Node writes a huge burst.
     // Larger than LogCollector's budget because Node debug writes can
@@ -457,8 +465,17 @@ class SeekerClawService : Service() {
                         // in the Android SDK — null path is the only
                         // signal we get.
                         if (path == "node_debug.log" || path == null) {
-                            // Dispatch off the FileObserver thread.
-                            scope.launch { forwardNewNodeDebugLines(debugLogFile) }
+                            // Single-flight: only launch a drain if none
+                            // is in flight. The flag clears BEFORE the
+                            // drain so events arriving during it can
+                            // schedule a fresh drain (which reads to
+                            // current EOF). (Copilot R-latest+8 C3.)
+                            if (nodeDebugDrainScheduled.compareAndSet(false, true)) {
+                                scope.launch {
+                                    nodeDebugDrainScheduled.set(false)
+                                    forwardNewNodeDebugLines(debugLogFile)
+                                }
+                            }
                         }
                     }
                 }.also { it.startWatching() }

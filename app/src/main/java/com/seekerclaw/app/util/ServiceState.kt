@@ -349,17 +349,22 @@ object ServiceState {
             // single working observer. workspaceDir is a different directory
             // and remains observed separately here — no conflict.
             if (workspaceUsable) {
-                // Filter by basename in onEvent: workspace/ also contains
-                // high-frequency files (node_debug.log writes from :node,
-                // workspace/config.json, daily memory files, etc.) that
-                // would otherwise launch a coroutine per event just to
-                // re-read tiny health/usage files. (Copilot R-latest+3 C1.)
-                workspaceDirObserver = makeDirObserver(workspaceDir) { path ->
+                // Filter by basename in onEvent (Copilot R-latest+3 C1
+                // and R-latest+8 C1): workspace/ also contains high-
+                // frequency files (node_debug.log from :node, daily
+                // memory files, etc.) that aren't ours. Filtering at
+                // makeDirObserver's onEvent — BEFORE coroutine launch —
+                // means those events cost only a Set lookup, not a
+                // coroutine schedule.
+                workspaceDirObserver = makeDirObserver(
+                    workspaceDir,
+                    watchedFiles = setOf("agent_health_state", "api_usage_state"),
+                ) { path ->
                     when (path) {
                         "agent_health_state" -> readAgentHealthFile()
                         "api_usage_state" -> readApiUsageFile()
-                        // null = directory-level event without filename;
-                        // re-read both defensively.
+                        // null = directory-level event without filename
+                        // (also signals Q_OVERFLOW); re-read both defensively.
                         null -> { readAgentHealthFile(); readApiUsageFile() }
                     }
                 }.also { it.startWatching() }
@@ -477,6 +482,7 @@ object ServiceState {
 
     private fun makeDirObserver(
         dir: File,
+        watchedFiles: Set<String>,
         onChange: (path: String?) -> Unit,
     ): FileObserver {
         // FileObserver(File) is API 29+; we target min SDK 34 so this is safe.
@@ -509,6 +515,14 @@ object ServiceState {
                 FileObserver.DELETE,
         ) {
             override fun onEvent(event: Int, path: String?) {
+                // Filter BEFORE launching (Copilot R-latest+8 C1): the
+                // watched dir contains high-frequency files (e.g. node_debug.log
+                // in workspace/, written multiple times per second by :node)
+                // that aren't ours. Filtering inside the coroutine wastes
+                // scheduling. path == null is always forwarded — that's the
+                // only signal Android gives us for inotify queue overflow,
+                // and we want a forced resync in that case.
+                if (path != null && path !in watchedFiles) return
                 // Dispatch to scope so the FileObserver thread (a single
                 // shared thread named "FileObserver" in Android) doesn't
                 // do file I/O. The reader functions are idempotent — if

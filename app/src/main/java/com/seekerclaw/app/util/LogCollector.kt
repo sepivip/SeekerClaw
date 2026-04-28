@@ -62,6 +62,17 @@ object LogCollector {
     private val readLock = Any()
     private val startWatchingLock = Any()
 
+    // Single-flight gate for FileObserver-driven reads (Copilot R-latest+8
+    // C2): under heavy logging, FileObserver fires MODIFY + CLOSE_WRITE
+    // per write — easily 100+ events/sec. Without this gate, each event
+    // launched its own coroutine that all queued on readLock; most then
+    // found nothing to read and exited, but the scheduling cost was
+    // proportional to the event rate. With the gate, at most one drain
+    // coroutine is in flight at a time. The flag clears BEFORE the read
+    // starts, so any event arriving after that point can launch a fresh
+    // drain — bounded to ~2 concurrent coroutines in worst case.
+    private val drainScheduled = java.util.concurrent.atomic.AtomicBoolean(false)
+
     fun init(context: Context) {
         logFile = File(context.filesDir, LOG_FILE_NAME)
     }
@@ -180,12 +191,19 @@ object LogCollector {
                     // the Android SDK — null path is the only signal we
                     // get, so we trigger resync on any null-path event.
                     if (path == LOG_FILE_NAME || path == null) {
-                        // Dispatch off the FileObserver thread. readNewFromFile
-                        // serializes file reads + lastReadPosition updates via
-                        // `readLock` internally, so concurrent dispatches
-                        // (FileObserver often emits MODIFY + CLOSE_WRITE for
-                        // one write) don't double-read the same byte range.
-                        scope.launch { readNewFromFile() }
+                        // Single-flight: only launch a coroutine if no
+                        // drain is currently scheduled. The flag clears
+                        // BEFORE the read so a new event arriving during
+                        // the read can schedule a fresh drain (the read
+                        // is to current EOF, so the new event's bytes get
+                        // picked up). Worst case: 2 concurrent drain
+                        // coroutines. (Copilot R-latest+8 C2.)
+                        if (drainScheduled.compareAndSet(false, true)) {
+                            scope.launch {
+                                drainScheduled.set(false)
+                                readNewFromFile()
+                            }
+                        }
                     }
                     // BAT-518 device-fix consolidation: ServiceState no
                     // longer owns its own filesDir observer (multi-observer-
