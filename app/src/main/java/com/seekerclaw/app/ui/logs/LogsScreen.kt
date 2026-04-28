@@ -75,6 +75,10 @@ fun LogsScreen() {
     var showWarn by rememberSaveable { mutableStateOf(true) }
     var showError by rememberSaveable { mutableStateOf(true) }
 
+    LaunchedEffect(Unit) {
+        LogCollector.refreshFromFile()
+    }
+
     val filteredLogs = remember(logs, showDebug, showInfo, showWarn, showError, searchQuery) {
         logs.filter { entry ->
             val levelMatch = when (entry.level) {

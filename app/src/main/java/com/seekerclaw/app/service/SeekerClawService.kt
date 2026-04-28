@@ -24,6 +24,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -45,40 +46,7 @@ class SeekerClawService : Service() {
     private var nodeDebugObserver: FileObserver? = null
     @Volatile private var nodeDebugLastPos = 0L
     private val nodeDebugMutex = Mutex()
-    // Drain state machine — replaces the prior boolean gate which had a
-    // window race: an event arriving between the drain coroutine's last
-    // length check and its flag clear was dropped (the next CAS still
-    // saw the flag true) with no subsequent event guaranteed to re-
-    // trigger a drain. The state machine guarantees no missed bytes:
-    //
-    //   0 = idle.
-    //   1 = drain running.
-    //   2 = drain running with a rerun queued.
-    //
-    // Event arrival: 0 -> 1 (launch), 1 -> 2, 2 -> 2 (no-op).
-    // Drain settle:  1 -> 0 (true idle), 2 -> 1 (re-pass).
-    //
-    // Single-flight is preserved (only one drain coroutine in flight)
-    // and forwardNewNodeDebugLines still drains its inner while loop
-    // until exhausted, so most bursts are coalesced into the in-flight
-    // drain. The state-machine pattern only fires the rerun for events
-    // that land in the narrow trailing window after the inner loop has
-    // decided "no more bytes" but before the drain coroutine has
-    // settled to idle.
-    private val nodeDebugDrainState = java.util.concurrent.atomic.AtomicInteger(0)
-
-    // Owner token, incremented every time a new drain launches. The
-    // drain captures `myOwner = nodeDebugDrainOwner.get()` at launch and
-    // re-checks it in finally before resetting nodeDebugDrainState to 0.
-    private val nodeDebugDrainOwner = java.util.concurrent.atomic.AtomicLong(0)
-
-    // Gate that serializes launch-vs-finally ownership transitions for
-    // the node-debug drain. Same pattern as LogCollector.drainGate —
-    // without serialization, a finally that captured owner=N (matches)
-    // could pre-empt and a new launch could bump owner to N+1 + state=1,
-    // then the original finally wakes up and CAS-clobbers state back to
-    // 0, leaving the new drain stuck in an infinite settle loop.
-    private val nodeDebugDrainGate = Any()
+    private var nodeDebugDrainChannel: Channel<Unit>? = null
     // Per-chunk cap to prevent OOM if events are batched (e.g. Doze mode
     // releases queued events at once) or if Node writes a huge burst.
     // Larger than LogCollector's budget because Node debug writes can
@@ -161,6 +129,22 @@ class SeekerClawService : Service() {
                 drainOneNodeDebugChunk(debugLogFile)
             }
         }
+    }
+
+    private fun ensureNodeDebugDrainWorker(debugLogFile: File) {
+        if (nodeDebugDrainChannel != null) return
+        val channel = Channel<Unit>(Channel.CONFLATED)
+        nodeDebugDrainChannel = channel
+        scope.launch {
+            for (ignored in channel) {
+                if (!isActive) break
+                forwardNewNodeDebugLines(debugLogFile)
+            }
+        }
+    }
+
+    private fun requestNodeDebugDrain() {
+        nodeDebugDrainChannel?.trySend(Unit)
     }
 
     /**
@@ -470,6 +454,8 @@ class SeekerClawService : Service() {
                     return@withLock
                 }
 
+                ensureNodeDebugDrainWorker(debugLogFile)
+
                 // Constants qualified (Java statics not auto-imported into
                 // Kotlin function bodies). Mask includes
                 // DELETE so log rotation that removes
@@ -492,51 +478,7 @@ class SeekerClawService : Service() {
                         // in the Android SDK — null path is the only
                         // signal we get.
                         if (path == "node_debug.log" || path == null) {
-                            // State-machine single-flight (see
-                            // nodeDebugDrainState declaration). Transition:
-                            // 0 -> 1 (launch), 1 -> 2 (queue rerun),
-                            // 2 -> 2 (no-op). Launch decision and finally
-                            // ownership check are both gated on
-                            // nodeDebugDrainGate so owner+state are
-                            // always observed as a consistent pair.
-                            var myOwner: Long = -1L
-                            var shouldLaunch = false
-                            synchronized(nodeDebugDrainGate) {
-                                when (nodeDebugDrainState.get()) {
-                                    0 -> {
-                                        myOwner = nodeDebugDrainOwner.incrementAndGet()
-                                        nodeDebugDrainState.set(1)
-                                        shouldLaunch = true
-                                    }
-                                    1 -> nodeDebugDrainState.set(2)
-                                    else -> { /* already 2 */ }
-                                }
-                            }
-                            if (shouldLaunch) {
-                                scope.launch {
-                                    try {
-                                        while (true) {
-                                            forwardNewNodeDebugLines(debugLogFile)
-                                            // Settle: 1 -> 0 (true idle) or
-                                            // 2 -> 1 (rerun for an event
-                                            // that landed during drain).
-                                            // Re-pass until idle.
-                                            if (nodeDebugDrainState.compareAndSet(1, 0)) break
-                                            if (nodeDebugDrainState.compareAndSet(2, 1)) continue
-                                        }
-                                    } finally {
-                                        // Owner+state checked atomically
-                                        // under the gate so a late finally
-                                        // can't clobber a newer drain.
-                                        synchronized(nodeDebugDrainGate) {
-                                            if (nodeDebugDrainOwner.get() == myOwner) {
-                                                nodeDebugDrainState.compareAndSet(1, 0)
-                                                nodeDebugDrainState.compareAndSet(2, 0)
-                                            }
-                                        }
-                                    }
-                                }
-                            }
+                            requestNodeDebugDrain()
                         }
                     }
                 }.also { it.startWatching() }
@@ -555,7 +497,7 @@ class SeekerClawService : Service() {
             // log file we're not watching anymore would be misleading.
             // (R-latest+5 fix.)
             if (observerAttached) {
-                forwardNewNodeDebugLines(debugLogFile)
+                requestNodeDebugDrain()
             }
         }
 

@@ -425,4 +425,29 @@ class LogCollectorTest {
             tmp.delete()
         }
     }
+
+    @Test
+    fun `append compacts oversized service log file`() {
+        val tmp = File.createTempFile("bat518-compact", ".test")
+        try {
+            LogCollector.setLogFileForTest(tmp)
+            LogCollector.resetForTest()
+
+            val line = "${System.currentTimeMillis()}|INFO|${"x".repeat(180)}\n"
+            val builder = StringBuilder()
+            while (builder.length < 1_100_000) {
+                builder.append(line)
+            }
+            tmp.writeText(builder.toString())
+
+            LogCollector.append("after-compaction", LogLevel.INFO)
+
+            assertTrue("service_logs should be compacted below 700KB", tmp.length() < 700_000)
+            assertTrue("new append should survive compaction", tmp.readText().contains("after-compaction"))
+        } finally {
+            LogCollector.setLogFileForTest(null)
+            LogCollector.resetForTest()
+            tmp.delete()
+        }
+    }
 }

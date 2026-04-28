@@ -5,8 +5,10 @@ import android.os.FileObserver
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -22,6 +24,8 @@ object LogCollector {
     private const val TAG = "LogCollector"
     private const val MAX_LINES = 300
     private const val LOG_FILE_NAME = "service_logs"
+    private const val MAX_LOG_FILE_BYTES = 1_000_000L
+    private const val COMPACT_LOG_FILE_BYTES = 512_000L
 
     private val _logs = MutableStateFlow<List<LogEntry>>(emptyList())
     val logs: StateFlow<List<LogEntry>> = _logs
@@ -36,6 +40,7 @@ object LogCollector {
     private var fileObserver: FileObserver? = null
     @Volatile private var lastReadPosition = 0L
     private val scope = CoroutineScope(Dispatchers.IO)
+    private var drainChannel: Channel<Unit>? = null
 
     // Locking scheme :
     // - `readLock` guards EVERY file operation: reads (readNewFromFile,
@@ -79,57 +84,11 @@ object LogCollector {
     // (e.g. bridge_token CREATE).
     @Volatile private var initialReadComplete = false
 
-    // Single-flight gate for FileObserver-driven reads: under heavy
-    // logging, FileObserver fires MODIFY + CLOSE_WRITE per write —
-    // easily 100+ events/sec. Without this gate, each event launched
-    // its own coroutine that all queued on readLock; most then found
-    // nothing to read and exited, but the scheduling cost was
-    // proportional to the event rate. With the gate, at most one drain
-    // coroutine is in flight at a time. The flag remains set for the
-    // entire drain and is cleared only when the coroutine finishes
-    // (in a finally block), so events that arrive while a drain is
-    // running are coalesced into the in-flight drain rather than
-    // scheduling a concurrent second one. The drain itself loops on
-    // file.length() vs lastReadPosition to pick up bytes that landed
-    // during decode/parse.
-    // Drain state machine — replaces the prior boolean drainScheduled
-    // gate which had a window race: an event arriving between the drain
-    // loop's last !moreBytes check and `drainScheduled.set(false)` was
-    // dropped (compareAndSet saw the flag still true) with no subsequent
-    // event guaranteed to re-trigger a drain.
-    //
-    // States:
-    //   0 = idle. No drain running, no work pending.
-    //   1 = running. Drain coroutine in flight.
-    //   2 = running with rerun queued. An event arrived while a drain
-    //       was running; drain MUST do another pass before settling.
-    //
-    // Transitions on event arrival:  0 -> 1 (launch drain), 1 -> 2,
-    // 2 -> 2 (no-op).
-    // Transitions in drain settle:   1 -> 0 (true idle), 2 -> 1 (rerun).
-    //
-    // Guarantees no missed bytes regardless of when an event arrives.
-    private val drainState = java.util.concurrent.atomic.AtomicInteger(0)
-
-    // Owner token, incremented every time launchDrainIfIdle launches a
-    // new drain. The drain captures `myOwner = drainOwner.get()` at
-    // launch and re-checks it in `finally` before resetting drainState
-    // to 0. Without this check, a successful settle (CAS 1->0) followed
-    // by a new event (transition 0->1, launch drain B) followed by
-    // drain A's finally would clobber drain B's state and cause an
-    // infinite loop in drain B's settle CAS.
-    private val drainOwner = java.util.concurrent.atomic.AtomicLong(0)
-
-    // Gate that serializes launch-vs-finally ownership transitions.
-    // The owner+state pair must be observed atomically; without the
-    // gate, a race exists where a draining coroutine's finally reads
-    // owner=N (matches), gets pre-empted, and then a new launch
-    // bumps owner to N+1 + sets state=1 — only for the original
-    // finally to wake up and CAS state back to 0, clobbering the
-    // newly-launched drain. The gate is held only for the brief
-    // launch decision and finally check (microseconds, in-memory
-    // ops only), not during the drain loop itself.
-    private val drainGate = Any()
+    // FileObserver can emit multiple events per write. A conflated
+    // channel gives us one serialized drain worker: events are cheap to
+    // signal, overlapping drains cannot happen, and events arriving
+    // during a drain are coalesced into the next channel receive instead
+    // of depending on custom atomic owner/state transitions.
 
     fun init(context: Context) {
         logFile = File(context.filesDir, LOG_FILE_NAME)
@@ -216,6 +175,8 @@ object LogCollector {
                 return
             }
 
+            ensureDrainWorkerLocked()
+
             val parent = logFile?.parentFile ?: run {
                 Log.w(TAG, "startWatching: no parent dir, skipping FileObserver")
                 return
@@ -269,7 +230,7 @@ object LogCollector {
                         // readAllFromFile reads the full current file
                         // (incl. any in-flight writes) before flipping
                         // the flag, so no log lines are lost.
-                        launchDrainIfIdle()
+                        requestDrain()
                     }
                     // BAT-518 device-fix consolidation: ServiceState no
                     // longer owns its own filesDir observer (multi-observer-
@@ -303,82 +264,34 @@ object LogCollector {
             // Trigger one drain in case writes landed between
             // readAllFromFile's read and the flag flip — those events
             // were dropped by the gate above. Idempotent if no new bytes.
-            launchDrainIfIdle()
+            requestDrain()
             Log.d(TAG, "startWatching: initial read complete, drains enabled")
         }
     }
 
-    /**
-     * State-machine single-flight drain launcher.
-     *
-     * Transition on entry:  0 -> 1 (launch new drain),  1 -> 2 (queue
-     * rerun for the in-flight drain), 2 -> 2 (no-op, already queued).
-     *
-     * Drain coroutine settle: 1 -> 0 (true idle, exit) or 2 -> 1 (a
-     * rerun was queued; loop body again). Loops until successfully
-     * hitting idle so no event-driven request goes unserved.
-     *
-     * Inner do-while continues while EITHER bytes remain to read OR
-     * we made forward progress on the last read. Two break conditions:
-     *   1. No new bytes (file.length() <= lastReadPosition)
-     *   2. lastReadPosition didn't advance (partial-line case:
-     *      readNewFromFile read up to a mid-line position and is
-     *      waiting for the newline to arrive). Without (2), a partial
-     *      line would spin re-reading the same bytes forever.
-     *
-     * Cancellation safety: the drain coroutine wraps its loop in
-     * try/finally. The finally block (under drainGate) resets
-     * drainState to 0 ONLY if we're still the active owner. Without
-     * the gate + owner check, race exists: drain A settles CAS(1, 0),
-     * pre-empts; drain A's finally checks owner (matches old N);
-     * drain A pre-empts; event B launches with owner=N+1 + state=1;
-     * drain A's CAS(1, 0) succeeds and clobbers state — drain B's
-     * settle CAS would fail forever. Gating launch+finally on the
-     * same monitor serializes the two so owner+state are always
-     * observed as a consistent pair.
-     */
-    private fun launchDrainIfIdle() {
-        var myOwner: Long = -1L
-        synchronized(drainGate) {
-            when (drainState.get()) {
-                0 -> {
-                    myOwner = drainOwner.incrementAndGet()
-                    drainState.set(1)
-                }
-                1 -> {
-                    drainState.set(2)
-                    return
-                }
-                else -> return  // already 2 (queued); no-op
+    private fun ensureDrainWorkerLocked() {
+        if (drainChannel != null) return
+        val channel = Channel<Unit>(Channel.CONFLATED)
+        drainChannel = channel
+        scope.launch {
+            for (ignored in channel) {
+                if (!isActive) break
+                drainUntilSettled()
             }
         }
-        scope.launch {
-            try {
-                while (true) {
-                    do {
-                        val before = lastReadPosition
-                        readNewFromFile()
-                        val advanced = lastReadPosition > before
-                        val moreBytes = (logFile?.length() ?: 0L) > lastReadPosition
-                        if (!advanced || !moreBytes) break
-                    } while (true)
-                    if (drainState.compareAndSet(1, 0)) break
-                    if (drainState.compareAndSet(2, 1)) continue
-                }
-            } finally {
-                // Owner+state checked atomically under the gate.
-                // Normal exit: state was already CAS'd to 0 inside the
-                // settle loop, this is a no-op. Cancellation exit:
-                // state may be 1 or 2, reset so future drains can
-                // launch. If a newer drain has taken over (owner !=
-                // myOwner), skip reset entirely so we don't clobber.
-                synchronized(drainGate) {
-                    if (drainOwner.get() == myOwner) {
-                        drainState.compareAndSet(1, 0)
-                        drainState.compareAndSet(2, 0)
-                    }
-                }
-            }
+    }
+
+    private fun requestDrain() {
+        drainChannel?.trySend(Unit)
+    }
+
+    private fun drainUntilSettled() {
+        while (true) {
+            val before = lastReadPosition
+            readNewFromFile()
+            val advanced = lastReadPosition > before
+            val moreBytes = (logFile?.length() ?: 0L) > lastReadPosition
+            if (!advanced || !moreBytes) break
         }
     }
 
@@ -392,6 +305,20 @@ object LogCollector {
         replaceWith = ReplaceWith("startWatching(context)"),
 )
     fun startPolling(context: Context) = startWatching(context)
+
+    /**
+     * One-shot, user-visible catch-up path. This is intentionally not a
+     * background poll: LogsScreen calls it when opened so the UI can
+     * recover from process restarts, Doze-batched events, or a missed
+     * observer notification without reintroducing 24/7 disk reads.
+     */
+    fun refreshFromFile() {
+        scope.launch {
+            readAllFromFile()
+            initialReadComplete = true
+            requestDrain()
+        }
+    }
 
     private fun writeToFile(entry: LogEntry) {
         // Take readLock to serialize the append against:
@@ -417,9 +344,28 @@ object LogCollector {
             val file = logFile ?: return
             try {
                 file.appendText("${entry.timestamp}|${entry.level.name}|${entry.message}\n")
+                compactLogFileIfNeededLocked(file)
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to write log entry to file", e)
             }
+        }
+    }
+
+    private fun compactLogFileIfNeededLocked(file: File) {
+        if (!file.exists() || file.length() <= MAX_LOG_FILE_BYTES) return
+
+        val keepBytes = minOf(file.length(), COMPACT_LOG_FILE_BYTES)
+        val tail = java.io.RandomAccessFile(file, "r").use { raf ->
+            raf.seek(file.length() - keepBytes)
+            ByteArray(keepBytes.toInt()).also { raf.readFully(it) }
+        }
+
+        var start = 0
+        while (start < tail.size && tail[start] != 0x0A.toByte()) start++
+        val compacted = if (start < tail.size) tail.copyOfRange(start + 1, tail.size) else tail
+        file.writeBytes(compacted)
+        if (lastReadPosition > file.length()) {
+            lastReadPosition = file.length()
         }
     }
 
