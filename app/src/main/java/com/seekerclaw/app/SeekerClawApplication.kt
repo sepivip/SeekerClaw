@@ -39,10 +39,18 @@ class SeekerClawApplication : Application() {
         // 30s staleness ticker re-reads agent_health_state to keep the time-based
         // stale predicate live (see ServiceState.startStalenessTicker), and Doze
         // mode can batch FileObserver delivery.
+        // Order matters: LogCollector's FileObserver also dispatches
+        // ServiceState reads for filesDir state files (BAT-518 device-fix
+        // consolidation). Attaching LogCollector FIRST means the observer
+        // is live before ServiceState's initial async read runs — without
+        // this order, a CREATE event for `bridge_token` landing in the
+        // narrow window between ServiceState's dispatched read and
+        // LogCollector's attach would be missed, and the UI wouldn't see
+        // the token until another file change.
         val isMainProcess = getProcessName() == packageName
         if (isMainProcess) {
-            ServiceState.startWatching(this)
             LogCollector.startWatching(this)
+            ServiceState.startWatching(this)
             registerConfigChangedReceiver()
         }
     }

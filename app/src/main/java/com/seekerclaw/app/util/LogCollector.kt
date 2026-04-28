@@ -207,9 +207,21 @@ object LogCollector {
                         if (drainScheduled.compareAndSet(false, true)) {
                             scope.launch {
                                 try {
+                                    // Loop while bytes remain AND we made
+                                    // forward progress. Without the
+                                    // forward-progress guard, a partial-
+                                    // line case (readNewFromFile returns
+                                    // without advancing lastReadPosition
+                                    // because it's waiting for newline)
+                                    // would spin indefinitely re-reading
+                                    // the same bytes.
                                     do {
+                                        val before = lastReadPosition
                                         readNewFromFile()
-                                    } while ((logFile?.length() ?: 0L) > lastReadPosition)
+                                        val advanced = lastReadPosition > before
+                                        val moreBytes = (logFile?.length() ?: 0L) > lastReadPosition
+                                        if (!advanced || !moreBytes) break
+                                    } while (true)
                                 } finally {
                                     drainScheduled.set(false)
                                 }
