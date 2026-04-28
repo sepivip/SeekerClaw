@@ -250,9 +250,16 @@ object ServiceState {
      *
      * Two FileObservers are attached: one on `filesDir` (for
      * `service_state` and `bridge_token`) and one on `filesDir/workspace`
-     * (for `agent_health_state` and `api_usage_state`). Each observer
-     * dispatches by filename to the same single-file readers that the
-     * polling loop used to call directly.
+     * (for `agent_health_state` and `api_usage_state`).
+     *
+     * BAT-518 device-fix update: ServiceState no longer attaches its own
+     * `filesDir` observer. Multiple FileObservers in the same process on
+     * the same directory proved fragile on the Solana Seeker (one of two
+     * silently never received events). Instead, `LogCollector`'s observer
+     * — which already watches `filesDir` for `service_logs` — calls
+     * `ServiceState.handleFilesDirEvent(path)` on every event, filtered
+     * to state-file paths only. This method now attaches a FileObserver
+     * ONLY on `filesDir/workspace`.
      *
      * Initial reads are dispatched ASYNCHRONOUSLY to Dispatchers.IO
      * (Copilot R2/R4 — startWatching is invoked from Application.onCreate
@@ -402,19 +409,32 @@ object ServiceState {
     }
 
     /**
-     * Called by LogCollector's FileObserver on every event in filesDir
-     * (BAT-518 device-fix consolidation). Triggers reads of the cross-
-     * process state files that live in filesDir alongside the log file.
+     * Called by LogCollector's FileObserver when an event in `filesDir`
+     * is for one of ServiceState's files (BAT-518 device-fix consolidation).
      *
-     * Idempotent + cheap: file reads are small (~80 bytes each), parse
-     * and assignment to StateFlow are no-ops if values match. Multiple
-     * dispatches from rapid event bursts (MODIFY + CLOSE_WRITE on a
-     * single write) just re-read the same file — no harm done.
+     * Path filter is critical: without it, every `service_logs` append
+     * (potentially many per second) would re-read `service_state` and
+     * `bridge_token`, partially undoing the I/O savings BAT-518 set out
+     * to win. LogCollector now only invokes this when path matches one
+     * of these basenames, or when path is null (directory-level events
+     * with no attributable filename — rare but harmless to re-read on).
+     *
+     * Idempotent + cheap: each re-read is ~80 bytes; StateFlow only
+     * emits when values actually change.
      */
-    fun handleFilesDirEvent() {
+    fun handleFilesDirEvent(path: String?) {
         scope.launch {
-            readFromFile()
-            readBridgeToken()
+            when (path) {
+                "service_state" -> readFromFile()
+                "bridge_token" -> readBridgeToken()
+                null -> {
+                    // Directory-level event with no attributable filename.
+                    // Read both — defensive, very rare.
+                    readFromFile()
+                    readBridgeToken()
+                }
+                // Any other filename (e.g. service_logs) is not ours; ignore.
+            }
         }
     }
 
@@ -430,7 +450,6 @@ object ServiceState {
     )
     fun startPolling(context: Context) = startWatching(context)
 
-    private var filesDirObserver: FileObserver? = null
     private var workspaceDirObserver: FileObserver? = null
 
     private fun makeDirObserver(

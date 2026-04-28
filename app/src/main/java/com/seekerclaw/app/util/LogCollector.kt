@@ -171,12 +171,13 @@ object LogCollector {
                     scope.launch { readNewFromFile() }
                 }
                 // BAT-518 device-fix consolidation: ServiceState no longer
-                // owns its own filesDir observer (multiple FileObservers
-                // on the same dir is fragile). On ANY event in filesDir,
-                // dispatch to ServiceState so cross-process state files
-                // (service_state, bridge_token) get re-read. Cost: ~µs
-                // per event for ~80-byte file reads.
-                ServiceState.handleFilesDirEvent()
+                // owns its own filesDir observer (multi-observer-per-dir
+                // is fragile on this device). LogCollector dispatches to
+                // ServiceState for events on its files. Pass `path` so
+                // ServiceState can filter — without filtering, every log
+                // append (high frequency) would re-read service_state +
+                // bridge_token, partially undoing the I/O savings.
+                ServiceState.handleFilesDirEvent(path)
             }
         }.also { it.startWatching() }
 
@@ -256,12 +257,48 @@ object LogCollector {
                     ByteArray(tailBytes.toInt()).also { raf.readFully(it) }
                 }
                 val seekedMidFile = tailBytes < fileLength
+
+                // Line-boundary safety (mirrors readNewFromFile, Copilot R-latest):
+                // a concurrent writer may leave the file ending mid-line. If we
+                // advance lastReadPosition to fileLength, the partial trailing
+                // line gets lost forever once the rest arrives. Find the last
+                // newline byte (0x0A — same in ASCII and UTF-8 due to single-
+                // byte encoding for that codepoint) and only advance to that
+                // boundary. Three cases:
+                //   A) Newline found: forward complete lines, leave any partial
+                //      trailing line for next read.
+                //   B) No newline + buffer covers whole file (small file mid-
+                //      write): wait for next event. Don't advance.
+                //   C) No newline + buffer is tail of bigger file (single line
+                //      > 60KB tail buffer, pathological): force-advance to
+                //      avoid wedging — accept that the line gets split.
+                var lastNewlineIdx = -1
+                for (i in bytes.size - 1 downTo 0) {
+                    if (bytes[i] == 0x0A.toByte()) { lastNewlineIdx = i; break }
+                }
+
+                val (completeBytes, advanceTo) = when {
+                    lastNewlineIdx >= 0 -> {
+                        val complete = bytes.copyOfRange(0, lastNewlineIdx + 1)
+                        val bufStartInFile = fileLength - bytes.size
+                        complete to (bufStartInFile + lastNewlineIdx + 1)
+                    }
+                    !seekedMidFile -> {
+                        // Case B: small file, no newlines anywhere — wait.
+                        return
+                    }
+                    else -> {
+                        // Case C: pathological huge single line — force-advance.
+                        bytes to fileLength
+                    }
+                }
+
                 // Explicit UTF-8 — see readNewFromFile note (Copilot R4).
-                val lines = String(bytes, Charsets.UTF_8).lines()
+                val lines = String(completeBytes, Charsets.UTF_8).lines()
                     .filter { it.isNotBlank() }
                     .let { if (seekedMidFile) it.drop(1) else it } // drop partial first line only when we seeked mid-file
                 val entries = lines.mapNotNull { parseLine(it) }.takeLast(MAX_LINES)
-                lastReadPosition = fileLength
+                lastReadPosition = advanceTo
                 // Brief logsLock for the in-memory update only.
                 synchronized(logsLock) {
                     _logs.value = entries
