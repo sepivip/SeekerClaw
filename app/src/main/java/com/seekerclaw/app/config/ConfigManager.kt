@@ -132,9 +132,26 @@ object ConfigManager {
      * file). Without this, a cross-process write of runtime fields
      * lands in prefs but in-process Compose screens that read via
      * [loadConfig] don't recompose until manual remount.
+     *
+     * The [configVersion] bump dispatches to the main thread when
+     * we're not already on it. `mutableIntStateOf` is the Compose
+     * snapshot state Compose recompositions observe; mutating it
+     * from a background thread can land mid-snapshot in the UI
+     * process and produce a confused recomposition. The
+     * RuntimeStateStore collector runs on `Dispatchers.IO`, so
+     * this dispatch is the gate that keeps Compose state mutations
+     * single-threaded. The broadcast goes outside the main-thread
+     * gate — it's a system IPC that doesn't need main-thread
+     * affinity.
      */
     fun signalConfigChanged(context: Context) {
-        configVersion.intValue++
+        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+            configVersion.intValue++
+        } else {
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                configVersion.intValue++
+            }
+        }
         broadcastConfigChanged(context)
     }
 

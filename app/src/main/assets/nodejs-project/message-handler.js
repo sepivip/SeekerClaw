@@ -573,10 +573,19 @@ async function handleModelCommand(chatId, args) {
         deps.log(`[/model] runtime_state.json write threw: ${e.message}`, 'ERROR');
     }
     if (!runtimeOk) {
-        deps.log(`[/model] runtime_state.json write returned false — UI may show stale model until restart`, 'WARN');
+        deps.log(`[/model] runtime_state.json write returned false — UI may show stale model until a later write succeeds`, 'WARN');
     }
     deps.log(`[/model] Switched to ${v.model} (provider=${state.provider}, auth=${state.authType}, runtime_state_ok=${runtimeOk})`, 'INFO');
-    const warningSuffix = runtimeOk ? '' : '\n⚠ App settings UI may show stale model until next service restart.';
+    // The agent_settings.json overlay was written successfully — the
+    // model takes effect on the next message regardless of the
+    // runtime_state.json failure. A service restart WON'T help because
+    // if runtime_state.json exists with stale content, Node reads it
+    // (higher precedence than config.json) and continues showing the
+    // old value to the UI. Recovery is to retry /model later (or free
+    // up storage if the FS write was rejected).
+    const warningSuffix = runtimeOk
+        ? ''
+        : '\n⚠ App settings UI may show stale model until you /model again or free up storage.';
     return `✓ Switched to \`${v.model}\`. Takes effect on your next message.${warningSuffix}`;
 }
 
@@ -733,8 +742,24 @@ async function handleProviderCommand(chatId, args, messageId = null) {
     // — the main UI Settings screen would then show the NEW provider
     // while the running Node process is still on the OLD one, a
     // half-switched state worse than today's overlay-only revert.
+    //
+    // IMPORTANT: parse the file directly here instead of using
+    // `_runtimeState.read()`. The store helper returns the seeded
+    // DEFAULTS on missing/decode failure (correct for hot-read
+    // paths) — but if we treat that as "the prior state" and then
+    // write it back on revert, we'd be persisting DEFAULTS as if
+    // they were the user's previous setting, masking a missing or
+    // corrupt file with a fake history. By parsing raw, missing /
+    // decode failure → `null` → revert path skips the runtime_state
+    // write entirely (the file stays as it was before the /provider
+    // attempt, which is the correct revert).
     const prevRuntimeState = (() => {
-        try { return _runtimeState.read(); } catch (_) { return null; }
+        try {
+            if (!fs.existsSync(_runtimeState.filePath)) return null;
+            return JSON.parse(fs.readFileSync(_runtimeState.filePath, 'utf8'));
+        } catch (_) {
+            return null;
+        }
     })();
     const runtimeStateModelToWrite = newModel || state.model;
     try {

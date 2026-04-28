@@ -186,13 +186,28 @@ let OWNER_ID = CHANNEL === 'discord'
 // the failure case as "file effectively missing → fall back to
 // config.json". The store handle is still kept for write paths
 // (createStore preserved its own atomicity contract).
-const _runtimeState = require('./runtime-state').open(workDir);
+const _runtimeStateModule = require('./runtime-state');
+const _runtimeState = _runtimeStateModule.open(workDir);
 let _runtimeStateValues = null;
 if (fs.existsSync(_runtimeState.filePath)) {
     try {
         const _raw = fs.readFileSync(_runtimeState.filePath, 'utf8');
-        _runtimeStateValues = JSON.parse(_raw);
-        log(`[Config] Loaded runtime_state.json: provider=${_runtimeStateValues.provider} authType=${_runtimeStateValues.authType} model=${_runtimeStateValues.model}`, 'DEBUG');
+        const _parsed = JSON.parse(_raw);
+        // Defense-in-depth: validate the (provider, authType) pair
+        // matches the matrix the write path enforces. A manually-
+        // edited file (or a future build's value with a combo this
+        // build doesn't support) would otherwise drive Node startup
+        // with an invalid combination instead of falling back.
+        // Treat invalid content the same as decode failure: log,
+        // discard, fall through to config.json.
+        if (typeof _parsed.provider === 'string' && typeof _parsed.authType === 'string'
+            && _runtimeStateModule.validateMatrix(_parsed.provider, _parsed.authType)) {
+            _runtimeStateValues = _parsed;
+            log(`[Config] Loaded runtime_state.json: provider=${_runtimeStateValues.provider} authType=${_runtimeStateValues.authType} model=${_runtimeStateValues.model}`, 'DEBUG');
+        } else {
+            log(`[Config] runtime_state.json has invalid (provider=${_parsed.provider}, authType=${_parsed.authType}) — falling back to config.json`, 'WARN');
+            _runtimeStateValues = null;
+        }
     } catch (e) {
         // Decode failure (corrupt JSON, partial write surviving rename
         // failure, manual edit gone wrong). Fall back to config.json

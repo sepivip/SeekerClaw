@@ -1199,12 +1199,16 @@ fun SettingsScreen(
                     val savedConfig = ConfigManager.loadConfig(context)
                     if (!savedOk) {
                         // BAT-513: prefs persisted but RuntimeStateStore.write
-                        // failed — runtime fields may not have reached the
-                        // cross-process file. Surface to user; the legacy
-                        // prefs path still works so the import isn't lost.
+                        // failed — runtime fields didn't reach the cross-
+                        // process file. A service restart WON'T fix this:
+                        // if runtime_state.json already exists, Node reads
+                        // it (higher precedence than config.json) and would
+                        // keep using the stale value. The user needs to
+                        // retry the save (or free up storage if FS pressure
+                        // is the cause).
                         Toast.makeText(
                             context,
-                            "Imported but couldn't sync runtime config — restart the service.",
+                            "Imported but couldn't sync runtime config. Try saving again or free up storage.",
                             Toast.LENGTH_LONG,
                         ).show()
                     }
