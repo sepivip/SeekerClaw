@@ -578,11 +578,16 @@ async function handleModelCommand(chatId, args) {
     deps.log(`[/model] Switched to ${v.model} (provider=${state.provider}, auth=${state.authType}, runtime_state_ok=${runtimeOk})`, 'INFO');
     // The agent_settings.json overlay was written successfully — the
     // model takes effect on the next message regardless of the
-    // runtime_state.json failure. A service restart WON'T help because
-    // if runtime_state.json exists with stale content, Node reads it
-    // (higher precedence than config.json) and continues showing the
-    // old value to the UI. Recovery is to retry /model later (or free
-    // up storage if the FS write was rejected).
+    // runtime_state.json failure (Node's per-turn resolveActiveModel
+    // reads the overlay, not runtime_state.json). The UI is the
+    // surface that observes runtime_state.json (via Kotlin's
+    // FileObserver → RuntimeStateStore.state → Settings screen);
+    // when our write to it fails, the UI keeps showing the previous
+    // value. A service restart doesn't fix it — Node's
+    // resolveActiveModel pulls from the overlay regardless, and
+    // re-running this command WOULD fix it (retry the FS write).
+    // Recovery is to retry /model later (or free up storage if the
+    // FS write was rejected).
     const warningSuffix = runtimeOk
         ? ''
         : '\n⚠ App settings UI may show stale model until you /model again or free up storage.';
@@ -765,9 +770,24 @@ async function handleProviderCommand(chatId, args, messageId = null) {
     // state this snapshot is supposed to prevent. Treat invalid
     // parsed content as "no valid prior file" → null → revert path
     // skips the write.
+    // BAT-513 round-7: also track whether the file EXISTED before our
+    // write. If the file didn't exist (e.g. first install where the
+    // main UI process's RuntimeStateStore.init migration hasn't run
+    // yet — the `:node` process has no way to gate on that), our own
+    // `_runtimeState.write(...)` below CREATES the file. On a
+    // restart-failure revert with `prevRuntimeState == null`, the
+    // current code path skips the runtime-state write — but that
+    // would leave the FILE WE JUST CREATED on disk advertising the
+    // NEW provider, while the overlay reverts to the OLD one and
+    // the running adapter stays on OLD. Same half-switched state
+    // the snapshot is supposed to prevent.
+    //
+    // Fix: track `prevFileExisted` here, then on revert delete the
+    // file we created when there was no valid prior state.
+    const prevFileExisted = fs.existsSync(_runtimeState.filePath);
     const prevRuntimeState = (() => {
         try {
-            if (!fs.existsSync(_runtimeState.filePath)) return null;
+            if (!prevFileExisted) return null;
             const parsed = JSON.parse(fs.readFileSync(_runtimeState.filePath, 'utf8'));
             if (!parsed || typeof parsed !== 'object') return null;
             if (typeof parsed.provider !== 'string' || typeof parsed.authType !== 'string'
@@ -854,11 +874,15 @@ async function handleProviderCommand(chatId, args, messageId = null) {
             }
             // BAT-513: also revert runtime_state.json so the UI shows
             // the OLD provider, matching the still-running adapter.
-            if (prevRuntimeState) {
-                try { _runtimeState.write(prevRuntimeState); } catch (e) {
-                    deps.log(`[/provider] runtime_state revert failed (${e && e.message}); UI may show stale provider`, 'WARN');
-                }
-            }
+            // Three branches:
+            //   - Valid prior state present → write it back
+            //   - File didn't exist pre-write but we created it →
+            //     unlink so the UI returns to "no file → fall back
+            //     to config.json" (matches pre-/provider behaviour)
+            //   - File existed but parsed as invalid → leave it; we
+            //     can't restore content we never had. Logged so the
+            //     half-switched state is visible.
+            revertRuntimeStateFile();
             // Restart didn't fire — tell the user so they don't wait
             // forever for a restart that never happens.
             deps.sendMessage(
@@ -875,12 +899,42 @@ async function handleProviderCommand(chatId, args, messageId = null) {
         } catch (e) {
             deps.log(`[/provider] overlay revert failed (${e && e.message})`, 'WARN');
         }
+        revertRuntimeStateFile();
+    });
+
+    // BAT-513 round-7: shared revert helper for both restart-failure
+    // callbacks above. Handles the three cases (valid prior state,
+    // file-didnt-exist-pre-write, file-existed-but-invalid) so neither
+    // callback leaves runtime_state.json advertising the NEW provider
+    // when the running adapter has reverted to OLD.
+    function revertRuntimeStateFile() {
         if (prevRuntimeState) {
             try { _runtimeState.write(prevRuntimeState); } catch (e) {
-                deps.log(`[/provider] runtime_state revert failed (${e && e.message})`, 'WARN');
+                deps.log(`[/provider] runtime_state revert failed (${e && e.message}); UI may show stale provider`, 'WARN');
             }
+            return;
         }
-    });
+        if (!prevFileExisted) {
+            // We created the file in this /provider attempt. Delete
+            // it so the UI's RuntimeStateStore re-emits the
+            // last-valid value (the seed or whatever survived in
+            // its StateFlow), and Node startup falls back to
+            // config.json on next service start.
+            try {
+                if (fs.existsSync(_runtimeState.filePath)) {
+                    fs.unlinkSync(_runtimeState.filePath);
+                }
+            } catch (e) {
+                deps.log(`[/provider] runtime_state unlink failed (${e && e.message}); UI may show NEW provider while running on OLD`, 'WARN');
+            }
+            return;
+        }
+        // File existed pre-write but its content was invalid (parsed
+        // as not-an-object, missing fields, or matrix violation). We
+        // overwrote it with the new (valid) state; can't restore
+        // invalid content. Log so the divergence is visible.
+        deps.log(`[/provider] no valid prior runtime_state to restore — file kept as NEW; UI may show stale until next save`, 'WARN');
+    }
 
     // We've handled the reply ourselves — tell the dispatcher not to send it again.
     return { __handled: true };
