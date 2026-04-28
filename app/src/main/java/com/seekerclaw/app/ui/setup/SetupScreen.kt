@@ -441,8 +441,14 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             // a broken state.
             val saved = ConfigManager.saveConfig(context, config)
             if (!saved) {
+                // saveConfig returns false for any of: prefs commit
+                // failure, RuntimeStateStore.write failure, or invalid
+                // (provider, authType) caught at the matrix gate. The
+                // log line stays generic so we don't misattribute
+                // commit failures to the runtime-state path during
+                // diagnosis.
                 LogCollector.append(
-                    "[Setup] saveConfig failed — RuntimeStateStore.write returned false",
+                    "[Setup] saveConfig returned false — see prior [Config] entries for the specific failure",
                     LogLevel.ERROR,
                 )
                 isStarting = false

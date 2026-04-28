@@ -1198,19 +1198,30 @@ fun SettingsScreen(
                     val savedOk = ConfigManager.saveConfig(context, merged)
                     val savedConfig = ConfigManager.loadConfig(context)
                     if (!savedOk) {
-                        // BAT-513: prefs persisted but RuntimeStateStore.write
-                        // failed — runtime fields didn't reach the cross-
-                        // process file. A service restart WON'T fix this:
-                        // if runtime_state.json already exists, Node reads
-                        // it (higher precedence than config.json) and would
-                        // keep using the stale value. The user needs to
-                        // retry the save (or free up storage if FS pressure
-                        // is the cause).
+                        // BAT-513: saveConfig returned false — could be prefs
+                        // commit failure OR RuntimeStateStore.write failure
+                        // OR an invalid (provider, authType) caught at the
+                        // matrix gate. In every case, the cross-process
+                        // file may diverge from what prefs hold for the
+                        // runtime fields. Treat this as a HARD FAILURE of
+                        // the import flow: surface an error, keep the
+                        // dialog open so the user can retry, and don't
+                        // proceed to the success steps (autoStart toggle,
+                        // restart dialog, "Config imported" toast). Same
+                        // pattern as ProviderConfigScreen.switchProvider's
+                        // round-3 fix — UI must reflect what actually
+                        // landed, not the optimistic merge.
+                        LogCollector.append(
+                            "[ConfigImport] saveConfig returned false — import treated as failed",
+                            LogLevel.ERROR,
+                        )
+                        configImportError = "Couldn't apply config — try again or free up storage"
                         Toast.makeText(
                             context,
-                            "Imported but couldn't sync runtime config. Try saving again or free up storage.",
+                            "Couldn't apply config. Try again or free up storage.",
                             Toast.LENGTH_LONG,
                         ).show()
+                        return@TextButton
                     }
                     LogCollector.append(
                         "[ConfigImport] Saved snapshot: ${ConfigManager.redactedSnapshot(savedConfig)}"

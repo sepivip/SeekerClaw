@@ -145,14 +145,35 @@ object ConfigManager {
      * affinity.
      */
     fun signalConfigChanged(context: Context) {
-        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
-            configVersion.intValue++
+        bumpConfigVersionOnMain()
+        broadcastConfigChanged(context)
+    }
+
+    /**
+     * Increment [configVersion] on the main thread regardless of where
+     * we're called from. Centralizes the main-thread dispatch so every
+     * mutation of this Compose snapshot state is consistent — saveConfig,
+     * reconcileWithAgentSettings, OAuth token saves, individual setters,
+     * and [signalConfigChanged] (the BAT-513 collector path) all route
+     * through here. Without centralization, a future caller running on
+     * `Dispatchers.IO` or a bridge handler thread could mutate
+     * `mutableIntStateOf` mid-snapshot and produce a confused
+     * recomposition.
+     */
+    private fun bumpConfigVersionOnMain() {
+        // Internal mutation site — the only place outside this helper
+        // that touches configVersion directly. Reads as "set to current
+        // value + 1" rather than the `++` shorthand so the
+        // codebase-wide replace-all that routes other call sites
+        // through this helper can't accidentally trap these lines.
+        val main = android.os.Looper.getMainLooper()
+        if (android.os.Looper.myLooper() == main) {
+            configVersion.intValue = configVersion.intValue + 1
         } else {
-            android.os.Handler(android.os.Looper.getMainLooper()).post {
-                configVersion.intValue++
+            android.os.Handler(main).post {
+                configVersion.intValue = configVersion.intValue + 1
             }
         }
-        broadcastConfigChanged(context)
     }
 
     private const val PREFS_NAME = "seekerclaw_prefs"
@@ -414,7 +435,7 @@ object ConfigManager {
 
         val persisted = editor.commit()
         if (persisted) {
-            configVersion.intValue++
+            bumpConfigVersionOnMain()
             // Keep agent_settings.json overlay in sync with prefs we just
             // wrote. Without this, prior `/provider` Telegram commands leave
             // a stale provider/authType/model in the overlay; the next
@@ -881,7 +902,7 @@ object ConfigManager {
         // is the canonical path here, where :node's ConfigManager.
         // configVersion bumps but main-process UI needs the broadcast
         // below to know.
-        configVersion.intValue++
+        bumpConfigVersionOnMain()
         broadcastConfigChanged(context)
 
         LogCollector.append(
@@ -1042,7 +1063,7 @@ object ConfigManager {
 
         val persisted = editor.commit()
         if (persisted) {
-            configVersion.intValue++
+            bumpConfigVersionOnMain()
         } else {
             LogCollector.append("[Config] Failed to persist OAuth tokens (commit=false)", LogLevel.ERROR)
         }
@@ -1156,7 +1177,7 @@ object ConfigManager {
             // Also update SharedPreferences for backward compatibility
             val key = if (channel == "discord") KEY_DISCORD_OWNER_ID else KEY_OWNER_ID
             prefs(context).edit().putString(key, ownerId).apply()
-            configVersion.intValue++
+            bumpConfigVersionOnMain()
 
             LogCollector.append("[Config] Owner ID saved to file for channel=$channel")
             return true
@@ -1188,7 +1209,7 @@ object ConfigManager {
     fun clearConfig(context: Context) {
         prefs(context).edit().clear().apply() // Clears all prefs including MCP servers
         KeystoreHelper.deleteKey()
-        configVersion.intValue++
+        bumpConfigVersionOnMain()
     }
 
     fun clearOpenAIOAuth(context: Context) {
@@ -1199,7 +1220,7 @@ object ConfigManager {
             .remove("openai_oauth_email") // legacy plaintext key — clean up on sign-out
             .remove(KEY_OPENAI_OAUTH_EXPIRES_AT)
             .apply()
-        configVersion.intValue++
+        bumpConfigVersionOnMain()
     }
 
     /**
@@ -1446,7 +1467,7 @@ object ConfigManager {
         prefs(context).edit()
             .putString(KEY_ENV_VARS_ENC, Base64.encodeToString(enc, Base64.NO_WRAP))
             .apply()
-        configVersion.intValue++
+        bumpConfigVersionOnMain()
     }
 
     /**
@@ -1506,7 +1527,7 @@ object ConfigManager {
         prefs(context).edit()
             .putString(KEY_MCP_SERVERS_ENC, Base64.encodeToString(enc, Base64.NO_WRAP))
             .apply()
-        configVersion.intValue++
+        bumpConfigVersionOnMain()
     }
 
     fun loadMcpServers(context: Context): List<McpServerConfig> {
@@ -1545,7 +1566,7 @@ object ConfigManager {
             .putString(KEY_WALLET_ADDRESS, address)
             .putString(KEY_WALLET_LABEL, label)
             .apply()
-        configVersion.intValue++
+        bumpConfigVersionOnMain()
         writeWalletConfig(context)
     }
 
@@ -1554,7 +1575,7 @@ object ConfigManager {
             .remove(KEY_WALLET_ADDRESS)
             .remove(KEY_WALLET_LABEL)
             .apply()
-        configVersion.intValue++
+        bumpConfigVersionOnMain()
         val walletFile = File(File(context.filesDir, "workspace"), "solana_wallet.json")
         if (walletFile.exists()) walletFile.delete()
     }
