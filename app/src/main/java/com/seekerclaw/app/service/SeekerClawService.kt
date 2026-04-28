@@ -437,6 +437,7 @@ class SeekerClawService : Service() {
         // the new state. The whole sequence is dispatched to scope so
         // onStartCommand returns fast.
         scope.launch {
+            var observerAttached = false
             nodeDebugMutex.withLock {
                 nodeDebugObserver?.stopWatching()
                 nodeDebugObserver = null
@@ -503,6 +504,7 @@ class SeekerClawService : Service() {
                         }
                     }
                 }.also { it.startWatching() }
+                observerAttached = true
             }
 
             // Initial read drains any bytes from current lastPos to file
@@ -511,7 +513,14 @@ class SeekerClawService : Service() {
             // the previous observer's last advance. Function takes the
             // mutex internally; ordering with the attach above is
             // preserved because both sequence through the same launch.
-            forwardNewNodeDebugLines(debugLogFile)
+            //
+            // Skip when workDir was invalid — there's no observer to
+            // pair this read with, and forwarding entries from a stale
+            // log file we're not watching anymore would be misleading.
+            // (R-latest+5 fix.)
+            if (observerAttached) {
+                forwardNewNodeDebugLines(debugLogFile)
+            }
         }
 
         // Track uptime

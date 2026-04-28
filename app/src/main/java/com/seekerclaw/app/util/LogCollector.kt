@@ -188,15 +188,27 @@ object LogCollector {
                 return
             }
 
-            // Attach observer FIRST, before the initial read .
-            // If we read first and a write lands between read-completion and
-            // attach, that write's MODIFY/CLOSE_WRITE event fires before the
-            // observer exists — so it's not delivered, and lastReadPosition
-            // is set to the pre-write length. The missed bytes wouldn't be
-            // forwarded until the NEXT write triggers an event. Attaching
-            // first means any write during the catch-up read window fires
-            // an event we'll see (idempotent — observer-triggered read sees
-            // lastReadPosition was already advanced and is a no-op).
+            // Construct observer FIRST but DEFER startWatching() until the
+            // initial readAllFromFile completes (R-latest+5 fix). Reason:
+            // readAllFromFile uses a tail read (up to MAX_LINES * 200 bytes)
+            // and publishes by REPLACING `_logs.value`. If a FileObserver-
+            // driven drain (`readNewFromFile`) ran concurrently with the
+            // initial readAllFromFile, the drain's APPEND could be
+            // overwritten by readAllFromFile's REPLACE — and on files
+            // larger than the tail budget, entries in the file but
+            // outside the tail would silently disappear from the in-
+            // memory buffer (since lastReadPosition is shared and may
+            // already have advanced past them).
+            //
+            // Trade-off: while startWatching is deferred, writes that
+            // land between readAllFromFile's read and startWatching's
+            // activation produce no event. Their bytes are still in
+            // the file though, and the next write triggers a drain
+            // that reads from lastReadPosition (= file end at time
+            // of readAllFromFile) to current length, picking up both
+            // the missed write and the new one. On a live agent log
+            // where writes happen frequently this gap closes within
+            // milliseconds.
             //
             // Watch the parent dir, dispatch on `service_logs` filename. Mask
             // covers append-style writes (MODIFY / CLOSE_WRITE), atomic-rename
@@ -277,15 +289,27 @@ object LogCollector {
                         ServiceState.handleFilesDirEvent(path)
                     }
                 }
-            }.also { it.startWatching() }
+            }
+            // Note: NO .also { startWatching() } here — deferred until
+            // initial read completes (see scope.launch below).
         } // end synchronized(startWatchingLock)
 
         // Initial catch-up read on Dispatchers.IO so the main-thread
         // caller (Application.onCreate) doesn't block on disk I/O.
         // _logs StateFlow holds emptyList until this lands; UI screens
         // that compose before see no log entries briefly.
-        scope.launch { readAllFromFile() }
-        Log.d(TAG, "startWatching: FileObserver attached; initial read dispatched")
+        //
+        // After the read publishes, activate the observer. Order matters:
+        // doing observer.startWatching() AFTER readAllFromFile guarantees
+        // no FileObserver-driven drain can race the initial REPLACE-
+        // semantics publish (R-latest+5 fix).
+        scope.launch {
+            readAllFromFile()
+            synchronized(startWatchingLock) {
+                fileObserver?.startWatching()
+            }
+            Log.d(TAG, "startWatching: initial read complete, FileObserver activated")
+        }
     }
 
     /**
