@@ -213,6 +213,62 @@ const CHECKPOINT_MESSAGES = 50;                 // Every 50 messages → checkpo
 const CHECKPOINT_INTERVAL_MS = 30 * 60 * 1000; // 30 min active chat → checkpoint
 const MIN_MESSAGES_FOR_SUMMARY = 3;             // Don't summarize tiny sessions
 
+// ── Idle-summary per-chat timers (BAT-524, BAT-518 phase 3B) ────────────────
+// Pre-BAT-524, main.js ran a global `setInterval(60s)` that swept the
+// sessionTracking Map every minute looking for chats whose
+// `lastMessageTime` had drifted past IDLE_TIMEOUT_MS. That interval ran
+// 1,440 times/day even with no chats active. We now keep at most one
+// `setTimeout(IDLE_TIMEOUT_MS)` per chat: it's (re)armed by every new
+// message via scheduleIdleSummary, fires once if no new message arrives
+// to reset it, and is cancelled on conversation clear / sessionTracking
+// delete / shutdown. Idle agent with no chats → zero scheduled timers
+// (vs 1,440 sweep ticks/day pre-BAT-524).
+const idleSummaryTimers = new Map(); // chatId → NodeJS.Timeout
+
+/**
+ * (Re)arm the idle-summary timer for `chatId`. Cancels the previous
+ * timer (if any) and schedules a fresh one IDLE_TIMEOUT_MS out. Call
+ * from every site that updates `track.lastMessageTime = Date.now()`
+ * — the new message resets the idle window.
+ */
+function scheduleIdleSummary(chatId) {
+    cancelIdleSummary(chatId);
+    const timer = setTimeout(() => {
+        // Clear our slot first so a new message arriving DURING
+        // saveSessionSummary's async work can install a fresh timer
+        // without colliding with this stale one.
+        idleSummaryTimers.delete(chatId);
+        const conv = conversations.get(chatId);
+        if (conv && conv.length >= MIN_MESSAGES_FOR_SUMMARY) {
+            saveSessionSummary(chatId, 'idle').catch(e => log(`[SessionSummary] ${e.message}`, 'DEBUG'));
+        }
+    }, IDLE_TIMEOUT_MS);
+    idleSummaryTimers.set(chatId, timer);
+}
+
+/**
+ * Cancel any pending idle-summary timer for `chatId`. Idempotent —
+ * safe to call even when no timer exists. Use from
+ * clearConversation / sessionTracking.delete / shutdown.
+ */
+function cancelIdleSummary(chatId) {
+    const timer = idleSummaryTimers.get(chatId);
+    if (timer !== undefined) {
+        clearTimeout(timer);
+        idleSummaryTimers.delete(chatId);
+    }
+}
+
+/**
+ * Cancel ALL pending idle-summary timers. Used by SIGTERM/SIGINT
+ * handlers so dangling setTimeouts don't keep the event loop alive
+ * and delay process.exit().
+ */
+function cancelAllIdleSummaries() {
+    for (const timer of idleSummaryTimers.values()) clearTimeout(timer);
+    idleSummaryTimers.clear();
+}
+
 function getSessionTrack(chatId) {
     const today = new Date().toISOString().split('T')[0];
     if (!sessionTracking.has(chatId)) {
@@ -245,6 +301,12 @@ function addToConversation(chatId, role, content) {
 
 function clearConversation(chatId) {
     conversations.set(chatId, []);
+    // BAT-524: cancel any pending idle-summary timer — clearing the
+    // conversation invalidates the "saved this idle gap" trigger
+    // condition (length < MIN_MESSAGES_FOR_SUMMARY post-clear), and
+    // leaving a dangling timer would harmlessly fire but waste a
+    // setTimeout slot and a saveSessionSummary attempt.
+    cancelIdleSummary(chatId);
 }
 
 // Session slug generator (OpenClaw-style adj-noun, BAT-57)
@@ -1966,6 +2028,10 @@ async function chat(chatId, userMessage, options = {}) {
     const track = getSessionTrack(chatId);
     track.lastMessageTime = Date.now();
     if (!track.firstMessageTime) track.firstMessageTime = track.lastMessageTime;
+    // BAT-524: (re)arm the per-chat idle-summary timer for the new
+    // message. Replaces the global setInterval(60s) sweep that used
+    // to scan sessionTracking for stale lastMessageTime entries.
+    scheduleIdleSummary(chatId);
 
     // BAT-243: Generate unique turn ID for correlating all API calls in this turn
     const turnId = crypto.randomBytes(4).toString('hex');
@@ -2373,6 +2439,8 @@ async function chat(chatId, userMessage, options = {}) {
                 const trk = getSessionTrack(chatId);
                 trk.lastMessageTime = Date.now();
                 trk.messageCount++;
+                // BAT-524: (re)arm the per-chat idle-summary timer.
+                scheduleIdleSummary(chatId);
                 const sinceLastSummary = Date.now() - (trk.lastSummaryTime || trk.firstMessageTime || Date.now());
                 if (trk.messageCount >= CHECKPOINT_MESSAGES || sinceLastSummary > CHECKPOINT_INTERVAL_MS) {
                     saveSessionSummary(chatId, 'checkpoint').catch(e => log(`[SessionSummary] ${e.message}`, 'DEBUG'));
@@ -2461,6 +2529,8 @@ async function chat(chatId, userMessage, options = {}) {
             const trk = getSessionTrack(chatId);
             trk.lastMessageTime = Date.now();
             trk.messageCount++;
+            // BAT-524: (re)arm the per-chat idle-summary timer.
+            scheduleIdleSummary(chatId);
             const sinceLastSummary = Date.now() - (trk.lastSummaryTime || trk.firstMessageTime || Date.now());
             if (trk.messageCount >= CHECKPOINT_MESSAGES || sinceLastSummary > CHECKPOINT_INTERVAL_MS) {
                 saveSessionSummary(chatId, 'checkpoint').catch(e => log(`[SessionSummary] ${e.message}`, 'DEBUG'));
@@ -2527,6 +2597,8 @@ module.exports = {
     // Sessions
     sessionTracking, saveSessionSummary,
     MIN_MESSAGES_FOR_SUMMARY, IDLE_TIMEOUT_MS,
+    // Idle-summary per-chat timers (BAT-524, BAT-518 phase 3B)
+    scheduleIdleSummary, cancelIdleSummary, cancelAllIdleSummaries,
     // Health
     writeAgentHealthFile, writeApiUsageState,
     // Session expiry

@@ -159,7 +159,8 @@ const {
     chat,
     conversations, getConversation, addToConversation, clearConversation,
     sessionTracking,
-    saveSessionSummary, MIN_MESSAGES_FOR_SUMMARY, IDLE_TIMEOUT_MS,
+    saveSessionSummary, MIN_MESSAGES_FOR_SUMMARY,
+    cancelIdleSummary, cancelAllIdleSummaries,
     writeAgentHealthFile,
     setChatDeps,
     getActiveTask, clearActiveTask,
@@ -731,19 +732,10 @@ telegram('getMe')
                 });
             }
 
-            // Idle session summary timer (BAT-57) — check every 60s per-chatId
-            setInterval(() => {
-                const now = Date.now();
-                sessionTracking.forEach((track, chatId) => {
-                    if (track.lastMessageTime > 0 && now - track.lastMessageTime > IDLE_TIMEOUT_MS) {
-                        track.lastMessageTime = 0; // Reset FIRST to prevent re-trigger on next tick
-                        const conv = conversations.get(chatId);
-                        if (conv && conv.length >= MIN_MESSAGES_FOR_SUMMARY) {
-                            saveSessionSummary(chatId, 'idle').catch(e => log(`[SessionSummary] ${e.message}`, 'DEBUG'));
-                        }
-                    }
-                });
-            }, 60000);
+            // BAT-524 (BAT-518 phase 3B): the prior 60s-sweep
+            // setInterval is gone. Idle session summaries now fire via
+            // per-chat setTimeout(IDLE_TIMEOUT_MS) timers (re)armed by
+            // every message — see scheduleIdleSummary in ai.js.
         } else {
             log(`ERROR: ${JSON.stringify(result)}`, 'ERROR');
             process.exit(1);
@@ -847,19 +839,10 @@ telegram('getMe')
             });
         }
 
-        // Idle session summary timer
-        setInterval(() => {
-            const now = Date.now();
-            sessionTracking.forEach((track, chatId) => {
-                if (track.lastMessageTime > 0 && now - track.lastMessageTime > IDLE_TIMEOUT_MS) {
-                    track.lastMessageTime = 0;
-                    const conv = conversations.get(chatId);
-                    if (conv && conv.length >= MIN_MESSAGES_FOR_SUMMARY) {
-                        saveSessionSummary(chatId, 'idle').catch(e => log(`[SessionSummary] ${e.message}`, 'DEBUG'));
-                    }
-                }
-            });
-        }, 60000);
+        // BAT-524 (BAT-518 phase 3B): the prior 60s-sweep setInterval
+        // is gone. Idle session summaries fire via per-chat
+        // setTimeout(IDLE_TIMEOUT_MS) timers (re)armed by every
+        // message — see scheduleIdleSummary in ai.js.
 
         log('[Discord] Discord channel fully initialized', 'INFO');
     }).catch(err => {
@@ -868,10 +851,12 @@ telegram('getMe')
     });
 }
 
-// Graceful shutdown: stop the channel (close WebSocket for Discord, no-op for Telegram)
+// Graceful shutdown: stop the channel (close WebSocket for Discord, no-op for Telegram).
 // Runs before database.js's gracefulShutdown which handles session summaries + DB save.
-process.on('SIGTERM', () => { try { channel.stop(); } catch (_) {} });
-process.on('SIGINT', () => { try { channel.stop(); } catch (_) {} });
+// BAT-524: also cancel all pending idle-summary timers so dangling
+// setTimeouts don't keep the event loop alive past process.exit().
+process.on('SIGTERM', () => { try { channel.stop(); } catch (_) {} cancelAllIdleSummaries(); });
+process.on('SIGINT', () => { try { channel.stop(); } catch (_) {} cancelAllIdleSummaries(); });
 
 // Runtime status log (uptime/memory debug, every 5 min)
 setInterval(() => {
@@ -932,6 +917,11 @@ async function runCronAgentTurn(message, jobId) {
         // the synthetic key frees all state for this cron run.
         conversations.delete(cronChatId);
         sessionTracking.delete(cronChatId);
+        // BAT-524: cancel any pending idle-summary timer for the
+        // synthetic cron chat so it doesn't fire after we've torn
+        // down conversations + sessionTracking (which would log a
+        // saveSessionSummary failure for a vanished session).
+        cancelIdleSummary(cronChatId);
         clearActiveTask(cronChatId);
     }
 }
