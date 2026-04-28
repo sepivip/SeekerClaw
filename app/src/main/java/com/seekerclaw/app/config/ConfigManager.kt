@@ -1048,8 +1048,21 @@ object ConfigManager {
         }
     }
 
-    fun updateConfigField(context: Context, field: String, value: String) {
-        val config = loadConfig(context) ?: return
+    /**
+     * Update a single config field and persist via [saveConfig].
+     *
+     * Returns the persistence result from [saveConfig] — `true` on
+     * full success (prefs commit + RuntimeStateStore write), `false`
+     * on any failure (including when no config exists yet, or when
+     * the runtime-state file write failed). Pre-BAT-513 callers that
+     * ignore the return value continue to compile (Boolean values
+     * are discardable in Kotlin); UI flows that touch runtime fields
+     * (`provider`, `authType`, `model`) should check the return so a
+     * failed save doesn't leave the UI displaying the optimistic
+     * value while the cross-process file is still on the old one.
+     */
+    fun updateConfigField(context: Context, field: String, value: String): Boolean {
+        val config = loadConfig(context) ?: return false
         val updated = when (field) {
             "anthropicApiKey" -> config.copy(anthropicApiKey = value)
             "setupToken" -> config.copy(setupToken = value)
@@ -1095,13 +1108,13 @@ object ConfigManager {
             "openaiOAuthRefresh" -> config.copy(openaiOAuthRefresh = value)
             "openaiOAuthEmail" -> config.copy(openaiOAuthEmail = value)
             "openaiOAuthExpiresAt" -> config.copy(openaiOAuthExpiresAt = value)
-            else -> return
+            else -> return false
         }
         // saveConfig now syncs the agent_settings.json overlay
         // automatically (writes prefs + overlay atomically), so the
         // separate writeAgentSettingsJson call previously here is no
         // longer needed. See saveConfig for the architectural fix.
-        saveConfig(context, updated)
+        return saveConfig(context, updated)
     }
 
     fun saveOwnerId(context: Context, ownerId: String): Boolean {

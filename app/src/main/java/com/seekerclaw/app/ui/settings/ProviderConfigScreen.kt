@@ -135,8 +135,34 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
 
     fun saveField(field: String, value: String, needsRestart: Boolean = false) {
-        ConfigManager.updateConfigField(context, field, value)
-        config = ConfigManager.loadConfig(context)
+        val saved = ConfigManager.updateConfigField(context, field, value)
+        val refreshed = ConfigManager.loadConfig(context)
+        // BAT-513 same-bug-class fix (covers `switchProvider`'s sibling): when
+        // updateConfigField returns false on a runtime field (provider /
+        // authType / model), prefs got the new value but runtime_state.json
+        // didn't. Override the displayed runtime fields with the last-valid
+        // RuntimeStateStore.read() so the UI matches what's actually live;
+        // surface the failure as a Toast and skip the restart dialog.
+        // Non-runtime fields (API keys, search providers, etc.) don't go
+        // through RuntimeStateStore — for them the Boolean reflects only
+        // the prefs commit, and the displayed config from `refreshed` is
+        // already correct.
+        val isRuntimeField = field == "provider" || field == "authType" || field == "model"
+        if (!saved && isRuntimeField) {
+            val lastValid = com.seekerclaw.app.state.RuntimeStateStore.read()
+            config = refreshed?.copy(
+                provider = lastValid.provider,
+                authType = lastValid.authType,
+                model = lastValid.model,
+            )
+            android.widget.Toast.makeText(
+                context,
+                "Couldn't save $field. Try again or free up storage.",
+                android.widget.Toast.LENGTH_LONG,
+            ).show()
+            return
+        }
+        config = refreshed
         if (needsRestart) showRestartDialog = true
     }
 
@@ -231,13 +257,29 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                 model = effectiveModel,
             )
         )
-        config = ConfigManager.loadConfig(context)
+        val refreshed = ConfigManager.loadConfig(context)
         if (saved) {
+            config = refreshed
             showRestartDialog = true
         } else {
+            // BAT-513: prefs were updated but runtime_state.json write
+            // failed — Node is still running on the OLD provider. If we
+            // displayed the prefs values (which now show the NEW
+            // selection), the UI would lie about what's actually live.
+            // Override the runtime fields in the displayed config with
+            // RuntimeStateStore.read() — that's the last valid state
+            // both the UI and Node agree on. Other fields (API keys,
+            // agent name, etc.) DID persist successfully so we keep
+            // the refreshed values for those.
+            val lastValid = com.seekerclaw.app.state.RuntimeStateStore.read()
+            config = refreshed?.copy(
+                provider = lastValid.provider,
+                authType = lastValid.authType,
+                model = lastValid.model,
+            )
             android.widget.Toast.makeText(
                 context,
-                "Couldn't save provider change. Try again.",
+                "Couldn't save provider change. Try again or free up storage.",
                 android.widget.Toast.LENGTH_LONG,
             ).show()
         }
