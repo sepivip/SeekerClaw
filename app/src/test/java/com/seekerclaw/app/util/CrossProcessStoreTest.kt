@@ -363,6 +363,39 @@ class CrossProcessStoreTest {
     }
 
     @Test
+    fun `drift live source snapshots initial at construction (round-5)`() {
+        // BAT-512 (Copilot review fix round-5): the `initial`
+        // constructor parameter must be cloned ONCE at construction
+        // into `initialSnapshot`. Without this, the caller's
+        // original `initial` reference (if T is mutable) could be
+        // mutated post-construction and the next missing/malformed
+        // read would clone the mutated state.
+        val src = locateLiveSource()
+        val text = src.readText()
+        assertTrue(
+            "constructor must NOT store `initial` as a property (must be a non-stored param so the original reference goes out of scope)",
+            !Regex("""private\s+val\s+initial\s*:\s*T""").containsMatchIn(text),
+        )
+        assertTrue(
+            "must declare initialSnapshot via cloneSafe(initial) at construction",
+            Regex("""initialSnapshot\s*:\s*T\s*=\s*cloneSafe\s*\(\s*initial\s*\)""").containsMatchIn(text),
+        )
+        assertTrue(
+            "read() missing/malformed paths must clone from initialSnapshot",
+            Regex("""cloneSafe\s*\(\s*initialSnapshot\s*\)""").containsMatchIn(text),
+        )
+        // Negative: must not still call cloneSafe(initial) anywhere
+        // EXCEPT in the snapshot initializer itself.
+        val cloneInitialCount = Regex("""cloneSafe\s*\(\s*initial\s*\)""")
+            .findAll(text).count()
+        assertEquals(
+            "cloneSafe(initial) must appear exactly once — in the initialSnapshot initializer",
+            1,
+            cloneInitialCount,
+        )
+    }
+
+    @Test
     fun `drift class-level KDoc declares Mutation safety contract`() {
         // BAT-512 (Copilot review fix round-4 contract): the boundary
         // contract is explicit at the class level so a future

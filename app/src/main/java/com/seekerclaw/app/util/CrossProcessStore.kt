@@ -75,25 +75,31 @@ import java.util.concurrent.atomic.AtomicBoolean
  *
  * ## Mutation safety (the boundary contract)
  *
- * The store treats T as a value type. Both [read] and [write]
- * defensively clone T at the boundary via [cloneSafe] so:
+ * The store treats T as a value type. T is JSON-cloned at every
+ * boundary where it crosses between caller and store, so neither
+ * side can poison the other through a shared reference:
  *
- *  - **Caller mutates after write()**: the store's internal `_state`
- *    + StateFlow observers see the snapshot the caller intended at
- *    write-time, not whatever the caller's reference morphs into
- *    afterward. Without this, observers could see "writes" that were
- *    never persisted to disk and that diverge from what [read]
- *    returns.
- *  - **Caller mutates after read()**: the store's `initial` default
- *    and StateFlow backing field are unaffected. Without this, a
- *    mutable T (a class with var properties, or a MutableMap) could
- *    let caller-side mutation poison the store.
+ *  - **Constructor input** (`initial` parameter): cloned once into
+ *    `initialSnapshot` at construction. The caller's original
+ *    reference goes out of scope. Subsequent caller mutations to
+ *    that original reference can't change what missing/malformed
+ *    [read] calls return.
+ *  - **Caller mutates after `write()`**: the store's internal
+ *    `_state` + StateFlow observers see the snapshot the caller
+ *    intended at write-time, not whatever the caller's reference
+ *    morphs into afterward. Without this, observers could see
+ *    "writes" that were never persisted to disk and that diverge
+ *    from what [read] returns.
+ *  - **Caller mutates after `read()`**: the store's
+ *    `initialSnapshot` and StateFlow backing field are unaffected.
+ *    Without this, a mutable T (a class with var properties, or a
+ *    MutableMap) could let caller-side mutation poison the store.
  *
  * The clone is JSON encode/decode round-trip — cheap on small
  * `@Serializable` data classes (the only realistic T for this store)
  * and produces a fresh object graph with no shared references. The
  * Node parity helper (`cross-process-store.js`) implements the same
- * boundary contract via `JSON.parse(JSON.stringify(value))`.
+ * three-boundary contract via `JSON.parse(JSON.stringify(value))`.
  *
  * ## What this class does NOT do
  *
@@ -130,7 +136,7 @@ class CrossProcessStore<T>(
     context: Context,
     private val fileName: String,
     private val serializer: KSerializer<T>,
-    private val initial: T,
+    initial: T,
     parentScope: CoroutineScope? = null,
 ) {
     init {
@@ -172,10 +178,23 @@ class CrossProcessStore<T>(
         encodeDefaults = true
     }
 
-    // Initialize _state with a deep-cloned seed so a caller mutating
-    // the returned value can't poison the StateFlow's backing field.
-    // Declared after `json` because cloneSafe() uses it.
-    private val _state = MutableStateFlow(cloneSafe(initial))
+    // BAT-512 (Copilot review fix round-5): snapshot the caller's
+    // `initial` reference ONCE at construction so a caller mutating
+    // their original `initial` object after `CrossProcessStore(...)`
+    // returns can't change what subsequent missing/malformed reads
+    // produce. The constructor parameter `initial` is non-stored
+    // (no `private val`), so the original reference goes out of scope
+    // after this snapshot — there's no way to reach it from inside
+    // the class anymore. Declared after `json` because cloneSafe
+    // depends on it.
+    private val initialSnapshot: T = cloneSafe(initial)
+
+    // Initialize _state with a fresh clone of the snapshot so an
+    // external mutation of `_state.value` (theoretical — StateFlow
+    // observers shouldn't mutate published values, but the type
+    // system doesn't enforce that for mutable T) can't poison the
+    // snapshot we'll keep returning from read() forever.
+    private val _state = MutableStateFlow(cloneSafe(initialSnapshot))
 
     /** Observable state. Emits new values on every successful write or reload. */
     val state: StateFlow<T> = _state.asStateFlow()
@@ -236,26 +255,27 @@ class CrossProcessStore<T>(
      * on missing file or malformed JSON (logged at WARN — never
      * throws).
      *
-     * BAT-512 (Copilot review fix #4): the returned value goes through
-     * `cloneSafe(initial)` on missing/malformed paths, which JSON-
-     * round-trips to produce a fresh instance with no shared
-     * references. Without this, a mutable T (e.g. a class with
+     * BAT-512 (Copilot review fixes #4 + round-5): the returned value
+     * goes through `cloneSafe(initialSnapshot)` on missing/malformed
+     * paths, which JSON-round-trips a fresh instance off the
+     * construction-time snapshot — see "Mutation safety" in the
+     * class KDoc. Without this, a mutable T (e.g. a class with
      * mutable fields, or a pre-Kotlin data type with var properties)
      * could let a caller's accidental mutation poison the store's
      * default and the StateFlow's backing field. The Node helper has
      * the same defensive clone. Edge case: if the JSON round-trip
      * itself throws (only possible for a misconfigured `@Serializable`
      * type — the live cases this store targets are all valid), we
-     * fall back to returning the original `initial` reference and log
+     * fall back to returning the un-cloned snapshot reference and log
      * a WARN; in that scenario the caller MUST treat T as immutable.
      */
     fun read(): T {
-        if (!file.exists()) return cloneSafe(initial)
+        if (!file.exists()) return cloneSafe(initialSnapshot)
         return try {
             json.decodeFromString(serializer, file.readText())
         } catch (e: Exception) {
             Log.w(TAG, "[$fileName] decode failed, returning initial: ${e.message}")
-            cloneSafe(initial)
+            cloneSafe(initialSnapshot)
         }
     }
 
@@ -346,8 +366,8 @@ class CrossProcessStore<T>(
                 // publishing so a caller mutating their `value`
                 // reference after this returns cannot mutate what
                 // StateFlow observers see. Symmetric with read()'s
-                // cloneSafe(initial). See class-level "Mutation
-                // safety" KDoc.
+                // clone of the construction-time snapshot. See class-
+                // level "Mutation safety" KDoc.
                 _state.value = cloneSafe(value)
                 broadcastChanged()
             } catch (e: Exception) {

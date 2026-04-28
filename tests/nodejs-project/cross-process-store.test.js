@@ -171,6 +171,30 @@ test('write success path also leaves no .tmp behind (rename consumed it)', () =>
     assert.ok(!fs.existsSync(file + '.tmp'), '.tmp consumed by rename');
 });
 
+test('mutating the original `defaults` AFTER createStore() does not affect future reads (round-5 snapshot)', () => {
+    // BAT-512 (Copilot review fix round-5): defaults must be
+    // snapshotted at createStore() construction, not closed over by
+    // reference. Otherwise a caller mutating their `defaults`
+    // object after construction would see those mutations leak
+    // through subsequent missing/malformed read() calls.
+    const dir = tmpDir();
+    const defaults = { provider: 'anthropic', nested: { count: 0 } };
+    const store = createStore(path.join(dir, 'absent.json'), defaults);
+    // Mutate the ORIGINAL reference the caller still holds.
+    defaults.provider = 'caller-mutated-provider';
+    defaults.nested.count = 999;
+    defaults.newField = 'caller-added';
+    // read() must return the snapshot taken at construction time —
+    // NOT the post-mutation defaults.
+    const v = store.read();
+    assert.strictEqual(v.provider, 'anthropic',
+        'snapshot must reflect construction-time defaults, not post-mutation');
+    assert.strictEqual(v.nested.count, 0,
+        'snapshot must protect nested fields too');
+    assert.strictEqual(v.newField, undefined,
+        'snapshot freezes the schema at construction time');
+});
+
 test('defaults are NOT mutated through the returned read() reference', () => {
     // Bug surface: if read() returns the shared `defaults` reference
     // and the caller mutates it (e.g. `const v = store.read(); v.foo
@@ -235,6 +259,18 @@ test('drift: this test file cleans up scratch dirs after running (Copilot round-
         'must call cleanupScratchDirs() in run()');
     assert.ok(/fs\.rmSync\s*\(\s*dir\s*,\s*\{\s*recursive\s*:\s*true/.test(self),
         'cleanup must rmSync recursively');
+});
+
+test('drift: live source snapshots `defaults` at createStore() (round-5)', () => {
+    const src = fs.readFileSync(STORE_JS, 'utf8');
+    assert.ok(/const\s+defaultsSnapshot\s*=\s*_clone\s*\(\s*defaults\s*\)/.test(src),
+        'must snapshot defaults via _clone(defaults) at construction');
+    assert.ok(/_clone\s*\(\s*defaultsSnapshot\s*\)/.test(src),
+        'read() paths must clone from defaultsSnapshot, not the raw defaults reference');
+    // Negative: read() must NOT clone the raw `defaults` reference
+    // (would re-introduce the post-construction mutation hazard).
+    assert.ok(!/return\s+_clone\s*\(\s*defaults\s*\)/.test(src),
+        'read() must NOT clone `defaults` directly — that path is the bug');
 });
 
 test('drift: live source defensively unlinks leaked .tmp on failure', () => {

@@ -57,14 +57,23 @@ function createStore(filePath, defaults) {
     }
     const tmpPath = filePath + '.tmp';
 
+    // BAT-512 (Copilot review fix round-5): snapshot defaults at
+    // construction time so a caller mutating their `defaults`
+    // object AFTER createStore() can't change what subsequent
+    // missing/malformed reads return. Without this, the closure
+    // captures `defaults` by reference and `_clone(defaults)` at
+    // read-time would reflect post-construction mutations — a
+    // silent contract drift.
+    const defaultsSnapshot = _clone(defaults);
+
     function read() {
         try {
-            if (!fs.existsSync(filePath)) return _clone(defaults);
+            if (!fs.existsSync(filePath)) return _clone(defaultsSnapshot);
             const text = fs.readFileSync(filePath, 'utf8');
             return JSON.parse(text);
         } catch (e) {
             _logger(`[CrossProcessStore:${path.basename(filePath)}] decode failed, returning defaults: ${e.message}`, 'WARN');
-            return _clone(defaults);
+            return _clone(defaultsSnapshot);
         }
     }
 
