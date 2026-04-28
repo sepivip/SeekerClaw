@@ -753,10 +753,31 @@ async function handleProviderCommand(chatId, args, messageId = null) {
     // decode failure → `null` → revert path skips the runtime_state
     // write entirely (the file stays as it was before the /provider
     // attempt, which is the correct revert).
+    //
+    // ALSO validate the parsed object's shape and matrix BEFORE
+    // accepting it as prevRuntimeState. A parseable-but-invalid
+    // object (missing fields, or a (provider, authType) combo
+    // outside the matrix) would otherwise become a truthy
+    // `prevRuntimeState`; the revert path's `_runtimeState.write`
+    // call would then throw on the matrix gate, the `.catch` would
+    // log WARN, and runtime_state.json would stay STUCK on the new
+    // (provider, authType, model) — exactly the half-switched
+    // state this snapshot is supposed to prevent. Treat invalid
+    // parsed content as "no valid prior file" → null → revert path
+    // skips the write.
     const prevRuntimeState = (() => {
         try {
             if (!fs.existsSync(_runtimeState.filePath)) return null;
-            return JSON.parse(fs.readFileSync(_runtimeState.filePath, 'utf8'));
+            const parsed = JSON.parse(fs.readFileSync(_runtimeState.filePath, 'utf8'));
+            if (!parsed || typeof parsed !== 'object') return null;
+            if (typeof parsed.provider !== 'string' || typeof parsed.authType !== 'string'
+                || typeof parsed.model !== 'string') {
+                return null;
+            }
+            if (!_runtimeState.validateMatrix(parsed.provider, parsed.authType)) {
+                return null;
+            }
+            return parsed;
         } catch (_) {
             return null;
         }
