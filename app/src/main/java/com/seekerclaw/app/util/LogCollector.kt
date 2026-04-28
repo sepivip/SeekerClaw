@@ -62,6 +62,15 @@ object LogCollector {
     private val readLock = Any()
     private val startWatchingLock = Any()
 
+    // Generation token, bumped on every clear(). Captured under readLock
+    // when a read starts, re-checked under readLock when the read tries
+    // to publish to _logs. If a clear() ran between the read and the
+    // publish (the decode/parse phase happens outside the lock), the
+    // generation will have advanced and the publish is discarded —
+    // otherwise stale entries from before the clear would be re-added
+    // to _logs after _logs was reset to empty.
+    @Volatile private var clearGeneration = 0L
+
     // Single-flight gate for FileObserver-driven reads: under heavy
     // logging, FileObserver fires MODIFY + CLOSE_WRITE per write —
     // easily 100+ events/sec. Without this gate, each event launched
@@ -120,10 +129,15 @@ object LogCollector {
         // against any in-flight readNewFromFile / readAllFromFile). Take
         // logsLock briefly inside for the in-memory list reset. Lock order
         // matches readNewFromFile's: readLock outer, logsLock inner.
+        //
+        // Bump clearGeneration BEFORE clearing _logs so any in-flight
+        // read that decoded under generation N sees N+1 at publish time
+        // and discards its stale entries.
         synchronized(readLock) {
             try {
                 logFile?.writeText("")
                 lastReadPosition = 0L
+                clearGeneration++
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to clear log file", e)
             }
@@ -325,6 +339,7 @@ object LogCollector {
         // a parse.
         var capturedBytes: ByteArray? = null
         var capturedSeekedMidFile = false
+        var generationAtRead = 0L
         synchronized(readLock) {
             val file = logFile ?: return
             try {
@@ -374,6 +389,7 @@ object LogCollector {
                 lastReadPosition = advanceTo
                 capturedBytes = completeBytes
                 capturedSeekedMidFile = seekedMidFile
+                generationAtRead = clearGeneration
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to read log file (full)", e)
             }
@@ -388,9 +404,18 @@ object LogCollector {
 .mapNotNull { parseLine(it) }
 .takeLast(MAX_LINES)
 
-        // Brief logsLock for the in-memory update only.
-        synchronized(logsLock) {
-            _logs.value = entries
+        // Re-acquire readLock to gate the publish on the clear-generation
+        // check. If a clear() ran during decode, the generation will have
+        // advanced and we discard these stale entries — otherwise we'd
+        // re-populate _logs with entries from before the clear, undoing
+        // the user's clear-logs action. logsLock nested inside readLock
+        // keeps the documented lock order (readLock outer, logsLock
+        // inner) and makes the check + publish atomic w.r.t. clear().
+        synchronized(readLock) {
+            if (clearGeneration != generationAtRead) return
+            synchronized(logsLock) {
+                _logs.value = entries
+            }
         }
     }
 
@@ -404,6 +429,7 @@ object LogCollector {
         // clear()) to wait through the parse, causing potential UI jank.
         var capturedBytes: ByteArray? = null
         var needFullRead = false
+        var generationAtRead = 0L
         synchronized(readLock) {
             val file = logFile ?: return
             try {
@@ -474,6 +500,7 @@ object LogCollector {
                 // bytes (if any) stay unread for next call.
                 lastReadPosition = pos + complete.size
                 capturedBytes = complete
+                generationAtRead = clearGeneration
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to read new log entries from file", e)
             }
@@ -498,16 +525,25 @@ object LogCollector {
 .mapNotNull { parseLine(it) }
         if (newEntries.isEmpty()) return
 
-        // Brief logsLock acquire ONLY for the in-memory list mutation.
-        // append() can compete here, but the lock is held for
-        // microseconds — no main-thread jank.
-        synchronized(logsLock) {
-            val current = _logs.value.toMutableList()
-            current.addAll(newEntries)
-            while (current.size > MAX_LINES) {
-                current.removeAt(0)
+        // Re-acquire readLock to gate the publish on the clear-generation
+        // check. If a clear() ran during decode, the generation will have
+        // advanced and we discard these stale entries — otherwise we'd
+        // re-publish entries from before the clear, partially undoing
+        // the user's clear-logs action. logsLock nested inside readLock
+        // matches the documented lock order (readLock outer, logsLock
+        // inner) and makes the check + publish atomic w.r.t. clear().
+        // The block is microseconds-scale (in-memory ops only) — no
+        // material change to UI-thread append() contention.
+        synchronized(readLock) {
+            if (clearGeneration != generationAtRead) return
+            synchronized(logsLock) {
+                val current = _logs.value.toMutableList()
+                current.addAll(newEntries)
+                while (current.size > MAX_LINES) {
+                    current.removeAt(0)
+                }
+                _logs.value = current
             }
-            _logs.value = current
         }
     }
 
