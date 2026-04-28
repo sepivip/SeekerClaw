@@ -338,6 +338,36 @@ test('drift: SIGTERM/SIGINT handlers in main.js cancel all idle timers', () => {
         'SIGINT handler must call cancelAllIdleSummaries(...)');
 });
 
+test('drift: scheduleIdleSummary calls .unref() on the timer', () => {
+    // Without unref(), a pending idle timer can keep the Node event
+    // loop alive past a clean shutdown unless every exit path
+    // reliably cancels it. Pin that the live source uses the same
+    // `if (timer.unref) timer.unref()` defensive pattern as cron.js.
+    const src = readJsSource(AI_JS);
+    const fnMatch = src.match(/function\s+scheduleIdleSummary[\s\S]*?\n\}/);
+    assert.ok(fnMatch, 'scheduleIdleSummary function body not found');
+    const body = fnMatch[0];
+    assert.ok(/timer\.unref\s*\(\s*\)/.test(body),
+        'scheduleIdleSummary must call timer.unref() so a pending idle timer cannot block clean process exit');
+});
+
+test('drift: gracefulShutdown receives cancelAllIdleSummaries via setShutdownDeps', () => {
+    const dbSrc = readJsSource(path.join(__dirname, '..', '..', 'app', 'src', 'main',
+        'assets', 'nodejs-project', 'database.js'));
+    // The shutdown-deps record must declare cancelAllIdleSummaries.
+    assert.ok(/cancelAllIdleSummaries\s*:/.test(dbSrc),
+        'database.js _shutdownDeps must declare cancelAllIdleSummaries (BAT-524 — gracefulShutdown can call process.exit before main.js SIGTERM listener runs)');
+    // gracefulShutdown must invoke it.
+    const fnMatch = dbSrc.match(/async\s+function\s+gracefulShutdown[\s\S]*?\n\}/);
+    assert.ok(fnMatch, 'gracefulShutdown function body not found');
+    assert.ok(/_shutdownDeps\.cancelAllIdleSummaries\s*\(\s*\)/.test(fnMatch[0]),
+        'gracefulShutdown must call _shutdownDeps.cancelAllIdleSummaries() so timers are released even when main.js SIGTERM listener is bypassed');
+    // main.js must pass cancelAllIdleSummaries when wiring deps.
+    const mainSrc = readJsSource(MAIN_JS);
+    assert.ok(/setShutdownDeps\s*\(\s*\{[^}]*cancelAllIdleSummaries/.test(mainSrc),
+        'main.js setShutdownDeps(...) call must include cancelAllIdleSummaries');
+});
+
 test('drift: stripJsComments actually removes comments without breaking strings', () => {
     // Sanity check on the helper itself — without this the other
     // drift guards' "comment immunity" claim is unverified. If
@@ -361,7 +391,7 @@ test('drift: stripJsComments actually removes comments without breaking strings'
         'string literal SIGTERM preserved');
     assert.ok(/literal/.test(stripped),
         'template literal body preserved');
-    assert.ok(!/not a comment/.test(stripped) === false,
+    assert.ok(/not a comment/.test(stripped),
         'block-comment-looking content INSIDE a template literal is preserved');
     // Live calls preserved.
     assert.ok(/cancelIdleSummary\(99\)/.test(stripped),

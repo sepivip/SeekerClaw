@@ -243,6 +243,11 @@ function scheduleIdleSummary(chatId) {
             saveSessionSummary(chatId, 'idle').catch(e => log(`[SessionSummary] ${e.message}`, 'DEBUG'));
         }
     }, IDLE_TIMEOUT_MS);
+    // unref() so a pending idle timer can't keep the Node event loop
+    // alive past a clean exit. Same pattern cron.js uses for its long-
+    // lived timers. The defensive `if (timer.unref)` matches Node-side
+    // type variance on different Node versions.
+    if (timer.unref) timer.unref();
     idleSummaryTimers.set(chatId, timer);
 }
 

@@ -85,6 +85,13 @@ let _shutdownDeps = {
     conversations: null,          // Map — from main.js (will move to ai.js in BAT-203)
     saveSessionSummary: null,     // async fn — from main.js (will move to ai.js in BAT-203)
     MIN_MESSAGES_FOR_SUMMARY: 3,  // constant — from main.js (will move to ai.js in BAT-203)
+    // BAT-524: cancel all per-chat idle-summary timers from inside
+    // gracefulShutdown. main.js also registers a SIGTERM listener that
+    // calls cancelAllIdleSummaries, but gracefulShutdown can call
+    // process.exit(0) synchronously when there are no session
+    // summaries to await — bypassing main.js's listener entirely. This
+    // dep makes the cleanup happen on the gracefulShutdown path too.
+    cancelAllIdleSummaries: null, // () => void — from main.js (BAT-524)
 };
 
 /**
@@ -99,6 +106,7 @@ function setShutdownDeps(deps) {
     if (deps.conversations) _shutdownDeps.conversations = deps.conversations;
     if (typeof deps.saveSessionSummary === 'function') _shutdownDeps.saveSessionSummary = deps.saveSessionSummary;
     if (typeof deps.MIN_MESSAGES_FOR_SUMMARY === 'number') _shutdownDeps.MIN_MESSAGES_FOR_SUMMARY = deps.MIN_MESSAGES_FOR_SUMMARY;
+    if (typeof deps.cancelAllIdleSummaries === 'function') _shutdownDeps.cancelAllIdleSummaries = deps.cancelAllIdleSummaries;
 }
 
 // ============================================================================
@@ -602,6 +610,15 @@ function backfillSessionsFromFiles() {
 // Registered outside initDatabase so shutdown hooks work even if DB init fails
 async function gracefulShutdown(signal) {
     log(`[Shutdown] ${signal} received, saving session summary...`, 'INFO');
+    // BAT-524: cancel pending idle-summary timers FIRST. Without this,
+    // a timer that's about to fire could call saveSessionSummary
+    // concurrently with the per-chat summary work below, double-
+    // writing summaries for the same chat. Cancelling early also
+    // releases the unref()'d timers so the event loop can settle
+    // promptly once gracefulShutdown's own awaits complete.
+    if (typeof _shutdownDeps.cancelAllIdleSummaries === 'function') {
+        try { _shutdownDeps.cancelAllIdleSummaries(); } catch (_) {}
+    }
     try {
         const { conversations, saveSessionSummary, MIN_MESSAGES_FOR_SUMMARY } = _shutdownDeps;
         if (conversations && saveSessionSummary) {

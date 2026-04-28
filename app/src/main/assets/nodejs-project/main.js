@@ -629,7 +629,7 @@ telegram('getMe')
             seedHeartbeatMd();
 
             // Wire shutdown deps now that conversations + saveSessionSummary exist
-            setShutdownDeps({ conversations, saveSessionSummary, MIN_MESSAGES_FOR_SUMMARY });
+            setShutdownDeps({ conversations, saveSessionSummary, MIN_MESSAGES_FOR_SUMMARY, cancelAllIdleSummaries });
 
             // Wire chat deps: inject main.js state into ai.js
             setChatDeps({
@@ -758,7 +758,7 @@ telegram('getMe')
         seedHeartbeatMd();
 
         // Wire shutdown deps
-        setShutdownDeps({ conversations, saveSessionSummary, MIN_MESSAGES_FOR_SUMMARY });
+        setShutdownDeps({ conversations, saveSessionSummary, MIN_MESSAGES_FOR_SUMMARY, cancelAllIdleSummaries });
 
         // Wire chat deps: inject main.js state into ai.js
         setChatDeps({
