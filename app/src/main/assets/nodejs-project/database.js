@@ -25,6 +25,48 @@ setDb(() => db);
 function getDb() { return db; }
 
 // ============================================================================
+// DIRTY FLAG + DEBOUNCED SAVE (BAT-523, BAT-518 phase 3A)
+// ============================================================================
+//
+// Pre-BAT-523, the DB was saved every 60s via an unconditional periodic
+// timer, regardless of whether anything changed. On an idle agent that's 1,440
+// pointless `db.export() + atomic-rename` cycles per day — wear on flash
+// for no behavioural reason.
+//
+// Now: a single in-memory `dirty` flag is set by every mutation site
+// (markDbDirty), which schedules a trailing-debounce save to fire
+// SAVE_DEBOUNCE_MS after the FIRST mutation in any new dirty window.
+// Subsequent mutations within that window coalesce into the same save.
+// `saveDatabase({ force: true })` skips both the dirty check and the
+// timer (used by init and graceful shutdown to flush synchronously).
+//
+// Durability guarantee: any mutation that markDbDirty() is called for is
+// persisted to disk within at most SAVE_DEBOUNCE_MS, matching the
+// pre-BAT-523 60s upper bound. Idle periods produce zero writes.
+const SAVE_DEBOUNCE_MS = 60_000;
+let dirty = false;
+let saveTimer = null;
+
+/**
+ * Mark the DB as having unsaved mutations and schedule a debounced save.
+ * No-op if no DB instance is loaded yet (init failed or hasn't run).
+ *
+ * Call this from EVERY db.run() that mutates state (INSERT/UPDATE/DELETE),
+ * either directly at the call site or via a wrapping function that ends
+ * a batch (e.g. saveSession() at the end of its INSERT). Reads
+ * (db.exec SELECT, etc.) must NOT call this.
+ */
+function markDbDirty() {
+    if (!db) return;
+    dirty = true;
+    if (saveTimer) return; // Already scheduled — coalesce.
+    saveTimer = setTimeout(() => {
+        saveTimer = null;
+        saveDatabase();
+    }, SAVE_DEBOUNCE_MS);
+}
+
+// ============================================================================
 // DATABASE INJECTION (shutdown deps live in main.js / ai.js, injected here)
 // ============================================================================
 
@@ -133,13 +175,18 @@ async function initDatabase() {
         )`);
         db.run(`CREATE INDEX IF NOT EXISTS idx_sessions_ended ON sessions(ended_at)`);
 
-        // Persist immediately so the file exists on disk right away
-        saveDatabase();
+        // Persist immediately so the file exists on disk right away. Force
+        // because no mutations have been marked yet — this is the bootstrap
+        // write so SQL.js has a real file to load on next launch.
+        saveDatabase({ force: true });
 
         log('[DB] SQL.js database initialized', 'INFO');
 
-        // Start periodic saves only after successful init
-        setInterval(saveDatabase, 60000);
+        // BAT-523 (BAT-518 phase 3A): the prior unconditional 60s
+        // periodic save is gone. Saves are now triggered by
+        // `markDbDirty()` from mutation sites and coalesced via
+        // SAVE_DEBOUNCE_MS trailing debounce. Idle agent → zero
+        // periodic writes.
 
     } catch (err) {
         log(`[DB] Failed to initialize SQL.js (non-fatal): ${err.message}`, 'ERROR');
@@ -147,8 +194,23 @@ async function initDatabase() {
     }
 }
 
-function saveDatabase() {
+/**
+ * Persist the in-memory SQL.js DB to disk via atomic temp+rename.
+ *
+ * BAT-523 (BAT-518 phase 3A): no longer called every 60s by an interval.
+ * The default invocation no-ops when nothing has been marked dirty since
+ * the last save — the only writes that happen are those triggered by
+ * `markDbDirty()` (debounced) or callers that explicitly request a flush.
+ *
+ * @param {object} [opts]
+ * @param {boolean} [opts.force=false] Save even if `dirty` is false.
+ *        Used by `initDatabase` (bootstrap write so the file exists on
+ *        disk for next launch) and by `gracefulShutdown` (flush any
+ *        pending mutations before the process exits).
+ */
+function saveDatabase({ force = false } = {}) {
     if (!db) return;
+    if (!dirty && !force) return; // Idle — nothing changed since last save.
     try {
         const data = db.export();
         const buffer = Buffer.from(data);
@@ -156,6 +218,14 @@ function saveDatabase() {
         const tmpPath = DB_PATH + '.tmp';
         fs.writeFileSync(tmpPath, buffer);
         fs.renameSync(tmpPath, DB_PATH);
+        dirty = false;
+        // We just persisted on the synchronous path — cancel any pending
+        // debounced save so it doesn't fire a redundant second write a
+        // few seconds later.
+        if (saveTimer) {
+            clearTimeout(saveTimer);
+            saveTimer = null;
+        }
     } catch (err) {
         log(`[DB] Save error: ${err.message}`, 'ERROR');
     }
@@ -236,7 +306,9 @@ function indexMemoryFiles() {
         db.run(`INSERT OR REPLACE INTO meta (key, value) VALUES ('last_indexed', ?)`,
             [localTimestamp()]);
 
-        if (indexed > 0) saveDatabase();
+        // BAT-523: schedule a debounced save instead of writing every batch
+        // immediately. Coalesces with concurrent mutations from other sites.
+        if (indexed > 0) markDbDirty();
         log(`[Memory] Indexed ${indexed} files, skipped ${skipped} unchanged`, 'DEBUG');
     } catch (err) {
         log(`[Memory] Indexing error (non-fatal): ${err.message}`, 'WARN');
@@ -312,7 +384,8 @@ function saveSession({ startedAt, endedAt, durationMin, messageCount, summaryFil
              VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
             [startedAt, endedAt, durationMin, messageCount, summaryFile ?? null, summaryExcerpt ?? null, trigger ?? null, model ?? null]
         );
-        saveDatabase();
+        // BAT-523: schedule debounced save (was unconditional saveDatabase()).
+        markDbDirty();
     } catch (err) {
         log(`[Sessions] Save error (non-fatal): ${err.message}`, 'WARN');
     }
@@ -434,7 +507,8 @@ function backfillSessionsFromFiles() {
         }
 
         if (backfilled > 0) {
-            saveDatabase();
+            // BAT-523: schedule debounced save (was unconditional saveDatabase()).
+            markDbDirty();
             log(`[Sessions] Backfilled ${backfilled} sessions from existing summary files`, 'INFO');
         }
     } catch (err) {
@@ -467,7 +541,9 @@ async function gracefulShutdown(signal) {
     } catch (err) {
         log(`[Shutdown] Summary failed: ${err.message}`, 'ERROR');
     }
-    saveDatabase();
+    // BAT-523: force-flush any pending debounced mutations before the
+    // process exits — otherwise dirty in-memory rows would be lost.
+    saveDatabase({ force: true });
     process.exit(0);
 }
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
@@ -642,6 +718,7 @@ module.exports = {
     backfillSessionsFromFiles,
     writeDbSummaryFile,
     markDbSummaryDirty,
+    markDbDirty, // BAT-523 (BAT-518 phase 3A) — call after every db.run() that mutates state
     startDbSummaryInterval,
     startStatsServer,
 };

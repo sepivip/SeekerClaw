@@ -37,7 +37,7 @@ const {
 } = require('./memory');
 
 const { findMatchingSkills, loadSkills } = require('./skills');
-const { getDb, markDbSummaryDirty, indexMemoryFiles, saveSession, getRecentSessions } = require('./database');
+const { getDb, markDbDirty, markDbSummaryDirty, indexMemoryFiles, saveSession, getRecentSessions } = require('./database');
 const { saveCheckpoint, cleanupChatCheckpoints } = require('./task-store');
 const loopDetector = require('./loop-detector');
 
@@ -1333,6 +1333,10 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
                              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                             [localTimestamp(), String(chatId || ''), 0, 0, 0, 0, -1, retries + timeoutRetries, durationMs]
                         );
+                        // BAT-523: schedule a debounced disk save. Pre-BAT-523
+                        // these writes relied on database.js's now-removed 60s
+                        // setInterval safety net.
+                        markDbDirty();
                     } catch (e) { log(`[Claude] Failed to log network error to DB: ${e.message}`, 'WARN'); }
                 }
                 if (!background) updateAgentHealth('error', { type: isTimeoutClass ? 'timeout' : 'network', status: -1, message: networkErr.message });
@@ -1399,6 +1403,13 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
                     norm.cacheWrite, norm.cacheRead,
                     res.status, retries + timeoutRetries, durationMs]
                 );
+                // BAT-523: schedule a debounced disk save. Pre-BAT-523
+                // these writes relied on database.js's now-removed 60s
+                // setInterval safety net.
+                markDbDirty();
+                // markDbSummaryDirty marks the SEPARATE db_summary_state
+                // file (cross-process UI cache) — unrelated to the main
+                // DB persistence path above.
                 markDbSummaryDirty();
             } catch (dbErr) {
                 log(`[DB] Log error: ${dbErr.message}`, 'WARN');
