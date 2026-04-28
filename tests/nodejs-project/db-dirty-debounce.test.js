@@ -9,9 +9,8 @@
 // --------------------
 // Phase 3A of BAT-518 replaces the prior unconditional
 // `setInterval(saveDatabase, 60000)` in database.js with a dirty-flag +
-// dirty-flag + bounded-delay debounce model. The change has two
-// correctness invariants
-// that aren't visible from a plain code read:
+// bounded-delay debounce model. The change has two correctness
+// invariants that aren't visible from a plain code read:
 //
 //   1. Multiple mutations within the debounce window must coalesce into
 //      ONE disk save (the whole point of the change).
@@ -66,7 +65,7 @@ function makeHarness({ debounceMs = 60_000 } = {}) {
         }, debounceMs);
     }
 
-    function saveDatabase({ force = false } = {}) {
+    function saveDatabase({ force = false, scheduleRetry = true } = {}) {
         if (!db) return;
         if (!dirty && !force) return;
         saveAttempts++;
@@ -83,9 +82,10 @@ function makeHarness({ debounceMs = 60_000 } = {}) {
             // Mirrors database.js retry-on-failure. Two failure shapes
             // need re-arming: dirty-driven (debounce path) AND
             // force-driven (init bootstrap or shutdown flush, where
-            // dirty may be false). The retry preserves `force` so a
-            // forced write that failed retries WITH force.
-            const willRetry = (dirty || force) && !saveTimer;
+            // dirty may be false). `scheduleRetry=false` opts out
+            // entirely (used by gracefulShutdown — process exits
+            // immediately after the call).
+            const willRetry = scheduleRetry && (dirty || force) && !saveTimer;
             if (willRetry) {
                 saveTimer = setTimeout(() => {
                     saveTimer = null;
@@ -285,6 +285,44 @@ test('save failure does NOT tight-loop (one attempt per debounce window)', async
     assert.ok(h.saveAttempts <= 10, `saveAttempts ${h.saveAttempts} suggests tight loop`);
 });
 
+test('shutdown-style force save with scheduleRetry=false does NOT arm a dead retry on failure', () => {
+    // gracefulShutdown calls saveDatabase({ force: true,
+    // scheduleRetry: false }) immediately before process.exit. If the
+    // disk write fails, scheduling a retry timer would be useless (the
+    // process is about to die) and the "retry in 60s" log line would
+    // be misleading. scheduleRetry=false suppresses the re-arm so
+    // shutdown logs match shutdown reality.
+    //
+    // Start from a clean state (no prior markDbDirty) so any pending
+    // timer at the end can only have been armed by the catch branch.
+    const h = makeHarness({ debounceMs: 60_000 });
+    h.attachDb({});
+    h.setSaveShouldFail(true);
+    assert.strictEqual(h.hasPendingTimer, false, 'baseline: no pending timer');
+
+    h.saveDatabase({ force: true, scheduleRetry: false });
+    assert.strictEqual(h.saveCount, 0, 'forced save attempt failed');
+    // The catch ran (saveAttempts=1), willRetry was false because
+    // scheduleRetry=false, so no new timer was armed.
+    assert.strictEqual(h.saveAttempts, 1, 'save was attempted');
+    assert.strictEqual(h.hasPendingTimer, false, 'no dead retry timer scheduled');
+});
+
+test('control: same shutdown failure WITH scheduleRetry=true would have armed a retry', () => {
+    // Counterpart to the test above — proves the assertion is
+    // meaningful (i.e. the no-retry result genuinely comes from
+    // scheduleRetry=false, not from some other condition that would
+    // suppress the retry anyway).
+    const h = makeHarness({ debounceMs: 60_000 });
+    h.attachDb({});
+    h.setSaveShouldFail(true);
+
+    h.saveDatabase({ force: true /* scheduleRetry defaults to true */ });
+    assert.strictEqual(h.saveCount, 0);
+    assert.strictEqual(h.hasPendingTimer, true,
+        'WITHOUT scheduleRetry=false, the catch arms a retry — proves the suppression in the previous test was the cause');
+});
+
 test('shutdown-style force save flushes pending mutations', () => {
     // Simulates: process gets SIGTERM, mutations from the last few
     // seconds are still dirty, gracefulShutdown calls
@@ -353,6 +391,19 @@ test('drift: saveDatabase catch path reschedules on failure (retry guard)', () =
     // bootstrap writes that fail with dirty=false still re-arm.
     assert.ok(/(dirty\s*\|\|\s*force|force\s*\|\|\s*dirty)/.test(catchBody),
         'retry condition must include `force` so init bootstrap failures retry (post-Copilot review fix)');
+});
+
+test('drift: gracefulShutdown calls saveDatabase with scheduleRetry=false', () => {
+    // Pin that the shutdown path opts out of retry scheduling. If a
+    // future refactor drops this option, shutdown failures would
+    // schedule timers that never fire (process exits immediately) and
+    // the log line would falsely promise a retry.
+    const src = fs.readFileSync(DATABASE_JS, 'utf8');
+    const fnMatch = src.match(/async\s+function\s+gracefulShutdown[\s\S]*?\n\}/);
+    assert.ok(fnMatch, 'gracefulShutdown function body not found');
+    const body = fnMatch[0];
+    assert.ok(/saveDatabase\s*\(\s*\{[^}]*scheduleRetry\s*:\s*false/.test(body),
+        'gracefulShutdown must pass scheduleRetry=false to saveDatabase (BAT-523 — process exits immediately, retry would be dead)');
 });
 
 test('drift: indexMemoryFiles marks dirty unconditionally', () => {

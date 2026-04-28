@@ -215,8 +215,14 @@ async function initDatabase() {
  *        Used by `initDatabase` (bootstrap write so the file exists on
  *        disk for next launch) and by `gracefulShutdown` (flush any
  *        pending mutations before the process exits).
+ * @param {boolean} [opts.scheduleRetry=true] On transient I/O failure,
+ *        re-arm a retry timer SAVE_DEBOUNCE_MS later. Disabled by
+ *        gracefulShutdown — the process exits immediately after, the
+ *        retry would never fire, and a "retry in 60s" log would be a
+ *        lie. Init keeps the default so a failed bootstrap write
+ *        retries before any mutation arrives.
  */
-function saveDatabase({ force = false } = {}) {
+function saveDatabase({ force = false, scheduleRetry = true } = {}) {
     if (!db) return;
     if (!dirty && !force) return; // Idle — nothing changed since last save.
     try {
@@ -259,7 +265,12 @@ function saveDatabase({ force = false } = {}) {
         // forced bootstrap write that failed retries WITH force,
         // preserving the original semantics. Bounded by
         // SAVE_DEBOUNCE_MS — explicitly NOT a tight loop.
-        const willRetry = (dirty || force) && !saveTimer;
+        //
+        // `scheduleRetry=false` skips the re-arm entirely. Used by
+        // gracefulShutdown — the process exits in the next instruction
+        // so a queued retry would never fire, and the log line would
+        // misleadingly promise one.
+        const willRetry = scheduleRetry && (dirty || force) && !saveTimer;
         log(`[DB] Save error${willRetry ? ` (retry in ${SAVE_DEBOUNCE_MS / 1000}s)` : ''}: ${err.message}`, 'ERROR');
         if (willRetry) {
             saveTimer = setTimeout(() => {
@@ -587,7 +598,10 @@ async function gracefulShutdown(signal) {
     }
     // BAT-523: force-flush any pending debounced mutations before the
     // process exits — otherwise dirty in-memory rows would be lost.
-    saveDatabase({ force: true });
+    // scheduleRetry=false because the very next instruction is
+    // process.exit(0) — a queued retry timer would never run, and the
+    // "retry in 60s" log line would be a lie.
+    saveDatabase({ force: true, scheduleRetry: false });
     process.exit(0);
 }
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
