@@ -149,9 +149,9 @@ object SettingsHelpTexts {
 
     const val MCP_SERVERS =
         "MCP (Model Context Protocol) servers give your agent extra tools from external services. " +
-        "Add a server URL, optionally an auth token, and your agent discovers its tools on startup. " +
-        "Remote only — your phone just makes HTTP calls. " +
-        "Restart the agent after adding or changing servers."
+        "Add a server URL, optionally an auth token, and your agent discovers its tools live — " +
+        "edits apply within a couple seconds without restarting the agent. " +
+        "Remote only — your phone just makes HTTP calls."
 
     // ── Discord ────────────────────────────────────────────────────
 

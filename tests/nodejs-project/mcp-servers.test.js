@@ -54,10 +54,27 @@ async function run() {
 }
 
 const _scratch = [];
+// Returns a `workspace` subdirectory inside a fresh tmpdir, mirroring
+// the production layout where Node's workDir is `filesDir/workspace`
+// and the mcp_servers.json file lives at `filesDir/mcp_servers.json`
+// (one level up). `mcp-servers.js open(workDir)` resolves the file
+// via `path.dirname(workDir)`, so passing the workspace path here
+// makes tests exercise the real path-resolution logic — the bug
+// caught at device test on the first MCP-add was specifically that
+// pre-fix tests used `tmpDir → file in same dir`, which masked the
+// production mismatch between workspace/ and filesDir/.
 function tmpDir() {
-    const d = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-servers-test-'));
-    _scratch.push(d);
-    return d;
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-servers-test-'));
+    _scratch.push(parent);
+    const workspace = path.join(parent, 'workspace');
+    fs.mkdirSync(workspace);
+    return workspace;
+}
+// Resolve the actual mcp_servers.json file path the way the module
+// will. Used by tests that pre-seed file content before calling
+// open(workDir).read().
+function fileFor(workDir) {
+    return path.join(path.dirname(workDir), FILE_NAME);
 }
 function cleanupTmp() {
     for (const d of _scratch) {
@@ -133,14 +150,14 @@ test('read returns empty array when file is absent', () => {
 
 test('read returns empty array on malformed JSON', () => {
     const dir = tmpDir();
-    fs.writeFileSync(path.join(dir, FILE_NAME), 'not valid json{{{');
+    fs.writeFileSync(fileFor(dir), 'not valid json{{{');
     const store = open(dir);
     assert.deepStrictEqual(store.read(), []);
 });
 
 test('read drops invalid entries and keeps the rest', () => {
     const dir = tmpDir();
-    fs.writeFileSync(path.join(dir, FILE_NAME), JSON.stringify({
+    fs.writeFileSync(fileFor(dir), JSON.stringify({
         servers: [
             { id: 'ok1', name: 'OK1', url: 'https://a', rateLimit: 5 },
             { id: 'bad id', name: 'X', url: 'https://b', rateLimit: 1 },     // bad id
@@ -155,7 +172,7 @@ test('read drops invalid entries and keeps the rest', () => {
 
 test('read drops duplicate ids (first wins)', () => {
     const dir = tmpDir();
-    fs.writeFileSync(path.join(dir, FILE_NAME), JSON.stringify({
+    fs.writeFileSync(fileFor(dir), JSON.stringify({
         servers: [
             { id: 'ctx', name: 'First', url: 'https://a', rateLimit: 1 },
             { id: 'ctx', name: 'Dupe', url: 'https://b', rateLimit: 2 },
@@ -168,7 +185,7 @@ test('read drops duplicate ids (first wins)', () => {
 
 test('read defaults enabled to true and trims name/url', () => {
     const dir = tmpDir();
-    fs.writeFileSync(path.join(dir, FILE_NAME), JSON.stringify({
+    fs.writeFileSync(fileFor(dir), JSON.stringify({
         servers: [
             { id: 'ctx', name: '  Context7  ', url: '  https://api.example.com/mcp  ', rateLimit: 5 },
         ],
@@ -208,7 +225,7 @@ test('write persists valid input atomically and read round-trips', () => {
     };
     store.write(value);
     // No leftover .tmp
-    assert.strictEqual(fs.existsSync(path.join(dir, FILE_NAME + '.tmp')), false);
+    assert.strictEqual(fs.existsSync(fileFor(dir) + '.tmp'), false);
     const back = store.read();
     assert.strictEqual(back.length, 2);
     assert.strictEqual(back[0].id, 'ctx');
@@ -220,6 +237,28 @@ test('write persists valid input atomically and read round-trips', () => {
 test('drift: file basename is exactly mcp_servers.json', () => {
     assert.strictEqual(FILE_NAME, 'mcp_servers.json',
         'Kotlin McpServersStore.FILE_NAME pins this name; do not change without updating both sides');
+});
+
+test('drift: open(workDir).filePath resolves to dirname(workDir)/mcp_servers.json', () => {
+    // Pin the production path-resolution rule. Kotlin's CrossProcessStore
+    // writes to `filesDir/mcp_servers.json` (no path separators allowed
+    // in CrossProcessStore.fileName), but Node receives `workDir =
+    // filesDir/workspace`. Without the dirname climb, Node's fs.watch
+    // + read would target workspace/ and never see Kotlin's writes —
+    // exactly the device-test failure mode the BAT-514 R20-fix patches.
+    const workDir = '/data/data/com.seekerclaw.app/files/workspace';
+    const expected = '/data/data/com.seekerclaw.app/files/mcp_servers.json';
+    // path.posix.normalize for cross-platform comparison (test runs on
+    // Windows in dev but the production target is Android/Linux).
+    const actual = open(workDir).filePath.replace(/\\/g, '/');
+    assert.strictEqual(actual, expected);
+});
+
+test('open() rejects empty/non-string workDir', () => {
+    assert.throws(() => open(''), TypeError);
+    assert.throws(() => open(undefined), TypeError);
+    assert.throws(() => open(null), TypeError);
+    assert.throws(() => open(123), TypeError);
 });
 
 test('drift: ID_REGEX matches the documented pattern', () => {

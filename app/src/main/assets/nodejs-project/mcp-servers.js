@@ -10,6 +10,20 @@
 //   store.filePath;        // → absolute path of mcp_servers.json
 //   store.validateShape(s);// per-server validity check
 //
+// File layout (NOT under workDir — mirrors BAT-513 runtime-state.js):
+//   /data/data/com.seekerclaw.app/files/mcp_servers.json
+//
+// Why not under workDir? `CrossProcessStore.kt` rejects path separators
+// in its `fileName` parameter (basename-only validation), so the file
+// MUST sit directly under `filesDir`. SeekerClawService starts Node
+// with `workDir = filesDir/workspace`, so the matching path is
+// `path.dirname(workDir) + /mcp_servers.json`. Without this dirname
+// climb, Node would watch `workspace/mcp_servers.json` (which never
+// exists) while Kotlin writes to `filesDir/mcp_servers.json` — the
+// two sides would never converge. (Caught at device test on the first
+// MCP-add — the Kotlin write succeeded and persisted, but Node's
+// fs.watch + read pointed at the wrong directory.)
+//
 // The schema:
 //   { servers: [ { id, name, url, enabled, rateLimit } ] }
 //
@@ -69,7 +83,14 @@ function validateShape(s) {
 }
 
 function open(workDir) {
-    const filePath = path.join(workDir, FILE_NAME);
+    if (typeof workDir !== 'string' || !workDir) {
+        throw new TypeError('mcp-servers: workDir must be a non-empty string');
+    }
+    // Resolve to filesDir/mcp_servers.json — see file-layout comment
+    // at the top of this module. `path.dirname(workDir)` climbs out of
+    // `workspace/` so we end up with `filesDir/<FILE_NAME>` which
+    // matches Kotlin's CrossProcessStore writes.
+    const filePath = path.join(path.dirname(workDir), FILE_NAME);
 
     /**
      * Read + validate. Returns an array (possibly empty) of valid
