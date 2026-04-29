@@ -244,6 +244,88 @@ check('PROVIDER_DISPLAY_NAMES matches registry',
     Object.fromEntries(REGISTRY.providers.map((p) => [p.id, p.displayName])));
 
 console.log();
+console.log('── _validateRegistry: explicit failure paths (BAT-517 R4 Copilot) ──');
+// Pin the loader-side validation Copilot asked for: duplicate provider
+// ids and missing required providers must throw clear errors at
+// require-time, not surface as obscure "Cannot read properties of
+// undefined" TypeErrors when the constant derivations dereference
+// _byId.{claude,openai,openrouter}.
+function expectThrow(label, fn, messageSubstring) {
+    try {
+        fn();
+    } catch (e) {
+        if (typeof e.message === 'string' && e.message.includes(messageSubstring)) {
+            console.log(`PASS: ${label}`);
+            return;
+        }
+        console.log(`FAIL: ${label} — wrong error message: ${e.message}`);
+        failures++;
+        return;
+    }
+    console.log(`FAIL: ${label} — did not throw`);
+    failures++;
+}
+
+const baseRegistry = JSON.parse(JSON.stringify(REGISTRY));
+const _validate = mc._validateRegistry;
+
+expectThrow(
+    'rejects null',
+    () => _validate(null),
+    'is not a JSON object',
+);
+expectThrow(
+    'rejects bad version',
+    () => _validate({ ...baseRegistry, version: 999 }),
+    'version=999',
+);
+expectThrow(
+    'rejects empty providers',
+    () => _validate({ version: 1, providers: [] }),
+    'has no providers',
+);
+expectThrow(
+    'rejects duplicate provider ids',
+    () => _validate({
+        version: 1,
+        providers: [...baseRegistry.providers, baseRegistry.providers[0]],
+    }),
+    'duplicate provider ids',
+);
+expectThrow(
+    'rejects missing required claude',
+    () => _validate({
+        version: 1,
+        providers: baseRegistry.providers.filter((p) => p.id !== 'claude'),
+    }),
+    'missing required provider(s): claude',
+);
+expectThrow(
+    'rejects missing required openai',
+    () => _validate({
+        version: 1,
+        providers: baseRegistry.providers.filter((p) => p.id !== 'openai'),
+    }),
+    'missing required provider(s): openai',
+);
+expectThrow(
+    'rejects missing required openrouter',
+    () => _validate({
+        version: 1,
+        providers: baseRegistry.providers.filter((p) => p.id !== 'openrouter'),
+    }),
+    'missing required provider(s): openrouter',
+);
+// And the happy path: live registry passes validation.
+try {
+    _validate(baseRegistry);
+    console.log('PASS: live registry passes _validateRegistry');
+} catch (e) {
+    console.log(`FAIL: live registry rejected by _validateRegistry — ${e.message}`);
+    failures++;
+}
+
+console.log();
 if (failures === 0) {
     console.log('ALL TESTS PASS');
     process.exit(0);

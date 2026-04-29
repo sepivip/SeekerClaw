@@ -24,16 +24,50 @@ const EXPECTED_VERSION = 1;
 // Load + validate at require-time. Failure throws — matches Kotlin's
 // "fail loud at boot" behaviour and makes a malformed bundled asset
 // (a build-time bug) impossible to ship undetected.
-function _loadRegistry() {
-    const raw = fs.readFileSync(REGISTRY_PATH, 'utf8');
-    const parsed = JSON.parse(raw);
+// IDs whose presence the constant derivations below depend on. Kept
+// in sync with the dereferences `_byId.claude / _byId.openai /
+// _byId.openrouter` further down — `custom` is intentionally NOT
+// required at this layer (no top-level constant references it).
+const REQUIRED_PROVIDER_IDS = ['openai', 'claude', 'openrouter'];
+
+/**
+ * Validate a parsed registry object. Pure function (no I/O) so tests
+ * can exercise the failure paths without touching the bundled asset.
+ * Throws Error with a clear message on any contract violation.
+ *
+ * BAT-517 R4 Copilot: duplicate-id and required-id checks added —
+ * Object.fromEntries silently overwrites duplicates, and the
+ * constant derivations below directly deref _byId.{claude,openai,
+ * openrouter}, so without this guard those failures would surface as
+ * unhelpful "Cannot read properties of undefined" TypeErrors at
+ * require-time. Symmetric with Kotlin's `loadAndValidate` +
+ * `requireProviderById`.
+ */
+function _validateRegistry(parsed) {
+    if (!parsed || typeof parsed !== 'object') {
+        throw new Error('model-registry.json is not a JSON object');
+    }
     if (parsed.version !== EXPECTED_VERSION) {
         throw new Error(`model-registry.json version=${parsed.version}, expected=${EXPECTED_VERSION}`);
     }
     if (!Array.isArray(parsed.providers) || parsed.providers.length === 0) {
         throw new Error('model-registry.json has no providers');
     }
+    const ids = parsed.providers.map((p) => p && p.id);
+    const dupes = ids.filter((id, i) => ids.indexOf(id) !== i);
+    if (dupes.length > 0) {
+        throw new Error(`model-registry.json has duplicate provider ids: ${[...new Set(dupes)].join(', ')}`);
+    }
+    const missing = REQUIRED_PROVIDER_IDS.filter((id) => !ids.includes(id));
+    if (missing.length > 0) {
+        throw new Error(`model-registry.json is missing required provider(s): ${missing.join(', ')}`);
+    }
     return parsed;
+}
+
+function _loadRegistry() {
+    const raw = fs.readFileSync(REGISTRY_PATH, 'utf8');
+    return _validateRegistry(JSON.parse(raw));
 }
 
 const _REGISTRY = _loadRegistry();
@@ -231,4 +265,9 @@ module.exports = {
     hasCredentialsFor,
     validateModelForProvider,
     displayNameForProvider,
+    // Test seam — exposes the loader's pure validation so unit tests
+    // can exercise failure paths (duplicate ids, missing required ids,
+    // bad version) without writing temp asset files. Not used by
+    // production code paths.
+    _validateRegistry,
 };
