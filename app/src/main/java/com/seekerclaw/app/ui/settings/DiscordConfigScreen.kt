@@ -62,8 +62,20 @@ fun DiscordConfigScreen(onBack: () -> Unit) {
     }
 
     fun saveField(field: String, value: String) {
-        ConfigManager.updateConfigField(context, field, value)
+        // BAT-513 round-14: handle saveConfig failure. Same pattern as
+        // ChannelConfigScreen / ProviderConfigScreen — Toast on
+        // failure, skip the restart dialog (restart won't recover a
+        // failed FS write).
+        val saved = ConfigManager.updateConfigField(context, field, value)
         config = ConfigManager.loadConfig(context)
+        if (!saved) {
+            android.widget.Toast.makeText(
+                context,
+                "Couldn't save changes. Try again or free up storage.",
+                android.widget.Toast.LENGTH_LONG,
+            ).show()
+            return
+        }
         showRestartDialog = true
     }
 

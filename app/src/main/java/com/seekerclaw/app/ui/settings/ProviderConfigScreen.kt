@@ -134,49 +134,80 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
 
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
 
-    fun saveField(field: String, value: String, needsRestart: Boolean = false) {
+    /**
+     * Persist a single config field. Returns `true` on success,
+     * `false` on any saveConfig failure (prefs commit failure,
+     * RuntimeStateStore.write failure, or invalid runtime-fields
+     * combo at the matrix gate).
+     *
+     * Failure handling (BAT-513 round-14):
+     *  - Refreshes the displayed `config` to match what actually
+     *    landed in prefs after saveConfig's rollback (runtime fields
+     *    revert to last valid; non-runtime fields commit
+     *    unconditionally). Same UI-reflects-reality contract whether
+     *    the user changed a runtime or non-runtime field.
+     *  - For runtime fields, additionally overrides the displayed
+     *    runtime triple with [RuntimeStateStore.read] so the UI
+     *    shows the last-valid state both UI and Node agree on.
+     *  - Toast surfaces the failure with a user-facing label.
+     *  - Does NOT trigger the restart dialog — restart won't recover
+     *    a stale runtime_state.json (Node would just re-read the
+     *    same stale content), and showing it on a failed save is
+     *    actively misleading.
+     *
+     * Multi-step save sites (e.g. setupToken + authType) MUST check
+     * the Boolean and short-circuit — running a second saveField on
+     * a partially-persisted state can cascade the inconsistency.
+     */
+    fun saveField(field: String, value: String, needsRestart: Boolean = false): Boolean {
         val saved = ConfigManager.updateConfigField(context, field, value)
         val refreshed = ConfigManager.loadConfig(context)
-        // BAT-513 same-bug-class fix (covers `switchProvider`'s sibling): when
-        // updateConfigField returns false on a runtime field (provider /
-        // authType / model), prefs got the new value but runtime_state.json
-        // didn't. Override the displayed runtime fields with the last-valid
-        // RuntimeStateStore.read() so the UI matches what's actually live;
-        // surface the failure as a Toast and skip the restart dialog.
-        // Non-runtime fields (API keys, search providers, etc.) don't go
-        // through RuntimeStateStore — for them the Boolean reflects only
-        // the prefs commit, and the displayed config from `refreshed` is
-        // already correct.
-        val isRuntimeField = field == "provider" || field == "authType" || field == "model"
-        if (!saved && isRuntimeField) {
-            val lastValid = com.seekerclaw.app.state.RuntimeStateStore.read()
-            config = refreshed?.copy(
-                provider = lastValid.provider,
-                authType = lastValid.authType,
-                model = lastValid.model,
-            )
-            // Map the internal field key to a user-facing label so the
-            // Toast doesn't surface implementation identifiers like
-            // "authType". Falls back to the raw key for any non-runtime
-            // field that hits this branch (defensive — only runtime
-            // fields are gated above, but a future caller adding a
-            // new runtime field should get a readable default until
-            // they wire up a label).
+        if (!saved) {
+            val isRuntimeField = field == "provider" || field == "authType" || field == "model"
+            config = if (isRuntimeField) {
+                // Override the displayed runtime triple with the last-
+                // valid state both UI and Node agree on. Non-runtime
+                // fields keep whatever `refreshed` says — those commit
+                // unconditionally per the round-6 atomicity contract.
+                val lastValid = com.seekerclaw.app.state.RuntimeStateStore.read()
+                refreshed?.copy(
+                    provider = lastValid.provider,
+                    authType = lastValid.authType,
+                    model = lastValid.model,
+                )
+            } else {
+                refreshed
+            }
+            // User-facing label so the Toast doesn't leak implementation
+            // identifiers like "authType" / "openaiOAuthToken".
             val fieldLabel = when (field) {
                 "provider" -> "provider"
                 "authType" -> "auth type"
                 "model" -> "model"
-                else -> field
+                "anthropicApiKey", "openaiApiKey", "openrouterApiKey",
+                    "customApiKey", "braveApiKey", "perplexityApiKey",
+                    "exaApiKey", "tavilyApiKey", "firecrawlApiKey",
+                    "jupiterApiKey", "heliusApiKey" -> "API key"
+                "setupToken" -> "setup token"
+                "telegramBotToken", "discordBotToken" -> "bot token"
+                "telegramOwnerId", "discordOwnerId" -> "owner ID"
+                "agentName" -> "agent name"
+                "customBaseUrl" -> "base URL"
+                "customFormat" -> "API format"
+                "customHeaders" -> "headers"
+                "channel" -> "channel"
+                else -> field.replaceFirstChar { it.lowercaseChar() }
             }
             android.widget.Toast.makeText(
                 context,
                 "Couldn't save $fieldLabel. Try again or free up storage.",
                 android.widget.Toast.LENGTH_LONG,
             ).show()
-            return
+            return false
         }
         config = refreshed
         if (needsRestart) showRestartDialog = true
+        return true
     }
 
     fun customFormatLabel(value: String?): String = when (value) {
@@ -590,14 +621,26 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                 // Optional fields that can be cleared to empty
                 val clearableFields = setOf("openrouterFallbackModel", "customHeaders")
                 if (field == "setupToken") {
-                    saveField(field, trimmed, needsRestart = true)
-                    if (trimmed.isNotEmpty()) saveField("authType", "setup_token")
+                    // Multi-step save: short-circuit if the first
+                    // saveField fails. Without the gate, we'd write
+                    // authType="setup_token" while the setupToken
+                    // itself failed to persist — leaving the agent
+                    // in a "claims setup_token mode but has no token"
+                    // state that fails every subsequent request.
+                    if (saveField(field, trimmed, needsRestart = true)
+                        && trimmed.isNotEmpty()) {
+                        saveField("authType", "setup_token")
+                    }
                 } else if (trimmed.isNotEmpty() || field in clearableFields) {
                     if (field == "anthropicApiKey") {
                         val detected = ConfigManager.detectAuthType(trimmed)
                         if (detected == "setup_token") {
-                            saveField("setupToken", trimmed, needsRestart = true)
-                            saveField("authType", "setup_token")
+                            // Same multi-step short-circuit: don't flip
+                            // authType to setup_token if the token
+                            // itself didn't persist.
+                            if (saveField("setupToken", trimmed, needsRestart = true)) {
+                                saveField("authType", "setup_token")
+                            }
                             editField = null
                             return@ProviderEditDialog
                         }
@@ -918,12 +961,18 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                         // "oauth selected, sign-in pending" state in SharedPreferences;
                         // the oauth+blank → api_key fallback only happens at writeConfigJson
                         // time so Node never sees an unstartable combination.
-                        saveField("authType", selectedAuth, needsRestart = true)
+                        // Multi-step save: short-circuit the model
+                        // fallback if the authType save failed.
+                        // Otherwise we'd end up with a fallback model
+                        // saved against the OLD authType (the one
+                        // authType save reverted to) — silently mis-
+                        // matched.
+                        val authSaved = saveField("authType", selectedAuth, needsRestart = true)
                         context.getSharedPreferences("seekerclaw_prefs", android.content.Context.MODE_PRIVATE)
                             .edit()
                             .putString("lastAuthType_$activeProvider", selectedAuth)
                             .apply()
-                        if (activeProvider == "openai") {
+                        if (authSaved && activeProvider == "openai") {
                             val currentModel = config?.model ?: ""
                             val allowedModels = modelsForProvider("openai", selectedAuth)
                             if (allowedModels.none { it.id == currentModel }) {

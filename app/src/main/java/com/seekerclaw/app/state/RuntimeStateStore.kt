@@ -173,16 +173,14 @@ object RuntimeStateStore {
      * to refresh).
      */
     private fun observeFromCollector(observed: RuntimeState, sp: SharedPreferences) {
-        if (!isValidPair(observed.provider, observed.authType)) {
-            Log.w(
-                TAG,
-                "observed invalid (provider=${observed.provider}, authType=${observed.authType}) " +
-                    "— UI keeps last valid; prefs unchanged",
-            )
-            return
-        }
-        _state.value = observed
-        val applied = mirrorIfChanged(sp, observed)
+        // Single chokepoint via onObserved (BAT-513 round-14): the
+        // pure-logic gate (validity check, _state update, prefs
+        // mirror, redundancy guard) lives in onObserved so unit tests
+        // and production share the exact same code path. This wrapper
+        // adds only the production-side concern: cross-process
+        // broadcast on a successful mirror. If onObserved drifts in
+        // the future, both paths drift together.
+        val applied = onObserved(observed, sp)
         if (applied) {
             appContext?.let { com.seekerclaw.app.config.ConfigManager.signalConfigChanged(it) }
         }
@@ -216,11 +214,15 @@ object RuntimeStateStore {
 
     /**
      * Read-modify-write under the underlying [CrossProcessStore]'s
-     * Mutex. [transform] receives the current value (a fresh
-     * deserialized instance) and returns the value to persist; the
-     * resulting (provider, authType) pair is validated INSIDE the
-     * lock so a transform that produces an invalid combination
-     * throws [IllegalArgumentException] without poisoning the file.
+     * `synchronized(writeLock)` block — atomic w.r.t. both concurrent
+     * `update {}` calls AND concurrent `write()` calls in the same
+     * process (round-13 review caught a Mutex-only design that missed
+     * update-vs-write contention). [transform] receives the current
+     * value (a fresh deserialized instance) and returns the value to
+     * persist; the resulting (provider, authType) pair is validated
+     * INSIDE the lock so a transform that produces an invalid
+     * combination throws [IllegalArgumentException] without poisoning
+     * the file.
      */
     suspend fun update(transform: (RuntimeState) -> RuntimeState): Boolean {
         val s = store ?: return false
@@ -279,18 +281,25 @@ object RuntimeStateStore {
      * the wrapper StateFlow + mirror to prefs. Extracted from the
      * collector so unit tests can drive it directly without spinning
      * up a CrossProcessStore.
+     *
+     * Returns `true` iff a mirror to prefs actually applied (i.e. the
+     * observed state was valid AND differed from current prefs values).
+     * The production [observeFromCollector] uses this signal to decide
+     * whether to fire [com.seekerclaw.app.config.ConfigManager.signalConfigChanged]
+     * — invalid observations and redundant emissions don't trigger a
+     * cross-process broadcast.
      */
-    internal fun onObserved(observed: RuntimeState, prefs: SharedPreferences) {
+    internal fun onObserved(observed: RuntimeState, prefs: SharedPreferences): Boolean {
         if (!isValidPair(observed.provider, observed.authType)) {
             Log.w(
                 TAG,
                 "observed invalid (provider=${observed.provider}, authType=${observed.authType}) " +
                     "— UI keeps last valid; prefs unchanged",
             )
-            return
+            return false
         }
         _state.value = observed
-        mirrorIfChanged(prefs, observed)
+        return mirrorIfChanged(prefs, observed)
     }
 
     /**

@@ -200,21 +200,27 @@ if (fs.existsSync(_runtimeState.filePath)) {
         // (including null) the same as decode failure: log + fall
         // through to config.json.
         const _isObj = !!_parsed && typeof _parsed === 'object' && !Array.isArray(_parsed);
-        // Defense-in-depth: validate the (provider, authType) pair
-        // matches the matrix the write path enforces. A manually-
-        // edited file (or a future build's value with a combo this
-        // build doesn't support) would otherwise drive Node startup
-        // with an invalid combination instead of falling back.
-        // Treat invalid content the same as decode failure: log,
-        // discard, fall through to config.json.
+        // Defense-in-depth: validate the FULL RuntimeState shape — the
+        // (provider, authType) matrix AND that `model` is a string.
+        // Without the model check, a manually-edited file with provider/
+        // authType present but `model` missing or non-string would
+        // accept the file as "valid" and downstream reads of
+        // `_runtimeStateValues.model` would yield `undefined` (logs
+        // would print "model=undefined" and the per-provider default
+        // would silently take over). The "runtime_state.json is valid"
+        // branch must correspond to a complete persisted RuntimeState,
+        // matching the Kotlin RuntimeState data class which has all
+        // three fields as non-null Strings.
         if (_isObj && typeof _parsed.provider === 'string' && typeof _parsed.authType === 'string'
+            && typeof _parsed.model === 'string'
             && _runtimeStateModule.validateMatrix(_parsed.provider, _parsed.authType)) {
             _runtimeStateValues = _parsed;
             log(`[Config] Loaded runtime_state.json: provider=${_runtimeStateValues.provider} authType=${_runtimeStateValues.authType} model=${_runtimeStateValues.model}`, 'DEBUG');
         } else {
             const _provider = _isObj ? _parsed.provider : '<not-an-object>';
             const _authType = _isObj ? _parsed.authType : '<not-an-object>';
-            log(`[Config] runtime_state.json has invalid content (provider=${_provider}, authType=${_authType}) — falling back to config.json`, 'WARN');
+            const _model = _isObj ? _parsed.model : '<not-an-object>';
+            log(`[Config] runtime_state.json has invalid content (provider=${_provider}, authType=${_authType}, model=${_model}) — falling back to config.json`, 'WARN');
             _runtimeStateValues = null;
         }
     } catch (e) {

@@ -92,8 +92,21 @@ fun ChannelConfigScreen(onBack: () -> Unit) {
     }
 
     fun saveField(field: String, value: String) {
-        ConfigManager.updateConfigField(context, field, value)
+        // BAT-513 round-14: handle saveConfig failure. updateConfigField
+        // returns false on prefs commit failure, RuntimeStateStore.write
+        // failure (main process), or invalid combo at the matrix gate.
+        // Surface via Toast and skip the restart dialog — restart won't
+        // recover a failed FS write.
+        val saved = ConfigManager.updateConfigField(context, field, value)
         config = ConfigManager.loadConfig(context)
+        if (!saved) {
+            android.widget.Toast.makeText(
+                context,
+                "Couldn't save changes. Try again or free up storage.",
+                android.widget.Toast.LENGTH_LONG,
+            ).show()
+            return
+        }
         showRestartDialog = true
     }
 
