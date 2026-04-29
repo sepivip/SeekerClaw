@@ -357,79 +357,92 @@ class CrossProcessStore<T>(
         // snapshots. Cloning once also avoids the extra encode/decode
         // round-trip cloneSafe used to do for the in-memory copy.
         val snapshot: T = cloneSafe(value)
-        // BAT-512 (Copilot review fix round-6): broadcast OUTSIDE the
-        // critical section. sendBroadcast is a system IPC that can
-        // block briefly; holding writeLock across it amplifies
-        // contention for concurrent writers without protecting any
-        // additional invariant (the file move + _state update are
-        // already atomic w.r.t. observers). This flag tells the
-        // post-lock code whether the write succeeded so it can
-        // broadcast only after a real state change.
-        var didWrite = false
-        synchronized(writeLock) {
-            try {
-                val text = json.encodeToString(serializer, snapshot)
-                tmpFile.writeText(text)
-                // BAT-512 (Copilot review fix): use NIO `Files.move`
-                // with REPLACE_EXISTING + ATOMIC_MOVE so the rename is
-                // atomic AT THE FILESYSTEM LEVEL even when the
-                // destination already exists. The earlier delete +
-                // renameTo fallback opened a window in which
-                // FileObserver fired DELETE, the corresponding reload
-                // landed `initial` in `_state`, and only the
-                // subsequent CREATE/MOVED_TO restored the correct
-                // value — observers briefly saw garbage.
-                //
-                // ATOMIC_MOVE + REPLACE_EXISTING is supported on the
-                // filesystems Android uses (ext4, F2FS). Min SDK 34 so
-                // java.nio.file is available. AtomicMoveNotSupported
-                // can occur on cross-device moves only, which doesn't
-                // happen here (both files are under filesDir on the
-                // same partition); we still degrade gracefully if it
-                // does.
-                try {
-                    java.nio.file.Files.move(
-                        tmpFile.toPath(),
-                        file.toPath(),
-                        java.nio.file.StandardCopyOption.REPLACE_EXISTING,
-                        java.nio.file.StandardCopyOption.ATOMIC_MOVE,
-                    )
-                } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
-                    // Fall back to non-atomic REPLACE_EXISTING — still
-                    // single-syscall (no DELETE event), just not
-                    // strictly atomic if the kernel decides otherwise.
-                    java.nio.file.Files.move(
-                        tmpFile.toPath(),
-                        file.toPath(),
-                        java.nio.file.StandardCopyOption.REPLACE_EXISTING,
-                    )
-                }
-                // BAT-512 (Copilot review fix #4 round-4 + round-7):
-                // publish the same snapshot we just wrote to disk. A
-                // caller mutating their `value` reference after this
-                // returns cannot mutate what StateFlow observers see
-                // (because `snapshot` was cloned at function entry
-                // and is no longer reachable from the caller). And
-                // disk + _state are guaranteed to publish the SAME
-                // snapshot — no race where they diverge if the
-                // caller mutates mid-write.
-                _state.value = snapshot
-                didWrite = true
-            } catch (e: Exception) {
-                Log.e(TAG, "[$fileName] write failed: ${e.message}", e)
-            } finally {
-                // Defensive: clean up a leftover .tmp on the failure path
-                // so we don't accumulate cruft. No-op when the move
-                // succeeded (the source inode is gone).
-                if (tmpFile.exists()) tmpFile.delete()
-            }
-        }
-        // Broadcast OUTSIDE the lock — see the note above the
-        // synchronized block. Skipped on the failure path so a
-        // failed write doesn't tell other-process observers a
-        // change happened that didn't.
+        // BAT-512 (Copilot review fix round-6) + BAT-513 round-18:
+        // broadcast OUTSIDE the critical section. sendBroadcast is a
+        // system IPC that can block briefly; holding writeLock across
+        // it amplifies contention for concurrent writers without
+        // protecting any additional invariant. This now goes through
+        // [persistLocked] which both [write] and [update] share, so
+        // both paths broadcast outside their own synchronized block.
+        val didWrite = synchronized(writeLock) { persistLocked(snapshot) }
         if (didWrite) broadcastChanged()
         return didWrite
+    }
+
+    /**
+     * Persist [snapshot] to disk and publish to [_state]. CALLER
+     * holds `synchronized(writeLock)` — either [write]'s direct
+     * synchronized block, or [update]'s outer block (reentrant on
+     * the same monitor). The caller is also responsible for
+     * broadcasting AFTER releasing the lock; this helper returns
+     * `true` iff the caller should broadcast.
+     *
+     * Extracted in BAT-513 round-18 to share the locked-persist
+     * logic between write and update without duplication AND so
+     * update can drop the lock before broadcasting (round-18 review
+     * caught update holding writeLock across the broadcast).
+     *
+     * The lock-required precondition isn't enforceable in the
+     * Kotlin/JVM type system; documented here and structurally
+     * obvious from call sites. Both call sites keep the
+     * synchronized block tight to just this call.
+     */
+    private fun persistLocked(snapshot: T): Boolean {
+        return try {
+            val text = json.encodeToString(serializer, snapshot)
+            tmpFile.writeText(text)
+            // BAT-512 (Copilot review fix): use NIO `Files.move`
+            // with REPLACE_EXISTING + ATOMIC_MOVE so the rename is
+            // atomic AT THE FILESYSTEM LEVEL even when the
+            // destination already exists. The earlier delete +
+            // renameTo fallback opened a window in which
+            // FileObserver fired DELETE, the corresponding reload
+            // landed `initial` in `_state`, and only the
+            // subsequent CREATE/MOVED_TO restored the correct
+            // value — observers briefly saw garbage.
+            //
+            // ATOMIC_MOVE + REPLACE_EXISTING is supported on the
+            // filesystems Android uses (ext4, F2FS). Min SDK 34 so
+            // java.nio.file is available. AtomicMoveNotSupported
+            // can occur on cross-device moves only, which doesn't
+            // happen here (both files are under filesDir on the
+            // same partition); we still degrade gracefully if it
+            // does.
+            try {
+                java.nio.file.Files.move(
+                    tmpFile.toPath(),
+                    file.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                    java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                )
+            } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
+                // Fall back to non-atomic REPLACE_EXISTING — still
+                // single-syscall (no DELETE event), just not
+                // strictly atomic if the kernel decides otherwise.
+                java.nio.file.Files.move(
+                    tmpFile.toPath(),
+                    file.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                )
+            }
+            // BAT-512 (Copilot review fix #4 round-4 + round-7):
+            // publish the same snapshot we just wrote to disk. A
+            // caller mutating their `value` reference after this
+            // returns cannot mutate what StateFlow observers see
+            // (because `snapshot` was cloned at write/update entry
+            // and is no longer reachable from the caller). disk +
+            // _state are guaranteed to publish the SAME snapshot.
+            _state.value = snapshot
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "[$fileName] write failed: ${e.message}", e)
+            false
+        } finally {
+            // Defensive: clean up a leftover .tmp on the failure path
+            // so we don't accumulate cruft. No-op when the move
+            // succeeded (the source inode is gone).
+            if (tmpFile.exists()) tmpFile.delete()
+        }
     }
 
     /**
@@ -464,10 +477,26 @@ class CrossProcessStore<T>(
      * the lock acquisition. The current body has no real suspension
      * points.
      */
-    suspend fun update(transform: (T) -> T): Boolean = synchronized(writeLock) {
-        val current = read()
-        val next = transform(current)
-        write(next)
+    suspend fun update(transform: (T) -> T): Boolean {
+        // BAT-513 round-18: broadcast OUTSIDE the synchronized block.
+        // The pre-round-18 design called write() directly inside the
+        // synchronized block, but write()'s own broadcast happened
+        // outside ITS synchronized block — yet still INSIDE update's
+        // outer synchronized block (reentrant monitor). That meant
+        // sendBroadcast() ran while update held writeLock, blocking
+        // other writers/updates on a slow IPC path.
+        //
+        // Fix: do the read + transform + persist inside the lock via
+        // [persistLocked] (sharing the same locked-persist logic with
+        // [write]). Drop the lock, then broadcast.
+        val didWrite = synchronized(writeLock) {
+            val current = read()
+            val next = transform(current)
+            val snapshot: T = cloneSafe(next)
+            persistLocked(snapshot)
+        }
+        if (didWrite) broadcastChanged()
+        return didWrite
     }
 
     /**
