@@ -297,7 +297,9 @@ object McpServersStore {
     fun read(): List<McpServer> = _state.value
 
     /**
-     * Persist [servers] atomically.
+     * Persist [servers] atomically. Suspending so the caller-side
+     * write+side-effects compose under a single
+     * [CrossProcessStore.update] transaction.
      *
      * Returns `false` (without persisting) on:
      *  - [init] not yet called (main-process gate)
@@ -305,65 +307,68 @@ object McpServersStore {
      *  - duplicate id after `safeId` normalization
      *  - any entry has `http://non-loopback` URL with a non-empty
      *    auth token in [McpTokenStore] (insecure bearer-over-HTTP)
-     *  - underlying [CrossProcessStore.write] failure
+     *  - underlying [CrossProcessStore.update] failure
      *
-     * On success: rebuilds the rollback shadow (with tokens reattached)
-     * AND fires a best-effort `reconcile(null)` to `:node`.
+     * On success: clears orphan tokens for removed servers, rebuilds
+     * the rollback shadow (with tokens reattached) AND fires a
+     * best-effort `reconcile(null)` to `:node`.
+     *
+     * Atomicity (Copilot R15): the read+transform+write all happen
+     * under [CrossProcessStore.writeLock], so two concurrent
+     * `write()` calls from the same process serialize and the second
+     * sees the first's result as `current`. Without this, the
+     * orphan-token diff (`preIds - nextIds`) could be computed from
+     * a stale baseline and clear tokens that a concurrent writer
+     * just added. The bearer-over-insecure-HTTP check and other
+     * cheap validations also run inside the transform — the slow
+     * Keystore decrypt that R11 moved out is replaced by
+     * [McpTokenStore.hasToken] which is just a `File.exists` check.
      */
-    fun write(servers: List<McpServer>): Boolean {
+    suspend fun write(servers: List<McpServer>): Boolean {
         val app = appContext ?: return false
         val s = store ?: return false
         // Defensive copy so caller-side mutation can't poison the
         // validation/persist pipeline.
         val list = servers.toList()
-        val invalid = list.firstOrNull { !isValid(it) }
-        if (invalid != null) {
-            Log.w(TAG, "rejected write: invalid server id=${invalid.id} reason=${reasonFor(invalid)}")
-            return false
-        }
-        val normalizedSeen = mutableSetOf<String>()
-        for (entry in list) {
-            val normalized = normalizeId(entry.id)
-            if (!normalizedSeen.add(normalized)) {
-                Log.w(
-                    TAG,
-                    "rejected write: duplicate id after normalization: ${entry.id} (normalizes to $normalized)",
-                )
-                return false
+
+        var preIds: Set<String> = emptySet()
+        val applied = try {
+            s.update { current ->
+                preIds = current.servers.map { it.id }.toSet()
+                val invalid = list.firstOrNull { !isValid(it) }
+                require(invalid == null) {
+                    "rejected write: invalid server id=${invalid?.id} reason=${invalid?.let { reasonFor(it) }}"
+                }
+                val normalizedSeen = mutableSetOf<String>()
+                for (entry in list) {
+                    val normalized = normalizeId(entry.id)
+                    require(normalizedSeen.add(normalized)) {
+                        "rejected write: duplicate id after normalization: ${entry.id} (normalizes to $normalized)"
+                    }
+                }
+                // Bearer-over-insecure-HTTP gate (v2.1 §5b). Mirrors
+                // mcp-client.js's URL-vs-token check so the same rule
+                // fails fast at write time rather than only when Node
+                // tries to connect.
+                require(list.none { hasInsecureToken(app, it) }) {
+                    "rejected write: server has token over insecure HTTP (use HTTPS or loopback)"
+                }
+                McpServersFile(servers = list)
             }
+        } catch (e: IllegalArgumentException) {
+            // CrossProcessStore.update doesn't catch transform
+            // exceptions — convert require() failures to false here
+            // so the documented Boolean return holds.
+            Log.w(TAG, e.message ?: "write rejected")
+            false
         }
-        // Bearer-over-insecure-HTTP gate (v2.1 §5b). Mirrors
-        // mcp-client.js's URL-vs-token check so the same rule fails
-        // fast at write-time rather than only when Node tries to
-        // connect.
-        for (entry in list) {
-            if (hasInsecureToken(app, entry)) {
-                Log.w(
-                    TAG,
-                    "rejected write: ${entry.id} has token over insecure HTTP (use HTTPS or loopback)",
-                )
-                return false
-            }
-        }
-        // Snapshot the disk's current servers BEFORE persisting, so
-        // the orphan-token cleanup diff is accurate even when our
-        // collector hasn't caught up to a recent prior write.
-        // Reading `_state.value` here would observe collector lag —
-        // by contrast, `s.read()` parses the JSON file synchronously
-        // (CrossProcessStore.write uses atomic move, so the read is
-        // never half-written). Best-effort against TOCTOU: another
-        // process writing between this read and the write below
-        // would race, but the orphan sweep at next `init()` catches
-        // any drift, and main-process writes from here serialize via
-        // CrossProcessStore.writeLock anyway.
-        val preIds = s.read().servers.map { it.id }.toSet()
-        if (!s.write(McpServersFile(servers = list))) return false
+        if (!applied) return false
 
         // Side effects after successful persist (kept out of the
         // CrossProcessStore lock per BAT-513 round-18 pattern).
-        // Clear orphan tokens for removed servers BEFORE rebuilding
-        // the rollback shadow — otherwise the shadow would still see
-        // the orphan via McpTokenStore.read and reattach it.
+        // `preIds` was captured inside the transform under the lock,
+        // so the diff is accurate even if another writer landed
+        // between transform-entry and now.
         val nextIds = list.map { it.id }.toSet()
         for (id in preIds - nextIds) {
             McpTokenStore.clear(app, id)
@@ -374,75 +379,70 @@ object McpServersStore {
     }
 
     /**
-     * Read current state, run [transform] EXACTLY once on it, validate
-     * the result, then atomically write. Same last-writer-wins
-     * semantics as [write] — a concurrent writer between the read and
-     * the write supersedes (acceptable for BAT-514: the only writer
-     * is the UI process; `:node` only reads `mcp_servers.json`).
+     * Read-modify-write under [CrossProcessStore.writeLock]. The
+     * transform sees the current on-disk state, the resulting list
+     * is validated and persisted atomically — concurrent same-process
+     * `update`/`write` calls serialize through the lock so the second
+     * caller's transform sees the first's result, not a stale
+     * baseline (Copilot R15).
      *
-     * Returns `false` on init-not-called, validation failure, or
-     * persist failure. Validation runs OUTSIDE the
-     * [CrossProcessStore] writeLock so the slow Keystore decrypt for
-     * the http+token check doesn't block other writers/observers
-     * (Copilot R11). Calling [transform] only once avoids the
-     * non-deterministic foot-gun of running caller-supplied code
-     * twice with different inputs (Copilot R13).
+     * Validation (cheap predicates only) runs INSIDE the transform.
+     * The slow path R11 flagged — `hasInsecureToken` doing Keystore
+     * decrypt — is gone: [hasInsecureToken] now uses
+     * [McpTokenStore.hasToken] (a `File.exists` check, not a
+     * decrypt), so it's safe under the lock.
      *
-     * Use this for delta-style edits where the transform composes a
-     * new list from the current one (`current.map { ... }`,
+     * `transform` is invoked exactly once (Copilot R13). Validation
+     * failures are raised as `require(...)` and converted to `false`
+     * by the outer try/catch — `CrossProcessStore.update` does NOT
+     * catch transform exceptions on its own (Copilot R10).
+     *
+     * Use this for delta-style edits where the next list is composed
+     * from the current one (`current.map { ... }`,
      * `current.filter { ... }`); use [write] for direct
-     * replace-the-whole-list flows.
+     * replace-the-whole-list flows. Both are now suspend.
      */
     suspend fun update(transform: (List<McpServer>) -> List<McpServer>): Boolean {
         val app = appContext ?: return false
         val s = store ?: return false
-        // Snapshot the current disk state, run the transform exactly
-        // once, validate the result, then write. The snapshot is also
-        // used downstream for the orphan-token diff so it stays
-        // consistent with what we're about to persist.
-        val current = s.read().servers
-        val computed = transform(current).toList()
-
-        // Validation — all checks run outside the lock. `isValid`,
-        // dedup, normalization are cheap; `hasInsecureToken` does
-        // file I/O + Keystore decrypt and would unacceptably hold the
-        // writeLock if run inside the transform per
-        // CrossProcessStore.update's "cheap and pure" contract.
-        val invalid = computed.firstOrNull { !isValid(it) }
-        if (invalid != null) {
-            Log.w(TAG, "update rejected: invalid entry id=${invalid.id} reason=${reasonFor(invalid)}")
-            return false
-        }
-        val seen = mutableSetOf<String>()
-        for (entry in computed) {
-            val n = normalizeId(entry.id)
-            if (!seen.add(n)) {
-                Log.w(
-                    TAG,
-                    "update rejected: duplicate id after normalization: ${entry.id} (normalizes to $n)",
-                )
-                return false
+        var preIds: Set<String> = emptySet()
+        var next: List<McpServer> = emptyList()
+        val applied = try {
+            s.update { current ->
+                preIds = current.servers.map { it.id }.toSet()
+                val computed = transform(current.servers).toList()
+                require(computed.all { isValid(it) }) {
+                    val bad = computed.firstOrNull { !isValid(it) }
+                    "Invalid entry after transform: id=${bad?.id} reason=${bad?.let { reasonFor(it) }}"
+                }
+                val seen = mutableSetOf<String>()
+                for (entry in computed) {
+                    val n = normalizeId(entry.id)
+                    require(seen.add(n)) {
+                        "Duplicate id after normalization: ${entry.id} (normalizes to $n)"
+                    }
+                }
+                require(computed.none { hasInsecureToken(app, it) }) {
+                    "Server has token over insecure HTTP"
+                }
+                next = computed
+                McpServersFile(servers = computed)
             }
+        } catch (e: IllegalArgumentException) {
+            Log.w(TAG, "update rejected: ${e.message}")
+            false
         }
-        if (computed.any { hasInsecureToken(app, it) }) {
-            // MCPClient.connect's `_checkUrlSafety` is the actual
-            // security boundary at request time; this store-level
-            // check is defense-in-depth.
-            Log.w(TAG, "update rejected: server has token over insecure HTTP")
-            return false
-        }
-
-        if (!s.write(McpServersFile(servers = computed))) return false
+        if (!applied) return false
 
         // Side effects (post-write, outside the lock — same pattern
-        // as [write]). The pre/next diff uses the snapshots captured
-        // above, NOT `_state.value`, so a lagging collector can't
-        // make us miss orphan tokens.
-        val nextIds = computed.map { it.id }.toSet()
-        for (id in current.map { it.id }.toSet() - nextIds) {
+        // as [write]). preIds + next are both captured inside the
+        // transform, so the diff is consistent with what we just
+        // persisted.
+        val nextIds = next.map { it.id }.toSet()
+        for (id in preIds - nextIds) {
             McpTokenStore.clear(app, id)
         }
-        rebuildRollbackShadow(app, computed)
+        rebuildRollbackShadow(app, next)
         ownedScope?.launch { NodeControlClient.reconcile(null) }
         return true
     }
@@ -582,8 +582,12 @@ object McpServersStore {
     }
 
     private fun hasInsecureToken(context: Context, server: McpServer): Boolean {
-        val token = McpTokenStore.read(context, server.id)
-        if (token.isBlank()) return false
+        // Cheap presence check (no Keystore decrypt) — token VALUE
+        // doesn't matter for the http+token gate, only token EXISTENCE.
+        // This keeps the predicate cheap enough to run inside
+        // CrossProcessStore.update's transform without violating the
+        // "transforms must be cheap and pure" contract.
+        if (!McpTokenStore.hasToken(context, server.id)) return false
         return !isUrlSafeForToken(server.url)
     }
 

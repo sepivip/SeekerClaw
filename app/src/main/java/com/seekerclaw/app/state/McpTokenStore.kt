@@ -180,6 +180,20 @@ object McpTokenStore {
     }
 
     /**
+     * Cheap presence check: does a token file exist for [id]? No
+     * decrypt, just `File.exists()`. Used by the http+token validity
+     * gate in [McpServersStore], where we only need to know whether
+     * a token IS set (to reject `http://non-loopback` with token), not
+     * what its value is — letting that gate run inside the
+     * [com.seekerclaw.app.util.CrossProcessStore] writeLock without
+     * the Keystore decrypt cost.
+     */
+    fun hasToken(context: Context, id: String): Boolean {
+        val file = fileFor(context, id) ?: return false
+        return file.exists()
+    }
+
+    /**
      * Return the set of server ids that currently have a token file.
      * Used by [McpServersStore.init] to detect orphan tokens (tokens
      * whose server was deleted while a previous build was running and
