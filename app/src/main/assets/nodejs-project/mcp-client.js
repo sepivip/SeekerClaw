@@ -165,13 +165,27 @@ function httpRequest(url, options, body, timeoutMs) {
     });
 }
 
+// ── safeId normalization ───────────────────────────────────────────
+// Single source of truth for the id->safeId fold used by both
+// MCPClient (constructor: `this.safeId`) and MCPManager (reconcile +
+// reconcileServer key normalization). Pinned to the same regex on the
+// Kotlin side via McpServersStore.normalizeId — drift here would
+// silently disconnect/reconnect-loop servers whose ids differ between
+// raw and folded forms.
+function _safeId(id) {
+    return (id || '').replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
 // ── MCP Client ─────────────────────────────────────────────────────
 
 class MCPClient {
     constructor(serverConfig, logFn, options = {}) {
         this.id = serverConfig.id || serverConfig.name;
-        // Sanitized ID used in tool name prefixes and as map key
-        this.safeId = (this.id || '').replace(/[^a-zA-Z0-9_-]/g, '_');
+        // Sanitized ID used in tool name prefixes and as map key.
+        // Routes through the module-level helper so MCPManager's
+        // reconcile path (which keys `desiredById` and looks up
+        // `this.servers` by the same fold) cannot drift.
+        this.safeId = _safeId(this.id);
         this.name = serverConfig.name;
         this.url = serverConfig.url;
         // BAT-514: tokens are no longer inline on `serverConfig` for
@@ -656,10 +670,19 @@ class MCPManager {
             this.log(`[MCP] configsProvider threw during reconcile: ${err.message}`, 'ERROR');
             return;
         }
-        const desiredById = new Map();
+        // `this.servers` is keyed by `safeId` (set in _connectServer
+        // via `client.safeId`), but configs carry RAW user-facing
+        // ids. For canonical BAT-514 ids these are identical (the
+        // regex's allowed alphabet survives `safeId` unchanged), but
+        // legacy config.json entries with shell-meta chars (".",
+        // ";", spaces, etc.) get folded by safeId. Keying
+        // `desiredById` by raw id then would mismatch the servers
+        // map and produce a disconnect/reconnect churn loop. Key by
+        // safeId here to align both sides. (Copilot R4 PR #352 finding.)
+        const desiredById = new Map(); // safeId -> raw config object
         for (const c of (configs || [])) {
             if (c && typeof c.id === 'string' && c.enabled !== false) {
-                desiredById.set(c.id, c);
+                desiredById.set(_safeId(c.id), c);
             }
         }
         // Disconnect gone-or-now-disabled OR url-changed servers.
@@ -676,8 +699,8 @@ class MCPManager {
             }
         }
         // Connect everything in desired that isn't currently connected.
-        for (const [id, cfg] of desiredById) {
-            if (!this.servers.has(id)) {
+        for (const [safeId, cfg] of desiredById) {
+            if (!this.servers.has(safeId)) {
                 await this._connectServer(cfg);
             }
         }
@@ -701,8 +724,14 @@ class MCPManager {
             this.log(`[MCP] configsProvider threw during reconcileServer(${id}): ${err.message}`, 'ERROR');
             return;
         }
+        // Caller (control-server / fs.watch) hands us a RAW id.
+        // The configs list also carries raw ids — so the find-by-id
+        // below is a raw match. The disconnect, on the other hand,
+        // looks up `this.servers` which is keyed by safeId — so
+        // normalize the input before disconnecting (Copilot R4 PR
+        // #352 same-bug-class sweep).
         const desired = (configs || []).find((c) => c && c.id === id);
-        this._disconnectAndRemove(id);
+        this._disconnectAndRemove(_safeId(id));
         if (desired && desired.enabled !== false) {
             await this._connectServer(desired);
         }
