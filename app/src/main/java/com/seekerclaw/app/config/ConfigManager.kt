@@ -154,13 +154,19 @@ object ConfigManager {
      * we're called from. Centralizes the main-thread dispatch so every
      * mutation of this Compose snapshot state is consistent — saveConfig,
      * reconcileWithAgentSettings, OAuth token saves, individual setters,
-     * and [signalConfigChanged] (the BAT-513 collector path) all route
-     * through here. Without centralization, a future caller running on
-     * `Dispatchers.IO` or a bridge handler thread could mutate
-     * `mutableIntStateOf` mid-snapshot and produce a confused
+     * [signalConfigChanged] (the BAT-513 collector path), AND the
+     * [ACTION_CONFIG_CHANGED] broadcast receiver in SeekerClawApplication
+     * all route through here. Without centralization, a future caller
+     * running on `Dispatchers.IO` or a bridge handler thread could
+     * mutate `mutableIntStateOf` mid-snapshot and produce a confused
      * recomposition.
+     *
+     * `internal` so the broadcast receiver (in a different package but
+     * the same module) can call it without re-broadcasting — receivers
+     * are reacting to a broadcast another process already sent, so a
+     * second broadcast here would loop.
      */
-    private fun bumpConfigVersionOnMain() {
+    internal fun bumpConfigVersionOnMain() {
         // Internal mutation site — the only place outside this helper
         // that touches configVersion directly. Reads as "set to current
         // value + 1" rather than the `++` shorthand so the

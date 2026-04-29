@@ -109,7 +109,11 @@ object RuntimeStateStore {
 
     private var ownedScope: CoroutineScope? = null
     private var store: CrossProcessStore<RuntimeState>? = null
-    private var prefs: SharedPreferences? = null
+    // No `prefs` field — internal helpers (seedFromPrefs, mirrorIfChanged,
+    // onObserved) take SharedPreferences as a parameter so unit tests can
+    // inject a fake without instantiating the singleton's full graph. The
+    // production [init] captures `sp` locally and threads it into the
+    // collector lambda directly.
 
     /**
      * Idempotent. Call once from `SeekerClawApplication.onCreate`.
@@ -123,7 +127,6 @@ object RuntimeStateStore {
         val app = context.applicationContext
         appContext = app
         val sp = app.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs = sp
         val seeded = seedFromPrefs(sp)
         _state.value = seeded
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -324,16 +327,14 @@ object RuntimeStateStore {
 
     /**
      * Test seam: bypass [init]'s real CrossProcessStore wiring and
-     * inject pre-built collaborators so unit tests can assert the
-     * collector path without a [Context]. Production code MUST NOT
-     * call this.
+     * just seed [_state] so unit tests can assert the collector
+     * path without a [Context]. Tests pass their fake
+     * SharedPreferences directly to [onObserved] / [mirrorIfChanged]
+     * — no prefs field is kept on the singleton (round-15 dead-code
+     * removal). Production code MUST NOT call this.
      */
-    internal fun initForTest(
-        injectedPrefs: SharedPreferences,
-        injectedSeed: RuntimeState,
-    ) {
+    internal fun initForTest(injectedSeed: RuntimeState) {
         if (!initialized.compareAndSet(false, true)) return
-        prefs = injectedPrefs
         _state.value = injectedSeed
     }
 
@@ -346,7 +347,6 @@ object RuntimeStateStore {
         ownedScope = null
         store?.close()
         store = null
-        prefs = null
         appContext = null
         _state.value = RuntimeState()
         initialized.set(false)

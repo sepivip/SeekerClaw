@@ -168,7 +168,7 @@ class RuntimeStateStoreTest {
 
     @Test
     fun `onObserved with valid state updates state and mirrors to prefs`() {
-        RuntimeStateStore.initForTest(prefs, RuntimeState())
+        RuntimeStateStore.initForTest(RuntimeState())
         // Observe a Node-originated write (simulated — in production
         // this lands via CrossProcessStore's StateFlow emission after
         // a FileObserver reload).
@@ -196,7 +196,7 @@ class RuntimeStateStoreTest {
             .putString("auth_type", "api_key")
             .putString("model", "claude-opus-4-7")
             .apply()
-        RuntimeStateStore.initForTest(prefs, RuntimeState("claude", "api_key", "claude-opus-4-7"))
+        RuntimeStateStore.initForTest(RuntimeState("claude", "api_key", "claude-opus-4-7"))
         prefs.applyCount = 0
 
         RuntimeStateStore.onObserved(RuntimeState("openrouter", "oauth", "gpt-5.4"), prefs)
@@ -218,7 +218,7 @@ class RuntimeStateStoreTest {
             .putString("auth_type", "oauth")
             .putString("model", "gpt-5.4")
             .apply()
-        RuntimeStateStore.initForTest(prefs, RuntimeState("openai", "oauth", "gpt-5.4"))
+        RuntimeStateStore.initForTest(RuntimeState("openai", "oauth", "gpt-5.4"))
         prefs.applyCount = 0
         // Observed value matches both prefs and the seeded StateFlow.
         // No-op everywhere.
@@ -235,7 +235,7 @@ class RuntimeStateStoreTest {
         // fire first — the test asserts the throw, not the return
         // value. Catching the throw proves the precondition
         // protects the persistence layer.
-        RuntimeStateStore.initForTest(prefs, RuntimeState())
+        RuntimeStateStore.initForTest(RuntimeState())
         RuntimeStateStore.write(RuntimeState("openrouter", "oauth", "x"))
     }
 

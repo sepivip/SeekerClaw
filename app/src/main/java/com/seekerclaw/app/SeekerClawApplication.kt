@@ -93,7 +93,15 @@ class SeekerClawApplication : Application() {
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
                 if (intent.action == ConfigManager.ACTION_CONFIG_CHANGED) {
-                    ConfigManager.configVersion.intValue++
+                    // BAT-513 round-15: route through the helper so
+                    // configVersion mutation stays main-thread-safe
+                    // and the "single chokepoint" claim in the helper
+                    // KDoc holds. Direct `.intValue++` here would
+                    // silently bypass the centralization.
+                    // BroadcastReceiver.onReceive runs on the main
+                    // thread, so the helper's Looper check hits the
+                    // fast path with no Handler dispatch.
+                    ConfigManager.bumpConfigVersionOnMain()
                 }
             }
         }
