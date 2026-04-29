@@ -131,11 +131,12 @@ test('GET /stats/db-summary works without auth (BAT-31 contract preserved)', asy
     assert.deepStrictEqual(r.body, _dbSummary);
 });
 
-test('GET /stats/db-summary on unrelated paths returns 404', async () => {
+test('GET on non-stats path falls through to 405 (method check before 404)', async () => {
+    // _route's first check is "GET + path === /stats/db-summary"; any
+    // other GET hits the "method !== POST" gate before the 404 fallback.
+    // 405 (not 404) is the documented behavior for unknown GET paths.
     const r = await _get('/stats/something-else');
-    assert.strictEqual(r.status, 405); // GET on /stats/something-else is method not allowed before reaching 404 path? actually GET on non-/stats falls through to method check
-    // _route runs path-match for GET /stats/db-summary first; otherwise falls
-    // through to "method !== POST → 405". This documents that behavior.
+    assert.strictEqual(r.status, 405);
 });
 
 // ---------- /mcp/reconcile auth ----------

@@ -115,11 +115,15 @@ class McpServersStoreTest {
     }
 
     @Test
-    fun `onObserved drops duplicate normalized ids keeping the first`() {
-        // "server-1" and "server_1" both normalize to "server_1" via
-        // mcp-client.js's safeId. Only the first survives.
-        val first = McpServer(id = "server-1", name = "First", url = "https://a", rateLimit = 1)
-        val collide = McpServer(id = "server_1", name = "Collide", url = "https://b", rateLimit = 1)
+    fun `onObserved drops duplicate ids keeping the first`() {
+        // Both Kotlin's normalizeId and Node's safeId preserve the
+        // ID_REGEX-allowed alphabet (alpha + digit + `_` + `-`)
+        // unchanged, so any two entries that normalize to the same
+        // bucket must already share an exact id. The collision check
+        // is identity for in-spec ids, but kept as defense-in-depth
+        // for a future ID_REGEX loosening.
+        val first = McpServer(id = "ctx", name = "First", url = "https://a", rateLimit = 1)
+        val collide = McpServer(id = "ctx", name = "Collide", url = "https://b", rateLimit = 1)
         val third = McpServer(id = "different", name = "Third", url = "https://c", rateLimit = 1)
         val cleaned = McpServersStore.onObserved(
             McpServersFile(servers = listOf(first, collide, third)),

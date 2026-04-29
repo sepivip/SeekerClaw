@@ -26,10 +26,15 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -67,8 +72,13 @@ fun McpConfigScreen(onBack: () -> Unit) {
     var deletingMcpServer by remember { mutableStateOf<McpServer?>(null) }
     var showRestartDialog by remember { mutableStateOf(false) }
 
-    // No prefs-load LaunchedEffect: the StateFlow above replaces it.
-    // Auth tokens are fetched lazily on edit (see Edit dialog).
+    // BAT-514 R2: McpServersStore.write / setAuthToken do disk I/O
+    // (JSON encode + atomic move + KeystoreHelper encrypt for the
+    // rollback-shadow rebuild) and need to run off the UI thread to
+    // avoid jank / StrictMode / ANR. All click handlers below dispatch
+    // through this scope onto Dispatchers.IO; UI state updates land
+    // back on Main via withContext.
+    val scope = rememberCoroutineScope()
 
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
 
@@ -134,19 +144,21 @@ fun McpConfigScreen(onBack: () -> Unit) {
                                         val updated = mcpServers.map {
                                             if (it.id == server.id) it.copy(enabled = enabled) else it
                                         }
-                                        if (McpServersStore.write(updated)) {
-                                            showRestartDialog = true
-                                        } else {
-                                            // Revert via the StateFlow — UI will
-                                            // re-read the last-valid list. Not
-                                            // expected on a simple toggle, but
-                                            // covers the rare case of a concurrent
-                                            // FS failure.
-                                            Toast.makeText(
-                                                context,
-                                                "Couldn't update server",
-                                                Toast.LENGTH_SHORT,
-                                            ).show()
+                                        scope.launch {
+                                            val ok = withContext(Dispatchers.IO) {
+                                                McpServersStore.write(updated)
+                                            }
+                                            if (ok) {
+                                                showRestartDialog = true
+                                            } else {
+                                                // Revert via the StateFlow —
+                                                // UI re-reads last valid list.
+                                                Toast.makeText(
+                                                    context,
+                                                    "Couldn't update server",
+                                                    Toast.LENGTH_SHORT,
+                                                ).show()
+                                            }
                                         }
                                     },
                                 )
@@ -201,11 +213,23 @@ fun McpConfigScreen(onBack: () -> Unit) {
     if (showMcpDialog) {
         var mcpName by remember(editingMcpServer) { mutableStateOf(editingMcpServer?.name ?: "") }
         var mcpUrl by remember(editingMcpServer) { mutableStateOf(editingMcpServer?.url ?: "") }
-        // BAT-514: tokens live in encrypted prefs (`mcp_token_<id>`),
-        // not on the McpServer object. Hydrate the field on dialog open
-        // so an edit shows the existing token; an add starts empty.
-        var mcpToken by remember(editingMcpServer) {
-            mutableStateOf(editingMcpServer?.let { McpServersStore.getAuthToken(context, it.id) } ?: "")
+        // BAT-514: tokens live in encrypted prefs (`mcp_token_<id>`).
+        // Hydrate the field via LaunchedEffect on Dispatchers.IO —
+        // KeystoreHelper.decrypt is blocking and was running on the
+        // composition thread inside `remember { }` before the R2 fix.
+        // While the decrypt is in flight the field stays "" (the
+        // PasswordVisualTransformation hides the placeholder anyway,
+        // so the user doesn't see flicker).
+        var mcpToken by remember(editingMcpServer) { mutableStateOf("") }
+        LaunchedEffect(editingMcpServer) {
+            val target = editingMcpServer
+            mcpToken = if (target == null) {
+                ""
+            } else {
+                withContext(Dispatchers.IO) {
+                    McpServersStore.getAuthToken(context, target.id)
+                }
+            }
         }
 
         AlertDialog(
@@ -317,40 +341,47 @@ fun McpConfigScreen(onBack: () -> Unit) {
                             } else {
                                 mcpServers + server
                             }
-                            // BAT-514: persist server first, token
-                            // second. If write fails, the token write
-                            // is skipped — we only want a token
-                            // attached to a persisted server. Token
-                            // value of "" clears the entry (handled by
-                            // setAuthToken).
                             val tokenValue = mcpToken.trim()
-                            val ok = McpServersStore.write(updated)
-                            if (!ok) {
-                                Toast.makeText(
-                                    context,
-                                    "Couldn't save server (check URL / token over insecure HTTP)",
-                                    Toast.LENGTH_LONG,
-                                ).show()
-                                return@TextButton
-                            }
-                            // Token is optional — only call setAuthToken
-                            // when the user actually entered/changed
-                            // one OR when explicitly clearing. The
-                            // store's setAuthToken handles both.
-                            if (tokenValue.isNotEmpty() ||
-                                (editingMcpServer != null &&
-                                    McpServersStore.getAuthToken(context, serverId).isNotEmpty())
-                            ) {
-                                if (!McpServersStore.setAuthToken(context, serverId, tokenValue)) {
+                            val wasEditing = editingMcpServer != null
+                            // BAT-514 R2: persist + token write run on
+                            // Dispatchers.IO. write() does atomic file
+                            // move + KeystoreHelper.encrypt for the
+                            // shadow rebuild; setAuthToken does
+                            // KeystoreHelper.encrypt + commit.
+                            scope.launch {
+                                val writeOk = withContext(Dispatchers.IO) {
+                                    McpServersStore.write(updated)
+                                }
+                                if (!writeOk) {
                                     Toast.makeText(
                                         context,
-                                        "Server saved, but token couldn't be stored",
+                                        "Couldn't save server (check URL / token over insecure HTTP)",
                                         Toast.LENGTH_LONG,
                                     ).show()
+                                    return@launch
                                 }
+                                // Token is optional — only call
+                                // setAuthToken when the user entered
+                                // or changed one, OR when an existing
+                                // entry's token needs to be cleared.
+                                val hadExistingToken = wasEditing && withContext(Dispatchers.IO) {
+                                    McpServersStore.getAuthToken(context, serverId).isNotEmpty()
+                                }
+                                if (tokenValue.isNotEmpty() || hadExistingToken) {
+                                    val tokenOk = withContext(Dispatchers.IO) {
+                                        McpServersStore.setAuthToken(context, serverId, tokenValue)
+                                    }
+                                    if (!tokenOk) {
+                                        Toast.makeText(
+                                            context,
+                                            "Server saved, but token couldn't be stored",
+                                            Toast.LENGTH_LONG,
+                                        ).show()
+                                    }
+                                }
+                                showMcpDialog = false
+                                showRestartDialog = true
                             }
-                            showMcpDialog = false
-                            showRestartDialog = true
                         }
                     },
                     enabled = mcpName.trim().isNotBlank() && mcpUrl.trim().isNotBlank(),
@@ -397,19 +428,24 @@ fun McpConfigScreen(onBack: () -> Unit) {
                 TextButton(onClick = {
                     val targetId = deletingMcpServer?.id
                     val updated = mcpServers.filter { it.id != targetId }
-                    if (McpServersStore.write(updated)) {
-                        // McpServersStore.write also runs the
-                        // delete-server cleanup (orphan token clear +
-                        // rollback shadow rebuild + reconcile).
-                        showDeleteMcpDialog = false
-                        deletingMcpServer = null
-                        showRestartDialog = true
-                    } else {
-                        Toast.makeText(
-                            context,
-                            "Couldn't remove server",
-                            Toast.LENGTH_SHORT,
-                        ).show()
+                    // BAT-514 R2: write off the UI thread (atomic move
+                    // + shadow rebuild + orphan token clear all do
+                    // disk + Keystore work).
+                    scope.launch {
+                        val ok = withContext(Dispatchers.IO) {
+                            McpServersStore.write(updated)
+                        }
+                        if (ok) {
+                            showDeleteMcpDialog = false
+                            deletingMcpServer = null
+                            showRestartDialog = true
+                        } else {
+                            Toast.makeText(
+                                context,
+                                "Couldn't remove server",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                        }
                     }
                 }) {
                     Text(

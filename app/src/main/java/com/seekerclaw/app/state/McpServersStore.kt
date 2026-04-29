@@ -234,11 +234,18 @@ object McpServersStore {
                 return false
             }
         }
-        // Snapshot removed-ids BEFORE persisting so the post-write
-        // orphan token cleanup is correct even if the StateFlow
-        // emission lands first (the collector observer would otherwise
-        // see the new list and the diff would be empty).
-        val removedIds = _state.value.map { it.id }.toSet() - list.map { it.id }.toSet()
+        // Snapshot the disk's current servers BEFORE persisting, so
+        // the orphan-token cleanup diff is accurate even when our
+        // collector hasn't caught up to a recent prior write.
+        // Reading `_state.value` here would observe collector lag —
+        // by contrast, `s.read()` parses the JSON file synchronously
+        // (CrossProcessStore.write uses atomic move, so the read is
+        // never half-written). Best-effort against TOCTOU: another
+        // process writing between this read and the write below
+        // would race, but the orphan sweep at next `init()` catches
+        // any drift, and main-process writes from here serialize via
+        // CrossProcessStore.writeLock anyway.
+        val preIds = s.read().servers.map { it.id }.toSet()
         if (!s.write(McpServersFile(servers = list))) return false
 
         // Side effects after successful persist (kept out of the
@@ -246,7 +253,8 @@ object McpServersStore {
         // Clear orphan tokens for removed servers BEFORE rebuilding
         // the rollback shadow — otherwise the shadow would still see
         // the orphan via McpTokenStore.read and reattach it.
-        for (id in removedIds) {
+        val nextIds = list.map { it.id }.toSet()
+        for (id in preIds - nextIds) {
             McpTokenStore.clear(app, id)
         }
         rebuildRollbackShadow(app, list)
@@ -270,38 +278,44 @@ object McpServersStore {
     suspend fun update(transform: (List<McpServer>) -> List<McpServer>): Boolean {
         val app = appContext ?: return false
         val s = store ?: return false
-        // Capture pre-transform ids so the post-update orphan sweep
-        // sees an accurate diff. We can't compute this inside the
-        // transform lambda — `_state` may not have observed the new
-        // value yet, which is the whole point of doing it here.
-        val preIds = _state.value.map { it.id }.toSet()
+        // Capture pre-transform AND next snapshots inside the
+        // CrossProcessStore.update lock so the post-update side
+        // effects don't race the collector. Reading `_state.value`
+        // after `s.update` returns is unreliable — the collector that
+        // mirrors the disk write to `_state` runs on its own coroutine
+        // and may not have observed the new value yet (Copilot R1
+        // PR #352 finding).
+        var pre: List<McpServer> = emptyList()
+        var next: List<McpServer> = emptyList()
         val applied = s.update { current ->
-            val next = transform(current.servers).toList()
-            require(next.all { isValid(it) }) {
-                val bad = next.firstOrNull { !isValid(it) }
+            pre = current.servers
+            val computed = transform(current.servers).toList()
+            require(computed.all { isValid(it) }) {
+                val bad = computed.firstOrNull { !isValid(it) }
                 "Invalid entry after transform: id=${bad?.id} reason=${bad?.let { reasonFor(it) }}"
             }
             // Duplicate-id check inside the transform so the lock
             // covers it too (a concurrent write that produced the
             // duplicate can't slip through).
             val seen = mutableSetOf<String>()
-            for (entry in next) {
+            for (entry in computed) {
                 val n = normalizeId(entry.id)
                 require(seen.add(n)) {
                     "Duplicate id after normalization: ${entry.id} (normalizes to $n)"
                 }
             }
-            require(next.none { hasInsecureToken(app, it) }) {
+            require(computed.none { hasInsecureToken(app, it) }) {
                 "Server has token over insecure HTTP"
             }
-            McpServersFile(servers = next)
+            next = computed
+            McpServersFile(servers = computed)
         }
         if (applied) {
-            val postIds = _state.value.map { it.id }.toSet()
-            for (id in preIds - postIds) {
+            val nextIds = next.map { it.id }.toSet()
+            for (id in pre.map { it.id }.toSet() - nextIds) {
                 McpTokenStore.clear(app, id)
             }
-            rebuildRollbackShadow(app, _state.value)
+            rebuildRollbackShadow(app, next)
             ownedScope?.launch { NodeControlClient.reconcile(null) }
         }
         return applied
@@ -410,13 +424,17 @@ object McpServersStore {
 
     /**
      * Mirror Node's `safeId` normalization (mcp-client.js line 174):
-     * `replace(/[^a-zA-Z0-9_-]/g, '_')`. We also disallow the bare `-`
-     * collision via [ID_REGEX] up front, but use this for the
-     * post-normalization uniqueness check so a future regex-loosen
-     * doesn't open a duplicate-id hole.
+     * `replace(/[^a-zA-Z0-9_-]/g, '_')` — note the dash IS preserved
+     * on both sides so `server-1` is NOT folded to `server_1`. The
+     * post-normalization uniqueness check below is identity for any
+     * id that already passes [ID_REGEX] (since the regex's allowed
+     * set matches safeId's preserved set), but it remains as defense-
+     * in-depth: if [ID_REGEX] is ever loosened to allow e.g. `.`,
+     * Node would fold that to `_` via safeId, and this check would
+     * catch the resulting collision before either side sees it.
      */
     private fun normalizeId(id: String): String =
-        id.replace(Regex("[^A-Za-z0-9_]"), "_")
+        id.replace(Regex("[^A-Za-z0-9_-]"), "_")
 
     // ---- Collector path -------------------------------------------------
 
