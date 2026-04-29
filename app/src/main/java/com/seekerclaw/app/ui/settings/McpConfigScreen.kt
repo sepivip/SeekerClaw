@@ -267,9 +267,26 @@ fun McpConfigScreen(onBack: () -> Unit) {
                 val storedToken = withContext(Dispatchers.IO) {
                     McpServersStore.getAuthToken(context, target.id)
                 }
-                // Only auto-fill if the user hasn't started typing
-                // yet — otherwise we'd overwrite their input.
-                if (!tokenEdited) {
+                if (storedToken.isEmpty()) {
+                    // `""` from getAuthToken means EITHER no token is
+                    // stored OR the token file exists but couldn't be
+                    // decrypted (Keystore failure, file corruption).
+                    // Self-heal the corrupt-file case: force tokenEdited
+                    // so the user's next Save calls setAuthToken("")
+                    // and clears the stale file. Without this, the
+                    // file lingers and the http+token gate keeps
+                    // blocking edits via `hasToken` even though the
+                    // UI shows an empty field. (Copilot R17 PR #352
+                    // finding.)
+                    val corruptFilePresent = withContext(Dispatchers.IO) {
+                        McpServersStore.hasAuthToken(context, target.id)
+                    }
+                    if (corruptFilePresent) {
+                        tokenEdited = true
+                    }
+                } else if (!tokenEdited) {
+                    // Only auto-fill if the user hasn't started typing
+                    // yet — otherwise we'd overwrite their input.
                     mcpToken = storedToken
                 }
             }

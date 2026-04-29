@@ -239,7 +239,9 @@ class AndroidBridge(
      *  - Bridge-token auth on the outer hop (already enforced by
      *    [serve]).
      *  - Body validates `id` as `^[A-Za-z0-9_-]+$` so a hostile caller
-     *    can't probe arbitrary prefs keys via this endpoint.
+     *    can't use path traversal or crafted names to probe arbitrary
+     *    files via this endpoint; access is constrained to the
+     *    intended per-id token files under `filesDir/mcp_tokens/`.
      *  - Returns `{ token: "" }` for unknown ids and decryption
      *    failures — the caller can't distinguish "no token" from
      *    "decrypt failed", which is the same defensive behavior as

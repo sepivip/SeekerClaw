@@ -217,17 +217,35 @@ object McpServersStore {
                 //     the existing Toast — the user gets a clear
                 //     "save failed" signal and the workflow is to
                 //     restart.
+                // Only migrate tokens for legacy entries that pass
+                // `isValid` — invalid ids would have McpTokenStore.write
+                // return false (the file path validation rejects them),
+                // which would flip allTokensOk and abort the entire
+                // migration permanently. A SINGLE corrupt legacy id
+                // would brick first-launch migration for all the
+                // user's other servers. (Copilot R17 PR #352 finding.)
+                // Invalid entries are dropped from `seeded` by
+                // onObserved, so their tokens are unreachable
+                // post-migration anyway — losing them here doesn't
+                // change the user-visible state.
                 var allTokensOk = true
                 for (s in legacy) {
-                    if (s.authToken.isNotBlank()) {
-                        if (!McpTokenStore.write(app, s.id, s.authToken)) {
-                            allTokensOk = false
-                            Log.w(
-                                TAG,
-                                "Migration token write failed for id=${s.id}; " +
-                                    "aborting migration to keep KEY_MCP_SERVERS_ENC intact",
-                            )
-                        }
+                    if (s.authToken.isBlank()) continue
+                    if (!isValid(s.toMcpServer())) {
+                        Log.w(
+                            TAG,
+                            "Migration skipping token for invalid legacy id=${s.id} " +
+                                "(server entry will be dropped from migrated file)",
+                        )
+                        continue
+                    }
+                    if (!McpTokenStore.write(app, s.id, s.authToken)) {
+                        allTokensOk = false
+                        Log.w(
+                            TAG,
+                            "Migration token write failed for id=${s.id}; " +
+                                "aborting migration to keep KEY_MCP_SERVERS_ENC intact",
+                        )
                     }
                 }
                 if (!allTokensOk) {
@@ -506,9 +524,26 @@ object McpServersStore {
      * Read the decrypted token for [id]. `""` if absent or decryption
      * failed (matches [McpTokenStore.read]). Process-agnostic — works
      * in `:node` without [init] having run.
+     *
+     * Note: `""` doesn't distinguish "no token" from
+     * "present-but-corrupt token". Use [hasAuthToken] when callers
+     * need to know whether a token file exists on disk regardless of
+     * decrypt success (e.g. the Edit dialog's corrupt-token self-heal
+     * path — Copilot R17 PR #352 finding).
      */
     fun getAuthToken(context: Context, id: String): String =
         McpTokenStore.read(context, id)
+
+    /**
+     * Cheap presence check: is a token file on disk for [id]? No
+     * decrypt. Wraps [McpTokenStore.hasToken] for callers that need
+     * to distinguish "token never set" from "token set but
+     * unreadable" — the http+token validity gate uses this internally,
+     * and the Edit dialog uses it to detect a corrupt-token state and
+     * force a clear on Save.
+     */
+    fun hasAuthToken(context: Context, id: String): Boolean =
+        McpTokenStore.hasToken(context, id)
 
     /**
      * Remove the stored token for [id]. Same return semantics as
@@ -665,8 +700,14 @@ object McpServersStore {
             }
             cleaned.add(s)
         }
-        _state.value = cleaned
-        return cleaned
+        // Publish an immutable snapshot — the mutable builder must
+        // not leak into StateFlow observers or `_previousMirrored`,
+        // since either could end up cast to MutableList by a careless
+        // caller and silently mutate the published value (Copilot
+        // R17 PR #352 finding).
+        val snapshot = cleaned.toList()
+        _state.value = snapshot
+        return snapshot
     }
 
     // Track last-mirrored to dedupe collector emissions (BAT-513
