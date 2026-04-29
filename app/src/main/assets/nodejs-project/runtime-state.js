@@ -121,6 +121,27 @@ function open(workDir) {
         // prefer to never persist one in the first place — that way
         // a Telegram /provider command surfaces a clear error to the
         // user instead of silently no-op'ing through the mirror.
+        //
+        // Shape check FIRST: cross-process-store.write persists any
+        // JSON-serializable value, so without this check a caller bug
+        // could write a non-string `model` (or missing fields). The
+        // Kotlin side's @Serializable decode would then fail and fall
+        // back to defaults — the user-visible symptom would be "I
+        // saved a model but it didn't take" with no clear error
+        // upstream. The validateMatrix call below would also crash
+        // with TypeError on non-string provider/authType (e.g. on
+        // `'foo'.toLowerCase` if the value were null). Refuse the
+        // write loudly so the bug surfaces at the source.
+        if (!value || typeof value !== 'object'
+            || typeof value.provider !== 'string'
+            || typeof value.authType !== 'string'
+            || typeof value.model !== 'string') {
+            throw new Error(
+                `runtime-state: invalid shape (provider=${value && typeof value.provider}, ` +
+                `authType=${value && typeof value.authType}, ` +
+                `model=${value && typeof value.model}) — refusing to persist`,
+            );
+        }
         if (!validateMatrix(value.provider, value.authType)) {
             throw new Error(
                 `runtime-state: invalid (provider=${value.provider}, ` +
