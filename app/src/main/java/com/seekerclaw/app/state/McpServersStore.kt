@@ -200,8 +200,16 @@ object McpServersStore {
                 // the next launch retries the whole migration.
             }
 
-            // Step 3: orphan token sweep.
-            sweepOrphanTokens(app, _state.value)
+            // Step 3: orphan token sweep against the on-disk file —
+            // NOT `_state.value`. _state is seeded from the legacy
+            // KEY_MCP_SERVERS_ENC prefs blob and may temporarily
+            // diverge from `mcp_servers.json` until the collector's
+            // first emission lands. If it did diverge (e.g. a `:node`
+            // write modified the file under us), sweeping by the
+            // prefs view would clear `mcp_token_<id>` entries for
+            // servers that ARE in the file. Copilot R3 PR #352
+            // finding.
+            sweepOrphanTokens(app, cps.read().servers)
 
             // Step 4: observe-and-mirror collector.
             cps.state.collect { observed ->
@@ -389,7 +397,14 @@ object McpServersStore {
             McpTokenStore.write(context, id, token)
         }
         if (ok) {
-            rebuildRollbackShadow(context, _state.value)
+            // Use the same disk snapshot used for the existence
+            // check above, NOT `_state.value` — the collector lag
+            // means `_state` may be missing the server we just
+            // validated against, and the rebuilt shadow would be
+            // a stale list (potentially missing the just-added
+            // server during the create-server -> write -> setAuthToken
+            // flow). Copilot R3 PR #352 finding.
+            rebuildRollbackShadow(context, s.read().servers)
             ownedScope?.launch { NodeControlClient.reconcile(id) }
         }
         return ok

@@ -56,15 +56,21 @@ const { telegramCommandMenu, telegramFallbackMenu } = require('./telegram-comman
 const { MCPManager } = require('./mcp-client');
 const _mcpServersStore = require('./mcp-servers').open(workDir);
 // MCP_SERVERS resolution order (BAT-514):
-//   1. mcp_servers.json (Kotlin McpServersStore — live source of truth)
-//   2. config.json's mcpServers field (cold-start fallback for upgrades
-//      and legacy installs that haven't migrated yet)
-// Tokens are NOT in #1 — `tokenFetcher` resolves them via the bridge
-// at connect time. #2 entries may still carry inline `authToken` for
-// downgrade compatibility; MCPClient prefers the fetcher when set.
+//   1. mcp_servers.json (Kotlin McpServersStore — live source of truth).
+//      If the file exists we ALWAYS use its content, even when empty —
+//      an empty `servers: []` is a valid "user deleted everything"
+//      state, and falling back to legacy config.json there would
+//      resurrect stale entries (Copilot R3 PR #352 finding).
+//   2. config.json's mcpServers field — cold-start fallback used ONLY
+//      when the file is absent (pre-migration first launch, or a
+//      fresh install where the user hasn't opened Settings -> MCP
+//      Servers yet). Tokens for #2 entries may still be inline as
+//      authToken for downgrade compatibility; MCPClient prefers the
+//      bridge fetcher when set.
 function _resolveMcpConfigs() {
-    const fromFile = _mcpServersStore.read();
-    if (fromFile.length > 0) return fromFile;
+    if (fs.existsSync(_mcpServersStore.filePath)) {
+        return _mcpServersStore.read();
+    }
     return MCP_SERVERS;
 }
 const mcpManager = new MCPManager(log, wrapExternalContent, {

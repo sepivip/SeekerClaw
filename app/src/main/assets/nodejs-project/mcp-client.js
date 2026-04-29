@@ -203,13 +203,17 @@ class MCPClient {
      * Resolve the auth token for this server. Prefers `tokenFetcher`
      * (BAT-514 path: encrypted prefs via AndroidBridge); falls back
      * to inline `serverConfig.authToken` for cold-start config.json
-     * entries.
+     * entries OR when the bridge fetch returns empty (bridge down,
+     * unknown id, decryption failed — `fetchMcpToken` collapses all
+     * those to `""`). Treating `""` as authoritative would silently
+     * drop the inline token during a config.json-fed cold start
+     * (Copilot R3 PR #352 finding).
      */
     async _resolveAuthToken() {
         if (this.tokenFetcher) {
             try {
                 const t = await this.tokenFetcher(this.id);
-                if (typeof t === 'string') return t;
+                if (typeof t === 'string' && t.length > 0) return t;
             } catch (err) {
                 this.log(`[MCP] tokenFetcher(${this.id}) failed: ${err.message}`, 'WARN');
             }
