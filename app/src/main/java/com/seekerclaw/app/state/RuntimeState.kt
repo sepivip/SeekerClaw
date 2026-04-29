@@ -21,10 +21,16 @@ import kotlinx.serialization.Serializable
  *    matrix at the write boundary so an invalid combo never reaches
  *    disk or the Node side.
  *  - [model] — model ID. Live-updateable: a model change takes effect
- *    on the next AI turn without a service restart (Node re-reads the
- *    runtime state per turn). Provider/authType changes still require
- *    a service restart — the active adapter, base URL, and auth headers
- *    are wired at Node startup.
+ *    on the next AI turn without a service restart, because Node's
+ *    `resolveActiveModel` (config.js) resolves the active model per
+ *    turn from the `agent_settings.json` overlay. `runtime_state.json`
+ *    is the cross-process source of truth that the main UI process
+ *    observes — Node reads it at startup as the fallback chain
+ *    after `agent_settings.json`. Telegram `/model` and Settings UI
+ *    writes update BOTH so both surfaces stay consistent.
+ *    Provider/authType changes still require a service restart — the
+ *    active adapter, base URL, and auth headers are wired at Node
+ *    startup.
  *
  * ## Provider / authType matrix
  *

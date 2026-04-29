@@ -89,9 +89,17 @@ import java.util.concurrent.atomic.AtomicBoolean
  *    that (Settings save handler, `/provider` Telegram command). Live
  *    provider switching would require per-turn provider resolution in
  *    every adapter — explicitly out of scope for BAT-513.
- *  - Does NOT broadcast app-wide config changes. Existing
+ *  - Does NOT replace [com.seekerclaw.app.config.ConfigManager] as the
+ *    general broadcaster for app-wide config changes. The collector
+ *    DOES call [com.seekerclaw.app.config.ConfigManager.signalConfigChanged]
+ *    when a runtime-state mirror lands (so in-process Compose screens
+ *    that read prefs via `loadConfig` recompose, and other-process
+ *    observers receive `ACTION_CONFIG_CHANGED`) — that's the narrow
+ *    cross-process refresh path for the three runtime fields, NOT a
+ *    catch-all. Existing
  *    [com.seekerclaw.app.config.ConfigManager.broadcastConfigChanged]
- *    paths still apply where they applied pre-BAT-513.
+ *    paths still apply for everything else (saveConfig writes,
+ *    reconcile, OAuth saves, individual setters).
  */
 object RuntimeStateStore {
     private const val TAG = "RuntimeStateStore"
