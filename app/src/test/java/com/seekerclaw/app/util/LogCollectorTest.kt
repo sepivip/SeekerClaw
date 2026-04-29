@@ -487,11 +487,12 @@ class LogCollectorTest {
             val ts = System.currentTimeMillis()
             tmp.writeText("$ts|INFO|first appended line\n")
 
-            LogCollector.refreshFromFile()
-            // refreshFromFile dispatches to Dispatchers.IO. Wait for
-            // the read + publish to settle. StateFlow updates are
-            // synchronous after the read completes.
-            kotlinx.coroutines.delay(150)
+            // BAT-513 round-24: refreshFromFile returns a Job. Wait
+            // deterministically with .join() instead of a fixed delay
+            // — the previous delay(150) was flaky on contended CI
+            // machines (too short → assert fires before publish; too
+            // long → wasted time).
+            LogCollector.refreshFromFile().join()
 
             assertTrue(
                 "refreshFromFile must read & publish appended content (got ${LogCollector.logs.value.size} entries)",
@@ -505,8 +506,7 @@ class LogCollectorTest {
             val ts2 = ts + 1
             tmp.appendText("$ts2|WARN|second appended line\n")
 
-            LogCollector.refreshFromFile()
-            kotlinx.coroutines.delay(150)
+            LogCollector.refreshFromFile().join()
 
             assertTrue(
                 "refreshFromFile must publish the second append too (got ${LogCollector.logs.value.size} entries)",

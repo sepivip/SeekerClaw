@@ -327,17 +327,35 @@ object LogCollector {
      * ~60 KB, parse, and publish whatever's there. Then trigger a
      * follow-up drain in case more bytes landed during the read.
      *
+     * Single-flight (BAT-513 round-24): if a refresh is already
+     * in-flight, returns the existing [Job] instead of queueing a
+     * duplicate. Compose loops at 1.5s could otherwise stack reads
+     * during slow I/O periods.
+     *
+     * Returns the active [Job] so callers (e.g. tests) can `join()`
+     * for deterministic completion instead of relying on a fixed
+     * delay.
+     *
      * Safe to call from a Compose `LaunchedEffect` loop at 1-2s
      * cadence while a screen (Logs, Dashboard, System) is composed
      * — leaves composition → loop dies. NOT a 24/7 background poll.
      */
-    fun refreshFromFile() {
-        scope.launch {
-            readAllFromFile()
-            initialReadComplete = true
-            requestDrain()
+    fun refreshFromFile(): kotlinx.coroutines.Job {
+        synchronized(refreshJobLock) {
+            val existing = refreshJob
+            if (existing != null && existing.isActive) return existing
+            val job = scope.launch {
+                readAllFromFile()
+                initialReadComplete = true
+                requestDrain()
+            }
+            refreshJob = job
+            return job
         }
     }
+
+    private val refreshJobLock = Any()
+    @Volatile private var refreshJob: kotlinx.coroutines.Job? = null
 
     private fun writeToFile(entry: LogEntry) {
         // Take readLock to serialize the append against:
