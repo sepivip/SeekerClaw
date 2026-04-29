@@ -242,13 +242,35 @@ fun McpConfigScreen(onBack: () -> Unit) {
         // PasswordVisualTransformation hides the placeholder anyway,
         // so the user doesn't see flicker).
         var mcpToken by remember(editingMcpServer) { mutableStateOf("") }
+        // BAT-514 R16: track whether the user has typed in the token
+        // field. Used for two related bugs the prior implementation
+        // had:
+        //   (a) The async hydration could clobber what the user typed
+        //       between dialog open and getAuthToken returning
+        //       (Copilot R16 t1).
+        //   (b) The Save flow inferred "did this server have a stored
+        //       token?" via `getAuthToken(...).isNotEmpty()`, which
+        //       returns "" both for "no token" AND for
+        //       "present-but-corrupt token" — the user couldn't clear
+        //       a corrupted entry (Copilot R16 t2).
+        // Tracking explicit user edits lets us:
+        //   - skip auto-fill if the user has touched the field, AND
+        //   - only call setAuthToken when the user explicitly typed
+        //     (set or cleared) — never overwriting stored state via
+        //     a stale empty mcpToken from a slow async hydrate.
+        var tokenEdited by remember(editingMcpServer) { mutableStateOf(false) }
         LaunchedEffect(editingMcpServer) {
             val target = editingMcpServer
-            mcpToken = if (target == null) {
-                ""
+            if (target == null) {
+                mcpToken = ""
             } else {
-                withContext(Dispatchers.IO) {
+                val storedToken = withContext(Dispatchers.IO) {
                     McpServersStore.getAuthToken(context, target.id)
+                }
+                // Only auto-fill if the user hasn't started typing
+                // yet — otherwise we'd overwrite their input.
+                if (!tokenEdited) {
+                    mcpToken = storedToken
                 }
             }
         }
@@ -302,7 +324,7 @@ fun McpConfigScreen(onBack: () -> Unit) {
                     Spacer(modifier = Modifier.height(8.dp))
                     OutlinedTextField(
                         value = mcpToken,
-                        onValueChange = { mcpToken = it },
+                        onValueChange = { mcpToken = it; tokenEdited = true },
                         label = { Text("Auth Token (optional)", fontFamily = RethinkSans) },
                         visualTransformation = PasswordVisualTransformation(),
                         singleLine = true,
@@ -388,14 +410,20 @@ fun McpConfigScreen(onBack: () -> Unit) {
                                     ).show()
                                     return@launch
                                 }
-                                // Token is optional — only call
-                                // setAuthToken when the user entered
-                                // or changed one, OR when an existing
-                                // entry's token needs to be cleared.
-                                val hadExistingToken = wasEditing && withContext(Dispatchers.IO) {
-                                    McpServersStore.getAuthToken(context, serverId).isNotEmpty()
-                                }
-                                if (tokenValue.isNotEmpty() || hadExistingToken) {
+                                // Token is optional. Only route through
+                                // setAuthToken when the user explicitly
+                                // typed in the token field — `tokenEdited`
+                                // tracks that. This is more robust than
+                                // the previous `getAuthToken(...).isNotEmpty()`
+                                // check, which couldn't distinguish "no
+                                // token" from "present-but-corrupt token"
+                                // (both return "" by design) and would
+                                // either silently skip a corrupt-clear OR
+                                // overwrite a stored token with a stale
+                                // empty `mcpToken` if the user clicked
+                                // Save before the async hydrate completed.
+                                // (Copilot R16 PR #352 finding.)
+                                if (tokenEdited) {
                                     val tokenOk = withContext(Dispatchers.IO) {
                                         McpServersStore.setAuthToken(context, serverId, tokenValue)
                                     }
