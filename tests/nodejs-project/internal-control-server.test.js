@@ -10,10 +10,15 @@
 //   - port 8766 (must match AndroidBridge.kt's proxy URL)
 //   - GET /stats/db-summary works without auth (preserves BAT-31 contract)
 //   - POST /mcp/reconcile requires bridge-token auth
-//   - POST /mcp/reconcile coalesces enqueue (single drain pass per burst)
+//   - POST /mcp/reconcile enqueues to MCPManager.requestReconcile
 //   - POST /healthz round-trip
-//   - 404 / 405 / 401 / 429 status codes
+//   - 401 / 404 / 405 status codes
 //   - id validation: non-string/empty becomes full reconcile
+//
+// Rate-limit (429) behavior is documented in internal-control-server.js
+// (RATE_LIMIT_RECONCILE = 30/min; RATE_LIMIT_HEALTHZ = 60/min) but
+// not exercised here — firing 31+ requests would pollute the
+// shared per-process bucket state for later tests in the run.
 
 'use strict';
 

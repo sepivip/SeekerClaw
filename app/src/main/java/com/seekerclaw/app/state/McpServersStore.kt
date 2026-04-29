@@ -15,6 +15,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
@@ -133,11 +134,19 @@ object McpServersStore {
         appContext = app
 
         // Step 1: seed _state from prefs (last-valid pre-BAT-514 view).
+        // Run the raw legacy list through `onObserved` so it gets the
+        // SAME treatment file-observed content does: invalid entries
+        // dropped, name/url trimmed, duplicates collapsed by id.
+        // Without this pass, a corrupt legacy KEY_MCP_SERVERS_ENC
+        // (e.g. duplicate ids from a buggy old write path, or
+        // whitespace-padded URLs from a manual edit) would briefly
+        // publish to `_state` AND get persisted into the migrated
+        // file. The collector eventually re-cleans on its first
+        // emission — but only AFTER the migration write already
+        // landed on disk. Copilot R6/R7 PR #352 finding.
         val legacy = ConfigManager.loadMcpServers(app)
-        val seeded = legacy
-            .map { it.toMcpServer() }
-            .filter { isValid(it) }
-        _state.value = seeded
+        val rawSeed = legacy.map { it.toMcpServer() }
+        val seeded = onObserved(McpServersFile(servers = rawSeed))
 
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         ownedScope = scope
@@ -443,9 +452,17 @@ object McpServersStore {
     }
 
     private fun isValidUrl(raw: String): Boolean {
-        if (raw.isBlank()) return false
+        // Trim before parse so whitespace-padded URLs from observed
+        // file content (manual edit, or a Node-side pre-trim quirk)
+        // don't get rejected here while Node's mcp-servers.js read()
+        // accepts and normalizes them. `onObserved` separately trims
+        // the stored value into _state so the cross-language behavior
+        // is symmetric: both sides accept whitespace AND both sides
+        // strip it before storage. Copilot R6/R7 PR #352 finding.
+        val trimmed = raw.trim()
+        if (trimmed.isBlank()) return false
         return try {
-            val u = URL(raw)
+            val u = URL(trimmed)
             val scheme = u.protocol?.lowercase()
             val host = u.host?.lowercase()
             (scheme == "http" || scheme == "https") && !host.isNullOrBlank()
@@ -521,15 +538,23 @@ object McpServersStore {
     }
 
     /**
-     * Pure helper: drop invalid entries with a WARN log, drop
-     * duplicates after `safeId` normalization (keep first), publish
-     * the cleaned list to [_state]. Returns the cleaned list so
-     * callers can decide whether to fire side effects.
+     * Pure helper: trim name + url, drop invalid entries with a WARN
+     * log, drop duplicates after `safeId` normalization (keep first),
+     * publish the cleaned list to [_state]. Returns the cleaned list
+     * so callers can decide whether to fire side effects.
+     *
+     * Trimming mirrors Node's `mcp-servers.js read()` so the two
+     * sides agree on the canonical stored shape; otherwise a
+     * whitespace-padded value (manual file edit, copy-paste with a
+     * trailing space) would be accepted by Node's tolerant parse but
+     * stored verbatim by Kotlin and produce cross-language drift on
+     * downstream comparisons.
      */
     internal fun onObserved(observed: McpServersFile): List<McpServer> {
         val cleaned = mutableListOf<McpServer>()
         val seen = mutableSetOf<String>()
-        for (s in observed.servers) {
+        for (raw in observed.servers) {
+            val s = raw.copy(name = raw.name.trim(), url = raw.url.trim())
             if (!isValid(s)) {
                 Log.w(TAG, "dropped corrupt entry id=${s.id} reason=${reasonFor(s)}")
                 continue
