@@ -59,6 +59,17 @@ object ModelRegistry {
     @Volatile
     private var initialized = false
     private val initLock = Any()
+
+    // BAT-517 R1 Copilot: must be @Volatile. The `providers` getter reads
+    // `_providers` without taking `initLock` (and without consulting
+    // `initialized`), so without volatile semantics the JIT can reorder
+    // the writes inside `init` such that a reader on another thread sees
+    // `initialized == true` (or just sees a non-null check pass and
+    // immediately afterwards null) while `_providers` is still null /
+    // partially-constructed. @Volatile on `_providers` gives the
+    // happens-before edge that pairs with the `synchronized(initLock)`
+    // write so any non-null read after init publication is well-defined.
+    @Volatile
     private var _providers: List<ProviderInfo>? = null
 
     private val json = Json {

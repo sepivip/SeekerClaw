@@ -28,17 +28,25 @@ import org.junit.Test
  *  - the OpenAI strict-authType throw vs other providers' permissive
  *    behaviour
  *
- * `LiveRegistryParitiesTest` in the same file uses the embedded
- * fixture below to also pin the actual production data shape — if
- * someone edits `model-registry.json` and one of the live invariants
- * breaks, this test fails before the merge.
+ * The embedded `productionProviders` fixture below mirrors the live
+ * `model-registry.json` shape closely enough to exercise these
+ * contracts on the JVM without an Android Context. It is a HAND-KEPT
+ * mirror, NOT a parity-against-the-asset check — keep it aligned by
+ * convention when editing the JSON. Asset-loading is exercised on
+ * device by `SeekerClawApplication.onCreate` calling
+ * `ModelRegistry.init(context)`, which throws on a malformed bundled
+ * file (Codex v2.1 finding 1) — that's the live-asset gate, not this
+ * test file. Node-side parity is enforced by
+ * `tests/nodejs-project/model-catalog.test.js`, which loads the same
+ * JSON file and asserts the same invariants.
  */
 class ModelRegistryTest {
 
     /**
-     * Mirror of the production `model-registry.json` so the unit test
-     * can exercise real-data shape without an Android Context. If this
-     * drifts from the asset, the parity tests below fail loudly.
+     * Production-shaped fixture used to exercise registry behavior on
+     * the JVM without an Android Context. Hand-kept aligned with
+     * `model-registry.json`; this file does not provide direct asset
+     * parity verification (see class KDoc).
      */
     private val productionProviders: List<ProviderInfo> = listOf(
         ProviderInfo(
@@ -151,25 +159,22 @@ class ModelRegistryTest {
     }
 
     @Test
-    fun `no duplicate model ids within a provider's effective lists`() {
+    fun `no duplicate model ids within each provider's lists`() {
+        // BAT-517 R1 Copilot: the previous version of this test asserted
+        // uniqueness across the UNION of `models` + `modelsByAuth.values`,
+        // which is incompatible with the live OpenAI shape — `modelsByAuth.oauth`
+        // is a SUPERSET of `models` (same api_key ids + extras like
+        // `gpt-5.4-mini`), so the union always has duplicates by design.
+        // The actual invariant is: no duplicates WITHIN any single list.
         for (provider in productionProviders) {
-            val combined = provider.models + provider.modelsByAuth.values.flatten()
-            val ids = combined.map { it.id }
-            // Distinct IDs across union — freeform allowed empty.
             assertEquals(
-                "${provider.id} has duplicate model ids in effective union: ${ids}",
-                ids.toSet().size,
-                ids.size.coerceAtMost(ids.toSet().size + 0).let { ids.toSet().size }, // identity sanity
-            )
-            // Per-list: each list has unique ids
-            assertEquals(
-                "${provider.id}.models has duplicates",
+                "${provider.id}.models has duplicate ids",
                 provider.models.size,
                 provider.models.map { it.id }.toSet().size,
             )
             for ((auth, list) in provider.modelsByAuth) {
                 assertEquals(
-                    "${provider.id}.modelsByAuth[$auth] has duplicates",
+                    "${provider.id}.modelsByAuth[$auth] has duplicate ids",
                     list.size,
                     list.map { it.id }.toSet().size,
                 )

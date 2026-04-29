@@ -47,7 +47,13 @@ const _byId = Object.fromEntries(_REGISTRY.providers.map((p) => [p.id, p]));
 
 const CLAUDE_MODELS         = _byId.claude.models;
 const OPENAI_API_KEY_MODELS = _byId.openai.models;
-const OPENAI_OAUTH_MODELS   = _byId.openai.modelsByAuth.oauth;
+// BAT-517 R1 Copilot: `modelsByAuth` is optional in the schema (Kotlin
+// defaults it to emptyMap()), so we must not assume the override exists.
+// If a future registry omits it, fall back to the base `models` list —
+// same behaviour as `modelsForProvider('openai','oauth')` and Kotlin's
+// `modelsByAuth["oauth"] ?: models`.
+const OPENAI_OAUTH_MODELS   = (_byId.openai.modelsByAuth && _byId.openai.modelsByAuth.oauth)
+    || _byId.openai.models;
 
 const CLAUDE_DEFAULT_MODEL     = _byId.claude.defaultModel;
 const OPENAI_DEFAULT_MODEL     = _byId.openai.defaultModel;
