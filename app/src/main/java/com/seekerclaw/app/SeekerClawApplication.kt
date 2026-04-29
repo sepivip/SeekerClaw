@@ -70,7 +70,7 @@ class SeekerClawApplication : Application() {
             // before any UI screen reads it. Mirrors RuntimeStateStore.init
             // — main process only (`:node` reads the same file directly
             // via mcp-servers.js). On first launch, splits legacy
-            // `KEY_MCP_SERVERS_ENC` tokens into per-id encrypted prefs
+            // `KEY_MCP_SERVERS_ENC` tokens into per-id encrypted files
             // and seeds the file. Sweeps orphan tokens after.
             McpServersStore.init(this)
             registerConfigChangedReceiver()

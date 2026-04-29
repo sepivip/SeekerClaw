@@ -234,7 +234,7 @@ fun McpConfigScreen(onBack: () -> Unit) {
     if (showMcpDialog) {
         var mcpName by remember(editingMcpServer) { mutableStateOf(editingMcpServer?.name ?: "") }
         var mcpUrl by remember(editingMcpServer) { mutableStateOf(editingMcpServer?.url ?: "") }
-        // BAT-514: tokens live in encrypted prefs (`mcp_token_<id>`).
+        // BAT-514: tokens live in encrypted files (`mcp_tokens/<id>`).
         // Hydrate the field via LaunchedEffect on Dispatchers.IO —
         // KeystoreHelper.decrypt is blocking and was running on the
         // composition thread inside `remember { }` before the R2 fix.

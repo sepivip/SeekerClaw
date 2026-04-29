@@ -32,14 +32,18 @@ import java.util.concurrent.atomic.AtomicBoolean
  * UI-safe StateFlow, AND token I/O wrappers that delegate to the
  * stateless [McpTokenStore].
  *
- * ## Field split (file vs. encrypted prefs)
+ * ## Field split (file vs. encrypted-token files)
  *
  *  - **File:** id, name, url, enabled, rateLimit. Plaintext JSON, safe
  *    for cross-process file IPC.
- *  - **Encrypted prefs:** authToken per server, keyed by `mcp_token_<id>`.
- *    Lives in `seekerclaw_prefs` via [KeystoreHelper] AES-GCM. Read on
- *    every connect by the Node side via AndroidBridge
- *    `POST /config/mcp-token`.
+ *  - **Encrypted token files:** authToken per server in
+ *    `filesDir/mcp_tokens/<id>`. Encrypted via [KeystoreHelper]
+ *    AES-GCM. Read on every connect by the Node side via
+ *    AndroidBridge `POST /config/mcp-token`. Backing storage is
+ *    file-per-token so cross-process token edits propagate live —
+ *    SharedPreferences would have a per-process cache that
+ *    invalidates the BAT-514 live-edit contract (see
+ *    [McpTokenStore]'s class doc).
  *
  * Tokens DO get reattached when reconstructing the legacy
  * `KEY_MCP_SERVERS_ENC` rollback shadow (BAT-514 v2 §2): pre-BAT-514
@@ -121,11 +125,11 @@ object McpServersStore {
      *     tokens; on fresh install, it's empty.
      *  2. If `mcp_servers.json` is missing AND prefs has servers:
      *     migrate. Split each entry → encrypt token to
-     *     `mcp_token_<id>`, drop authToken from in-memory list,
+     *     `mcp_tokens/<id>` (encrypted file), drop authToken from in-memory list,
      *     write cleaned list to file. Rebuild rollback shadow with
      *     tokens reattached.
-     *  3. Sweep orphan tokens: any `mcp_token_*` key whose id isn't
-     *     in the current server list is cleared.
+     *  3. Sweep orphan tokens: any `mcp_tokens/<id>` file whose id
+     *     isn't in the current server list is cleared.
      *  4. Start the observe-and-mirror collector.
      */
     fun init(context: Context) {
@@ -215,7 +219,7 @@ object McpServersStore {
             // diverge from `mcp_servers.json` until the collector's
             // first emission lands. If it did diverge (e.g. a `:node`
             // write modified the file under us), sweeping by the
-            // prefs view would clear `mcp_token_<id>` entries for
+            // prefs view would clear `mcp_tokens/<id>` files for
             // servers that ARE in the file. Copilot R3 PR #352
             // finding.
             sweepOrphanTokens(app, cps.read().servers)
@@ -334,28 +338,38 @@ object McpServersStore {
         // PR #352 finding).
         var pre: List<McpServer> = emptyList()
         var next: List<McpServer> = emptyList()
-        val applied = s.update { current ->
-            pre = current.servers
-            val computed = transform(current.servers).toList()
-            require(computed.all { isValid(it) }) {
-                val bad = computed.firstOrNull { !isValid(it) }
-                "Invalid entry after transform: id=${bad?.id} reason=${bad?.let { reasonFor(it) }}"
-            }
-            // Duplicate-id check inside the transform so the lock
-            // covers it too (a concurrent write that produced the
-            // duplicate can't slip through).
-            val seen = mutableSetOf<String>()
-            for (entry in computed) {
-                val n = normalizeId(entry.id)
-                require(seen.add(n)) {
-                    "Duplicate id after normalization: ${entry.id} (normalizes to $n)"
+        // CrossProcessStore.update does NOT catch transform exceptions
+        // — a `require(...)` that fails inside the transform throws out
+        // of `s.update` and would crash the calling coroutine. Wrap
+        // the call so validation failures surface as the documented
+        // `false` return instead. (Copilot R10 PR #352 finding.)
+        val applied = try {
+            s.update { current ->
+                pre = current.servers
+                val computed = transform(current.servers).toList()
+                require(computed.all { isValid(it) }) {
+                    val bad = computed.firstOrNull { !isValid(it) }
+                    "Invalid entry after transform: id=${bad?.id} reason=${bad?.let { reasonFor(it) }}"
                 }
+                // Duplicate-id check inside the transform so the lock
+                // covers it too (a concurrent write that produced the
+                // duplicate can't slip through).
+                val seen = mutableSetOf<String>()
+                for (entry in computed) {
+                    val n = normalizeId(entry.id)
+                    require(seen.add(n)) {
+                        "Duplicate id after normalization: ${entry.id} (normalizes to $n)"
+                    }
+                }
+                require(computed.none { hasInsecureToken(app, it) }) {
+                    "Server has token over insecure HTTP"
+                }
+                next = computed
+                McpServersFile(servers = computed)
             }
-            require(computed.none { hasInsecureToken(app, it) }) {
-                "Server has token over insecure HTTP"
-            }
-            next = computed
-            McpServersFile(servers = computed)
+        } catch (e: IllegalArgumentException) {
+            Log.w(TAG, "update rejected: ${e.message}")
+            false
         }
         if (applied) {
             val nextIds = next.map { it.id }.toSet()
@@ -369,7 +383,8 @@ object McpServersStore {
     }
 
     /**
-     * Persist [token] for [id] (encrypted prefs) and trigger reconcile.
+     * Persist [token] for [id] (encrypted file at `mcp_tokens/<id>`)
+     * and trigger reconcile.
      *
      * Returns `false` if [init] wasn't called, [id] doesn't match a
      * server in the list (token-without-server is meaningless), the
@@ -481,12 +496,21 @@ object McpServersStore {
      * AND connect time.
      */
     private fun isUrlSafeForToken(raw: String): Boolean {
-        if (!isValidUrl(raw)) return false
-        val u = URL(raw)
-        val scheme = u.protocol.lowercase()
-        if (scheme == "https") return true
-        val host = u.host.lowercase()
-        return host == "localhost" || host == "127.0.0.1" || host == "::1"
+        // `isValidUrl` trims internally before parse, so a
+        // whitespace-padded URL can pass it but `URL(raw)` here would
+        // throw on the same input. Trim + try/catch defensively to
+        // keep this predicate from killing callers on what is
+        // logically a valid URL. (Copilot R10 PR #352 finding.)
+        val trimmed = raw.trim()
+        return try {
+            val u = URL(trimmed)
+            val scheme = u.protocol.lowercase()
+            if (scheme == "https") return true
+            val host = u.host.lowercase()
+            host == "localhost" || host == "127.0.0.1" || host == "::1"
+        } catch (_: Exception) {
+            false
+        }
     }
 
     private fun hasInsecureToken(context: Context, server: McpServer): Boolean {
@@ -633,7 +657,7 @@ object McpServersStore {
     }
 
     /**
-     * Clear `mcp_token_<id>` entries for ids not present in [current].
+     * Clear `mcp_tokens/<id>` files for ids not present in [current].
      * Catches the case where a previous build deleted a server but the
      * pre-BAT-514 path didn't have a per-id token to clear (it just
      * rewrote the whole encrypted list).
@@ -643,7 +667,7 @@ object McpServersStore {
         val tokenIds = McpTokenStore.listAllIds(context)
         for (id in tokenIds) {
             if (id !in knownIds) {
-                Log.i(TAG, "clearing orphan token mcp_token_$id (no matching server)")
+                Log.i(TAG, "clearing orphan token mcp_tokens/$id (no matching server)")
                 McpTokenStore.clear(context, id)
             }
         }

@@ -1,22 +1,38 @@
 package com.seekerclaw.app.state
 
 import android.content.Context
-import android.content.SharedPreferences
-import android.util.Base64
 import android.util.Log
 import com.seekerclaw.app.config.KeystoreHelper
+import java.io.File
 
 /**
- * Process-agnostic encrypted-prefs helper for MCP server auth tokens
+ * Process-agnostic encrypted-file helper for MCP server auth tokens
  * (BAT-514).
  *
  * Each token is encrypted via [KeystoreHelper] (Keystore-backed AES-GCM,
- * same as the rest of the app's per-secret prefs entries), base64'd, and
- * stored in `seekerclaw_prefs` under the key `mcp_token_<id>`.
+ * same primitive used elsewhere for at-rest secrets) and persisted as
+ * its own file under `filesDir/mcp_tokens/<id>`. Atomic-rename writes
+ * keep readers from observing partial files.
  *
- * ## Why this is split out from [McpServersStore]
+ * ## Why files instead of SharedPreferences
  *
- * Token I/O has to work in BOTH processes:
+ * Earlier BAT-514 drafts stored tokens as encrypted blobs in
+ * `seekerclaw_prefs` keyed by `mcp_token_<id>`. The
+ * [com.seekerclaw.app.util.CrossProcessStore] class doc explicitly
+ * calls SharedPreferences "BROKEN cross-process — every field that's
+ * read on BOTH UI and `:node` sides has the same staleness bug": each
+ * process has its own in-memory `SharedPreferencesImpl` cache that
+ * doesn't reload after another process writes. For the BAT-514
+ * live-token-edit contract this would mean the FIRST token read in
+ * `:node` (cache miss → fresh disk load) sees the right value, but
+ * every subsequent edit returns the cached pre-edit value. Token
+ * rotation would silently fail until the service restarts.
+ *
+ * Switching to files-on-disk fixes this: every [read] does a fresh
+ * `File.readBytes()`, so `:node`'s view always matches whatever the
+ * main process most-recently wrote. (Copilot R10 PR #352 finding.)
+ *
+ * ## Token I/O works in BOTH processes
  *
  *  - **Main process:** Settings UI writes / clears via [McpServersStore]
  *    wrapper methods, which delegate to this object.
@@ -28,10 +44,9 @@ import com.seekerclaw.app.config.KeystoreHelper
  * Putting reads in [McpServersStore] would gate them on
  * `McpServersStore.init()` (main-process-only, per the BAT-513 pattern).
  * Splitting reads here means the bridge endpoint works regardless of
- * which process invoked it; `init()` isn't a precondition. Shared prefs
- * are file-backed and accessible cross-process for read, and the
- * Keystore key itself is per-app (not per-process), so the same
- * encrypted blob decrypts identically in either process.
+ * which process invoked it; `init()` isn't a precondition. The
+ * Keystore key is per-app (not per-process), so the same encrypted
+ * file decrypts identically in either process.
  *
  * ## What this does NOT do
  *
@@ -45,13 +60,25 @@ import com.seekerclaw.app.config.KeystoreHelper
  */
 object McpTokenStore {
     private const val TAG = "McpTokenStore"
-    private const val PREFS_NAME = "seekerclaw_prefs"
-    private const val KEY_PREFIX = "mcp_token_"
+    private const val DIR_NAME = "mcp_tokens"
 
-    private fun prefs(context: Context): SharedPreferences =
-        context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    /**
+     * Same alphabet [McpServersStore.ID_REGEX] enforces. Validating at
+     * the file boundary prevents path traversal (`../`, `/`) and any
+     * caller bug from materializing a file outside `mcp_tokens/`.
+     */
+    private val ID_REGEX = Regex("^[A-Za-z0-9_-]+$")
 
-    private fun keyFor(id: String): String = KEY_PREFIX + id
+    private fun dir(context: Context): File {
+        val d = File(context.applicationContext.filesDir, DIR_NAME)
+        if (!d.exists()) d.mkdirs()
+        return d
+    }
+
+    private fun fileFor(context: Context, id: String): File? {
+        if (!ID_REGEX.matches(id)) return null
+        return File(dir(context), id)
+    }
 
     /**
      * Read the decrypted token for [id]. Returns `""` (empty) when no
@@ -59,63 +86,87 @@ object McpTokenStore {
      * which is intentional: a corrupt entry should behave the same as
      * "no token" (the connect path handles missing tokens by attempting
      * unauthenticated, and a `WARN` log here is enough for diagnostics).
+     *
+     * Always reads fresh from disk — no caching layer that could go
+     * stale after a write from another process.
      */
     fun read(context: Context, id: String): String {
-        val raw = prefs(context).getString(keyFor(id), null) ?: return ""
+        val file = fileFor(context, id) ?: return ""
+        if (!file.exists()) return ""
         return try {
-            KeystoreHelper.decrypt(Base64.decode(raw, Base64.NO_WRAP))
+            KeystoreHelper.decrypt(file.readBytes())
         } catch (e: Exception) {
-            // Corrupt entry — treat as missing rather than crash the
-            // bridge endpoint. The user can re-enter the token in
-            // Settings if the connect attempt fails.
-            Log.w(TAG, "Failed to decrypt mcp_token_$id: ${e.message}")
+            // Corrupt or partially-written entry — treat as missing
+            // rather than crash the bridge endpoint. The user can
+            // re-enter the token in Settings if the connect attempt
+            // fails.
+            Log.w(TAG, "Failed to decrypt mcp_tokens/$id: ${e.message}")
             ""
         }
     }
 
     /**
      * Encrypt + persist [token] under [id]. Returns `true` on success,
-     * `false` on encryption / commit failure (caller surfaces via UX).
-     * Empty / blank [token] writes nothing and returns `false` — use
-     * [clear] to remove a token explicitly.
+     * `false` on encryption or filesystem failure (caller surfaces via
+     * UX). Empty / blank [token] writes nothing and returns `false` —
+     * use [clear] to remove a token explicitly.
+     *
+     * Atomic via tmp-file + `renameTo` — readers either see the prior
+     * file (or no file, if first write) or the new one, never a
+     * truncated mid-write.
      */
     fun write(context: Context, id: String, token: String): Boolean {
         if (token.isBlank()) return false
+        val file = fileFor(context, id) ?: return false
         return try {
             val enc = KeystoreHelper.encrypt(token)
-            prefs(context).edit()
-                .putString(keyFor(id), Base64.encodeToString(enc, Base64.NO_WRAP))
-                .commit()
+            val tmp = File(file.parentFile, "$id.tmp")
+            tmp.writeBytes(enc)
+            // renameTo on the same filesystem is atomic on the
+            // Android-supported filesystems (ext4, F2FS) — same
+            // guarantee CrossProcessStore relies on for its tmp+move
+            // pattern. If the rename ever fails, fall through to
+            // false so the caller knows the write didn't land.
+            if (tmp.renameTo(file)) {
+                true
+            } else {
+                Log.w(TAG, "renameTo failed for mcp_tokens/$id; tmp file left in place")
+                false
+            }
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to write mcp_token_$id: ${e.message}")
+            Log.w(TAG, "Failed to write mcp_tokens/$id: ${e.message}")
             false
         }
     }
 
     /**
-     * Remove the token entry for [id]. Returns `true` if the commit
-     * succeeded (whether or not a key was present beforehand).
+     * Remove the token entry for [id]. Returns `true` if the file is
+     * gone after the call (whether or not it existed before).
      */
     fun clear(context: Context, id: String): Boolean {
+        val file = fileFor(context, id) ?: return false
         return try {
-            prefs(context).edit().remove(keyFor(id)).commit()
+            if (!file.exists()) return true
+            file.delete()
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to clear mcp_token_$id: ${e.message}")
+            Log.w(TAG, "Failed to clear mcp_tokens/$id: ${e.message}")
             false
         }
     }
 
     /**
-     * Return the set of server ids that currently have a token entry.
+     * Return the set of server ids that currently have a token file.
      * Used by [McpServersStore.init] to detect orphan tokens (tokens
      * whose server was deleted while a previous build was running and
-     * the legacy `saveMcpServers` path didn't clean them up).
+     * the legacy `saveMcpServers` path didn't clean them up). Skips
+     * stale `<id>.tmp` files left by a crashed write.
      */
     fun listAllIds(context: Context): List<String> {
-        return prefs(context).all.keys
-            .asSequence()
-            .filter { it.startsWith(KEY_PREFIX) }
-            .map { it.removePrefix(KEY_PREFIX) }
-            .toList()
+        return dir(context).listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && ID_REGEX.matches(it.name) }
+            ?.map { it.name }
+            ?.toList()
+            ?: emptyList()
     }
 }

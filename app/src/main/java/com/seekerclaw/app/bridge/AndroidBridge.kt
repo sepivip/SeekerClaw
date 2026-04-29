@@ -229,8 +229,9 @@ class AndroidBridge(
 
     /**
      * Returns the decrypted bearer token for the requested MCP server
-     * id, sourced from per-id encrypted SharedPreferences
-     * (`mcp_token_<id>`). Called by `MCPClient.connect` in `:node` once
+     * id, sourced from per-id encrypted file storage
+     * (`filesDir/mcp_tokens/<id>`, AES-GCM via `KeystoreHelper`).
+     * Called by `MCPClient.connect` in `:node` once
      * per connect attempt — the token never persists in `MCP_SERVERS`
      * post-BAT-514, so the bridge fetch is the only path.
      *
