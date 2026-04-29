@@ -89,7 +89,12 @@ function modelsForProvider(providerId, authType) {
     if (!provider) return [];
     if (provider.freeform) return [];
     if (provider.id === 'openai') {
-        if (authType === 'oauth') return provider.modelsByAuth.oauth || provider.models;
+        // BAT-517 R2 Copilot: guard `modelsByAuth` — schema marks it
+        // optional (Kotlin defaults to emptyMap()), so the
+        // `modelsByAuth.oauth` direct access could TypeError if a future
+        // registry omits the field. Symmetric with the
+        // OPENAI_OAUTH_MODELS constant derivation above.
+        if (authType === 'oauth') return (provider.modelsByAuth && provider.modelsByAuth.oauth) || provider.models;
         if (authType === 'api_key') return provider.models;
         return [];
     }
