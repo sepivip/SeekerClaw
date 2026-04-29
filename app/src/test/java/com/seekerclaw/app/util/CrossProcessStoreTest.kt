@@ -685,9 +685,18 @@ class CrossProcessStoreTest {
             Regex("""fun\s+write\s*\(\s*value\s*:\s*T\s*\)\s*:\s*Boolean\s*\{""")
                 .containsMatchIn(text),
         )
+        // BAT-513 round-27: scope the `return didWrite` check to
+        // write()'s body specifically. After round-18 extracted
+        // persistLocked, update() ALSO contains `return didWrite`
+        // (its outer return), so a global grep would pass even if
+        // write() stopped returning the flag. Extract the write
+        // body via the same regex pattern the other drift tests use.
+        val writeBlock = Regex(
+            """fun\s+write\s*\(\s*value\s*:\s*T\s*\)(?:\s*:\s*Boolean)?\s*\{[\s\S]*?(?=\n\s{4}\}\n)""",
+        ).find(text)?.value ?: error("write() function body not found")
         assertTrue(
             "write() body must end by returning the didWrite flag",
-            Regex("""return\s+didWrite\b""").containsMatchIn(text),
+            Regex("""return\s+didWrite\b""").containsMatchIn(writeBlock),
         )
     }
 
