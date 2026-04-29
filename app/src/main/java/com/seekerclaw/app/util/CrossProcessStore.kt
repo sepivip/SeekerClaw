@@ -554,10 +554,24 @@ class CrossProcessStore<T> private constructor(
      * BAT-512 (Copilot review fix #1): no-op when the store is
      * [closed] so a coroutine in flight on a caller-owned scope
      * (which we don't cancel) can't publish a value after close().
+     *
+     * BAT-513 round-20: read+publish is wrapped in
+     * `synchronized(writeLock)` to prevent a write-vs-reload race.
+     * Without the lock, a reload that started its `read()` BEFORE a
+     * concurrent `write()` completed could publish the stale value
+     * to `_state.value` AFTER the write — regressing in-memory
+     * state. With the lock, reload either completes entirely before
+     * write begins (publishing whatever the file held at that
+     * moment, then write supersedes), or starts AFTER write
+     * released (reading the new value, publishing the same — no-op).
+     * State can never end at a value older than the latest
+     * successful write.
      */
     fun reload() {
         if (closed.get()) return
-        _state.value = read()
+        synchronized(writeLock) {
+            _state.value = read()
+        }
     }
 
     private fun broadcastChanged() {
