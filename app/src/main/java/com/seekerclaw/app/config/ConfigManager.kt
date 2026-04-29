@@ -512,7 +512,18 @@ object ConfigManager {
         // now defense-in-depth (the up-front matrix gate at the top
         // of saveConfig should have prevented invalid combos from
         // reaching here); same rollback applies.
-        val runtimeWritten = try {
+        //
+        // PROCESS GUARD: RuntimeStateStore.init only runs in the main
+        // process (SeekerClawApplication.onCreate gates it on
+        // isMainProcess). In `:node`, isInitialized is false and
+        // RuntimeStateStore.write would always return false → saveConfig
+        // would always fail in `:node` even when prefs commit succeeded,
+        // breaking existing AndroidBridge / service-process callers
+        // (round-12 review finding). Skip the runtime-state write +
+        // rollback path in `:node`; runtime_state.json gets its sync
+        // from the direct runtime-state.js write inside Telegram
+        // /provider and /model handlers.
+        val runtimeWritten = if (RuntimeStateStore.isInitialized) try {
             RuntimeStateStore.write(
                 RuntimeState(
                     provider = config.provider,
@@ -527,6 +538,13 @@ object ConfigManager {
                 LogLevel.WARN,
             )
             false
+        } else {
+            // `:node` process — RuntimeStateStore not initialized.
+            // Treat as "no-op success" so saveConfig completes the
+            // prefs+overlay+broadcast path normally. runtime_state.json
+            // sync in `:node` happens at the runtime-state.js write
+            // sites (/provider, /model), not here.
+            true
         }
         if (!runtimeWritten) {
             // Roll back prefs runtime fields AND KEY_SETUP_COMPLETE to

@@ -701,12 +701,34 @@ class CrossProcessStoreTest {
         // updateMutex for the RMW). The atomicWrite helper at the bottom
         // of this file gives us file-level atomicity; here we layer the
         // Mutex on top to verify the contract.
+        // BAT-513 round-12 review: this test must actually exercise
+        // contention. The previous version used `runBlocking { async { ... } }`
+        // without specifying a dispatcher, so the async coroutines all
+        // ran on the single runBlocking thread. With no suspension
+        // points inside `update {}`, they executed sequentially —
+        // meaning the assertion would still pass even if the Mutex
+        // were removed. Two changes make the test meaningful:
+        //
+        //   1. async(Dispatchers.Default) — multi-threaded dispatcher
+        //      so coroutines actually run on different worker threads
+        //      simultaneously.
+        //   2. yield() between read and write inside `update {}` —
+        //      forces a suspension point that gives the dispatcher a
+        //      chance to schedule another `update` call mid-RMW. With
+        //      the Mutex held, the suspension is harmless (other calls
+        //      block on withLock); without the Mutex, this is the
+        //      window where lost updates would manifest.
         val file = File(workDir, "rmw.json")
         atomicWrite(file, Sample(model = "0"))
         val mutex = Mutex()
         suspend fun update(transform: (Sample) -> Sample): Boolean {
             return mutex.withLock {
                 val current = readOrInitial(file, Sample(model = "0"))
+                // Force an actual suspension point between read and
+                // write so the multi-threaded dispatcher has the
+                // opportunity to interleave another `update` call —
+                // exposing any RMW that isn't properly serialized.
+                kotlinx.coroutines.yield()
                 val next = transform(current)
                 atomicWrite(file, next)
                 true
@@ -714,7 +736,7 @@ class CrossProcessStoreTest {
         }
         runBlocking {
             val deferreds = (1..10).map {
-                async {
+                async(kotlinx.coroutines.Dispatchers.Default) {
                     update { s -> s.copy(model = (s.model.toInt() + 1).toString()) }
                 }
             }
