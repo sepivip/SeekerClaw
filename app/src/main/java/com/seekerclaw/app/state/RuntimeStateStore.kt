@@ -139,28 +139,42 @@ object RuntimeStateStore {
             parentScope = scope,
         )
         store = cps
-        // Migration: if no file exists yet, seed it from the prefs we
-        // just read. The redundancy guard inside the collector will
-        // skip the corresponding mirror call (file value == prefs).
-        // Surface a failed migration write so it's diagnosable: the
-        // app proceeds with the seeded in-memory state (UI works), but
-        // the `:node` side will fall back to config.json values until
-        // a later write succeeds. Without the log, this divergence is
-        // silent. Common failure mode would be transient FS pressure
-        // (full storage) — recoverable on next user-initiated save.
-        val file = File(app.filesDir, FILE_NAME)
-        if (!file.exists() && !cps.write(seeded)) {
-            Log.w(
-                TAG,
-                "first-launch migration write to $FILE_NAME failed — " +
-                    "app proceeds with in-memory seed; :node will fall back to config.json " +
-                    "until a later write succeeds (Settings save / Telegram /provider /model)",
-            )
-        }
-        // Start observe-and-mirror collector AFTER the migration so
-        // its first observed emission matches prefs and produces no
-        // spurious apply().
+        // BAT-513 round-17: migration write moves to the owned IO
+        // scope. init() runs on Application.onCreate (main thread);
+        // CrossProcessStore.write does disk I/O (tmp write +
+        // Files.move) which would trip StrictMode and add startup
+        // jank if invoked synchronously here.
+        //
+        // Sequencing inside the launch:
+        //   1. Migration: if runtime_state.json is missing, write the
+        //      seeded value (from prefs).
+        //   2. Start the observe-and-mirror collector AFTER the
+        //      migration completes — so the first observed emission
+        //      matches the file we just wrote (which matches prefs),
+        //      and the redundancy guard yields a no-op apply.
+        //
+        // Trade-off: there's a brief window between Application.onCreate
+        // and the migration landing where runtime_state.json doesn't
+        // exist on first install. _state is already seeded
+        // synchronously above (line 131) so UI bound to
+        // RuntimeStateStore.state sees the right value immediately;
+        // the `:node` side falls back to config.json (same values
+        // from prefs as the seed), so no functional regression.
+        //
+        // Migration failure is logged but non-fatal: the app proceeds
+        // with the seeded in-memory state, and a later user-initiated
+        // save (Settings UI / Telegram /provider /model) retries the
+        // file write.
         scope.launch {
+            val file = File(app.filesDir, FILE_NAME)
+            if (!file.exists() && !cps.write(seeded)) {
+                Log.w(
+                    TAG,
+                    "first-launch migration write to $FILE_NAME failed — " +
+                        "app proceeds with in-memory seed; :node will fall back to config.json " +
+                        "until a later write succeeds (Settings save / Telegram /provider /model)",
+                )
+            }
             cps.state.collect { observed -> observeFromCollector(observed, sp) }
         }
     }
