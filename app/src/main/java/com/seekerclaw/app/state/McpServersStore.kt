@@ -78,11 +78,13 @@ object McpServersStore {
 
     /**
      * MCP server `id` must match this regex AND be unique after
-     * `safeId` normalization (the Node side replaces `[^A-Za-z0-9_]`
-     * with `_`, so `server-1` and `server_1` would collide). The
-     * regex itself doesn't allow `-` to be replaced — it allows `-`
-     * intentionally — but `safeId` normalization is a stricter check
-     * that catches collisions if the regex is ever loosened.
+     * `safeId` normalization (the Node side replaces
+     * `[^A-Za-z0-9_-]` with `_`, so `-` is preserved). Because the
+     * regex's allowed alphabet is exactly the set Node's `safeId`
+     * leaves untouched, the post-normalization uniqueness check is
+     * identity for any in-spec id — kept as defense-in-depth in case
+     * the regex is ever loosened to allow characters Node would fold
+     * (e.g. `.`, which `safeId` would map to `_`).
      */
     private val ID_REGEX = Regex("^[A-Za-z0-9_-]+$")
 
@@ -152,22 +154,50 @@ object McpServersStore {
             // Step 2: migration write (one-shot if file is absent).
             val file = File(app.filesDir, FILE_NAME)
             if (!file.exists()) {
-                // Encrypt every legacy token into per-id prefs FIRST,
-                // so a crash after the file write but before this
-                // loop doesn't lose tokens.
+                // Encrypt every legacy token into per-id prefs FIRST.
+                // If ANY token write fails (Keystore error, prefs
+                // commit failure), abort migration: don't seed the
+                // file, don't rebuild the rollback shadow. Reasoning:
+                //   - The legacy KEY_MCP_SERVERS_ENC blob is still
+                //     intact and contains the tokens. Pre-BAT-514
+                //     code (and this build's `loadMcpServers`) can
+                //     still read it.
+                //   - If we proceeded, `rebuildRollbackShadow` would
+                //     read `""` for the failed entry from
+                //     `McpTokenStore.read` and overwrite
+                //     `KEY_MCP_SERVERS_ENC` with a tokenless copy —
+                //     silently losing the token on downgrade AND
+                //     breaking next-launch's Node-side connect.
+                //   - Aborting leaves `mcp_servers.json` absent, so
+                //     next launch retries the whole migration.
+                var allTokensOk = true
                 for (s in legacy) {
                     if (s.authToken.isNotBlank()) {
-                        McpTokenStore.write(app, s.id, s.authToken)
+                        if (!McpTokenStore.write(app, s.id, s.authToken)) {
+                            allTokensOk = false
+                            Log.w(
+                                TAG,
+                                "Migration token write failed for id=${s.id}; " +
+                                    "aborting migration to keep KEY_MCP_SERVERS_ENC intact",
+                            )
+                        }
                     }
                 }
-                if (!cps.write(McpServersFile(servers = seeded))) {
-                    Log.w(
-                        TAG,
-                        "first-launch migration write to $FILE_NAME failed — " +
-                            "in-memory state retained; next save retries the file write",
-                    )
+                if (allTokensOk) {
+                    if (cps.write(McpServersFile(servers = seeded))) {
+                        rebuildRollbackShadow(app, seeded)
+                    } else {
+                        Log.w(
+                            TAG,
+                            "first-launch migration write to $FILE_NAME failed — " +
+                                "in-memory state retained; next save retries the file write",
+                        )
+                    }
                 }
-                rebuildRollbackShadow(app, seeded)
+                // If allTokensOk is false: file is NOT seeded, shadow
+                // is NOT rebuilt. KEY_MCP_SERVERS_ENC stays as the
+                // legacy source, _state has the in-memory view, and
+                // the next launch retries the whole migration.
             }
 
             // Step 3: orphan token sweep.
@@ -333,7 +363,18 @@ object McpServersStore {
      */
     fun setAuthToken(context: Context, id: String, token: String): Boolean {
         if (!isInitialized) return false
-        val server = _state.value.firstOrNull { it.id == id }
+        val s = store ?: return false
+        // Read from disk, not `_state.value`. The collector observes
+        // file changes asynchronously, so `_state.value` may still
+        // reflect the prior list for a few coroutine ticks after a
+        // just-successful `write()`. The McpConfigScreen Save flow
+        // does write() then setAuthToken() back-to-back for new
+        // servers — validating against the lagging `_state.value`
+        // would make that flow flake with "unknown server id".
+        // `s.read()` parses the on-disk file synchronously
+        // (CrossProcessStore.write uses atomic move, so the read is
+        // never half-written). (Copilot R2 PR #352 finding.)
+        val server = s.read().servers.firstOrNull { it.id == id }
         if (server == null) {
             Log.w(TAG, "setAuthToken rejected: unknown server id=$id")
             return false

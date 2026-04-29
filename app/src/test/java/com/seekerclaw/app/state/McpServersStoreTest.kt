@@ -154,11 +154,14 @@ class McpServersStoreTest {
     @Test
     fun `ID_REGEX is exactly the documented set`() {
         // Drift guard: the contract pins this to ^[A-Za-z0-9_-]+$.
-        // Node's safeId normalization replaces [^A-Za-z0-9_] with "_"
-        // — narrower than this regex (no "-"). The Kotlin write
-        // boundary intentionally allows "-" (canonical mcp ids like
-        // "server-1") AND adds the post-normalization uniqueness
-        // check so "-" / "_" can't collide silently.
+        // Node's safeId normalization in mcp-client.js uses
+        // `replace(/[^a-zA-Z0-9_-]/g, '_')` and PRESERVES "-" — the
+        // alphabet here matches that exactly so canonical mcp ids
+        // like "server-1" pass through both sides unchanged. The
+        // post-normalization uniqueness check is identity for any
+        // in-spec id; kept as defense-in-depth in case the regex
+        // is ever loosened to allow characters Node would fold
+        // (e.g. "." -> "_" via safeId).
         val good = listOf("a", "A", "0", "_", "-", "abc", "a-b_c", "Z9_-")
         val bad = listOf("", " ", "a b", "a/b", "a.b", "a;b", "🦄", "a/../b")
         for (g in good) {
