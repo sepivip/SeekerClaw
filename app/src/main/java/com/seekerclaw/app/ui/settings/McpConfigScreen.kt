@@ -359,18 +359,17 @@ fun McpConfigScreen(onBack: () -> Unit) {
                             )
                             val tokenValue = mcpToken.trim()
                             val wasEditing = editingMcpServer != null
-                            // BAT-514 R9: route through update() for
-                            // atomic RMW (same rationale as toggle /
-                            // delete). The transform composes the new
-                            // list against the latest on-disk state,
-                            // so concurrent edits from another screen
-                            // or the :node side can't be silently
-                            // overwritten by the UI's lagging
-                            // StateFlow snapshot. Validation throws
-                            // inside update()'s transform are caught
-                            // by CrossProcessStore.update and surface
-                            // as `false` here, which the existing
-                            // Toast path handles.
+                            // BAT-514 R9/R13: route through update() for
+                            // a fresh-disk-read + transform + atomic
+                            // write. Picks up edits from another
+                            // screen or the :node side that the UI's
+                            // collected `mcpServers` snapshot might
+                            // not have observed yet. Validation
+                            // failures (invalid id, dup id, http +
+                            // token) surface as `false` directly —
+                            // McpServersStore.update returns false
+                            // without throwing, so the Toast path
+                            // handles them naturally.
                             scope.launch {
                                 val writeOk = withContext(Dispatchers.IO) {
                                     McpServersStore.update { current ->

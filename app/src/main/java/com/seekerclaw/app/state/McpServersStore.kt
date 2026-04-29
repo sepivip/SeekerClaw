@@ -454,9 +454,12 @@ object McpServersStore {
      * Returns `false` if [init] wasn't called, [id] doesn't match a
      * server in the list (token-without-server is meaningless), the
      * server's URL is `http://non-loopback` (insecure bearer reject),
-     * or encryption / commit fails. Returns `true` once the token
-     * lands in prefs — the reconcile dispatch is best-effort and its
-     * outcome doesn't change this return.
+     * or [McpTokenStore.write] / [McpTokenStore.clear] fails (Keystore
+     * encrypt error, atomic move failure, or `File.delete` failure
+     * for an existing entry). Returns `true` once the token change
+     * has been written via [McpTokenStore]; any rollback shadow
+     * update and the reconcile dispatch are best-effort, and their
+     * outcomes don't change this return value.
      */
     fun setAuthToken(context: Context, id: String, token: String): Boolean {
         if (!isInitialized) return false
@@ -674,10 +677,11 @@ object McpServersStore {
 
     /**
      * Reconstruct legacy `KEY_MCP_SERVERS_ENC` from [servers] PLUS the
-     * encrypted-prefs tokens. A pre-BAT-514 build downgraded onto the
-     * current state expects each server entry to carry its `authToken`
-     * — without re-attaching here, downgrade would silently break
-     * authenticated MCP servers.
+     * per-id tokens read fresh from [McpTokenStore]'s encrypted token
+     * files (`filesDir/mcp_tokens/<id>`). A pre-BAT-514 build
+     * downgraded onto the current state expects each server entry to
+     * carry its `authToken` inline — without re-attaching here,
+     * downgrade would silently break authenticated MCP servers.
      *
      * Writes the same JSON shape the pre-BAT-514 `loadMcpServers`
      * path expects (servers with `authToken` inline), encrypted via
@@ -709,9 +713,9 @@ object McpServersStore {
             // apply() is async and would widen that window to
             // include arbitrary deferred-write delay (Android batches
             // apply() flushes). All callers run on Dispatchers.IO so
-            // the synchronous wait is benign. Mirrors McpTokenStore
-            // which uses commit() for the same reason. (Copilot R8
-            // PR #352 finding.)
+            // the synchronous wait is benign, and synchronous
+            // persistence here preserves the intended downgrade-
+            // durability contract. (Copilot R8 PR #352 finding.)
             // Surface a commit() failure: the rollback shadow is
             // explicitly part of the downgrade-durability contract,
             // so a silent failure here would defeat that guarantee
