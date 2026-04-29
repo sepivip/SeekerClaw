@@ -107,8 +107,12 @@ test('validateShape accepts http and https', () => {
     );
 });
 
-test('validateShape rejects rateLimit <= 0', () => {
-    for (const bad of [0, -1, 'ten', NaN, Infinity, null, undefined]) {
+test('validateShape rejects rateLimit not a positive integer', () => {
+    // Cross-language schema parity check (BAT-514 R19): Kotlin
+    // McpServer.rateLimit is Int, so non-integer values would fail
+    // kotlinx-serialization decode. Floats and non-numbers must
+    // both reject.
+    for (const bad of [0, -1, 1.5, -0.5, 'ten', NaN, Infinity, null, undefined]) {
         const r = validateShape({ id: 'x', name: 'n', url: 'https://x', rateLimit: bad });
         assert.notStrictEqual(r, null, `expected reject rateLimit=${bad}`);
     }

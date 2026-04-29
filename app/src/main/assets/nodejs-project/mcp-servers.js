@@ -53,8 +53,14 @@ function validateShape(s) {
     const scheme = (u.protocol || '').toLowerCase();
     if (scheme !== 'http:' && scheme !== 'https:') return `url scheme ${scheme} not http(s)`;
     if (!u.hostname) return 'url missing host';
-    if (typeof s.rateLimit !== 'number' || !isFinite(s.rateLimit) || s.rateLimit <= 0) {
-        return `rateLimit ${JSON.stringify(s.rateLimit)} <= 0`;
+    // Cross-language schema parity: Kotlin's McpServer.rateLimit is
+    // Int, so a fractional value (e.g. 1.5) here would fail
+    // kotlinx-serialization decode of the whole file and CrossProcessStore.read
+    // would fall back to its `initial` (effectively dropping every
+    // server until the next valid write). Require an integer to keep
+    // both sides of the contract aligned. (Copilot R19 PR #352 finding.)
+    if (typeof s.rateLimit !== 'number' || !Number.isInteger(s.rateLimit) || s.rateLimit <= 0) {
+        return `rateLimit ${JSON.stringify(s.rateLimit)} not a positive integer`;
     }
     if (s.enabled !== undefined && typeof s.enabled !== 'boolean') {
         return `enabled ${JSON.stringify(s.enabled)} not boolean`;

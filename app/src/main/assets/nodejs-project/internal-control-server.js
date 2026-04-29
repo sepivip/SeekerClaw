@@ -53,21 +53,41 @@ function _allow(endpoint, limit) {
     return true;
 }
 
+// Sentinel error code so `_route` can distinguish "body exceeded
+// limit" from a generic transport error and return 413 cleanly
+// instead of letting the connection die with ECONNRESET. (Copilot
+// R19 PR #352 finding.)
+const _BODY_TOO_LARGE = 'BODY_TOO_LARGE';
+
 function _readBody(req, maxBytes) {
     return new Promise((resolve, reject) => {
         let data = '';
         let len = 0;
+        // `done` guard so a single oversized chunk doesn't fire both
+        // reject() AND resolve() via subsequent `end`/`error` events.
+        let done = false;
         req.on('data', (chunk) => {
+            if (done) return;
             len += Buffer.byteLength(chunk);
             if (len > maxBytes) {
-                reject(new Error('body too large'));
-                req.destroy();
+                done = true;
+                const err = new Error('body too large');
+                err.code = _BODY_TOO_LARGE;
+                reject(err);
                 return;
             }
             data += chunk;
         });
-        req.on('end', () => resolve(data));
-        req.on('error', reject);
+        req.on('end', () => {
+            if (done) return;
+            done = true;
+            resolve(data);
+        });
+        req.on('error', (err) => {
+            if (done) return;
+            done = true;
+            reject(err);
+        });
     });
 }
 
@@ -157,12 +177,25 @@ async function _route(req, res) {
         if (!_allow('/mcp/reconcile', RATE_LIMIT_RECONCILE)) {
             return _json(res, 429, { error: 'rate limit exceeded' }, { 'Retry-After': '60' });
         }
-        // Body is optional `{ id?: string }`. We accept JSON parse
-        // failures silently and treat them as full-reconcile — defensive
-        // against a buggy caller / truncated body. The id is also
-        // permitted to be a non-string (number, object) — we ignore
-        // anything that isn't a string.
-        const raw = await _readBody(req, 4096).catch(() => '');
+        // Body is optional `{ id?: string }` (typically <50 bytes).
+        // JSON parse failures are accepted silently and treated as
+        // full-reconcile — defensive against a buggy caller /
+        // truncated body. Body-size overflow is a different class of
+        // failure (oversized request implies a misbehaving or
+        // hostile caller); return 413 cleanly and skip the reconcile
+        // so we don't do work for an already-rejected request.
+        // (Copilot R19 PR #352 finding.)
+        let raw
+        try {
+            raw = await _readBody(req, 4096)
+        } catch (err) {
+            if (err && err.code === _BODY_TOO_LARGE) {
+                return _json(res, 413, { error: 'request body too large' })
+            }
+            // Other transport errors: fall back to full-reconcile
+            // (matches the prior tolerant behavior).
+            raw = ''
+        }
         let id = null;
         if (raw) {
             try {

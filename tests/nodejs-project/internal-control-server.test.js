@@ -181,6 +181,40 @@ test('POST /mcp/reconcile with empty body enqueues full reconcile', async () => 
     assert.deepStrictEqual(_reconcileCalls, [null]);
 });
 
+test('POST /mcp/reconcile with oversized body returns 413 and skips reconcile', async () => {
+    // BAT-514 R19: oversized requests should produce a clean 413
+    // response and not trigger reconcile work. Build a JSON-shaped
+    // payload >4 KB.
+    const oversized = JSON.stringify({ id: 'a'.repeat(8192) });
+    const r = await new Promise((resolve, reject) => {
+        const req = http.request({
+            hostname: HOST,
+            port: PORT,
+            path: '/mcp/reconcile',
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(oversized),
+                'X-Bridge-Token': BRIDGE_TOKEN,
+            },
+            timeout: 2000,
+        }, (res) => {
+            let raw = '';
+            res.on('data', (c) => raw += c);
+            res.on('end', () => {
+                let parsed = null;
+                try { parsed = JSON.parse(raw); } catch (_) { parsed = raw; }
+                resolve({ status: res.statusCode, body: parsed });
+            });
+        });
+        req.on('error', reject);
+        req.write(oversized);
+        req.end();
+    });
+    assert.strictEqual(r.status, 413);
+    assert.deepStrictEqual(_reconcileCalls, []);
+});
+
 test('POST /mcp/reconcile with non-string id falls back to full reconcile', async () => {
     const r = await _post('/mcp/reconcile', { id: 123 }, { 'X-Bridge-Token': BRIDGE_TOKEN });
     assert.strictEqual(r.status, 200);
