@@ -613,10 +613,20 @@ object McpServersStore {
         }
         try {
             val enc = KeystoreHelper.encrypt(arr.toString())
+            // commit() not apply(): the rollback shadow is the
+            // pre-BAT-514 build's source of truth on downgrade. The
+            // PR's known-limitation note specifically scopes the
+            // race to "the millisecond window during commit()" —
+            // apply() is async and would widen that window to
+            // include arbitrary deferred-write delay (Android batches
+            // apply() flushes). All callers run on Dispatchers.IO so
+            // the synchronous wait is benign. Mirrors McpTokenStore
+            // which uses commit() for the same reason. (Copilot R8
+            // PR #352 finding.)
             context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 .edit()
                 .putString(KEY_MCP_SERVERS_ENC, Base64.encodeToString(enc, Base64.NO_WRAP))
-                .apply()
+                .commit()
         } catch (e: Exception) {
             Log.w(TAG, "rebuildRollbackShadow failed: ${e.message}")
         }
