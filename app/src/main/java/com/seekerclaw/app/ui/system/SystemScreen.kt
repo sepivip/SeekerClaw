@@ -97,6 +97,18 @@ fun SystemScreen(onBack: () -> Unit) {
     val apiUsage by ServiceState.apiUsage.collectAsState()
     val lastActivity by ServiceState.lastActivityTime.collectAsState()
 
+    // BAT-513 round-22 device-fix: foreground-only catch-up refresh
+    // for ServiceState (same pattern as Dashboard / Logs). System
+    // screen can be open while Dashboard isn't (different nav route)
+    // — its own composition needs the catch-up to keep status fresh
+    // if LogCollector's filesDir FileObserver missed an event.
+    LaunchedEffect(Unit) {
+        while (true) {
+            ServiceState.refreshFromFile()
+            kotlinx.coroutines.delay(1500)
+        }
+    }
+
     val cfgVersion by ConfigManager.configVersion
     val config = remember(cfgVersion) { ConfigManager.loadConfig(context) }
     val agentName = remember(config) { config?.agentName?.ifBlank { "SeekerClaw" } ?: "SeekerClaw" }

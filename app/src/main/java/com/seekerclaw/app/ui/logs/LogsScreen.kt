@@ -75,8 +75,21 @@ fun LogsScreen() {
     var showWarn by rememberSaveable { mutableStateOf(true) }
     var showError by rememberSaveable { mutableStateOf(true) }
 
+    // BAT-513 round-22 device-fix: foreground-only catch-up refresh.
+    // Pre-fix this was a one-shot refresh on screen open; observed on
+    // Solana Seeker that LogCollector's filesDir FileObserver
+    // sometimes drops deliveries, so the Logs screen stops updating
+    // mid-session even while service_logs is being appended on disk.
+    // While this screen is composed, request a drain every 1.5s as a
+    // safety net. Cancellation on dispose comes free with
+    // LaunchedEffect; leaving the screen kills the loop. NOT a 24/7
+    // background poll. FileObserver remains the primary fast path —
+    // this fires only when visible.
     LaunchedEffect(Unit) {
-        LogCollector.refreshFromFile()
+        while (true) {
+            LogCollector.refreshFromFile()
+            kotlinx.coroutines.delay(1500)
+        }
     }
 
     val filteredLogs = remember(logs, showDebug, showInfo, showWarn, showError, searchQuery) {

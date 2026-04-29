@@ -264,6 +264,39 @@ class SeekerClawService : Service() {
         getSystemService(android.app.NotificationManager::class.java)
             ?.cancel(SETUP_NOTIFICATION_ID)
 
+        // BAT-513 round-22 device-fix: idempotent re-entry. The
+        // foreground service can be re-launched while still running
+        // (Dashboard "Deploy Agent" tap when status display is stale,
+        // BootReceiver re-firing after a timer wake, system re-binding
+        // after the process re-attaches). Pre-fix this re-ran
+        // NodeBridge.start() (which short-circuits internally with
+        // "Node.js already started" — single-start JNI limitation)
+        // AND AndroidBridge.start() / Watchdog.start() — those don't
+        // short-circuit, so the second AndroidBridge bind fails with
+        // EADDRINUSE on port 8765 and the running bridge from the
+        // first start gets killed. The SECOND start's failure cascade
+        // then leaves the UI thinking deploy failed even though
+        // NodeBridge is still alive on the original instance.
+        //
+        // Guard: if NodeBridge is already alive, just re-publish
+        // RUNNING (so any UI process that observed STARTING/STOPPED
+        // catches up) and return. Don't touch NodeBridge / AndroidBridge
+        // / Watchdog — they're all still running from the first
+        // onStartCommand. Preserve the existing serviceStartTimeMs so
+        // uptime is computed against the actual start, not this no-op
+        // re-entry.
+        if (NodeBridge.isAlive()) {
+            ServiceState.updateStatus(ServiceStatus.RUNNING)
+            if (ServiceState.serviceStartTimeMs.value == 0L) {
+                // Defensive: if somehow the start time was cleared
+                // while NodeBridge stayed alive (shouldn't happen, but
+                // covers a stale-state scenario), set it to now.
+                ServiceState.setServiceStartTimeMs(System.currentTimeMillis())
+            }
+            LogCollector.append("[Service] Start requested while already running; re-published RUNNING")
+            return START_STICKY
+        }
+
         // Owner ID may be blank on first run — this is expected. Node.js auto-detects
         // it from the first Telegram message and persists it via the /config/save-owner
         // bridge callback; the service logs a warning here rather than blocking startup.

@@ -308,17 +308,25 @@ object LogCollector {
     fun startPolling(context: Context) = startWatching(context)
 
     /**
-     * One-shot, user-visible catch-up path. This is intentionally not a
-     * background poll: LogsScreen calls it when opened so the UI can
-     * recover from process restarts, Doze-batched events, or a missed
-     * observer notification without reintroducing 24/7 disk reads.
+     * Foreground-visible catch-up path. Calls [requestDrain] to ask
+     * the existing drain worker to follow `service_logs` from
+     * [lastReadPosition], picking up any appends the FileObserver
+     * may have missed (observed on Solana Seeker — kernel sometimes
+     * drops events). Idempotent and cheap: if no new bytes exist
+     * since the last drain, `drainUntilSettled` is a no-op.
+     *
+     * Safe to call from a Compose `LaunchedEffect` loop at 1-2s
+     * cadence while a screen (Logs, Dashboard, System) is composed
+     * — leaves composition → loop dies. NOT a 24/7 background poll.
+     * The initial full-file read happens once in [init] /
+     * [startWatching] (`scope.launch { readAllFromFile() }`); this
+     * method is the lightweight follow-up, NOT the heavy first
+     * load. BAT-513 round-22: simplified from a per-call
+     * `readAllFromFile` (which would be wasteful at 1.5s cadence on
+     * a 10MB rotated log) to a pure drain request.
      */
     fun refreshFromFile() {
-        scope.launch {
-            readAllFromFile()
-            initialReadComplete = true
-            requestDrain()
-        }
+        requestDrain()
     }
 
     private fun writeToFile(entry: LogEntry) {

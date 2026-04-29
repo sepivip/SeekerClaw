@@ -107,6 +107,26 @@ fun DashboardScreen(
     val health by ServiceState.agentHealth.collectAsState()
     val logs by LogCollector.logs.collectAsState()
 
+    // BAT-513 round-22 device-fix: foreground-only catch-up refresh.
+    // The LogCollector filesDir FileObserver is the fast path
+    // (events deliver in <50ms when the kernel cooperates), but on
+    // the Solana Seeker we've observed the observer occasionally
+    // dropping deliveries — both Dashboard and Logs go stale while
+    // the service is actually RUNNING. While this screen is
+    // composed, poke ServiceState.refreshFromFile() as a safety net.
+    //
+    // Pattern: immediate refresh on first composition, then every
+    // 1.5s thereafter; cancellation on dispose comes free with
+    // LaunchedEffect. NOT a 24/7 background poll — leaves composition
+    // → loop dies. FileObserver remains the primary delivery; this
+    // is purely the visible-screen catch-up.
+    LaunchedEffect(Unit) {
+        while (true) {
+            ServiceState.refreshFromFile()
+            kotlinx.coroutines.delay(1500)
+        }
+    }
+
     val cfgVersion by ConfigManager.configVersion
     val config = remember(cfgVersion) { ConfigManager.loadConfig(context) }
     val agentName = remember(config) { config?.agentName?.ifBlank { "SeekerClaw" } ?: "SeekerClaw" }
