@@ -172,14 +172,25 @@ object ConfigManager {
         // value + 1" rather than the `++` shorthand so the
         // codebase-wide replace-all that routes other call sites
         // through this helper can't accidentally trap these lines.
-        val main = android.os.Looper.getMainLooper()
-        if (android.os.Looper.myLooper() == main) {
+        if (android.os.Looper.myLooper() == mainHandler.looper) {
             configVersion.intValue = configVersion.intValue + 1
         } else {
-            android.os.Handler(main).post {
+            // BAT-513 round-25: reuse the cached mainHandler instead of
+            // allocating `Handler(Looper.getMainLooper())` per call.
+            // configVersion bumps fire from saveConfig, reconcile,
+            // OAuth saves, individual setters, the BAT-513 collector
+            // mirror, AND the ACTION_CONFIG_CHANGED receiver — moderate
+            // frequency, but per-call allocation adds avoidable GC
+            // pressure. Lazy init pays nothing if every caller happens
+            // to land on main.
+            mainHandler.post {
                 configVersion.intValue = configVersion.intValue + 1
             }
         }
+    }
+
+    private val mainHandler: android.os.Handler by lazy {
+        android.os.Handler(android.os.Looper.getMainLooper())
     }
 
     private const val PREFS_NAME = "seekerclaw_prefs"
