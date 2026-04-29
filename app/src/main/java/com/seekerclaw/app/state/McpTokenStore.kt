@@ -111,37 +111,62 @@ object McpTokenStore {
      * UX). Empty / blank [token] writes nothing and returns `false` —
      * use [clear] to remove a token explicitly.
      *
-     * Atomic via tmp-file + `renameTo` — readers either see the prior
-     * file (or no file, if first write) or the new one, never a
-     * truncated mid-write.
+     * Atomic via tmp-file + `Files.move(REPLACE_EXISTING, ATOMIC_MOVE)`
+     * — same guarantee CrossProcessStore relies on for its JSON
+     * file. `File.renameTo` is unreliable on Android when the
+     * destination already exists (token rotations would silently
+     * fail and leak `<id>.tmp` files); the NIO move handles overwrite
+     * properly and falls back to non-atomic REPLACE_EXISTING on the
+     * narrow case where ATOMIC_MOVE isn't supported (cross-device
+     * — doesn't happen here since src + dst are in the same
+     * directory). Tmp is removed on any failure path so stale
+     * `<id>.tmp` entries don't accumulate. (Copilot R11 PR #352
+     * finding.)
      */
     fun write(context: Context, id: String, token: String): Boolean {
         if (token.isBlank()) return false
         val file = fileFor(context, id) ?: return false
+        val tmp = File(file.parentFile, "$id.tmp")
         return try {
             val enc = KeystoreHelper.encrypt(token)
-            val tmp = File(file.parentFile, "$id.tmp")
             tmp.writeBytes(enc)
-            // renameTo on the same filesystem is atomic on the
-            // Android-supported filesystems (ext4, F2FS) — same
-            // guarantee CrossProcessStore relies on for its tmp+move
-            // pattern. If the rename ever fails, fall through to
-            // false so the caller knows the write didn't land.
-            if (tmp.renameTo(file)) {
-                true
-            } else {
-                Log.w(TAG, "renameTo failed for mcp_tokens/$id; tmp file left in place")
-                false
+            try {
+                java.nio.file.Files.move(
+                    tmp.toPath(),
+                    file.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                    java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                )
+            } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
+                // Same-directory move that the kernel decided isn't
+                // atomically replaceable (rare on ext4/F2FS). Fall
+                // back to REPLACE_EXISTING — still single-syscall.
+                java.nio.file.Files.move(
+                    tmp.toPath(),
+                    file.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                )
             }
+            true
         } catch (e: Exception) {
             Log.w(TAG, "Failed to write mcp_tokens/$id: ${e.message}")
+            // Clean up the tmp file we may have created so a future
+            // call doesn't trip over a stale partial write.
+            try { if (tmp.exists()) tmp.delete() } catch (_: Exception) {}
             false
         }
     }
 
     /**
-     * Remove the token entry for [id]. Returns `true` if the file is
-     * gone after the call (whether or not it existed before).
+     * Remove the token entry for [id].
+     *
+     * Returns:
+     *  - `true` when the file is gone after the call (whether it
+     *    existed before or not — clearing a non-existent token is a
+     *    no-op success)
+     *  - `false` when [id] fails [ID_REGEX] validation (caller bug —
+     *    valid server ids never trip this), or when [File.delete]
+     *    fails on an existing file (rare permission / FS error)
      */
     fun clear(context: Context, id: String): Boolean {
         val file = fileFor(context, id) ?: return false

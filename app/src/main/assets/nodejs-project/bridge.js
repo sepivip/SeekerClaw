@@ -55,10 +55,11 @@ async function androidBridgeCall(endpoint, data = {}, timeoutMs = 10000) {
     });
 }
 
-// BAT-514: fetch the per-server MCP auth token from Kotlin's encrypted
-// SharedPreferences (`mcp_token_<id>`). Mirrors the bridge's other
-// "config presence" endpoints, but returns the actual decrypted value
-// — necessary because Node has to attach the bearer header to MCP
+// BAT-514: fetch the per-server MCP auth token via the Kotlin bridge,
+// which reads it from the encrypted file at `filesDir/mcp_tokens/<id>`
+// through `McpTokenStore`. Mirrors the bridge's other "config
+// presence" endpoints, but returns the actual decrypted value —
+// necessary because Node has to attach the bearer header to MCP
 // requests itself. Returns the empty string on any failure (bridge
 // down, unauthorized, unknown id, decrypt failure) so callers don't
 // have to distinguish — the connect attempt will fail loudly if the

@@ -167,7 +167,8 @@ object McpServersStore {
             // Step 2: migration write (one-shot if file is absent).
             val file = File(app.filesDir, FILE_NAME)
             if (!file.exists()) {
-                // Encrypt every legacy token into per-id prefs FIRST.
+                // Encrypt every legacy token into per-id token files
+                // (`filesDir/mcp_tokens/<id>`) FIRST.
                 // If ANY token write fails (Keystore error, prefs
                 // commit failure), abort migration: don't seed the
                 // file, don't rebuild the rollback shadow. Reasoning:
@@ -336,6 +337,24 @@ object McpServersStore {
         // mirrors the disk write to `_state` runs on its own coroutine
         // and may not have observed the new value yet (Copilot R1
         // PR #352 finding).
+        // Pre-validate the insecure-token combination OUTSIDE the
+        // CrossProcessStore.update writeLock. `hasInsecureToken` does
+        // file I/O + Keystore decrypt (via McpTokenStore.read), which
+        // would block other writers/observers if held inside the
+        // synchronized block (Copilot R11 PR #352 finding). Race
+        // window: if a concurrent setAuthToken changes a server's
+        // token between this check and the lock acquisition, the
+        // resulting state could violate the http+token gate — but
+        // MCPClient.connect's `_checkUrlSafety` is the actual
+        // security boundary (it refuses to send tokens over plain
+        // non-loopback HTTP at request time), so the store-level
+        // check is defense-in-depth, not a hard guarantee.
+        val initialNext = transform(s.read().servers).toList()
+        if (initialNext.any { hasInsecureToken(app, it) }) {
+            Log.w(TAG, "update rejected: server has token over insecure HTTP")
+            return false
+        }
+
         var pre: List<McpServer> = emptyList()
         var next: List<McpServer> = emptyList()
         // CrossProcessStore.update does NOT catch transform exceptions
@@ -353,16 +372,15 @@ object McpServersStore {
                 }
                 // Duplicate-id check inside the transform so the lock
                 // covers it too (a concurrent write that produced the
-                // duplicate can't slip through).
+                // duplicate can't slip through). Cheap and pure
+                // (no I/O), as required by CrossProcessStore.update's
+                // "transforms must be cheap and pure" rule.
                 val seen = mutableSetOf<String>()
                 for (entry in computed) {
                     val n = normalizeId(entry.id)
                     require(seen.add(n)) {
                         "Duplicate id after normalization: ${entry.id} (normalizes to $n)"
                     }
-                }
-                require(computed.none { hasInsecureToken(app, it) }) {
-                    "Server has token over insecure HTTP"
                 }
                 next = computed
                 McpServersFile(servers = computed)
@@ -647,10 +665,19 @@ object McpServersStore {
             // the synchronous wait is benign. Mirrors McpTokenStore
             // which uses commit() for the same reason. (Copilot R8
             // PR #352 finding.)
-            context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            // Surface a commit() failure: the rollback shadow is
+            // explicitly part of the downgrade-durability contract,
+            // so a silent failure here would defeat that guarantee
+            // for the user without any diagnostic trail. (Copilot
+            // R11 PR #352 finding.)
+            val committed = context.applicationContext
+                .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 .edit()
                 .putString(KEY_MCP_SERVERS_ENC, Base64.encodeToString(enc, Base64.NO_WRAP))
                 .commit()
+            if (!committed) {
+                Log.w(TAG, "rebuildRollbackShadow commit failed; downgrade shadow not durably persisted")
+            }
         } catch (e: Exception) {
             Log.w(TAG, "rebuildRollbackShadow failed: ${e.message}")
         }

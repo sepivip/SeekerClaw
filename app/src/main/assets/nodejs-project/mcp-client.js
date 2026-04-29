@@ -190,7 +190,8 @@ class MCPClient {
         this.url = serverConfig.url;
         // BAT-514: tokens are no longer inline on `serverConfig` for
         // file-sourced (`mcp_servers.json`) entries — they come from
-        // `tokenFetcher`, which fetches per-id encrypted prefs via the
+        // `tokenFetcher`, which fetches per-id encrypted token files
+        // (`filesDir/mcp_tokens/<id>`) via the
         // AndroidBridge. The legacy inline `authToken` field still
         // works when `tokenFetcher` isn't provided (cold-start fallback
         // through `config.json`'s `mcpServers`).

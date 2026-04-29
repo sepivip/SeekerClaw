@@ -14,9 +14,10 @@
 //   { servers: [ { id, name, url, enabled, rateLimit } ] }
 //
 // `authToken` is intentionally NOT in the file. Tokens live in
-// per-id encrypted SharedPreferences on the Kotlin side keyed by
-// `mcp_token_<id>` and are fetched on every connect via the
-// AndroidBridge `POST /config/mcp-token` endpoint.
+// per-id encrypted files on the Kotlin side under
+// `filesDir/mcp_tokens/<id>` and are fetched on every connect via
+// the AndroidBridge `POST /config/mcp-token` endpoint through
+// `McpTokenStore`.
 //
 // Read drops invalid entries (defensive — manual edits / future-build
 // values shouldn't break the agent for valid entries). Write throws

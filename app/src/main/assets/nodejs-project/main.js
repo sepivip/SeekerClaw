@@ -92,9 +92,11 @@ const mcpManager = new MCPManager(log, wrapExternalContent, {
  *    create the file, and the next service start will pick up the
  *    watch.
  *  - Watch handle drops (rename across atomic-move can detach the
- *    watcher on some kernels): re-attach lazily on next change via
- *    the underlying inotify; if that fails, the bridge endpoint still
- *    works as the safety net.
+ *    watcher on some kernels): live updates may stop until the
+ *    service is restarted, but the bridge endpoint still works as
+ *    the safety net for explicit reconcile requests from main. (No
+ *    automatic re-attach is implemented — Copilot R11 noted the
+ *    earlier comment promised behavior the code didn't have.)
  */
 function startMcpFileWatch() {
     const filePath = _mcpServersStore.filePath;

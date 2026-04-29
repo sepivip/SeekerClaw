@@ -75,11 +75,11 @@ function rebuildRedactPatterns() {
     }
     // BAT-514: MCP server auth tokens are no longer iterated at
     // startup — tokens aren't in `MCP_SERVERS` post-migration (they
-    // live in per-id encrypted SharedPreferences and are fetched on
-    // demand by `MCPClient.connect`). Each fetched token registers
-    // itself via `registerRedactedSecret(...)` BEFORE the bearer
-    // header is attached or any connect log fires; see
-    // `mcp-client.js` connect().
+    // live in encrypted per-id files under `filesDir/mcp_tokens/<id>`
+    // and are fetched on demand by `MCPClient.connect`). Each fetched
+    // token registers itself via `registerRedactedSecret(...)`
+    // BEFORE the bearer header is attached or any connect log fires;
+    // see `mcp-client.js` connect().
     _dynamicPatterns = patterns;
 }
 
