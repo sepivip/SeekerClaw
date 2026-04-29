@@ -48,9 +48,12 @@ class AndroidBridge(
         private const val TAG = "AndroidBridge"
         private const val AUTH_HEADER = "X-Bridge-Token"
         // BAT-514: MCP server id format mirrors McpServersStore.ID_REGEX.
-        // Validated at the bridge boundary so a malformed id can't slip
-        // into McpTokenStore.read() (which is otherwise process-agnostic
-        // and trusts its caller).
+        // Validated at the bridge boundary as defense-in-depth /
+        // early reject — McpTokenStore.read() also runs its own
+        // ID_REGEX check before constructing the file path, so the
+        // bridge check is the outer rail (rejects malformed JSON-RPC
+        // input with HTTP 400 + a clean log) rather than a unique
+        // safety boundary.
         private val MCP_TOKEN_ID_REGEX = Regex("^[A-Za-z0-9_-]+$")
         // Delay between returning HTTP 200 and stopping the service — gives the
         // Node caller (and its Telegram reply) time to flush.

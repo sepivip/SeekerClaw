@@ -385,11 +385,23 @@ object McpServersStore {
         // Side effects after successful persist (kept out of the
         // CrossProcessStore lock per BAT-513 round-18 pattern).
         // `preIds` was captured inside the transform under the lock,
-        // so the diff is accurate even if another writer landed
-        // between transform-entry and now.
+        // so the diff against `nextIds` is accurate at the moment
+        // the persist landed. Re-read fresh before the actual
+        // clear() to defend against a concurrent update that
+        // re-added the same id between our lock release and now —
+        // very rare in practice (BAT-514 ids are UUIDs that don't
+        // collide with deleted ones), but the contract claim is
+        // atomic RMW and the defensive check is cheap. (Copilot
+        // R18 PR #352 finding.)
         val nextIds = list.map { it.id }.toSet()
-        for (id in preIds - nextIds) {
-            McpTokenStore.clear(app, id)
+        val removedIds = preIds - nextIds
+        if (removedIds.isNotEmpty()) {
+            val latestIds = s.read().servers.map { it.id }.toSet()
+            for (id in removedIds) {
+                if (id !in latestIds) {
+                    McpTokenStore.clear(app, id)
+                }
+            }
         }
         rebuildRollbackShadow(app, list)
         ownedScope?.launch { NodeControlClient.reconcile(null) }
@@ -455,10 +467,20 @@ object McpServersStore {
         // Side effects (post-write, outside the lock — same pattern
         // as [write]). preIds + next are both captured inside the
         // transform, so the diff is consistent with what we just
-        // persisted.
+        // persisted. The `latestIds` re-read (mirrors the [write]
+        // path's defense) skips a clear if a concurrent update
+        // re-added the same id between our lock release and now —
+        // see [write]'s rationale comment. (Copilot R18 PR #352
+        // finding.)
         val nextIds = next.map { it.id }.toSet()
-        for (id in preIds - nextIds) {
-            McpTokenStore.clear(app, id)
+        val removedIds = preIds - nextIds
+        if (removedIds.isNotEmpty()) {
+            val latestIds = s.read().servers.map { it.id }.toSet()
+            for (id in removedIds) {
+                if (id !in latestIds) {
+                    McpTokenStore.clear(app, id)
+                }
+            }
         }
         rebuildRollbackShadow(app, next)
         ownedScope?.launch { NodeControlClient.reconcile(null) }
