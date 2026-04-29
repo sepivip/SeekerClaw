@@ -1,5 +1,8 @@
 package com.seekerclaw.app.util
 
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import org.junit.After
@@ -739,58 +742,58 @@ class CrossProcessStoreTest {
     }
 
     @Test
-    fun `mirror — synchronized-protected RMW under contention preserves all increments`() {
-        // BAT-513 round-13: `update {}` serializes same-process read-
-        // modify-write via `synchronized(writeLock)` so the RMW is
-        // atomic w.r.t. concurrent `update {}` AND `write()`. Ten
-        // concurrent `update { it + 1 }` calls must collapse to a
-        // final value of +10, not some lower number reflecting lost
-        // updates between unsynchronized read/write pairs.
+    fun `production CrossProcessStore update under contention preserves all increments`() {
+        // BAT-513 round-19: drive the REAL CrossProcessStore.update()
+        // implementation, not a mirror. Round 18 left this as a
+        // pattern-mirror test that didn't fail if production atomicity
+        // changed; reviewer correctly flagged that the test was
+        // claiming validation it didn't deliver. The round-19 refactor
+        // adds a JVM-only constructor (filesDir injection, no Android
+        // Context) so unit tests can construct a fully-functional
+        // store and exercise update() under real Dispatchers.Default
+        // contention.
         //
-        // Round 12 review: this test must actually exercise contention.
-        // We use `Executors.newFixedThreadPool(8)` so the runnables
-        // execute on real OS threads simultaneously — synchronized
-        // blocks the OS thread, so any thread that tries to enter the
-        // monitor while another is inside actually waits. (Pre-round-13
-        // we used kotlinx Mutex + yield() to force interleaving in a
-        // coroutine context; the production code now uses synchronized
-        // which is OS-thread-level, so the test mirrors that with a
-        // thread-pool harness.)
-        val file = File(workDir, "rmw.json")
-        atomicWrite(file, Sample(model = "0"))
-        val rmwLock = Any()
-        fun update(transform: (Sample) -> Sample): Boolean {
-            synchronized(rmwLock) {
-                val current = readOrInitial(file, Sample(model = "0"))
-                val next = transform(current)
-                atomicWrite(file, next)
-                return true
-            }
-        }
-        val executor = Executors.newFixedThreadPool(8)
-        val latch = CountDownLatch(10)
-        val results = java.util.concurrent.ConcurrentLinkedQueue<Boolean>()
-        for (i in 1..10) {
-            executor.submit {
-                try {
-                    results += update { s ->
+        // What this proves about production code:
+        //   - synchronized(writeLock) inside update() actually
+        //     serializes concurrent update() calls (10 increments
+        //     preserved → no lost updates).
+        //   - The persistLocked file-write + _state publish stays
+        //     atomic w.r.t. the read inside the same synchronized
+        //     block.
+        //   - cloneSafe round-trip works at the volume + concurrency
+        //     of the test.
+        //
+        // What this does NOT exercise (those are device tests):
+        //   - FileObserver event delivery
+        //   - BroadcastReceiver register/dispatch
+        //   - Cross-process notification semantics
+        val store = CrossProcessStore(
+            filesDir = workDir,
+            fileName = "rmw-prod.json",
+            serializer = Sample.serializer(),
+            initial = Sample(model = "0"),
+        )
+        // Seed via the production write path so the on-disk state is
+        // a known starting point.
+        assertTrue("seed write succeeds", store.write(Sample(model = "0")))
+
+        runBlocking {
+            val deferreds = (1..10).map {
+                async(kotlinx.coroutines.Dispatchers.Default) {
+                    store.update { s ->
                         s.copy(model = (s.model.toInt() + 1).toString())
                     }
-                } finally {
-                    latch.countDown()
                 }
             }
+            assertTrue("all updates report success", deferreds.awaitAll().all { it })
         }
-        assertTrue("threads finished in time", latch.await(5, TimeUnit.SECONDS))
-        executor.shutdown()
-        assertEquals("all 10 updates dispatched", 10, results.size)
-        assertTrue("all updates report success", results.all { it })
-        val finalValue = readOrInitial(file, Sample())
+        val finalValue = store.read()
         assertEquals(
-            "synchronized-serialized RMW must preserve all 10 increments — no lost updates",
+            "production CrossProcessStore.update must preserve all 10 increments — no lost updates",
             "10",
             finalValue.model,
         )
+        store.close()
     }
 
     // --- helpers (mirror the live class) ---

@@ -132,13 +132,66 @@ import java.util.concurrent.atomic.AtomicBoolean
  *                       FileObserver / receiver threads. Defaults to
  *                       `Dispatchers.IO`.
  */
-class CrossProcessStore<T>(
-    context: Context,
+class CrossProcessStore<T> private constructor(
+    private val filesDirRoot: File,
+    // Null in the test-only constructor: skips FileObserver attach,
+    // BroadcastReceiver register, and broadcastChanged. The store is
+    // still fully functional for read/write/update/reload — exactly
+    // what JVM tests need to drive the production update() under
+    // contention without an Android Context (BAT-513 round-19).
+    private val appContext: Context?,
     private val fileName: String,
     private val serializer: KSerializer<T>,
     initial: T,
-    parentScope: CoroutineScope? = null,
+    parentScope: CoroutineScope?,
 ) {
+    /**
+     * Production constructor. Pins to `applicationContext` so an
+     * Activity/Service Context passed in by mistake can't leak the
+     * BroadcastReceiver/FileObserver for the lifetime of that
+     * component (BAT-512 review fix #6).
+     */
+    constructor(
+        context: Context,
+        fileName: String,
+        serializer: KSerializer<T>,
+        initial: T,
+        parentScope: CoroutineScope? = null,
+    ) : this(
+        filesDirRoot = context.applicationContext.filesDir,
+        appContext = context.applicationContext,
+        fileName = fileName,
+        serializer = serializer,
+        initial = initial,
+        parentScope = parentScope,
+    )
+
+    /**
+     * Test-only constructor (BAT-513 round-19). Bypasses the Android
+     * wiring (FileObserver + BroadcastReceiver + sendBroadcast) so
+     * JVM unit tests can drive the production [read] / [write] /
+     * [update] / [reload] methods against a real tmp filesDir
+     * without instantiating Robolectric or running on a device.
+     * Cross-process notification paths aren't exercised by tests
+     * built with this constructor — those are validated separately
+     * by device tests.
+     */
+    @androidx.annotation.VisibleForTesting
+    internal constructor(
+        filesDir: File,
+        fileName: String,
+        serializer: KSerializer<T>,
+        initial: T,
+        parentScope: CoroutineScope? = null,
+    ) : this(
+        filesDirRoot = filesDir,
+        appContext = null,
+        fileName = fileName,
+        serializer = serializer,
+        initial = initial,
+        parentScope = parentScope,
+    )
+
     init {
         // BAT-512 (Copilot review fix #1): fileName is documented as a
         // basename relative to filesDir. Without enforcement, a caller
@@ -149,13 +202,6 @@ class CrossProcessStore<T>(
             "fileName must be a non-empty basename without path separators or '..': '$fileName'"
         }
     }
-
-    // BAT-512 (Copilot review fix #6): pin to applicationContext so a
-    // caller passing an Activity/Service Context can't leak the
-    // BroadcastReceiver / FileObserver for the lifetime of that
-    // component. The application context survives configuration
-    // changes and process boundaries cleanly.
-    private val appContext: Context = context.applicationContext
 
     // BAT-512 (Copilot review fix #7): own a SupervisorJob so close()
     // can cancel in-flight reload coroutines for the default fresh
@@ -169,8 +215,8 @@ class CrossProcessStore<T>(
     private val coroutineScope: CoroutineScope = parentScope
         ?: CoroutineScope(Dispatchers.IO + ownedJob!!)
 
-    private val file: File = File(appContext.filesDir, fileName)
-    private val tmpFile: File = File(appContext.filesDir, "$fileName.tmp")
+    private val file: File = File(filesDirRoot, fileName)
+    private val tmpFile: File = File(filesDirRoot, "$fileName.tmp")
     // BAT-513 round-13: writeLock now also serves as the read-modify-write
     // serialization point for [update]. The earlier design used a separate
     // kotlinx Mutex for update, which protected update-vs-update but
@@ -515,11 +561,16 @@ class CrossProcessStore<T>(
     }
 
     private fun broadcastChanged() {
+        // Test-only constructor leaves appContext null — skip the
+        // broadcast cleanly. Same-process StateFlow observers still
+        // see the update via _state.value emission inside
+        // persistLocked; only cross-process notification is skipped.
+        val ctx = appContext ?: return
         try {
             val intent = Intent(ACTION_STORE_CHANGED)
-                .setPackage(appContext.packageName)
+                .setPackage(ctx.packageName)
                 .putExtra(EXTRA_FILE_NAME, fileName)
-            appContext.sendBroadcast(intent)
+            ctx.sendBroadcast(intent)
         } catch (e: Exception) {
             // Broadcast failure is non-fatal — FileObserver in the other
             // process will still pick up the file change.
@@ -528,6 +579,12 @@ class CrossProcessStore<T>(
     }
 
     private fun startWatching() {
+        // Test-only constructor (appContext == null) skips the Android
+        // wiring entirely — JVM tests don't have a Looper for FileObserver
+        // and the broadcast receiver registration would NPE without a
+        // real Context. Same-process behaviour (StateFlow updates from
+        // local writes) is unaffected.
+        if (appContext == null) return
         attachFileObserver()
         registerBroadcastReceiver()
     }
@@ -599,8 +656,12 @@ class CrossProcessStore<T>(
                 }
             }
         }
+        // appContext is non-null here — registerBroadcastReceiver is
+        // only called from startWatching(), which already returns early
+        // for the test-only (appContext == null) constructor.
+        val ctx = appContext ?: return
         ContextCompat.registerReceiver(
-            appContext,
+            ctx,
             r,
             IntentFilter(ACTION_STORE_CHANGED),
             ContextCompat.RECEIVER_NOT_EXPORTED,
@@ -643,10 +704,19 @@ class CrossProcessStore<T>(
         fileObserver?.stopWatching()
         fileObserver = null
         receiver?.let {
-            try {
-                appContext.unregisterReceiver(it)
-            } catch (_: Exception) {
-                // Already unregistered, or never registered (test paths).
+            // appContext is null in the test-only constructor where the
+            // receiver was never registered — receiver is itself null
+            // there too, so this whole block is unreachable in that
+            // path. Guard the unregister anyway so a future maintainer
+            // can't trip an NPE by adding a register call without a
+            // context.
+            val ctx = appContext
+            if (ctx != null) {
+                try {
+                    ctx.unregisterReceiver(it)
+                } catch (_: Exception) {
+                    // Already unregistered, or never registered (test paths).
+                }
             }
         }
         receiver = null
