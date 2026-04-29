@@ -713,8 +713,13 @@ class MCPManager {
      * Force-reconnect a single server. Used after a token edit (file
      * unchanged but bearer differs). Disconnects first so the next
      * connect's `_resolveAuthToken` fetches fresh from the bridge.
-     * Silent no-op if the id isn't in the current configs (e.g. a
-     * stale signal arrived after the server was deleted).
+     *
+     * Behaviour for IDs not in current configs (e.g. a stale signal
+     * arrived after the server was deleted): the disconnect runs
+     * unconditionally — it's a no-op against `this.servers` if the
+     * id was never connected, and a clean teardown if the server was
+     * just removed by an earlier full reconcile. The reconnect step
+     * is gated on `desired && desired.enabled !== false`.
      */
     async reconcileServer(id) {
         if (!this.configsProvider) return;

@@ -119,26 +119,32 @@ object McpServersStore {
      * Idempotent. Call once from `SeekerClawApplication.onCreate`.
      *
      * The body of this function does NO disk I/O — it only allocates
-     * the owned IO scope and constructs the [CrossProcessStore]
-     * (which itself defers its first read to that scope). All work
-     * that touches disk or Keystore runs inside the launched
-     * coroutine below, so this call is safe to invoke from
-     * `Application.onCreate` on the main thread.
+     * the owned IO scope. CrossProcessStore creation itself is
+     * deferred to the IO scope so the legacy load can complete first
+     * and seed the store's `initial` value (preserving the legacy
+     * view if migration aborts). All work that touches disk or
+     * Keystore runs inside the launched coroutine below, so this
+     * call is safe to invoke from `Application.onCreate` on the
+     * main thread.
      *
      * Ordering inside the IO coroutine:
      *
      *  1. If `mcp_servers.json` is missing: read legacy
      *     [KEY_MCP_SERVERS_ENC] prefs (Keystore decrypt + JSON
-     *     parse), then migrate. Split each entry → encrypt token to
-     *     `mcp_tokens/<id>` (encrypted file), drop authToken from
-     *     in-memory list, write cleaned list to file. Rebuild
-     *     rollback shadow with tokens reattached. Steady-state
-     *     launches (file exists) skip this entirely — the
-     *     CrossProcessStore catch-up reload populates `_state` from
-     *     the file via the collector below.
-     *  2. Sweep orphan tokens: any `mcp_tokens/<id>` file whose id
+     *     parse), then encrypt each token to `mcp_tokens/<id>`. If
+     *     ANY token write fails, abort: leave `KEY_MCP_SERVERS_ENC`
+     *     intact, leave `_state` showing the legacy view, and
+     *     return without creating [store] (UI writes return false
+     *     until the user restarts). Steady-state launches (file
+     *     exists) skip step 1 entirely.
+     *  2. Construct [CrossProcessStore] with `initial = seeded` so
+     *     `cps.read()` returns the legacy view if the file write
+     *     below fails.
+     *  3. Migration write of cleaned list + rollback shadow (only
+     *     when the file was missing).
+     *  4. Sweep orphan tokens: any `mcp_tokens/<id>` file whose id
      *     isn't in the current server list is cleared.
-     *  3. Start the observe-and-mirror collector.
+     *  5. Start the observe-and-mirror collector.
      */
     fun init(context: Context) {
         if (!initialized.compareAndSet(false, true)) return
@@ -148,24 +154,21 @@ object McpServersStore {
         // Caller is `SeekerClawApplication.onCreate` (main thread).
         // The legacy `ConfigManager.loadMcpServers` does Keystore
         // decrypt + JSON parse — slow enough to trip StrictMode and
-        // add startup jank. Defer it (and everything else that
-        // touches disk) to the owned IO scope below. UI binds to
-        // `state` which is empty until either:
-        //   (a) CrossProcessStore's catch-up reload publishes the
-        //       file content (steady state — most launches), OR
-        //   (b) the migration scope.launch publishes the legacy
-        //       view (upgrade path on first BAT-514 launch).
-        // (Copilot R12 PR #352 finding.)
+        // add startup jank. Defer EVERYTHING that touches disk or
+        // Keystore to the owned IO scope below. UI binds to `state`
+        // which starts empty for a few ms while the catch-up reload
+        // runs (steady state) or while the legacy load + migration
+        // runs (upgrade path). (Copilot R12 PR #352 finding.)
+        //
+        // CrossProcessStore creation is also deferred — we want to
+        // pass the legacy-seeded list as `initial` so a migration
+        // abort (token write failure or file write failure) leaves
+        // `cps.read()` returning the legacy view instead of an empty
+        // list (Copilot R13 finding 1+2: an empty `initial` would
+        // both clobber `_state` via the collector AND make the
+        // orphan sweep clear all newly-written token files).
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         ownedScope = scope
-        val cps = CrossProcessStore(
-            context = app,
-            fileName = FILE_NAME,
-            serializer = McpServersFile.serializer(),
-            initial = McpServersFile(emptyList()),
-            parentScope = scope,
-        )
-        store = cps
 
         scope.launch {
             // Step 1: migration check + legacy load — only when the
@@ -182,15 +185,21 @@ object McpServersStore {
             // from a manual edit) would briefly publish to `_state`
             // AND get persisted into the migrated file (Copilot R6/R7).
             val file = File(app.filesDir, FILE_NAME)
-            if (!file.exists()) {
+            val needsMigration = !file.exists()
+            var seeded: List<McpServer> = emptyList()
+            if (needsMigration) {
                 val legacy = ConfigManager.loadMcpServers(app)
                 val rawSeed = legacy.map { it.toMcpServer() }
-                val seeded = onObserved(McpServersFile(servers = rawSeed))
+                // onObserved cleans + sets `_state.value` so the UI's
+                // collectAsState binding sees the legacy view
+                // immediately while migration finishes.
+                seeded = onObserved(McpServersFile(servers = rawSeed))
                 // Encrypt every legacy token into per-id token files
                 // (`filesDir/mcp_tokens/<id>`) FIRST.
                 // If ANY token write fails (Keystore error, prefs
                 // commit failure), abort migration: don't seed the
-                // file, don't rebuild the rollback shadow. Reasoning:
+                // file, don't rebuild the rollback shadow, and don't
+                // even create the CrossProcessStore. Reasoning:
                 //   - The legacy KEY_MCP_SERVERS_ENC blob is still
                 //     intact and contains the tokens. Pre-BAT-514
                 //     code (and this build's `loadMcpServers`) can
@@ -202,7 +211,12 @@ object McpServersStore {
                 //     silently losing the token on downgrade AND
                 //     breaking next-launch's Node-side connect.
                 //   - Aborting leaves `mcp_servers.json` absent, so
-                //     next launch retries the whole migration.
+                //     next launch retries the whole migration. UI
+                //     writes via `McpServersStore.write` return false
+                //     in the meantime (store is null) and surface
+                //     the existing Toast — the user gets a clear
+                //     "save failed" signal and the workflow is to
+                //     restart.
                 var allTokensOk = true
                 for (s in legacy) {
                     if (s.authToken.isNotBlank()) {
@@ -216,24 +230,51 @@ object McpServersStore {
                         }
                     }
                 }
-                if (allTokensOk) {
-                    if (cps.write(McpServersFile(servers = seeded))) {
-                        rebuildRollbackShadow(app, seeded)
-                    } else {
-                        Log.w(
-                            TAG,
-                            "first-launch migration write to $FILE_NAME failed — " +
-                                "in-memory state retained; next save retries the file write",
-                        )
-                    }
+                if (!allTokensOk) {
+                    // Don't create the store. Don't start the
+                    // collector. Don't run the orphan sweep —
+                    // `cps.read()` would be `[]` and would clear
+                    // every token file we just successfully wrote
+                    // (Copilot R13 finding 2). _state retains the
+                    // legacy view from `onObserved` above so the UI
+                    // remains usable until the user restarts.
+                    return@launch
                 }
-                // If allTokensOk is false: file is NOT seeded, shadow
-                // is NOT rebuilt. KEY_MCP_SERVERS_ENC stays as the
-                // legacy source, _state has the in-memory view, and
-                // the next launch retries the whole migration.
             }
 
-            // Step 2: orphan token sweep against the on-disk file —
+            // Step 2: construct the CrossProcessStore. `initial` is
+            // the seeded legacy view (when migration just ran) or
+            // `emptyList()` (when file already existed). On a
+            // file-missing read, cps.read() returns `cloneSafe(initial)`,
+            // so post-migration the legacy view is still visible
+            // even if the file write below fails.
+            val cps = CrossProcessStore(
+                context = app,
+                fileName = FILE_NAME,
+                serializer = McpServersFile.serializer(),
+                initial = McpServersFile(servers = seeded),
+                parentScope = scope,
+            )
+            store = cps
+
+            // Step 3: migration write (if needed). Token files are
+            // already on disk from step 1, so a file-write failure
+            // here doesn't lose tokens — next launch sees the file
+            // still missing and retries the file seed (token writes
+            // are idempotent: McpTokenStore.write overwrites).
+            if (needsMigration) {
+                if (cps.write(McpServersFile(servers = seeded))) {
+                    rebuildRollbackShadow(app, seeded)
+                } else {
+                    Log.w(
+                        TAG,
+                        "first-launch migration write to $FILE_NAME failed — " +
+                            "tokens already persisted; next save retries the file write",
+                    )
+                }
+            }
+
+            // Step 4: orphan token sweep against the on-disk file —
             // NOT `_state.value`. `_state` may not have observed the
             // CrossProcessStore catch-up reload yet at this point,
             // and on the upgrade path it briefly held the legacy
@@ -243,7 +284,7 @@ object McpServersStore {
             // finding.)
             sweepOrphanTokens(app, cps.read().servers)
 
-            // Step 3: observe-and-mirror collector.
+            // Step 5: observe-and-mirror collector.
             cps.state.collect { observed ->
                 observeFromCollector(observed)
             }
@@ -333,89 +374,77 @@ object McpServersStore {
     }
 
     /**
-     * Read-modify-write under [CrossProcessStore]'s lock so
-     * concurrent writes can't drop updates. The transformed list goes
-     * through the same validity gate as [write] — an invalid result
-     * throws [IllegalArgumentException] (caller tests / debug
-     * builds) rather than silently persisting corrupt state.
+     * Read current state, run [transform] EXACTLY once on it, validate
+     * the result, then atomically write. Same last-writer-wins
+     * semantics as [write] — a concurrent writer between the read and
+     * the write supersedes (acceptable for BAT-514: the only writer
+     * is the UI process; `:node` only reads `mcp_servers.json`).
      *
-     * Returns `false` on init-not-called, lock acquisition failure,
-     * or persist failure. The caller is expected to use [write] for
-     * the simple replace-all path; this is for atomic delta cases
-     * (toggle one server's `enabled`, edit one server's URL) where
-     * read-then-write would race against `:node` writes.
+     * Returns `false` on init-not-called, validation failure, or
+     * persist failure. Validation runs OUTSIDE the
+     * [CrossProcessStore] writeLock so the slow Keystore decrypt for
+     * the http+token check doesn't block other writers/observers
+     * (Copilot R11). Calling [transform] only once avoids the
+     * non-deterministic foot-gun of running caller-supplied code
+     * twice with different inputs (Copilot R13).
+     *
+     * Use this for delta-style edits where the transform composes a
+     * new list from the current one (`current.map { ... }`,
+     * `current.filter { ... }`); use [write] for direct
+     * replace-the-whole-list flows.
      */
     suspend fun update(transform: (List<McpServer>) -> List<McpServer>): Boolean {
         val app = appContext ?: return false
         val s = store ?: return false
-        // Capture pre-transform AND next snapshots inside the
-        // CrossProcessStore.update lock so the post-update side
-        // effects don't race the collector. Reading `_state.value`
-        // after `s.update` returns is unreliable — the collector that
-        // mirrors the disk write to `_state` runs on its own coroutine
-        // and may not have observed the new value yet (Copilot R1
-        // PR #352 finding).
-        // Pre-validate the insecure-token combination OUTSIDE the
-        // CrossProcessStore.update writeLock. `hasInsecureToken` does
-        // file I/O + Keystore decrypt (via McpTokenStore.read), which
-        // would block other writers/observers if held inside the
-        // synchronized block (Copilot R11 PR #352 finding). Race
-        // window: if a concurrent setAuthToken changes a server's
-        // token between this check and the lock acquisition, the
-        // resulting state could violate the http+token gate — but
-        // MCPClient.connect's `_checkUrlSafety` is the actual
-        // security boundary (it refuses to send tokens over plain
-        // non-loopback HTTP at request time), so the store-level
-        // check is defense-in-depth, not a hard guarantee.
-        val initialNext = transform(s.read().servers).toList()
-        if (initialNext.any { hasInsecureToken(app, it) }) {
+        // Snapshot the current disk state, run the transform exactly
+        // once, validate the result, then write. The snapshot is also
+        // used downstream for the orphan-token diff so it stays
+        // consistent with what we're about to persist.
+        val current = s.read().servers
+        val computed = transform(current).toList()
+
+        // Validation — all checks run outside the lock. `isValid`,
+        // dedup, normalization are cheap; `hasInsecureToken` does
+        // file I/O + Keystore decrypt and would unacceptably hold the
+        // writeLock if run inside the transform per
+        // CrossProcessStore.update's "cheap and pure" contract.
+        val invalid = computed.firstOrNull { !isValid(it) }
+        if (invalid != null) {
+            Log.w(TAG, "update rejected: invalid entry id=${invalid.id} reason=${reasonFor(invalid)}")
+            return false
+        }
+        val seen = mutableSetOf<String>()
+        for (entry in computed) {
+            val n = normalizeId(entry.id)
+            if (!seen.add(n)) {
+                Log.w(
+                    TAG,
+                    "update rejected: duplicate id after normalization: ${entry.id} (normalizes to $n)",
+                )
+                return false
+            }
+        }
+        if (computed.any { hasInsecureToken(app, it) }) {
+            // MCPClient.connect's `_checkUrlSafety` is the actual
+            // security boundary at request time; this store-level
+            // check is defense-in-depth.
             Log.w(TAG, "update rejected: server has token over insecure HTTP")
             return false
         }
 
-        var pre: List<McpServer> = emptyList()
-        var next: List<McpServer> = emptyList()
-        // CrossProcessStore.update does NOT catch transform exceptions
-        // — a `require(...)` that fails inside the transform throws out
-        // of `s.update` and would crash the calling coroutine. Wrap
-        // the call so validation failures surface as the documented
-        // `false` return instead. (Copilot R10 PR #352 finding.)
-        val applied = try {
-            s.update { current ->
-                pre = current.servers
-                val computed = transform(current.servers).toList()
-                require(computed.all { isValid(it) }) {
-                    val bad = computed.firstOrNull { !isValid(it) }
-                    "Invalid entry after transform: id=${bad?.id} reason=${bad?.let { reasonFor(it) }}"
-                }
-                // Duplicate-id check inside the transform so the lock
-                // covers it too (a concurrent write that produced the
-                // duplicate can't slip through). Cheap and pure
-                // (no I/O), as required by CrossProcessStore.update's
-                // "transforms must be cheap and pure" rule.
-                val seen = mutableSetOf<String>()
-                for (entry in computed) {
-                    val n = normalizeId(entry.id)
-                    require(seen.add(n)) {
-                        "Duplicate id after normalization: ${entry.id} (normalizes to $n)"
-                    }
-                }
-                next = computed
-                McpServersFile(servers = computed)
-            }
-        } catch (e: IllegalArgumentException) {
-            Log.w(TAG, "update rejected: ${e.message}")
-            false
+        if (!s.write(McpServersFile(servers = computed))) return false
+
+        // Side effects (post-write, outside the lock — same pattern
+        // as [write]). The pre/next diff uses the snapshots captured
+        // above, NOT `_state.value`, so a lagging collector can't
+        // make us miss orphan tokens.
+        val nextIds = computed.map { it.id }.toSet()
+        for (id in current.map { it.id }.toSet() - nextIds) {
+            McpTokenStore.clear(app, id)
         }
-        if (applied) {
-            val nextIds = next.map { it.id }.toSet()
-            for (id in pre.map { it.id }.toSet() - nextIds) {
-                McpTokenStore.clear(app, id)
-            }
-            rebuildRollbackShadow(app, next)
-            ownedScope?.launch { NodeControlClient.reconcile(null) }
-        }
-        return applied
+        rebuildRollbackShadow(app, computed)
+        ownedScope?.launch { NodeControlClient.reconcile(null) }
+        return true
     }
 
     /**
