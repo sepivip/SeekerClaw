@@ -118,55 +118,74 @@ object McpServersStore {
     /**
      * Idempotent. Call once from `SeekerClawApplication.onCreate`.
      *
-     * Ordering:
+     * The body of this function does NO disk I/O — it only allocates
+     * the owned IO scope and constructs the [CrossProcessStore]
+     * (which itself defers its first read to that scope). All work
+     * that touches disk or Keystore runs inside the launched
+     * coroutine below, so this call is safe to invoke from
+     * `Application.onCreate` on the main thread.
      *
-     *  1. Read legacy [KEY_MCP_SERVERS_ENC] prefs (the pre-BAT-514
-     *     source of truth). On upgrade, this contains servers WITH
-     *     tokens; on fresh install, it's empty.
-     *  2. If `mcp_servers.json` is missing AND prefs has servers:
-     *     migrate. Split each entry → encrypt token to
-     *     `mcp_tokens/<id>` (encrypted file), drop authToken from in-memory list,
-     *     write cleaned list to file. Rebuild rollback shadow with
-     *     tokens reattached.
-     *  3. Sweep orphan tokens: any `mcp_tokens/<id>` file whose id
+     * Ordering inside the IO coroutine:
+     *
+     *  1. If `mcp_servers.json` is missing: read legacy
+     *     [KEY_MCP_SERVERS_ENC] prefs (Keystore decrypt + JSON
+     *     parse), then migrate. Split each entry → encrypt token to
+     *     `mcp_tokens/<id>` (encrypted file), drop authToken from
+     *     in-memory list, write cleaned list to file. Rebuild
+     *     rollback shadow with tokens reattached. Steady-state
+     *     launches (file exists) skip this entirely — the
+     *     CrossProcessStore catch-up reload populates `_state` from
+     *     the file via the collector below.
+     *  2. Sweep orphan tokens: any `mcp_tokens/<id>` file whose id
      *     isn't in the current server list is cleared.
-     *  4. Start the observe-and-mirror collector.
+     *  3. Start the observe-and-mirror collector.
      */
     fun init(context: Context) {
         if (!initialized.compareAndSet(false, true)) return
         val app = context.applicationContext
         appContext = app
 
-        // Step 1: seed _state from prefs (last-valid pre-BAT-514 view).
-        // Run the raw legacy list through `onObserved` so it gets the
-        // SAME treatment file-observed content does: invalid entries
-        // dropped, name/url trimmed, duplicates collapsed by id.
-        // Without this pass, a corrupt legacy KEY_MCP_SERVERS_ENC
-        // (e.g. duplicate ids from a buggy old write path, or
-        // whitespace-padded URLs from a manual edit) would briefly
-        // publish to `_state` AND get persisted into the migrated
-        // file. The collector eventually re-cleans on its first
-        // emission — but only AFTER the migration write already
-        // landed on disk. Copilot R6/R7 PR #352 finding.
-        val legacy = ConfigManager.loadMcpServers(app)
-        val rawSeed = legacy.map { it.toMcpServer() }
-        val seeded = onObserved(McpServersFile(servers = rawSeed))
-
+        // Caller is `SeekerClawApplication.onCreate` (main thread).
+        // The legacy `ConfigManager.loadMcpServers` does Keystore
+        // decrypt + JSON parse — slow enough to trip StrictMode and
+        // add startup jank. Defer it (and everything else that
+        // touches disk) to the owned IO scope below. UI binds to
+        // `state` which is empty until either:
+        //   (a) CrossProcessStore's catch-up reload publishes the
+        //       file content (steady state — most launches), OR
+        //   (b) the migration scope.launch publishes the legacy
+        //       view (upgrade path on first BAT-514 launch).
+        // (Copilot R12 PR #352 finding.)
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         ownedScope = scope
         val cps = CrossProcessStore(
             context = app,
             fileName = FILE_NAME,
             serializer = McpServersFile.serializer(),
-            initial = McpServersFile(servers = seeded),
+            initial = McpServersFile(emptyList()),
             parentScope = scope,
         )
         store = cps
 
         scope.launch {
-            // Step 2: migration write (one-shot if file is absent).
+            // Step 1: migration check + legacy load — only when the
+            // file is missing. Steady-state launches (file exists)
+            // skip the Keystore decrypt entirely; CrossProcessStore's
+            // own catch-up reload populates `cps._state` from the
+            // file, and the collector below mirrors that into our
+            // `_state`. Run the raw legacy list through `onObserved`
+            // so it gets the SAME treatment file-observed content
+            // does: invalid entries dropped, name/url trimmed,
+            // duplicates collapsed by id. Without this pass, a
+            // corrupt legacy KEY_MCP_SERVERS_ENC (e.g. duplicate ids
+            // from a buggy old write path, or whitespace-padded URLs
+            // from a manual edit) would briefly publish to `_state`
+            // AND get persisted into the migrated file (Copilot R6/R7).
             val file = File(app.filesDir, FILE_NAME)
             if (!file.exists()) {
+                val legacy = ConfigManager.loadMcpServers(app)
+                val rawSeed = legacy.map { it.toMcpServer() }
+                val seeded = onObserved(McpServersFile(servers = rawSeed))
                 // Encrypt every legacy token into per-id token files
                 // (`filesDir/mcp_tokens/<id>`) FIRST.
                 // If ANY token write fails (Keystore error, prefs
@@ -214,18 +233,17 @@ object McpServersStore {
                 // the next launch retries the whole migration.
             }
 
-            // Step 3: orphan token sweep against the on-disk file —
-            // NOT `_state.value`. _state is seeded from the legacy
-            // KEY_MCP_SERVERS_ENC prefs blob and may temporarily
-            // diverge from `mcp_servers.json` until the collector's
-            // first emission lands. If it did diverge (e.g. a `:node`
-            // write modified the file under us), sweeping by the
-            // prefs view would clear `mcp_tokens/<id>` files for
-            // servers that ARE in the file. Copilot R3 PR #352
-            // finding.
+            // Step 2: orphan token sweep against the on-disk file —
+            // NOT `_state.value`. `_state` may not have observed the
+            // CrossProcessStore catch-up reload yet at this point,
+            // and on the upgrade path it briefly held the legacy
+            // view from the migration block above. Sweeping by an
+            // out-of-sync view would clear `mcp_tokens/<id>` files
+            // for servers that ARE in the file. (Copilot R3 PR #352
+            // finding.)
             sweepOrphanTokens(app, cps.read().servers)
 
-            // Step 4: observe-and-mirror collector.
+            // Step 3: observe-and-mirror collector.
             cps.state.collect { observed ->
                 observeFromCollector(observed)
             }
