@@ -15,8 +15,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.json.Json
 import java.io.File
@@ -173,16 +171,16 @@ class CrossProcessStore<T>(
 
     private val file: File = File(appContext.filesDir, fileName)
     private val tmpFile: File = File(appContext.filesDir, "$fileName.tmp")
+    // BAT-513 round-13: writeLock now also serves as the read-modify-write
+    // serialization point for [update]. The earlier design used a separate
+    // kotlinx Mutex for update, which protected update-vs-update but
+    // missed update-vs-write: a `write()` from another thread could fire
+    // between [update]'s `read()` and `write(next)` and the update would
+    // overwrite it. By taking the same `synchronized(writeLock)` for the
+    // entire RMW, update is now atomic w.r.t. concurrent `write()` too.
+    // synchronized is reentrant on the JVM, so update's nested call to
+    // write() (which also takes writeLock) is fine.
     private val writeLock = Any()
-
-    // BAT-513: serializes [update] read-modify-write. Same-process callers
-    // performing concurrent `update { ... }` would otherwise race between
-    // their `read()` and `write()` and silently lose increments. The
-    // existing `writeLock` synchronizes the file move only — it does not
-    // span the read step. Cross-process `update` is still last-writer-wins
-    // (filesystem move semantics); no caller in the BAT-511 family needs
-    // cross-process RMW.
-    private val updateMutex = Mutex()
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -435,9 +433,16 @@ class CrossProcessStore<T>(
     }
 
     /**
-     * Read-modify-write under an internal [Mutex] so two concurrent
-     * `update {}` calls in the same process can't lose an interleaved
-     * change between their respective `read()` and `write()` steps.
+     * Read-modify-write under the same `synchronized(writeLock)` that
+     * [write] uses, so the entire `read → transform → write` sequence
+     * is atomic w.r.t. BOTH concurrent `update {}` calls AND
+     * concurrent `write()` calls in the same process. A pre-round-13
+     * design used a separate kotlinx Mutex; that protected
+     * update-vs-update but missed update-vs-write — a `write()` could
+     * fire between this `read()` and `write(next)` and the update
+     * would overwrite it. synchronized is reentrant on the JVM, so the
+     * nested call to [write] (which also takes `synchronized(writeLock)`)
+     * acquires the same monitor without deadlock.
      *
      * Returns the underlying [write]'s result — `true` if the
      * transformed value persisted, `false` on caught failure.
@@ -445,13 +450,21 @@ class CrossProcessStore<T>(
      * The [transform] callback is invoked under the lock with the
      * current persisted value (a fresh deserialized instance from
      * [read]) and must return the value to persist. Keep transforms
-     * cheap and pure — the lock is held for the duration of the call.
+     * cheap and pure — the lock is held for the duration of the call,
+     * and `synchronized` blocks the OS thread (no suspension allowed
+     * inside).
      *
      * Cross-process `update` is still last-writer-wins per filesystem
-     * move semantics; this Mutex is same-process only. No caller in
+     * move semantics; this lock is same-process only. No caller in
      * the BAT-511 family needs cross-process RMW.
+     *
+     * Declared `suspend` for forward compatibility — callers may
+     * eventually want to invoke this from coroutine contexts that
+     * could later add per-call work (e.g. metrics, tracing) before
+     * the lock acquisition. The current body has no real suspension
+     * points.
      */
-    suspend fun update(transform: (T) -> T): Boolean = updateMutex.withLock {
+    suspend fun update(transform: (T) -> T): Boolean = synchronized(writeLock) {
         val current = read()
         val next = transform(current)
         write(next)

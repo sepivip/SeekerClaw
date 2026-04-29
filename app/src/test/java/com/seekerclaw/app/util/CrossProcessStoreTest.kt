@@ -1,10 +1,5 @@
 package com.seekerclaw.app.util
 
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import org.junit.After
@@ -631,7 +626,7 @@ class CrossProcessStoreTest {
             Regex("""fileName\s*!=\s*File\s*\(\s*fileName\s*\)\s*\.\s*name""").containsMatchIn(text))
     }
 
-    // --- BAT-513 Boolean return + Mutex-protected update() ---
+    // --- BAT-513 Boolean return + synchronized-protected update() ---
 
     @Test
     fun `drift write returns Boolean (BAT-513 — failure visibility for callers)`() {
@@ -660,17 +655,20 @@ class CrossProcessStoreTest {
     }
 
     @Test
-    fun `drift update is suspend Mutex-protected RMW (BAT-513)`() {
+    fun `drift update serializes RMW via synchronized writeLock (BAT-513 round-13)`() {
         // BAT-513 adds `suspend fun update(transform: (T) -> T): Boolean`.
-        // The whole point is to serialize read-modify-write so two
-        // concurrent `update {}` calls in the same process can't lose an
-        // interleaved change (their `read()` and `write()` would
-        // otherwise interleave under the existing writeLock, which only
-        // covers the file move).
+        // Round 13 review caught that an early Mutex-only design serialized
+        // update-vs-update but missed update-vs-write: a `write()` from
+        // another thread could fire between update's `read()` and
+        // `write(next)`, and update would overwrite it. The fix uses
+        // `synchronized(writeLock)` for the entire RMW so update is atomic
+        // w.r.t. concurrent write() calls too (synchronized is reentrant
+        // on the JVM, so the nested write() call works fine).
         //
         // Pin the structural contract: declared as `suspend`, takes a
-        // `(T) -> T` transform, returns Boolean, and the body uses
-        // `updateMutex.withLock`.
+        // `(T) -> T` transform, returns Boolean, and the body wraps
+        // read+transform+write in `synchronized(writeLock)` (NOT in a
+        // separate Mutex that wouldn't serialize against write()).
         val src = locateLiveSource()
         val text = src.readText()
         assertTrue(
@@ -680,71 +678,76 @@ class CrossProcessStoreTest {
             ).containsMatchIn(text),
         )
         assertTrue(
-            "update must declare a Mutex for RMW serialization",
+            "update body must serialize via synchronized(writeLock) so it's atomic w.r.t. write()",
+            Regex(
+                """suspend\s+fun\s+update\s*\([\s\S]*?\)\s*:\s*Boolean\s*=\s*synchronized\s*\(\s*writeLock\s*\)""",
+            ).containsMatchIn(text),
+        )
+        // Negative pin: the OLD pattern (separate Mutex/withLock that
+        // misses update-vs-write contention) must be gone. If a future
+        // refactor brings back a `Mutex()` for update serialization,
+        // this guard fires and forces the maintainer to revisit the
+        // round-13 review thread before re-introducing the bug class.
+        assertFalse(
+            "update must NOT use a separate Mutex (round-13 fix dropped updateMutex)",
             Regex("""updateMutex\s*=\s*Mutex\s*\(\s*\)""").containsMatchIn(text),
         )
-        assertTrue(
-            "update body must serialize via updateMutex.withLock",
+        assertFalse(
+            "update body must NOT call updateMutex.withLock (round-13 fix uses synchronized(writeLock) instead)",
             Regex("""updateMutex\.withLock""").containsMatchIn(text),
         )
     }
 
     @Test
-    fun `mirror — Mutex-protected RMW under contention preserves all increments`() {
-        // BAT-513: `update {}` must serialize same-process read-modify-
-        // write so 10 concurrent `update { it + 1 }` calls collapse to a
+    fun `mirror — synchronized-protected RMW under contention preserves all increments`() {
+        // BAT-513 round-13: `update {}` serializes same-process read-
+        // modify-write via `synchronized(writeLock)` so the RMW is
+        // atomic w.r.t. concurrent `update {}` AND `write()`. Ten
+        // concurrent `update { it + 1 }` calls must collapse to a
         // final value of +10, not some lower number reflecting lost
         // updates between unsynchronized read/write pairs.
         //
-        // Pure-JVM mirror: build a tiny store-shaped harness that mimics
-        // the live class's two locks (writeLock for the file move,
-        // updateMutex for the RMW). The atomicWrite helper at the bottom
-        // of this file gives us file-level atomicity; here we layer the
-        // Mutex on top to verify the contract.
-        // BAT-513 round-12 review: this test must actually exercise
-        // contention. The previous version used `runBlocking { async { ... } }`
-        // without specifying a dispatcher, so the async coroutines all
-        // ran on the single runBlocking thread. With no suspension
-        // points inside `update {}`, they executed sequentially —
-        // meaning the assertion would still pass even if the Mutex
-        // were removed. Two changes make the test meaningful:
-        //
-        //   1. async(Dispatchers.Default) — multi-threaded dispatcher
-        //      so coroutines actually run on different worker threads
-        //      simultaneously.
-        //   2. yield() between read and write inside `update {}` —
-        //      forces a suspension point that gives the dispatcher a
-        //      chance to schedule another `update` call mid-RMW. With
-        //      the Mutex held, the suspension is harmless (other calls
-        //      block on withLock); without the Mutex, this is the
-        //      window where lost updates would manifest.
+        // Round 12 review: this test must actually exercise contention.
+        // We use `Executors.newFixedThreadPool(8)` so the runnables
+        // execute on real OS threads simultaneously — synchronized
+        // blocks the OS thread, so any thread that tries to enter the
+        // monitor while another is inside actually waits. (Pre-round-13
+        // we used kotlinx Mutex + yield() to force interleaving in a
+        // coroutine context; the production code now uses synchronized
+        // which is OS-thread-level, so the test mirrors that with a
+        // thread-pool harness.)
         val file = File(workDir, "rmw.json")
         atomicWrite(file, Sample(model = "0"))
-        val mutex = Mutex()
-        suspend fun update(transform: (Sample) -> Sample): Boolean {
-            return mutex.withLock {
+        val rmwLock = Any()
+        fun update(transform: (Sample) -> Sample): Boolean {
+            synchronized(rmwLock) {
                 val current = readOrInitial(file, Sample(model = "0"))
-                // Force an actual suspension point between read and
-                // write so the multi-threaded dispatcher has the
-                // opportunity to interleave another `update` call —
-                // exposing any RMW that isn't properly serialized.
-                kotlinx.coroutines.yield()
                 val next = transform(current)
                 atomicWrite(file, next)
-                true
+                return true
             }
         }
-        runBlocking {
-            val deferreds = (1..10).map {
-                async(kotlinx.coroutines.Dispatchers.Default) {
-                    update { s -> s.copy(model = (s.model.toInt() + 1).toString()) }
+        val executor = Executors.newFixedThreadPool(8)
+        val latch = CountDownLatch(10)
+        val results = java.util.concurrent.ConcurrentLinkedQueue<Boolean>()
+        for (i in 1..10) {
+            executor.submit {
+                try {
+                    results += update { s ->
+                        s.copy(model = (s.model.toInt() + 1).toString())
+                    }
+                } finally {
+                    latch.countDown()
                 }
             }
-            assertTrue("all updates report success", deferreds.awaitAll().all { it })
         }
+        assertTrue("threads finished in time", latch.await(5, TimeUnit.SECONDS))
+        executor.shutdown()
+        assertEquals("all 10 updates dispatched", 10, results.size)
+        assertTrue("all updates report success", results.all { it })
         val finalValue = readOrInitial(file, Sample())
         assertEquals(
-            "Mutex-serialized RMW must preserve all 10 increments — no lost updates",
+            "synchronized-serialized RMW must preserve all 10 increments — no lost updates",
             "10",
             finalValue.model,
         )
