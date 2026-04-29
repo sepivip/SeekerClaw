@@ -308,25 +308,35 @@ object LogCollector {
     fun startPolling(context: Context) = startWatching(context)
 
     /**
-     * Foreground-visible catch-up path. Calls [requestDrain] to ask
-     * the existing drain worker to follow `service_logs` from
-     * [lastReadPosition], picking up any appends the FileObserver
-     * may have missed (observed on Solana Seeker — kernel sometimes
-     * drops events). Idempotent and cheap: if no new bytes exist
-     * since the last drain, `drainUntilSettled` is a no-op.
+     * Foreground-visible catch-up path. Performs an ACTIVE disk read
+     * — does NOT depend on the drain worker / FileObserver / current
+     * [lastReadPosition] to be healthy.
+     *
+     * BAT-513 round-23: round-22 mistakenly simplified this to just
+     * `requestDrain()`, but on device the drain path is exactly the
+     * one that goes stale when the kernel drops FileObserver events
+     * (lastReadPosition gets stuck at the position of the last
+     * delivered event; subsequent appends never trigger a drain
+     * because no event ever fires). A drain-only refresh therefore
+     * "asks the dead messenger to deliver the message" — useless.
+     *
+     * The fix: launch on Dispatchers.IO and call [readAllFromFile]
+     * directly. That function is tail-bounded (`MAX_LINES * 200L =
+     * ~60 KB` regardless of file size), so calling it at 1.5s
+     * cadence on a 10 MB rotated log is fine — we read the last
+     * ~60 KB, parse, and publish whatever's there. Then trigger a
+     * follow-up drain in case more bytes landed during the read.
      *
      * Safe to call from a Compose `LaunchedEffect` loop at 1-2s
      * cadence while a screen (Logs, Dashboard, System) is composed
      * — leaves composition → loop dies. NOT a 24/7 background poll.
-     * The initial full-file read happens once in [init] /
-     * [startWatching] (`scope.launch { readAllFromFile() }`); this
-     * method is the lightweight follow-up, NOT the heavy first
-     * load. BAT-513 round-22: simplified from a per-call
-     * `readAllFromFile` (which would be wasteful at 1.5s cadence on
-     * a 10MB rotated log) to a pure drain request.
      */
     fun refreshFromFile() {
-        requestDrain()
+        scope.launch {
+            readAllFromFile()
+            initialReadComplete = true
+            requestDrain()
+        }
     }
 
     private fun writeToFile(entry: LogEntry) {

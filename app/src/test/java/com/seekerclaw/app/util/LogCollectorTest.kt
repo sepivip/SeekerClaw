@@ -461,4 +461,63 @@ class LogCollectorTest {
         assertEquals("agent_health_state", LogCollector.fileNameFromObserverPath("workspace/agent_health_state"))
         assertNull(LogCollector.fileNameFromObserverPath(null))
     }
+
+    @Test
+    fun `refreshFromFile publishes new file content without observer events`() = runBlocking {
+        // BAT-513 round-23: refreshFromFile must work as a TRUE catch-up
+        // path even when no FileObserver event ever fires. The 1.5s
+        // foreground loop in DashboardScreen / LogsScreen / SystemScreen
+        // depends on this guarantee — on Solana Seeker, FileObserver on
+        // filesDir occasionally drops events, leaving the drain
+        // worker's lastReadPosition stuck. A drain-only refresh in
+        // that state would never see the new bytes; refreshFromFile
+        // must DIRECTLY read the file regardless of observer state.
+        //
+        // Simulates: an external writer (the :node service writing to
+        // service_logs) appends new lines, but no FileObserver event
+        // is delivered to the test harness. Calling refreshFromFile
+        // alone must publish those lines into _logs.
+        val tmp = File.createTempFile("bat513-r23-refresh", ".test")
+        try {
+            LogCollector.setLogFileForTest(tmp)
+            LogCollector.resetForTest()
+
+            // Write some initial content. NO observer event, NO drain
+            // request — just a file append, then refreshFromFile.
+            val ts = System.currentTimeMillis()
+            tmp.writeText("$ts|INFO|first appended line\n")
+
+            LogCollector.refreshFromFile()
+            // refreshFromFile dispatches to Dispatchers.IO. Wait for
+            // the read + publish to settle. StateFlow updates are
+            // synchronous after the read completes.
+            kotlinx.coroutines.delay(150)
+
+            assertTrue(
+                "refreshFromFile must read & publish appended content (got ${LogCollector.logs.value.size} entries)",
+                LogCollector.logs.value.isNotEmpty(),
+            )
+            assertEquals("first appended line", LogCollector.logs.value.last().message)
+
+            // Second append, again with no observer event, just a
+            // refreshFromFile call. The catch-up loop semantics: each
+            // tick must pick up whatever's currently on disk.
+            val ts2 = ts + 1
+            tmp.appendText("$ts2|WARN|second appended line\n")
+
+            LogCollector.refreshFromFile()
+            kotlinx.coroutines.delay(150)
+
+            assertTrue(
+                "refreshFromFile must publish the second append too (got ${LogCollector.logs.value.size} entries)",
+                LogCollector.logs.value.size >= 2,
+            )
+            assertEquals("second appended line", LogCollector.logs.value.last().message)
+            assertEquals(LogLevel.WARN, LogCollector.logs.value.last().level)
+        } finally {
+            LogCollector.setLogFileForTest(null)
+            LogCollector.resetForTest()
+            tmp.delete()
+        }
+    }
 }
