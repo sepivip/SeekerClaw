@@ -70,7 +70,13 @@ fun McpConfigScreen(onBack: () -> Unit) {
     var editingMcpServer by remember { mutableStateOf<McpServer?>(null) }
     var showDeleteMcpDialog by remember { mutableStateOf(false) }
     var deletingMcpServer by remember { mutableStateOf<McpServer?>(null) }
-    var showRestartDialog by remember { mutableStateOf(false) }
+    // BAT-514: no restart prompt for MCP edits. The Node side picks
+    // up file changes via fs.watch + the bridge `/mcp/reconcile`
+    // endpoint within ~1-2s, so the agent never needs to be
+    // restarted for an MCP server add/edit/disable/delete/token
+    // change. The StateFlow-driven list above provides the visual
+    // confirmation (Copilot R5 PR #352 finding — the prior restart
+    // prompt contradicted the BAT-514 design).
 
     // BAT-514 R2: McpServersStore.write / setAuthToken do disk I/O
     // (JSON encode + atomic move + KeystoreHelper encrypt for the
@@ -148,11 +154,13 @@ fun McpConfigScreen(onBack: () -> Unit) {
                                             val ok = withContext(Dispatchers.IO) {
                                                 McpServersStore.write(updated)
                                             }
-                                            if (ok) {
-                                                showRestartDialog = true
-                                            } else {
-                                                // Revert via the StateFlow —
-                                                // UI re-reads last valid list.
+                                            // Success path is silent —
+                                            // StateFlow refreshes the list
+                                            // and Node reconciles within
+                                            // ~1-2s. Failure surfaces a
+                                            // Toast and reverts via the
+                                            // StateFlow re-read.
+                                            if (!ok) {
                                                 Toast.makeText(
                                                     context,
                                                     "Couldn't update server",
@@ -380,7 +388,6 @@ fun McpConfigScreen(onBack: () -> Unit) {
                                     }
                                 }
                                 showMcpDialog = false
-                                showRestartDialog = true
                             }
                         }
                     },
@@ -438,7 +445,6 @@ fun McpConfigScreen(onBack: () -> Unit) {
                         if (ok) {
                             showDeleteMcpDialog = false
                             deletingMcpServer = null
-                            showRestartDialog = true
                         } else {
                             Toast.makeText(
                                 context,
@@ -466,11 +472,5 @@ fun McpConfigScreen(onBack: () -> Unit) {
         )
     }
 
-    // ==================== Restart Prompt ====================
-    if (showRestartDialog) {
-        RestartDialog(
-            context = context,
-            onDismiss = { showRestartDialog = false },
-        )
-    }
+    // No restart prompt — see comment at the top of this composable.
 }
