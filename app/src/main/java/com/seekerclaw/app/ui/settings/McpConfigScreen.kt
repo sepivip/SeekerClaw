@@ -147,12 +147,25 @@ fun McpConfigScreen(onBack: () -> Unit) {
                                 SeekerClawSwitch(
                                     checked = server.enabled,
                                     onCheckedChange = { enabled ->
-                                        val updated = mcpServers.map {
-                                            if (it.id == server.id) it.copy(enabled = enabled) else it
-                                        }
+                                        val targetId = server.id
+                                        // BAT-514 R9: route through
+                                        // update() for atomic RMW
+                                        // against the latest disk
+                                        // snapshot. write(mcpServers.map{}
+                                        // would compute from the UI's
+                                        // collected StateFlow value,
+                                        // which lags behind disk by a
+                                        // collector tick — two rapid
+                                        // toggles (or a toggle racing
+                                        // a /provider write from :node)
+                                        // could overwrite each other.
                                         scope.launch {
                                             val ok = withContext(Dispatchers.IO) {
-                                                McpServersStore.write(updated)
+                                                McpServersStore.update { current ->
+                                                    current.map {
+                                                        if (it.id == targetId) it.copy(enabled = enabled) else it
+                                                    }
+                                                }
                                             }
                                             // Success path is silent —
                                             // StateFlow refreshes the list
@@ -344,21 +357,29 @@ fun McpConfigScreen(onBack: () -> Unit) {
                                 enabled = editingMcpServer?.enabled ?: true,
                                 rateLimit = editingMcpServer?.rateLimit ?: 10,
                             )
-                            val updated = if (editingMcpServer != null) {
-                                mcpServers.map { if (it.id == serverId) server else it }
-                            } else {
-                                mcpServers + server
-                            }
                             val tokenValue = mcpToken.trim()
                             val wasEditing = editingMcpServer != null
-                            // BAT-514 R2: persist + token write run on
-                            // Dispatchers.IO. write() does atomic file
-                            // move + KeystoreHelper.encrypt for the
-                            // shadow rebuild; setAuthToken does
-                            // KeystoreHelper.encrypt + commit.
+                            // BAT-514 R9: route through update() for
+                            // atomic RMW (same rationale as toggle /
+                            // delete). The transform composes the new
+                            // list against the latest on-disk state,
+                            // so concurrent edits from another screen
+                            // or the :node side can't be silently
+                            // overwritten by the UI's lagging
+                            // StateFlow snapshot. Validation throws
+                            // inside update()'s transform are caught
+                            // by CrossProcessStore.update and surface
+                            // as `false` here, which the existing
+                            // Toast path handles.
                             scope.launch {
                                 val writeOk = withContext(Dispatchers.IO) {
-                                    McpServersStore.write(updated)
+                                    McpServersStore.update { current ->
+                                        if (wasEditing) {
+                                            current.map { if (it.id == serverId) server else it }
+                                        } else {
+                                            current + server
+                                        }
+                                    }
                                 }
                                 if (!writeOk) {
                                     Toast.makeText(
@@ -434,13 +455,16 @@ fun McpConfigScreen(onBack: () -> Unit) {
             confirmButton = {
                 TextButton(onClick = {
                     val targetId = deletingMcpServer?.id
-                    val updated = mcpServers.filter { it.id != targetId }
-                    // BAT-514 R2: write off the UI thread (atomic move
-                    // + shadow rebuild + orphan token clear all do
-                    // disk + Keystore work).
+                    // BAT-514 R9: route through update() for atomic
+                    // RMW. Same rationale as the toggle handler —
+                    // the UI's `mcpServers` snapshot lags behind disk
+                    // by a collector tick, so a delete computed from
+                    // a stale list could miss a concurrent edit.
                     scope.launch {
                         val ok = withContext(Dispatchers.IO) {
-                            McpServersStore.write(updated)
+                            McpServersStore.update { current ->
+                                current.filter { it.id != targetId }
+                            }
                         }
                         if (ok) {
                             showDeleteMcpDialog = false

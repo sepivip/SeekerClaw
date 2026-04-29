@@ -96,14 +96,19 @@ const tests = [];
 let pass = 0, fail = 0;
 function test(name, fn) { tests.push({ name, fn }); }
 async function run() {
-    server.start({
+    const httpServer = server.start({
         bridgeToken: BRIDGE_TOKEN,
         getDbSummary: () => _dbSummary,
         requestReconcile: (id) => { _reconcileCalls.push(id); },
         logFn: () => {}, // suppress
     });
-    // small delay so listen() callback fires
-    await new Promise((r) => setTimeout(r, 30));
+    // Wait deterministically for the listening event (Copilot R9 PR
+    // #352 finding — the prior fixed 30ms sleep could race CI loaded
+    // runners and produce ECONNREFUSED on the first request).
+    await new Promise((resolve) => {
+        if (httpServer.listening) resolve();
+        else httpServer.once('listening', resolve);
+    });
     for (const { name, fn } of tests) {
         try {
             _reconcileCalls = [];
