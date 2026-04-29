@@ -1,113 +1,256 @@
 package com.seekerclaw.app.config
 
+import android.content.Context
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+
 /**
- * Provider registry for multi-provider support (BAT-315).
- * Adding a new provider = 1 entry here + 1 model list.
+ * Provider + model registry shared between Kotlin and Node (BAT-517).
+ *
+ * Source of truth: `app/src/main/assets/nodejs-project/model-registry.json`.
+ * Both runtimes read the SAME file:
+ *  - Kotlin: `context.assets.open("nodejs-project/model-registry.json")`
+ *  - Node:   `path.join(__dirname, 'model-registry.json')` after the
+ *            APK→filesDir extraction in NodeBridge.
+ *
+ * Adding a new provider or model = ONE edit to the JSON file. The
+ * pre-BAT-517 layout had the same data encoded twice — once in this
+ * file and once in `model-catalog.js` — and it had already drifted
+ * during BAT-509. Centralizing here keeps both sides in sync.
+ *
+ * ## Read-only by design
+ *
+ * The registry ships with the APK and is never mutated at runtime —
+ * model data only changes via app updates. So no [com.seekerclaw.app.util.CrossProcessStore],
+ * no FileObserver, no atomic-RMW: this is just a JSON-backed lookup
+ * table.
  */
+@Serializable
 data class ProviderInfo(
     val id: String,
     val displayName: String,
     val authTypes: List<String>,
     val keyHint: String,
     val consoleUrl: String,
-    val keysUrl: String = consoleUrl,
+    val keysUrl: String,
+    val freeform: Boolean,
+    val defaultModel: String,
+    val models: List<ModelInfo>,
+    /**
+     * Per-auth-type override map. Optional — most providers don't need
+     * it. Today only OpenAI uses this (`oauth` exposes an extra
+     * `gpt-5.4-mini` that the API-key flow doesn't have access to).
+     * Default `emptyMap()` so providers that omit the field parse
+     * cleanly via kotlinx-serialization (Codex v2.1 finding).
+     */
+    val modelsByAuth: Map<String, List<ModelInfo>> = emptyMap(),
 )
 
-val availableProviders = listOf(
-    ProviderInfo(
-        id = "openai",
-        displayName = "OpenAI",
-        authTypes = listOf("api_key", "oauth"),
-        keyHint = "sk-proj-…",
-        consoleUrl = "https://platform.openai.com",
-        keysUrl = "https://platform.openai.com/api-keys",
-    ),
-    ProviderInfo(
-        id = "claude",
-        displayName = "Anthropic",
-        authTypes = listOf("api_key", "setup_token"),
-        keyHint = "sk-ant-api03-…",
-        consoleUrl = "https://console.anthropic.com",
-        keysUrl = "https://console.anthropic.com/settings/keys",
-    ),
-    ProviderInfo(
-        id = "openrouter",
-        displayName = "OpenRouter",
-        authTypes = listOf("api_key"),
-        keyHint = "sk-or-v1-…",
-        consoleUrl = "https://openrouter.ai",
-        keysUrl = "https://openrouter.ai/keys",
-    ),
-    ProviderInfo(
-        id = "custom",
-        displayName = "Custom",
-        authTypes = listOf("api_key"),
-        keyHint = "your-api-key",
-        consoleUrl = "https://seekerclaw.xyz/docs/custom-provider",
-        keysUrl = "https://seekerclaw.xyz/docs/custom-provider",
-    ),
+@Serializable
+private data class ModelRegistryFile(
+    val version: Int,
+    val providers: List<ProviderInfo>,
 )
 
-// Display order: freshest first for UX. Default selection is NOT tied
-// to list order — see defaultModelForProvider() below. Callers seeding
-// a default must use that helper, not `firstOrNull()`, so newer models
-// can appear at the top of the picker without accidentally becoming
-// the default for tier-gated users.
-val openaiModels = listOf(
-    ModelInfo("gpt-5.5", "GPT-5.5"),
-    ModelInfo("gpt-5.4", "GPT-5.4"),
-    ModelInfo("gpt-5.3-codex", "GPT-5.3 Codex"),
-)
+object ModelRegistry {
+    private const val ASSET_PATH = "nodejs-project/model-registry.json"
+    private const val EXPECTED_VERSION = 1
 
-val openaiOAuthModels = listOf(
-    ModelInfo("gpt-5.5", "GPT-5.5"),
-    ModelInfo("gpt-5.4", "GPT-5.4"),
-    ModelInfo("gpt-5.4-mini", "GPT-5.4 Mini"),
-    ModelInfo("gpt-5.3-codex", "GPT-5.3 Codex"),
-)
+    @Volatile
+    private var initialized = false
+    private val initLock = Any()
+    private var _providers: List<ProviderInfo>? = null
 
-/** Default model for freeform providers (OpenRouter) where model list is empty. */
-const val OPENROUTER_DEFAULT_MODEL = "anthropic/claude-sonnet-4-6"
-
-/**
- * Resolve the model list for a given provider.
- *
- * For OpenAI, `authType` MUST be an explicit "oauth" or "api_key" — passing null or
- * any other value throws so call sites can't accidentally fall through to the API-key
- * model list while the user is in OAuth mode. For other providers `authType` is
- * advisory/ignored.
- */
-fun modelsForProvider(providerId: String, authType: String?): List<ModelInfo> = when (providerId) {
-    "openai" -> when (authType) {
-        "oauth" -> openaiOAuthModels
-        "api_key" -> openaiModels
-        null -> throw IllegalArgumentException("authType is required for providerId=openai")
-        else -> throw IllegalArgumentException("Unsupported authType '$authType' for providerId=openai")
+    private val json = Json {
+        ignoreUnknownKeys = true
+        encodeDefaults = true
     }
-    "openrouter", "custom" -> emptyList() // Freeform: user types model ID
-    else -> availableModels
+
+    /**
+     * Idempotent. Call from [com.seekerclaw.app.SeekerClawApplication.onCreate]
+     * BEFORE any code that touches `ConfigManager` / provider helpers,
+     * and OUTSIDE any `isMainProcess` guard — both the main UI process
+     * AND the `:node` service process need the registry available
+     * (Codex v2 finding).
+     *
+     * Load-and-validate first, publish-after-success: a failed parse
+     * (bad JSON, schema mismatch, missing required field) throws and
+     * leaves [initialized] = false so a retry can re-attempt the load
+     * (Codex v2.1 finding).
+     */
+    fun init(context: Context) {
+        if (initialized) return
+        synchronized(initLock) {
+            if (initialized) return
+            // loadAndValidate may throw on bad JSON or schema mismatch.
+            // Until publication on the next two lines, `initialized`
+            // stays false and any retry caller starts from scratch.
+            val loaded = loadAndValidate(context.applicationContext)
+            _providers = loaded
+            initialized = true
+        }
+    }
+
+    /**
+     * Test seam — bypass the asset load and inject a synthetic
+     * registry. Used by `ModelRegistryTest` to exercise edge cases
+     * without a real Android Context.
+     */
+    @androidx.annotation.VisibleForTesting
+    internal fun initForTest(providers: List<ProviderInfo>) {
+        synchronized(initLock) {
+            _providers = providers
+            initialized = true
+        }
+    }
+
+    @androidx.annotation.VisibleForTesting
+    internal fun resetForTest() {
+        synchronized(initLock) {
+            _providers = null
+            initialized = false
+        }
+    }
+
+    val providers: List<ProviderInfo>
+        get() = _providers
+            ?: error("ModelRegistry.init(context) must be called before use")
+
+    /**
+     * Look up a provider by id. Falls back to the FIRST provider in the
+     * registry for unknown ids — preserves the pre-BAT-517 behaviour
+     * where unknown id → `availableProviders[0]` (which today is
+     * `openai`). The fallback is intentional: code paths that use
+     * `providerById` for branding / display never crash on a corrupt
+     * persisted provider id.
+     */
+    fun providerById(id: String): ProviderInfo {
+        val list = providers
+        return list.find { it.id == id } ?: list[0]
+    }
+
+    /**
+     * Resolve the model list for a given provider+auth combination.
+     *
+     * For OpenAI specifically, [authType] MUST be either `"api_key"` or
+     * `"oauth"` — passing null or any other value throws so callers
+     * can't accidentally fall through to the API-key model list while
+     * the user is in OAuth mode. This mirrors the pre-BAT-517 Kotlin
+     * behaviour and is intentionally asymmetric with Node (which
+     * returns `[]` instead of throwing — Node tools can't crash the
+     * chat turn). For other providers [authType] is advisory; we
+     * always return the base `models` list (or per-auth override if
+     * present and the auth matches), and freeform providers get `[]`.
+     */
+    fun modelsForProvider(providerId: String, authType: String?): List<ModelInfo> {
+        val provider = providers.find { it.id == providerId } ?: return emptyList()
+        if (provider.freeform) return emptyList()
+        if (provider.id == "openai") {
+            return when (authType) {
+                "oauth" -> provider.modelsByAuth["oauth"] ?: provider.models
+                "api_key" -> provider.models
+                null -> throw IllegalArgumentException("authType is required for providerId=openai")
+                else -> throw IllegalArgumentException("Unsupported authType '$authType' for providerId=openai")
+            }
+        }
+        // Other providers: per-auth override wins if present, else base models.
+        if (authType != null) {
+            provider.modelsByAuth[authType]?.let { return it }
+        }
+        return provider.models
+    }
+
+    /**
+     * Recommended default model for a given provider. Decoupled from
+     * [ProviderInfo.models] order — explicit registry value, not
+     * `models[0]`. The display order in the picker can put a
+     * tier-gated model at the top without it silently becoming the
+     * fresh-install default.
+     *
+     * No per-auth defaults today; if a future provider needs them,
+     * extend the schema with `defaultModelByAuth` symmetric to
+     * `modelsByAuth`.
+     */
+    fun defaultModelForProvider(providerId: String, @Suppress("UNUSED_PARAMETER") authType: String?): String {
+        val provider = providers.find { it.id == providerId } ?: return ""
+        return provider.defaultModel
+    }
+
+    /**
+     * Render a model id as its display label by searching every
+     * provider's [ProviderInfo.models] AND every
+     * [ProviderInfo.modelsByAuth] list. First match wins. Falls back
+     * to the raw id verbatim for freeform / future / unknown models —
+     * so an OpenRouter id like `anthropic/claude-sonnet-4-6` displays
+     * as itself rather than a confusing "Not configured" or empty
+     * string. Pre-BAT-517 this only searched the Claude list, so
+     * `modelDisplayName("gpt-5.4")` returned the raw id; post-BAT-517
+     * it returns `"GPT-5.4"`. Codex v2 finding 5.
+     */
+    fun modelDisplayName(modelId: String?): String {
+        if (modelId.isNullOrBlank()) return "Not configured"
+        for (provider in providers) {
+            provider.models.find { it.id == modelId }?.let { return it.displayName }
+            for (overrideList in provider.modelsByAuth.values) {
+                overrideList.find { it.id == modelId }?.let { return it.displayName }
+            }
+        }
+        return modelId
+    }
+
+    /**
+     * Internal load + minimal-validation entry point. Throws on:
+     *  - missing asset / IO failure
+     *  - JSON parse error
+     *  - version mismatch
+     *  - empty providers list (a valid registry MUST list at least
+     *    one provider so [providerById]'s fallback is well-defined)
+     *
+     * Heavier invariants (default-model membership, no-duplicate-ids,
+     * `modelsByAuth` keys ⊆ `authTypes`) are pinned by
+     * `ModelRegistryTest` rather than enforced at load — failing hard
+     * on a malformed bundled asset is the right call (it's a build-
+     * time bug), but we don't want the runtime loader doing every
+     * check the test suite does.
+     */
+    private fun loadAndValidate(applicationContext: Context): List<ProviderInfo> {
+        val raw = applicationContext.assets.open(ASSET_PATH)
+            .use { it.bufferedReader().readText() }
+        val parsed = json.decodeFromString(ModelRegistryFile.serializer(), raw)
+        require(parsed.version == EXPECTED_VERSION) {
+            "model-registry.json version=${parsed.version}, expected=$EXPECTED_VERSION"
+        }
+        require(parsed.providers.isNotEmpty()) {
+            "model-registry.json has no providers"
+        }
+        return parsed.providers
+    }
 }
 
-fun providerById(id: String): ProviderInfo =
-    availableProviders.find { it.id == id } ?: availableProviders[0]
+// ─── Backward-compatible top-level API ──────────────────────────────
+//
+// Pre-BAT-517 callers across UI/config code import these names. They
+// stay as property getters / delegating functions so the existing
+// import statements keep working without churn. The implementations
+// route through ModelRegistry — getters specifically (NOT eager top-
+// level vals) so each access reads after `ModelRegistry.init()` has
+// run, even for a caller that ran before init() (Codex v2.1 finding).
+
+val availableProviders: List<ProviderInfo>
+    get() = ModelRegistry.providers
+
+fun providerById(id: String): ProviderInfo = ModelRegistry.providerById(id)
+
+fun modelsForProvider(providerId: String, authType: String?): List<ModelInfo> =
+    ModelRegistry.modelsForProvider(providerId, authType)
+
+fun defaultModelForProvider(providerId: String, authType: String?): String =
+    ModelRegistry.defaultModelForProvider(providerId, authType)
 
 /**
- * Recommended default model for a given provider/authType.
- *
- * Decoupled from list order (intentionally) so the display list can prioritize
- * the newest/most-exciting model at the top while the default stays on a known-
- * safe, broadly-available choice. Rule of thumb: if a brand-new model is added
- * that's tier-gated (e.g. only available on ChatGPT Pro), leave this alone —
- * users on lower tiers must never hit a default that their plan can't reach.
- *
- * Call sites that seed an initial model (SetupScreen, provider/auth switches)
- * should use this helper instead of `modelsForProvider(...).firstOrNull()`.
+ * Default for OpenRouter — kept as a top-level alias for the call
+ * sites that imported it directly pre-BAT-517. Sourced from the
+ * registry instead of a hardcoded const.
  */
-fun defaultModelForProvider(providerId: String, authType: String?): String = when (providerId) {
-    // GPT-5.4 is available on every ChatGPT subscription tier AND via API key.
-    // GPT-5.5 is tier-gated on some plans as of 2026-04 — don't pick it as a default.
-    "openai" -> "gpt-5.4"
-    "openrouter" -> OPENROUTER_DEFAULT_MODEL
-    "custom" -> ""
-    else -> availableModels.firstOrNull()?.id ?: ""
-}
+val OPENROUTER_DEFAULT_MODEL: String
+    get() = ModelRegistry.providerById("openrouter").defaultModel

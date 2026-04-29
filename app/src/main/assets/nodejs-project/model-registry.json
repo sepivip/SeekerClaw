@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "providers": [
+    {
+      "id": "openai",
+      "displayName": "OpenAI",
+      "authTypes": ["api_key", "oauth"],
+      "keyHint": "sk-proj-…",
+      "consoleUrl": "https://platform.openai.com",
+      "keysUrl": "https://platform.openai.com/api-keys",
+      "freeform": false,
+      "defaultModel": "gpt-5.4",
+      "models": [
+        { "id": "gpt-5.5",       "displayName": "GPT-5.5" },
+        { "id": "gpt-5.4",       "displayName": "GPT-5.4" },
+        { "id": "gpt-5.3-codex", "displayName": "GPT-5.3 Codex" }
+      ],
+      "modelsByAuth": {
+        "oauth": [
+          { "id": "gpt-5.5",       "displayName": "GPT-5.5" },
+          { "id": "gpt-5.4",       "displayName": "GPT-5.4" },
+          { "id": "gpt-5.4-mini",  "displayName": "GPT-5.4 Mini" },
+          { "id": "gpt-5.3-codex", "displayName": "GPT-5.3 Codex" }
+        ]
+      }
+    },
+    {
+      "id": "claude",
+      "displayName": "Anthropic",
+      "authTypes": ["api_key", "setup_token"],
+      "keyHint": "sk-ant-api03-…",
+      "consoleUrl": "https://console.anthropic.com",
+      "keysUrl": "https://console.anthropic.com/settings/keys",
+      "freeform": false,
+      "defaultModel": "claude-opus-4-7",
+      "models": [
+        { "id": "claude-opus-4-7",   "displayName": "Opus 4.7" },
+        { "id": "claude-opus-4-6",   "displayName": "Opus 4.6" },
+        { "id": "claude-sonnet-4-6", "displayName": "Sonnet 4.6" },
+        { "id": "claude-haiku-4-5",  "displayName": "Haiku 4.5" }
+      ]
+    },
+    {
+      "id": "openrouter",
+      "displayName": "OpenRouter",
+      "authTypes": ["api_key"],
+      "keyHint": "sk-or-v1-…",
+      "consoleUrl": "https://openrouter.ai",
+      "keysUrl": "https://openrouter.ai/keys",
+      "freeform": true,
+      "defaultModel": "anthropic/claude-sonnet-4-6",
+      "models": []
+    },
+    {
+      "id": "custom",
+      "displayName": "Custom",
+      "authTypes": ["api_key"],
+      "keyHint": "your-api-key",
+      "consoleUrl": "https://seekerclaw.xyz/docs/custom-provider",
+      "keysUrl": "https://seekerclaw.xyz/docs/custom-provider",
+      "freeform": true,
+      "defaultModel": "",
+      "models": []
+    }
+  ]
+}

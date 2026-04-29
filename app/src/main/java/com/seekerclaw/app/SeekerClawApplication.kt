@@ -21,6 +21,17 @@ class SeekerClawApplication : Application() {
         super.onCreate()
         createNotificationChannel()
 
+        // BAT-517: load the shared provider+model registry FIRST,
+        // before anything else that might touch ConfigManager /
+        // provider helpers. Runs in EVERY Android process (NOT
+        // gated on isMainProcess) — the `:node` service process
+        // also calls ConfigManager paths that depend on the
+        // registry. `init` is idempotent so a second call from
+        // a future code path (or a test) is a no-op. Failed parse
+        // throws and leaves the registry uninitialized so a retry
+        // can re-attempt the load.
+        com.seekerclaw.app.config.ModelRegistry.init(this)
+
         // Firebase Analytics
         Analytics.init(this)
         ConfigManager.loadConfig(this)?.let { config ->

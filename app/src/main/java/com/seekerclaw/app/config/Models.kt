@@ -1,21 +1,38 @@
 package com.seekerclaw.app.config
 
+import kotlinx.serialization.Serializable
+
+@Serializable
 data class ModelInfo(
     val id: String,
     val displayName: String,
 )
 
-// Position [0] is the fallback target: SetupScreen coerces any saved model ID
-// not present in this list to availableModels[0].id. Keep the freshest / default
-// model at the top so coercion and fresh-install defaults stay symmetric.
-val availableModels = listOf(
-    ModelInfo("claude-opus-4-7", "Opus 4.7"),
-    ModelInfo("claude-opus-4-6", "Opus 4.6"),
-    ModelInfo("claude-sonnet-4-6", "Sonnet 4.6"),
-    ModelInfo("claude-haiku-4-5", "Haiku 4.5"),
-)
+/**
+ * Backward-compat alias for the Claude model list. Pre-BAT-517 this
+ * was the canonical "available models" list (Claude was the only
+ * provider). Today it's just the Claude entry's `models` from the
+ * registry, exposed as a property getter so callers that import it
+ * directly keep working without churn.
+ *
+ * Property getter (NOT eager top-level val) so each access reads
+ * AFTER `ModelRegistry.init()` has run — Codex v2.1 finding.
+ */
+val availableModels: List<ModelInfo>
+    get() = ModelRegistry.providerById("claude").models
 
-fun modelDisplayName(modelId: String?): String {
-    if (modelId.isNullOrBlank()) return "Not configured"
-    return availableModels.find { it.id == modelId }?.displayName ?: modelId
-}
+/**
+ * Render a model id as its display label.
+ *
+ * Searches EVERY provider's `models` AND every `modelsByAuth` list
+ * (Codex v2 finding 5). Pre-BAT-517 this only searched the Claude
+ * list, so `modelDisplayName("gpt-5.4")` returned the raw id when
+ * the user was on OpenAI; post-BAT-517 it returns `"GPT-5.4"`.
+ *
+ * Behaviour summary:
+ *  - null/blank → `"Not configured"` (preserved)
+ *  - found in any provider's effective list → the registry display name
+ *  - not found (freeform / future / unknown) → the raw id verbatim
+ */
+fun modelDisplayName(modelId: String?): String =
+    ModelRegistry.modelDisplayName(modelId)

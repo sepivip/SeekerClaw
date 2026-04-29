@@ -1,54 +1,73 @@
 // ============================================================================
-// Model & provider catalog — mirrors Kotlin Providers.kt / Models.kt.
+// Model & provider catalog — derived from the shared model-registry.json (BAT-517).
 //
 // Used by the `/model` and `/provider` Telegram slash commands to validate
-// user input. Kept deliberately simple (pure data + pure functions) so it's
-// easy to unit-test and easy to spot drift vs the Kotlin source.
+// user input. After BAT-517, the catalog data lives in ONE place:
+//   app/src/main/assets/nodejs-project/model-registry.json
+// Both this module AND Kotlin's ModelRegistry load the same file. Adding
+// a model means editing the JSON; both runtimes pick it up at next start.
 //
-// KEEP IN SYNC with:
-//   app/src/main/java/com/seekerclaw/app/config/Providers.kt
-//   app/src/main/java/com/seekerclaw/app/config/Models.kt
+// Export shape preserved from pre-BAT-517 (CLAUDE_MODELS, OPENAI_*_MODELS,
+// *_DEFAULT_MODEL, KNOWN_PROVIDERS, PROVIDER_DISPLAY_NAMES, the
+// validate/resolve helpers) so existing callers in message-handler.js and
+// the test suite keep working without churn.
 // ============================================================================
 
 'use strict';
 
-// Ordered for display: freshest first. Default selection is explicit (see
-// defaultModelForProvider) and NOT tied to list position — so newly-added
-// tier-gated models can appear at the top of pickers without silently
-// becoming the default.
-const CLAUDE_MODELS = [
-    { id: 'claude-opus-4-7',   displayName: 'Opus 4.7' },
-    { id: 'claude-opus-4-6',   displayName: 'Opus 4.6' },
-    { id: 'claude-sonnet-4-6', displayName: 'Sonnet 4.6' },
-    { id: 'claude-haiku-4-5',  displayName: 'Haiku 4.5' },
-];
+const fs = require('fs');
+const path = require('path');
 
-const OPENAI_API_KEY_MODELS = [
-    { id: 'gpt-5.5',       displayName: 'GPT-5.5' },
-    { id: 'gpt-5.4',       displayName: 'GPT-5.4' },
-    { id: 'gpt-5.3-codex', displayName: 'GPT-5.3 Codex' },
-];
+const REGISTRY_PATH = path.join(__dirname, 'model-registry.json');
+const EXPECTED_VERSION = 1;
 
-const OPENAI_OAUTH_MODELS = [
-    { id: 'gpt-5.5',       displayName: 'GPT-5.5' },
-    { id: 'gpt-5.4',       displayName: 'GPT-5.4' },
-    { id: 'gpt-5.4-mini',  displayName: 'GPT-5.4 Mini' },
-    { id: 'gpt-5.3-codex', displayName: 'GPT-5.3 Codex' },
-];
+// Load + validate at require-time. Failure throws — matches Kotlin's
+// "fail loud at boot" behaviour and makes a malformed bundled asset
+// (a build-time bug) impossible to ship undetected.
+function _loadRegistry() {
+    const raw = fs.readFileSync(REGISTRY_PATH, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (parsed.version !== EXPECTED_VERSION) {
+        throw new Error(`model-registry.json version=${parsed.version}, expected=${EXPECTED_VERSION}`);
+    }
+    if (!Array.isArray(parsed.providers) || parsed.providers.length === 0) {
+        throw new Error('model-registry.json has no providers');
+    }
+    return parsed;
+}
 
-const OPENROUTER_DEFAULT_MODEL = 'anthropic/claude-sonnet-4-6';
+const _REGISTRY = _loadRegistry();
+const _byId = Object.fromEntries(_REGISTRY.providers.map((p) => [p.id, p]));
 
-// Explicit safe defaults per provider. Do NOT derive these from list order —
-// a new model inserted at the top of a display list shouldn't silently change
-// the default. Tier-gated models (eg. gpt-5.5 on some ChatGPT plans) must
-// never be listed here, or fresh installs / provider-switch fallbacks would
-// land users on a model their plan can't reach.
-const CLAUDE_DEFAULT_MODEL = 'claude-opus-4-7';
-const OPENAI_DEFAULT_MODEL = 'gpt-5.4'; // available on every ChatGPT tier + api key
+// ─── Backward-compat exports derived from the registry ──────────────────────
+//
+// Pre-BAT-517 callers import these names directly. Computed once at module
+// load — the registry is read-only at runtime, so freezing the references
+// here matches the previous semantics (top-level `const`s).
+
+const CLAUDE_MODELS         = _byId.claude.models;
+const OPENAI_API_KEY_MODELS = _byId.openai.models;
+const OPENAI_OAUTH_MODELS   = _byId.openai.modelsByAuth.oauth;
+
+const CLAUDE_DEFAULT_MODEL     = _byId.claude.defaultModel;
+const OPENAI_DEFAULT_MODEL     = _byId.openai.defaultModel;
+const OPENROUTER_DEFAULT_MODEL = _byId.openrouter.defaultModel;
+
+const KNOWN_PROVIDERS = _REGISTRY.providers.map((p) => p.id);
+
+// Canonical display names for user-facing messaging (Telegram replies,
+// TG command descriptions, etc). Mirrors Kotlin's Settings UI convention
+// — `claude` maps to "Anthropic" (the company making Claude). NOT used
+// for identity/routing — that's always `providerId`.
+const PROVIDER_DISPLAY_NAMES = Object.fromEntries(
+    _REGISTRY.providers.map((p) => [p.id, p.displayName]),
+);
+
+// ─── Resolution helpers ─────────────────────────────────────────────────────
 
 /**
  * Resolve the model list for a given provider + auth.
- * Returns [] for freeform providers (openrouter, custom).
+ * Returns [] for freeform providers (openrouter, custom) and unknown providers.
  *
  * For OpenAI, `authType` MUST be explicitly 'api_key' or 'oauth'.
  * Passing null/undefined/anything else returns [] so callers
@@ -56,22 +75,22 @@ const OPENAI_DEFAULT_MODEL = 'gpt-5.4'; // available on every ChatGPT tier + api
  * rather than silently validating against the API-key allowlist.
  * Mirrors Kotlin's modelsForProvider which throws on the same
  * ambiguity — we return empty instead of throwing because a thrown
- * error from inside a Node tool would crash the chat turn.
+ * error from inside a Node tool would crash the chat turn (BAT-517
+ * preserves this asymmetry).
  */
 function modelsForProvider(providerId, authType) {
-    switch (providerId) {
-        case 'claude':
-            return CLAUDE_MODELS;
-        case 'openai':
-            if (authType === 'oauth') return OPENAI_OAUTH_MODELS;
-            if (authType === 'api_key') return OPENAI_API_KEY_MODELS;
-            return [];
-        case 'openrouter':
-        case 'custom':
-            return [];
-        default:
-            return [];
+    const provider = _byId[providerId];
+    if (!provider) return [];
+    if (provider.freeform) return [];
+    if (provider.id === 'openai') {
+        if (authType === 'oauth') return provider.modelsByAuth.oauth || provider.models;
+        if (authType === 'api_key') return provider.models;
+        return [];
     }
+    if (authType && provider.modelsByAuth && provider.modelsByAuth[authType]) {
+        return provider.modelsByAuth[authType];
+    }
+    return provider.models;
 }
 
 /**
@@ -79,41 +98,18 @@ function modelsForProvider(providerId, authType) {
  * Deliberately decoupled from list order — don't put tier-gated models here.
  * Mirrors Kotlin defaultModelForProvider(...).
  */
+// eslint-disable-next-line no-unused-vars
 function defaultModelForProvider(providerId, authType) {
-    switch (providerId) {
-        case 'claude':     return CLAUDE_DEFAULT_MODEL;
-        case 'openai':     return OPENAI_DEFAULT_MODEL;
-        case 'openrouter': return OPENROUTER_DEFAULT_MODEL;
-        case 'custom':     return '';
-        default:           return '';
-    }
+    const provider = _byId[providerId];
+    if (!provider) return '';
+    return provider.defaultModel;
 }
-
-const KNOWN_PROVIDERS = ['claude', 'openai', 'openrouter', 'custom'];
-
-// Canonical display names for user-facing messaging (Telegram replies,
-// TG command descriptions, etc). Mirrors Kotlin's Providers.kt
-// `availableProviders[].displayName` so Settings UI and Telegram
-// replies never disagree on branding. NOT used for identity/routing
-// — that's always `providerId`.
-//
-// Note: `claude` maps to "Anthropic" (the company making Claude) to
-// match Kotlin's Settings UI convention. Settings shows "Anthropic"
-// with the sk-ant-api03-… key hint, so the Telegram reply saying
-// "Switching to Anthropic" is consistent with where the user
-// configured credentials.
-const PROVIDER_DISPLAY_NAMES = {
-    claude: 'Anthropic',
-    openai: 'OpenAI',
-    openrouter: 'OpenRouter',
-    custom: 'Custom',
-};
 
 /**
  * Render a provider ID as a canonical brand name ("OpenAI", not
  * "Openai"). Falls back to the raw ID (capitalized) for anything
  * not in the registry so future providers don't crash the display
- * path if someone forgets to update PROVIDER_DISPLAY_NAMES.
+ * path if the JSON forgets to register one.
  */
 function displayNameForProvider(providerId) {
     if (PROVIDER_DISPLAY_NAMES[providerId]) return PROVIDER_DISPLAY_NAMES[providerId];
@@ -122,14 +118,13 @@ function displayNameForProvider(providerId) {
 }
 
 /**
- * Valid auth types per provider. OpenAI is the only one with multiple.
+ * Valid auth types per provider. Falls back to ['api_key'] for unknown
+ * providers (defensive — matches the pre-BAT-517 default branch).
  */
 function authTypesForProvider(providerId) {
-    switch (providerId) {
-        case 'openai': return ['api_key', 'oauth'];
-        case 'claude': return ['api_key', 'setup_token'];
-        default: return ['api_key'];
-    }
+    const provider = _byId[providerId];
+    if (provider) return provider.authTypes;
+    return ['api_key'];
 }
 
 /**
@@ -137,6 +132,11 @@ function authTypesForProvider(providerId) {
  * Reads from the startup `config` object loaded by config.js. Returns:
  *   { ok: true }                          — credentials present
  *   { ok: false, reason: <human string> } — missing / not configured
+ *
+ * NOT registry data — the runtime-config-key mapping (which `config.X`
+ * field corresponds to each provider/auth) is loader-side behaviour
+ * that stays per-language. Could move into the schema later if both
+ * runtimes need it; out of scope for BAT-517.
  */
 function hasCredentialsFor(config, providerId, authType) {
     const nonBlank = (v) => typeof v === 'string' && v.trim().length > 0;
@@ -184,7 +184,13 @@ function hasCredentialsFor(config, providerId, authType) {
 function validateModelForProvider(providerId, authType, modelId) {
     const trimmed = typeof modelId === 'string' ? modelId.trim() : '';
     if (!trimmed) return { ok: false, reason: 'Model ID must not be empty.' };
+    const provider = _byId[providerId];
+    if (provider && provider.freeform) {
+        return { ok: true, model: trimmed };
+    }
     if (providerId === 'openrouter' || providerId === 'custom') {
+        // Defensive: keep freeform behaviour at this call site even if
+        // someone removes the freeform flag from the registry entries.
         return { ok: true, model: trimmed };
     }
     const list = modelsForProvider(providerId, authType);
