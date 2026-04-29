@@ -15,6 +15,7 @@ const {
     getOwnerId, setOwnerId,
     workDir, config, debugLog,
     USER_ENV_KEYS,
+    BRIDGE_TOKEN, // BAT-514: passed to internal-control-server for X-Bridge-Token auth
 } = require('./config');
 
 process.on('uncaughtException', (err) => log('UNCAUGHT: ' + (err.stack || err), 'ERROR'));
@@ -28,6 +29,7 @@ const {
     redactSecrets,
     wrapExternalContent,
     registerRedactedSecrets,
+    registerRedactedSecret, // BAT-514: per-fetch MCP token redaction (mcp-client.js)
 } = require('./security');
 
 // Wire redactSecrets into config.js log() so early log lines before this point
@@ -46,13 +48,65 @@ registerRedactedSecrets(
 // BRIDGE (extracted to bridge.js — BAT-195)
 // ============================================================================
 
-const { androidBridgeCall } = require('./bridge');
+const { androidBridgeCall, fetchMcpToken } = require('./bridge');
 const { stripSilentReply, containsSilentReply } = require('./silent-reply');
 const { telegramCommandMenu, telegramFallbackMenu } = require('./telegram-commands');
 
-// ── MCP (Model Context Protocol) — Remote tool servers (BAT-168) ───
+// ── MCP (Model Context Protocol) — Remote tool servers (BAT-168, BAT-514) ───
 const { MCPManager } = require('./mcp-client');
-const mcpManager = new MCPManager(log, wrapExternalContent);
+const _mcpServersStore = require('./mcp-servers').open(workDir);
+// MCP_SERVERS resolution order (BAT-514):
+//   1. mcp_servers.json (Kotlin McpServersStore — live source of truth)
+//   2. config.json's mcpServers field (cold-start fallback for upgrades
+//      and legacy installs that haven't migrated yet)
+// Tokens are NOT in #1 — `tokenFetcher` resolves them via the bridge
+// at connect time. #2 entries may still carry inline `authToken` for
+// downgrade compatibility; MCPClient prefers the fetcher when set.
+function _resolveMcpConfigs() {
+    const fromFile = _mcpServersStore.read();
+    if (fromFile.length > 0) return fromFile;
+    return MCP_SERVERS;
+}
+const mcpManager = new MCPManager(log, wrapExternalContent, {
+    tokenFetcher: fetchMcpToken,
+    registerSecret: registerRedactedSecret,
+    configsProvider: _resolveMcpConfigs,
+});
+
+/**
+ * fs.watch the MCP servers file. On change, request a full reconcile —
+ * the manager's drain coalesces bursts (FileObserver-equivalent storms
+ * during atomic-move-based writes) into a single MCPManager.reconcile()
+ * pass. The bridge `POST /mcp/reconcile` endpoint is the deterministic
+ * catch-up; this is the fast path.
+ *
+ * Handles two transient cases:
+ *  - File doesn't exist yet on first launch: skip the watch and rely
+ *    on the bridge endpoint exclusively. The first Settings save will
+ *    create the file, and the next service start will pick up the
+ *    watch.
+ *  - Watch handle drops (rename across atomic-move can detach the
+ *    watcher on some kernels): re-attach lazily on next change via
+ *    the underlying inotify; if that fails, the bridge endpoint still
+ *    works as the safety net.
+ */
+function startMcpFileWatch() {
+    const filePath = _mcpServersStore.filePath;
+    if (!fs.existsSync(filePath)) {
+        log(`[MCP] mcp_servers.json absent at watch start (${filePath}) — relying on bridge reconcile endpoint`, 'DEBUG');
+        return;
+    }
+    try {
+        fs.watch(filePath, { persistent: false }, (eventType) => {
+            if (eventType === 'change' || eventType === 'rename') {
+                mcpManager.requestReconcile(null);
+            }
+        });
+        log(`[MCP] watching ${filePath} for live config updates`, 'DEBUG');
+    } catch (err) {
+        log(`[MCP] fs.watch on ${filePath} failed: ${err.message} — bridge endpoint still works`, 'WARN');
+    }
+}
 
 
 // ============================================================================
@@ -79,8 +133,14 @@ const {
 const {
     setShutdownDeps,
     initDatabase, indexMemoryFiles, backfillSessionsFromFiles,
-    startDbSummaryInterval, startStatsServer,
+    startDbSummaryInterval, getDbSummary,
 } = require('./database');
+
+// BAT-514: extracted from database.js. Loopback server on :8766 hosts
+// the existing GET /stats/db-summary AND the new POST /mcp/reconcile +
+// POST /healthz endpoints. Started below after MCP manager init order
+// settles.
+const internalControlServer = require('./internal-control-server');
 
 // ============================================================================
 // SOLANA (extracted to solana.js — BAT-201)
@@ -620,7 +680,7 @@ telegram('getMe')
             // Condensed startup banner (Phase 4 — single INFO line replaces 10+ verbose startup lines)
             const _skillCount = loadSkills().length;
             const _cronCount = cronService.store?.jobs?.length || 0;
-            log(`${AGENT_NAME} | ${PROVIDER}/${MODEL} | @${result.result.username} | ${_skillCount} skills | ${MCP_SERVERS.length} MCP | ${_cronCount} cron`, 'INFO');
+            log(`${AGENT_NAME} | ${PROVIDER}/${MODEL} | @${result.result.username} | ${_skillCount} skills | ${_resolveMcpConfigs().length} MCP | ${_cronCount} cron`, 'INFO');
 
             // Initialize SQL.js database before polling (non-fatal if WASM fails)
             await initDatabase();
@@ -673,7 +733,17 @@ telegram('getMe')
             setFullToolRegistry(() => [...TOOLS, ...mcpManager.getAllTools()]);
 
             startDbSummaryInterval();
-            startStatsServer();
+            // BAT-514: single internal HTTP server hosts both stats and
+            // MCP control endpoints. Started after MCP manager so its
+            // requestReconcile callback is wired before the listener
+            // accepts connections.
+            internalControlServer.start({
+                bridgeToken: BRIDGE_TOKEN,
+                getDbSummary,
+                requestReconcile: (id) => mcpManager.requestReconcile(id),
+                logFn: log,
+            });
+            startMcpFileWatch();
 
             // Agent health heartbeat: write immediately on startup (prevents false "stale"
             // when Kotlin reads the old file before the first interval tick), then every 60s.
@@ -721,15 +791,20 @@ telegram('getMe')
             setTimeout(() => autoResumeOnStartup(), 3000);
 
             // Initialize MCP servers in background (non-blocking, won't delay Telegram)
-            if (MCP_SERVERS.length > 0) {
-                mcpManager.initializeAll(MCP_SERVERS).then((mcpResults) => {
-                    const ok = mcpResults.filter(r => r.status === 'connected');
-                    const fail = mcpResults.filter(r => r.status === 'failed');
-                    if (ok.length > 0) log(`[MCP] ${ok.length} server(s) connected, ${ok.reduce((s, r) => s + r.tools, 0)} tools available`, 'INFO');
-                    if (fail.length > 0) log(`[MCP] ${fail.length} server(s) failed to connect`, 'WARN');
-                }).catch((e) => {
-                    log(`[MCP] Initialization error: ${e.message}`, 'ERROR');
-                });
+            // BAT-514: resolve from `mcp_servers.json` first, falling
+            // back to `config.json`'s `mcpServers` for cold-start.
+            {
+                const _mcpInitial = _resolveMcpConfigs();
+                if (_mcpInitial.length > 0) {
+                    mcpManager.initializeAll(_mcpInitial).then((mcpResults) => {
+                        const ok = mcpResults.filter(r => r.status === 'connected');
+                        const fail = mcpResults.filter(r => r.status === 'failed');
+                        if (ok.length > 0) log(`[MCP] ${ok.length} server(s) connected, ${ok.reduce((s, r) => s + r.tools, 0)} tools available`, 'INFO');
+                        if (fail.length > 0) log(`[MCP] ${fail.length} server(s) failed to connect`, 'WARN');
+                    }).catch((e) => {
+                        log(`[MCP] Initialization error: ${e.message}`, 'ERROR');
+                    });
+                }
             }
 
             // BAT-524 (BAT-518 phase 3B): the prior 60s-sweep
@@ -749,7 +824,7 @@ telegram('getMe')
     // Condensed startup banner
     const _skillCount = loadSkills().length;
     const _cronCount = cronService.store?.jobs?.length || 0;
-    log(`${AGENT_NAME} | ${PROVIDER}/${MODEL} | Discord | ${_skillCount} skills | ${MCP_SERVERS.length} MCP | ${_cronCount} cron`, 'INFO');
+    log(`${AGENT_NAME} | ${PROVIDER}/${MODEL} | Discord | ${_skillCount} skills | ${_resolveMcpConfigs().length} MCP | ${_cronCount} cron`, 'INFO');
 
     // Initialize SQL.js database (non-fatal if WASM fails)
     initDatabase().then(() => {
@@ -800,7 +875,14 @@ telegram('getMe')
         setFullToolRegistry(() => [...TOOLS, ...mcpManager.getAllTools()]);
 
         startDbSummaryInterval();
-        startStatsServer();
+        // BAT-514: see Telegram path comment above.
+        internalControlServer.start({
+            bridgeToken: BRIDGE_TOKEN,
+            getDbSummary,
+            requestReconcile: (id) => mcpManager.requestReconcile(id),
+            logFn: log,
+        });
+        startMcpFileWatch();
 
         // Agent health heartbeat
         writeAgentHealthFile();
@@ -827,16 +909,19 @@ telegram('getMe')
         // Auto-resume checkpoints after 3s
         setTimeout(() => autoResumeOnStartup(), 3000);
 
-        // Initialize MCP servers in background
-        if (MCP_SERVERS.length > 0) {
-            mcpManager.initializeAll(MCP_SERVERS).then((mcpResults) => {
-                const ok = mcpResults.filter(r => r.status === 'connected');
-                const fail = mcpResults.filter(r => r.status === 'failed');
-                if (ok.length > 0) log(`[MCP] ${ok.length} server(s) connected, ${ok.reduce((s, r) => s + r.tools, 0)} tools available`, 'INFO');
-                if (fail.length > 0) log(`[MCP] ${fail.length} server(s) failed to connect`, 'WARN');
-            }).catch((e) => {
-                log(`[MCP] Initialization error: ${e.message}`, 'ERROR');
-            });
+        // Initialize MCP servers in background (BAT-514: file first, config.json fallback)
+        {
+            const _mcpInitial = _resolveMcpConfigs();
+            if (_mcpInitial.length > 0) {
+                mcpManager.initializeAll(_mcpInitial).then((mcpResults) => {
+                    const ok = mcpResults.filter(r => r.status === 'connected');
+                    const fail = mcpResults.filter(r => r.status === 'failed');
+                    if (ok.length > 0) log(`[MCP] ${ok.length} server(s) connected, ${ok.reduce((s, r) => s + r.tools, 0)} tools available`, 'INFO');
+                    if (fail.length > 0) log(`[MCP] ${fail.length} server(s) failed to connect`, 'WARN');
+                }).catch((e) => {
+                    log(`[MCP] Initialization error: ${e.message}`, 'ERROR');
+                });
+            }
         }
 
         // BAT-524 (BAT-518 phase 3B): the prior 60s-sweep setInterval

@@ -47,6 +47,11 @@ class AndroidBridge(
     companion object {
         private const val TAG = "AndroidBridge"
         private const val AUTH_HEADER = "X-Bridge-Token"
+        // BAT-514: MCP server id format mirrors McpServersStore.ID_REGEX.
+        // Validated at the bridge boundary so a malformed id can't slip
+        // into McpTokenStore.read() (which is otherwise process-agnostic
+        // and trusts its caller).
+        private val MCP_TOKEN_ID_REGEX = Regex("^[A-Za-z0-9_-]+$")
         // Delay between returning HTTP 200 and stopping the service — gives the
         // Node caller (and its Telegram reply) time to flush.
         private const val RESTART_DELAY_MS = 500L
@@ -74,6 +79,10 @@ class AndroidBridge(
         // a misbehaving Node caller can't spin it. 10/min is ample for
         // normal /provider interactive use.
         "/config/credentials" to Pair(10, 60_000L),
+        // BAT-514: /config/mcp-token can fire once per MCP server per
+        // connect; 30/min covers a 10-server install with reconcile
+        // bursts during Settings edits without throttling normal use.
+        "/config/mcp-token" to Pair(30, 60_000L),
         "/service/restart" to Pair(3, 60_000L),
     )
 
@@ -162,6 +171,7 @@ class AndroidBridge(
                 "/config/save-owner" -> handleConfigSaveOwner(params)
                 "/openai/oauth/save-tokens" -> handleOpenAIOAuthSaveTokens(params)
                 "/config/credentials" -> handleConfigCredentials()
+                "/config/mcp-token" -> handleConfigMcpToken(params)
                 "/service/restart" -> handleServiceRestart()
                 "/stats/db-summary" -> proxyToNodeStats()
                 "/ping" -> jsonResponse(200, mapOf("status" to "ok", "bridge" to "AndroidBridge"))
@@ -213,6 +223,41 @@ class AndroidBridge(
             "customBaseUrl" to if (config.customBaseUrl.isNotBlank()) placeholder else "",
         )
         return jsonResponse(200, mapOf("ok" to true, "credentials" to creds))
+    }
+
+    // ==================== MCP token fetch (BAT-514) ====================
+
+    /**
+     * Returns the decrypted bearer token for the requested MCP server
+     * id, sourced from per-id encrypted SharedPreferences
+     * (`mcp_token_<id>`). Called by `MCPClient.connect` in `:node` once
+     * per connect attempt — the token never persists in `MCP_SERVERS`
+     * post-BAT-514, so the bridge fetch is the only path.
+     *
+     * Security:
+     *  - Bridge-token auth on the outer hop (already enforced by
+     *    [serve]).
+     *  - Body validates `id` as `^[A-Za-z0-9_-]+$` so a hostile caller
+     *    can't probe arbitrary prefs keys via this endpoint.
+     *  - Returns `{ token: "" }` for unknown ids and decryption
+     *    failures — the caller can't distinguish "no token" from
+     *    "decrypt failed", which is the same defensive behavior as
+     *    `McpTokenStore.read`.
+     */
+    private fun handleConfigMcpToken(params: JSONObject): Response {
+        val id = params.optString("id", "").trim()
+        if (id.isEmpty() || !MCP_TOKEN_ID_REGEX.matches(id)) {
+            return jsonResponse(400, mapOf("error" to "invalid id"))
+        }
+        return try {
+            val token = com.seekerclaw.app.state.McpTokenStore.read(context, id)
+            jsonResponse(200, mapOf("token" to token))
+        } catch (e: Exception) {
+            // Don't leak the failure mode to the caller — same shape
+            // as the token-not-found response.
+            Log.w(TAG, "[Bridge] /config/mcp-token failed for id=$id: ${e.message}")
+            jsonResponse(200, mapOf("token" to ""))
+        }
     }
 
     // ==================== Service restart ====================

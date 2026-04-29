@@ -776,32 +776,12 @@ function startDbSummaryInterval() {
     setInterval(() => { if (dbSummaryDirty) writeDbSummaryFile(); }, 30000);
 }
 
-// ============================================================================
-// INTERNAL HTTP SERVER — serves stats to Android UI via bridge proxy (BAT-31)
-// ============================================================================
-
-const STATS_PORT = 8766;
-
-function startStatsServer() {
-    const statsServer = require('http').createServer((req, res) => {
-        if (req.method === 'GET' && req.url === '/stats/db-summary') {
-            const summary = getDbSummary();
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify(summary));
-        } else {
-            res.writeHead(404, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Not found' }));
-        }
-    });
-
-    statsServer.on('error', (err) => {
-        log(`[Stats] Internal stats server error (${err.code || 'UNKNOWN'}): ${err.message}`, 'ERROR');
-    });
-
-    statsServer.listen(STATS_PORT, '127.0.0.1', () => {
-        log(`[Stats] Internal stats server listening on port ${STATS_PORT}`, 'INFO');
-    });
-}
+// BAT-514: the loopback HTTP server used to live here as
+// `startStatsServer()` (BAT-31, port 8766). It moved to
+// `internal-control-server.js` so MCP control endpoints
+// (`POST /mcp/reconcile`, `POST /healthz`) can share the same port.
+// `getDbSummary` below is the only export the new server needs from
+// this module — main.js wires the dependency.
 
 // ============================================================================
 // EXPORTS
@@ -819,5 +799,5 @@ module.exports = {
     markDbSummaryDirty,
     markDbDirty, // BAT-523 (BAT-518 phase 3A) — call after every db.run() that mutates state
     startDbSummaryInterval,
-    startStatsServer,
+    getDbSummary,
 };

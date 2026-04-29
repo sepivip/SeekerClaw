@@ -9,6 +9,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import androidx.core.content.ContextCompat
 import com.seekerclaw.app.config.ConfigManager
+import com.seekerclaw.app.state.McpServersStore
 import com.seekerclaw.app.state.RuntimeStateStore
 import com.seekerclaw.app.util.Analytics
 import com.seekerclaw.app.util.LogCollector
@@ -65,6 +66,13 @@ class SeekerClawApplication : Application() {
             // process and reads the same file directly via
             // runtime-state.js.
             RuntimeStateStore.init(this)
+            // BAT-514: own the MCP server config (`mcp_servers.json`)
+            // before any UI screen reads it. Mirrors RuntimeStateStore.init
+            // — main process only (`:node` reads the same file directly
+            // via mcp-servers.js). On first launch, splits legacy
+            // `KEY_MCP_SERVERS_ENC` tokens into per-id encrypted prefs
+            // and seeds the file. Sweeps orphan tokens after.
+            McpServersStore.init(this)
             registerConfigChangedReceiver()
         }
     }

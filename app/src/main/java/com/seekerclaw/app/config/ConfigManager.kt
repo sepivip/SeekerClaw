@@ -1665,25 +1665,14 @@ object ConfigManager {
 
     // ==================== MCP Servers ====================
 
-    fun saveMcpServers(context: Context, servers: List<McpServerConfig>) {
-        val json = JSONArray().apply {
-            for (s in servers) {
-                put(JSONObject().apply {
-                    put("id", s.id)
-                    put("name", s.name)
-                    put("url", s.url)
-                    put("authToken", s.authToken)
-                    put("enabled", s.enabled)
-                    put("rateLimit", s.rateLimit)
-                })
-            }
-        }.toString()
-        val enc = KeystoreHelper.encrypt(json)
-        prefs(context).edit()
-            .putString(KEY_MCP_SERVERS_ENC, Base64.encodeToString(enc, Base64.NO_WRAP))
-            .apply()
-        bumpConfigVersionOnMain()
-    }
+    // BAT-514: `saveMcpServers` was deleted. Settings UI writes go
+    // through [com.seekerclaw.app.state.McpServersStore.write] /
+    // [com.seekerclaw.app.state.McpServersStore.setAuthToken] now.
+    // Rollback-shadow writes (`KEY_MCP_SERVERS_ENC` with tokens
+    // inline) are owned by McpServersStore — see its
+    // `rebuildRollbackShadow`. `loadMcpServers` below is kept because
+    // it's still the read path for cold-start fallback (config.json
+    // regeneration, SettingsScreen count, McpServersStore migration).
 
     fun loadMcpServers(context: Context): List<McpServerConfig> {
         return try {

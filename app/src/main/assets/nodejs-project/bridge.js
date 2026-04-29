@@ -55,10 +55,26 @@ async function androidBridgeCall(endpoint, data = {}, timeoutMs = 10000) {
     });
 }
 
+// BAT-514: fetch the per-server MCP auth token from Kotlin's encrypted
+// SharedPreferences (`mcp_token_<id>`). Mirrors the bridge's other
+// "config presence" endpoints, but returns the actual decrypted value
+// — necessary because Node has to attach the bearer header to MCP
+// requests itself. Returns the empty string on any failure (bridge
+// down, unauthorized, unknown id, decrypt failure) so callers don't
+// have to distinguish — the connect attempt will fail loudly if the
+// token was actually required.
+async function fetchMcpToken(id) {
+    if (typeof id !== 'string' || !id) return '';
+    const result = await androidBridgeCall('/config/mcp-token', { id }, 5000);
+    if (result && typeof result.token === 'string') return result.token;
+    return '';
+}
+
 // ============================================================================
 // EXPORTS
 // ============================================================================
 
 module.exports = {
     androidBridgeCall,
+    fetchMcpToken,
 };

@@ -168,13 +168,24 @@ function httpRequest(url, options, body, timeoutMs) {
 // ── MCP Client ─────────────────────────────────────────────────────
 
 class MCPClient {
-    constructor(serverConfig, logFn) {
+    constructor(serverConfig, logFn, options = {}) {
         this.id = serverConfig.id || serverConfig.name;
         // Sanitized ID used in tool name prefixes and as map key
         this.safeId = (this.id || '').replace(/[^a-zA-Z0-9_-]/g, '_');
         this.name = serverConfig.name;
         this.url = serverConfig.url;
-        this.authToken = serverConfig.authToken || '';
+        // BAT-514: tokens are no longer inline on `serverConfig` for
+        // file-sourced (`mcp_servers.json`) entries — they come from
+        // `tokenFetcher`, which fetches per-id encrypted prefs via the
+        // AndroidBridge. The legacy inline `authToken` field still
+        // works when `tokenFetcher` isn't provided (cold-start fallback
+        // through `config.json`'s `mcpServers`).
+        this._initialAuthToken = serverConfig.authToken || '';
+        this.tokenFetcher = typeof options.tokenFetcher === 'function' ? options.tokenFetcher : null;
+        this.registerSecret = typeof options.registerSecret === 'function' ? options.registerSecret : null;
+        // Set in connect() after token resolution; bearer header lookup
+        // in `_headers()` reads this.
+        this.authToken = '';
         this.rateLimit = new RateLimiter(serverConfig.rateLimit || DEFAULT_RATE_LIMIT);
         this.log = logFn || console.log;
         this.sessionId = null;
@@ -182,15 +193,44 @@ class MCPClient {
         this.toolHashes = new Map(); // originalName → SHA-256 hash
         this.connected = false;
         this.requestId = 0;
+        // URL safety check (refuse bearer-token over plain non-loopback
+        // HTTP) is deferred to connect() — see `_checkUrlSafety`. We
+        // can't run it here because the token isn't known yet when
+        // tokenFetcher is in play.
+    }
 
-        // Security: refuse to send auth tokens over plain HTTP (credential disclosure)
-        const urlObj = new URL(this.url);
-        if (this.authToken && urlObj.protocol !== 'https:') {
-            const h = urlObj.hostname; // URL() strips brackets from IPv6
-            const isLocalhost = h === 'localhost' || h === '127.0.0.1' || h === '::1';
-            if (!isLocalhost) {
-                throw new Error(`Refusing to send auth token over plain HTTP to ${this.url}. Use HTTPS or localhost.`);
+    /**
+     * Resolve the auth token for this server. Prefers `tokenFetcher`
+     * (BAT-514 path: encrypted prefs via AndroidBridge); falls back
+     * to inline `serverConfig.authToken` for cold-start config.json
+     * entries.
+     */
+    async _resolveAuthToken() {
+        if (this.tokenFetcher) {
+            try {
+                const t = await this.tokenFetcher(this.id);
+                if (typeof t === 'string') return t;
+            } catch (err) {
+                this.log(`[MCP] tokenFetcher(${this.id}) failed: ${err.message}`, 'WARN');
             }
+        }
+        return this._initialAuthToken;
+    }
+
+    /**
+     * Refuse to send auth tokens over plain (non-loopback) HTTP. Run
+     * after token resolution, before any request that would attach the
+     * bearer header. Throws `Error` (caller — connect — surfaces as a
+     * failed connect; rest of the agent keeps running).
+     */
+    _checkUrlSafety(token) {
+        if (!token) return;
+        const urlObj = new URL(this.url);
+        if (urlObj.protocol === 'https:') return;
+        const h = urlObj.hostname; // URL() strips brackets from IPv6
+        const isLocalhost = h === 'localhost' || h === '127.0.0.1' || h === '::1';
+        if (!isLocalhost) {
+            throw new Error(`Refusing to send auth token over plain HTTP to ${this.url}. Use HTTPS or localhost.`);
         }
     }
 
@@ -287,6 +327,18 @@ class MCPClient {
 
     /** Three-step handshake: initialize → receive result → send initialized notification. */
     async connect() {
+        // BAT-514: resolve auth token + register redaction BEFORE any
+        // logging that could include the bearer header. The
+        // registerSecret callback (security.registerRedactedSecret)
+        // skips values shorter than its min-len threshold so empty
+        // tokens are silently a no-op.
+        const token = await this._resolveAuthToken();
+        if (token && this.registerSecret) {
+            try { this.registerSecret(token); } catch (_) { /* best-effort */ }
+        }
+        this._checkUrlSafety(token);
+        this.authToken = token;
+
         this.log(`[MCP] Connecting to ${this.name} at ${this.url}`, 'DEBUG');
 
         // Step 1: Initialize
@@ -440,12 +492,31 @@ class MCPClient {
 // ── MCP Manager ────────────────────────────────────────────────────
 
 class MCPManager {
-    constructor(logFn, wrapExternalContentFn) {
+    constructor(logFn, wrapExternalContentFn, options = {}) {
         this.servers = new Map(); // safeId → MCPClient
         this.toolMap = new Map(); // prefixedName → { client, originalName }
         this.log = logFn || console.log;
         this.wrapExternalContent = wrapExternalContentFn;
         this.globalRateLimit = new RateLimiter(GLOBAL_RATE_LIMIT);
+        // BAT-514: per-server bearer-token resolution + log-redaction
+        // registration. Both come from main.js — tokenFetcher hits
+        // `POST /config/mcp-token` on the AndroidBridge; registerSecret
+        // calls security.registerRedactedSecret. Either may be null
+        // (cold-start fallback path), in which case MCPClient falls
+        // back to its inline `serverConfig.authToken`.
+        this.tokenFetcher = typeof options.tokenFetcher === 'function' ? options.tokenFetcher : null;
+        this.registerSecret = typeof options.registerSecret === 'function' ? options.registerSecret : null;
+        // BAT-514 reconcile path: when we get a /mcp/reconcile signal
+        // from Kotlin, we re-read the latest config snapshot via this
+        // provider. Without it, requestReconcile() is a no-op (the
+        // pre-BAT-514 cold-start path doesn't need it).
+        this.configsProvider = typeof options.configsProvider === 'function' ? options.configsProvider : null;
+        // Coalesce reconcile requests so a burst (Settings save + token
+        // edit + fs.watch all firing within 50ms) collapses to a
+        // single drain pass. `pendingFull` always wins over individual
+        // ids — full reconcile already covers everything.
+        this._reconcileQueue = { pendingFull: false, pendingIds: new Set() };
+        this._reconcileRunning = false;
     }
 
     /** Connect to all enabled servers. Non-fatal: logs errors and continues. */
@@ -463,7 +534,7 @@ class MCPManager {
             }
 
             try {
-                const client = new MCPClient(cfg, this.log);
+                const client = this._buildClient(cfg);
                 if (!client.safeId) {
                     this.log(`[MCP] Skipping server with missing id: ${cfg.name || '<unnamed>'}`, 'WARN');
                     results.push({ id: null, name: cfg.name, tools: 0, status: 'failed', error: 'Missing server id' });
@@ -491,6 +562,179 @@ class MCPManager {
         const total = this.getAllTools().length;
         this.log(`[MCP] Initialization complete: ${this.servers.size} servers, ${total} tools`, 'INFO');
         return results;
+    }
+
+    /**
+     * Construct an MCPClient with the manager's tokenFetcher /
+     * registerSecret options threaded through. Centralized so
+     * initializeAll, reconcile, and reconcileServer share one
+     * construction path (changes to options shape stay here).
+     */
+    _buildClient(cfg) {
+        return new MCPClient(cfg, this.log, {
+            tokenFetcher: this.tokenFetcher,
+            registerSecret: this.registerSecret,
+        });
+    }
+
+    /**
+     * Public coalesced reconcile entry point. Called from:
+     *   - control-server's `POST /mcp/reconcile` handler
+     *   - fs.watch on `mcp_servers.json` (full reconcile)
+     *
+     * `id === null` (or omitted) requests a full reconcile against
+     * the configsProvider. `id` as a string requests a force-reconnect
+     * of just that server (used after a token edit, when the file
+     * didn't change). The drain runs serially — bursts collapse.
+     */
+    requestReconcile(id) {
+        if (id === null || id === undefined) {
+            this._reconcileQueue.pendingFull = true;
+            this._reconcileQueue.pendingIds.clear();
+        } else if (typeof id === 'string' && id.length > 0) {
+            // If a full reconcile is already pending, the per-id
+            // request is moot — it'll be covered by the full pass.
+            if (!this._reconcileQueue.pendingFull) this._reconcileQueue.pendingIds.add(id);
+        } else {
+            return;
+        }
+        this._drainReconcile();
+    }
+
+    /**
+     * Serial drain. Returns immediately if a drain is already running
+     * — that drain's loop will pick up newly-pending work before
+     * exiting. The `_reconcileRunning` flag is set/cleared inside this
+     * function only, so there's no race.
+     */
+    async _drainReconcile() {
+        if (this._reconcileRunning) return;
+        this._reconcileRunning = true;
+        try {
+            while (this._reconcileQueue.pendingFull || this._reconcileQueue.pendingIds.size > 0) {
+                if (this._reconcileQueue.pendingFull) {
+                    this._reconcileQueue.pendingFull = false;
+                    this._reconcileQueue.pendingIds.clear();
+                    await this.reconcile();
+                } else {
+                    // Snapshot + clear so concurrent requestReconcile
+                    // calls during this iteration land in the next loop.
+                    const ids = Array.from(this._reconcileQueue.pendingIds);
+                    this._reconcileQueue.pendingIds.clear();
+                    for (const id of ids) {
+                        await this.reconcileServer(id);
+                    }
+                }
+            }
+        } catch (err) {
+            this.log(`[MCP] reconcile drain error: ${err.message}`, 'ERROR');
+        } finally {
+            this._reconcileRunning = false;
+        }
+    }
+
+    /**
+     * Diff current connected servers against the latest configs and
+     * reconcile: connect new, disconnect removed/disabled, reconnect
+     * URL-changed. Token-only edits aren't covered here (file didn't
+     * change → URLs equal → no reconnect); reconcileServer handles
+     * those.
+     */
+    async reconcile() {
+        if (!this.configsProvider) {
+            this.log('[MCP] reconcile() skipped: no configsProvider', 'DEBUG');
+            return;
+        }
+        let configs;
+        try {
+            configs = await Promise.resolve(this.configsProvider());
+        } catch (err) {
+            this.log(`[MCP] configsProvider threw during reconcile: ${err.message}`, 'ERROR');
+            return;
+        }
+        const desiredById = new Map();
+        for (const c of (configs || [])) {
+            if (c && typeof c.id === 'string' && c.enabled !== false) {
+                desiredById.set(c.id, c);
+            }
+        }
+        // Disconnect gone-or-now-disabled OR url-changed servers.
+        const currentIds = Array.from(this.servers.keys());
+        for (const id of currentIds) {
+            const client = this.servers.get(id);
+            const desired = desiredById.get(id);
+            if (!desired) {
+                this._disconnectAndRemove(id);
+                continue;
+            }
+            if (desired.url !== client.url) {
+                this._disconnectAndRemove(id);
+            }
+        }
+        // Connect everything in desired that isn't currently connected.
+        for (const [id, cfg] of desiredById) {
+            if (!this.servers.has(id)) {
+                await this._connectServer(cfg);
+            }
+        }
+        const total = this.getAllTools().length;
+        this.log(`[MCP] reconcile complete: ${this.servers.size} servers, ${total} tools`, 'INFO');
+    }
+
+    /**
+     * Force-reconnect a single server. Used after a token edit (file
+     * unchanged but bearer differs). Disconnects first so the next
+     * connect's `_resolveAuthToken` fetches fresh from the bridge.
+     * Silent no-op if the id isn't in the current configs (e.g. a
+     * stale signal arrived after the server was deleted).
+     */
+    async reconcileServer(id) {
+        if (!this.configsProvider) return;
+        let configs;
+        try {
+            configs = await Promise.resolve(this.configsProvider());
+        } catch (err) {
+            this.log(`[MCP] configsProvider threw during reconcileServer(${id}): ${err.message}`, 'ERROR');
+            return;
+        }
+        const desired = (configs || []).find((c) => c && c.id === id);
+        this._disconnectAndRemove(id);
+        if (desired && desired.enabled !== false) {
+            await this._connectServer(desired);
+        }
+        const total = this.getAllTools().length;
+        this.log(`[MCP] reconcileServer(${id}) complete: ${this.servers.size} servers, ${total} tools`, 'INFO');
+    }
+
+    _disconnectAndRemove(id) {
+        const client = this.servers.get(id);
+        if (!client) return;
+        try { client.disconnect(); } catch (_) { /* fire-and-forget */ }
+        for (const [key, val] of this.toolMap) {
+            if (val.client === client) this.toolMap.delete(key);
+        }
+        this.servers.delete(id);
+    }
+
+    async _connectServer(cfg) {
+        try {
+            const client = this._buildClient(cfg);
+            if (!client.safeId) {
+                this.log(`[MCP] Skipping server with missing id: ${cfg.name || '<unnamed>'}`, 'WARN');
+                return;
+            }
+            if (this.servers.has(client.safeId)) {
+                this.log(`[MCP] Duplicate server id "${client.safeId}" from ${cfg.name} — skipping`, 'WARN');
+                return;
+            }
+            await client.connect();
+            this.servers.set(client.safeId, client);
+            for (const tool of client.tools) {
+                this.toolMap.set(tool.name, { client, originalName: tool.originalName });
+            }
+        } catch (err) {
+            this.log(`[MCP] Failed to (re)connect ${cfg.name}: ${err.message}`, 'ERROR');
+        }
     }
 
     /** Get all tools from all connected servers (Claude API format). */

@@ -61,6 +61,12 @@ const LOAD_TARGETS = [
     'loop-detector.js',
     'model-catalog.js',
     'telegram-commands.js',
+    // BAT-514: both modules are pure (functions only, no top-level
+    // side effects). internal-control-server.js's HTTP listener is
+    // gated behind `start()`; mcp-servers.js's filesystem read is
+    // gated behind `open(workDir).read()`.
+    'mcp-servers.js',
+    'internal-control-server.js',
 ];
 
 // Files skipped intentionally. Most modules depend on config.js (which

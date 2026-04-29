@@ -4,7 +4,7 @@
 
 const path = require('path');
 
-const { BRIDGE_TOKEN, config, MCP_SERVERS, log, workDir } = require('./config');
+const { BRIDGE_TOKEN, config, log, workDir } = require('./config');
 
 // ============================================================================
 // SECRET REDACTION
@@ -73,12 +73,13 @@ function rebuildRedactPatterns() {
             patterns.push({ rx: new RegExp(_escRx(config[key]), 'g'), replacement: `[REDACTED:${key}]` });
         }
     }
-    // MCP server auth tokens (literal match per server)
-    for (const server of MCP_SERVERS) {
-        if (server.authToken && server.authToken.length >= 8) {
-            patterns.push({ rx: new RegExp(_escRx(server.authToken), 'g'), replacement: '[REDACTED:mcp-token]' });
-        }
-    }
+    // BAT-514: MCP server auth tokens are no longer iterated at
+    // startup — tokens aren't in `MCP_SERVERS` post-migration (they
+    // live in per-id encrypted SharedPreferences and are fetched on
+    // demand by `MCPClient.connect`). Each fetched token registers
+    // itself via `registerRedactedSecret(...)` BEFORE the bearer
+    // header is attached or any connect log fires; see
+    // `mcp-client.js` connect().
     _dynamicPatterns = patterns;
 }
 
