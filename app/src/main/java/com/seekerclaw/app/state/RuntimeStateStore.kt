@@ -48,18 +48,36 @@ import java.util.concurrent.atomic.AtomicBoolean
  *     transiently-corrupt file; it sticks with the last valid value
  *     until a fresh valid one lands.
  *
- * ## Init ordering (no spurious mirror on first launch)
+ * ## Init ordering
  *
- *  1. Read prefs FIRST (the BAT-513 build's source of truth on first
- *     launch — prefs were written by the pre-BAT-513 code path).
+ *  1. Read prefs FIRST (the BAT-513 build's source of truth on
+ *     upgrade — prefs were written by the pre-BAT-513 code path).
  *  2. If `runtime_state.json` is missing, write the prefs values into
  *     it (the upgrade migration). This is a one-shot — subsequent
  *     launches see the file and skip this step.
- *  3. THEN start the observe-and-mirror collector. The first emission
- *     it sees from [CrossProcessStore.state] equals what we just
- *     seeded, which equals prefs, so the redundancy guard yields
- *     `false → false → false` and no `apply()` runs. Clean steady
- *     state, no spurious prefs write.
+ *  3. THEN start the observe-and-mirror collector.
+ *
+ * ## First-emission behaviour by install path
+ *
+ *  - **Upgrade path** (prefs already populated by pre-BAT-513 code):
+ *    seedFromPrefs returns the persisted values; the migration
+ *    write puts the same values into the file; the first observed
+ *    emission equals current prefs; [mirrorIfChanged]'s redundancy
+ *    guard yields `false → false → false` and no `apply()` runs.
+ *    Clean — no spurious prefs write or signalConfigChanged.
+ *  - **Fresh-install path** (prefs absent): `prefs.getString(KEY_*,
+ *    null)` returns `null`; seedFromPrefs uses defaults
+ *    (`claude/api_key/claude-opus-4-7`) since no key is present;
+ *    the migration write puts those defaults into the file; the
+ *    first observed emission compares default strings against
+ *    `null` prefs values → mismatch → ONE prefs `apply()` runs +
+ *    ONE signalConfigChanged broadcast fires to seed the legacy
+ *    keys. This is correct, idempotent (subsequent launches hit
+ *    the upgrade path), and matches what saveConfig would do on
+ *    the first user-initiated save anyway. NOT a spurious write.
+ *
+ * The "subsequent launches" steady state always yields zero
+ * apply()s.
  *
  * ## What this does NOT do
  *
@@ -147,11 +165,17 @@ object RuntimeStateStore {
         //
         // Sequencing inside the launch:
         //   1. Migration: if runtime_state.json is missing, write the
-        //      seeded value (from prefs).
+        //      seeded value (from prefs, or defaults on fresh
+        //      install).
         //   2. Start the observe-and-mirror collector AFTER the
-        //      migration completes — so the first observed emission
-        //      matches the file we just wrote (which matches prefs),
-        //      and the redundancy guard yields a no-op apply.
+        //      migration completes. On UPGRADE paths the first
+        //      emission equals prefs (redundancy guard yields no-op
+        //      apply); on FRESH-INSTALL paths the first emission
+        //      equals defaults but prefs are absent, so the
+        //      redundancy guard fires ONE apply() to seed legacy
+        //      keys + ONE signalConfigChanged broadcast (correct,
+        //      idempotent — see class KDoc "First-emission behaviour
+        //      by install path" for the full breakdown).
         //
         // Trade-off: there's a brief window between Application.onCreate
         // and the migration landing where runtime_state.json doesn't

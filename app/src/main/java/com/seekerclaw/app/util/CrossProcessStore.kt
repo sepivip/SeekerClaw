@@ -493,18 +493,23 @@ class CrossProcessStore<T> private constructor(
 
     /**
      * Read-modify-write under the same `synchronized(writeLock)` that
-     * [write] uses, so the entire `read → transform → write` sequence
-     * is atomic w.r.t. BOTH concurrent `update {}` calls AND
+     * [write] uses, so the entire `read → transform → persistLocked`
+     * sequence is atomic w.r.t. BOTH concurrent `update {}` calls AND
      * concurrent `write()` calls in the same process. A pre-round-13
      * design used a separate kotlinx Mutex; that protected
      * update-vs-update but missed update-vs-write — a `write()` could
      * fire between this `read()` and `write(next)` and the update
-     * would overwrite it. synchronized is reentrant on the JVM, so the
-     * nested call to [write] (which also takes `synchronized(writeLock)`)
-     * acquires the same monitor without deadlock.
+     * would overwrite it.
      *
-     * Returns the underlying [write]'s result — `true` if the
-     * transformed value persisted, `false` on caught failure.
+     * Round 18 split the persistence into [persistLocked] so update
+     * could broadcast OUTSIDE the lock (write's broadcast was already
+     * outside ITS synchronized block, but with update calling write
+     * inside its outer synchronized, the broadcast was still under
+     * update's lock). update now does read+transform+persistLocked
+     * directly, then drops the lock before [broadcastChanged].
+     *
+     * Returns the [persistLocked] result — `true` if the transformed
+     * value persisted, `false` on caught FS failure.
      *
      * The [transform] callback is invoked under the lock with the
      * current persisted value (a fresh deserialized instance from
