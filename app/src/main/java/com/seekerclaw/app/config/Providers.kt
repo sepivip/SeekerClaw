@@ -109,6 +109,13 @@ object ModelRegistry {
      */
     @androidx.annotation.VisibleForTesting
     internal fun initForTest(providers: List<ProviderInfo>) {
+        // BAT-517 R3 Copilot: mirror the runtime loader's minimal-validation
+        // shape so a misused test seam fails with a clear message instead
+        // of an obscure IndexOutOfBoundsException at the next
+        // `providerById` call (which falls back to `list[0]`).
+        require(providers.isNotEmpty()) {
+            "initForTest requires a non-empty providers list"
+        }
         synchronized(initLock) {
             _providers = providers
             initialized = true
@@ -138,6 +145,22 @@ object ModelRegistry {
     fun providerById(id: String): ProviderInfo {
         val list = providers
         return list.find { it.id == id } ?: list[0]
+    }
+
+    /**
+     * Strict lookup variant — throws if the named provider is missing.
+     *
+     * Use for backward-compat aliases that name a SPECIFIC provider
+     * ([availableModels] = "claude", [OPENROUTER_DEFAULT_MODEL] =
+     * "openrouter"): these aliases mean "this provider's data" by
+     * contract, so the silent fallback in [providerById] would let a
+     * malformed registry (claude removed, openrouter renamed) silently
+     * return the wrong provider's data instead of failing fast at app
+     * startup. BAT-517 R3 Copilot finding.
+     */
+    internal fun requireProviderById(id: String): ProviderInfo {
+        return providers.find { it.id == id }
+            ?: error("ModelRegistry is missing required provider: $id")
     }
 
     /**
@@ -262,6 +285,12 @@ fun defaultModelForProvider(providerId: String, authType: String?): String =
  * Default for OpenRouter — kept as a top-level alias for the call
  * sites that imported it directly pre-BAT-517. Sourced from the
  * registry instead of a hardcoded const.
+ *
+ * Uses the strict [ModelRegistry.requireProviderById] lookup (NOT the
+ * fall-back-tolerant `providerById`) — the alias is by name "the
+ * OpenRouter default", so a missing/renamed `openrouter` entry must
+ * fail fast rather than silently return another provider's default
+ * (BAT-517 R3 Copilot finding).
  */
 val OPENROUTER_DEFAULT_MODEL: String
-    get() = ModelRegistry.providerById("openrouter").defaultModel
+    get() = ModelRegistry.requireProviderById("openrouter").defaultModel

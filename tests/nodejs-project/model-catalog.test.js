@@ -226,9 +226,16 @@ console.log('── exported constants match registry-derived values (drift guar
 // hardcodes a value), this guard catches the drift between exports and
 // the JSON source of truth.
 const byId = Object.fromEntries(REGISTRY.providers.map((p) => [p.id, p]));
+// BAT-517 R3 Copilot: mirror the production code's optional handling
+// of `modelsByAuth` here too. Direct `.modelsByAuth.oauth` access would
+// TypeError and ABORT the test run if a future registry omits the
+// override; the guarded access lets `check()` report a clean FAIL
+// instead.
+const expectedOpenaiOauthModels =
+    (byId.openai.modelsByAuth && byId.openai.modelsByAuth.oauth) || byId.openai.models;
 check('CLAUDE_MODELS == registry.claude.models', mc.CLAUDE_MODELS, byId.claude.models);
 check('OPENAI_API_KEY_MODELS == registry.openai.models', mc.OPENAI_API_KEY_MODELS, byId.openai.models);
-check('OPENAI_OAUTH_MODELS == registry.openai.modelsByAuth.oauth', mc.OPENAI_OAUTH_MODELS, byId.openai.modelsByAuth.oauth);
+check('OPENAI_OAUTH_MODELS == registry.openai.modelsByAuth.oauth (or fallback to models)', mc.OPENAI_OAUTH_MODELS, expectedOpenaiOauthModels);
 check('CLAUDE_DEFAULT_MODEL matches registry', mc.CLAUDE_DEFAULT_MODEL, byId.claude.defaultModel);
 check('OPENAI_DEFAULT_MODEL matches registry', mc.OPENAI_DEFAULT_MODEL, byId.openai.defaultModel);
 check('OPENROUTER_DEFAULT_MODEL matches registry', mc.OPENROUTER_DEFAULT_MODEL, byId.openrouter.defaultModel);

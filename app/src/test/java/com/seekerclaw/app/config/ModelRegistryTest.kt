@@ -373,4 +373,72 @@ class ModelRegistryTest {
         assertEquals("openai", productionProviders.first().id)
         assertSame(productionProviders.first(), ModelRegistry.providerById("garbage"))
     }
+
+    // ---- Strict lookups + initForTest validation (R3 Copilot) -----------
+
+    @Test
+    fun `requireProviderById throws if provider missing`() {
+        // Pin the strict-lookup contract used by availableModels +
+        // OPENROUTER_DEFAULT_MODEL: a malformed registry must surface
+        // immediately, not silently return providers[0].
+        try {
+            ModelRegistry.requireProviderById("not-a-provider")
+            fail("requireProviderById must throw on missing id")
+        } catch (e: IllegalStateException) {
+            assertTrue(
+                "error message should name the missing provider, was: ${e.message}",
+                (e.message ?: "").contains("not-a-provider"),
+            )
+        }
+    }
+
+    @Test
+    fun `availableModels fails fast when claude provider is removed from registry`() {
+        // Re-init with a registry that omits `claude`. Pre-R3, this would
+        // silently fall back to providers[0].models (openai's list).
+        // Post-R3 it must throw.
+        ModelRegistry.resetForTest()
+        ModelRegistry.initForTest(productionProviders.filter { it.id != "claude" })
+        try {
+            availableModels.size  // force getter evaluation
+            fail("availableModels must throw when claude provider missing")
+        } catch (e: IllegalStateException) {
+            assertTrue((e.message ?: "").contains("claude"))
+        } finally {
+            ModelRegistry.resetForTest()
+            ModelRegistry.initForTest(productionProviders)
+        }
+    }
+
+    @Test
+    fun `OPENROUTER_DEFAULT_MODEL fails fast when openrouter provider is removed from registry`() {
+        ModelRegistry.resetForTest()
+        ModelRegistry.initForTest(productionProviders.filter { it.id != "openrouter" })
+        try {
+            OPENROUTER_DEFAULT_MODEL.length  // force getter evaluation
+            fail("OPENROUTER_DEFAULT_MODEL must throw when openrouter provider missing")
+        } catch (e: IllegalStateException) {
+            assertTrue((e.message ?: "").contains("openrouter"))
+        } finally {
+            ModelRegistry.resetForTest()
+            ModelRegistry.initForTest(productionProviders)
+        }
+    }
+
+    @Test
+    fun `initForTest rejects empty providers list`() {
+        // Mirror the runtime loader's `parsed.providers.isNotEmpty()`
+        // guard so a misused test seam fails clearly instead of
+        // surfacing as IndexOutOfBoundsException at the next
+        // providerById call.
+        ModelRegistry.resetForTest()
+        try {
+            ModelRegistry.initForTest(emptyList())
+            fail("initForTest must reject empty providers list")
+        } catch (e: IllegalArgumentException) {
+            // expected
+        } finally {
+            ModelRegistry.initForTest(productionProviders)
+        }
+    }
 }

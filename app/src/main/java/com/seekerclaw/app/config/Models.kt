@@ -17,9 +17,15 @@ data class ModelInfo(
  *
  * Property getter (NOT eager top-level val) so each access reads
  * AFTER `ModelRegistry.init()` has run — Codex v2.1 finding.
+ *
+ * Uses the strict [ModelRegistry.requireProviderById] lookup (NOT the
+ * fall-back-tolerant `providerById`) — the alias is by name "the
+ * Claude model list", so a malformed registry that drops or renames
+ * `claude` must fail fast instead of silently returning OpenAI's
+ * models (BAT-517 R3 Copilot finding).
  */
 val availableModels: List<ModelInfo>
-    get() = ModelRegistry.providerById("claude").models
+    get() = ModelRegistry.requireProviderById("claude").models
 
 /**
  * Render a model id as its display label.
