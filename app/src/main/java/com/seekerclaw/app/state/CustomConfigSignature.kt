@@ -4,6 +4,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import java.security.MessageDigest
+import java.util.Locale
 
 /**
  * Deterministic signature for the "Custom" provider configuration
@@ -113,7 +114,16 @@ object CustomConfigSignature {
         }
         val seen = LinkedHashSet<String>()
         for (key in obj.keys) {
-            val k = key.trim().lowercase()
+            // R17 R1 Copilot: use Locale.ROOT so Turkish-locale devices
+            // don't produce a different signature than other devices and
+            // the Node side. Kotlin's `String.lowercase()` defaults to
+            // the device locale, which would lower-case "I" → "ı"
+            // (dotless) on Turkish locale, diverging from Node's
+            // `String.toLowerCase()` (which is locale-invariant). The
+            // mismatch would silently flag a config "change" and reset
+            // the override every time a Turkish-locale user looked at
+            // their gateway, even though nothing actually changed.
+            val k = key.trim().lowercase(Locale.ROOT)
             if (k.isEmpty()) continue
             if (k == "__proto__" || k == "constructor" || k == "prototype") continue
             seen.add(k)
