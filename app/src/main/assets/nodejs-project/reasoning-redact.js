@@ -28,17 +28,18 @@ const crypto = require('crypto');
  * Safely stringify ANY input for hashing/redaction. Codex R2 thread 1:
  * raw `JSON.stringify` throws on BigInt and circular refs, which would
  * crash the very logging call sites this module is supposed to protect.
- * Buffer also gets special-cased — `JSON.stringify(buffer)` expands to a
- * huge `{type:"Buffer",data:[...]}` form that's expensive to hash.
+ *
+ * NOTE: Buffer is intentionally NOT handled here — `fingerprint()` hashes
+ * Buffers via their bytes directly (R3 thread 3 fix). If you need to
+ * stringify a Buffer for non-hash purposes, JSON.stringify on a Buffer
+ * does have a default representation (`{type:"Buffer",data:[...]}`)
+ * that this function would emit if a Buffer slipped past `fingerprint()`.
  *
  * Returns `null` if conversion fails entirely (caller treats as "absent").
  */
 function _safeStringify(input) {
     if (input === null || input === undefined) return null;
     if (typeof input === 'string') return input;
-    if (Buffer.isBuffer(input)) {
-        return `<Buffer:${input.length}b>`;
-    }
     if (typeof input === 'bigint') {
         return `<bigint:${input.toString()}>`;
     }
@@ -54,11 +55,17 @@ function _safeStringify(input) {
 }
 
 /**
- * Short fingerprint of any string/buffer/object — first 8 hex chars of sha256.
- * Returns '-' for empty/missing/unserializable input.
+ * Short fingerprint of any string/buffer/object — first 8 hex chars of
+ * sha256. Returns '-' for empty/missing/unserializable input. Buffer
+ * inputs are hashed via their bytes directly (R3 thread 3) so two
+ * different Buffers of the same length produce different fingerprints.
  */
 function fingerprint(input) {
     if (input === null || input === undefined || input === '') return '-';
+    if (Buffer.isBuffer(input)) {
+        if (input.length === 0) return '-';
+        return crypto.createHash('sha256').update(input).digest('hex').slice(0, 8);
+    }
     const s = _safeStringify(input);
     if (s === null || s === '') return '-';
     return crypto.createHash('sha256').update(s, 'utf8').digest('hex').slice(0, 8);

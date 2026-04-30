@@ -46,7 +46,11 @@ function isReasoningContent400(status, data) {
 /**
  * Step 1 cut point: index AFTER the last user-role message in the active
  * segment. Slice from this index to get the volatile tail. Returns -1 if
- * no user message found (caller should fall through to step 3).
+ * no user message found — caller escalates step 1 to step 2 first
+ * (escalate-by-one), and only falls through to step 3 if step 2 also
+ * returns ok=false. R3 doc fix to match actual recovery driver semantics
+ * in `quarantineActiveSegment` + the no-op handling in ai.js's chat()
+ * loop (which calls step 2 immediately when step 1 returns ok=false).
  */
 function findLastUserBoundary(messages) {
     if (!Array.isArray(messages)) return -1;

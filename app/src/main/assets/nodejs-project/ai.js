@@ -42,6 +42,8 @@ const { saveCheckpoint, cleanupChatCheckpoints } = require('./task-store');
 const loopDetector = require('./loop-detector');
 // BAT-549: adaptive 3-step quarantine recovery for reasoning-content 400s
 const _reasoningRecovery = require('./reasoning-recovery');
+// BAT-549 R3: fingerprint for sanitized error logging (no raw payloads)
+const { fingerprint: _reasoningFingerprint } = require('./reasoning-redact');
 
 // ── Injected dependencies (set from main.js at startup) ───────────────────
 // These break circular deps and reference things that still live in main.js
@@ -2243,7 +2245,21 @@ async function chat(chatId, userMessage, options = {}) {
             const res = await claudeApiCall(body, chatId, { turnId, iteration: stepCount });
 
             if (res.status !== 200) {
-                log(`API error: ${res.status} - ${JSON.stringify(res.data)}`, 'ERROR');
+                // BAT-549 R3 thread 2: error bodies can echo reasoning
+                // content, encrypted_content, signatures, or other
+                // sensitive snippets. Log only a minimal sanitized
+                // summary at ERROR level. Mobile logs end up in bug
+                // reports/screenshots — never dump arbitrary provider
+                // payloads. The sanitized summary still gives ops a
+                // useful failure signal (status, error type/code, msg
+                // length + fingerprint).
+                const errType = (res.data && res.data.error && res.data.error.type) || 'unknown';
+                const errCode = (res.data && res.data.error && res.data.error.code) || null;
+                const errMsg = (res.data && res.data.error && res.data.error.message)
+                    || (res.data && res.data.message) || '';
+                const errMsgLen = typeof errMsg === 'string' ? errMsg.length : 0;
+                const errMsgFp = _reasoningFingerprint(errMsg);
+                log(`API error: status=${res.status} type=${errType} code=${errCode || '-'} msgLen=${errMsgLen} msgFp=${errMsgFp}`, 'ERROR');
 
                 // BAT-549: detect "reasoning_content must be passed back" 400
                 // and run adaptive 3-step quarantine recovery before bubbling

@@ -224,12 +224,25 @@ try { circHash = fingerprint(circ); ok('fingerprint(circular) does not throw', t
 catch (e) { ok('fingerprint(circular) does not throw', false, e.message); }
 ok('fingerprint(circular) returns valid output (not "-")', circHash && circHash !== '-');
 
-// Buffer — would JSON.stringify expand to {type:"Buffer",data:[...]} (huge)
+// Buffer — fingerprinted via bytes directly (R3 thread 3 fix). Two
+// same-length Buffers with different bytes MUST produce different
+// fingerprints; previous implementation collided them via a
+// `<Buffer:<len>b>` placeholder.
 const buf = Buffer.from('reasoning bytes that should not be JSON-expanded for hashing', 'utf8');
 let bufHash;
 try { bufHash = fingerprint(buf); ok('fingerprint(Buffer) does not throw', true); }
 catch (e) { ok('fingerprint(Buffer) does not throw', false, e.message); }
 ok('fingerprint(Buffer) returns 8-char hex', /^[0-9a-f]{8}$/.test(bufHash || ''));
+
+// R3 thread 3 — collision regression: same-length Buffers must hash differently
+const bufA = Buffer.from('AAAAAAAA', 'utf8');
+const bufB = Buffer.from('BBBBBBBB', 'utf8');
+ok('Same-length Buffers with different bytes produce different fingerprints',
+    fingerprint(bufA) !== fingerprint(bufB),
+    `bufA fp=${fingerprint(bufA)} bufB fp=${fingerprint(bufB)}`);
+ok('Buffer fingerprint matches its string-content fingerprint when bytes equal',
+    // Sanity: buffer of "hello" must hash same as string "hello"
+    fingerprint(Buffer.from('hello', 'utf8')) === fingerprint('hello'));
 
 // Opaque-wire path with BigInt inside
 const opaqueBlock = {
