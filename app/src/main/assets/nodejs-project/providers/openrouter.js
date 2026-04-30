@@ -77,11 +77,19 @@ function toApiMessages(messages) {
                 let plainReasoningContent = null;
                 for (const blk of msg.reasoningBlocks) {
                     if (!blk || !blk.wire) continue;
+                    // R11 thread 1: validate wire is a plain object before
+                    // dereferencing. A corrupted/older checkpoint (or future
+                    // adapter) could store `wire` as a string, number, or
+                    // array — pushing those into reasoning_details would
+                    // produce an invalid request payload that the upstream
+                    // provider would reject. Skip anything that isn't a
+                    // plain object.
+                    if (typeof blk.wire !== 'object' || Array.isArray(blk.wire)) continue;
                     const srcOk = blk.sourceAdapter === 'openrouter'
                         || blk.delegateAdapter === 'openrouter';
                     if (!srcOk) continue;
                     // OpenRouter native shape — push verbatim
-                    if (Array.isArray(blk.wire) === false && blk.wire.reasoning_content === undefined) {
+                    if (blk.wire.reasoning_content === undefined) {
                         details.push(blk.wire);
                     } else if (typeof blk.wire.reasoning_content === 'string') {
                         // DeepSeek-via-OpenRouter style — emit the field at message

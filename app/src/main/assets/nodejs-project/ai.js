@@ -392,14 +392,18 @@ async function generateSessionSummary(chatId) {
 
     const res = await claudeApiCall(body, chatId, { background: true });
     if (res.status !== 200) {
+        // BAT-549 R11 thread 2: same redaction shape as the chat() error
+        // path — error bodies can echo reasoning content / signatures /
+        // encrypted_content; raw payload (or 200-char slice of it) must
+        // not enter logs. Use sanitized status + type/code + length +
+        // fingerprint instead.
         const d = res.data;
-        let reason;
-        if (d?.error?.message) reason = d.error.message;
-        else if (typeof d === 'string') reason = d.slice(0, 200);
-        else if (d) try { reason = JSON.stringify(d).slice(0, 200); } catch (_) { reason = String(d).slice(0, 200); }
-        else reason = 'No error details';
-        reason = reason.replace(/[\r\n]+/g, ' ').trim();
-        log(`[SessionSummary] API ${res.status}: ${reason}`, 'WARN');
+        const errType = (d && d.error && d.error.type) || 'unknown';
+        const errCode = (d && d.error && d.error.code) || null;
+        const errMsg = (d && d.error && d.error.message) || (d && d.message) || '';
+        const errMsgLen = typeof errMsg === 'string' ? errMsg.length : 0;
+        const errMsgFp = _reasoningFingerprint(errMsg);
+        log(`[SessionSummary] API ${res.status}: type=${errType} code=${errCode || '-'} msgLen=${errMsgLen} msgFp=${errMsgFp}`, 'WARN');
         return null;
     }
 
