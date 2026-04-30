@@ -9,9 +9,12 @@
 //  Step 3 — fallback: full conversation reset
 //
 // PLUS active task-store checkpoint quarantine: each step ALSO mutates the
-// persisted `task-store/<chatId>.json` so a future `/resume` can't reload
-// the original bad slice. The pre-quarantine checkpoint is copied to
-// `recovery/<chatId>-<timestamp>-checkpoint-stepN.json` for forensics.
+// persisted `task-store/<taskId>.json` so a future `/resume` can't reload
+// the original bad slice. (task-store files are keyed by `taskId`, not
+// `chatId` — Copilot R1 thread 2 doc fix.) The pre-quarantine checkpoint
+// is copied to `recovery/<chatId>-<timestamp>-stepN-checkpoint.json` for
+// forensics; the recovery file uses the chatId because forensic files are
+// per-conversation rather than per-task.
 //
 // User data ALWAYS preserved: workspace, memory files (MEMORY.md, daily/,
 // SOUL.md, IDENTITY.md, USER.md), skills, config, credentials, checkpoints

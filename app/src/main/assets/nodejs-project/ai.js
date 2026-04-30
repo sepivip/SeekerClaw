@@ -2111,11 +2111,14 @@ async function chat(chatId, userMessage, options = {}) {
     _summarizedThisTurn.delete(chatId);
     if (global._discoveredToolsByChat) global._discoveredToolsByChat.delete(chatId); // Reset discovered tools
 
-    // BAT-549: `messages` is `let` (was `const`) so the reasoning-content
-    // 400 recovery path can reassign it to a truncated array. The recovery
-    // helper returns a NEW array (not in-place mutation) — see
-    // reasoning-recovery.js. Tracker also lives on this closure.
-    let messages = getConversation(chatId);
+    // BAT-549: `messages` stays `const` because we MUST mutate the
+    // existing array in place — `conversations` map (in-memory state)
+    // holds a reference to it; reassigning would diverge state and
+    // subsequent addToConversation() calls would append to the old
+    // array. The recovery path uses `messages.splice(0, messages.length,
+    // ...newMessages)` to truncate without breaking the reference
+    // (Copilot R1 thread 1, BAT-549 PR #354).
+    const messages = getConversation(chatId);
     let _reasoningRecoveryStep = 0;
 
     // P2.4b: Extract original goal from conversation for checkpoint persistence.
@@ -2211,6 +2214,19 @@ async function chat(chatId, userMessage, options = {}) {
                 // and run adaptive 3-step quarantine recovery before bubbling
                 // up to the user. Tracks _reasoningRecoveryStep on the closure
                 // so a same-error 400 retry escalates to the next step.
+                //
+                // Copilot R1 thread 1: must mutate the EXISTING messages
+                // array in place (via splice) so the `conversations` map's
+                // reference stays valid. Reassigning `messages = …` would
+                // diverge in-memory conversation state — subsequent pushes
+                // and addToConversation() calls would update the wrong
+                // array. Helper does it once for both step paths.
+                const _applyRecovery = (result) => {
+                    messages.splice(0, messages.length, ...result.newMessages);
+                    if (result.systemNote) {
+                        messages.push({ role: 'user', content: `[System: ${result.systemNote}]` });
+                    }
+                };
                 if (_reasoningRecovery.isReasoningContent400(res.status, res.data)) {
                     _reasoningRecoveryStep = (_reasoningRecoveryStep || 0) + 1;
                     if (_reasoningRecoveryStep <= 3) {
@@ -2220,11 +2236,7 @@ async function chat(chatId, userMessage, options = {}) {
                         });
                         if (result.ok) {
                             log(`[ReasoningRecovery] Step ${_reasoningRecoveryStep} truncated at index ${result.cutIndex}; retrying turn`, 'WARN');
-                            // Replace the live messages reference; inject system note
-                            messages = result.newMessages;
-                            if (result.systemNote) {
-                                messages.push({ role: 'user', content: `[System: ${result.systemNote}]` });
-                            }
+                            _applyRecovery(result);
                             continue; // retry the while loop with the truncated history
                         } else if (_reasoningRecoveryStep < 3) {
                             // No-op step (e.g. step 1 had no user boundary) — escalate immediately
@@ -2235,10 +2247,7 @@ async function chat(chatId, userMessage, options = {}) {
                             });
                             if (r2.ok) {
                                 log(`[ReasoningRecovery] Step ${_reasoningRecoveryStep} (escalated from no-op) truncated at index ${r2.cutIndex}`, 'WARN');
-                                messages = r2.newMessages;
-                                if (r2.systemNote) {
-                                    messages.push({ role: 'user', content: `[System: ${r2.systemNote}]` });
-                                }
+                                _applyRecovery(r2);
                                 continue;
                             }
                         }
