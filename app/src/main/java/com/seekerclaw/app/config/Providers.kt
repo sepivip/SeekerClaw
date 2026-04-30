@@ -170,24 +170,35 @@ object ModelRegistry {
      * show / activate the "Extended Thinking" row, and adapter request
      * paths consult it before sending the thinking/reasoning param.
      *
+     * `"unknown"` is the SAFE-DEFAULT state — adapters and Settings UI
+     * MUST treat it as capture-only / don't-enable-in-request. Codex 3a
+     * R1 thread 1: single consistent meaning across Node + Kotlin.
+     *
      * Matrix per v4.1 contract:
      *  - Known model in registry with `reasoningSupport === "yes"` → "yes"
      *  - Known model with `"no"` → "no" (toggle is a true no-op)
      *  - Known model with the field absent OR unknown model id OR
      *    freeform provider (openrouter, custom) → "unknown"
+     *  - OpenAI with null / unsupported authType → "unknown" (Codex 3a
+     *    R1 thread 3: match `modelsForProvider`'s strict authType
+     *    semantics — silently falling through to the api_key list
+     *    would misclassify oauth-only models like gpt-5.4-mini)
      *
-     * Mirrors `model-catalog.js` `reasoningSupportFor` Node-side helper —
-     * keep both in sync. Unit-tested in ModelRegistryTest.
+     * Mirrors `model-catalog.js` `reasoningSupportFor` Node-side helper.
+     * Unit-tested in ModelRegistryTest.
      */
     fun reasoningSupportFor(providerId: String, modelId: String?, authType: String?): String {
         if (modelId.isNullOrBlank()) return "unknown"
         val provider = providers.find { it.id == providerId } ?: return "unknown"
         if (provider.freeform) return "unknown"
-        // Walk the effective model list for this auth type (mirrors modelsForProvider).
+        // Mirror modelsForProvider's strict-authType handling for OpenAI:
+        // only 'api_key' and 'oauth' are valid. Anything else → "unknown".
         val effective: List<ModelInfo> = when {
             provider.id == "openai" && authType == "oauth" ->
                 provider.modelsByAuth["oauth"] ?: provider.models
-            provider.id == "openai" -> provider.models
+            provider.id == "openai" && authType == "api_key" ->
+                provider.models
+            provider.id == "openai" -> return "unknown" // null / other authType
             authType != null -> provider.modelsByAuth[authType] ?: provider.models
             else -> provider.models
         }

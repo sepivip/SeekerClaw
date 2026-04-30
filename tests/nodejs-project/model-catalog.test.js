@@ -376,6 +376,19 @@ check('null modelId → unknown',
 check('empty modelId → unknown',
     mc.reasoningSupportFor('claude', '', 'api_key'), 'unknown');
 
+// 3a R1 thread 2: OpenAI strict authType handling — match modelsForProvider
+check('openai/gpt-5.4 with null authType → unknown (NOT yes)',
+    mc.reasoningSupportFor('openai', 'gpt-5.4', null), 'unknown');
+check('openai/gpt-5.4 with undefined authType → unknown',
+    mc.reasoningSupportFor('openai', 'gpt-5.4', undefined), 'unknown');
+check('openai/gpt-5.4 with bogus authType → unknown',
+    mc.reasoningSupportFor('openai', 'gpt-5.4', 'invalid'), 'unknown');
+// Sanity: explicit api_key / oauth still resolves correctly
+check('openai/gpt-5.4 with api_key → yes',
+    mc.reasoningSupportFor('openai', 'gpt-5.4', 'api_key'), 'yes');
+check('openai/gpt-5.4 with oauth → yes',
+    mc.reasoningSupportFor('openai', 'gpt-5.4', 'oauth'), 'yes');
+
 console.log();
 if (failures === 0) {
     console.log('ALL TESTS PASS');

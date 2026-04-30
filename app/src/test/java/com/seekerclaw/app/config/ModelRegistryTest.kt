@@ -492,6 +492,20 @@ class ModelRegistryTest {
     }
 
     @Test
+    fun `reasoningSupportFor — OpenAI strict authType handling (3a R1 thread 3)`() {
+        // Mirror modelsForProvider's strict-authType contract: only
+        // 'api_key' and 'oauth' are valid for OpenAI. Anything else
+        // returns "unknown" instead of silently falling through to the
+        // api_key list (which would misclassify oauth-only models).
+        assertEquals("unknown", ModelRegistry.reasoningSupportFor("openai", "gpt-5.4", null))
+        assertEquals("unknown", ModelRegistry.reasoningSupportFor("openai", "gpt-5.4", "invalid"))
+        assertEquals("unknown", ModelRegistry.reasoningSupportFor("openai", "gpt-5.4", ""))
+        // Sanity: explicit auth still resolves correctly
+        assertEquals("yes", ModelRegistry.reasoningSupportFor("openai", "gpt-5.4", "api_key"))
+        assertEquals("yes", ModelRegistry.reasoningSupportFor("openai", "gpt-5.4", "oauth"))
+    }
+
+    @Test
     fun `reasoningSupportFor — model without reasoningSupport field returns unknown`() {
         // Inject a one-off provider with a model that has reasoningSupport = null
         val withMissingField = productionProviders + ProviderInfo(

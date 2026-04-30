@@ -141,33 +141,46 @@ function modelsForProvider(providerId, authType) {
 /**
  * BAT-549 Commit 3: tri-state reasoningSupport resolver. Returns one of
  * `"yes"`, `"no"`, `"unknown"` for any (providerId, modelId, authType?)
- * triple. Adapters consult this when deciding whether to send the
- * thinking/reasoning request param.
+ * triple.
+ *
+ * `"unknown"` is the SAFE-DEFAULT state — adapters and Settings UI MUST
+ * treat it as capture-only / don't-enable-in-request unless the user
+ * explicitly overrides via the per-Custom advanced toggle. (Codex 3a R1
+ * thread 1 — single consistent meaning across Node + Kotlin.)
  *
  * Matrix per v4.1 contract:
  *   - Known model in registry with reasoningSupport === "yes" → "yes"
  *   - Known model with "no" → "no" (toggle is a true no-op for this model)
- *   - Known model without the field, or unknown model id, or freeform
- *     provider (openrouter, custom) → "unknown" (capture-only by default;
- *     adapter sends param anyway for `unknown` since user opted in via
- *     toggle, with WARN log if the API rejects)
+ *   - Known model without the field → "unknown"
+ *   - Unknown model id under known provider → "unknown"
+ *   - Freeform provider (openrouter, custom) → "unknown"
+ *   - OpenAI with null/unsupported authType → "unknown" (Codex 3a R1
+ *     thread 2 — match modelsForProvider's strict-authType semantics
+ *     instead of silently falling through to api_key list, which would
+ *     misclassify gpt-5.4-mini as "yes" via the wrong auth)
  */
 function reasoningSupportFor(providerId, modelId, authType) {
     const provider = _byId[providerId];
     if (!provider) return 'unknown';
     if (provider.freeform) return 'unknown';
     if (typeof modelId !== 'string' || modelId.length === 0) return 'unknown';
-    // Walk the effective model list for this auth type (matches modelsForProvider).
-    const effective = (() => {
-        if (provider.id === 'openai') {
-            if (authType === 'oauth') return (provider.modelsByAuth && provider.modelsByAuth.oauth) || provider.models;
-            return provider.models;
+    // Walk the effective model list for this auth type. For OpenAI we
+    // mirror modelsForProvider's strict authType handling: only
+    // 'api_key' and 'oauth' are valid. Anything else → 'unknown'.
+    let effective;
+    if (provider.id === 'openai') {
+        if (authType === 'oauth') {
+            effective = (provider.modelsByAuth && provider.modelsByAuth.oauth) || provider.models;
+        } else if (authType === 'api_key') {
+            effective = provider.models;
+        } else {
+            return 'unknown'; // null / undefined / any other authType
         }
-        if (authType && provider.modelsByAuth && provider.modelsByAuth[authType]) {
-            return provider.modelsByAuth[authType];
-        }
-        return provider.models;
-    })();
+    } else if (authType && provider.modelsByAuth && provider.modelsByAuth[authType]) {
+        effective = provider.modelsByAuth[authType];
+    } else {
+        effective = provider.models;
+    }
     const found = (effective || []).find((m) => m && m.id === modelId);
     if (!found) return 'unknown';
     if (found.reasoningSupport === 'yes') return 'yes';
