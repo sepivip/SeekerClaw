@@ -47,10 +47,20 @@
 const path = require('path');
 const { createStore } = require('./cross-process-store');
 
+// BAT-549 Commit 3b: dual-side defaults must mirror Kotlin's
+// RuntimeState data class defaults. New fields default to false / null
+// so updating from a pre-BAT-549 build does NOT silently flip on
+// reasoning capability (cost / behavior change). The cross-process-
+// store fills missing fields from these DEFAULTS on read, so old
+// `runtime_state.json` files that lack the new fields load cleanly.
 const DEFAULTS = Object.freeze({
     provider: 'claude',
     authType: 'api_key',
     model: 'claude-opus-4-7',
+    reasoningEnabled: false,
+    reasoningDisplayInChat: false,
+    customEchoReasoning: false,
+    customConfigSignature: null,
 });
 
 // Provider / authType matrix — must mirror
@@ -112,7 +122,22 @@ function open(workDir) {
     const store = createStore(filePath, DEFAULTS);
 
     function read() {
-        return store.read();
+        // BAT-549 Commit 3b: layer DEFAULTS-merge over the cross-process-
+        // store's raw JSON.parse so old `runtime_state.json` files (pre-
+        // BAT-549, with only provider/authType/model) load cleanly with
+        // the new fields filled from DEFAULTS. The Kotlin side handles
+        // this automatically via @Serializable data class defaults; the
+        // Node side needs explicit merge because cross-process-store
+        // returns the parsed object as-is when the file exists.
+        const raw = store.read();
+        if (!raw || typeof raw !== 'object') return { ...DEFAULTS };
+        const merged = { ...DEFAULTS };
+        for (const key of Object.keys(DEFAULTS)) {
+            if (Object.prototype.hasOwnProperty.call(raw, key) && raw[key] !== undefined) {
+                merged[key] = raw[key];
+            }
+        }
+        return merged;
     }
 
     function write(value) {
@@ -147,6 +172,24 @@ function open(workDir) {
                 `runtime-state: invalid (provider=${value.provider}, ` +
                 `authType=${value.authType}) — refusing to persist`,
             );
+        }
+        // BAT-549 Commit 3b: type-check the new optional fields IF
+        // present. Absent → DEFAULTS fill on read; that's fine. Wrong
+        // type → caller bug, surface loudly so the symptom shows up at
+        // the source instead of "saved but didn't take".
+        if (value.reasoningEnabled !== undefined && typeof value.reasoningEnabled !== 'boolean') {
+            throw new Error(`runtime-state: reasoningEnabled must be boolean, got ${typeof value.reasoningEnabled}`);
+        }
+        if (value.reasoningDisplayInChat !== undefined && typeof value.reasoningDisplayInChat !== 'boolean') {
+            throw new Error(`runtime-state: reasoningDisplayInChat must be boolean, got ${typeof value.reasoningDisplayInChat}`);
+        }
+        if (value.customEchoReasoning !== undefined && typeof value.customEchoReasoning !== 'boolean') {
+            throw new Error(`runtime-state: customEchoReasoning must be boolean, got ${typeof value.customEchoReasoning}`);
+        }
+        if (value.customConfigSignature !== undefined
+            && value.customConfigSignature !== null
+            && typeof value.customConfigSignature !== 'string') {
+            throw new Error(`runtime-state: customConfigSignature must be string or null, got ${typeof value.customConfigSignature}`);
         }
         return store.write(value);
     }

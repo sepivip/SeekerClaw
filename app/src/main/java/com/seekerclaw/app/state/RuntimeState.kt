@@ -58,4 +58,62 @@ data class RuntimeState(
     val provider: String = "claude",
     val authType: String = "api_key",
     val model: String = "claude-opus-4-7",
+    /**
+     * BAT-549 Commit 3b: user-facing toggle for "Extended Thinking".
+     * When `true` AND the active model's `reasoningSupport === "yes"`
+     * in the registry, adapters send the provider-appropriate request
+     * param (Anthropic `thinking:{type:"adaptive"}`, OpenAI
+     * `reasoning:{effort:"medium"}`, OpenRouter `reasoning:{effort:"medium"}`).
+     * For models with `reasoningSupport === "no"` (Haiku) the toggle is
+     * a true no-op — no request param sent; for `"unknown"` (freeform
+     * providers) the param is also NOT sent unless the user enables
+     * the per-Custom advanced override (see [customEchoReasoning]).
+     *
+     * Default `false` so updating from a pre-BAT-549 build does NOT
+     * silently flip on reasoning (token costs, behavior change).
+     */
+    val reasoningEnabled: Boolean = false,
+    /**
+     * BAT-549 Commit 3b: when `true`, reasoning summaries are surfaced
+     * to the Telegram chat as expandable blockquotes (collapsed by
+     * default, tap-to-expand). When `false` (default), reasoning is
+     * captured into checkpoint state but never shown to the user.
+     *
+     * Independent of [reasoningEnabled] — a power user could enable
+     * thinking without surfacing it (e.g. for tool-loop quality
+     * without UI clutter), or vice versa (display already-captured
+     * reasoning from past turns even with the toggle off).
+     */
+    val reasoningDisplayInChat: Boolean = false,
+    /**
+     * BAT-549 Commit 3b: per-Custom-config advanced override. When
+     * `true`, the Custom adapter forces echo-on-tool-loop for any
+     * model id (overrides the conservative default of stripping
+     * unknown gateways' reasoning content to avoid spurious 400s).
+     *
+     * Used when a user knows their custom gateway requires echoing
+     * reasoning_content but the model id doesn't match the known
+     * DeepSeek-V4 regex. R5 thread 5 of Commit 1 says this should be
+     * provider-config-scoped, NOT global — the [customConfigSignature]
+     * companion field tracks (model | baseUrl | format | sortedHeaderKeys)
+     * and resets this override to `false` when the signature changes
+     * (i.e., the user switched to a different gateway).
+     */
+    val customEchoReasoning: Boolean = false,
+    /**
+     * BAT-549 Commit 3b: SHA-256 of the Custom config tuple
+     * `(customModel | normalize(customBaseUrl) | customFormat |
+     * sortedHeaderKeys(customHeaders))`. ApiKey changes are NOT part
+     * of the signature (key rotation common); header VALUES are NOT
+     * hashed (would persist secret material on disk). When the
+     * signature mismatches the live config, [customEchoReasoning] is
+     * reset to `false` and the user is prompted to re-enable it.
+     *
+     * Default `null` for fresh installs and pre-BAT-549 upgrades —
+     * the signature is computed and persisted on the next Settings
+     * write to the Custom provider config (after Commit 3e wires the
+     * UI). Until then, [customEchoReasoning] simply stays at its
+     * persisted value.
+     */
+    val customConfigSignature: String? = null,
 )

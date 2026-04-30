@@ -4,6 +4,7 @@ import android.content.SharedPreferences
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -81,6 +82,61 @@ class RuntimeStateStoreTest {
     fun `seedFromPrefs returns defaults when prefs are empty`() {
         val seed = RuntimeStateStore.seedFromPrefs(prefs)
         assertEquals(RuntimeState(), seed)
+    }
+
+    // ---- BAT-549 Commit 3b: RuntimeState reasoning fields ---------------
+
+    @Test
+    fun `RuntimeState defaults — new BAT-549 fields`() {
+        val state = RuntimeState()
+        // Existing BAT-513 fields preserved
+        assertEquals("claude", state.provider)
+        assertEquals("api_key", state.authType)
+        assertEquals("claude-opus-4-7", state.model)
+        // New BAT-549 fields default to safe-off so existing users don't
+        // silently flip on reasoning capability when they update the app.
+        assertEquals(false, state.reasoningEnabled)
+        assertEquals(false, state.reasoningDisplayInChat)
+        assertEquals(false, state.customEchoReasoning)
+        assertEquals(null, state.customConfigSignature)
+    }
+
+    @Test
+    fun `RuntimeState data class equality includes new fields`() {
+        // Two instances with same originals + different reasoning fields
+        // must NOT be equal — the data class auto-generated equals/hashCode
+        // must include the new fields so observe-and-mirror change detection
+        // (RuntimeStateStore.mirrorIfChanged) sees toggle flips.
+        val baseline = RuntimeState("claude", "api_key", "claude-opus-4-7")
+        val flippedReasoning = baseline.copy(reasoningEnabled = true)
+        val flippedDisplay = baseline.copy(reasoningDisplayInChat = true)
+        val flippedCustom = baseline.copy(customEchoReasoning = true)
+        val flippedSig = baseline.copy(customConfigSignature = "abc123")
+
+        assertNotEquals(baseline, flippedReasoning)
+        assertNotEquals(baseline, flippedDisplay)
+        assertNotEquals(baseline, flippedCustom)
+        assertNotEquals(baseline, flippedSig)
+        // copy without changes still equal
+        assertEquals(baseline, baseline.copy())
+    }
+
+    @Test
+    fun `RuntimeState constructor accepts all 7 fields`() {
+        val state = RuntimeState(
+            provider = "custom",
+            authType = "api_key",
+            model = "deepseek-v4-pro",
+            reasoningEnabled = true,
+            reasoningDisplayInChat = true,
+            customEchoReasoning = true,
+            customConfigSignature = "sha256-stub",
+        )
+        assertEquals("custom", state.provider)
+        assertEquals(true, state.reasoningEnabled)
+        assertEquals(true, state.reasoningDisplayInChat)
+        assertEquals(true, state.customEchoReasoning)
+        assertEquals("sha256-stub", state.customConfigSignature)
     }
 
     @Test
