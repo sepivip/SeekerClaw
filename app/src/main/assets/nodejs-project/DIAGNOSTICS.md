@@ -371,3 +371,43 @@ grep -i "rate limit.*mcp\|rate limit.*exceeded" node_debug.log | tail -10
 **Diagnosis:** The grid is a fixed 26-week window ending with the current week. Today's cell sits at whatever row corresponds to today's weekday (Mon=row 0, Sun=row 6). Future days in the current week are intentionally blank (Color.Transparent) — not a bug. Clipping on the actual right edge was fixed in PR #304 by switching to weight-based cells (BAT-500). If clipping reappears, it's likely a regression in `MessageActivityHeatmap` in `SystemScreen.kt`.
 **Fix:** This is a UI bug path, not a data bug. Ask the user for a screenshot and the device model + app version, then file a bug.
 
+## Reasoning (Extended Thinking)
+
+BAT-549 introduced reasoning content preservation across all 4 providers, plus user-facing toggles for enabling thinking and displaying summaries in chat. The reasoning subsystem has several moving pieces — this section is the playbook for diagnosing each.
+
+### `/think on` Toggled But Model Doesn't Think Differently
+**Symptoms:** User toggled `/think on` (or Settings > Reasoning > Extended thinking ON) but responses look the same as before.
+**Diagnosis:** The toggle is a no-op for models whose registry tri-state is `"no"` (Haiku 4.5) or `"unknown"` (freeform / unregistered model ids). Run `/think` (no args) to see the active model's `reasoningSupport` value. The agent's system prompt also exposes this state — the agent itself can tell the user.
+**Fix:**
+- `reasoningSupport=no`: switch to a yes-supporting model (Opus 4.7, Sonnet 4.6, GPT-5.4/5.5, Codex models) via `/model` or Settings.
+- `reasoningSupport=unknown`: this is the safe default for models not in the registry. If the user is on Custom and knows their gateway supports thinking, ask them to confirm (the request param genuinely isn't sent — registry is the source of truth).
+
+### Custom + DeepSeek V4: 400 Loop on `/resume` After Tool Calls
+**Symptoms:** User on Custom provider with a DeepSeek V4 model gets `400` errors after tool calls, often in a loop after `/resume`.
+**Diagnosis:** Pre-BAT-549 the Custom adapter stripped V4's `reasoning_content` field from the next request, but V4 REQUIRES it echoed back after a tool call. Commit 1 added model-gating: V4 now echoes, R1 strips, unknown captures-only. The 400-loop should be impossible on the current build for V4 ids matching `deepseek-v4*` (case-insensitive, with or without `deepseek/` OR-prefix).
+**Fix:**
+- Confirm the model id matches the V4 regex (the agent can grep `reasoning-gating.js` for the exact pattern).
+- If the user is on a V4 fork with a non-matching id (e.g., `my-deepseek-v4-fork`): toggle `/think echo on` (Custom-only, force echo on tool-loop) OR enable in Settings > AI Provider > Custom > Advanced (Reasoning) > "Echo reasoning to gateway".
+- If still failing: the 400 message likely contains "reasoning_content must be passed back" — the adaptive 3-step quarantine recovery (last-user → earliest-tool-call → full reset) auto-runs and saves a forensic dump under `<workDir>/reasoning-quarantine/`.
+
+### Custom + R1 (DeepSeek-Reasoner): 400 With "Reasoning Content Echoed"
+**Symptoms:** User on Custom provider with DeepSeek-R1 / DeepSeek-Reasoner gets `400` with a message about reasoning_content being unexpected.
+**Diagnosis:** OPPOSITE of V4 — R1 REJECTS echoed reasoning_content. Commit 1's gating returns `'strip'` for R1 ids; the strip should run pre-delegation.
+**Fix:**
+- Verify the model id matches the R1 regex (`/(?:^|\/)deepseek-(?:reasoner|r1)(?:-|$)/i`).
+- Check the user has NOT enabled the per-Custom echo override (`/think echo` is not currently a recognized subcommand; the override only flips via Settings > AI Provider > Custom > Advanced (Reasoning)). The override resets automatically when the user edits any signed Custom config field (model | baseUrl | format | header keys), so if they recently swapped from V4 to R1 the override should already be off.
+
+### Reasoning Captured But Not Displayed in Chat
+**Symptoms:** User toggled "Display reasoning in chat" but no blockquote appears below the agent's responses.
+**Diagnosis:** As of v1.9.x the display path is wired only at the Settings/state level — the actual blockquote-rendering integration into the response flow ships in a later release. The toggle persists correctly and `reasoning-display.js` formats blockquotes, but ai.js doesn't yet send them as a separate message.
+**Fix:** Tell the user this is a known scoped-out gap; reasoning IS being captured into checkpoint state (so future builds can replay/display it). Reference the CHANGELOG entry for the release that wires display.
+
+### `customConfigSignature` Reset The Echo Override After A Spurious Edit
+**Symptoms:** User reports that the "Echo reasoning to gateway" toggle reset to OFF after they "barely changed anything" in the Custom config.
+**Diagnosis:** The signature hashes the trimmed values of customModel | customBaseUrl | customFormat | sortedLowercaseHeaderKeys. Any visible character change (including trailing slash, scheme case, header key add/remove) resets the override. ApiKey changes do NOT (key rotation is common). Header VALUE changes do NOT (would persist a leakable digest).
+**Fix:** Confirm the user's expectation matches the contract — "any visible edit resets the override" is intentional defense-in-depth (gateway-A's echo contract may not match gateway-B's). If they want to reduce reset-frequency, recommend keeping all whitespace consistent in their Settings entries.
+
+### Reasoning Logs Show `len=N fp=XXXXXXXX` Instead of Raw Text
+**Symptoms:** User looking at logs (or sending a bug report screenshot) doesn't see any reasoning content — just length + 8-char hex fingerprints.
+**Diagnosis:** This is BY DESIGN. `reasoning-redact.js` is the centralized redaction helper for reasoning logs. Mobile logs end up in bug-report screenshots — raw thinking text, signatures, and encrypted_content MUST never leak there. The fingerprint is enough for ops to confirm "the same reasoning block was seen / replayed across turns" without revealing content.
+**Fix:** No fix needed. If a user genuinely needs reasoning visibility, point them at the "Display reasoning in chat" toggle (Settings > Reasoning).

@@ -3,6 +3,36 @@
 All notable changes to SeekerClaw are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Added
+- **Reasoning content preservation across all 4 providers (BAT-549)** — captures and (when supported) replays provider-native reasoning artifacts across tool-loop turns so multi-step thinking survives `/resume` and tool calls without re-prompting. Each provider preserves its own wire shape byte-exact:
+  - Anthropic: `thinking` / `redacted_thinking` blocks with signature byte-exact, replayed with the `interleaved-thinking-2025-05-14` beta header
+  - OpenAI Responses: full reasoning items with `encrypted_content` for `store:false` (OAuth/Codex) and api_key paths via `include:["reasoning.encrypted_content"]`
+  - OpenRouter: `reasoning_details[]` echoed verbatim, plus `reasoning_content` echo gated by R1/V4 model regex
+  - Custom: wraps the delegate (OpenAI Responses or OpenRouter Chat Completions) with model-gated echo policy (DeepSeek R1 strip, V4 echo-on-tool-loop, unknown capture-only) — fixes the `/resume` 400 loop on Custom + DeepSeek-V4 gateways
+- **Adaptive 3-step quarantine recovery** — when a provider returns "reasoning_content must be passed back" 400, the chat loop runs progressive recovery: cut at last user-message boundary → cut at earliest provider-relevant tool-call turn → full conversation reset. Each step also rewrites the active task-store checkpoint so a later `/resume` can't reload the bad segment. User memory, skills, cron, credentials, and other-chat checkpoints are untouched at every step.
+- **`reasoningSupport` tri-state in model registry** — known reasoning models marked `"yes"` (Opus 4.7/4.6, Sonnet 4.6, GPT-5.5/5.4/5.3-codex, gpt-5.4-mini), Haiku 4.5 marked `"no"`, everything else (incl. freeform OpenRouter / Custom model ids) resolves to `"unknown"`. The "yes" gate is authoritative — toggles never send the request param for non-yes models even when the user has them on.
+- **Settings > Reasoning section** — two toggles (Extended thinking, Display reasoning in chat) that drive the request enablement and the planned chat-display path. UI surfaces a hint when the active model's `reasoningSupport` is `"no"` or `"unknown"` so users know the toggle is a no-op for that model.
+- **Settings > AI Provider > Custom > Advanced (Reasoning)** — per-Custom advanced override `customEchoReasoning` for power users on V4-shaped gateways whose model id doesn't match the known regex. Resets automatically when any signed Custom config field (model | baseUrl | format | header keys) changes — `CustomConfigSignature` mirrors algorithm Kotlin/Node-side with a golden-hash dual-side equivalence test.
+- **Telegram `/think` command** — toggle reasoning fields from chat: `/think` shows status, `/think on/off` flips Extended thinking, `/think show/hide` flips Display in chat. Mirrors the Settings UI so power users don't have to leave the conversation.
+- **Centralized log-redaction helper** (`reasoning-redact.js`) — every reasoning-related log line goes through `fingerprint()` (sha256[:8]) + length-only summaries. Mobile logs end up in bug-report screenshots; raw thinking text, signatures, and `encrypted_content` MUST never leak there. Buffer / BigInt / circular-ref inputs all handled safely (no throw, no JSON expansion of secrets).
+- **`DIAGNOSTICS.md` Reasoning section** — playbook for the 6 most likely user-visible reasoning issues (toggle no-op surprise, V4 400 loop, R1 400 with echo, display-not-wired, signature spurious reset, redacted-log confusion).
+- **Agent self-knowledge** — `buildSystemBlocks` injects a "Reasoning (Extended Thinking)" block per turn with the live state of all 3 toggles + active model's `reasoningSupport`, so the agent can answer "is reasoning on?" / "does my model support it?" without making things up.
+
+### Fixed
+- **DeepSeek V4-via-Custom `/resume` 400 crash** — the headline fix from BAT-549 Commit 1. V4 server requires reasoning_content echoed after tool calls; pre-BAT-549 the Custom adapter stripped it unconditionally and looped on the 400. Now the gating echoes for V4, strips for R1, captures-only for unknown gateways.
+
+### Security
+- **Header-VALUE bytes never hashed in `customConfigSignature`** — only sortedHeaderKeys (lowercase, deduped) participate in the hash, so secret material in `Authorization` / `X-API-Key` header values doesn't persist a leakable digest on disk.
+- **API-key rotation invisible to the override-reset trigger** — the user's per-Custom advanced override survives normal key rotation (rotating `apiKey` doesn't change the signature). Only meaningful gateway-shape edits reset.
+- **Locale-invariant Kotlin lowercase** — header-key lowercasing uses `Locale.ROOT` so Turkish-locale devices don't produce a different signature than other devices and the Node side (the dotted-I problem).
+- **Sanitize-on-merge for corrupt `runtime_state.json`** — if the file got a wrong-type value (manual edit, schema rolled back), legacy 3-field writes fall back to defaults instead of carrying the bad value forward.
+
+### Changed
+- **Adapter `formatRequest` and `toApiMessages` accept an optional `requestOptions` arg** — additive 6th parameter (formatRequest) / 3rd parameter (toApiMessages). Existing call sites that don't pass it get the same pre-BAT-549 behavior. Used to thread `reasoningEnabled` / `reasoningSupport` / `customEchoOverride` through to per-adapter request-side decisions.
+- **Anthropic `anthropic-beta` header** — now always includes `interleaved-thinking-2025-05-14` (no-op when reasoning is off; required so the API accepts replayed thinking blocks AFTER tool_use on the next turn — Commit 2a's capture path was inert without this).
+
 ## [1.9.0] - 2026-04-13
 
 ### Added

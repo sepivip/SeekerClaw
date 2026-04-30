@@ -1179,6 +1179,37 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
         lines.push('');
     }
 
+    // BAT-549 Commit 5: agent self-knowledge of reasoning capability.
+    // Per CLAUDE.md "Agent Self-Awareness" rule — when we add a feature
+    // the agent only knows what we tell it. Read RuntimeState fresh
+    // each prompt build so the agent's self-description matches
+    // what's actually being sent on the next request.
+    try {
+        const _rtState = (typeof _runtimeState !== 'undefined' && _runtimeState) ? _runtimeState.read() : null;
+        const reasoningOn = !!(_rtState && _rtState.reasoningEnabled);
+        const displayOn = !!(_rtState && _rtState.reasoningDisplayInChat);
+        const _support = (() => {
+            const auth = PROVIDER === 'openai' ? OPENAI_AUTH_TYPE : AUTH_TYPE;
+            try { return reasoningSupportFor(PROVIDER, activeModel, auth); }
+            catch (_) { return 'unknown'; }
+        })();
+        lines.push('## Reasoning (Extended Thinking)');
+        lines.push(`Your active model's reasoning support: \`${_support}\` (yes/no/unknown).`);
+        lines.push(`User's "Extended Thinking" toggle: \`${reasoningOn ? 'on' : 'off'}\`.`);
+        lines.push(`User's "Display reasoning in chat" toggle: \`${displayOn ? 'on' : 'off'}\`.`);
+        if (_support === 'yes' && reasoningOn) {
+            lines.push('You are running with extended thinking enabled — take time for thorough multi-step analysis when warranted. Your thinking is preserved across tool calls within a turn (Anthropic interleaved thinking / OpenAI Responses encrypted_content / OpenRouter reasoning_details).');
+        } else if (_support === 'no') {
+            lines.push('Your model does not support extended thinking — the toggle is a no-op for you. Respond normally.');
+        } else if (_support === 'unknown') {
+            lines.push('Your model is not in the registry. Whether extended thinking takes effect depends on your gateway/provider — assume it does not unless the user has confirmed otherwise.');
+        }
+        lines.push('Users can toggle these any time via Settings > Reasoning OR via Telegram `/think on|off|show|hide`. The active state above reflects what was persisted at the START of THIS turn — a mid-turn toggle takes effect on the next user message.');
+        lines.push('');
+    } catch (_) {
+        // Defensive: never let self-knowledge prompt failures take down chat()
+    }
+
     // Runtime limitations (behavioral — device/version info is in PLATFORM.md)
     lines.push('## Runtime Limitations');
     lines.push('- Running inside nodejs-mobile on Android (Node.js runs as libnode.so via JNI, not a standalone binary)');
