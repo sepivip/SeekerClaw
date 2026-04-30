@@ -211,6 +211,84 @@ recovery.quarantineActiveSegment({
 });
 eq('input messages array NOT mutated by quarantine', sampleConv.length, beforeLen);
 
+console.log();
+console.log('── R4 thread 1: ai.js _applyRecovery semantics (current user preserved, no systemNote in prompt) ──');
+// This pins the v4.1 R4 invariant for ai.js's _applyRecovery helper.
+// We replicate its exact splice+re-append logic against a quarantine
+// result and assert: (1) the current user message is the LAST user-role
+// entry, (2) the systemNote is NOT present in the messages array.
+const _applyRecoveryReplica = (messages, userMessage, result) => {
+    messages.splice(0, messages.length, ...result.newMessages);
+    const last = messages[messages.length - 1];
+    const lastIsCurrentUser = last
+        && last.role === 'user'
+        && typeof last.content === 'string'
+        && last.content === userMessage;
+    if (!lastIsCurrentUser) {
+        messages.push({ role: 'user', content: userMessage });
+    }
+    // Do NOT inject systemNote — recovery metadata only
+};
+
+// Step 2 quarantine removes the current user prompt — _applyRecovery must re-append.
+const userMessageS2 = 'second question';  // matches sampleConv[4].content
+const liveMessagesS2 = sampleConv.slice();
+const step2result = recovery.quarantineActiveSegment({
+    chatId: 'r4-step2',
+    messages: liveMessagesS2,
+    workDir: tmpRoot,
+    step: 2,
+    taskId: null,
+    now: () => 1700000000005,
+});
+ok('Step 2 quarantine ok=true', step2result.ok === true);
+ok('Step 2 newMessages does NOT include current user prompt (was removed)',
+    step2result.newMessages.every((m) => !(m.role === 'user' && m.content === userMessageS2)));
+_applyRecoveryReplica(liveMessagesS2, userMessageS2, step2result);
+const lastS2 = liveMessagesS2[liveMessagesS2.length - 1];
+ok('After _applyRecovery: last message is the current user prompt',
+    lastS2 && lastS2.role === 'user' && lastS2.content === userMessageS2);
+ok('After _applyRecovery: systemNote NOT injected as a user message',
+    !liveMessagesS2.some((m) => typeof m.content === 'string'
+        && m.content.includes(step2result.systemNote)));
+
+// Step 1 quarantine PRESERVES the current user prompt — _applyRecovery must NOT duplicate.
+const userMessageS1 = 'second question';
+const liveMessagesS1 = sampleConv.slice();
+const step1result = recovery.quarantineActiveSegment({
+    chatId: 'r4-step1',
+    messages: liveMessagesS1,
+    workDir: tmpRoot,
+    step: 1,
+    taskId: null,
+    now: () => 1700000000006,
+});
+ok('Step 1 newMessages still has current user prompt as last',
+    step1result.newMessages[step1result.newMessages.length - 1].content === userMessageS1);
+const beforeReplicaLenS1 = step1result.newMessages.length;
+_applyRecoveryReplica(liveMessagesS1, userMessageS1, step1result);
+ok('After _applyRecovery (step 1): no duplicate user prompt appended',
+    liveMessagesS1.length === beforeReplicaLenS1,
+    `expected ${beforeReplicaLenS1}, got ${liveMessagesS1.length}`);
+
+// Step 3 full reset — _applyRecovery must re-append the user prompt.
+const userMessageS3 = 'fresh start question';
+const liveMessagesS3 = sampleConv.slice();
+const step3result = recovery.quarantineActiveSegment({
+    chatId: 'r4-step3',
+    messages: liveMessagesS3,
+    workDir: tmpRoot,
+    step: 3,
+    taskId: null,
+    now: () => 1700000000007,
+});
+eq('Step 3 newMessages is empty', step3result.newMessages.length, 0);
+_applyRecoveryReplica(liveMessagesS3, userMessageS3, step3result);
+eq('After _applyRecovery (step 3): exactly one user-role message',
+    liveMessagesS3.filter((m) => m.role === 'user').length, 1);
+ok('After _applyRecovery (step 3): the lone user message is the current prompt',
+    liveMessagesS3[0].role === 'user' && liveMessagesS3[0].content === userMessageS3);
+
 // Cleanup
 try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch (_) {}
 

@@ -2271,12 +2271,41 @@ async function chat(chatId, userMessage, options = {}) {
                 // reference stays valid. Reassigning `messages = …` would
                 // diverge in-memory conversation state — subsequent pushes
                 // and addToConversation() calls would update the wrong
-                // array. Helper does it once for both step paths.
+                // array.
+                //
+                // R4 thread 1: the previous version pushed `[System:
+                // <note>]` as a `{role:'user'}` message before retrying.
+                // That had two bugs: (a) for step 2/3 the user's actual
+                // current prompt may have been quarantined out, leaving
+                // the system note as the model's only user input, and
+                // (b) even when the user prompt survived, the note
+                // became the LAST user message so the model responded
+                // to the note rather than the original question.
+                //
+                // The fix: ensure the current turn's user message is
+                // present as the last user-role entry after truncation
+                // (re-append it if recovery removed it), and do NOT
+                // inject the systemNote into messages. The note is
+                // recovery metadata — it could surface to the user via
+                // Telegram in a future commit, but it must NOT enter
+                // the model's prompt context.
                 const _applyRecovery = (result) => {
                     messages.splice(0, messages.length, ...result.newMessages);
-                    if (result.systemNote) {
-                        messages.push({ role: 'user', content: `[System: ${result.systemNote}]` });
+                    // Re-append the current turn's user message if recovery
+                    // removed it. Step 1 cuts AFTER the last user message so
+                    // it's preserved; step 2 cuts at the earliest assistant
+                    // tool-call turn and may remove it; step 3 is full reset.
+                    const last = messages[messages.length - 1];
+                    const lastIsCurrentUser = last
+                        && last.role === 'user'
+                        && typeof last.content === 'string'
+                        && last.content === userMessage;
+                    if (!lastIsCurrentUser) {
+                        messages.push({ role: 'user', content: userMessage });
                     }
+                    // result.systemNote intentionally not injected — it's
+                    // recovery metadata for potential user-facing surfaces
+                    // (Telegram reply), not model prompt context.
                 };
                 if (_reasoningRecovery.isReasoningContent400(res.status, res.data)) {
                     _reasoningRecoveryStep = (_reasoningRecoveryStep || 0) + 1;
