@@ -11,16 +11,16 @@
       "freeform": false,
       "defaultModel": "gpt-5.4",
       "models": [
-        { "id": "gpt-5.5",       "displayName": "GPT-5.5" },
-        { "id": "gpt-5.4",       "displayName": "GPT-5.4" },
-        { "id": "gpt-5.3-codex", "displayName": "GPT-5.3 Codex" }
+        { "id": "gpt-5.5",       "displayName": "GPT-5.5",       "reasoningSupport": "yes" },
+        { "id": "gpt-5.4",       "displayName": "GPT-5.4",       "reasoningSupport": "yes" },
+        { "id": "gpt-5.3-codex", "displayName": "GPT-5.3 Codex", "reasoningSupport": "yes" }
       ],
       "modelsByAuth": {
         "oauth": [
-          { "id": "gpt-5.5",       "displayName": "GPT-5.5" },
-          { "id": "gpt-5.4",       "displayName": "GPT-5.4" },
-          { "id": "gpt-5.4-mini",  "displayName": "GPT-5.4 Mini" },
-          { "id": "gpt-5.3-codex", "displayName": "GPT-5.3 Codex" }
+          { "id": "gpt-5.5",       "displayName": "GPT-5.5",       "reasoningSupport": "yes" },
+          { "id": "gpt-5.4",       "displayName": "GPT-5.4",       "reasoningSupport": "yes" },
+          { "id": "gpt-5.4-mini",  "displayName": "GPT-5.4 Mini",  "reasoningSupport": "yes" },
+          { "id": "gpt-5.3-codex", "displayName": "GPT-5.3 Codex", "reasoningSupport": "yes" }
         ]
       }
     },
@@ -34,10 +34,10 @@
       "freeform": false,
       "defaultModel": "claude-opus-4-7",
       "models": [
-        { "id": "claude-opus-4-7",   "displayName": "Opus 4.7" },
-        { "id": "claude-opus-4-6",   "displayName": "Opus 4.6" },
-        { "id": "claude-sonnet-4-6", "displayName": "Sonnet 4.6" },
-        { "id": "claude-haiku-4-5",  "displayName": "Haiku 4.5" }
+        { "id": "claude-opus-4-7",   "displayName": "Opus 4.7",   "reasoningSupport": "yes" },
+        { "id": "claude-opus-4-6",   "displayName": "Opus 4.6",   "reasoningSupport": "yes" },
+        { "id": "claude-sonnet-4-6", "displayName": "Sonnet 4.6", "reasoningSupport": "yes" },
+        { "id": "claude-haiku-4-5",  "displayName": "Haiku 4.5",  "reasoningSupport": "no"  }
       ]
     },
     {

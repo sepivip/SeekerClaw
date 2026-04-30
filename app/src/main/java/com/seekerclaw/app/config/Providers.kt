@@ -164,6 +164,42 @@ object ModelRegistry {
     }
 
     /**
+     * BAT-549 Commit 3: tri-state reasoning-support resolver. Returns one
+     * of `"yes"`, `"no"`, `"unknown"` for any (providerId, modelId,
+     * authType?) triple. Settings UI consults this to decide whether to
+     * show / activate the "Extended Thinking" row, and adapter request
+     * paths consult it before sending the thinking/reasoning param.
+     *
+     * Matrix per v4.1 contract:
+     *  - Known model in registry with `reasoningSupport === "yes"` → "yes"
+     *  - Known model with `"no"` → "no" (toggle is a true no-op)
+     *  - Known model with the field absent OR unknown model id OR
+     *    freeform provider (openrouter, custom) → "unknown"
+     *
+     * Mirrors `model-catalog.js` `reasoningSupportFor` Node-side helper —
+     * keep both in sync. Unit-tested in ModelRegistryTest.
+     */
+    fun reasoningSupportFor(providerId: String, modelId: String?, authType: String?): String {
+        if (modelId.isNullOrBlank()) return "unknown"
+        val provider = providers.find { it.id == providerId } ?: return "unknown"
+        if (provider.freeform) return "unknown"
+        // Walk the effective model list for this auth type (mirrors modelsForProvider).
+        val effective: List<ModelInfo> = when {
+            provider.id == "openai" && authType == "oauth" ->
+                provider.modelsByAuth["oauth"] ?: provider.models
+            provider.id == "openai" -> provider.models
+            authType != null -> provider.modelsByAuth[authType] ?: provider.models
+            else -> provider.models
+        }
+        val found = effective.find { it.id == modelId } ?: return "unknown"
+        return when (found.reasoningSupport) {
+            "yes" -> "yes"
+            "no" -> "no"
+            else -> "unknown"
+        }
+    }
+
+    /**
      * Resolve the model list for a given provider+auth combination.
      *
      * For OpenAI specifically, [authType] MUST be either `"api_key"` or

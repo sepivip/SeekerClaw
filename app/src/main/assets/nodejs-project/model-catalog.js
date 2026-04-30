@@ -139,6 +139,43 @@ function modelsForProvider(providerId, authType) {
 }
 
 /**
+ * BAT-549 Commit 3: tri-state reasoningSupport resolver. Returns one of
+ * `"yes"`, `"no"`, `"unknown"` for any (providerId, modelId, authType?)
+ * triple. Adapters consult this when deciding whether to send the
+ * thinking/reasoning request param.
+ *
+ * Matrix per v4.1 contract:
+ *   - Known model in registry with reasoningSupport === "yes" → "yes"
+ *   - Known model with "no" → "no" (toggle is a true no-op for this model)
+ *   - Known model without the field, or unknown model id, or freeform
+ *     provider (openrouter, custom) → "unknown" (capture-only by default;
+ *     adapter sends param anyway for `unknown` since user opted in via
+ *     toggle, with WARN log if the API rejects)
+ */
+function reasoningSupportFor(providerId, modelId, authType) {
+    const provider = _byId[providerId];
+    if (!provider) return 'unknown';
+    if (provider.freeform) return 'unknown';
+    if (typeof modelId !== 'string' || modelId.length === 0) return 'unknown';
+    // Walk the effective model list for this auth type (matches modelsForProvider).
+    const effective = (() => {
+        if (provider.id === 'openai') {
+            if (authType === 'oauth') return (provider.modelsByAuth && provider.modelsByAuth.oauth) || provider.models;
+            return provider.models;
+        }
+        if (authType && provider.modelsByAuth && provider.modelsByAuth[authType]) {
+            return provider.modelsByAuth[authType];
+        }
+        return provider.models;
+    })();
+    const found = (effective || []).find((m) => m && m.id === modelId);
+    if (!found) return 'unknown';
+    if (found.reasoningSupport === 'yes') return 'yes';
+    if (found.reasoningSupport === 'no') return 'no';
+    return 'unknown';
+}
+
+/**
  * Recommended default model for provider+authType.
  * Deliberately decoupled from list order — don't put tier-gated models here.
  * Mirrors Kotlin defaultModelForProvider(...).
@@ -261,6 +298,7 @@ module.exports = {
     PROVIDER_DISPLAY_NAMES,
     modelsForProvider,
     defaultModelForProvider,
+    reasoningSupportFor,
     authTypesForProvider,
     hasCredentialsFor,
     validateModelForProvider,

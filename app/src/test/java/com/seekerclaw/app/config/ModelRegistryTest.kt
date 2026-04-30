@@ -59,16 +59,16 @@ class ModelRegistryTest {
             freeform = false,
             defaultModel = "gpt-5.4",
             models = listOf(
-                ModelInfo("gpt-5.5", "GPT-5.5"),
-                ModelInfo("gpt-5.4", "GPT-5.4"),
-                ModelInfo("gpt-5.3-codex", "GPT-5.3 Codex"),
+                ModelInfo("gpt-5.5", "GPT-5.5", "yes"),
+                ModelInfo("gpt-5.4", "GPT-5.4", "yes"),
+                ModelInfo("gpt-5.3-codex", "GPT-5.3 Codex", "yes"),
             ),
             modelsByAuth = mapOf(
                 "oauth" to listOf(
-                    ModelInfo("gpt-5.5", "GPT-5.5"),
-                    ModelInfo("gpt-5.4", "GPT-5.4"),
-                    ModelInfo("gpt-5.4-mini", "GPT-5.4 Mini"),
-                    ModelInfo("gpt-5.3-codex", "GPT-5.3 Codex"),
+                    ModelInfo("gpt-5.5", "GPT-5.5", "yes"),
+                    ModelInfo("gpt-5.4", "GPT-5.4", "yes"),
+                    ModelInfo("gpt-5.4-mini", "GPT-5.4 Mini", "yes"),
+                    ModelInfo("gpt-5.3-codex", "GPT-5.3 Codex", "yes"),
                 ),
             ),
         ),
@@ -82,10 +82,10 @@ class ModelRegistryTest {
             freeform = false,
             defaultModel = "claude-opus-4-7",
             models = listOf(
-                ModelInfo("claude-opus-4-7", "Opus 4.7"),
-                ModelInfo("claude-opus-4-6", "Opus 4.6"),
-                ModelInfo("claude-sonnet-4-6", "Sonnet 4.6"),
-                ModelInfo("claude-haiku-4-5", "Haiku 4.5"),
+                ModelInfo("claude-opus-4-7", "Opus 4.7", "yes"),
+                ModelInfo("claude-opus-4-6", "Opus 4.6", "yes"),
+                ModelInfo("claude-sonnet-4-6", "Sonnet 4.6", "yes"),
+                ModelInfo("claude-haiku-4-5", "Haiku 4.5", "no"),
             ),
         ),
         ProviderInfo(
@@ -438,6 +438,80 @@ class ModelRegistryTest {
         } catch (e: IllegalArgumentException) {
             // expected
         } finally {
+            ModelRegistry.initForTest(productionProviders)
+        }
+    }
+
+    // ---- BAT-549 Commit 3: reasoningSupportFor tri-state -----------------
+
+    @Test
+    fun `reasoningSupportFor — known yes models`() {
+        assertEquals("yes", ModelRegistry.reasoningSupportFor("claude", "claude-opus-4-7", "api_key"))
+        assertEquals("yes", ModelRegistry.reasoningSupportFor("claude", "claude-opus-4-6", "api_key"))
+        assertEquals("yes", ModelRegistry.reasoningSupportFor("claude", "claude-sonnet-4-6", "api_key"))
+        assertEquals("yes", ModelRegistry.reasoningSupportFor("openai", "gpt-5.5", "api_key"))
+        assertEquals("yes", ModelRegistry.reasoningSupportFor("openai", "gpt-5.4", "api_key"))
+        assertEquals("yes", ModelRegistry.reasoningSupportFor("openai", "gpt-5.3-codex", "api_key"))
+    }
+
+    @Test
+    fun `reasoningSupportFor — known no model (Haiku)`() {
+        assertEquals("no", ModelRegistry.reasoningSupportFor("claude", "claude-haiku-4-5", "api_key"))
+    }
+
+    @Test
+    fun `reasoningSupportFor — gpt-5_4-mini is yes via oauth, unknown via api_key`() {
+        // Per the production registry, gpt-5.4-mini exists ONLY in modelsByAuth.oauth
+        assertEquals("yes", ModelRegistry.reasoningSupportFor("openai", "gpt-5.4-mini", "oauth"))
+        assertEquals("unknown", ModelRegistry.reasoningSupportFor("openai", "gpt-5.4-mini", "api_key"))
+    }
+
+    @Test
+    fun `reasoningSupportFor — freeform providers always unknown`() {
+        // openrouter and custom have models = [] — anything looked up returns unknown
+        assertEquals("unknown", ModelRegistry.reasoningSupportFor("openrouter", "anthropic/claude-sonnet-4-6", "api_key"))
+        assertEquals("unknown", ModelRegistry.reasoningSupportFor("openrouter", "deepseek/deepseek-r1", "api_key"))
+        assertEquals("unknown", ModelRegistry.reasoningSupportFor("custom", "deepseek-v4-pro", "api_key"))
+    }
+
+    @Test
+    fun `reasoningSupportFor — unknown provider returns unknown`() {
+        assertEquals("unknown", ModelRegistry.reasoningSupportFor("nonexistent", "foo", "api_key"))
+    }
+
+    @Test
+    fun `reasoningSupportFor — unknown model under known provider returns unknown`() {
+        assertEquals("unknown", ModelRegistry.reasoningSupportFor("claude", "claude-future-9-9", "api_key"))
+    }
+
+    @Test
+    fun `reasoningSupportFor — null or blank modelId returns unknown`() {
+        assertEquals("unknown", ModelRegistry.reasoningSupportFor("claude", null, "api_key"))
+        assertEquals("unknown", ModelRegistry.reasoningSupportFor("claude", "", "api_key"))
+        assertEquals("unknown", ModelRegistry.reasoningSupportFor("claude", "   ", "api_key"))
+    }
+
+    @Test
+    fun `reasoningSupportFor — model without reasoningSupport field returns unknown`() {
+        // Inject a one-off provider with a model that has reasoningSupport = null
+        val withMissingField = productionProviders + ProviderInfo(
+            id = "test-prov",
+            displayName = "Test",
+            authTypes = listOf("api_key"),
+            keyHint = "",
+            consoleUrl = "",
+            keysUrl = "",
+            freeform = false,
+            defaultModel = "no-field-model",
+            models = listOf(ModelInfo("no-field-model", "No Field", reasoningSupport = null)),
+        )
+        ModelRegistry.resetForTest()
+        ModelRegistry.initForTest(withMissingField)
+        try {
+            assertEquals("unknown",
+                ModelRegistry.reasoningSupportFor("test-prov", "no-field-model", "api_key"))
+        } finally {
+            ModelRegistry.resetForTest()
             ModelRegistry.initForTest(productionProviders)
         }
     }

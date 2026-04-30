@@ -6,6 +6,20 @@ import kotlinx.serialization.Serializable
 data class ModelInfo(
     val id: String,
     val displayName: String,
+    /**
+     * BAT-549 Commit 3: tri-state per Codex v4.1 contract finding 4.
+     * "yes" — known reasoning-capable; adapter MAY send thinking/reasoning param when toggle on
+     * "no"  — known non-reasoning; toggle is a no-op (Haiku, GPT-5.4 chat-completions only)
+     * Optional field — absent on freeform-provider lookups (openrouter / custom) where the
+     * model id is user-typed and we have no a-priori knowledge. Code paths that need a
+     * value-or-fallback should treat absent as "unknown" (default behavior: capture-only,
+     * don't enable in request).
+     *
+     * Default `null` rather than a Kotlin enum because the field arrives from JSON parsed
+     * by kotlinx-serialization and `null` cleanly represents "absent in the registry"
+     * without a sentinel string. Callers compare to literal "yes"/"no" strings.
+     */
+    val reasoningSupport: String? = null,
 )
 
 /**

@@ -326,6 +326,57 @@ try {
 }
 
 console.log();
+console.log('── BAT-549 Commit 3: reasoningSupportFor tri-state resolver ──');
+
+// Known reasoning-capable Claude models
+check('claude/claude-opus-4-7 → yes',
+    mc.reasoningSupportFor('claude', 'claude-opus-4-7', 'api_key'), 'yes');
+check('claude/claude-opus-4-6 → yes',
+    mc.reasoningSupportFor('claude', 'claude-opus-4-6', 'api_key'), 'yes');
+check('claude/claude-sonnet-4-6 → yes',
+    mc.reasoningSupportFor('claude', 'claude-sonnet-4-6', 'api_key'), 'yes');
+
+// Known non-reasoning Claude model
+check('claude/claude-haiku-4-5 → no',
+    mc.reasoningSupportFor('claude', 'claude-haiku-4-5', 'api_key'), 'no');
+
+// OpenAI api_key path
+check('openai/gpt-5.5 (api_key) → yes',
+    mc.reasoningSupportFor('openai', 'gpt-5.5', 'api_key'), 'yes');
+check('openai/gpt-5.4 (api_key) → yes',
+    mc.reasoningSupportFor('openai', 'gpt-5.4', 'api_key'), 'yes');
+check('openai/gpt-5.3-codex (api_key) → yes',
+    mc.reasoningSupportFor('openai', 'gpt-5.3-codex', 'api_key'), 'yes');
+
+// gpt-5.4-mini is OAuth-only — yes via oauth path, unknown via api_key
+check('openai/gpt-5.4-mini (oauth) → yes',
+    mc.reasoningSupportFor('openai', 'gpt-5.4-mini', 'oauth'), 'yes');
+check('openai/gpt-5.4-mini (api_key) → unknown (not in api_key list)',
+    mc.reasoningSupportFor('openai', 'gpt-5.4-mini', 'api_key'), 'unknown');
+
+// Freeform providers → always unknown (we don't list specific models)
+check('openrouter/<any> → unknown',
+    mc.reasoningSupportFor('openrouter', 'anthropic/claude-sonnet-4-6'), 'unknown');
+check('openrouter/deepseek-r1 → unknown (freeform)',
+    mc.reasoningSupportFor('openrouter', 'deepseek/deepseek-r1'), 'unknown');
+check('custom/<any> → unknown',
+    mc.reasoningSupportFor('custom', 'deepseek-v4-pro'), 'unknown');
+
+// Unknown provider → unknown
+check('nonexistent/foo → unknown',
+    mc.reasoningSupportFor('nonexistent', 'foo'), 'unknown');
+
+// Unknown model under known provider → unknown
+check('claude/claude-future-9-9 → unknown',
+    mc.reasoningSupportFor('claude', 'claude-future-9-9', 'api_key'), 'unknown');
+
+// Edge: empty/null modelId
+check('null modelId → unknown',
+    mc.reasoningSupportFor('claude', null, 'api_key'), 'unknown');
+check('empty modelId → unknown',
+    mc.reasoningSupportFor('claude', '', 'api_key'), 'unknown');
+
+console.log();
 if (failures === 0) {
     console.log('ALL TESTS PASS');
     process.exit(0);
