@@ -62,8 +62,13 @@ data class RuntimeState(
      * BAT-549 Commit 3b: user-facing toggle for "Extended Thinking".
      * When `true` AND the active model's `reasoningSupport === "yes"`
      * in the registry, adapters send the provider-appropriate request
-     * param (Anthropic `thinking:{type:"adaptive"}`, OpenAI
-     * `reasoning:{effort:"medium"}`, OpenRouter `reasoning:{effort:"medium"}`).
+     * param (Anthropic `thinking:{type:"enabled", budget_tokens:16000}`,
+     * OpenAI `reasoning:{effort:"medium", summary:"auto"}` plus
+     * `include:["reasoning.encrypted_content"]`, OpenRouter
+     * `reasoning:{effort:"medium"}`). The exact body shapes live in the
+     * Node adapters (`providers/claude.js`, `providers/openai.js`,
+     * `providers/openrouter.js`) — keep this comment aligned with the
+     * code if either side changes (Commit 3c R-1 drift fix).
      * For models with `reasoningSupport === "no"` (Haiku) the toggle is
      * a true no-op — no request param sent; for `"unknown"` (freeform
      * providers) the param is also NOT sent unless the user enables
