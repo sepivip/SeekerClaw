@@ -21,20 +21,33 @@ const { log, OPENROUTER_FALLBACK_MODEL } = require('../config');
  *   { role:'assistant', content:'text', tool_calls:[{id, type:'function', function:{name,arguments}}] }
  *   { role:'tool', tool_call_id:'tc_1', content:'...' }
  */
-// BAT-549 R1 of Commit 2a Copilot: same R1/V4 gating that Custom uses
-// must also apply to NATIVE OpenRouter, because OpenRouter is freeform
-// and a user can configure `deepseek/deepseek-r1-0528` (would 400 if
-// echoed) directly. The detect helper recognises both `deepseek/...` OR
-// prefixed ids and bare `deepseek-...` ids.
+// BAT-549 R1 of Commit 2a Copilot: gating that the Custom adapter uses
+// must also apply to NATIVE OpenRouter when the user configures a
+// DeepSeek-flavored model (`deepseek/deepseek-r1-0528` etc.). The
+// detect helper recognises both `deepseek/...` OR-prefixed ids and
+// bare `deepseek-...` ids.
+//
+// R2-of-2a Copilot: scope clarified. The gating decision below applies
+// ONLY to the bare `reasoning_content` field (DeepSeek-flavored,
+// where R1 rejects echo with 400). The `reasoning_details[]` array is
+// OpenRouter's NORMALIZED reasoning shape — provider-agnostic, with
+// format-discriminator entries that OpenRouter expects to round-trip
+// verbatim. We always echo `reasoning_details[]` when present (never
+// gated). Per OpenRouter's docs this is the contract regardless of
+// underlying model family.
 const { detectCustomEchoBehavior } = require('../reasoning-gating');
 
 function toApiMessages(messages, activeModel) {
     const out = [];
 
-    // Determine echo policy ONCE per request based on the model the body
-    // will be sent with. R1 → strip, V4 → echo, unknown → don't echo
-    // (capture-only). Native OpenRouter has no `customEchoReasoning`
-    // override yet — that lands with RuntimeState in Commit 3.
+    // Per-request echo policy for the bare `reasoning_content` field only.
+    // - R1 → 'strip' (server returns 400 if echoed)
+    // - V4 → 'echo-on-tool-loop' (server returns 400 if NOT echoed)
+    // - unknown → 'unknown' (capture-only — don't risk a 400 by echoing
+    //   a bare reasoning_content field on a model whose contract we
+    //   haven't tested)
+    // Native OpenRouter has no `customEchoReasoning` override yet —
+    // that lands with RuntimeState in Commit 3.
     const echoBehavior = detectCustomEchoBehavior(activeModel, false);
 
     for (const msg of messages) {

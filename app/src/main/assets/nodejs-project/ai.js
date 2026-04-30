@@ -394,14 +394,24 @@ async function generateSessionSummary(chatId) {
     if (res.status !== 200) {
         // BAT-549 R11 thread 2: same redaction shape as the chat() error
         // path — error bodies can echo reasoning content / signatures /
-        // encrypted_content; raw payload (or 200-char slice of it) must
-        // not enter logs. Use sanitized status + type/code + length +
-        // fingerprint instead.
+        // encrypted_content; raw payload must not enter logs. Sanitized
+        // status + type/code + length + fingerprint only.
+        // R2-of-2a Copilot: handle string + Buffer bodies too (plaintext/
+        // HTML error pages from upstream CDNs would otherwise log
+        // msgLen=0 msgFp=- and lose ALL diagnostic signal).
         const d = res.data;
         const errType = (d && d.error && d.error.type) || 'unknown';
         const errCode = (d && d.error && d.error.code) || null;
-        const errMsg = (d && d.error && d.error.message) || (d && d.message) || '';
-        const errMsgLen = typeof errMsg === 'string' ? errMsg.length : 0;
+        let errMsg = '';
+        if (typeof d === 'string') {
+            errMsg = d;
+        } else if (Buffer.isBuffer(d)) {
+            errMsg = d;
+        } else if (d) {
+            errMsg = (d.error && d.error.message) || d.message || '';
+        }
+        const errMsgLen = typeof errMsg === 'string' ? errMsg.length
+            : Buffer.isBuffer(errMsg) ? errMsg.length : 0;
         const errMsgFp = _reasoningFingerprint(errMsg);
         log(`[SessionSummary] API ${res.status}: type=${errType} code=${errCode || '-'} msgLen=${errMsgLen} msgFp=${errMsgFp}`, 'WARN');
         return null;
@@ -2276,11 +2286,26 @@ async function chat(chatId, userMessage, options = {}) {
                 // payloads. The sanitized summary still gives ops a
                 // useful failure signal (status, error type/code, msg
                 // length + fingerprint).
+                // R2 of Commit 2a: handle string/Buffer res.data too — some
+                // providers (or upstream CDNs) return plaintext/HTML error
+                // bodies. Without this, msgLen=0 / msgFp=- and the log
+                // loses ALL diagnostic signal. Strings are still safe to
+                // fingerprint via _reasoningFingerprint (it's
+                // length+sha256[:8], no raw content).
                 const errType = (res.data && res.data.error && res.data.error.type) || 'unknown';
                 const errCode = (res.data && res.data.error && res.data.error.code) || null;
-                const errMsg = (res.data && res.data.error && res.data.error.message)
-                    || (res.data && res.data.message) || '';
-                const errMsgLen = typeof errMsg === 'string' ? errMsg.length : 0;
+                let errMsg = '';
+                if (typeof res.data === 'string') {
+                    errMsg = res.data;
+                } else if (Buffer.isBuffer(res.data)) {
+                    errMsg = res.data; // _reasoningFingerprint handles Buffer
+                } else if (res.data) {
+                    errMsg = (res.data.error && res.data.error.message)
+                        || res.data.message
+                        || '';
+                }
+                const errMsgLen = typeof errMsg === 'string' ? errMsg.length
+                    : Buffer.isBuffer(errMsg) ? errMsg.length : 0;
                 const errMsgFp = _reasoningFingerprint(errMsg);
                 log(`API error: status=${res.status} type=${errType} code=${errCode || '-'} msgLen=${errMsgLen} msgFp=${errMsgFp}`, 'ERROR');
 
@@ -2748,12 +2773,14 @@ async function chat(chatId, userMessage, options = {}) {
         // Update conversation history with final response.
         // BAT-549 R2 thread 5: thread reasoningBlocks through so a non-
         // tool final answer's reasoning content survives across turns
-        // and into checkpoint snapshots. Empty array is the documented
-        // "no reasoning preserved" sentinel.
+        // and into checkpoint snapshots. R2-of-2a Copilot: ALWAYS persist
+        // the field (even when empty) so checkpoint schema is stable
+        // turn-over-turn — every assistant message either has populated
+        // reasoningBlocks or has [] as the documented sentinel. The
+        // mid-loop messages.push at line ~2410 already does this for
+        // tool-use rounds; this matches that contract.
         addToConversation(chatId, 'assistant', assistantMessage,
-            lastParsedReasoningBlocks.length > 0
-                ? { reasoningBlocks: lastParsedReasoningBlocks }
-                : null);
+            { reasoningBlocks: lastParsedReasoningBlocks });
 
         // Session summary tracking (BAT-57)
         {
