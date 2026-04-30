@@ -52,14 +52,30 @@ ok('Buffer body containing the trigger phrase IS detected',
         Buffer.from('Some HTML <p>reasoning_content must be passed back</p>', 'utf8')));
 ok('Buffer body without trigger is NOT detected',
     !recovery.isReasoningContent400(400, Buffer.from('not relevant error', 'utf8')));
-// Large buffer — must complete quickly (bounded scan)
+
+// Bounded scan: trigger phrase BEYOND the 4KB scan limit must NOT be
+// detected. Functional / deterministic assertion of bounded behavior —
+// replaces R1's wall-clock timing test which was flaky on slower CI
+// machines (2c R2 Copilot thread 1).
+const paddedBuf = Buffer.concat([
+    Buffer.alloc(8192, 0x41), // 8 KB of 'A' filler — well past 4 KB limit
+    Buffer.from('reasoning_content must be passed back', 'utf8'),
+]);
+ok('Trigger phrase beyond 4KB scan limit is NOT detected (proves bounded scan)',
+    !recovery.isReasoningContent400(400, paddedBuf));
+
+// Sanity: same phrase WITHIN the scan limit IS detected
+const withinLimitBuf = Buffer.concat([
+    Buffer.alloc(100, 0x41),
+    Buffer.from('reasoning_content must be passed back', 'utf8'),
+]);
+ok('Trigger phrase within scan limit IS detected',
+    recovery.isReasoningContent400(400, withinLimitBuf));
+
+// Large buffer + no trigger → returns false without crashing/hanging
 const bigBuf = Buffer.alloc(1024 * 1024, 0x41); // 1 MB of 'A'
-const start = Date.now();
-const bigResult = recovery.isReasoningContent400(400, bigBuf);
-const elapsed = Date.now() - start;
-ok('Large Buffer (1MB) bounded scan returns false in <100ms (no JSON expansion)',
-    bigResult === false && elapsed < 100,
-    `elapsed=${elapsed}ms`);
+ok('Large Buffer (1MB, no trigger) returns false without crash',
+    recovery.isReasoningContent400(400, bigBuf) === false);
 ok('Non-400 status is never a trigger',
     !recovery.isReasoningContent400(500, { error: { message: 'reasoning_content must be passed back' } }));
 ok('null data is safe',

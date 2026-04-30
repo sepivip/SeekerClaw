@@ -48,21 +48,32 @@ function isReasoningContent400(status, data) {
             ? data.slice(0, _REASONING_400_SCAN_LIMIT)
             : data);
     } else if (Buffer.isBuffer(data)) {
-        // 2c Copilot: skip JSON.stringify(Buffer) — that would expand to
-        // `{type:"Buffer",data:[...]}` and blow up on large bodies.
+        // 2c Copilot R1: skip JSON.stringify(Buffer) — that would expand
+        // to `{type:"Buffer",data:[...]}` and blow up on large bodies.
         // Decode at most _REASONING_400_SCAN_LIMIT bytes as utf-8 (lossy
         // for non-text bodies, which is fine — they wouldn't match the
         // English-language regex anyway).
         candidates.push(data.toString('utf8', 0, Math.min(data.length, _REASONING_400_SCAN_LIMIT)));
     } else if (typeof data === 'object') {
-        if (data.error && typeof data.error.message === 'string') candidates.push(data.error.message);
-        if (typeof data.message === 'string') candidates.push(data.message);
-        try {
-            const s = JSON.stringify(data);
-            candidates.push(s.length > _REASONING_400_SCAN_LIMIT
-                ? s.slice(0, _REASONING_400_SCAN_LIMIT)
-                : s);
-        } catch (_) {}
+        // 2c Copilot R2: rely on STRUCTURED fields only. Previous version
+        // had a `JSON.stringify(data)` fallback as a last-ditch regex
+        // surface, but JSON.stringify itself is unbounded on input — a
+        // 10MB error blob would be fully serialized before the slice. All
+        // production providers we care about (Anthropic, OpenAI,
+        // OpenRouter, DeepSeek/Custom) put the human-readable error
+        // message on `error.message` or `message`. If a future provider
+        // surfaces it elsewhere, we'll add an explicit field here rather
+        // than re-introducing the unbounded fallback.
+        if (data.error && typeof data.error.message === 'string') {
+            candidates.push(data.error.message.length > _REASONING_400_SCAN_LIMIT
+                ? data.error.message.slice(0, _REASONING_400_SCAN_LIMIT)
+                : data.error.message);
+        }
+        if (typeof data.message === 'string') {
+            candidates.push(data.message.length > _REASONING_400_SCAN_LIMIT
+                ? data.message.slice(0, _REASONING_400_SCAN_LIMIT)
+                : data.message);
+        }
     }
     return candidates.some((s) => REASONING_400_PATTERN.test(s));
 }
@@ -247,16 +258,23 @@ function quarantineActiveSegment(ctx) {
     let checkpointPath = null;
     if (taskId) {
         try {
-            // 2b Copilot: same sanitize+containment defense as the main
-            // forensic file. taskFile path uses the SANITIZED safeTask
-            // (not the raw taskId) so an injected `..` in the on-disk
-            // resumedFromTaskId can't write into a sibling directory.
-            // We DO need to read from the actual taskId-keyed file, so
-            // re-validate it explicitly stays under task-store/.
+            // 2b Copilot + 2c R2 thread 3: containment-check defense WITHOUT
+            // sanitizing the lookup id. The task-store file we wrote during
+            // normal operation uses the original taskId — sanitizing it for
+            // the LOOKUP would prevent reading legitimately-named files
+            // whose ids happened to contain non-allowlist chars (none today,
+            // but defensive sanitization on a read path is the wrong shape).
+            //
+            // The safety guarantee comes from `_isUnderDir`: even if `taskId`
+            // contains `/` or `..` (e.g. injected via a tampered
+            // resumedFromTaskId on disk), `path.resolve` will collapse the
+            // traversal, and the containment check rejects anything that
+            // escapes `task-store/`. SAFE FOR READ = let path.join produce
+            // the literal path, then verify resolved location.
             const taskStoreDir = path.join(workDir, 'task-store');
-            const taskFile = path.join(taskStoreDir, `${safeTask}.json`);
+            const taskFile = path.join(taskStoreDir, `${taskId}.json`);
             if (!_isUnderDir(taskFile, taskStoreDir)) {
-                log(`[ReasoningRecovery] Step ${step} skipped checkpoint mutation — sanitized taskId escapes task-store dir (taskId=${safeTask})`, 'WARN');
+                log(`[ReasoningRecovery] Step ${step} skipped checkpoint mutation — taskId escapes task-store dir (sanitized=${safeTask})`, 'WARN');
                 return { newMessages: keptPrefix, systemNote, quarantinePath: quarantineWritten, checkpointPath: null, ok: true, cutIndex };
             }
             if (fs.existsSync(taskFile)) {
