@@ -145,6 +145,68 @@ eq('update: customConfigSignature still set',
     afterUpdate.customConfigSignature, 'sha256-abc-def');
 
 console.log();
+console.log('── 3b R2 Copilot: write() merges with persisted state (no field-loss) ──');
+
+// Scenario: existing user has reasoningEnabled=true on disk. A legacy
+// 3-field write (e.g. Telegram /model command at message-handler.js:573)
+// MUST NOT silently drop reasoningEnabled back to false.
+handle.write({
+    provider: 'claude', authType: 'api_key', model: 'claude-opus-4-7',
+    reasoningEnabled: true,
+    reasoningDisplayInChat: true,
+    customEchoReasoning: true,
+    customConfigSignature: 'sig-baseline',
+});
+
+// Legacy 3-field write — only provider/authType/model
+handle.write({ provider: 'openai', authType: 'oauth', model: 'gpt-5.4' });
+const afterLegacy = handle.read();
+eq('Legacy write: provider updated', afterLegacy.provider, 'openai');
+eq('Legacy write: authType updated', afterLegacy.authType, 'oauth');
+eq('Legacy write: model updated', afterLegacy.model, 'gpt-5.4');
+eq('Legacy write: reasoningEnabled PRESERVED (NOT reset to false)',
+    afterLegacy.reasoningEnabled, true);
+eq('Legacy write: reasoningDisplayInChat PRESERVED',
+    afterLegacy.reasoningDisplayInChat, true);
+eq('Legacy write: customEchoReasoning PRESERVED',
+    afterLegacy.customEchoReasoning, true);
+eq('Legacy write: customConfigSignature PRESERVED',
+    afterLegacy.customConfigSignature, 'sig-baseline');
+
+// Partial update of only ONE new field — others preserved
+handle.write({
+    provider: 'openai', authType: 'oauth', model: 'gpt-5.4',
+    reasoningEnabled: false, // flip back off
+});
+const afterPartial = handle.read();
+eq('Partial write: reasoningEnabled flipped', afterPartial.reasoningEnabled, false);
+eq('Partial write: reasoningDisplayInChat preserved (still true)',
+    afterPartial.reasoningDisplayInChat, true);
+eq('Partial write: customEchoReasoning preserved (still true)',
+    afterPartial.customEchoReasoning, true);
+
+// Full 7-field write still works as full-replace
+handle.write({
+    provider: 'claude', authType: 'api_key', model: 'claude-opus-4-7',
+    reasoningEnabled: true,
+    reasoningDisplayInChat: false,
+    customEchoReasoning: false,
+    customConfigSignature: null,
+});
+const afterFull = handle.read();
+eq('Full write: customEchoReasoning replaced', afterFull.customEchoReasoning, false);
+eq('Full write: customConfigSignature replaced', afterFull.customConfigSignature, null);
+
+// Allowlist: unknown extra fields in incoming value are dropped (don't reach disk)
+handle.write({
+    provider: 'claude', authType: 'api_key', model: 'claude-opus-4-7',
+    bogusField: 'should not persist',
+});
+const afterBogus = handle.read();
+ok('Allowlist merge: bogus field NOT persisted',
+    afterBogus.bogusField === undefined);
+
+console.log();
 console.log('── BAT-513 contract preserved (no regression) ──');
 
 // Matrix violation still throws

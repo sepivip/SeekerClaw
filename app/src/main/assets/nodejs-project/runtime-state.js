@@ -179,9 +179,10 @@ function open(workDir) {
             );
         }
         // BAT-549 Commit 3b: type-check the new optional fields IF
-        // present. Absent → DEFAULTS fill on read; that's fine. Wrong
-        // type → caller bug, surface loudly so the symptom shows up at
-        // the source instead of "saved but didn't take".
+        // present. Absent → MERGE preserves the persisted value (see
+        // below); that's fine. Wrong type → caller bug, surface loudly
+        // so the symptom shows up at the source instead of "saved but
+        // didn't take".
         if (value.reasoningEnabled !== undefined && typeof value.reasoningEnabled !== 'boolean') {
             throw new Error(`runtime-state: reasoningEnabled must be boolean, got ${typeof value.reasoningEnabled}`);
         }
@@ -196,7 +197,32 @@ function open(workDir) {
             && typeof value.customConfigSignature !== 'string') {
             throw new Error(`runtime-state: customConfigSignature must be string or null, got ${typeof value.customConfigSignature}`);
         }
-        return store.write(value);
+        // BAT-549 Commit 3b R2 Copilot: merge incoming with persisted
+        // state so legacy 3-field callers (Telegram /model, /provider —
+        // see message-handler.js:573, :814) don't silently drop the
+        // BAT-549 fields when they update provider/authType/model. The
+        // semantic becomes: write() is a partial-update — fields not in
+        // the incoming value are preserved from disk. Full-replace is
+        // still possible by passing all 7 fields explicitly.
+        //
+        // Allowlist merge to avoid prototype-pollution / unknown-field
+        // leakage: only fields named in DEFAULTS get carried forward.
+        // Anything else in the incoming object is dropped (won't reach
+        // disk), and anything else in the persisted object is dropped
+        // too (post-rollback cleanup of stale fields from a future
+        // build that downgraded to this one).
+        const persisted = read();
+        const merged = {};
+        for (const key of Object.keys(DEFAULTS)) {
+            if (Object.prototype.hasOwnProperty.call(value, key) && value[key] !== undefined) {
+                merged[key] = value[key];
+            } else if (Object.prototype.hasOwnProperty.call(persisted, key)) {
+                merged[key] = persisted[key];
+            } else {
+                merged[key] = DEFAULTS[key];
+            }
+        }
+        return store.write(merged);
     }
 
     function update(transform) {
