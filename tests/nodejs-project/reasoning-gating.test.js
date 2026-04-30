@@ -113,6 +113,35 @@ eq('non-array messages → returned as-is', stripReasoningForCustomGating(null, 
 eq('empty array → empty array',           stripReasoningForCustomGating([], 'strip'),         []);
 
 console.log();
+console.log('── OpenRouter prefix-style model ids (Copilot 2a R1 finding 1) ──');
+// OpenRouter routes models with the `<vendor>/<model>` prefix shape.
+// Native OpenRouter is freeform — the user can configure
+// `deepseek/deepseek-r1-0528` and the same R1 strip / V4 echo gating
+// MUST apply on the native path, not just the bare-id Custom path.
+eq('deepseek/deepseek-r1 (OR-prefix) → strip',
+    detectCustomEchoBehavior('deepseek/deepseek-r1', false), 'strip');
+eq('deepseek/deepseek-r1-0528 (OR-prefix, with date suffix) → strip',
+    detectCustomEchoBehavior('deepseek/deepseek-r1-0528', false), 'strip');
+eq('deepseek/deepseek-reasoner (OR-prefix) → strip',
+    detectCustomEchoBehavior('deepseek/deepseek-reasoner', false), 'strip');
+eq('deepseek/deepseek-v4-pro (OR-prefix) → echo-on-tool-loop',
+    detectCustomEchoBehavior('deepseek/deepseek-v4-pro', false), 'echo-on-tool-loop');
+eq('deepseek/deepseek-v4-flash (OR-prefix) → echo-on-tool-loop',
+    detectCustomEchoBehavior('deepseek/deepseek-v4-flash', false), 'echo-on-tool-loop');
+// Don't false-positive on lookalikes
+eq('deepseek/deepseek-chat-v3.1 (V3 chat — not V4) → unknown',
+    detectCustomEchoBehavior('deepseek/deepseek-chat-v3.1', false), 'unknown');
+eq('anthropic/claude-sonnet-4-6 (non-deepseek prefix) → unknown',
+    detectCustomEchoBehavior('anthropic/claude-sonnet-4-6', false), 'unknown');
+eq('mistralai/mistral-large-2407 (non-deepseek) → unknown',
+    detectCustomEchoBehavior('mistralai/mistral-large-2407', false), 'unknown');
+// Bare ids still work (Custom adapter pointed at api.deepseek.com)
+eq('Bare deepseek-r1 (no prefix) → strip',
+    detectCustomEchoBehavior('deepseek-r1', false), 'strip');
+eq('Bare deepseek-v4-pro (no prefix) → echo-on-tool-loop',
+    detectCustomEchoBehavior('deepseek-v4-pro', false), 'echo-on-tool-loop');
+
+console.log();
 if (failures === 0) {
     console.log('ALL TESTS PASS');
     process.exit(0);

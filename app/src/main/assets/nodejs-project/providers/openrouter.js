@@ -21,8 +21,21 @@ const { log, OPENROUTER_FALLBACK_MODEL } = require('../config');
  *   { role:'assistant', content:'text', tool_calls:[{id, type:'function', function:{name,arguments}}] }
  *   { role:'tool', tool_call_id:'tc_1', content:'...' }
  */
-function toApiMessages(messages) {
+// BAT-549 R1 of Commit 2a Copilot: same R1/V4 gating that Custom uses
+// must also apply to NATIVE OpenRouter, because OpenRouter is freeform
+// and a user can configure `deepseek/deepseek-r1-0528` (would 400 if
+// echoed) directly. The detect helper recognises both `deepseek/...` OR
+// prefixed ids and bare `deepseek-...` ids.
+const { detectCustomEchoBehavior } = require('../reasoning-gating');
+
+function toApiMessages(messages, activeModel) {
     const out = [];
+
+    // Determine echo policy ONCE per request based on the model the body
+    // will be sent with. R1 → strip, V4 → echo, unknown → don't echo
+    // (capture-only). Native OpenRouter has no `customEchoReasoning`
+    // override yet — that lands with RuntimeState in Commit 3.
+    const echoBehavior = detectCustomEchoBehavior(activeModel, false);
 
     for (const msg of messages) {
         if (msg.role === 'tool') {
@@ -94,8 +107,19 @@ function toApiMessages(messages) {
                     } else if (typeof blk.wire.reasoning_content === 'string') {
                         // DeepSeek-via-OpenRouter style — emit the field at message
                         // level (chat-completions DeepSeek expects this on the
-                        // assistant turn alongside tool_calls).
-                        plainReasoningContent = blk.wire.reasoning_content;
+                        // assistant turn alongside tool_calls). R1-of-2a Copilot:
+                        // gate by model. R1 family rejects echoed reasoning_content
+                        // with 400; V4 family requires it; unknown stays
+                        // capture-only. Custom is fine here too because
+                        // stripReasoningForCustomGating clears reasoningBlocks
+                        // upstream when the Custom-side gating says strip — we
+                        // only see blocks that survived that filter.
+                        if (echoBehavior === 'echo-on-tool-loop') {
+                            plainReasoningContent = blk.wire.reasoning_content;
+                        }
+                        // 'strip' or 'unknown' → silently drop reasoning_content
+                        // from this request. The block stays in checkpoint state
+                        // for forensics and future re-evaluation.
                     }
                 }
                 if (details.length > 0) entry.reasoning_details = details;

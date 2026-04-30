@@ -2688,6 +2688,18 @@ async function chat(chatId, userMessage, options = {}) {
                     const cleaned = stripSilentReply(summaryParsed.text);
                     if (cleaned) {
                         textContent = { text: cleaned };
+                        // BAT-549 Copilot 2a finding 4: when the summary call's
+                        // text is consumed as the final assistant message,
+                        // associate THIS call's reasoningBlocks with that
+                        // message — otherwise lastParsedReasoningBlocks (set
+                        // from the prior no-text response) would attach stale
+                        // blocks to the summary message at the end-of-turn
+                        // addToConversation. Empty array if summary didn't
+                        // think — which is the correct "no reasoning preserved"
+                        // sentinel for that turn.
+                        lastParsedReasoningBlocks = Array.isArray(summaryParsed.reasoningBlocks)
+                            ? summaryParsed.reasoningBlocks
+                            : [];
                     } else {
                         log('Summary returned SILENT_REPLY token (any form) — falling through to fallback', 'DEBUG');
                     }

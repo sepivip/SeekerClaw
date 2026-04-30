@@ -45,11 +45,15 @@ function detectCustomEchoBehavior(modelId, customEchoOverride) {
 
     const m = (typeof modelId === 'string' ? modelId : '').toLowerCase().trim();
 
-    // DeepSeek R1 family — server REJECTS reasoning_content echo (returns 400)
-    if (/^deepseek-(reasoner|r1)/i.test(m)) return 'strip';
+    // DeepSeek R1 family — server REJECTS reasoning_content echo (returns 400).
+    // Match the family substring anywhere in the id (handles raw
+    // `deepseek-r1` for the Custom adapter pointed at api.deepseek.com AND
+    // OpenRouter-prefixed `deepseek/deepseek-r1-0528` etc.).
+    if (/(?:^|\/)deepseek-(?:reasoner|r1)(?:-|$)/i.test(m)) return 'strip';
 
-    // DeepSeek V4 family — server REQUIRES reasoning_content echo after tool calls
-    if (/^deepseek-v4/i.test(m)) return 'echo-on-tool-loop';
+    // DeepSeek V4 family — server REQUIRES reasoning_content echo after tool calls.
+    // Same family-substring matching as R1.
+    if (/(?:^|\/)deepseek-v4(?:-|$)/i.test(m)) return 'echo-on-tool-loop';
 
     // Everything else (incl. qwen3-thinking, mistral-large-2407, gemini-deep-think,
     // llama-4-thinking, etc.) — start unknown until tested.

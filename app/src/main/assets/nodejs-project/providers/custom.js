@@ -199,7 +199,14 @@ function toApiMessages(messages, activeModel) {
     }
 
     const gatedMessages = stripReasoningForCustomGating(messages, behavior);
-    return delegate().toApiMessages(gatedMessages);
+    // BAT-549 R1-of-2a Copilot: pass activeModel through to the delegate's
+    // toApiMessages so its own gating (added in Commit 2a for native OpenRouter
+    // R1/V4 protection) sees the same model Custom resolved. Without this,
+    // openrouter's gating would receive activeModel=undefined and default to
+    // 'unknown' / strip — contradicting Custom's V4 'echo-on-tool-loop'
+    // decision. With it, openrouter agrees with Custom (V4 → echo, R1 → strip)
+    // and the gated messages survive intact.
+    return delegate().toApiMessages(gatedMessages, customModel);
 }
 
 module.exports = {
