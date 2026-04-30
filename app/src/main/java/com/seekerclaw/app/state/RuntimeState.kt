@@ -70,9 +70,14 @@ data class RuntimeState(
      * `providers/openrouter.js`) — keep this comment aligned with the
      * code if either side changes (Commit 3c R-1 drift fix).
      * For models with `reasoningSupport === "no"` (Haiku) the toggle is
-     * a true no-op — no request param sent; for `"unknown"` (freeform
-     * providers) the param is also NOT sent unless the user enables
-     * the per-Custom advanced override (see [customEchoReasoning]).
+     * a true no-op — no request param sent. For `"unknown"` (freeform
+     * providers, unregistered model ids) the request param is also NOT
+     * sent — the registry is the source of truth for what supports the
+     * provider's thinking/reasoning param. The per-Custom advanced
+     * override [customEchoReasoning] is a separate mechanism that
+     * controls only how Custom ECHOES `reasoning_content` on tool-loop
+     * turns; it does NOT enable request-side thinking/reasoning params
+     * (R16 Copilot doc fix — the two fields used to be conflated here).
      *
      * Default `false` so updating from a pre-BAT-549 build does NOT
      * silently flip on reasoning (token costs, behavior change).

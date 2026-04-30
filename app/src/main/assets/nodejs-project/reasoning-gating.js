@@ -81,8 +81,19 @@ function detectCustomEchoBehavior(modelId, customEchoOverride) {
  * outside the Custom path needs provenance-aware filtering, refactor at
  * that point — over-engineering today is a YAGNI hazard.
  *
+ * R16 Copilot wire-shape filter: the strip targets the chat-completions-
+ * style `reasoning_content` field (the DeepSeek R1/V4 echo-or-strip
+ * problem), NOT the OpenAI Responses-style `wire.type === 'reasoning'`
+ * items. Responses items carry encrypted_content and are required for
+ * tool-loop continuation regardless of model — stripping them would
+ * break Commit 2b's encrypted_content preservation for any Custom+
+ * Responses gateway pointing at a model that doesn't match the R1/V4
+ * regex (e.g., gpt-5.4 on a self-hosted Responses proxy → behavior
+ * 'unknown' → previously cleared the Responses items).
+ *
  * Pure function — returns a new array with shallow-cloned assistant messages
- * that have `reasoningBlocks` cleared. Other messages pass through by reference.
+ * that have chat-completions-style `reasoningBlocks` removed. Other
+ * messages pass through by reference.
  *
  * Why clear rather than skip-the-emit-in-delegate: the delegate (openrouter
  * or openai) is also used by the *native* OpenRouter / OpenAI adapter where
@@ -95,8 +106,27 @@ function stripReasoningForCustomGating(messages, behavior) {
     if (!Array.isArray(messages)) return messages;
     return messages.map((msg) => {
         if (msg && msg.role === 'assistant' && Array.isArray(msg.reasoningBlocks) && msg.reasoningBlocks.length > 0) {
+            const filtered = msg.reasoningBlocks.filter((blk) => {
+                // Defensive: drop malformed blocks regardless of behavior.
+                if (!blk || !blk.wire || typeof blk.wire !== 'object' || Array.isArray(blk.wire)) return false;
+                // Preserve OpenAI Responses-style reasoning items (encrypted_content
+                // is required for tool-loop replay; gating is irrelevant to these
+                // because they aren't the DeepSeek R1/V4 echo-problem field).
+                if (blk.wire.type === 'reasoning') return true;
+                // Strip chat-completions-style reasoning_content blocks (the
+                // gating target — this is what R1 rejects with 400 and V4
+                // requires after tool calls).
+                if (typeof blk.wire.reasoning_content === 'string') return false;
+                // Unknown wire shape — drop conservatively. If a future
+                // adapter introduces a third reasoning shape, an explicit
+                // case here keeps gating semantics clear; until then,
+                // unknown shapes are treated as chat-completions-style
+                // (the safer side for R1's 400-loop scenario).
+                return false;
+            });
+            if (filtered.length === msg.reasoningBlocks.length) return msg;
             const clone = { ...msg };
-            clone.reasoningBlocks = [];
+            clone.reasoningBlocks = filtered;
             return clone;
         }
         return msg;

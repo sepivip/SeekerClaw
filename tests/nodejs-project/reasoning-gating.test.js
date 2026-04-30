@@ -142,6 +142,76 @@ eq('Bare deepseek-v4-pro (no prefix) → echo-on-tool-loop',
     detectCustomEchoBehavior('deepseek-v4-pro', false), 'echo-on-tool-loop');
 
 console.log();
+console.log('── R16 Copilot: stripReasoningForCustomGating preserves Responses items ──');
+
+// CRITICAL contract pin: when behavior is 'strip' or 'unknown', the
+// strip MUST preserve OpenAI Responses-style reasoning items
+// (`wire.type === 'reasoning'`) because they carry encrypted_content
+// required for tool-loop replay (Commit 2b). It MUST still strip
+// chat-completions-style `reasoning_content` blocks (the actual
+// gating target — DeepSeek R1's 400-on-echo problem).
+const mixedAssistantMsg = {
+    role: 'assistant',
+    content: 'response',
+    toolCalls: [{ id: 'fc1', name: 'echo', input: {} }],
+    reasoningBlocks: [
+        // OpenAI Responses-style — MUST be preserved
+        {
+            schemaVersion: 1,
+            provider: 'custom',
+            sourceAdapter: 'custom',
+            delegateAdapter: 'openai',
+            sourceModel: 'gpt-5.4',
+            wire: {
+                id: 'rs_01ABC',
+                type: 'reasoning',
+                summary: [{ type: 'summary_text', text: 'thinking' }],
+                encrypted_content: 'gAAA-encrypted-bytes',
+            },
+        },
+        // Chat-completions-style — MUST be stripped under behavior!='echo-on-tool-loop'
+        {
+            schemaVersion: 1,
+            provider: 'custom',
+            sourceAdapter: 'custom',
+            delegateAdapter: 'openrouter',
+            sourceModel: 'deepseek-r1',
+            wire: { reasoning_content: 'r1 thoughts (will 400 if echoed)' },
+        },
+        // Malformed (no wire) — MUST be dropped regardless of behavior
+        { schemaVersion: 1, provider: 'custom', sourceAdapter: 'custom' },
+    ],
+};
+
+// behavior='strip' → kill chat-completions reasoning_content but
+// keep Responses encrypted_content
+const afterStrip = stripReasoningForCustomGating([mixedAssistantMsg], 'strip');
+const afterStripBlocks = afterStrip[0].reasoningBlocks;
+eq('strip behavior: keeps the Responses item, drops chat-completions + malformed',
+    afterStripBlocks.length, 1);
+eq('strip behavior: preserved item is the Responses one (id matches)',
+    afterStripBlocks[0].wire.id, 'rs_01ABC');
+eq('strip behavior: encrypted_content preserved byte-exact',
+    afterStripBlocks[0].wire.encrypted_content, 'gAAA-encrypted-bytes');
+
+// behavior='unknown' → same selective preservation (Responses items
+// are required for tool-loop replay regardless of model match)
+const afterUnknown = stripReasoningForCustomGating([mixedAssistantMsg], 'unknown');
+const afterUnknownBlocks = afterUnknown[0].reasoningBlocks;
+eq('unknown behavior: also preserves Responses item, drops chat-completions',
+    afterUnknownBlocks.length, 1);
+eq('unknown behavior: preserved item id matches',
+    afterUnknownBlocks[0].wire.id, 'rs_01ABC');
+
+// behavior='echo-on-tool-loop' → no strip at all (passes through unchanged
+// for the original chat-completions + Responses + malformed blocks)
+const afterEcho = stripReasoningForCustomGating([mixedAssistantMsg], 'echo-on-tool-loop');
+eq('echo behavior: returns messages unchanged (3 blocks preserved)',
+    afterEcho[0].reasoningBlocks.length, 3);
+eq('echo behavior: chat-completions block NOT stripped',
+    afterEcho[0].reasoningBlocks.some((b) => b.wire && b.wire.reasoning_content), true);
+
+console.log();
 if (failures === 0) {
     console.log('ALL TESTS PASS');
     process.exit(0);
