@@ -30,6 +30,7 @@ const COMMAND_REGISTRY = [
     { name: 'status',   description: 'Bot status, uptime, model',      fallback: true },
     { name: 'model',    description: 'Show or switch AI model',        fallback: true },
     { name: 'provider', description: 'Show or switch AI provider',     fallback: true },
+    { name: 'think',    description: 'Toggle extended thinking & display' },
     { name: 'new',      description: 'Archive session & start fresh',  fallback: true },
     { name: 'reset',    description: 'Wipe conversation (no backup)' },
     { name: 'resume',   description: 'Resume an interrupted task' },

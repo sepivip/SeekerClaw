@@ -76,6 +76,13 @@ const LOAD_TARGETS = [
     'reasoning-redact.js',
     'reasoning-gating.js',
     'reasoning-recovery.js',
+    // BAT-549 Commit 3d: signature algorithm — pure (crypto + JSON.parse),
+    // no top-level IO. Loaded here so the smoke harness catches a syntax
+    // or top-level throw on every commit.
+    'custom-config-signature.js',
+    // BAT-549 Commit 4: reasoning-display.js is a pure formatter
+    // (string transforms only); safe to require at startup.
+    'reasoning-display.js',
 ];
 
 // Files skipped intentionally. Most modules depend on config.js (which

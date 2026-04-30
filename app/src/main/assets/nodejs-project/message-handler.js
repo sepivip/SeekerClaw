@@ -382,6 +382,10 @@ Platform: \`${platform}\``;
             return await handleProviderCommand(chatId, args, messageId);
         }
 
+        case '/think': {
+            return await handleThinkCommand(chatId, args);
+        }
+
         default:
             return null; // Not a command — falls through to agent
     }
@@ -1295,6 +1299,97 @@ function handleReactionUpdate(reaction) {
     }).catch(e => deps.log(`Reaction queue error: ${e.message}`, 'ERROR'));
     deps.chatQueues.set(chatId, task);
     task.then(() => { if (deps.chatQueues.get(chatId) === task) deps.chatQueues.delete(chatId); });
+}
+
+// ============================================================================
+// /think HANDLER (BAT-549 Commit 4)
+// Toggles RuntimeState reasoning fields from Telegram. Mirrors the
+// Settings UI Reasoning section so power users can flip without
+// leaving the chat:
+//   /think                — show current state of all 3 toggles + active model's reasoningSupport
+//   /think on             — set reasoningEnabled=true
+//   /think off            — set reasoningEnabled=false
+//   /think show           — set reasoningDisplayInChat=true
+//   /think hide           — set reasoningDisplayInChat=false
+// ============================================================================
+
+async function handleThinkCommand(chatId, args) {
+    const trimmed = (args || '').trim().toLowerCase();
+    const current = _runtimeState.read();
+
+    // No args → status display
+    if (!trimmed) {
+        const modelCatalog = require('./model-catalog');
+        const support = modelCatalog.reasoningSupportFor(
+            current.provider,
+            current.model,
+            current.provider === 'openai' ? OPENAI_AUTH_TYPE : AUTH_TYPE,
+        );
+        const lines = [];
+        lines.push('**Reasoning state**');
+        lines.push(`• Extended thinking: ${current.reasoningEnabled ? '✓ on' : '✗ off'}`);
+        lines.push(`• Display in chat: ${current.reasoningDisplayInChat ? '✓ on' : '✗ off'}`);
+        lines.push(`• Active model: \`${current.model}\` (\`reasoningSupport=${support}\`)`);
+        if (support === 'no') {
+            lines.push('');
+            lines.push('⚠ Active model does not support reasoning — toggles have no request-side effect for this model.');
+        } else if (support === 'unknown') {
+            lines.push('');
+            lines.push('⚠ Active model is not in the registry — toggles may have no effect (depends on the gateway).');
+        }
+        lines.push('');
+        lines.push('**Usage:**');
+        lines.push('• `/think on` / `/think off` — request-side enablement');
+        lines.push('• `/think show` / `/think hide` — render reasoning summaries in chat');
+        return lines.join('\n');
+    }
+
+    // Map subcommand → field+value patch
+    const patch = {};
+    let action = '';
+    switch (trimmed) {
+        case 'on':
+            patch.reasoningEnabled = true;
+            action = 'Extended thinking enabled.';
+            break;
+        case 'off':
+            patch.reasoningEnabled = false;
+            action = 'Extended thinking disabled.';
+            break;
+        case 'show':
+            patch.reasoningDisplayInChat = true;
+            action = 'Reasoning will be displayed in chat (when captured).';
+            break;
+        case 'hide':
+            patch.reasoningDisplayInChat = false;
+            action = 'Reasoning will not be displayed in chat.';
+            break;
+        default:
+            return `❌ Unknown subcommand \`${trimmed}\`. Try \`/think\` for usage.`;
+    }
+
+    // Write through RuntimeStateStore — partial-update semantics preserve
+    // other fields (including provider/authType/model and the per-Custom
+    // override + signature). The merge layer in runtime-state.js handles
+    // the partial-update contract.
+    let ok = true;
+    try {
+        ok = _runtimeState.write({
+            provider: current.provider,
+            authType: current.authType,
+            model: current.model,
+            ...patch,
+        });
+    } catch (e) {
+        deps.log(`[/think] runtime_state.json write threw: ${e.message}`, 'ERROR');
+        return `❌ Couldn't save — ${e.message}`;
+    }
+    if (!ok) {
+        deps.log(`[/think] runtime_state.json write returned false`, 'WARN');
+        return `❌ Couldn't save (filesystem error). Try again or check storage.`;
+    }
+    deps.log(`[/think] ${trimmed} (${JSON.stringify(patch)})`, 'INFO');
+    return `✓ ${action} Takes effect on your next message.`;
 }
 
 module.exports = { init, handleCommand, handleMessage, handleReactionUpdate };
