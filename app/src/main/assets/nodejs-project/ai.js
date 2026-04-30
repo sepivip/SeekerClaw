@@ -8,7 +8,7 @@ const crypto = require('crypto');
 // ── Imports from other SeekerClaw modules ──────────────────────────────────
 
 const {
-    workDir, MODEL, resolveActiveModel, PROVIDER, CHANNEL, ANTHROPIC_KEY, OPENAI_KEY, OPENROUTER_KEY, CUSTOM_KEY, CUSTOM_BASE_URL, OPENROUTER_FALLBACK_MODEL, OPENROUTER_MODEL_CONTEXT, OPENROUTER_FALLBACK_CONTEXT, AUTH_TYPE, OPENAI_AUTH_TYPE,
+    workDir, MODEL, resolveActiveModel, PROVIDER, CHANNEL, ANTHROPIC_KEY, OPENAI_KEY, OPENROUTER_KEY, CUSTOM_KEY, CUSTOM_BASE_URL, CUSTOM_FORMAT, OPENROUTER_FALLBACK_MODEL, OPENROUTER_MODEL_CONTEXT, OPENROUTER_FALLBACK_CONTEXT, AUTH_TYPE, OPENAI_AUTH_TYPE,
     REACTION_GUIDANCE, REACTION_NOTIFICATIONS, MEMORY_DIR,
     CONFIRM_REQUIRED, TOOL_RATE_LIMITS, TOOL_STATUS_MAP,
     API_TIMEOUT_RETRIES, API_TIMEOUT_BACKOFF_MS, API_TIMEOUT_MAX_BACKOFF_MS,
@@ -412,7 +412,12 @@ async function generateSessionSummary(chatId) {
         } else if (d) {
             errMsg = (d.error && d.error.message) || d.message || '';
         }
-        const errMsgLen = typeof errMsg === 'string' ? errMsg.length
+        // R6 Copilot: report msgLen in UTF-8 BYTES (not JS String code-point
+        // length) so the value aligns with what _reasoningFingerprint hashes.
+        // Without this, non-ASCII error messages produce a length value
+        // that disagrees with the fingerprint's hash domain, causing
+        // surprising diagnostics when triaging multi-byte error bodies.
+        const errMsgLen = typeof errMsg === 'string' ? Buffer.byteLength(errMsg, 'utf8')
             : Buffer.isBuffer(errMsg) ? errMsg.length : 0;
         const errMsgFp = _reasoningFingerprint(errMsg);
         log(`[SessionSummary] API ${res.status}: type=${errType} code=${errCode || '-'} msgLen=${errMsgLen} msgFp=${errMsgFp}`, 'WARN');
@@ -2278,21 +2283,37 @@ async function chat(chatId, userMessage, options = {}) {
             // gets the request param, even if the user toggle is on (registry
             // is the source of truth for what a given model supports).
             //
-            // For OpenAI specifically, registry resolution depends on
-            // OPENAI_AUTH_TYPE (the OAuth/Codex model list differs from
-            // api_key); for Anthropic it depends on AUTH_TYPE. For
-            // OpenRouter/Custom (freeform) the resolver always returns
-            // "unknown" — those paths use the per-Custom override toggle.
+            // Per-provider registry inputs:
+            //   - openai → OPENAI_AUTH_TYPE (oauth model list ≠ api_key list)
+            //   - anthropic → AUTH_TYPE (api_key vs setup_token)
+            //   - openrouter → freeform → always "unknown"
+            //   - custom → freeform under its OWN id → always "unknown",
+            //              but when CUSTOM_FORMAT === 'responses' the actual
+            //              transport IS OpenAI Responses. Resolve through the
+            //              delegate provider id ('openai') so a known-yes
+            //              model id (e.g., 'gpt-5.4' on a Custom-Responses
+            //              gateway) can light up the user toggle path. Use
+            //              authType 'api_key' since Custom never carries an
+            //              OAuth/Codex credential. Without this delegate-id
+            //              resolution, the user toggle would be permanently
+            //              dead on Custom-Responses (R6 Copilot finding 1).
             const _liveRtState = (() => {
                 try { return _runtimeState ? _runtimeState.read() : null; }
                 catch (_) { return null; }
             })();
-            const _authForRegistry = adapter.id === 'openai'
-                ? OPENAI_AUTH_TYPE
-                : AUTH_TYPE;
+            let _registryProviderId = adapter.id;
+            let _authForRegistry;
+            if (adapter.id === 'openai') {
+                _authForRegistry = OPENAI_AUTH_TYPE;
+            } else if (adapter.id === 'custom' && CUSTOM_FORMAT === 'responses') {
+                _registryProviderId = 'openai';
+                _authForRegistry = 'api_key';
+            } else {
+                _authForRegistry = AUTH_TYPE;
+            }
             const requestOptions = {
                 reasoningEnabled: !!(_liveRtState && _liveRtState.reasoningEnabled),
-                reasoningSupport: reasoningSupportFor(adapter.id, activeModel, _authForRegistry),
+                reasoningSupport: reasoningSupportFor(_registryProviderId, activeModel, _authForRegistry),
                 customEchoOverride: !!(_liveRtState && _liveRtState.customEchoReasoning),
             };
 
@@ -2337,7 +2358,10 @@ async function chat(chatId, userMessage, options = {}) {
                         || res.data.message
                         || '';
                 }
-                const errMsgLen = typeof errMsg === 'string' ? errMsg.length
+                // R6 Copilot: UTF-8 byte length to align with the
+                // fingerprint's hash domain (see [SessionSummary] log
+                // path above for the same fix; same reasoning applies).
+                const errMsgLen = typeof errMsg === 'string' ? Buffer.byteLength(errMsg, 'utf8')
                     : Buffer.isBuffer(errMsg) ? errMsg.length : 0;
                 const errMsgFp = _reasoningFingerprint(errMsg);
                 log(`API error: status=${res.status} type=${errType} code=${errCode || '-'} msgLen=${errMsgLen} msgFp=${errMsgFp}`, 'ERROR');
