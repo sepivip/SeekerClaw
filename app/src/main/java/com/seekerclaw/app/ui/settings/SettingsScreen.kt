@@ -48,6 +48,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableIntStateOf
@@ -1469,13 +1470,23 @@ private fun ReasoningSection(
     currentAuthType: String?,
 ) {
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
-    // Initial values from the persisted RuntimeState. Use the public
-    // RuntimeStateStore.read() (returns the latest valid value or
-    // RuntimeState() defaults if not initialized) so first paint
-    // matches disk.
-    val initial = remember { RuntimeStateStore.read() }
-    var reasoningEnabled by remember { mutableStateOf(initial.reasoningEnabled) }
-    var reasoningDisplay by remember { mutableStateOf(initial.reasoningDisplayInChat) }
+    // R14 Copilot: observe the StateFlow so cross-process updates
+    // (e.g., a Telegram /think command in Commit 4 writing
+    // runtime_state.json) flow through to the UI without requiring
+    // the user to leave + re-enter Settings. The local `optimistic`
+    // var below provides immediate visual feedback on tap so the
+    // switch doesn't briefly snap back while the IO dispatch
+    // completes.
+    val rtState by RuntimeStateStore.state.collectAsState()
+    val scope = rememberCoroutineScope()
+    // Optimistic local override, re-keyed on external state change so
+    // a Telegram /think (or any cross-process write) that lands AFTER
+    // the user toggled here propagates correctly. `null` means "no
+    // local override — show the StateFlow value".
+    var optimisticEnabled by remember(rtState.reasoningEnabled) { mutableStateOf<Boolean?>(null) }
+    var optimisticDisplay by remember(rtState.reasoningDisplayInChat) { mutableStateOf<Boolean?>(null) }
+    val reasoningEnabled = optimisticEnabled ?: rtState.reasoningEnabled
+    val reasoningDisplay = optimisticDisplay ?: rtState.reasoningDisplayInChat
 
     // Tri-state model support — drives the "no-op for this model" hint.
     val support = remember(currentProvider, currentModel, currentAuthType) {
@@ -1494,10 +1505,11 @@ private fun ReasoningSection(
                 label = "Extended thinking",
                 checked = reasoningEnabled,
                 onCheckedChange = { newValue ->
-                    reasoningEnabled = newValue
-                    persistReasoningField(newValue, reasoningDisplay) { ok ->
-                        if (!ok) reasoningEnabled = !newValue // revert local on FS failure
-                    }
+                    optimisticEnabled = newValue
+                    persistReasoningFieldAsync(
+                        scope,
+                        rtState.copy(reasoningEnabled = newValue),
+                    ) { ok -> if (!ok) optimisticEnabled = !newValue }
                 },
                 info = SettingsHelpTexts.REASONING_ENABLED,
             )
@@ -1505,10 +1517,11 @@ private fun ReasoningSection(
                 label = "Display reasoning in chat",
                 checked = reasoningDisplay,
                 onCheckedChange = { newValue ->
-                    reasoningDisplay = newValue
-                    persistReasoningField(reasoningEnabled, newValue) { ok ->
-                        if (!ok) reasoningDisplay = !newValue
-                    }
+                    optimisticDisplay = newValue
+                    persistReasoningFieldAsync(
+                        scope,
+                        rtState.copy(reasoningDisplayInChat = newValue),
+                    ) { ok -> if (!ok) optimisticDisplay = !newValue }
                 },
                 info = SettingsHelpTexts.REASONING_DISPLAY_IN_CHAT,
             )
@@ -1538,34 +1551,28 @@ private fun ReasoningSection(
 }
 
 /**
- * Persist BAT-549 RuntimeState fields via RuntimeStateStore. Reads
- * the current state, copies the BAT-549 fields with the new toggle
- * values, and writes back. Other fields (provider/authType/model,
- * customEchoReasoning, customConfigSignature) are preserved.
- *
- * On RuntimeStateStore.write failure (FS error / not-initialized),
- * the [callback] receives `false` so the caller can revert local UI
- * state. Synchronous write: matches the existing
- * `ConfigManager.setAutoStartOnBoot(...)` pattern callsite — the
- * cross-process-store atomic rename is ms-scale on the small
- * runtime_state.json file, well under the perceptual-stall threshold.
+ * Persist a [next] RuntimeState via [RuntimeStateStore.write] off the
+ * main thread. R14 Copilot: cross-process-store does a tmp-write +
+ * atomic rename which is sync disk I/O — fine on flash but trips
+ * StrictMode and can produce visible jank on slow devices when the
+ * fsync stalls. Dispatching to IO keeps the UI thread responsive
+ * while the optimistic local state already gave the user immediate
+ * visual feedback. [callback] runs on Main with the persistence
+ * result so the caller can revert optimistic state on FS failure.
  */
-private fun persistReasoningField(
-    enabled: Boolean,
-    displayInChat: Boolean,
+private fun persistReasoningFieldAsync(
+    scope: kotlinx.coroutines.CoroutineScope,
+    next: com.seekerclaw.app.state.RuntimeState,
     callback: (Boolean) -> Unit,
 ) {
-    val current = RuntimeStateStore.read()
-    val next = current.copy(
-        reasoningEnabled = enabled,
-        reasoningDisplayInChat = displayInChat,
-    )
-    val ok = try {
-        RuntimeStateStore.write(next)
-    } catch (_: IllegalArgumentException) {
-        false
+    scope.launch(Dispatchers.IO) {
+        val ok = try {
+            RuntimeStateStore.write(next)
+        } catch (_: IllegalArgumentException) {
+            false
+        }
+        kotlinx.coroutines.withContext(Dispatchers.Main) { callback(ok) }
     }
-    callback(ok)
 }
 
 @Composable

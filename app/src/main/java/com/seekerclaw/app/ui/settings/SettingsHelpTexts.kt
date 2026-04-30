@@ -193,9 +193,9 @@ object SettingsHelpTexts {
         "multi-step problems. Latency: each turn takes longer."
 
     const val REASONING_DISPLAY_IN_CHAT =
-        "Show reasoning summaries to your Telegram chat as expandable " +
-        "blockquotes. Independent of the toggle above — you can capture " +
-        "reasoning into checkpoint state without surfacing it (lower " +
-        "noise) or display existing captured reasoning even with new " +
-        "thinking off."
+        "Surface reasoning summaries in your Telegram chat (when the " +
+        "build supports rendering them — see the changelog for which " +
+        "release wires the display path). Independent of the toggle " +
+        "above: you can capture reasoning into checkpoint state without " +
+        "surfacing it (lower noise) or vice versa once display is wired."
 }

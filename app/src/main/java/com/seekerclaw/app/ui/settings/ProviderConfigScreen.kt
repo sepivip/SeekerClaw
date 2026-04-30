@@ -26,6 +26,7 @@ import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -1389,8 +1390,14 @@ fun OpenRouterModelEditDialog(
  */
 @Composable
 private fun CustomEchoReasoningRow() {
-    val initial = remember { RuntimeStateStore.read() }
-    var checked by remember { mutableStateOf(initial.customEchoReasoning) }
+    // R14 Copilot: observe the StateFlow so cross-process updates
+    // (Commit 3d's signature reset, future Telegram commands, etc.)
+    // flow through to the UI. Optimistic local override gives instant
+    // visual feedback on tap while the IO dispatch persists.
+    val rtState by RuntimeStateStore.state.collectAsState()
+    val scope = rememberCoroutineScope()
+    var optimistic by remember(rtState.customEchoReasoning) { mutableStateOf<Boolean?>(null) }
+    val checked = optimistic ?: rtState.customEchoReasoning
 
     Row(
         modifier = Modifier
@@ -1418,19 +1425,22 @@ private fun CustomEchoReasoningRow() {
         SeekerClawSwitch(
             checked = checked,
             onCheckedChange = { newValue ->
-                val current = RuntimeStateStore.read()
-                val next = current.copy(customEchoReasoning = newValue)
-                val ok = try {
-                    RuntimeStateStore.write(next)
-                } catch (_: IllegalArgumentException) {
-                    false
+                optimistic = newValue
+                // R14 Copilot: dispatch the disk write off the main
+                // thread so the cross-process-store fsync can't trip
+                // StrictMode or jank the UI. On failure, revert local
+                // optimistic state.
+                val next = rtState.copy(customEchoReasoning = newValue)
+                scope.launch(Dispatchers.IO) {
+                    val ok = try {
+                        RuntimeStateStore.write(next)
+                    } catch (_: IllegalArgumentException) {
+                        false
+                    }
+                    withContext(Dispatchers.Main) {
+                        if (!ok) optimistic = !newValue
+                    }
                 }
-                if (ok) {
-                    checked = newValue
-                }
-                // On failure: leave `checked` at its prior value so the
-                // switch visually reverts. RuntimeStateStore.write
-                // already logs FS errors via its underlying store.
             },
         )
     }
