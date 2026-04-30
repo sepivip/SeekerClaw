@@ -57,14 +57,21 @@ function detectCustomEchoBehavior(modelId, customEchoOverride) {
 }
 
 /**
- * Filter the messages array to remove Custom-stamped reasoningBlocks when
- * the gating decision is 'strip' or 'unknown'. Used by `providers/custom.js`
- * BEFORE handing to its delegate's `toApiMessages`.
+ * Clear `reasoningBlocks` on every assistant message in `messages` when the
+ * gating decision is 'strip' or 'unknown'. Used by `providers/custom.js`
+ * BEFORE handing to its delegate's `toApiMessages`. R9 doc fix: this
+ * function strips reasoningBlocks REGARDLESS of provenance — it does not
+ * inspect block.provider / block.sourceAdapter. In practice that's safe
+ * because the only caller is the Custom adapter, which has already
+ * re-stamped every captured block with `provider: 'custom'` /
+ * `sourceAdapter: 'custom'` in its `fromApiResponse`. If a future caller
+ * outside the Custom path needs provenance-aware filtering, refactor at
+ * that point — over-engineering today is a YAGNI hazard.
  *
  * Pure function — returns a new array with shallow-cloned assistant messages
  * that have `reasoningBlocks` cleared. Other messages pass through by reference.
  *
- * Why filter rather than skip-the-emit-in-delegate: the delegate (openrouter
+ * Why clear rather than skip-the-emit-in-delegate: the delegate (openrouter
  * or openai) is also used by the *native* OpenRouter / OpenAI adapter where
  * echo is correct. The gating is Custom-specific, so the cleanest place to
  * enforce it is at the Custom-adapter boundary BEFORE delegation, by removing
