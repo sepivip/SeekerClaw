@@ -1314,11 +1314,20 @@ function handleReactionUpdate(reaction) {
 // ============================================================================
 
 async function handleThinkCommand(chatId, args) {
-    const trimmed = (args || '').trim().toLowerCase();
+    // R23 Copilot: tokenize on whitespace instead of matching the
+    // exact trimmed-and-lowercased string. Pre-fix `'echo   on'`
+    // (multiple spaces) or `'echo\non'` (user's keyboard inserted a
+    // newline) hit the unknown-subcommand path even though the
+    // intent was clearly `/think echo on`. Token-array matching
+    // tolerates any inter-token whitespace as well as trailing
+    // whitespace from copy-paste.
+    const raw = (args || '').trim().toLowerCase();
+    const tokens = raw.length > 0 ? raw.split(/\s+/) : [];
+    const subcommand = tokens.join(' '); // canonical single-space form
     const current = _runtimeState.read();
 
     // No args → status display
-    if (!trimmed) {
+    if (tokens.length === 0) {
         const modelCatalog = require('./model-catalog');
         // R21 Copilot: use current.authType (live RuntimeState) instead
         // of the startup AUTH_TYPE / OPENAI_AUTH_TYPE constants. The
@@ -1355,10 +1364,12 @@ async function handleThinkCommand(chatId, args) {
         return lines.join('\n');
     }
 
-    // Map subcommand → field+value patch
+    // Map subcommand → field+value patch. `subcommand` is the
+    // single-space-canonicalized token form so 'echo   on' and 'echo on'
+    // both match.
     const patch = {};
     let action = '';
-    switch (trimmed) {
+    switch (subcommand) {
         case 'on':
             patch.reasoningEnabled = true;
             action = 'Extended thinking enabled.';
@@ -1387,7 +1398,7 @@ async function handleThinkCommand(chatId, args) {
             action = 'Custom echo override disabled.';
             break;
         default:
-            return `❌ Unknown subcommand \`${trimmed}\`. Try \`/think\` for usage.`;
+            return `❌ Unknown subcommand \`${subcommand}\`. Try \`/think\` for usage.`;
     }
 
     // Write through RuntimeStateStore — partial-update semantics preserve
@@ -1410,7 +1421,7 @@ async function handleThinkCommand(chatId, args) {
         deps.log(`[/think] runtime_state.json write returned false`, 'WARN');
         return `❌ Couldn't save (filesystem error). Try again or check storage.`;
     }
-    deps.log(`[/think] ${trimmed} (${JSON.stringify(patch)})`, 'INFO');
+    deps.log(`[/think] ${subcommand} (${JSON.stringify(patch)})`, 'INFO');
     return `✓ ${action} Takes effect on your next message.`;
 }
 

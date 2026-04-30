@@ -492,11 +492,11 @@ fun SettingsScreen(
         // reasoning into checkpoint state without surfacing it (lower
         // chat noise) or vice versa (display already-captured reasoning
         // from past turns even when not currently enabling new captures).
-        ReasoningSection(
-            currentProvider = config?.provider ?: "claude",
-            currentModel = config?.model ?: "",
-            currentAuthType = config?.authType,
-        )
+        // R23 Copilot: ReasoningSection now reads provider/model/authType
+        // entirely from RuntimeStateStore.state (re-keyed support lookup
+        // matches the toggles' source of truth). No need to thread the
+        // ConfigManager snapshot through.
+        ReasoningSection()
 
         Spacer(modifier = Modifier.height(28.dp))
 
@@ -1464,11 +1464,7 @@ fun SettingsScreen(
  * simultaneously — exceedingly rare; the next interaction resolves.
  */
 @Composable
-private fun ReasoningSection(
-    currentProvider: String,
-    currentModel: String,
-    currentAuthType: String?,
-) {
+private fun ReasoningSection() {
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
     // R14 Copilot: observe the StateFlow so cross-process updates
     // (e.g., a Telegram /think command in Commit 4 writing

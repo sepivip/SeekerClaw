@@ -160,6 +160,20 @@ function ok(label, cond, hint = '') {
     ok('/think echo off: customEchoReasoning=false',
         stateAfterEchoOff.customEchoReasoning === false);
 
+    // ── R23 Copilot: tokenized subcommand parsing tolerates extra whitespace ──
+    await messageHandler.handleCommand('123', '/think', '   echo    on   ', null);
+    const stateAfterMultiSpace = _runtimeState.read();
+    ok('/think echo  on (multi-space): canonicalized → customEchoReasoning=true',
+        stateAfterMultiSpace.customEchoReasoning === true);
+
+    await messageHandler.handleCommand('123', '/think', 'echo\non', null);
+    const stateAfterNewline = _runtimeState.read();
+    ok('/think echo<newline>on: canonicalized → still echo on path',
+        stateAfterNewline.customEchoReasoning === true);
+
+    // Reset for downstream assertions
+    await messageHandler.handleCommand('123', '/think', 'echo off', null);
+
     // ── R21 Copilot: status surfaces the third toggle ──
     const statusWithThird = await messageHandler.handleCommand('123', '/think', '', null);
     ok('Status: includes Echo reasoning to gateway line',
