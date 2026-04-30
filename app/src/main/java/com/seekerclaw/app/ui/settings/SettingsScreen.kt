@@ -1488,9 +1488,17 @@ private fun ReasoningSection(
     val reasoningEnabled = optimisticEnabled ?: rtState.reasoningEnabled
     val reasoningDisplay = optimisticDisplay ?: rtState.reasoningDisplayInChat
 
-    // Tri-state model support — drives the "no-op for this model" hint.
-    val support = remember(currentProvider, currentModel, currentAuthType) {
-        ModelRegistry.reasoningSupportFor(currentProvider, currentModel, currentAuthType)
+    // R21 Copilot: derive provider/model/authType from rtState (the
+    // RuntimeStateStore StateFlow) instead of the ConfigManager-loaded
+    // snapshot passed in via [currentProvider]/[currentModel]/[currentAuthType].
+    // The toggles already track rtState; mixing the support-lookup against
+    // a stale ConfigManager snapshot would let the hint disagree with the
+    // toggles' actual effect when Telegram /provider or /model has
+    // updated runtime_state.json without a same-tick recompose of the
+    // outer SettingsScreen config snapshot. Re-key on rtState so the
+    // hint refreshes with the toggles in lock-step.
+    val support = remember(rtState.provider, rtState.model, rtState.authType) {
+        ModelRegistry.reasoningSupportFor(rtState.provider, rtState.model, rtState.authType)
     }
 
     CollapsibleSection("Reasoning", initiallyExpanded = false) {

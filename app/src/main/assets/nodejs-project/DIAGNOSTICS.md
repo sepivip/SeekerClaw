@@ -388,14 +388,14 @@ BAT-549 introduced reasoning content preservation across all 4 providers, plus u
 **Fix:**
 - Confirm the model id matches the V4 regex (the agent can grep `reasoning-gating.js` for the exact pattern).
 - If the user is on a V4 fork with a non-matching id (e.g., `my-deepseek-v4-fork`): toggle `/think echo on` (Custom-only, force echo on tool-loop) OR enable in Settings > AI Provider > Custom > Advanced (Reasoning) > "Echo reasoning to gateway".
-- If still failing: the 400 message likely contains "reasoning_content must be passed back" — the adaptive 3-step quarantine recovery (last-user → earliest-tool-call → full reset) auto-runs and saves a forensic dump under `<workDir>/reasoning-quarantine/`.
+- If still failing: the 400 message likely contains "reasoning_content must be passed back" — the adaptive 3-step quarantine recovery (last-user → earliest-tool-call → full reset) auto-runs and saves a forensic dump under `<workDir>/recovery/` (file pattern: `<chatId>-<timestamp>-step<N>[-task<id>].json`).
 
 ### Custom + R1 (DeepSeek-Reasoner): 400 With "Reasoning Content Echoed"
 **Symptoms:** User on Custom provider with DeepSeek-R1 / DeepSeek-Reasoner gets `400` with a message about reasoning_content being unexpected.
 **Diagnosis:** OPPOSITE of V4 — R1 REJECTS echoed reasoning_content. Commit 1's gating returns `'strip'` for R1 ids; the strip should run pre-delegation.
 **Fix:**
 - Verify the model id matches the R1 regex (`/(?:^|\/)deepseek-(?:reasoner|r1)(?:-|$)/i`).
-- Check the user has NOT enabled the per-Custom echo override (`/think echo` is not currently a recognized subcommand; the override only flips via Settings > AI Provider > Custom > Advanced (Reasoning)). The override resets automatically when the user edits any signed Custom config field (model | baseUrl | format | header keys), so if they recently swapped from V4 to R1 the override should already be off.
+- Check the user has NOT enabled the per-Custom echo override (`/think echo on` flips it from chat; Settings > AI Provider > Custom > Advanced (Reasoning) flips it from the UI). The override resets automatically when the user edits any signed Custom config field (model | baseUrl | format | header keys), so if they recently swapped from V4 to R1 the override should already be off — but confirm with `/think` (no args) which surfaces the current value.
 
 ### Reasoning Captured But Not Displayed in Chat
 **Symptoms:** User toggled "Display reasoning in chat" but no blockquote appears below the agent's responses.

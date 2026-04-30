@@ -146,6 +146,26 @@ function ok(label, cond, hint = '') {
     ok('/think hide: reasoningDisplayInChat=false',
         stateAfterHide.reasoningDisplayInChat === false);
 
+    // ── R21 Copilot: /think echo on / off (per-Custom advanced override) ──
+    const echoOnReply = await messageHandler.handleCommand('123', '/think', 'echo on', null);
+    const stateAfterEchoOn = _runtimeState.read();
+    ok('/think echo on: customEchoReasoning=true',
+        stateAfterEchoOn.customEchoReasoning === true);
+    // current.provider was 'claude' from setup → message should warn
+    ok('/think echo on: warns when not on Custom',
+        typeof echoOnReply === 'string' && echoOnReply.includes('only takes effect when provider=custom'));
+
+    await messageHandler.handleCommand('123', '/think', 'echo off', null);
+    const stateAfterEchoOff = _runtimeState.read();
+    ok('/think echo off: customEchoReasoning=false',
+        stateAfterEchoOff.customEchoReasoning === false);
+
+    // ── R21 Copilot: status surfaces the third toggle ──
+    const statusWithThird = await messageHandler.handleCommand('123', '/think', '', null);
+    ok('Status: includes Echo reasoning to gateway line',
+        typeof statusWithThird === 'string'
+        && statusWithThird.includes('Echo reasoning to gateway'));
+
     // ── Unknown subcommand → error with usage hint ──
     const errReply = await messageHandler.handleCommand('123', '/think', 'banana', null);
     ok('Unknown subcommand: returns error',

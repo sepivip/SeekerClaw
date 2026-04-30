@@ -1320,15 +1320,25 @@ async function handleThinkCommand(chatId, args) {
     // No args → status display
     if (!trimmed) {
         const modelCatalog = require('./model-catalog');
+        // R21 Copilot: use current.authType (live RuntimeState) instead
+        // of the startup AUTH_TYPE / OPENAI_AUTH_TYPE constants. The
+        // constants snapshot at Node startup and don't reflect mid-session
+        // /provider switches, but RuntimeState is the source of truth
+        // (FileObserver-backed, written by /provider, /model, Settings).
         const support = modelCatalog.reasoningSupportFor(
             current.provider,
             current.model,
-            current.provider === 'openai' ? OPENAI_AUTH_TYPE : AUTH_TYPE,
+            current.authType,
         );
         const lines = [];
         lines.push('**Reasoning state**');
         lines.push(`• Extended thinking: ${current.reasoningEnabled ? '✓ on' : '✗ off'}`);
         lines.push(`• Display in chat: ${current.reasoningDisplayInChat ? '✓ on' : '✗ off'}`);
+        // R21 Copilot: surface the per-Custom override too (the third
+        // toggle the comment promised). Always include it so users on
+        // any provider see the same fields; non-Custom users see "off"
+        // and the action description tells them it's Custom-only.
+        lines.push(`• Echo reasoning to gateway (Custom only): ${current.customEchoReasoning ? '✓ on' : '✗ off'}`);
         lines.push(`• Active model: \`${current.model}\` (\`reasoningSupport=${support}\`)`);
         if (support === 'no') {
             lines.push('');
@@ -1341,6 +1351,7 @@ async function handleThinkCommand(chatId, args) {
         lines.push('**Usage:**');
         lines.push('• `/think on` / `/think off` — request-side enablement');
         lines.push('• `/think show` / `/think hide` — render reasoning summaries in chat');
+        lines.push('• `/think echo on` / `/think echo off` — Custom advanced override (force echo on tool-loop, only when on Custom provider)');
         return lines.join('\n');
     }
 
@@ -1363,6 +1374,17 @@ async function handleThinkCommand(chatId, args) {
         case 'hide':
             patch.reasoningDisplayInChat = false;
             action = 'Reasoning will not be displayed in chat.';
+            break;
+        case 'echo on':
+            patch.customEchoReasoning = true;
+            action = 'Custom echo override enabled (force reasoning_content echo on tool-loop turns).';
+            if (current.provider !== 'custom') {
+                action += ' Note: only takes effect when provider=custom; you are currently on \`' + current.provider + '\`.';
+            }
+            break;
+        case 'echo off':
+            patch.customEchoReasoning = false;
+            action = 'Custom echo override disabled.';
             break;
         default:
             return `❌ Unknown subcommand \`${trimmed}\`. Try \`/think\` for usage.`;
