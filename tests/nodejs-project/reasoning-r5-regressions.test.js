@@ -141,6 +141,62 @@ function buildEntry(role, content, extra = null) {
 }
 
 console.log();
+console.log('── R6 thread 1: _reasoningRecoveryStep resets to 0 after every 200 ──');
+
+// Replicate ai.js's chat() while-loop step tracking. After each 200,
+// the counter must reset so a later 400 in the same turn re-attempts
+// step 1 (rather than jumping straight to step 3 from a previous
+// recovery's leftover state).
+function simulateMultipleEpisodes(events) {
+    let _reasoningRecoveryStep = 0;
+    const stepsAttemptedPerEpisode = [];
+    let currentEpisode = null;
+
+    for (const ev of events) {
+        if (ev === 'recover-success') {
+            // start episode
+            if (!currentEpisode) currentEpisode = [];
+            _reasoningRecoveryStep++;
+            currentEpisode.push(_reasoningRecoveryStep);
+        } else if (ev === '200') {
+            // close episode (if any) — reset
+            if (currentEpisode) { stepsAttemptedPerEpisode.push(currentEpisode); currentEpisode = null; }
+            _reasoningRecoveryStep = 0;
+        }
+    }
+    if (currentEpisode) stepsAttemptedPerEpisode.push(currentEpisode);
+    return stepsAttemptedPerEpisode;
+}
+
+let episodes = simulateMultipleEpisodes([
+    'recover-success',  // 400 → recovery step 1, 200 follows
+    '200',
+    'recover-success',  // another 400 in same turn → MUST be step 1 again
+    '200',
+]);
+ok('Each 400 episode after 200 starts at step 1',
+    episodes.length === 2 && episodes[0][0] === 1 && episodes[1][0] === 1,
+    `episodes: ${JSON.stringify(episodes)}`);
+
+console.log();
+console.log('── R6 thread 2: resumedFromTaskId quarantine path ──');
+// We can't run the full chat() flow without a config, but we can pin
+// the contract: if `resumedFromTaskId` is set AND differs from the
+// fresh `taskId`, recovery quarantines BOTH. We replicate the gating
+// logic directly from ai.js.
+function shouldQuarantineResumedFrom(resumedFromTaskId, freshTaskId) {
+    return Boolean(resumedFromTaskId && resumedFromTaskId !== freshTaskId);
+}
+ok('resume case: resumedFromTaskId set, differs from fresh → quarantine BOTH',
+    shouldQuarantineResumedFrom('old-resumed-task', 'new-fresh-task') === true);
+ok('non-resume case: resumedFromTaskId null → fresh-only',
+    shouldQuarantineResumedFrom(null, 'fresh-task') === false);
+ok('edge case: same id (defensive) → fresh-only',
+    shouldQuarantineResumedFrom('same-id', 'same-id') === false);
+ok('empty string → fresh-only',
+    shouldQuarantineResumedFrom('', 'fresh-task') === false);
+
+console.log();
 if (failures === 0) {
     console.log('ALL TESTS PASS');
     process.exit(0);

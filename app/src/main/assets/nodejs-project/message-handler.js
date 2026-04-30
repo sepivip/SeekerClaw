@@ -364,7 +364,14 @@ Platform: \`${platform}\``;
 
             // Checkpoint stays on disk — chat() will call cleanupChatCheckpoints()
             // on successful completion.
-            return { __resumeFallthrough: true, originalGoal: full.originalGoal || null };
+            // BAT-549 R6 thread 2: forward the resumed-from taskId so chat()
+            // can quarantine THIS file if the 400 fires on the first API
+            // call (common on /resume — there's no fresh checkpoint yet).
+            return {
+                __resumeFallthrough: true,
+                originalGoal: full.originalGoal || null,
+                resumedFromTaskId: cp.taskId,
+            };
         }
 
         case '/model': {
@@ -1012,6 +1019,12 @@ async function handleMessage(normalized) {
         // P2.4: resume flag — set by /resume handler, passed to chat() as option
         let isResume = false;
         let resumeGoal = null;
+        // BAT-549 R6 thread 2: the OLD checkpoint's taskId (the one we
+        // resumed FROM); forwarded to chat() so reasoning-content-400
+        // recovery can quarantine the actual problematic file rather
+        // than chat()'s freshly-minted taskId (which has no on-disk
+        // checkpoint when the 400 fires on the first API call).
+        let resumedFromTaskId = null;
 
         // Check for commands (use combinedText so /commands work even in replies)
         if (combinedText.startsWith('/')) {
@@ -1034,6 +1047,13 @@ async function handleMessage(normalized) {
                 // not as a user message (system directives are authoritative).
                 isResume = true;
                 resumeGoal = response.originalGoal || null;
+                // BAT-549 R6 thread 2: forward the OLD checkpoint's taskId so
+                // chat()'s reasoning-content 400 recovery path can quarantine
+                // it. Otherwise a /resume that triggers a 400 would mutate
+                // only chat()'s freshly-minted taskId (which has no on-disk
+                // checkpoint yet), and a future /resume would re-load the
+                // original bad slice.
+                resumedFromTaskId = response.resumedFromTaskId || null;
                 text = 'continue';
             } else if (response) {
                 await deps.sendMessage(chatId, response, messageId);
@@ -1192,7 +1212,7 @@ async function handleMessage(normalized) {
             }
         }
 
-        let response = await deps.chat(chatId, userContent, { isResume, originalGoal: resumeGoal, statusReaction });
+        let response = await deps.chat(chatId, userContent, { isResume, originalGoal: resumeGoal, statusReaction, resumedFromTaskId });
 
         // Strip protocol tokens the agent may have mixed into content (BAT-279)
         // Uses centralized silent-reply.js helper (BAT-488) that also handles

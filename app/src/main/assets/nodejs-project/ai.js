@@ -2082,6 +2082,17 @@ async function chat(chatId, userMessage, options = {}) {
     const taskId = crypto.randomBytes(8).toString('hex');
     setActiveTask(chatId, taskId);
 
+    // BAT-549 R6 thread 2: when invoked via /resume, the OLD checkpoint's
+    // taskId (the one we restored conversation state from) is on
+    // `options.resumedFromTaskId`. Reasoning-content-400 recovery uses
+    // it to quarantine the actual problematic on-disk file rather than
+    // chat()'s freshly-minted taskId (which has no checkpoint until
+    // after the first tool round). For non-resume turns, this is null
+    // and recovery degrades cleanly: no checkpoint to mutate, just
+    // truncate in-memory.
+    const resumedFromTaskId = (options && typeof options.resumedFromTaskId === 'string')
+        ? options.resumedFromTaskId : null;
+
     // userMessage can be a string or an array of content blocks (for vision)
     // Extract text for skill matching (skip for resume — don't trigger skills)
     const textForSkills = options.isResume ? '' : (
@@ -2317,13 +2328,23 @@ async function chat(chatId, userMessage, options = {}) {
                 };
                 if (_reasoningRecovery.isReasoningContent400(res.status, res.data)) {
                     // R5 thread 1: loop escalation until a step returns
-                    // ok=true OR step 3 has been attempted. Previous code
-                    // only escalated once on no-op, so step 1+2 both
-                    // returning ok=false would bubble before step 3 ever
-                    // ran — breaking the documented 3-step fallback.
+                    // ok=true OR step 3 has been attempted.
                     let recovered = false;
                     while (_reasoningRecoveryStep < 3 && !recovered) {
                         _reasoningRecoveryStep++;
+                        // R6 thread 2: ALSO quarantine the resumed-from
+                        // checkpoint (if any) — its conversationSlice on
+                        // disk is what a future /resume would re-load.
+                        // The fresh taskId checkpoint is mutated for the
+                        // current run; the resumed-from checkpoint is
+                        // mutated to prevent re-load of the bad slice.
+                        if (resumedFromTaskId && resumedFromTaskId !== taskId) {
+                            _reasoningRecovery.quarantineActiveSegment({
+                                chatId, messages, workDir,
+                                taskId: resumedFromTaskId,
+                                step: _reasoningRecoveryStep, log,
+                            });
+                        }
                         const result = _reasoningRecovery.quarantineActiveSegment({
                             chatId, messages, workDir, taskId,
                             step: _reasoningRecoveryStep, log,
@@ -2333,11 +2354,8 @@ async function chat(chatId, userMessage, options = {}) {
                             _applyRecovery(result);
                             recovered = true;
                         }
-                        // ok=false → loop and try the next step (escalate
-                        // step 1 → 2 → 3). Step 3 is unconditional reset
-                        // so it always returns ok=true.
                     }
-                    if (recovered) continue; // retry the while loop with truncated history
+                    if (recovered) continue;
                     log(`[ReasoningRecovery] All 3 recovery steps returned ok=false — bubbling error to user`, 'ERROR');
                 }
 
@@ -2351,6 +2369,16 @@ async function chat(chatId, userMessage, options = {}) {
                 httpErr._sanitized = true;
                 throw httpErr;
             }
+
+            // BAT-549 R6 thread 1: reset recovery step counter after every
+            // successful response. _reasoningRecoveryStep is per-chat()
+            // call, but a single chat() turn can fire multiple API calls
+            // (tool-use rounds, summary fallback). Without this reset, a
+            // later 400 in the same turn would start at the previous
+            // step (e.g. step 2) and over-truncate even though the
+            // previous round succeeded — each independent 400 episode
+            // should re-attempt step 1 first.
+            _reasoningRecoveryStep = 0;
 
             // BAT-315: Parse response through adapter into neutral format
             const parsed = adapter.fromApiResponse(res.data);
