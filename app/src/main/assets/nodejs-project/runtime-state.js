@@ -50,9 +50,14 @@ const { createStore } = require('./cross-process-store');
 // BAT-549 Commit 3b: dual-side defaults must mirror Kotlin's
 // RuntimeState data class defaults. New fields default to false / null
 // so updating from a pre-BAT-549 build does NOT silently flip on
-// reasoning capability (cost / behavior change). The cross-process-
-// store fills missing fields from these DEFAULTS on read, so old
-// `runtime_state.json` files that lack the new fields load cleanly.
+// reasoning capability (cost / behavior change). The DEFAULTS-merge
+// happens in this module's `read()` (see below) — `cross-process-store`
+// itself returns the raw `JSON.parse(text)` when the file exists and
+// only falls back to the supplied default when the file is absent or
+// corrupt. So old `runtime_state.json` files that lack the new fields
+// load cleanly via the merge layered in `read()` here. The Kotlin side
+// gets the same coverage automatically via `@Serializable` data class
+// defaults during decode.
 const DEFAULTS = Object.freeze({
     provider: 'claude',
     authType: 'api_key',
