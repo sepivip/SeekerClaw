@@ -5,20 +5,23 @@
 // Pure helper: no IO, no telegram-API calls. Caller decides whether to
 // render (gated on reasoningDisplayInChat) and how to send.
 //
-// ## Telegram expandable blockquote format
+// ## Telegram HTML format (R21 Copilot fix)
 //
-// MarkdownV2 syntax (Telegram Bot API 7.0+):
-//   **>line 1
-//   >line 2
-//   >line 3||
+// SeekerClaw's send pipeline (telegram.js: toTelegramHtml) uses
+// `parse_mode: 'HTML'`, NOT MarkdownV2 — markdown-it converts the
+// agent's response from markdown to HTML before send. Telegram HTML
+// supports the `expandable` attribute on blockquote:
 //
-// The leading `**>` opens an EXPANDABLE blockquote (collapsed by default,
-// tap to expand). Each subsequent line starts with `>`. The closing `||`
-// marks the end. Used because:
-//  - Reasoning summaries can be long (multi-paragraph thinking).
-//  - Most users don't want it inline; collapsed-by-default keeps the
-//    chat readable.
-//  - Power users can tap to expand for depth.
+//   <blockquote expandable>line 1
+//   line 2
+//   line 3</blockquote>
+//
+// This renders collapsed by default with a tap-to-expand affordance.
+// Output from this helper MUST be sent verbatim with parse_mode='HTML'
+// — running it through `toTelegramHtml` would re-escape the angle
+// brackets and produce literal `&lt;blockquote&gt;...` text. The
+// caller is responsible for bypassing the markdown-it conversion
+// for these messages.
 //
 // ## Per-provider extraction
 //
@@ -95,25 +98,31 @@ function extractDisplayText(block) {
 }
 
 /**
- * Telegram MarkdownV2 reserves these characters; they MUST be escaped
- * when emitting user-controlled text inside a blockquote (otherwise the
- * server returns 400 with "can't parse entities"). Escape with backslash.
+ * Telegram HTML reserves `<`, `>`, and `&`; they MUST be escaped when
+ * emitting user-controlled text inside an HTML message body (otherwise
+ * the server returns 400 with "can't parse entities" or — worse —
+ * accidental tag injection from a `<script>`-shaped reasoning summary).
+ * Escape with the standard HTML entity references.
  */
-const _MDV2_RESERVED = /[_*[\]()~`>#+\-=|{}.!]/g;
-function escapeMarkdownV2(text) {
+function escapeHtml(text) {
     if (typeof text !== 'string') return '';
-    return text.replace(_MDV2_RESERVED, '\\$&');
+    return text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
 }
 
 /**
- * Format an array of reasoningBlocks as a Telegram MarkdownV2 expandable
- * blockquote string. Returns `null` when no blocks have displayable text
- * — caller should skip sending entirely instead of emitting an empty
- * blockquote.
+ * Format an array of reasoningBlocks as a Telegram HTML expandable
+ * blockquote string. Returns `null` when no blocks have displayable
+ * text — caller should skip sending entirely instead of emitting an
+ * empty blockquote.
  *
- * Each block's text is a separate paragraph (blank-line-separated)
- * inside the blockquote. Lines inside each paragraph are prefixed with
- * `>` per the MarkdownV2 expandable-blockquote spec.
+ * Output shape: `<blockquote expandable>content</blockquote>` with
+ * paragraphs separated by blank lines (rendered as `<br><br>` in the
+ * Telegram client). Send with `parse_mode: 'HTML'` and bypass any
+ * markdown-it conversion — the angle brackets MUST reach Telegram
+ * unescaped for the expandable affordance to activate.
  */
 function formatExpandableBlockquote(reasoningBlocks) {
     if (!Array.isArray(reasoningBlocks) || reasoningBlocks.length === 0) return null;
@@ -125,28 +134,17 @@ function formatExpandableBlockquote(reasoningBlocks) {
     }
     if (paragraphs.length === 0) return null;
 
-    // Build the blockquote. First-line opener `**>`, every subsequent
-    // line `>`, closing `||`. Blank lines between paragraphs render as
-    // `>` (empty quote line) so the visual paragraph break is preserved
-    // inside the collapsed view.
-    const escapedLines = [];
-    for (let i = 0; i < paragraphs.length; i++) {
-        const para = paragraphs[i];
-        for (const line of para.split('\n')) {
-            escapedLines.push(escapeMarkdownV2(line));
-        }
-        if (i < paragraphs.length - 1) {
-            escapedLines.push(''); // blank quote line between paragraphs
-        }
-    }
-
-    const head = '**>' + escapedLines[0];
-    const body = escapedLines.slice(1).map((l) => '>' + l).join('\n');
-    return body.length > 0 ? `${head}\n${body}||` : `${head}||`;
+    // Each paragraph's text is HTML-escaped (so `<script>` in a reasoning
+    // summary doesn't inject a tag). Paragraphs are joined with a blank
+    // line so they render as separate visual paragraphs inside the
+    // blockquote.
+    const escapedParagraphs = paragraphs.map((p) => escapeHtml(p));
+    const inner = escapedParagraphs.join('\n\n');
+    return `<blockquote expandable>${inner}</blockquote>`;
 }
 
 module.exports = {
     formatExpandableBlockquote,
     extractDisplayText,
-    escapeMarkdownV2,
+    escapeHtml,
 };

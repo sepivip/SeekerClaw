@@ -1,17 +1,20 @@
 #!/usr/bin/env node
 // reasoning-display.test.js — pin BAT-549 Commit 4 reasoning-display
-// helpers.
+// helpers (R22 Copilot fix: now Telegram HTML, not MarkdownV2).
 //
 // What this guards:
 //   - Per-provider display-text extraction (Anthropic, OpenAI, OpenRouter,
 //     DeepSeek-via-OR, Custom) returns the human-readable summary
 //   - Encrypted/redacted-only blocks return "" so the caller skips them
 //   - Unknown wire shapes return "" (no JSON-stringify leak into chat)
-//   - MarkdownV2 escape covers all reserved chars
+//   - HTML escape covers the 3 entity-reserved chars (& < >)
 //   - Expandable blockquote formatting:
-//       * `**>` opener on first line, `>` on subsequent lines, `||` close
-//       * Blank quote-line separator between paragraphs from different blocks
+//       * `<blockquote expandable>...</blockquote>` shape
+//       * Multi-block paragraphs joined with blank line
 //       * Returns null when no blocks have displayable text
+//   - Telegram pipeline integration: caller sends with parse_mode='HTML'
+//     and bypasses markdown-it conversion (output's angle brackets must
+//     reach Telegram unescaped).
 //
 // Run:  node tests/nodejs-project/reasoning-display.test.js
 
@@ -20,7 +23,7 @@
 const {
     formatExpandableBlockquote,
     extractDisplayText,
-    escapeMarkdownV2,
+    escapeHtml,
 } = require('../../app/src/main/assets/nodejs-project/reasoning-display');
 
 let failures = 0;
@@ -107,22 +110,23 @@ eq('Empty block → ""', extractDisplayText({}), '');
 eq('null wire → ""', extractDisplayText({ wire: null }), '');
 eq('Array wire → ""', extractDisplayText({ wire: [] }), '');
 
-// ── MarkdownV2 escape ────────────────────────────────────────────
+// ── HTML escape ──────────────────────────────────────────────────
 
 console.log();
-console.log('── escapeMarkdownV2 ──');
+console.log('── escapeHtml ──');
 
-eq('escapes underscores', escapeMarkdownV2('_emphasis_'), '\\_emphasis\\_');
-eq('escapes asterisks', escapeMarkdownV2('*bold*'), '\\*bold\\*');
-eq('escapes brackets', escapeMarkdownV2('[link](url)'), '\\[link\\]\\(url\\)');
-eq('escapes period and exclamation', escapeMarkdownV2('end.'), 'end\\.');
-eq('escapes pipe and equals', escapeMarkdownV2('a|b=c'), 'a\\|b\\=c');
-eq('escapes hyphen and plus', escapeMarkdownV2('1-2+3'), '1\\-2\\+3');
-eq('escapes braces', escapeMarkdownV2('{x}'), '\\{x\\}');
-eq('escapes hash and gt', escapeMarkdownV2('#h >q'), '\\#h \\>q');
-eq('escapes backtick and tilde', escapeMarkdownV2('`code` ~strike~'), '\\`code\\` \\~strike\\~');
-eq('plain text untouched', escapeMarkdownV2('hello world'), 'hello world');
-eq('non-string returns ""', escapeMarkdownV2(42), '');
+eq('escapes ampersand', escapeHtml('a & b'), 'a &amp; b');
+eq('escapes less-than', escapeHtml('a < b'), 'a &lt; b');
+eq('escapes greater-than', escapeHtml('a > b'), 'a &gt; b');
+eq('escapes <script> tag', escapeHtml('<script>x</script>'), '&lt;script&gt;x&lt;/script&gt;');
+eq('escape order: & first',
+    escapeHtml('<&>'),
+    '&lt;&amp;&gt;');
+eq('plain text untouched', escapeHtml('hello world'), 'hello world');
+eq('non-string returns ""', escapeHtml(42), '');
+// MarkdownV2 chars NOT escaped here (HTML doesn't reserve them)
+eq('asterisks pass through (HTML)', escapeHtml('*bold*'), '*bold*');
+eq('parens pass through (HTML)', escapeHtml('(a)'), '(a)');
 
 // ── formatExpandableBlockquote ───────────────────────────────────
 
@@ -139,36 +143,36 @@ eq('null for blocks with no displayable text',
     ]),
     null);
 
-// Single block, single line
+// Single block, single line → wrapped in <blockquote expandable>
 const singleBlock = [{
     provider: 'anthropic',
     wire: { type: 'thinking', thinking: 'Hello.' },
 }];
-const singleResult = formatExpandableBlockquote(singleBlock);
-eq('single block single line: opens **> closes ||',
-    singleResult, '**>Hello\\.||');
+eq('single block: <blockquote expandable>...</blockquote>',
+    formatExpandableBlockquote(singleBlock),
+    '<blockquote expandable>Hello.</blockquote>');
 
-// Single block, multiple lines
+// Single block, multiple lines (newlines inside the same paragraph)
 const multiLineBlock = [{
     provider: 'anthropic',
     wire: { type: 'thinking', thinking: 'Line 1.\nLine 2.\nLine 3.' },
 }];
 const multiResult = formatExpandableBlockquote(multiLineBlock);
-ok('multi-line: starts with **>',
-    typeof multiResult === 'string' && multiResult.startsWith('**>Line 1\\.'));
-ok('multi-line: subsequent lines start with >',
-    typeof multiResult === 'string' && multiResult.includes('\n>Line 2\\.'));
-ok('multi-line: ends with ||',
-    typeof multiResult === 'string' && multiResult.endsWith('||'));
+ok('multi-line: starts with <blockquote expandable>',
+    typeof multiResult === 'string' && multiResult.startsWith('<blockquote expandable>'));
+ok('multi-line: ends with </blockquote>',
+    typeof multiResult === 'string' && multiResult.endsWith('</blockquote>'));
+ok('multi-line: preserves newlines inside the same paragraph',
+    typeof multiResult === 'string' && multiResult.includes('Line 1.\nLine 2.'));
 
-// Multiple blocks → blank quote-line between paragraphs
+// Multiple blocks → blank line between paragraphs
 const multiBlock = [
     { provider: 'anthropic', wire: { type: 'thinking', thinking: 'First.' } },
     { provider: 'openai', wire: { type: 'reasoning', id: 'r1', summary: [{ type: 'summary_text', text: 'Second.' }] } },
 ];
-const multiBlockResult = formatExpandableBlockquote(multiBlock);
-ok('multiple blocks: blank quote line "\\n>\\n" between paragraphs',
-    typeof multiBlockResult === 'string' && multiBlockResult.includes('\n>\n>Second\\.'));
+eq('multiple blocks: paragraphs separated by blank line',
+    formatExpandableBlockquote(multiBlock),
+    '<blockquote expandable>First.\n\nSecond.</blockquote>');
 
 // Mix of displayable + non-displayable: skips the empty ones
 const mixed = [
@@ -187,18 +191,35 @@ ok('mixed: encrypted-only and redacted blocks NOT in output',
     && !mixedResult.includes('blob')
     && !mixedResult.includes('enc'));
 
-// MarkdownV2 reserved chars in reasoning text are escaped
-const specialCharsBlock = [{
+// HTML reserved chars in reasoning text are escaped — defends against
+// `<script>`-shaped or `<blockquote>`-shaped reasoning text injecting
+// tags into the message body.
+const tagInjection = [{
     provider: 'anthropic',
-    wire: { type: 'thinking', thinking: 'Use *bold* and (parens) and [brackets]!' },
+    wire: { type: 'thinking', thinking: '<script>alert(1)</script>\n<blockquote>nested</blockquote>' },
 }];
-const escapedResult = formatExpandableBlockquote(specialCharsBlock);
-ok('MarkdownV2 chars in reasoning text are escaped',
+const escapedResult = formatExpandableBlockquote(tagInjection);
+ok('HTML tag-injection in reasoning text is escaped',
     typeof escapedResult === 'string'
-    && escapedResult.includes('\\*bold\\*')
-    && escapedResult.includes('\\(parens\\)')
-    && escapedResult.includes('\\[brackets\\]')
-    && escapedResult.includes('\\!'));
+    && escapedResult.includes('&lt;script&gt;')
+    && escapedResult.includes('&lt;/script&gt;')
+    && escapedResult.includes('&lt;blockquote&gt;')
+    && !escapedResult.includes('<script>'));
+// The OUTER expandable blockquote tags are NOT escaped (they ARE meant
+// to render). Only the inner content is escaped.
+ok('outer <blockquote expandable> tags pass through unescaped',
+    typeof escapedResult === 'string'
+    && escapedResult.startsWith('<blockquote expandable>')
+    && escapedResult.endsWith('</blockquote>'));
+
+// Ampersand in reasoning text
+const ampBlock = [{
+    provider: 'anthropic',
+    wire: { type: 'thinking', thinking: 'Both A & B.' },
+}];
+eq('ampersand escaped to &amp;',
+    formatExpandableBlockquote(ampBlock),
+    '<blockquote expandable>Both A &amp; B.</blockquote>');
 
 console.log();
 if (failures === 0) {
