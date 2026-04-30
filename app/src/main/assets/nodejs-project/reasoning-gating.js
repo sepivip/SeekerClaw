@@ -25,10 +25,19 @@
  *  - 'echo-on-tool-loop'  : known-must-echo-after-tool-call (e.g. DeepSeek
  *                           V4) OR user enabled the advanced override.
  *                           Pass blocks through to the delegate, which
- *                           emits unconditionally whenever blocks are
- *                           present (R8 thread 1: the delegate does NOT
- *                           re-decide based on tool-use context — gating
- *                           lives entirely in this Custom-adapter layer).
+ *                           emits whenever blocks are present and the
+ *                           delegate's OWN model-gating agrees. The
+ *                           OpenRouter delegate has its own model
+ *                           regex (added in Commit 2a for native
+ *                           OpenRouter R1/V4 protection), so gating is
+ *                           layered: Custom decides "should we even
+ *                           pass blocks", and the delegate decides
+ *                           "given this model, do I emit them". For
+ *                           V4-shaped models both layers say "yes"; for
+ *                           R1-shaped both say "no"; for unknown the
+ *                           Custom layer can override (echo-on-tool-loop
+ *                           via the user toggle) and the delegate's
+ *                           freeform-default wins (no extra emit).
  *                           The "tool-loop" suffix in this name reflects
  *                           the V4 SERVER contract that requires echo
  *                           after a tool call, not a per-call delegate

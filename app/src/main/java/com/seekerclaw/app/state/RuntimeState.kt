@@ -107,18 +107,28 @@ data class RuntimeState(
     val customEchoReasoning: Boolean = false,
     /**
      * BAT-549 Commit 3b: SHA-256 of the Custom config tuple
-     * `(customModel | normalize(customBaseUrl) | customFormat |
-     * sortedHeaderKeys(customHeaders))`. ApiKey changes are NOT part
-     * of the signature (key rotation common); header VALUES are NOT
-     * hashed (would persist secret material on disk). When the
+     * `(trim(customModel) | trim(customBaseUrl) | trim(customFormat) |
+     * sortedLowercasedHeaderKeys(customHeaders))`. ApiKey changes are
+     * NOT part of the signature (key rotation common); header VALUES
+     * are NOT hashed (would persist secret material on disk). When the
      * signature mismatches the live config, [customEchoReasoning] is
      * reset to `false` and the user is prompted to re-enable it.
      *
+     * Authoritative algorithm in [CustomConfigSignature] (Kotlin) and
+     * `app/src/main/assets/nodejs-project/custom-config-signature.js`
+     * (Node) — both apply only `trim()` to model/baseUrl/format. URL
+     * canonicalization (default-port stripping, percent-encoding,
+     * trailing-slash collapse) is intentionally NOT performed: the
+     * signature represents the user's typed config, and any visible
+     * edit should reset the override (conservative side). Two URLs
+     * that are semantically equivalent but typed differently produce
+     * different signatures by design.
+     *
      * Default `null` for fresh installs and pre-BAT-549 upgrades —
-     * the signature is computed and persisted on the next Settings
-     * write to the Custom provider config (after Commit 3e wires the
-     * UI). Until then, [customEchoReasoning] simply stays at its
-     * persisted value.
+     * the signature is computed and persisted on the next saveConfig
+     * call to the Custom provider config (Commit 3d wires this in
+     * [com.seekerclaw.app.config.ConfigManager]). Until then,
+     * [customEchoReasoning] simply stays at its persisted value.
      */
     val customConfigSignature: String? = null,
 )
