@@ -1509,7 +1509,17 @@ private fun ReasoningSection(
                     persistReasoningFieldAsync(
                         scope,
                         rtState.copy(reasoningEnabled = newValue),
-                    ) { ok -> if (!ok) optimisticEnabled = !newValue }
+                    ) { ok ->
+                        // R17 Copilot: clear the optimistic override on
+                        // failure so the displayed value falls back to
+                        // the live StateFlow. `!newValue` would be
+                        // wrong if a concurrent cross-process write
+                        // (e.g., Telegram /think) had landed in the
+                        // meantime — clearing the override is always
+                        // correct because rtState reflects whatever's
+                        // persisted on disk.
+                        if (!ok) optimisticEnabled = null
+                    }
                 },
                 info = SettingsHelpTexts.REASONING_ENABLED,
             )
@@ -1521,7 +1531,7 @@ private fun ReasoningSection(
                     persistReasoningFieldAsync(
                         scope,
                         rtState.copy(reasoningDisplayInChat = newValue),
-                    ) { ok -> if (!ok) optimisticDisplay = !newValue }
+                    ) { ok -> if (!ok) optimisticDisplay = null }
                 },
                 info = SettingsHelpTexts.REASONING_DISPLAY_IN_CHAT,
             )

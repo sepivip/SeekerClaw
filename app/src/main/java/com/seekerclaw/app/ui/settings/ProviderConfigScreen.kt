@@ -1438,7 +1438,15 @@ private fun CustomEchoReasoningRow() {
                         false
                     }
                     withContext(Dispatchers.Main) {
-                        if (!ok) optimistic = !newValue
+                        // R17 Copilot: clear the optimistic override on
+                        // failure rather than negating newValue. A
+                        // concurrent cross-process update (Commit 3d's
+                        // signature reset, future Telegram commands)
+                        // could change the canonical value in the
+                        // meantime — clearing the override is always
+                        // correct because rtState reflects whatever's
+                        // currently persisted on disk.
+                        if (!ok) optimistic = null
                     }
                 }
             },
