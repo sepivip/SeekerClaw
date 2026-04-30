@@ -13,6 +13,7 @@ import android.util.Log
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.core.content.ContextCompat
 import com.seekerclaw.app.BuildConfig
+import com.seekerclaw.app.state.CustomConfigSignature
 import com.seekerclaw.app.state.RuntimeState
 import com.seekerclaw.app.state.RuntimeStateStore
 import com.seekerclaw.app.util.LogCollector
@@ -540,12 +541,91 @@ object ConfigManager {
         // rollback path in `:node`; runtime_state.json gets its sync
         // from the direct runtime-state.js write inside Telegram
         // /provider and /model handlers.
+        // BAT-549 Commit 3d: preserve the BAT-549 RuntimeState fields
+        // across this write. Pre-3d this constructed RuntimeState with
+        // only (provider, authType, model), letting the data class
+        // defaults clobber reasoningEnabled / reasoningDisplayInChat /
+        // customEchoReasoning / customConfigSignature back to their
+        // factory values on every saveConfig. With 3d we read the
+        // current state first, carry the BAT-549 fields forward, AND
+        // recompute the Custom-config signature: when the signature
+        // changes (user edited Custom config), reset
+        // customEchoReasoning to false (the override is gateway-
+        // specific; a new gateway must re-opt-in).
+        //
+        // Read-then-write race: a concurrent runtime_state.json writer
+        // (e.g., :node-side `/provider` Telegram handler) could land
+        // between our read and write. The window is ~ms and only
+        // matters for a user who simultaneously presses Save in
+        // Settings AND issues a /provider command from Telegram —
+        // exceedingly rare, and the next user-driven write resolves
+        // any divergence. For robust atomicity, RuntimeStateStore
+        // would need a synchronous merge-and-write entry point;
+        // that's deferred until a real conflict is observed.
+        val currentRtState = if (RuntimeStateStore.isInitialized) RuntimeStateStore.read() else null
+        // Recompute the Custom-config signature ONLY when the user is on
+        // the Custom provider. AppConfig doesn't separately store a
+        // "customModel" — `config.model` is the single active model,
+        // which is the Custom model only when provider==custom. If we
+        // recomputed on every saveConfig regardless of provider, then:
+        //   1. User on Custom (model=X, baseUrl=Y, headers=Z) → sig S1
+        //   2. User switches to Anthropic → recompute with model="" or
+        //      model="claude-opus-4-7" → sig changes → override reset
+        //   3. User switches back to Custom → override already lost
+        // That punishes ordinary provider-switching. Instead: only
+        // recompute when on Custom, otherwise preserve the prior
+        // signature. The override resets only when the Custom config
+        // tuple itself changes (user editing baseUrl/model/headers/
+        // format on the Custom provider config screen).
+        val newCustomSig = if (config.provider == "custom") {
+            CustomConfigSignature.compute(
+                customModel = config.model,
+                customBaseUrl = config.customBaseUrl,
+                customFormat = config.customFormat,
+                customHeaders = config.customHeaders,
+            )
+        } else {
+            currentRtState?.customConfigSignature
+        }
+        // Signature is "changed" only when we actually recomputed AND
+        // the result differs from the previously persisted value. When
+        // we preserved the old value above, customSigChanged stays false
+        // and the override is carried forward intact.
+        val customSigChanged = currentRtState != null
+            && config.provider == "custom"
+            && currentRtState.customConfigSignature != newCustomSig
+        // When the Custom config signature changes, reset
+        // customEchoReasoning. The override is gateway-specific
+        // (per-tuple-of-(model,baseUrl,format,headerKeys)) and the
+        // user MUST re-opt-in on the new gateway because echo
+        // semantics vary widely across OpenAI-compatible providers
+        // (R1 strips, V4 echoes, freeform unknown). Auto-carrying
+        // the override forward would risk a 400 loop or wasted
+        // tokens on a gateway whose echo contract differs.
+        // customSigChanged already implies currentRtState != null
+        // (the val above only flips true when the read produced one);
+        // keep the redundant null-safe call so a future refactor of
+        // customSigChanged's definition can't silently NPE here.
+        val resetCustomEcho = customSigChanged
+            && currentRtState?.customEchoReasoning == true
+        val newCustomEcho = if (customSigChanged) false else (currentRtState?.customEchoReasoning ?: false)
+        if (resetCustomEcho) {
+            LogCollector.append(
+                "[Config] BAT-549: Custom config signature changed — resetting " +
+                    "customEchoReasoning to false (re-enable in Settings on the new gateway)",
+                LogLevel.INFO,
+            )
+        }
         val runtimeWritten = if (RuntimeStateStore.isInitialized) try {
             RuntimeStateStore.write(
                 RuntimeState(
                     provider = config.provider,
                     authType = config.authType,
                     model = config.model,
+                    reasoningEnabled = currentRtState?.reasoningEnabled ?: false,
+                    reasoningDisplayInChat = currentRtState?.reasoningDisplayInChat ?: false,
+                    customEchoReasoning = newCustomEcho,
+                    customConfigSignature = newCustomSig,
                 ),
             )
         } catch (e: IllegalArgumentException) {
