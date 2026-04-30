@@ -304,20 +304,28 @@ function getConversation(chatId) {
     return conversations.get(chatId);
 }
 
+// R5 thread 2: addToConversation's `extra` field is allowlisted, NOT
+// merged-with-blocklist. Earlier draft used `if (key === 'role' ||
+// key === 'content') continue;` which left `__proto__`/`constructor`/
+// `prototype` open as prototype-pollution vectors if a future caller
+// ever forwarded provider-derived data into `extra`. Allowlist
+// approach is safer + more explicit about intent.
+const _ADD_TO_CONV_ALLOWED_EXTRAS = ['reasoningBlocks'];
+
 function addToConversation(chatId, role, content, extra = null) {
     const conv = getConversation(chatId);
     // BAT-549 R2 thread 5: allow optional extra fields (e.g.
     // reasoningBlocks) to be persisted on assistant messages added at the
-    // final-response site (line ~2594) so a non-tool final answer's
-    // reasoning content survives across turns/checkpoints. The default
-    // `null` keeps the call sig backward compatible — existing callers
-    // (user messages, fallback assistant strings) don't pass it.
+    // final-response site so a non-tool final answer's reasoning content
+    // survives across turns/checkpoints. The default `null` keeps the
+    // call sig backward compatible — existing callers (user messages,
+    // fallback assistant strings) don't pass it.
     const entry = { role, content };
     if (extra && typeof extra === 'object') {
-        for (const key of Object.keys(extra)) {
-            // Don't let an `extra` arg silently override role/content.
-            if (key === 'role' || key === 'content') continue;
-            entry[key] = extra[key];
+        for (const key of _ADD_TO_CONV_ALLOWED_EXTRAS) {
+            if (Object.prototype.hasOwnProperty.call(extra, key)) {
+                entry[key] = extra[key];
+            }
         }
     }
     conv.push(entry);
@@ -2308,8 +2316,14 @@ async function chat(chatId, userMessage, options = {}) {
                     // (Telegram reply), not model prompt context.
                 };
                 if (_reasoningRecovery.isReasoningContent400(res.status, res.data)) {
-                    _reasoningRecoveryStep = (_reasoningRecoveryStep || 0) + 1;
-                    if (_reasoningRecoveryStep <= 3) {
+                    // R5 thread 1: loop escalation until a step returns
+                    // ok=true OR step 3 has been attempted. Previous code
+                    // only escalated once on no-op, so step 1+2 both
+                    // returning ok=false would bubble before step 3 ever
+                    // ran — breaking the documented 3-step fallback.
+                    let recovered = false;
+                    while (_reasoningRecoveryStep < 3 && !recovered) {
+                        _reasoningRecoveryStep++;
                         const result = _reasoningRecovery.quarantineActiveSegment({
                             chatId, messages, workDir, taskId,
                             step: _reasoningRecoveryStep, log,
@@ -2317,22 +2331,14 @@ async function chat(chatId, userMessage, options = {}) {
                         if (result.ok) {
                             log(`[ReasoningRecovery] Step ${_reasoningRecoveryStep} truncated at index ${result.cutIndex}; retrying turn`, 'WARN');
                             _applyRecovery(result);
-                            continue; // retry the while loop with the truncated history
-                        } else if (_reasoningRecoveryStep < 3) {
-                            // No-op step (e.g. step 1 had no user boundary) — escalate immediately
-                            _reasoningRecoveryStep++;
-                            const r2 = _reasoningRecovery.quarantineActiveSegment({
-                                chatId, messages, workDir, taskId,
-                                step: _reasoningRecoveryStep, log,
-                            });
-                            if (r2.ok) {
-                                log(`[ReasoningRecovery] Step ${_reasoningRecoveryStep} (escalated from no-op) truncated at index ${r2.cutIndex}`, 'WARN');
-                                _applyRecovery(r2);
-                                continue;
-                            }
+                            recovered = true;
                         }
+                        // ok=false → loop and try the next step (escalate
+                        // step 1 → 2 → 3). Step 3 is unconditional reset
+                        // so it always returns ok=true.
                     }
-                    log(`[ReasoningRecovery] Recovery exhausted (step ${_reasoningRecoveryStep}); bubbling error to user`, 'ERROR');
+                    if (recovered) continue; // retry the while loop with truncated history
+                    log(`[ReasoningRecovery] All 3 recovery steps returned ok=false — bubbling error to user`, 'ERROR');
                 }
 
                 const errClass = classifyApiError(res.status, res.data);

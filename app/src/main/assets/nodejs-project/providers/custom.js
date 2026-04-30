@@ -160,7 +160,13 @@ function toApiMessages(messages, activeModel) {
     const customEchoOverride = false; // BAT-549 commit 3 wires this from RuntimeState.customEchoReasoning
     const behavior = detectCustomEchoBehavior(customModel, customEchoOverride);
 
-    // One-shot warning when reasoning is captured but gating won't echo it
+    // One-shot warning when reasoning is captured but gating won't echo it.
+    // R5 thread 3: don't reference a Settings toggle that doesn't exist
+    // yet — `customEchoOverride` is hardcoded false until BAT-549
+    // Commit 3 wires it from RuntimeState.customEchoReasoning. Pointing
+    // users at a setting that doesn't exist is misleading; just log the
+    // diagnostic state and leave actionable advice for when the toggle
+    // ships.
     if (behavior === 'unknown') {
         const hasReasoning = Array.isArray(messages) && messages.some(
             (m) => m && m.role === 'assistant'
@@ -171,7 +177,7 @@ function toApiMessages(messages, activeModel) {
             if (!_unknownEchoLogged.has(key)) {
                 _unknownEchoLogged.add(key);
                 log(
-                    `[Custom] Reasoning content detected on model ${customModel || '<unset>'} but echo behavior is unknown — not echoing. If you hit a 400 about reasoning_content, enable Echo Reasoning in Settings.`,
+                    `[Custom] Reasoning content detected on model ${customModel || '<unset>'} but the gateway's echo contract is unknown to SeekerClaw. Capturing for forensics; not echoing on next turn (would risk a 400 if the gateway is R1-shaped).`,
                     'INFO',
                 );
             }
