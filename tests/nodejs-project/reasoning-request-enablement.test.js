@@ -1,0 +1,419 @@
+#!/usr/bin/env node
+// reasoning-request-enablement.test.js — pin BAT-549 Commit 3c per-adapter
+// request-side reasoning enablement gating:
+//
+//  Adapter contract: each adapter's formatRequest accepts an optional 6th
+//  `requestOptions` argument. When BOTH `reasoningEnabled === true` AND
+//  `reasoningSupport === "yes"`, the adapter MUST emit its provider-
+//  specific reasoning param. Any other combination MUST NOT emit (the
+//  registry's "yes" gate is authoritative; "no"/"unknown" never sends).
+//
+//  Per-adapter body shapes:
+//   - claude.js → body.thinking = {type:"enabled", budget_tokens:16000}
+//   - openai.js (api_key) → body.reasoning = {effort:"medium", summary:"auto"}
+//                          + body.include = ["reasoning.encrypted_content"]
+//   - openrouter.js → body.reasoning = {effort:"medium"}
+//   - custom.js → forwards to delegate (or no-op for chat-completions)
+//
+//  Preservation of existing hardcodes (don't regress):
+//   - openai OAuth/Codex path: body.reasoning ALWAYS set (transport req)
+//   - claude headers: anthropic-beta now includes interleaved-thinking-2025-05-14
+//
+//  Backward compat: callers that don't pass requestOptions get the same
+//  no-reasoning-enabled body as before BAT-549 Commit 3c.
+//
+// Run:  node tests/nodejs-project/reasoning-request-enablement.test.js
+
+'use strict';
+
+const path = require('path');
+const configPath = path.resolve(__dirname, '../../app/src/main/assets/nodejs-project/config.js');
+const bridgePath = path.resolve(__dirname, '../../app/src/main/assets/nodejs-project/bridge.js');
+
+let _openaiAuthType = 'api_key';
+require.cache[configPath] = {
+    id: configPath, filename: configPath, loaded: true,
+    exports: {
+        log: () => {},
+        OPENAI_OAUTH_TOKEN: 'fake-oauth',
+        OPENAI_OAUTH_REFRESH: 'fake-refresh',
+        get OPENAI_AUTH_TYPE() { return _openaiAuthType; },
+        OPENROUTER_FALLBACK_MODEL: '',
+        OPENROUTER_KEY: 'fake-or-key',
+        CUSTOM_KEY: 'fake-custom-key',
+        CUSTOM_HEADERS: {},
+        CUSTOM_FORMAT: 'chat-completions',
+        CUSTOM_ENDPOINT: { protocol: 'https:', hostname: 'gateway.example', port: 443, path: '/v1/chat/completions' },
+        resolveActiveModel: () => 'gpt-4',
+    },
+};
+require.cache[bridgePath] = {
+    id: bridgePath, filename: bridgePath, loaded: true,
+    exports: { androidBridgeCall: async () => ({}) },
+};
+
+const claude = require('../../app/src/main/assets/nodejs-project/providers/claude');
+const openai = require('../../app/src/main/assets/nodejs-project/providers/openai');
+const openrouter = require('../../app/src/main/assets/nodejs-project/providers/openrouter');
+
+let failures = 0;
+function ok(label, cond, hint = '') {
+    if (cond) console.log(`PASS: ${label}`);
+    else { console.log(`FAIL: ${label}${hint ? ' — ' + hint : ''}`); failures++; }
+}
+function eq(label, actual, expected) {
+    const a = JSON.stringify(actual), e = JSON.stringify(expected);
+    if (a === e) console.log(`PASS: ${label}`);
+    else { console.log(`FAIL: ${label}\n  actual:   ${a}\n  expected: ${e}`); failures++; }
+}
+
+// ── Claude (Anthropic Messages API) ────────────────────────────────
+
+console.log('── claude.js: thinking gate ──');
+
+// reasoningEnabled + support===yes → emit
+let body = JSON.parse(claude.formatRequest('claude-opus-4-7', 4096, [], [], [], {
+    reasoningEnabled: true, reasoningSupport: 'yes',
+}));
+eq('Claude yes/yes: body.thinking emitted',
+    body.thinking, { type: 'enabled', budget_tokens: 16000 });
+
+// reasoningEnabled but support===no (Haiku) → DO NOT emit
+body = JSON.parse(claude.formatRequest('claude-haiku-4-5', 4096, [], [], [], {
+    reasoningEnabled: true, reasoningSupport: 'no',
+}));
+ok('Claude yes/no: body.thinking NOT emitted (Haiku regression guard)',
+    body.thinking === undefined);
+
+// reasoningEnabled but support===unknown → DO NOT emit
+body = JSON.parse(claude.formatRequest('claude-future-x', 4096, [], [], [], {
+    reasoningEnabled: true, reasoningSupport: 'unknown',
+}));
+ok('Claude yes/unknown: body.thinking NOT emitted (safe default)',
+    body.thinking === undefined);
+
+// reasoningEnabled=false (toggle off) → DO NOT emit even when support===yes
+body = JSON.parse(claude.formatRequest('claude-opus-4-7', 4096, [], [], [], {
+    reasoningEnabled: false, reasoningSupport: 'yes',
+}));
+ok('Claude off/yes: body.thinking NOT emitted (toggle off)',
+    body.thinking === undefined);
+
+// No requestOptions arg → backward compat (pre-3c behavior)
+body = JSON.parse(claude.formatRequest('claude-opus-4-7', 4096, [], [], []));
+ok('Claude legacy (no opts): body.thinking NOT emitted',
+    body.thinking === undefined);
+
+// Existing body shape preserved
+body = JSON.parse(claude.formatRequest('claude-opus-4-7', 4096, ['sys'], [{role:'user', content:'hi'}], [{name:'tool', description:'d', input_schema:{}}], {
+    reasoningEnabled: true, reasoningSupport: 'yes',
+}));
+eq('Claude: body.model preserved', body.model, 'claude-opus-4-7');
+eq('Claude: body.max_tokens preserved', body.max_tokens, 4096);
+eq('Claude: body.system preserved', body.system, ['sys']);
+eq('Claude: body.messages preserved', body.messages, [{role:'user', content:'hi'}]);
+ok('Claude: body.tools preserved', Array.isArray(body.tools) && body.tools.length === 1);
+
+// Header beta tag includes interleaved-thinking
+const apiKeyHeaders = claude.buildHeaders('sk-ant-fake', 'api_key');
+ok('Claude headers (api_key): anthropic-beta includes interleaved-thinking-2025-05-14',
+    apiKeyHeaders['anthropic-beta'].includes('interleaved-thinking-2025-05-14'),
+    `actual: ${apiKeyHeaders['anthropic-beta']}`);
+ok('Claude headers (api_key): anthropic-beta still includes prompt-caching',
+    apiKeyHeaders['anthropic-beta'].includes('prompt-caching-2024-07-31'));
+
+const setupHeaders = claude.buildHeaders('sk-ant-setup-fake', 'setup_token');
+ok('Claude headers (setup_token): anthropic-beta includes interleaved-thinking-2025-05-14',
+    setupHeaders['anthropic-beta'].includes('interleaved-thinking-2025-05-14'));
+ok('Claude headers (setup_token): anthropic-beta still includes oauth-2025-04-20',
+    setupHeaders['anthropic-beta'].includes('oauth-2025-04-20'));
+
+// ── OpenAI (Responses API) ────────────────────────────────────────
+
+console.log();
+console.log('── openai.js: reasoning gate (api_key path) ──');
+
+// api_key + reasoningEnabled + support===yes → emit
+body = JSON.parse(openai.formatRequest('gpt-5.4', 4096, 'sys', [], [], {
+    reasoningEnabled: true, reasoningSupport: 'yes',
+}));
+eq('OpenAI api_key yes/yes: body.reasoning emitted',
+    body.reasoning, { effort: 'medium', summary: 'auto' });
+eq('OpenAI api_key yes/yes: body.include emitted (encrypted_content)',
+    body.include, ['reasoning.encrypted_content']);
+
+// api_key + support===no → DO NOT emit
+body = JSON.parse(openai.formatRequest('gpt-3.5-turbo', 4096, 'sys', [], [], {
+    reasoningEnabled: true, reasoningSupport: 'no',
+}));
+ok('OpenAI api_key yes/no: body.reasoning NOT emitted',
+    body.reasoning === undefined);
+ok('OpenAI api_key yes/no: body.include NOT emitted',
+    body.include === undefined);
+
+// api_key + support===unknown → DO NOT emit
+body = JSON.parse(openai.formatRequest('gpt-future-x', 4096, 'sys', [], [], {
+    reasoningEnabled: true, reasoningSupport: 'unknown',
+}));
+ok('OpenAI api_key yes/unknown: body.reasoning NOT emitted',
+    body.reasoning === undefined);
+
+// api_key + reasoningEnabled=false → DO NOT emit
+body = JSON.parse(openai.formatRequest('gpt-5.4', 4096, 'sys', [], [], {
+    reasoningEnabled: false, reasoningSupport: 'yes',
+}));
+ok('OpenAI api_key off/yes: body.reasoning NOT emitted (toggle off)',
+    body.reasoning === undefined);
+
+// No requestOptions on api_key non-codex → DO NOT emit (legacy compat)
+body = JSON.parse(openai.formatRequest('gpt-3.5-turbo', 4096, 'sys', [], []));
+ok('OpenAI api_key legacy: body.reasoning NOT emitted',
+    body.reasoning === undefined);
+
+// Codex model on api_key (transport hardcode preserved) — emit even without toggle
+body = JSON.parse(openai.formatRequest('gpt-5.3-codex', 4096, 'sys', [], []));
+ok('OpenAI api_key + codex model (transport hardcode): body.reasoning emitted regardless of toggle',
+    body.reasoning && body.reasoning.effort === 'medium');
+ok('OpenAI api_key + codex model: body.include emitted',
+    Array.isArray(body.include) && body.include.includes('reasoning.encrypted_content'));
+
+console.log();
+console.log('── openai.js: reasoning gate (OAuth path — transport hardcode) ──');
+
+// Reload openai with OAuth
+_openaiAuthType = 'oauth';
+delete require.cache[require.resolve('../../app/src/main/assets/nodejs-project/providers/openai')];
+const openaiOauth = require('../../app/src/main/assets/nodejs-project/providers/openai');
+
+// OAuth + no requestOptions → still emit (transport hardcode preserved)
+body = JSON.parse(openaiOauth.formatRequest('gpt-5.4', 4096, 'sys', [], []));
+ok('OpenAI OAuth legacy (no opts): body.reasoning emitted (transport req)',
+    body.reasoning && body.reasoning.effort === 'medium');
+ok('OpenAI OAuth: body.store === false', body.store === false);
+
+// OAuth + reasoningEnabled=false → STILL emit (transport overrides toggle off)
+body = JSON.parse(openaiOauth.formatRequest('gpt-5.4', 4096, 'sys', [], [], {
+    reasoningEnabled: false, reasoningSupport: 'no',
+}));
+ok('OpenAI OAuth off/no: body.reasoning STILL emitted (transport hardcode wins)',
+    body.reasoning && body.reasoning.effort === 'medium');
+
+// Reset to api_key for downstream tests
+_openaiAuthType = 'api_key';
+
+// ── OpenRouter (Chat Completions) ──────────────────────────────────
+
+console.log();
+console.log('── openrouter.js: reasoning gate ──');
+
+// reasoningEnabled + support===yes → emit
+body = JSON.parse(openrouter.formatRequest('anthropic/claude-opus-4-7', 4096, 'sys', [], [], {
+    reasoningEnabled: true, reasoningSupport: 'yes',
+}));
+eq('OpenRouter yes/yes: body.reasoning emitted',
+    body.reasoning, { effort: 'medium' });
+
+// support===unknown (the OR default for freeform) → DO NOT emit
+body = JSON.parse(openrouter.formatRequest('anthropic/claude-opus-4-7', 4096, 'sys', [], [], {
+    reasoningEnabled: true, reasoningSupport: 'unknown',
+}));
+ok('OpenRouter yes/unknown: body.reasoning NOT emitted (freeform default)',
+    body.reasoning === undefined);
+
+// reasoningEnabled=false → DO NOT emit
+body = JSON.parse(openrouter.formatRequest('anthropic/claude-opus-4-7', 4096, 'sys', [], [], {
+    reasoningEnabled: false, reasoningSupport: 'yes',
+}));
+ok('OpenRouter off/yes: body.reasoning NOT emitted (toggle off)',
+    body.reasoning === undefined);
+
+// No requestOptions → DO NOT emit (legacy compat)
+body = JSON.parse(openrouter.formatRequest('anthropic/claude-opus-4-7', 4096, 'sys', [], []));
+ok('OpenRouter legacy (no opts): body.reasoning NOT emitted',
+    body.reasoning === undefined);
+
+// Existing body shape preserved
+body = JSON.parse(openrouter.formatRequest('foo/model', 4096, 'sys-prompt', [{role:'user',content:'hi'}], [], {
+    reasoningEnabled: true, reasoningSupport: 'yes',
+}));
+eq('OpenRouter: body.cache_control preserved', body.cache_control, { type: 'ephemeral' });
+eq('OpenRouter: system message preserved as first message',
+    body.messages[0], { role: 'system', content: 'sys-prompt' });
+
+// ── Custom (delegates) ─────────────────────────────────────────────
+
+console.log();
+console.log('── custom.js: chat-completions formatRequest does NOT emit reasoning ──');
+
+// Re-cache config with chat-completions Custom format
+delete require.cache[configPath];
+require.cache[configPath] = {
+    id: configPath, filename: configPath, loaded: true,
+    exports: {
+        log: () => {},
+        OPENAI_OAUTH_TOKEN: 'fake', OPENAI_OAUTH_REFRESH: 'fake',
+        get OPENAI_AUTH_TYPE() { return _openaiAuthType; },
+        OPENROUTER_FALLBACK_MODEL: '',
+        OPENROUTER_KEY: 'fake',
+        CUSTOM_KEY: 'fake',
+        CUSTOM_HEADERS: {},
+        CUSTOM_FORMAT: 'chat-completions',
+        CUSTOM_ENDPOINT: { protocol: 'https:', hostname: 'gw', port: 443, path: '/v1/chat/completions' },
+        resolveActiveModel: () => 'deepseek-v4-pro',
+    },
+};
+delete require.cache[require.resolve('../../app/src/main/assets/nodejs-project/providers/custom')];
+delete require.cache[require.resolve('../../app/src/main/assets/nodejs-project/providers/openai')];
+delete require.cache[require.resolve('../../app/src/main/assets/nodejs-project/providers/openrouter')];
+delete require.cache[require.resolve('../../app/src/main/assets/nodejs-project/reasoning-gating')];
+const customCC = require('../../app/src/main/assets/nodejs-project/providers/custom');
+
+body = JSON.parse(customCC.formatRequest('deepseek-v4-pro', 4096, 'sys', [{role:'user',content:'hi'}], [], {
+    reasoningEnabled: true, reasoningSupport: 'unknown',
+}));
+ok('Custom chat-completions: body.reasoning NOT emitted (Custom defines own clean shape)',
+    body.reasoning === undefined);
+eq('Custom chat-completions: body.model preserved', body.model, 'deepseek-v4-pro');
+ok('Custom chat-completions: body.messages preserved as system+user',
+    body.messages[0].role === 'system' && body.messages[1].role === 'user');
+
+console.log();
+console.log('── custom.js: responses-format formatRequest forwards to OpenAI delegate ──');
+
+// Switch to responses format
+delete require.cache[configPath];
+require.cache[configPath] = {
+    id: configPath, filename: configPath, loaded: true,
+    exports: {
+        log: () => {},
+        OPENAI_OAUTH_TOKEN: 'fake', OPENAI_OAUTH_REFRESH: 'fake',
+        get OPENAI_AUTH_TYPE() { return _openaiAuthType; },
+        OPENROUTER_FALLBACK_MODEL: '',
+        OPENROUTER_KEY: 'fake',
+        CUSTOM_KEY: 'fake',
+        CUSTOM_HEADERS: {},
+        CUSTOM_FORMAT: 'responses',
+        CUSTOM_ENDPOINT: { protocol: 'https:', hostname: 'gw', port: 443, path: '/v1/responses' },
+        resolveActiveModel: () => 'gpt-5.4',
+    },
+};
+delete require.cache[require.resolve('../../app/src/main/assets/nodejs-project/providers/custom')];
+delete require.cache[require.resolve('../../app/src/main/assets/nodejs-project/providers/openai')];
+const customResponses = require('../../app/src/main/assets/nodejs-project/providers/custom');
+
+body = JSON.parse(customResponses.formatRequest('gpt-5.4', 4096, 'sys', [], [], {
+    reasoningEnabled: true, reasoningSupport: 'yes',
+}));
+eq('Custom responses-format yes/yes: body.reasoning emitted via OpenAI delegate',
+    body.reasoning, { effort: 'medium', summary: 'auto' });
+
+body = JSON.parse(customResponses.formatRequest('gpt-5.4', 4096, 'sys', [], [], {
+    reasoningEnabled: false, reasoningSupport: 'yes',
+}));
+ok('Custom responses-format off/yes: body.reasoning NOT emitted (toggle off)',
+    body.reasoning === undefined);
+
+console.log();
+console.log('── custom.js: toApiMessages reads customEchoOverride from requestOptions ──');
+
+// Construct an assistant message with reasoningBlocks. With override=true,
+// gating must promote unknown→echo (block stays); with override=false the
+// block is stripped (gating decides 'unknown'→capture-only).
+const unknownEchoMsg = {
+    role: 'assistant', content: 'r',
+    toolCalls: [{ id: 'fc1', name: 'echo', input: {} }],
+    reasoningBlocks: [{
+        schemaVersion: 1, provider: 'custom', sourceAdapter: 'custom',
+        delegateAdapter: 'openrouter', sourceModel: 'unknown-future-model',
+        wire: { reasoning_content: 'opaque-reasoning' },
+    }],
+};
+
+// Reload Custom in chat-completions to test gating without OpenAI delegate noise
+delete require.cache[configPath];
+require.cache[configPath] = {
+    id: configPath, filename: configPath, loaded: true,
+    exports: {
+        log: () => {},
+        OPENAI_OAUTH_TOKEN: 'fake', OPENAI_OAUTH_REFRESH: 'fake',
+        get OPENAI_AUTH_TYPE() { return _openaiAuthType; },
+        OPENROUTER_FALLBACK_MODEL: '',
+        OPENROUTER_KEY: 'fake',
+        CUSTOM_KEY: 'fake',
+        CUSTOM_HEADERS: {},
+        CUSTOM_FORMAT: 'chat-completions',
+        CUSTOM_ENDPOINT: { protocol: 'https:', hostname: 'gw', port: 443, path: '/v1/chat/completions' },
+        resolveActiveModel: () => 'unknown-future-model',
+    },
+};
+delete require.cache[require.resolve('../../app/src/main/assets/nodejs-project/providers/custom')];
+delete require.cache[require.resolve('../../app/src/main/assets/nodejs-project/providers/openrouter')];
+delete require.cache[require.resolve('../../app/src/main/assets/nodejs-project/reasoning-gating')];
+const custom2 = require('../../app/src/main/assets/nodejs-project/providers/custom');
+
+// Test gating decision via the public test seam — pin behavior at the
+// gating-function boundary (stable contract; toApiMessages emit-shape is
+// delegate-specific and harder to assert generically).
+const behaviorWithoutOverride = custom2._detectEchoBehaviorForTest('unknown-future-model', false);
+const behaviorWithOverride = custom2._detectEchoBehaviorForTest('unknown-future-model', true);
+ok('Custom unknown-model + override=false → unknown (capture-only)',
+    behaviorWithoutOverride === 'unknown',
+    `actual: ${behaviorWithoutOverride}`);
+ok('Custom unknown-model + override=true → echo-on-tool-loop (3c override path)',
+    behaviorWithOverride === 'echo-on-tool-loop',
+    `actual: ${behaviorWithOverride}`);
+
+// Now exercise the toApiMessages path: with override=true the unknown
+// model should NOT have its reasoningBlocks stripped pre-delegation
+// (gating became echo-on-tool-loop). With override=false the gating
+// decided 'unknown' → strip → reasoningBlocks cleared on the delegate
+// input. We assert by checking the gated message's reasoningBlocks
+// directly using a wrapped message clone.
+function deepCopy(o) { return JSON.parse(JSON.stringify(o)); }
+
+const noOverrideOpts = { reasoningEnabled: false, reasoningSupport: 'unknown', customEchoOverride: false };
+const withOverrideOpts = { reasoningEnabled: false, reasoningSupport: 'unknown', customEchoOverride: true };
+
+// Use an Anthropic-format conversation snippet so the openrouter delegate's
+// transformation doesn't drop our reasoningBlocks unrelated to gating.
+const convoSnippet = [
+    { role: 'user', content: 'hello' },
+    deepCopy(unknownEchoMsg),
+    { role: 'tool', toolCallId: 'fc1', content: 'tool result' },
+];
+
+// override=false: openrouter delegate's emit path should see assistant
+// message with reasoningBlocks=[] (stripped pre-delegation).
+const inputNoOverride = custom2.toApiMessages(deepCopy(convoSnippet), 'unknown-future-model', noOverrideOpts);
+// In Chat Completions output the reasoning_content field would only be set
+// on the last assistant message if the delegate echoes it. We can't observe
+// the inner reasoningBlocks directly post-delegation without coupling to
+// openrouter internals — so we verify behavior via the assistant turn's
+// emitted content shape. The simplest pin: with override=false on an
+// "unknown" model, the openrouter delegate's gating ALSO sees "unknown"
+// and emits NO `reasoning_content` field on the assistant. With
+// override=true, openrouter still sees "unknown" (it gates on its own
+// model regex independently), so override-path body shape is the SAME
+// for openrouter — which is correct (Custom's override only affects
+// Custom's pre-delegation strip, not the delegate's own gating).
+// The contract pinned by the unit-test seam above is the contract; the
+// toApiMessages path is exercised here only to confirm no crash:
+ok('Custom toApiMessages override=false: returns array',
+    Array.isArray(inputNoOverride));
+const inputWithOverride = custom2.toApiMessages(deepCopy(convoSnippet), 'unknown-future-model', withOverrideOpts);
+ok('Custom toApiMessages override=true: returns array',
+    Array.isArray(inputWithOverride));
+
+// No requestOptions arg → defaults to override=false (legacy behavior)
+const inputLegacy = custom2.toApiMessages(deepCopy(convoSnippet), 'unknown-future-model');
+ok('Custom toApiMessages legacy (no opts): returns array (default override=false)',
+    Array.isArray(inputLegacy));
+
+console.log();
+if (failures === 0) {
+    console.log('ALL TESTS PASS');
+    process.exit(0);
+} else {
+    console.log(`${failures} TEST(S) FAILED`);
+    process.exit(1);
+}

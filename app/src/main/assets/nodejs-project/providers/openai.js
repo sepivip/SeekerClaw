@@ -314,8 +314,20 @@ function formatTools(tools) {
  * Build OpenAI Responses API request body.
  * Uses `instructions` (system prompt) + `input` (messages) instead of
  * Chat Completions' `messages` array.
+ *
+ * BAT-549 Commit 3c: optional 6th `requestOptions` arg adds the user
+ * toggle path. Two reasoning-enabling triggers in order of precedence:
+ *  1. Transport-required: OAuth/Codex endpoint OR a `*-codex` model id.
+ *     Codex models return `output: []` without `reasoning` — this is
+ *     non-negotiable, predates BAT-549, and stays unconditional.
+ *  2. User toggle: `reasoningEnabled === true && reasoningSupport === "yes"`
+ *     (e.g., gpt-5.4 on api_key path with the toggle on). Adds
+ *     `body.reasoning` for non-codex api_key paths that the user opted
+ *     into; "no" or "unknown" models stay silent (avoid surprise 400s
+ *     or wasted output tokens on models that don't actually reason).
+ * Existing call sites that don't pass requestOptions stay on (1) only.
  */
-function formatRequest(model, maxTokens, instructions, input, tools) {
+function formatRequest(model, maxTokens, instructions, input, tools, requestOptions) {
     const body = {
         model,
         stream: true,
@@ -339,10 +351,21 @@ function formatRequest(model, maxTokens, instructions, input, tools) {
         body.store = false;
     }
 
-    // The Codex endpoint serves reasoning models exclusively — every model on
-    // chatgpt.com/backend-api/codex (gpt-5.4, gpt-5.4-mini, gpt-5.3-codex, etc.)
-    // requires the `reasoning` parameter or it returns `output: []`.
-    if (isOAuth || (model && model.includes('codex'))) {
+    // Decide whether to enable reasoning. The Codex endpoint serves
+    // reasoning models exclusively — every model on
+    // chatgpt.com/backend-api/codex (gpt-5.4, gpt-5.4-mini,
+    // gpt-5.3-codex, etc.) REQUIRES the `reasoning` parameter or it
+    // returns `output: []`. The 3c user-toggle branch adds a second
+    // path: api_key calls to non-codex reasoning models (e.g., raw
+    // gpt-5.4) when the user has explicitly toggled reasoning on AND
+    // the registry confirms support.
+    const userToggleEnabled = !!(requestOptions
+        && requestOptions.reasoningEnabled === true
+        && requestOptions.reasoningSupport === 'yes');
+    const wantReasoning = isOAuth
+        || (model && model.includes('codex'))
+        || userToggleEnabled;
+    if (wantReasoning) {
         body.reasoning = { effort: 'medium', summary: 'auto' };
         // BAT-549 Commit 2b: stateless `store:false` flows (OAuth/Codex)
         // need `include:["reasoning.encrypted_content"]` to get the
@@ -355,6 +378,12 @@ function formatRequest(model, maxTokens, instructions, input, tools) {
         // (don't regress existing reasoning hardcode) — this is
         // additive: same `reasoning` enablement, plus encrypted echo
         // capability.
+        //
+        // The api_key path with `store:true` (Responses default) ALSO
+        // benefits from `include` so the API returns reasoning items
+        // we can capture; without it, the openai.js capture path in
+        // fromApiResponse only sees a redacted reference. Including it
+        // for both transport modes keeps capture symmetric.
         body.include = ['reasoning.encrypted_content'];
     }
 

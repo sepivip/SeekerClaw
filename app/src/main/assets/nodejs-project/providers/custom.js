@@ -164,7 +164,7 @@ function fromApiResponse(raw) {
  * outside Custom), gating doesn't apply — those adapters are called
  * directly by the providers/index.js registry without Custom in front.
  */
-function toApiMessages(messages, activeModel) {
+function toApiMessages(messages, activeModel, requestOptions) {
     // R2 thread 3: accept the resolved active model as a parameter so
     // gating uses the SAME model that ai.js's chat() built the request
     // with. Re-reading resolveActiveModel() here would race with a mid-
@@ -177,16 +177,26 @@ function toApiMessages(messages, activeModel) {
     const customModel = (typeof activeModel === 'string' && activeModel)
         ? activeModel
         : resolveActiveModel();
-    const customEchoOverride = false; // BAT-549 commit 3 wires this from RuntimeState.customEchoReasoning
+    // BAT-549 Commit 3c: read the user's per-Custom override toggle from
+    // requestOptions (built fresh by ai.js from RuntimeState each turn).
+    // When `true`, detectCustomEchoBehavior promotes "unknown" gateways
+    // to "echo-on-tool-loop" — for power users who know their gateway
+    // requires echoing reasoning_content but the model id doesn't match
+    // the known DeepSeek-V4 regex. The override is single-flag, scoped
+    // to the active Custom config tuple via Commit 3d's signature
+    // mechanism (which resets the override when the user switches
+    // gateways). Older callsites that don't pass requestOptions get
+    // the conservative default (false) — same as Commit 1 behavior.
+    const customEchoOverride = !!(requestOptions
+        && requestOptions.customEchoOverride === true);
     const behavior = detectCustomEchoBehavior(customModel, customEchoOverride);
 
     // One-shot warning when reasoning is captured but gating won't echo it.
-    // R5 thread 3: don't reference a Settings toggle that doesn't exist
-    // yet — `customEchoOverride` is hardcoded false until BAT-549
-    // Commit 3 wires it from RuntimeState.customEchoReasoning. Pointing
-    // users at a setting that doesn't exist is misleading; just log the
-    // diagnostic state and leave actionable advice for when the toggle
-    // ships.
+    // 3c update: now that the override IS wired (Commit 3c), the actionable
+    // advice is real — the Settings UI ships with the per-Custom toggle in
+    // Commit 3e. Until 3e merges, the toggle is settable only via the
+    // RuntimeState file directly; the log line still helps power users see
+    // why their gateway isn't echoing.
     if (behavior === 'unknown') {
         const hasReasoning = Array.isArray(messages) && messages.some(
             (m) => m && m.role === 'assistant'
@@ -212,7 +222,12 @@ function toApiMessages(messages, activeModel) {
     // 'unknown' / strip — contradicting Custom's V4 'echo-on-tool-loop'
     // decision. With it, openrouter agrees with Custom (V4 → echo, R1 → strip)
     // and the gated messages survive intact.
-    return delegate().toApiMessages(gatedMessages, customModel);
+    // 3c: also forward requestOptions so the delegate's own formatRequest
+    // (called separately) receives the SAME options object — keeps gating
+    // and request body decisions in lock-step. The delegate's toApiMessages
+    // ignores the 3rd arg today; future delegate-side request-shape
+    // decisions will read it.
+    return delegate().toApiMessages(gatedMessages, customModel, requestOptions);
 }
 
 module.exports = {
@@ -234,10 +249,21 @@ module.exports = {
     formatTools(tools) { return delegate().formatTools(tools); },
     formatVision(base64, mediaType) { return delegate().formatVision(base64, mediaType); },
 
-    // Own formatRequest — clean Chat Completions body without OpenRouter cache_control/fallback
-    formatRequest(model, maxTokens, instructions, input, tools) {
+    // Own formatRequest — clean Chat Completions body without OpenRouter cache_control/fallback.
+    // BAT-549 Commit 3c: forward requestOptions to the openai delegate when
+    // CUSTOM_FORMAT==='responses' (so user-toggled reasoning gating reaches
+    // the delegate's body builder for non-codex Responses-shaped gateways).
+    // The chat-completions branch deliberately does NOT emit body.reasoning
+    // — Custom defines its own clean body shape (no OpenRouter decorations,
+    // no Anthropic-only fields), and OpenAI-compatible gateways vary too
+    // widely in how they handle a `reasoning` field for the `chat/completions`
+    // endpoint to send it blindly. Power users who know their gateway
+    // accepts it can set the per-Custom echo override (which controls
+    // toApiMessages' echo path); request-side reasoning enablement on
+    // chat-completions Custom is intentionally left to the gateway's default.
+    formatRequest(model, maxTokens, instructions, input, tools, requestOptions) {
         if (CUSTOM_FORMAT === 'responses') {
-            return openai.formatRequest(model, maxTokens, instructions, input, tools);
+            return openai.formatRequest(model, maxTokens, instructions, input, tools, requestOptions);
         }
         const body = {
             model,

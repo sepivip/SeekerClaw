@@ -306,7 +306,7 @@ function formatTools(tools) {
  * supported providers (Anthropic, DeepSeek, Gemini, Grok, Groq).
  * Providers that don't support caching silently ignore it.
  */
-function formatRequest(model, maxTokens, systemPrompt, messages, tools) {
+function formatRequest(model, maxTokens, systemPrompt, messages, tools, requestOptions) {
     const body = {
         model,
         stream: true,
@@ -315,6 +315,22 @@ function formatRequest(model, maxTokens, systemPrompt, messages, tools) {
         cache_control: { type: 'ephemeral' },
     };
     if (tools && tools.length > 0) body.tools = tools;
+
+    // BAT-549 Commit 3c: emit `reasoning:{effort:"medium"}` only when both
+    // the user toggle is on AND the registry confirms the model supports
+    // it. OpenRouter is freeform in the registry resolver — `reasoningSupport`
+    // resolves to "unknown" for every OR-prefixed model ID, so the toggle
+    // is currently a no-op on OpenRouter. The branch lives here so a future
+    // build that learns specific OR model IDs (e.g. registering
+    // `openai/gpt-5.4` under the openrouter provider with reasoningSupport:
+    // "yes") can flip it on without further adapter changes. Until then
+    // OpenRouter relies on the OR-side default behavior of any reasoning
+    // models the user picks (most pass through provider defaults).
+    if (requestOptions
+        && requestOptions.reasoningEnabled === true
+        && requestOptions.reasoningSupport === 'yes') {
+        body.reasoning = { effort: 'medium' };
+    }
 
     // Model fallback: if configured, use models array for auto-failover.
     // OpenRouter tries the first model, falls back on context errors,

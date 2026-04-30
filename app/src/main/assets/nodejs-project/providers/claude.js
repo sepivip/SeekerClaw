@@ -220,8 +220,17 @@ function formatTools(tools) {
 
 /**
  * Build full Claude API request body.
+ *
+ * BAT-549 Commit 3c: the optional 6th `requestOptions` arg gates extended
+ * thinking. Emit `body.thinking` only when BOTH the user toggle
+ * (`reasoningEnabled === true`) AND the registry confirms the model
+ * supports it (`reasoningSupport === "yes"`). The "yes" gate is critical:
+ *   - Haiku 4.5 returns 400 if `thinking` is sent → registry says "no".
+ *   - Unknown models default to "unknown" → don't send (avoid surprise 400).
+ * Existing call sites (vision/summary) that don't pass requestOptions get
+ * the same no-`thinking` behavior as before — additive change.
  */
-function formatRequest(model, maxTokens, systemBlocks, messages, tools) {
+function formatRequest(model, maxTokens, systemBlocks, messages, tools, requestOptions) {
     const body = {
         model,
         max_tokens: maxTokens,
@@ -230,6 +239,17 @@ function formatRequest(model, maxTokens, systemBlocks, messages, tools) {
         messages,
     };
     if (tools && tools.length > 0) body.tools = tools;
+    if (requestOptions
+        && requestOptions.reasoningEnabled === true
+        && requestOptions.reasoningSupport === 'yes') {
+        // budget_tokens is the upper bound on thinking output. 16K is the
+        // BAT-549 v4.1 default — large enough for non-trivial multi-step
+        // reasoning, capped well under Claude 4.x's 32K thinking ceiling
+        // so a runaway thinking pass doesn't burn the entire 200K context
+        // window before the user-facing response. Future Settings UI may
+        // expose this; until then it's a sensible single value.
+        body.thinking = { type: 'enabled', budget_tokens: 16000 };
+    }
     return JSON.stringify(body);
 }
 
@@ -242,12 +262,20 @@ function buildHeaders(apiKey, authType) {
         ? { 'Authorization': `Bearer ${apiKey}` }
         : { 'x-api-key': apiKey };
 
+    // BAT-549 Commit 3c: include the `interleaved-thinking-2025-05-14` beta
+    // so the API accepts replayed `thinking` blocks AFTER `tool_use` blocks
+    // on the next turn. Without this, a tool-loop turn that splices the
+    // captured thinking back into content[] would be rejected. Adding it
+    // is a no-op when reasoning is OFF — the beta only activates when the
+    // request actually emits thinking blocks. Safe-by-default for both
+    // setup_token and api_key auth modes.
+    const betaTags = authType === 'setup_token'
+        ? 'prompt-caching-2024-07-31,oauth-2025-04-20,interleaved-thinking-2025-05-14'
+        : 'prompt-caching-2024-07-31,interleaved-thinking-2025-05-14';
     return {
         'Content-Type': 'application/json',
         'anthropic-version': '2023-06-01',
-        'anthropic-beta': authType === 'setup_token'
-            ? 'prompt-caching-2024-07-31,oauth-2025-04-20'
-            : 'prompt-caching-2024-07-31',
+        'anthropic-beta': betaTags,
         ...auth,
     };
 }

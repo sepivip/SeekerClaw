@@ -17,7 +17,9 @@ const {
     getOwnerId,
     USER_ENV_KEYS,
     config: _config,
+    runtimeState: _runtimeState,
 } = require('./config');
+const { reasoningSupportFor } = require('./model-catalog');
 
 const { redactSecrets } = require('./security');
 // Channel abstraction — routes to telegram.js or discord.js based on config
@@ -2266,14 +2268,45 @@ async function chat(chatId, userMessage, options = {}) {
             // Defensive: re-sanitize after trim to fix any orphaned tool pairs
             if (trimPasses > 0) sanitizeConversation(messages, turnId);
 
+            // BAT-549 Commit 3c: build per-turn request options from the LIVE
+            // RuntimeState (read fresh each turn so a Settings toggle takes
+            // effect on the next turn without service restart) plus the
+            // registry's reasoningSupport tri-state. Each adapter decides
+            // whether/how to honor these — see adapter formatRequest /
+            // toApiMessages for the per-provider semantics. The "yes/no/unknown"
+            // resolver gates "yes" tightly: a "no" or "unknown" model never
+            // gets the request param, even if the user toggle is on (registry
+            // is the source of truth for what a given model supports).
+            //
+            // For OpenAI specifically, registry resolution depends on
+            // OPENAI_AUTH_TYPE (the OAuth/Codex model list differs from
+            // api_key); for Anthropic it depends on AUTH_TYPE. For
+            // OpenRouter/Custom (freeform) the resolver always returns
+            // "unknown" — those paths use the per-Custom override toggle.
+            const _liveRtState = (() => {
+                try { return _runtimeState ? _runtimeState.read() : null; }
+                catch (_) { return null; }
+            })();
+            const _authForRegistry = adapter.id === 'openai'
+                ? OPENAI_AUTH_TYPE
+                : AUTH_TYPE;
+            const requestOptions = {
+                reasoningEnabled: !!(_liveRtState && _liveRtState.reasoningEnabled),
+                reasoningSupport: reasoningSupportFor(adapter.id, activeModel, _authForRegistry),
+                customEchoOverride: !!(_liveRtState && _liveRtState.customEchoReasoning),
+            };
+
             // Convert neutral messages to provider API format for the request.
             // BAT-549 R2 thread 3: pass `activeModel` as 2nd arg so the
             // Custom adapter's gating decision uses the SAME model the
             // request will be sent with (avoids race with a mid-turn
             // agent_settings.json overlay). Other adapters ignore the
             // extra arg.
-            const apiMessages = adapter.toApiMessages(messages, activeModel);
-            const body = adapter.formatRequest(activeModel, 4096, systemBlocks, apiMessages, formattedTools);
+            // BAT-549 Commit 3c: pass `requestOptions` as 3rd arg so the
+            // Custom adapter can read `customEchoOverride` (replaces the
+            // hardcoded `false` from Commit 1). Other adapters ignore it.
+            const apiMessages = adapter.toApiMessages(messages, activeModel, requestOptions);
+            const body = adapter.formatRequest(activeModel, 4096, systemBlocks, apiMessages, formattedTools, requestOptions);
 
             const res = await claudeApiCall(body, chatId, { turnId, iteration: stepCount });
 
