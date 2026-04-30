@@ -27,8 +27,22 @@ const {
 } = require('../reasoning-gating');
 
 // One-time-per-(model,session) log gate: avoid spamming when an "unknown"
-// gateway returns reasoning_content on every turn.
-const _unknownEchoLogged = new Set();
+// gateway returns reasoning_content on every turn. R10 fix: bounded LRU
+// (Map preserves insertion order; we drop the oldest entry when we hit
+// the cap) so a long-lived 24/7 agent process doesn't accumulate
+// per-model entries indefinitely as users experiment with gateways.
+const _UNKNOWN_ECHO_LOG_LRU_MAX = 64;
+const _unknownEchoLogged = new Map();
+function _markEchoLogged(key) {
+    // Refresh insertion order on re-touch so recent keys stay warm
+    if (_unknownEchoLogged.has(key)) _unknownEchoLogged.delete(key);
+    _unknownEchoLogged.set(key, true);
+    while (_unknownEchoLogged.size > _UNKNOWN_ECHO_LOG_LRU_MAX) {
+        // Drop the oldest key (Map iteration order = insertion order)
+        const oldest = _unknownEchoLogged.keys().next().value;
+        _unknownEchoLogged.delete(oldest);
+    }
+}
 
 function delegate() {
     return CUSTOM_FORMAT === 'responses' ? openai : openrouter;
@@ -175,7 +189,7 @@ function toApiMessages(messages, activeModel) {
         if (hasReasoning) {
             const key = `${customModel || ''}|${process.pid || 'p'}`;
             if (!_unknownEchoLogged.has(key)) {
-                _unknownEchoLogged.add(key);
+                _markEchoLogged(key);
                 log(
                     `[Custom] Reasoning content detected on model ${customModel || '<unset>'} but the gateway's echo contract is unknown to SeekerClaw. Capturing for forensics; not echoing on next turn (would risk a 400 if the gateway is R1-shaped).`,
                     'INFO',
