@@ -12,7 +12,7 @@ import org.junit.Test
  * AND dual-side equivalence with the Node implementation in
  * `app/src/main/assets/nodejs-project/custom-config-signature.js`.
  *
- * The "golden hash" test (see [duallSide_goldenHash_matches_node]) is the
+ * The "golden hash" test (see [dualSide_goldenHash_matches_node]) is the
  * load-bearing assertion: if you change the algorithm (separator chars,
  * normalization, hash function), update BOTH sides AND the golden in
  * BOTH tests simultaneously.
@@ -179,7 +179,7 @@ class CustomConfigSignatureTest {
      *   deepseek-v4-pro|https://api.deepseek.com/v1|chat_completions|x-api-key,x-org-id
      */
     @Test
-    fun duallSide_goldenHash_matches_node() {
+    fun dualSide_goldenHash_matches_node() {
         val sig = CustomConfigSignature.compute(
             customModel = "deepseek-v4-pro",
             customBaseUrl = "https://api.deepseek.com/v1",
