@@ -24,6 +24,33 @@ const OAUTH_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
  * - Tool results are `function_call_output` items (not role:'tool' messages)
  * - Vision uses `input_image` type (not `image_url`)
  */
+// BAT-549 Commit 2b: collect OpenAI-stamped reasoning wire items from
+// a stored assistant message's reasoningBlocks. These are the FULL
+// `output[]` reasoning items as they came back from the Responses API
+// (id, summary, encrypted_content, ...) and must be replayed verbatim
+// into `input[]` on the next request when the assistant message has
+// tool_calls — that's how `store:false` flows preserve reasoning state
+// across turns. Returns an array of wire objects suitable for splicing
+// at the position where the assistant's items would have been.
+//
+// Filters by sourceAdapter==='openai' so other-provider blocks
+// (claude/openrouter/custom) pass through silently.
+function _collectOpenAIReasoningItems(msg) {
+    if (!msg || !Array.isArray(msg.reasoningBlocks)) return [];
+    const out = [];
+    for (const blk of msg.reasoningBlocks) {
+        if (!blk || blk.sourceAdapter !== 'openai') continue;
+        if (typeof blk.wire !== 'object' || blk.wire === null || Array.isArray(blk.wire)) continue;
+        if (blk.wire.type !== 'reasoning') continue;
+        // Minimum viable Responses-API reasoning item shape: must have an
+        // `id` (server-assigned identifier; the Responses API rejects
+        // replay items without it).
+        if (typeof blk.wire.id !== 'string' || blk.wire.id.length === 0) continue;
+        out.push(blk.wire);
+    }
+    return out;
+}
+
 function toApiMessages(messages) {
     const input = [];
 
@@ -39,6 +66,21 @@ function toApiMessages(messages) {
         }
 
         if (msg.role === 'assistant') {
+            // BAT-549 Commit 2b: emit reasoning items FIRST in input[]
+            // so the Responses API sees them in the original order before
+            // the message + function_call items. Echo only on tool-use
+            // turns (toolCalls or Claude-native tool_use blocks present)
+            // — that's the contract: reasoning replay protects tool-loop
+            // continuity, text-only turns are capture-only.
+            const hasNeutralToolCalls = Array.isArray(msg.toolCalls) && msg.toolCalls.length > 0;
+            const hasClaudeToolUse = Array.isArray(msg.content)
+                && msg.content.some((b) => b && b.type === 'tool_use');
+            if (hasNeutralToolCalls || hasClaudeToolUse) {
+                for (const item of _collectOpenAIReasoningItems(msg)) {
+                    input.push(item);
+                }
+            }
+
             // Handle Claude-native format: content is array with text/tool_use blocks
             if (Array.isArray(msg.content)) {
                 const textParts = msg.content
@@ -135,6 +177,14 @@ function fromApiResponse(raw) {
     const textParts = [];
     const reasoningSummaryParts = [];
     const toolCalls = [];
+    // BAT-549 Commit 2b: capture FULL reasoning items (id, summary,
+    // encrypted_content, …) verbatim into reasoningBlocks for round-trip
+    // replay on tool-use turns. Codex v3 finding 1: never re-normalize
+    // — store the raw wire item so encrypted_content stays byte-exact
+    // and the Responses API accepts the replay.
+    const reasoningBlocks = [];
+    const turnId = (resp && typeof resp.id === 'string') ? resp.id : null;
+    const sourceModel = (resp && typeof resp.model === 'string') ? resp.model : null;
 
     for (const item of (resp.output || [])) {
         // Text output items (the user-facing answer)
@@ -153,6 +203,22 @@ function fromApiResponse(raw) {
                     reasoningSummaryParts.push(part.text);
                 }
             }
+        }
+        // BAT-549 Commit 2b: ALSO capture the FULL reasoning item into
+        // reasoningBlocks. Independent of the summary-text fallback
+        // above (which is for empty-response display only). This is
+        // what gets replayed on tool-use round-trips when `store:false`
+        // (OAuth/Codex path) — encrypted_content is the only way the
+        // Responses API can preserve reasoning across stateless turns.
+        if (item && item.type === 'reasoning' && typeof item.id === 'string' && item.id.length > 0) {
+            reasoningBlocks.push({
+                schemaVersion: 1,
+                provider: 'openai',
+                sourceAdapter: 'openai',
+                sourceModel,
+                turnId,
+                wire: item, // verbatim; preserves encrypted_content byte-exact
+            });
         }
         // Function call output items
         if (item.type === 'function_call') {
@@ -199,7 +265,7 @@ function fromApiResponse(raw) {
         else stopReason = 'max_tokens'; // any incomplete = truncation
     }
 
-    return { text, toolCalls, stopReason, usage: resp.usage || {} };
+    return { text, toolCalls, reasoningBlocks, stopReason, usage: resp.usage || {} };
 }
 
 // ── System prompt ───────────────────────────────────────────────────────────
@@ -267,6 +333,18 @@ function formatRequest(model, maxTokens, instructions, input, tools) {
     // requires the `reasoning` parameter or it returns `output: []`.
     if (isOAuth || (model && model.includes('codex'))) {
         body.reasoning = { effort: 'medium', summary: 'auto' };
+        // BAT-549 Commit 2b: stateless `store:false` flows (OAuth/Codex)
+        // need `include:["reasoning.encrypted_content"]` to get the
+        // encrypted reasoning item back in the response — that's the
+        // only artifact the Responses API can replay across turns
+        // when state isn't persisted server-side. Without this,
+        // reasoningBlocks captured from a prior turn are useful only
+        // for forensics; with it, they round-trip cleanly on tool-use
+        // continuations. v4.1 contract + Codex sign-off watch-note 3
+        // (don't regress existing reasoning hardcode) — this is
+        // additive: same `reasoning` enablement, plus encrypted echo
+        // capability.
+        body.include = ['reasoning.encrypted_content'];
     }
 
     return JSON.stringify(body);
