@@ -40,6 +40,8 @@ const { findMatchingSkills, loadSkills } = require('./skills');
 const { getDb, markDbDirty, markDbSummaryDirty, indexMemoryFiles, saveSession, getRecentSessions } = require('./database');
 const { saveCheckpoint, cleanupChatCheckpoints } = require('./task-store');
 const loopDetector = require('./loop-detector');
+// BAT-549: adaptive 3-step quarantine recovery for reasoning-content 400s
+const _reasoningRecovery = require('./reasoning-recovery');
 
 // ── Injected dependencies (set from main.js at startup) ───────────────────
 // These break circular deps and reference things that still live in main.js
@@ -2109,7 +2111,12 @@ async function chat(chatId, userMessage, options = {}) {
     _summarizedThisTurn.delete(chatId);
     if (global._discoveredToolsByChat) global._discoveredToolsByChat.delete(chatId); // Reset discovered tools
 
-    const messages = getConversation(chatId);
+    // BAT-549: `messages` is `let` (was `const`) so the reasoning-content
+    // 400 recovery path can reassign it to a truncated array. The recovery
+    // helper returns a NEW array (not in-place mutation) — see
+    // reasoning-recovery.js. Tracker also lives on this closure.
+    let messages = getConversation(chatId);
+    let _reasoningRecoveryStep = 0;
 
     // P2.4b: Extract original goal from conversation for checkpoint persistence.
     // On resume, this lets the agent know exactly what it was trying to accomplish.
@@ -2199,6 +2206,46 @@ async function chat(chatId, userMessage, options = {}) {
 
             if (res.status !== 200) {
                 log(`API error: ${res.status} - ${JSON.stringify(res.data)}`, 'ERROR');
+
+                // BAT-549: detect "reasoning_content must be passed back" 400
+                // and run adaptive 3-step quarantine recovery before bubbling
+                // up to the user. Tracks _reasoningRecoveryStep on the closure
+                // so a same-error 400 retry escalates to the next step.
+                if (_reasoningRecovery.isReasoningContent400(res.status, res.data)) {
+                    _reasoningRecoveryStep = (_reasoningRecoveryStep || 0) + 1;
+                    if (_reasoningRecoveryStep <= 3) {
+                        const result = _reasoningRecovery.quarantineActiveSegment({
+                            chatId, messages, workDir, taskId,
+                            step: _reasoningRecoveryStep, log,
+                        });
+                        if (result.ok) {
+                            log(`[ReasoningRecovery] Step ${_reasoningRecoveryStep} truncated at index ${result.cutIndex}; retrying turn`, 'WARN');
+                            // Replace the live messages reference; inject system note
+                            messages = result.newMessages;
+                            if (result.systemNote) {
+                                messages.push({ role: 'user', content: `[System: ${result.systemNote}]` });
+                            }
+                            continue; // retry the while loop with the truncated history
+                        } else if (_reasoningRecoveryStep < 3) {
+                            // No-op step (e.g. step 1 had no user boundary) — escalate immediately
+                            _reasoningRecoveryStep++;
+                            const r2 = _reasoningRecovery.quarantineActiveSegment({
+                                chatId, messages, workDir, taskId,
+                                step: _reasoningRecoveryStep, log,
+                            });
+                            if (r2.ok) {
+                                log(`[ReasoningRecovery] Step ${_reasoningRecoveryStep} (escalated from no-op) truncated at index ${r2.cutIndex}`, 'WARN');
+                                messages = r2.newMessages;
+                                if (r2.systemNote) {
+                                    messages.push({ role: 'user', content: `[System: ${r2.systemNote}]` });
+                                }
+                                continue;
+                            }
+                        }
+                    }
+                    log(`[ReasoningRecovery] Recovery exhausted (step ${_reasoningRecoveryStep}); bubbling error to user`, 'ERROR');
+                }
+
                 const errClass = classifyApiError(res.status, res.data);
                 const userText = errClass.userMessage || `API error: ${res.status}`;
                 log(`[OutputPath] ${JSON.stringify({
@@ -2231,10 +2278,18 @@ async function chat(chatId, userMessage, options = {}) {
             stepCount++;
 
             // Add assistant's response to history in neutral format
+            // BAT-549: thread reasoningBlocks through so the next turn's
+            // toApiMessages() can emit them back at the wire shape each
+            // adapter requires. Adapters that don't capture reasoning
+            // (claude.js / openai.js pre-Commit-2) return undefined here;
+            // `|| []` keeps the field stable so checkpoint serialization
+            // doesn't churn the schema between turns. Empty array is the
+            // documented "no reasoning preserved" sentinel.
             messages.push({
                 role: 'assistant',
                 content: parsed.text || '',
                 toolCalls: parsed.toolCalls,
+                reasoningBlocks: Array.isArray(parsed.reasoningBlocks) ? parsed.reasoningBlocks : [],
             });
 
             // DeerFlow P1: If this is the final loop-break iteration, ignore any tool calls

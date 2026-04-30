@@ -65,6 +65,35 @@ function toApiMessages(messages) {
                 }));
             }
 
+            // BAT-549 (v4.1 Codex finding 6): reasoning_details[] attaches
+            // to the assistant message INSIDE messages[], not request top-
+            // level. Echo every block whose source adapter (or delegated
+            // adapter, when invoked from Custom) is openrouter — these are
+            // the wire payloads OpenRouter expects to round-trip verbatim.
+            // Custom's stripReasoningForCustomGating clears reasoningBlocks
+            // upstream when DeepSeek R1 / unknown models are configured.
+            if (Array.isArray(msg.reasoningBlocks) && msg.reasoningBlocks.length > 0) {
+                const details = [];
+                let plainReasoningContent = null;
+                for (const blk of msg.reasoningBlocks) {
+                    if (!blk || !blk.wire) continue;
+                    const srcOk = blk.sourceAdapter === 'openrouter'
+                        || blk.delegateAdapter === 'openrouter';
+                    if (!srcOk) continue;
+                    // OpenRouter native shape — push verbatim
+                    if (Array.isArray(blk.wire) === false && blk.wire.reasoning_content === undefined) {
+                        details.push(blk.wire);
+                    } else if (typeof blk.wire.reasoning_content === 'string') {
+                        // DeepSeek-via-OpenRouter style — emit the field at message
+                        // level (chat-completions DeepSeek expects this on the
+                        // assistant turn alongside tool_calls).
+                        plainReasoningContent = blk.wire.reasoning_content;
+                    }
+                }
+                if (details.length > 0) entry.reasoning_details = details;
+                if (plainReasoningContent !== null) entry.reasoning_content = plainReasoningContent;
+            }
+
             out.push(entry);
             continue;
         }
@@ -112,10 +141,23 @@ function toApiMessages(messages) {
 /**
  * Parse Chat Completions response into neutral format.
  * Works for both streamed (accumulated) and non-streamed responses.
+ *
+ * BAT-549: also captures reasoning content from the response message into
+ * `reasoningBlocks` (raw wire payloads, never re-normalized — Codex v3
+ * finding). Captures both shapes that show up here:
+ *  - `message.reasoning_details[]` — native OpenRouter sum-type with `format`
+ *    discriminator; echoed verbatim on the next request
+ *  - `message.reasoning_content` (string) — DeepSeek-style; surfaces here
+ *    when Custom delegates Chat Completions to OpenRouter pointed at DeepSeek
+ *
+ * Both are stamped with `provider: 'openrouter'`. The Custom adapter wraps
+ * this and re-stamps to `provider: 'custom'` per v4.1 finding 5 — this
+ * function is the canonical OpenRouter parse path; Custom is responsible for
+ * its own re-stamping.
  */
 function fromApiResponse(raw) {
     const choice = raw.choices?.[0];
-    if (!choice) return { text: null, toolCalls: [], stopReason: 'end_turn', usage: raw.usage || {} };
+    if (!choice) return { text: null, toolCalls: [], reasoningBlocks: [], stopReason: 'end_turn', usage: raw.usage || {} };
 
     const message = choice.message || {};
     const text = message.content || null;
@@ -133,6 +175,39 @@ function fromApiResponse(raw) {
         return { id: tc.id || `tc_or_${idx}`, name: tc.function?.name || 'unknown', input };
     });
 
+    // BAT-549: capture reasoning content verbatim into reasoningBlocks.
+    // Two shapes show up on this code path:
+    //   1. message.reasoning_details[] — native OpenRouter sum-type
+    //   2. message.reasoning_content   — DeepSeek (when Custom delegates here)
+    // Both stored with raw `wire` preserved; the Custom adapter wraps and
+    // re-stamps provider/sourceAdapter on its own pass.
+    const reasoningBlocks = [];
+    const turnId = raw.id || message.id || null;
+    if (Array.isArray(message.reasoning_details) && message.reasoning_details.length > 0) {
+        for (const detail of message.reasoning_details) {
+            reasoningBlocks.push({
+                schemaVersion: 1,
+                provider: 'openrouter',
+                sourceAdapter: 'openrouter',
+                sourceModel: raw.model || null,
+                turnId,
+                wire: detail,
+            });
+        }
+    }
+    if (typeof message.reasoning_content === 'string' && message.reasoning_content.length > 0) {
+        // DeepSeek-style reasoning; preserve verbatim — Custom wrapper will
+        // re-stamp `provider: 'custom'` and apply model-gating before echo.
+        reasoningBlocks.push({
+            schemaVersion: 1,
+            provider: 'openrouter',
+            sourceAdapter: 'openrouter',
+            sourceModel: raw.model || null,
+            turnId,
+            wire: { reasoning_content: message.reasoning_content },
+        });
+    }
+
     // Map finish_reason → neutral stopReason
     const fr = choice.finish_reason;
     let stopReason = 'end_turn';
@@ -140,7 +215,7 @@ function fromApiResponse(raw) {
     else if (fr === 'length') stopReason = 'max_tokens';
     else if (fr === 'content_filter') stopReason = 'content_filter';
 
-    return { text, toolCalls, stopReason, usage: raw.usage || {} };
+    return { text, toolCalls, reasoningBlocks, stopReason, usage: raw.usage || {} };
 }
 
 // ── System prompt ───────────────────────────────────────────────────────────

@@ -2,19 +2,40 @@
 // Generic custom provider for OpenAI-compatible gateways and middlemen.
 // Delegates to openrouter.js (Chat Completions) or openai.js (Responses API)
 // but uses own formatRequest to avoid OpenRouter-specific decorations.
+//
+// BAT-549: this adapter explicitly wraps the delegate's reasoning round-trip
+// (Codex v4.1 finding 5). Reasoning blocks captured under delegation are
+// re-stamped `provider: 'custom'` / `sourceAdapter: 'custom'` (with
+// `delegateAdapter` recorded for forensics), and DeepSeek V4/R1 model-gating
+// is applied BEFORE delegation so the delegate's emit path never bypasses
+// gating. See `reasoning-gating.js` for the gating function.
 
 const {
     CUSTOM_KEY,
     CUSTOM_HEADERS,
     CUSTOM_FORMAT,
     CUSTOM_ENDPOINT,
+    resolveActiveModel,
+    log,
 } = require('../config');
 
 const openai = require('./openai');
 const openrouter = require('./openrouter');
+const {
+    detectCustomEchoBehavior,
+    stripReasoningForCustomGating,
+} = require('../reasoning-gating');
+
+// One-time-per-(model,session) log gate: avoid spamming when an "unknown"
+// gateway returns reasoning_content on every turn.
+const _unknownEchoLogged = new Set();
 
 function delegate() {
     return CUSTOM_FORMAT === 'responses' ? openai : openrouter;
+}
+
+function delegateName() {
+    return CUSTOM_FORMAT === 'responses' ? 'openai' : 'openrouter';
 }
 
 function sanitizeHeaderValue(value) {
@@ -78,6 +99,71 @@ function classifyNetworkError(err) {
     };
 }
 
+/**
+ * BAT-549: wrap delegate's parse and re-stamp every reasoningBlock the
+ * delegate captured. Custom is the source-of-truth here — DeepSeek (and
+ * any future OpenAI-compatible reasoning model) returns content under the
+ * delegate's wire shape, but the user is on Custom and gating decisions
+ * apply to Custom. Re-stamping keeps echo routing consistent.
+ *
+ * `delegateAdapter` is recorded for forensics (so a checkpoint dump shows
+ * which path the data came from), but is NOT used for echo routing.
+ */
+function fromApiResponse(raw) {
+    const parsed = delegate().fromApiResponse(raw);
+    if (Array.isArray(parsed.reasoningBlocks) && parsed.reasoningBlocks.length > 0) {
+        const dn = delegateName();
+        const customModel = resolveActiveModel() || parsed.reasoningBlocks[0]?.sourceModel || null;
+        parsed.reasoningBlocks = parsed.reasoningBlocks.map((blk) => ({
+            ...blk,
+            provider: 'custom',
+            sourceAdapter: 'custom',
+            delegateAdapter: dn,
+            sourceModel: customModel,
+        }));
+    } else if (!parsed.reasoningBlocks) {
+        parsed.reasoningBlocks = [];
+    }
+    return parsed;
+}
+
+/**
+ * BAT-549: gate Custom-stamped reasoningBlocks BEFORE delegation. Per
+ * v4.1 Codex finding 5: gating must apply EVEN WHEN delegating to
+ * OpenAI/OpenRouter — otherwise R1 (which 400s on echo) would always
+ * route through the delegate's echo path.
+ *
+ * For native delegate adapters (the openrouter or openai modules invoked
+ * outside Custom), gating doesn't apply — those adapters are called
+ * directly by the providers/index.js registry without Custom in front.
+ */
+function toApiMessages(messages) {
+    const customModel = resolveActiveModel();
+    const customEchoOverride = false; // BAT-549 commit 3 wires this from RuntimeState.customEchoReasoning
+    const behavior = detectCustomEchoBehavior(customModel, customEchoOverride);
+
+    // One-shot warning when reasoning is captured but gating won't echo it
+    if (behavior === 'unknown') {
+        const hasReasoning = Array.isArray(messages) && messages.some(
+            (m) => m && m.role === 'assistant'
+                && Array.isArray(m.reasoningBlocks) && m.reasoningBlocks.length > 0
+        );
+        if (hasReasoning) {
+            const key = `${customModel || ''}|${process.pid || 'p'}`;
+            if (!_unknownEchoLogged.has(key)) {
+                _unknownEchoLogged.add(key);
+                log(
+                    `[Custom] Reasoning content detected on model ${customModel || '<unset>'} but echo behavior is unknown — not echoing. If you hit a 400 about reasoning_content, enable Echo Reasoning in Settings.`,
+                    'INFO',
+                );
+            }
+        }
+    }
+
+    const gatedMessages = stripReasoningForCustomGating(messages, behavior);
+    return delegate().toApiMessages(gatedMessages);
+}
+
 module.exports = {
     id: 'custom',
     name: 'Custom',
@@ -91,8 +177,8 @@ module.exports = {
 
     buildHeaders,
 
-    toApiMessages(messages) { return delegate().toApiMessages(messages); },
-    fromApiResponse(raw) { return delegate().fromApiResponse(raw); },
+    toApiMessages,
+    fromApiResponse,
     formatSystemPrompt(stable, dynamic, authType) { return delegate().formatSystemPrompt(stable, dynamic, authType); },
     formatTools(tools) { return delegate().formatTools(tools); },
     formatVision(base64, mediaType) { return delegate().formatVision(base64, mediaType); },
@@ -116,6 +202,11 @@ module.exports = {
     classifyNetworkError,
     normalizeUsage(usage) { return delegate().normalizeUsage(usage); },
     parseRateLimitHeaders(headers) { return delegate().parseRateLimitHeaders(headers); },
+
+    // Test seam — exposes the echo gating decision so unit tests can pin
+    // R1-strip vs V4-echo vs unknown-capture-only without going through the
+    // full request path. Not used by production code paths.
+    _detectEchoBehaviorForTest: detectCustomEchoBehavior,
 
     supportsCache: false,
     authTypes: ['api_key'],

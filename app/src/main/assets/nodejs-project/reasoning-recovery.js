@@ -1,0 +1,220 @@
+// SeekerClaw — reasoning-recovery.js (BAT-549)
+//
+// Adaptive 3-step quarantine recovery for active conversations stuck in a
+// reasoning-content 400 loop. Codex v4.1 finding 2+3:
+//
+//  Step 1 — narrow cut: last user-message boundary
+//  Step 2 — widen: earliest provider-relevant assistant tool-call turn
+//           in the active segment; widen on ambiguity
+//  Step 3 — fallback: full conversation reset
+//
+// PLUS active task-store checkpoint quarantine: each step ALSO mutates the
+// persisted `task-store/<chatId>.json` so a future `/resume` can't reload
+// the original bad slice. The pre-quarantine checkpoint is copied to
+// `recovery/<chatId>-<timestamp>-checkpoint-stepN.json` for forensics.
+//
+// User data ALWAYS preserved: workspace, memory files (MEMORY.md, daily/,
+// SOUL.md, IDENTITY.md, USER.md), skills, config, credentials, checkpoints
+// for OTHER chats, task-store entries for OTHER chats, cron jobs.
+
+'use strict';
+
+const fs = require('fs');
+const path = require('path');
+
+const REASONING_400_PATTERN = /reasoning[_-]?content.*passed\s*back/i;
+
+/**
+ * Inspect an HTTP error data payload and decide whether it's the
+ * "reasoning_content must be passed back" 400. Cheap regex over the
+ * provider's error message string.
+ */
+function isReasoningContent400(status, data) {
+    if (status !== 400) return false;
+    if (!data) return false;
+    const candidates = [];
+    if (typeof data === 'string') candidates.push(data);
+    if (data.error && typeof data.error.message === 'string') candidates.push(data.error.message);
+    if (typeof data.message === 'string') candidates.push(data.message);
+    try { candidates.push(JSON.stringify(data)); } catch (_) {}
+    return candidates.some((s) => REASONING_400_PATTERN.test(s));
+}
+
+/**
+ * Step 1 cut point: index AFTER the last user-role message in the active
+ * segment. Slice from this index to get the volatile tail. Returns -1 if
+ * no user message found (caller should fall through to step 3).
+ */
+function findLastUserBoundary(messages) {
+    if (!Array.isArray(messages)) return -1;
+    for (let i = messages.length - 1; i >= 0; i--) {
+        const m = messages[i];
+        if (m && m.role === 'user') return i + 1;
+    }
+    return -1;
+}
+
+/**
+ * Step 2 cut point: index of the EARLIEST assistant turn that has tool_calls
+ * (Codex v4.1 finding 2: "earliest provider-relevant assistant tool-call
+ * turn in the active segment", widen on ambiguity → the FIRST one wins).
+ * Returns -1 if no candidate (caller falls through to step 3).
+ */
+function findEarliestAssistantToolCallIndex(messages) {
+    if (!Array.isArray(messages)) return -1;
+    for (let i = 0; i < messages.length; i++) {
+        const m = messages[i];
+        if (!m || m.role !== 'assistant') continue;
+        const hasNeutralToolCalls = Array.isArray(m.toolCalls) && m.toolCalls.length > 0;
+        const hasClaudeToolUse = Array.isArray(m.content)
+            && m.content.some((b) => b && b.type === 'tool_use');
+        if (hasNeutralToolCalls || hasClaudeToolUse) return i;
+    }
+    return -1;
+}
+
+/**
+ * Atomic-ish JSON write — temp file + rename. Forensic file is nice-to-have,
+ * not required for safe truncation, so caller logs and continues on failure.
+ */
+function writeJsonAtomic(filePath, obj) {
+    const dir = path.dirname(filePath);
+    fs.mkdirSync(dir, { recursive: true });
+    const tmp = filePath + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(obj, null, 2), 'utf8');
+    fs.renameSync(tmp, filePath);
+}
+
+/**
+ * Compute the cut index for a given step against a given messages array.
+ * Returns -1 if the step has no valid cut point against this input
+ * (caller should escalate to the next step).
+ */
+function computeCutIndex(messages, step) {
+    if (step === 1) return findLastUserBoundary(messages);
+    if (step === 2) return findEarliestAssistantToolCallIndex(messages);
+    return 0; // step 3 = full reset
+}
+
+/**
+ * Run ONE step of adaptive quarantine recovery.
+ *
+ * @param {object} ctx
+ * @param {string|number} ctx.chatId — for naming recovery files
+ * @param {Array}  ctx.messages — current in-memory messages array (NOT mutated)
+ * @param {string} ctx.workDir — filesystem root (for recovery/ + task-store/)
+ * @param {number} ctx.step — 1, 2, or 3
+ * @param {function} [ctx.log] — optional logger
+ * @param {string} [ctx.taskId] — task id for active checkpoint quarantine
+ * @param {function} [ctx.now] — clock injection for tests; defaults to Date.now
+ *
+ * @returns {object}
+ *   - newMessages : truncated messages array (NEW array; caller reassigns)
+ *   - systemNote : user-visible system note string (or null on no-op)
+ *   - quarantinePath : path to written recovery file (or null on write failure)
+ *   - checkpointPath : path to forensic checkpoint copy (or null)
+ *   - ok : true if step actually truncated; false → caller escalates
+ *   - cutIndex : the index used; -1 means no-op
+ */
+function quarantineActiveSegment(ctx) {
+    const { chatId, messages, workDir, step, taskId } = ctx;
+    const log = ctx.log || (() => {});
+    const now = (ctx.now || Date.now)();
+
+    if (!Array.isArray(messages)) {
+        return { newMessages: messages, systemNote: null, quarantinePath: null, checkpointPath: null, ok: false, cutIndex: -1 };
+    }
+
+    const cutIndex = computeCutIndex(messages, step);
+
+    // No-op detection: step 1/2 may not find a valid cut point. Step 3
+    // (cutIndex=0) is always valid — it resets the whole conversation.
+    if (cutIndex < 0) {
+        return { newMessages: messages, systemNote: null, quarantinePath: null, checkpointPath: null, ok: false, cutIndex: -1 };
+    }
+    if (step !== 3 && cutIndex >= messages.length) {
+        // Cut point is at or past the tail — nothing to truncate
+        return { newMessages: messages, systemNote: null, quarantinePath: null, checkpointPath: null, ok: false, cutIndex };
+    }
+
+    const systemNote = step === 1
+        ? 'Previous reasoning content was lost in an upgrade. Continuing from your last message.'
+        : step === 2
+            ? 'Earlier conversation could not be recovered after a provider error. Continuing with a wider truncation; long-term memory and skills are preserved.'
+            : 'Earlier reasoning state could not be recovered. Conversation reset; long-term memory and skills are preserved.';
+
+    const keptPrefix = messages.slice(0, cutIndex);
+    const quarantinedSlice = messages.slice(cutIndex);
+    const recoveryDir = path.join(workDir, 'recovery');
+    const fileBase = `${chatId}-${now}-step${step}`;
+    const quarantinePath = path.join(recoveryDir, `${fileBase}.json`);
+
+    let quarantineWritten = null;
+    try {
+        writeJsonAtomic(quarantinePath, {
+            schemaVersion: 1,
+            recoveryStep: step,
+            chatId: String(chatId),
+            quarantinedAt: new Date(now).toISOString(),
+            cutIndex,
+            originalLength: messages.length,
+            quarantinedLength: quarantinedSlice.length,
+            quarantinedSlice,
+        });
+        quarantineWritten = quarantinePath;
+        log(`[ReasoningRecovery] Step ${step} quarantined ${quarantinedSlice.length} messages → ${quarantinePath}`, 'INFO');
+    } catch (e) {
+        log(`[ReasoningRecovery] Step ${step} forensic write failed: ${e.message}`, 'WARN');
+    }
+
+    // Active task-store checkpoint quarantine (Codex v4.1 finding 3).
+    // Best-effort: checkpoint may not exist on first turn or for a fresh chat.
+    let checkpointPath = null;
+    if (taskId) {
+        try {
+            const taskFile = path.join(workDir, 'task-store', `${taskId}.json`);
+            if (fs.existsSync(taskFile)) {
+                const cpForensic = path.join(recoveryDir, `${fileBase}-checkpoint.json`);
+                fs.copyFileSync(taskFile, cpForensic);
+                checkpointPath = cpForensic;
+
+                const cpRaw = fs.readFileSync(taskFile, 'utf8');
+                const cp = JSON.parse(cpRaw);
+                if (Array.isArray(cp.conversationSlice)) {
+                    // Apply the SAME boundary detection on the checkpoint slice
+                    // (it may diverge in length from the live messages array,
+                    // so re-compute rather than reuse cutIndex).
+                    const cpCut = computeCutIndex(cp.conversationSlice, step);
+                    if (cpCut >= 0) {
+                        cp.conversationSlice = cp.conversationSlice.slice(0, cpCut);
+                    }
+                }
+                cp.updatedAt = now;
+                cp.recoveryQuarantineStep = step;
+                cp.recoveryQuarantinedAt = new Date(now).toISOString();
+                writeJsonAtomic(taskFile, cp);
+                log(`[ReasoningRecovery] Step ${step} rewrote active checkpoint ${taskFile}`, 'INFO');
+            }
+        } catch (e) {
+            log(`[ReasoningRecovery] Step ${step} checkpoint mutation failed: ${e.message}`, 'WARN');
+        }
+    }
+
+    return {
+        newMessages: keptPrefix,
+        systemNote,
+        quarantinePath: quarantineWritten,
+        checkpointPath,
+        ok: true,
+        cutIndex,
+    };
+}
+
+module.exports = {
+    isReasoningContent400,
+    findLastUserBoundary,
+    findEarliestAssistantToolCallIndex,
+    computeCutIndex,
+    quarantineActiveSegment,
+    REASONING_400_PATTERN,
+};
