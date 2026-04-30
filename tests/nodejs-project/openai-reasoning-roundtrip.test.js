@@ -258,6 +258,71 @@ eq('Mixed-provider: emitted block matches the openai one',
     reasoningOnly[0].id, 'rs_01XYZ');
 
 console.log();
+console.log('── 3b R3 Fix 2: Custom-Responses replay (delegateAdapter==="openai") ──');
+
+// A Custom-stamped block with a byte-exact OpenAI Responses reasoning
+// wire item must be replayed. The Custom adapter wraps openai when
+// CUSTOM_FORMAT==='responses', captures `output[]` reasoning items,
+// then re-stamps provider/sourceAdapter to 'custom' while recording
+// delegateAdapter='openai'. Without the delegateAdapter branch in
+// `_collectOpenAIReasoningItems`, this round-trip silently drops the
+// reasoning item on the next tool-use turn — breaking encrypted_content
+// preservation for Custom+Responses gateways.
+const customResponsesBlock = {
+    schemaVersion: 1,
+    provider: 'custom',
+    sourceAdapter: 'custom',
+    delegateAdapter: 'openai',
+    sourceModel: 'gpt-5.4',
+    turnId: 'resp_custom_01',
+    // Wire shape MUST match what OpenAI Responses returned (id, type,
+    // summary, encrypted_content) — Custom adapter doesn't re-shape it,
+    // only re-stamps the envelope.
+    wire: {
+        id: 'rs_custom_01ABC',
+        type: 'reasoning',
+        summary: [{ type: 'summary_text', text: 'Custom-via-Responses thought.' }],
+        encrypted_content: 'gAAAAABh-CUSTOM-encrypted-bytes-from-gateway',
+    },
+};
+const customStored = {
+    role: 'assistant',
+    content: 'response from custom gateway',
+    toolCalls: [{ id: 'fc_custom', name: 'echo', input: {} }],
+    reasoningBlocks: [customResponsesBlock],
+};
+const customInput = openai.toApiMessages([customStored]);
+const customReasoning = customInput.filter((i) => i.type === 'reasoning');
+eq('Custom+Responses block: emitted on tool-use turn', customReasoning.length, 1);
+eq('Custom+Responses block: id preserved verbatim',
+    customReasoning[0].id, 'rs_custom_01ABC');
+eq('Custom+Responses block: encrypted_content preserved verbatim',
+    customReasoning[0].encrypted_content,
+    'gAAAAABh-CUSTOM-encrypted-bytes-from-gateway');
+
+// Native OpenRouter blocks STAY skipped — sourceAdapter !== 'openai'
+// AND delegateAdapter !== 'openai'. (Defense in depth: the older check
+// against orBlock above asserts this from the negative side; here we
+// re-state it next to the positive case so the branch contract is
+// pinned together.)
+const nativeOrStored = {
+    role: 'assistant',
+    content: 'r',
+    toolCalls: [{ id: 'fc', name: 'e', input: {} }],
+    reasoningBlocks: [{
+        schemaVersion: 1, provider: 'openrouter', sourceAdapter: 'openrouter',
+        delegateAdapter: 'openrouter',
+        sourceModel: 'openai/gpt-5.4',
+        wire: { id: 'rs_or_01', type: 'reasoning', summary: [],
+            encrypted_content: 'e' },
+    }],
+};
+const nativeOrInput = openai.toApiMessages([nativeOrStored]);
+const nativeOrReasoning = nativeOrInput.filter((i) => i.type === 'reasoning');
+eq('Native OpenRouter block: still skipped (delegateAdapter==="openrouter")',
+    nativeOrReasoning.length, 0);
+
+console.log();
 console.log('── toApiMessages: skips malformed blocks ──');
 
 const malformedBlocks = [

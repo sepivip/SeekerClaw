@@ -33,13 +33,24 @@ const OAUTH_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
 // across turns. Returns an array of wire objects suitable for splicing
 // at the position where the assistant's items would have been.
 //
-// Filters by sourceAdapter==='openai' so other-provider blocks
-// (claude/openrouter/custom) pass through silently.
+// Accepts blocks where sourceAdapter === 'openai' OR delegateAdapter ===
+// 'openai'. The delegateAdapter case is the Custom-Responses path: the
+// Custom adapter re-stamps captured blocks to provider/sourceAdapter
+// 'custom' (preserving forensic provenance) and records the underlying
+// transport in delegateAdapter. Without that branch, Custom+Responses
+// reasoning items would be dropped on tool-use replay even though the
+// wire shape is byte-exact OpenAI Responses items — symmetric to how
+// openrouter.js accepts both 'openrouter' and delegateAdapter==='openrouter'.
+// Other-provider blocks (claude/native-openrouter/custom-via-openrouter)
+// pass through silently because neither field matches.
 function _collectOpenAIReasoningItems(msg) {
     if (!msg || !Array.isArray(msg.reasoningBlocks)) return [];
     const out = [];
     for (const blk of msg.reasoningBlocks) {
-        if (!blk || blk.sourceAdapter !== 'openai') continue;
+        if (!blk) continue;
+        const srcOk = blk.sourceAdapter === 'openai'
+            || blk.delegateAdapter === 'openai';
+        if (!srcOk) continue;
         if (typeof blk.wire !== 'object' || blk.wire === null || Array.isArray(blk.wire)) continue;
         if (blk.wire.type !== 'reasoning') continue;
         // Minimum viable Responses-API reasoning item shape: must have an

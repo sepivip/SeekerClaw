@@ -43,8 +43,9 @@ function _safeStringify(input) {
     if (typeof input === 'bigint') {
         return `<bigint:${input.toString()}>`;
     }
+    let result;
     try {
-        return JSON.stringify(input);
+        result = JSON.stringify(input);
     } catch (e) {
         // BigInt inside object, circular ref, etc. — emit a stable
         // type-tagged placeholder. We don't expose the error message;
@@ -52,6 +53,14 @@ function _safeStringify(input) {
         // threw with that data.
         return `<unserializable:${typeof input}>`;
     }
+    // 3b R3 Copilot: JSON.stringify returns undefined for functions and
+    // symbols. Without this guard, fingerprint() would call
+    // crypto.update(undefined) and throw — undermining the contract
+    // that logging-side helpers MUST NOT crash their callers.
+    if (typeof result !== 'string') {
+        return `<unstringifiable:${typeof input}>`;
+    }
+    return result;
 }
 
 /**

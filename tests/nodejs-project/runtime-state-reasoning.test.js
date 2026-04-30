@@ -5,8 +5,10 @@
 //  - DEFAULTS include the 4 new fields (reasoningEnabled,
 //    reasoningDisplayInChat, customEchoReasoning, customConfigSignature)
 //  - Old `runtime_state.json` files (pre-BAT-549, just provider/authType/
-//    model) load cleanly via cross-process-store DEFAULTS-merge —
-//    missing fields filled, no crash, no schema migration needed
+//    model) load cleanly via the explicit DEFAULTS-merge layered in
+//    runtime-state.js's `read()` (cross-process-store itself returns the
+//    raw JSON.parse on file-exists; only `read()` here fills in absent
+//    BAT-549 fields from DEFAULTS) — no crash, no schema migration needed
 //  - New write() type-checks the new optional fields IF present
 //    (boolean flags, string-or-null signature)
 //  - BAT-513 read/write paths for provider/auth/model still work

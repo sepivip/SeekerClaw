@@ -118,10 +118,16 @@ function classifyNetworkError(err) {
  * delegate captured. Custom is the source-of-truth here — DeepSeek (and
  * any future OpenAI-compatible reasoning model) returns content under the
  * delegate's wire shape, but the user is on Custom and gating decisions
- * apply to Custom. Re-stamping keeps echo routing consistent.
+ * apply to Custom. Re-stamping keeps gating decisions (R1-strip vs
+ * V4-echo vs unknown-capture-only) consistent.
  *
  * `delegateAdapter` is recorded for forensics (so a checkpoint dump shows
- * which path the data came from), but is NOT used for echo routing.
+ * which path the data came from) AND is used by the delegate's own replay
+ * filter on the next tool-use turn: openai.js's `_collectOpenAIReasoningItems`
+ * and openrouter.js's emit path both accept blocks where
+ * `sourceAdapter === <self>` OR `delegateAdapter === <self>`. Without that
+ * symmetry, the Custom-stamped blocks would be dropped on replay even
+ * though the wire bytes are byte-exact for the delegate's API.
  */
 function fromApiResponse(raw) {
     const parsed = delegate().fromApiResponse(raw);
