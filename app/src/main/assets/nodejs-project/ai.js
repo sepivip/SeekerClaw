@@ -90,9 +90,14 @@ async function visionAnalyzeImage(imageBase64, prompt, maxTokens = 400) {
             visionBlock,
         ]
     }];
-    const apiMessages = adapter.toApiMessages(neutralMessages);
+    // BAT-549 R2 thread 3 same-class sweep: capture model ONCE so
+    // toApiMessages's Custom gating decision matches what formatRequest
+    // sends. Two `resolveActiveModel()` calls between these lines could
+    // otherwise return different values mid-turn.
+    const visionModel = resolveActiveModel();
+    const apiMessages = adapter.toApiMessages(neutralMessages, visionModel);
     const systemBlocks = adapter.formatSystemPrompt('You are a vision assistant.', '', AUTH_TYPE);
-    const body = adapter.formatRequest(resolveActiveModel(), cappedMaxTokens, systemBlocks, apiMessages, []);
+    const body = adapter.formatRequest(visionModel, cappedMaxTokens, systemBlocks, apiMessages, []);
 
     const res = await claudeApiCall(body, 'vision');
 
@@ -297,9 +302,23 @@ function getConversation(chatId) {
     return conversations.get(chatId);
 }
 
-function addToConversation(chatId, role, content) {
+function addToConversation(chatId, role, content, extra = null) {
     const conv = getConversation(chatId);
-    conv.push({ role, content });
+    // BAT-549 R2 thread 5: allow optional extra fields (e.g.
+    // reasoningBlocks) to be persisted on assistant messages added at the
+    // final-response site (line ~2594) so a non-tool final answer's
+    // reasoning content survives across turns/checkpoints. The default
+    // `null` keeps the call sig backward compatible — existing callers
+    // (user messages, fallback assistant strings) don't pass it.
+    const entry = { role, content };
+    if (extra && typeof extra === 'object') {
+        for (const key of Object.keys(extra)) {
+            // Don't let an `extra` arg silently override role/content.
+            if (key === 'role' || key === 'content') continue;
+            entry[key] = extra[key];
+        }
+    }
+    conv.push(entry);
     // Keep last N messages
     while (conv.length > MAX_HISTORY) {
         conv.shift();
@@ -352,11 +371,14 @@ async function generateSessionSummary(chatId) {
     const systemBlocks = adapter.formatSystemPrompt(
         'You are a session summarizer. Output ONLY the summary, no preamble.', '', AUTH_TYPE
     );
+    // BAT-549 R2 thread 3 same-class sweep: pass the resolved model to
+    // toApiMessages so Custom gating matches the body's model.
+    const summaryModel = resolveActiveModel();
     const summaryMessages = adapter.toApiMessages([{
         role: 'user',
         content: 'Summarize this conversation in 3-5 bullet points. Focus on: decisions made, tasks completed, new information learned, action items. Skip: greetings, small talk, repeated information. Format: markdown bullets, concise, factual.\n\n' + summaryInput
-    }]);
-    const body = adapter.formatRequest(resolveActiveModel(), 500, systemBlocks, summaryMessages, []);
+    }], summaryModel);
+    const body = adapter.formatRequest(summaryModel, 500, systemBlocks, summaryMessages, []);
 
     const res = await claudeApiCall(body, chatId, { background: true });
     if (res.status !== 200) {
@@ -1930,8 +1952,11 @@ async function summarizeOldMessages(messages, chatId, turnId, modelOverride) {
         const summarySystem = PROVIDER === 'claude'
             ? [{ type: 'text', text: summaryInstruction }]
             : summaryInstruction;
-        const apiMessages = adapter.toApiMessages(summaryPrompt);
-        const body = adapter.formatRequest(modelOverride || MODEL, 256, summarySystem, apiMessages, []);
+        // BAT-549 R2 thread 3 same-class sweep: pass the resolved model
+        // so Custom gating matches the body's model.
+        const summarizeModel = modelOverride || MODEL;
+        const apiMessages = adapter.toApiMessages(summaryPrompt, summarizeModel);
+        const body = adapter.formatRequest(summarizeModel, 256, summarySystem, apiMessages, []);
 
         // Select streaming function based on provider protocol
         const streamFn = adapter.streamProtocol === 'chat-completions'
@@ -2132,6 +2157,11 @@ async function chat(chatId, userMessage, options = {}) {
     // Call Claude API with tool use loop
     let response;
     let stepCount = 0;
+    // BAT-549 R2 thread 5: hoisted from `parsed.reasoningBlocks` inside
+    // the while loop. After break-on-no-tool-calls, we lose `parsed`'s
+    // scope, so capture the final response's blocks here so the
+    // addToConversation(final) at end-of-turn can persist them.
+    let lastParsedReasoningBlocks = [];
     // Read maxStepsPerTurn from agent_settings.json each turn so the user's
     // Settings change takes effect on the next chat() call (no service restart).
     // Mirrors getHeartbeatIntervalMs() in main.js. Clamped to [10, 100]; invalid
@@ -2201,8 +2231,13 @@ async function chat(chatId, userMessage, options = {}) {
             // Defensive: re-sanitize after trim to fix any orphaned tool pairs
             if (trimPasses > 0) sanitizeConversation(messages, turnId);
 
-            // Convert neutral messages to provider API format for the request
-            const apiMessages = adapter.toApiMessages(messages);
+            // Convert neutral messages to provider API format for the request.
+            // BAT-549 R2 thread 3: pass `activeModel` as 2nd arg so the
+            // Custom adapter's gating decision uses the SAME model the
+            // request will be sent with (avoids race with a mid-turn
+            // agent_settings.json overlay). Other adapters ignore the
+            // extra arg.
+            const apiMessages = adapter.toApiMessages(messages, activeModel);
             const body = adapter.formatRequest(activeModel, 4096, systemBlocks, apiMessages, formattedTools);
 
             const res = await claudeApiCall(body, chatId, { turnId, iteration: stepCount });
@@ -2272,6 +2307,15 @@ async function chat(chatId, userMessage, options = {}) {
             response = res.data;
             response._parsed = parsed;
 
+            // BAT-549 R2 thread 5: capture final-response reasoning blocks
+            // OUTSIDE the loop scope so the end-of-turn addToConversation
+            // (which fires AFTER `break` below for text-only responses)
+            // can persist them. For tool-call rounds the messages.push
+            // below already preserves blocks; this hoist is specifically
+            // for the text-only final-answer path.
+            lastParsedReasoningBlocks = Array.isArray(parsed.reasoningBlocks)
+                ? parsed.reasoningBlocks
+                : [];
 
             if (parsed.toolCalls.length === 0) {
                 break;
@@ -2530,7 +2574,8 @@ async function chat(chatId, userMessage, options = {}) {
                 role: 'user',
                 content: '[System: All tool operations are complete. Briefly summarize what was done and the results for the user. You MUST respond with text — do not use tools or return empty.]'
             }];
-            const summaryApiMsgs = adapter.toApiMessages(summaryNeutral);
+            // BAT-549 R2 thread 3: same activeModel as the body.
+            const summaryApiMsgs = adapter.toApiMessages(summaryNeutral, activeModel);
 
             const summaryRes = await claudeApiCall(
                 adapter.formatRequest(activeModel, 4096, systemBlocks, summaryApiMsgs, []),
@@ -2590,8 +2635,15 @@ async function chat(chatId, userMessage, options = {}) {
         // the checkpoint must survive for a retry.
         if (stepCount > 0) cleanupChatCheckpoints(chatId);
 
-        // Update conversation history with final response
-        addToConversation(chatId, 'assistant', assistantMessage);
+        // Update conversation history with final response.
+        // BAT-549 R2 thread 5: thread reasoningBlocks through so a non-
+        // tool final answer's reasoning content survives across turns
+        // and into checkpoint snapshots. Empty array is the documented
+        // "no reasoning preserved" sentinel.
+        addToConversation(chatId, 'assistant', assistantMessage,
+            lastParsedReasoningBlocks.length > 0
+                ? { reasoningBlocks: lastParsedReasoningBlocks }
+                : null);
 
         // Session summary tracking (BAT-57)
         {

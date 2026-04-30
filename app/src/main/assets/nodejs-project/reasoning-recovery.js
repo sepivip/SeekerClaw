@@ -140,8 +140,13 @@ function quarantineActiveSegment(ctx) {
         return { newMessages: messages, systemNote: null, quarantinePath: null, checkpointPath: null, ok: false, cutIndex };
     }
 
+    // R2 thread 2: step 1 was "lost in an upgrade" — but the recovery
+    // trigger is a provider 400, which can fire for reasons other than
+    // an app upgrade (provider-side contract changes, misconfig, model
+    // switch mid-conversation, etc.). Neutral wording stays accurate
+    // for all trigger cases.
     const systemNote = step === 1
-        ? 'Previous reasoning content was lost in an upgrade. Continuing from your last message.'
+        ? 'Conversation state could not be recovered after a provider error. Continuing from your last message; long-term memory and skills are preserved.'
         : step === 2
             ? 'Earlier conversation could not be recovered after a provider error. Continuing with a wider truncation; long-term memory and skills are preserved.'
             : 'Earlier reasoning state could not be recovered. Conversation reset; long-term memory and skills are preserved.';

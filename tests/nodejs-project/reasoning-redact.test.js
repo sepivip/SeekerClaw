@@ -206,6 +206,54 @@ notIncludes('No 16-char leak',  out, 'RECOGNIZABLE_LEA');
 notIncludes('No 32-char leak',  out, 'RECOGNIZABLE_LEAK_PHRASE_DO_NOT_');
 
 console.log();
+console.log('── Safe stringify regression (Codex R2 thread 1) ──');
+// fingerprint() and the unknown/opaque paths must not throw on BigInt,
+// circular refs, or Buffer. Each of these would crash logging call sites
+// if not guarded.
+
+// BigInt — JSON.stringify throws "TypeError: Do not know how to serialize a BigInt"
+let bigintHash;
+try { bigintHash = fingerprint(BigInt(12345)); ok('fingerprint(BigInt) does not throw', true); }
+catch (e) { ok('fingerprint(BigInt) does not throw', false, e.message); }
+ok('fingerprint(BigInt) returns 8-char hex', /^[0-9a-f]{8}$/.test(bigintHash || ''));
+
+// Circular reference
+const circ = { foo: 'bar' }; circ.self = circ;
+let circHash;
+try { circHash = fingerprint(circ); ok('fingerprint(circular) does not throw', true); }
+catch (e) { ok('fingerprint(circular) does not throw', false, e.message); }
+ok('fingerprint(circular) returns valid output (not "-")', circHash && circHash !== '-');
+
+// Buffer — would JSON.stringify expand to {type:"Buffer",data:[...]} (huge)
+const buf = Buffer.from('reasoning bytes that should not be JSON-expanded for hashing', 'utf8');
+let bufHash;
+try { bufHash = fingerprint(buf); ok('fingerprint(Buffer) does not throw', true); }
+catch (e) { ok('fingerprint(Buffer) does not throw', false, e.message); }
+ok('fingerprint(Buffer) returns 8-char hex', /^[0-9a-f]{8}$/.test(bufHash || ''));
+
+// Opaque-wire path with BigInt inside
+const opaqueBlock = {
+    schemaVersion: 1, provider: 'custom', sourceAdapter: 'custom',
+    sourceModel: 'unknown-gateway', wire: { weird: BigInt(42) },
+};
+let opaqueOut;
+try { opaqueOut = redactReasoningBlock(opaqueBlock); ok('redactReasoningBlock(BigInt-wire) does not throw', true); }
+catch (e) { ok('redactReasoningBlock(BigInt-wire) does not throw', false, e.message); }
+ok('opaque block summary still has kind tag',
+    typeof opaqueOut === 'string' && (opaqueOut.includes('kind=opaque') || opaqueOut.includes('kind=unknown')));
+
+// Unknown-provider path with circular wire
+const unknownBlock = {
+    schemaVersion: 1, provider: 'future-provider-v9', sourceAdapter: 'future',
+    sourceModel: 'whatever', wire: circ,
+};
+let unknownOut;
+try { unknownOut = redactReasoningBlock(unknownBlock); ok('redactReasoningBlock(circular-wire) does not throw', true); }
+catch (e) { ok('redactReasoningBlock(circular-wire) does not throw', false, e.message); }
+ok('unknown block summary contains kind=unknown',
+    typeof unknownOut === 'string' && unknownOut.includes('kind=unknown'));
+
+console.log();
 if (failures === 0) {
     console.log('ALL TESTS PASS');
     process.exit(0);

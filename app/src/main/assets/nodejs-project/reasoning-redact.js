@@ -25,12 +25,42 @@
 const crypto = require('crypto');
 
 /**
- * Short fingerprint of any string/buffer — first 8 hex chars of sha256.
- * Returns '-' for empty/missing input.
+ * Safely stringify ANY input for hashing/redaction. Codex R2 thread 1:
+ * raw `JSON.stringify` throws on BigInt and circular refs, which would
+ * crash the very logging call sites this module is supposed to protect.
+ * Buffer also gets special-cased — `JSON.stringify(buffer)` expands to a
+ * huge `{type:"Buffer",data:[...]}` form that's expensive to hash.
+ *
+ * Returns `null` if conversion fails entirely (caller treats as "absent").
+ */
+function _safeStringify(input) {
+    if (input === null || input === undefined) return null;
+    if (typeof input === 'string') return input;
+    if (Buffer.isBuffer(input)) {
+        return `<Buffer:${input.length}b>`;
+    }
+    if (typeof input === 'bigint') {
+        return `<bigint:${input.toString()}>`;
+    }
+    try {
+        return JSON.stringify(input);
+    } catch (e) {
+        // BigInt inside object, circular ref, etc. — emit a stable
+        // type-tagged placeholder. We don't expose the error message;
+        // it could itself contain reasoning content if a custom toJSON
+        // threw with that data.
+        return `<unserializable:${typeof input}>`;
+    }
+}
+
+/**
+ * Short fingerprint of any string/buffer/object — first 8 hex chars of sha256.
+ * Returns '-' for empty/missing/unserializable input.
  */
 function fingerprint(input) {
     if (input === null || input === undefined || input === '') return '-';
-    const s = typeof input === 'string' ? input : JSON.stringify(input);
+    const s = _safeStringify(input);
+    if (s === null || s === '') return '-';
     return crypto.createHash('sha256').update(s, 'utf8').digest('hex').slice(0, 8);
 }
 
@@ -123,16 +153,17 @@ function redactReasoningBlock(block) {
                 parts.push(`fp=${fingerprint(wire.reasoning_content)}`);
             } else {
                 // Unknown gateway shape — fingerprint the whole wire object
-                const serialized = JSON.stringify(wire);
+                // via _safeStringify (R2 thread 1: handles BigInt/circular)
+                const serialized = _safeStringify(wire);
                 parts.push(`kind=opaque`);
-                parts.push(`len=${byteLen(serialized)}`);
+                parts.push(`len=${byteLen(serialized || '')}`);
                 parts.push(`fp=${fingerprint(serialized)}`);
             }
         } else {
             // Unknown provider — fingerprint without disclosure
-            const serialized = JSON.stringify(wire);
+            const serialized = _safeStringify(wire);
             parts.push(`kind=unknown`);
-            parts.push(`len=${byteLen(serialized)}`);
+            parts.push(`len=${byteLen(serialized || '')}`);
             parts.push(`fp=${fingerprint(serialized)}`);
         }
     } else if (wire !== undefined) {
@@ -161,8 +192,9 @@ function redactReasoningField(value) {
     if (value === null || value === undefined) return 'absent';
     if (typeof value === 'string') return `len=${byteLen(value)} fp=${fingerprint(value)}`;
     if (typeof value === 'object') {
-        const s = JSON.stringify(value);
-        return `objLen=${byteLen(s)} fp=${fingerprint(s)}`;
+        // R2 thread 1: _safeStringify handles BigInt/circular/Buffer
+        const s = _safeStringify(value);
+        return `objLen=${byteLen(s || '')} fp=${fingerprint(s)}`;
     }
     return `type=${typeof value}`;
 }

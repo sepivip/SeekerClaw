@@ -113,13 +113,20 @@ function fromApiResponse(raw) {
     const parsed = delegate().fromApiResponse(raw);
     if (Array.isArray(parsed.reasoningBlocks) && parsed.reasoningBlocks.length > 0) {
         const dn = delegateName();
-        const customModel = resolveActiveModel() || parsed.reasoningBlocks[0]?.sourceModel || null;
+        // R2 thread 4: prefer the model the response ACTUALLY came from
+        // (raw.model from the delegate's parse, or blk.sourceModel which
+        // openrouter.js sets to raw.model). Fall back to resolveActiveModel
+        // ONLY when the response didn't include a model id. This keeps
+        // persisted provenance accurate even when an `agent_settings.json`
+        // overlay has switched the model since the request was sent.
         parsed.reasoningBlocks = parsed.reasoningBlocks.map((blk) => ({
             ...blk,
             provider: 'custom',
             sourceAdapter: 'custom',
             delegateAdapter: dn,
-            sourceModel: customModel,
+            sourceModel: raw && typeof raw.model === 'string' && raw.model
+                ? raw.model
+                : (blk.sourceModel || resolveActiveModel() || null),
         }));
     } else if (!parsed.reasoningBlocks) {
         parsed.reasoningBlocks = [];
@@ -137,8 +144,19 @@ function fromApiResponse(raw) {
  * outside Custom), gating doesn't apply — those adapters are called
  * directly by the providers/index.js registry without Custom in front.
  */
-function toApiMessages(messages) {
-    const customModel = resolveActiveModel();
+function toApiMessages(messages, activeModel) {
+    // R2 thread 3: accept the resolved active model as a parameter so
+    // gating uses the SAME model that ai.js's chat() built the request
+    // with. Re-reading resolveActiveModel() here would race with a mid-
+    // turn agent_settings.json overlay flip and could send a V4 request
+    // while gating decided "strip" (or vice versa) — reintroducing the
+    // 400 loop. Other adapters' toApiMessages signatures are unchanged
+    // (they ignore the extra arg). Fall back to resolveActiveModel only
+    // if the caller didn't pass one, for backward compatibility with any
+    // older callsites in this branch.
+    const customModel = (typeof activeModel === 'string' && activeModel)
+        ? activeModel
+        : resolveActiveModel();
     const customEchoOverride = false; // BAT-549 commit 3 wires this from RuntimeState.customEchoReasoning
     const behavior = detectCustomEchoBehavior(customModel, customEchoOverride);
 

@@ -283,6 +283,97 @@ assertOk('Block has sourceModel', typeof dsV4Block.sourceModel === 'string');
 assertOk('Block has turnId', dsV4Block.turnId !== undefined);
 
 console.log();
+console.log('── R2 thread 4: sourceModel uses raw.model, not resolveActiveModel ──');
+// This pins the v4.1 finding 4 invariant: persisted provenance must
+// reflect the model the response ACTUALLY came from, not whatever
+// resolveActiveModel returns when fromApiResponse runs (which can drift
+// after an agent_settings.json overlay flip mid-conversation).
+_activeModel = 'deepseek-v4-pro-NEW-OVERLAY'; // pretend overlay flipped after the request
+
+const stableV4Resp = {
+    id: 'chatcmpl-stable',
+    model: 'deepseek-v4-pro', // <-- response says THIS model produced it
+    choices: [{
+        finish_reason: 'tool_calls',
+        message: {
+            role: 'assistant',
+            content: 'response',
+            reasoning_content: 'reasoning under deepseek-v4-pro',
+            tool_calls: [{ id: 'tcA', type: 'function', function: { name: 'echo', arguments: '{}' } }],
+        },
+    }],
+};
+const stableParsed = customAdapter.fromApiResponse(stableV4Resp);
+assertEq('sourceModel = raw.model (not the overlay-shifted resolveActiveModel)',
+    stableParsed.reasoningBlocks[0].sourceModel,
+    'deepseek-v4-pro');
+
+// Fall-through: response without raw.model → resolveActiveModel takes over
+_activeModel = 'fallback-model-v9';
+const noModelResp = {
+    id: 'chatcmpl-no-model',
+    // no `model` field
+    choices: [{
+        finish_reason: 'tool_calls',
+        message: {
+            role: 'assistant',
+            content: 'response',
+            reasoning_content: 'reasoning when raw.model absent',
+            tool_calls: [{ id: 'tcB', type: 'function', function: { name: 'echo', arguments: '{}' } }],
+        },
+    }],
+};
+const noModelParsed = customAdapter.fromApiResponse(noModelResp);
+// Delegate's openrouter.js sets sourceModel from raw.model || null. So
+// when raw.model is absent, blk.sourceModel from delegate = null, and
+// we fall back to resolveActiveModel.
+assertEq('sourceModel falls back to resolveActiveModel when raw.model absent',
+    noModelParsed.reasoningBlocks[0].sourceModel,
+    'fallback-model-v9');
+
+console.log();
+console.log('── R2 thread 3: toApiMessages takes activeModel parameter ──');
+// Pin the v4.1 finding 3 invariant: gating uses the EXPLICITLY-PASSED
+// model, not whatever resolveActiveModel returns at toApiMessages-time.
+// Set a contradiction: resolveActiveModel returns R1 (would strip),
+// but we PASS V4 explicitly → gating MUST echo.
+
+_activeModel = 'deepseek-reasoner'; // would normally → strip
+const contradictionMessages = [
+    { role: 'user', content: 'q' },
+    {
+        role: 'assistant',
+        content: 'a',
+        toolCalls: [{ id: 'tc-c', name: 'echo', input: {} }],
+        reasoningBlocks: [{
+            schemaVersion: 1, provider: 'custom', sourceAdapter: 'custom',
+            delegateAdapter: 'openrouter', sourceModel: 'deepseek-v4-pro',
+            wire: { reasoning_content: 'V4 reasoning that must echo' },
+        }],
+    },
+    { role: 'tool', toolCallId: 'tc-c', content: 'ok' },
+];
+
+// Pass V4 explicitly → gating uses it, NOT the R1 from resolveActiveModel
+const wireWithExplicitModel = customAdapter.toApiMessages(contradictionMessages, 'deepseek-v4-pro');
+const wireAssistantExplicit = wireWithExplicitModel.find((m) => m.role === 'assistant');
+assertOk('Explicit V4 model → reasoning_content echoed (gating used param, not stale resolveActiveModel)',
+    typeof wireAssistantExplicit.reasoning_content === 'string'
+        && wireAssistantExplicit.reasoning_content.includes('V4 reasoning'));
+
+// Don't pass model → falls back to resolveActiveModel = R1 → strip
+const wireWithoutModel = customAdapter.toApiMessages(contradictionMessages);
+const wireAssistantFallback = wireWithoutModel.find((m) => m.role === 'assistant');
+assertOk('No explicit model → falls back to resolveActiveModel (R1) → strip',
+    wireAssistantFallback.reasoning_content === undefined);
+
+// Empty/null param → falls back too
+const wireWithEmpty = customAdapter.toApiMessages(contradictionMessages, '');
+const wireAssistantEmpty = wireWithEmpty.find((m) => m.role === 'assistant');
+assertOk('Empty model param → falls back to resolveActiveModel',
+    wireAssistantEmpty.reasoning_content === undefined);
+
+console.log();
 if (failures === 0) {
     console.log('ALL TESTS PASS');
     process.exit(0);
