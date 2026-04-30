@@ -2308,22 +2308,22 @@ async function chat(chatId, userMessage, options = {}) {
                 // recovery metadata — it could surface to the user via
                 // Telegram in a future commit, but it must NOT enter
                 // the model's prompt context.
-                // R7 thread 2: handle non-string userMessage. chat()
-                // accepts userMessage as either a string OR an array of
-                // content blocks (vision/multipart input). The previous
-                // `last.content === userMessage` check only matched
-                // strings; for arrays the splice would produce a fresh
-                // reference (sliced from result.newMessages) so reference
-                // equality fails AND the array isn't deep-equal to the
-                // ORIGINAL userMessage either. Solution: compare with a
-                // stable JSON serialization for non-string content.
-                const _userMessageEq = (a, b) => {
-                    if (a === b) return true;
-                    if (typeof a === 'string' && typeof b === 'string') return false;
-                    // Both should be arrays/objects of content blocks
-                    try { return JSON.stringify(a) === JSON.stringify(b); }
-                    catch (_) { return false; }
-                };
+                // R7 + R8 thread 2: handle non-string userMessage cheaply.
+                // chat() accepts userMessage as either a string OR an
+                // array of content blocks (vision/multipart, possibly
+                // multi-MB base64 image payloads). Reference equality is
+                // sufficient AND OOM-safe because:
+                //   - addToConversation builds `{role, content: userMessage}`
+                //     adopting the original reference verbatim
+                //   - splice(...result.newMessages) preserves entries by
+                //     reference (spread is shallow; quarantine slices are
+                //     shallow too — refs are unchanged)
+                //   - For string userMessage, `===` is value equality
+                //   - For array userMessage, `===` is reference equality
+                //     against the SAME object the user-message entry holds
+                // R7's JSON.stringify fallback was unnecessary overkill
+                // and would re-stringify a multi-MB payload on every retry.
+                const _userMessageEq = (a, b) => a === b;
                 const _applyRecovery = (result) => {
                     messages.splice(0, messages.length, ...result.newMessages);
                     // Re-append the current turn's user message if recovery

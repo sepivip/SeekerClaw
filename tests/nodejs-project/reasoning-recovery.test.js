@@ -298,12 +298,11 @@ console.log('── R7 thread 2: _applyRecovery handles array-content userMessag
 // the spliced array contains a copy via spread, so reference equality
 // fails AND the original userMessage object/array is needed for
 // comparison.
-const _userMessageEqReplica = (a, b) => {
-    if (a === b) return true;
-    if (typeof a === 'string' && typeof b === 'string') return false;
-    try { return JSON.stringify(a) === JSON.stringify(b); }
-    catch (_) { return false; }
-};
+// R8 thread 2: production uses cheap `===` (reference equality).
+// addToConversation adopts `userMessage` by reference and splice
+// preserves entries by reference, so reference equality is correct
+// and OOM-safe even for multi-MB image-block payloads.
+const _userMessageEqReplica = (a, b) => a === b;
 const _applyRecoveryArrayReplica = (messages, userMessage, result) => {
     messages.splice(0, messages.length, ...result.newMessages);
     const last = messages[messages.length - 1];

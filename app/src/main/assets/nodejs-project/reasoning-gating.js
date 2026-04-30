@@ -20,11 +20,19 @@
  *
  * Returns one of:
  *  - 'strip'              : known-do-not-echo (e.g. DeepSeek R1). Strip
- *                           reasoningBlocks before delegating.
- *  - 'echo-on-tool-loop'  : known-echo-after-tool-call (e.g. DeepSeek V4) OR
- *                           user enabled the advanced override. Hand blocks
- *                           to delegate; delegate decides whether the prior
- *                           turn was tool-use.
+ *                           reasoningBlocks before delegating, so the
+ *                           delegate's emit path has nothing to attach.
+ *  - 'echo-on-tool-loop'  : known-must-echo-after-tool-call (e.g. DeepSeek
+ *                           V4) OR user enabled the advanced override.
+ *                           Pass blocks through to the delegate, which
+ *                           emits unconditionally whenever blocks are
+ *                           present (R8 thread 1: the delegate does NOT
+ *                           re-decide based on tool-use context — gating
+ *                           lives entirely in this Custom-adapter layer).
+ *                           The "tool-loop" suffix in this name reflects
+ *                           the V4 SERVER contract that requires echo
+ *                           after a tool call, not a per-call delegate
+ *                           decision.
  *  - 'unknown'            : capture-only — do NOT echo. Log once per session
  *                           if blocks are present. User can flip the override
  *                           if their gateway needs it.
