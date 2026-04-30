@@ -1427,26 +1427,29 @@ private fun CustomEchoReasoningRow() {
             checked = checked,
             onCheckedChange = { newValue ->
                 optimistic = newValue
-                // R14 Copilot: dispatch the disk write off the main
-                // thread so the cross-process-store fsync can't trip
-                // StrictMode or jank the UI. On failure, revert local
-                // optimistic state.
-                val next = rtState.copy(customEchoReasoning = newValue)
+                // R14 Copilot: dispatch off the main thread so fsync
+                // can't trip StrictMode or jank the UI.
+                // R24 Copilot: use RuntimeStateStore.update for atomic
+                // field-local read-modify-write — `write(rtState.copy(...))`
+                // would clobber a concurrent cross-process write (Commit
+                // 3d's signature reset triggered from ConfigManager,
+                // future Telegram commands). update {} re-reads the
+                // latest persisted state INSIDE the lock so only the
+                // customEchoReasoning field is mutated.
                 scope.launch(Dispatchers.IO) {
                     val ok = try {
-                        RuntimeStateStore.write(next)
+                        RuntimeStateStore.update { it.copy(customEchoReasoning = newValue) }
                     } catch (_: IllegalArgumentException) {
                         false
                     }
                     withContext(Dispatchers.Main) {
                         // R17 Copilot: clear the optimistic override on
                         // failure rather than negating newValue. A
-                        // concurrent cross-process update (Commit 3d's
-                        // signature reset, future Telegram commands)
-                        // could change the canonical value in the
-                        // meantime — clearing the override is always
-                        // correct because rtState reflects whatever's
-                        // currently persisted on disk.
+                        // concurrent cross-process update could change
+                        // the canonical value in the meantime — clearing
+                        // the override is always correct because
+                        // rtState reflects whatever's currently
+                        // persisted on disk.
                         if (!ok) optimistic = null
                     }
                 }

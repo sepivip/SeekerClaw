@@ -1510,10 +1510,7 @@ private fun ReasoningSection() {
                 checked = reasoningEnabled,
                 onCheckedChange = { newValue ->
                     optimisticEnabled = newValue
-                    persistReasoningFieldAsync(
-                        scope,
-                        rtState.copy(reasoningEnabled = newValue),
-                    ) { ok ->
+                    persistReasoningUpdateAsync(scope, { it.copy(reasoningEnabled = newValue) }) { ok ->
                         // R17 Copilot: clear the optimistic override on
                         // failure so the displayed value falls back to
                         // the live StateFlow. `!newValue` would be
@@ -1532,10 +1529,9 @@ private fun ReasoningSection() {
                 checked = reasoningDisplay,
                 onCheckedChange = { newValue ->
                     optimisticDisplay = newValue
-                    persistReasoningFieldAsync(
-                        scope,
-                        rtState.copy(reasoningDisplayInChat = newValue),
-                    ) { ok -> if (!ok) optimisticDisplay = null }
+                    persistReasoningUpdateAsync(scope, { it.copy(reasoningDisplayInChat = newValue) }) { ok ->
+                        if (!ok) optimisticDisplay = null
+                    }
                 },
                 info = SettingsHelpTexts.REASONING_DISPLAY_IN_CHAT,
             )
@@ -1565,23 +1561,32 @@ private fun ReasoningSection() {
 }
 
 /**
- * Persist a [next] RuntimeState via [RuntimeStateStore.write] off the
- * main thread. R14 Copilot: cross-process-store does a tmp-write +
- * atomic rename which is sync disk I/O — fine on flash but trips
- * StrictMode and can produce visible jank on slow devices when the
- * fsync stalls. Dispatching to IO keeps the UI thread responsive
- * while the optimistic local state already gave the user immediate
- * visual feedback. [callback] runs on Main with the persistence
- * result so the caller can revert optimistic state on FS failure.
+ * Persist a BAT-549 RuntimeState field via [RuntimeStateStore.update]
+ * — atomic field-local read-modify-write under the
+ * CrossProcessStore's writeLock. R24 Copilot: prevents TOCTOU
+ * lost-update races where a concurrent cross-process write (Telegram
+ * /think handler, Commit 3d's signature reset, etc.) lands between
+ * the snapshot read in the @Composable and our write — without the
+ * lock our write would clobber the concurrent change. update {}
+ * re-reads the latest persisted value INSIDE the lock and applies
+ * [transform] to it, so we only mutate the field we intended to.
+ *
+ * R14 Copilot: cross-process-store does a tmp-write + atomic rename
+ * which is sync disk I/O — fine on flash but trips StrictMode and
+ * can produce visible jank on slow devices when the fsync stalls.
+ * Dispatching to IO keeps the UI thread responsive while the
+ * optimistic local state already gave the user immediate visual
+ * feedback. [callback] runs on Main with the persistence result so
+ * the caller can revert optimistic state on FS failure.
  */
-private fun persistReasoningFieldAsync(
+private fun persistReasoningUpdateAsync(
     scope: kotlinx.coroutines.CoroutineScope,
-    next: com.seekerclaw.app.state.RuntimeState,
+    transform: (com.seekerclaw.app.state.RuntimeState) -> com.seekerclaw.app.state.RuntimeState,
     callback: (Boolean) -> Unit,
 ) {
     scope.launch(Dispatchers.IO) {
         val ok = try {
-            RuntimeStateStore.write(next)
+            RuntimeStateStore.update(transform)
         } catch (_: IllegalArgumentException) {
             false
         }
