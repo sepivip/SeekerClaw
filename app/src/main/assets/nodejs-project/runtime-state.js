@@ -222,6 +222,26 @@ function open(workDir) {
                 merged[key] = DEFAULTS[key];
             }
         }
+        // 3e R5 Copilot: re-validate the BAT-549 fields after merge.
+        // The type-checks above only run on `value`. If a corrupted
+        // runtime_state.json (manual edit, future schema rolled back,
+        // etc.) had a wrong-type value for one of the BAT-549 fields,
+        // the merge above would carry it forward and we'd silently
+        // re-persist the bad value. Defensive sanitize-on-merge: if
+        // the persisted value has the wrong type, fall back to the
+        // DEFAULT for that field instead of refusing the write
+        // (refusing would break legacy 3-field callers entirely; the
+        // sanitize-and-write path heals corrupt files on the next
+        // user-driven write). Only the optional BAT-549 fields need
+        // this — the required fields (provider/authType/model) are
+        // already shape-checked above and won't reach here in a bad
+        // state.
+        if (typeof merged.reasoningEnabled !== 'boolean') merged.reasoningEnabled = DEFAULTS.reasoningEnabled;
+        if (typeof merged.reasoningDisplayInChat !== 'boolean') merged.reasoningDisplayInChat = DEFAULTS.reasoningDisplayInChat;
+        if (typeof merged.customEchoReasoning !== 'boolean') merged.customEchoReasoning = DEFAULTS.customEchoReasoning;
+        if (merged.customConfigSignature !== null && typeof merged.customConfigSignature !== 'string') {
+            merged.customConfigSignature = DEFAULTS.customConfigSignature;
+        }
         return store.write(merged);
     }
 

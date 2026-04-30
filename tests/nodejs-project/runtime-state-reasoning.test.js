@@ -221,6 +221,37 @@ expectThrow('write rejects missing model',
     () => handle.write({ provider: 'claude', authType: 'api_key' }),
     'invalid shape');
 
+console.log();
+console.log('── 3e R5 Copilot: corrupt persisted values heal on legacy write ──');
+
+// If runtime_state.json is corrupt (manual edit, schema rolled back, etc.)
+// with a string "true" instead of boolean true for reasoningEnabled, a
+// legacy 3-field write must NOT carry the bad value forward. The merge
+// layer's sanitize-on-merge resets it to DEFAULTS.
+fs.writeFileSync(oldShapeFile, JSON.stringify({
+    provider: 'claude',
+    authType: 'api_key',
+    model: 'claude-opus-4-7',
+    reasoningEnabled: 'true', // corrupted: string instead of boolean
+    reasoningDisplayInChat: 1, // corrupted: number instead of boolean
+    customEchoReasoning: null, // corrupted: null instead of boolean
+    customConfigSignature: 12345, // corrupted: number instead of string|null
+}, null, 2), 'utf8');
+
+// Legacy 3-field write
+handle.write({ provider: 'openai', authType: 'oauth', model: 'gpt-5.4' });
+const afterHeal = handle.read();
+eq('Sanitize: corrupted reasoningEnabled "true" → false (default)',
+    afterHeal.reasoningEnabled, false);
+eq('Sanitize: corrupted reasoningDisplayInChat 1 → false (default)',
+    afterHeal.reasoningDisplayInChat, false);
+eq('Sanitize: corrupted customEchoReasoning null → false (default)',
+    afterHeal.customEchoReasoning, false);
+eq('Sanitize: corrupted customConfigSignature 12345 → null (default)',
+    afterHeal.customConfigSignature, null);
+// Legacy fields still updated correctly
+eq('Sanitize: legacy fields written correctly', afterHeal.provider, 'openai');
+
 // Cleanup
 try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch (_) {}
 
