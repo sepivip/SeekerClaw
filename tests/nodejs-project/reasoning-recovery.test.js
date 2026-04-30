@@ -119,10 +119,12 @@ eq('step 1 cutIndex points after last user message', step1.cutIndex, 5);
 eq('step 1 newMessages length = 5', step1.newMessages.length, 5);
 ok('step 1 systemNote present', typeof step1.systemNote === 'string' && step1.systemNote.length > 0);
 ok('step 1 quarantinePath present', !!step1.quarantinePath);
-ok('step 1 quarantine file exists',
-    fs.existsSync(path.join(tmpRoot, 'recovery', '12345-1700000000000-step1.json')));
+// R7 thread 1: filename includes taskId so concurrent quarantines (e.g.
+// fresh + resumedFromTaskId in the same ms) don't overwrite each other.
+ok('step 1 quarantine file exists with taskId in name',
+    fs.existsSync(path.join(tmpRoot, 'recovery', '12345-1700000000000-step1-task-abc.json')));
 ok('step 1 forensic checkpoint exists',
-    fs.existsSync(path.join(tmpRoot, 'recovery', '12345-1700000000000-step1-checkpoint.json')));
+    fs.existsSync(path.join(tmpRoot, 'recovery', '12345-1700000000000-step1-task-abc-checkpoint.json')));
 
 const writtenForensic = JSON.parse(fs.readFileSync(step1.quarantinePath, 'utf8'));
 eq('forensic file: schemaVersion=1', writtenForensic.schemaVersion, 1);
@@ -288,6 +290,100 @@ eq('After _applyRecovery (step 3): exactly one user-role message',
     liveMessagesS3.filter((m) => m.role === 'user').length, 1);
 ok('After _applyRecovery (step 3): the lone user message is the current prompt',
     liveMessagesS3[0].role === 'user' && liveMessagesS3[0].content === userMessageS3);
+
+console.log();
+console.log('── R7 thread 2: _applyRecovery handles array-content userMessage (vision) ──');
+// Replicate ai.js's _userMessageEq + _applyRecovery for arrays/objects.
+// Vision flow: userMessage is an array of content blocks. After splice
+// the spliced array contains a copy via spread, so reference equality
+// fails AND the original userMessage object/array is needed for
+// comparison.
+const _userMessageEqReplica = (a, b) => {
+    if (a === b) return true;
+    if (typeof a === 'string' && typeof b === 'string') return false;
+    try { return JSON.stringify(a) === JSON.stringify(b); }
+    catch (_) { return false; }
+};
+const _applyRecoveryArrayReplica = (messages, userMessage, result) => {
+    messages.splice(0, messages.length, ...result.newMessages);
+    const last = messages[messages.length - 1];
+    const lastIsCurrentUser = last
+        && last.role === 'user'
+        && _userMessageEqReplica(last.content, userMessage);
+    if (!lastIsCurrentUser) {
+        messages.push({ role: 'user', content: userMessage });
+    }
+};
+
+// Vision-shape userMessage: array of content blocks
+const visionUserMessage = [
+    { type: 'text', text: 'What is in this image?' },
+    { type: 'image_url', image_url: { url: 'data:image/png;base64,XXXX' } },
+];
+// Step 1 path: last user message in conv has the SAME array content
+const visionConv = [
+    { role: 'user', content: visionUserMessage },
+];
+// Run quarantine step 1 (cuts after last user → newMessages includes the user)
+const visionStep1 = recovery.quarantineActiveSegment({
+    chatId: 'vision-test', messages: visionConv, workDir: tmpRoot,
+    step: 1, taskId: 'vt1', now: () => 1700000000222,
+});
+// Apply recovery — last message should NOT be duplicate-appended
+const visionLive = visionConv.slice();
+_applyRecoveryArrayReplica(visionLive, visionUserMessage, visionStep1);
+const visionUsers = visionLive.filter((m) => m.role === 'user');
+eq('Vision (array userMessage): step 1 preserves prompt without duplication',
+    visionUsers.length, 1);
+
+// Step 3 reset: array-userMessage gets re-appended exactly once
+const visionStep3 = recovery.quarantineActiveSegment({
+    chatId: 'vision-test', messages: visionConv, workDir: tmpRoot,
+    step: 3, taskId: 'vt3', now: () => 1700000000223,
+});
+const visionLiveS3 = visionConv.slice();
+_applyRecoveryArrayReplica(visionLiveS3, visionUserMessage, visionStep3);
+const visionS3Users = visionLiveS3.filter((m) => m.role === 'user');
+eq('Vision (array userMessage): step 3 re-appends exactly once',
+    visionS3Users.length, 1);
+ok('Vision (array userMessage): re-appended content matches original array shape',
+    JSON.stringify(visionS3Users[0].content) === JSON.stringify(visionUserMessage));
+
+// Mismatched arrays should NOT match: unrelated content array fails eq check
+const otherArray = [{ type: 'text', text: 'totally different' }];
+ok('Different arrays compare false (no false-positive match)',
+    !_userMessageEqReplica(visionUserMessage, otherArray));
+
+console.log();
+console.log('── R7 thread 1: forensic file collision (same-ms double quarantine) ──');
+// Replicate ai.js's recovery loop calling quarantineActiveSegment
+// twice in the same ms — once for resumedFromTaskId, once for fresh
+// taskId. Filenames MUST differ (taskId disambiguator).
+const sameMs = 1700000000999;
+const r1 = recovery.quarantineActiveSegment({
+    chatId: 'race', messages: sampleConv, workDir: tmpRoot,
+    step: 1, taskId: 'old-resumed', now: () => sameMs,
+});
+const r2 = recovery.quarantineActiveSegment({
+    chatId: 'race', messages: sampleConv, workDir: tmpRoot,
+    step: 1, taskId: 'new-fresh', now: () => sameMs,
+});
+ok('Both quarantines wrote distinct paths',
+    r1.quarantinePath && r2.quarantinePath
+    && r1.quarantinePath !== r2.quarantinePath,
+    `r1=${r1.quarantinePath} r2=${r2.quarantinePath}`);
+ok('Both forensic files coexist on disk',
+    fs.existsSync(r1.quarantinePath) && fs.existsSync(r2.quarantinePath));
+
+// Null-task case: no taskId → "no-task" tag (stable filename)
+const r3 = recovery.quarantineActiveSegment({
+    chatId: 'no-task-test', messages: sampleConv, workDir: tmpRoot,
+    step: 1, taskId: null, now: () => 1700000000111,
+});
+ok('No-taskId quarantine still produces a valid file path',
+    r3.quarantinePath && fs.existsSync(r3.quarantinePath));
+ok('No-taskId path includes "no-task" disambiguator',
+    r3.quarantinePath.includes('no-task'));
 
 // Cleanup
 try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch (_) {}

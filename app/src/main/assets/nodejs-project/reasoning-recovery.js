@@ -158,7 +158,13 @@ function quarantineActiveSegment(ctx) {
     const keptPrefix = messages.slice(0, cutIndex);
     const quarantinedSlice = messages.slice(cutIndex);
     const recoveryDir = path.join(workDir, 'recovery');
-    const fileBase = `${chatId}-${now}-step${step}`;
+    // R7 thread 1: include taskId in the filename so two calls within
+    // the same millisecond (ai.js's recovery loop hits both fresh and
+    // resumed-from taskIds when /resume triggers a 400) don't overwrite
+    // each other's forensic files. taskId is a hex string, so it's
+    // filesystem-safe; null/missing → "no-task".
+    const taskTag = taskId ? `-${taskId}` : '-no-task';
+    const fileBase = `${chatId}-${now}-step${step}${taskTag}`;
     const quarantinePath = path.join(recoveryDir, `${fileBase}.json`);
 
     let quarantineWritten = null;
