@@ -2,6 +2,7 @@ package com.seekerclaw.app.ui.settings
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -16,6 +17,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import com.seekerclaw.app.ui.components.SeekerClawScaffold
+import com.seekerclaw.app.ui.components.SeekerClawSwitch
+import com.seekerclaw.app.state.RuntimeStateStore
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.RadioButtonDefaults
@@ -541,6 +544,29 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                             showDivider = false,
                         )
                     }
+                }
+            }
+
+            // BAT-549 Commit 3e: per-Custom advanced override row. Only
+            // visible when the Custom provider is active. Forces the
+            // adapter to echo `reasoning_content` on tool-loop turns
+            // for ANY model id (overrides the conservative default of
+            // capturing-only for unknown gateways). Required for
+            // gateways whose model id doesn't match the known DeepSeek-V4
+            // regex but whose server contract requires the echo —
+            // wrong override → 400 loop, so default OFF.
+            //
+            // Resets to false when [CustomConfigSignature] detects a
+            // change to (model | baseUrl | format | sortedHeaderKeys) —
+            // see ConfigManager.saveConfig (Commit 3d). The reset
+            // protects users from carrying a "yes echo" decision from
+            // gateway A onto gateway B.
+            if (activeProvider == "custom") {
+                Spacer(modifier = Modifier.height(28.dp))
+                SectionLabel("Advanced (Reasoning)")
+                Spacer(modifier = Modifier.height(10.dp))
+                CardSurface {
+                    CustomEchoReasoningRow()
                 }
             }
 
@@ -1342,4 +1368,70 @@ fun OpenRouterModelEditDialog(
         containerColor = SeekerClawColors.Surface,
         shape = shape,
     )
+}
+
+/**
+ * BAT-549 Commit 3e: per-Custom advanced override toggle. Reads/writes
+ * RuntimeState.customEchoReasoning. When `true`, the Custom adapter's
+ * gating promotes "unknown" gateways to "echo-on-tool-loop", forcing
+ * `reasoning_content` to be echoed back on subsequent tool-use turns.
+ *
+ * Default OFF. The wrong setting → 400 loop on the next tool round
+ * (some gateways reject the echo, some require it). Only enable if you
+ * know your gateway requires the echo and the model id doesn't match
+ * the known DeepSeek-V4 regex (e.g., a self-hosted V4 fork or a brand-
+ * new V4-shaped model).
+ *
+ * The toggle automatically resets to false when the user edits any of
+ * (model | baseUrl | format | sortedHeaderKeys) — the
+ * [com.seekerclaw.app.state.CustomConfigSignature] change-detector
+ * triggered by ConfigManager.saveConfig (Commit 3d).
+ */
+@Composable
+private fun CustomEchoReasoningRow() {
+    val initial = remember { RuntimeStateStore.read() }
+    var checked by remember { mutableStateOf(initial.customEchoReasoning) }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = "Echo reasoning to gateway",
+                fontFamily = RethinkSans,
+                fontSize = 14.sp,
+                color = SeekerClawColors.TextPrimary,
+            )
+            Text(
+                text = "Force reasoning_content echo on tool-loop turns. Required for gateways that need it (e.g., DeepSeek-V4 forks). Wrong setting → 400 loop. Resets when you edit gateway config.",
+                fontFamily = RethinkSans,
+                fontSize = 11.sp,
+                color = SeekerClawColors.TextDim,
+                lineHeight = 16.sp,
+                modifier = Modifier.padding(top = 2.dp, end = 8.dp),
+            )
+        }
+        SeekerClawSwitch(
+            checked = checked,
+            onCheckedChange = { newValue ->
+                val current = RuntimeStateStore.read()
+                val next = current.copy(customEchoReasoning = newValue)
+                val ok = try {
+                    RuntimeStateStore.write(next)
+                } catch (_: IllegalArgumentException) {
+                    false
+                }
+                if (ok) {
+                    checked = newValue
+                }
+                // On failure: leave `checked` at its prior value so the
+                // switch visually reverts. RuntimeStateStore.write
+                // already logs FS errors via its underlying store.
+            },
+        )
+    }
 }

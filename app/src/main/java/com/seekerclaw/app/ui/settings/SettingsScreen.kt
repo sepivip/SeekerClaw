@@ -88,8 +88,10 @@ import androidx.compose.material3.IconButton
 import com.seekerclaw.app.config.ConfigClaimImport
 import com.seekerclaw.app.config.ConfigClaimImporter
 import com.seekerclaw.app.config.ConfigManager
+import com.seekerclaw.app.config.ModelRegistry
 import com.seekerclaw.app.config.availableModels
 import com.seekerclaw.app.config.searchProviderById
+import com.seekerclaw.app.state.RuntimeStateStore
 import com.seekerclaw.app.qr.QrScannerActivity
 import com.seekerclaw.app.service.SeekerClawService
 import com.seekerclaw.app.solana.SolanaAuthActivity
@@ -478,6 +480,22 @@ fun SettingsScreen(
                 )
             }
         }
+
+        Spacer(modifier = Modifier.height(28.dp))
+
+        // BAT-549 Commit 3e: "Reasoning" section — user-facing toggles for
+        // extended-thinking enablement and chat display. Both write through
+        // RuntimeStateStore so the :node side picks them up via the
+        // FileObserver / per-turn read in ai.js (Commit 3c). The "Display
+        // in chat" toggle is independent — a power user can capture
+        // reasoning into checkpoint state without surfacing it (lower
+        // chat noise) or vice versa (display already-captured reasoning
+        // from past turns even when not currently enabling new captures).
+        ReasoningSection(
+            currentProvider = config?.provider ?: "claude",
+            currentModel = config?.model ?: "",
+            currentAuthType = config?.authType,
+        )
 
         Spacer(modifier = Modifier.height(28.dp))
 
@@ -1425,6 +1443,130 @@ fun SettingsScreen(
 
 }
 
+
+/**
+ * BAT-549 Commit 3e: "Reasoning" section. Two switches that write
+ * through to RuntimeStateStore so the live cross-process state file
+ * stays in sync with the UI. The :node side reads these per turn
+ * (ai.js's chat() loop, Commit 3c) — no service restart needed.
+ *
+ * Note on the hint text: when the active model's `reasoningSupport`
+ * is "no" (Haiku) or "unknown" (freeform/unregistered), the toggle is
+ * a TRUE no-op — no request param is sent regardless. Showing this in
+ * the UI prevents the "I turned it on but nothing changed" confusion
+ * (Codex v4.1 watch-note 4: registry is the source of truth, never
+ * silently lie about model support).
+ *
+ * Read-modify-write race: a concurrent Telegram /think handler could
+ * land between our read and write. The window is ~ms and only matters
+ * for a user who flips the toggle in Settings AND issues /think
+ * simultaneously — exceedingly rare; the next interaction resolves.
+ */
+@Composable
+private fun ReasoningSection(
+    currentProvider: String,
+    currentModel: String,
+    currentAuthType: String?,
+) {
+    val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
+    // Initial values from the persisted RuntimeState. Use the public
+    // RuntimeStateStore.read() (returns the latest valid value or
+    // RuntimeState() defaults if not initialized) so first paint
+    // matches disk.
+    val initial = remember { RuntimeStateStore.read() }
+    var reasoningEnabled by remember { mutableStateOf(initial.reasoningEnabled) }
+    var reasoningDisplay by remember { mutableStateOf(initial.reasoningDisplayInChat) }
+
+    // Tri-state model support — drives the "no-op for this model" hint.
+    val support = remember(currentProvider, currentModel, currentAuthType) {
+        ModelRegistry.reasoningSupportFor(currentProvider, currentModel, currentAuthType)
+    }
+
+    CollapsibleSection("Reasoning", initiallyExpanded = false) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(SeekerClawColors.Surface, shape)
+                .cornerGlowBorder()
+                .padding(horizontal = 16.dp),
+        ) {
+            SettingRow(
+                label = "Extended thinking",
+                checked = reasoningEnabled,
+                onCheckedChange = { newValue ->
+                    reasoningEnabled = newValue
+                    persistReasoningField(newValue, reasoningDisplay) { ok ->
+                        if (!ok) reasoningEnabled = !newValue // revert local on FS failure
+                    }
+                },
+                info = SettingsHelpTexts.REASONING_ENABLED,
+            )
+            SettingRow(
+                label = "Display reasoning in chat",
+                checked = reasoningDisplay,
+                onCheckedChange = { newValue ->
+                    reasoningDisplay = newValue
+                    persistReasoningField(reasoningEnabled, newValue) { ok ->
+                        if (!ok) reasoningDisplay = !newValue
+                    }
+                },
+                info = SettingsHelpTexts.REASONING_DISPLAY_IN_CHAT,
+            )
+            // Surface the "no-op for this model" state so users don't
+            // think the toggle is broken when their model doesn't
+            // support reasoning. "yes" → no hint (toggle works as
+            // expected). "no" → explicit; "unknown" → softer wording
+            // since the user might have a freeform/Custom gateway
+            // that DOES support it.
+            val hint = when (support) {
+                "no" -> "This model does not support extended thinking — toggle has no effect."
+                "unknown" -> "This model is not in the registry. Toggle has no effect unless your custom gateway supports it (advanced)."
+                else -> null
+            }
+            if (hint != null && reasoningEnabled) {
+                Text(
+                    text = hint,
+                    fontFamily = RethinkSans,
+                    fontSize = 12.sp,
+                    color = SeekerClawColors.TextSecondary,
+                    lineHeight = 18.sp,
+                    modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Persist BAT-549 RuntimeState fields via RuntimeStateStore. Reads
+ * the current state, copies the BAT-549 fields with the new toggle
+ * values, and writes back. Other fields (provider/authType/model,
+ * customEchoReasoning, customConfigSignature) are preserved.
+ *
+ * On RuntimeStateStore.write failure (FS error / not-initialized),
+ * the [callback] receives `false` so the caller can revert local UI
+ * state. Synchronous write: matches the existing
+ * `ConfigManager.setAutoStartOnBoot(...)` pattern callsite — the
+ * cross-process-store atomic rename is ms-scale on the small
+ * runtime_state.json file, well under the perceptual-stall threshold.
+ */
+private fun persistReasoningField(
+    enabled: Boolean,
+    displayInChat: Boolean,
+    callback: (Boolean) -> Unit,
+) {
+    val current = RuntimeStateStore.read()
+    val next = current.copy(
+        reasoningEnabled = enabled,
+        reasoningDisplayInChat = displayInChat,
+    )
+    val ok = try {
+        RuntimeStateStore.write(next)
+    } catch (_: IllegalArgumentException) {
+        false
+    }
+    callback(ok)
+}
 
 @Composable
 private fun CollapsibleSection(

@@ -182,4 +182,20 @@ object SettingsHelpTexts {
         "Optional. Required for viewing NFT holdings (including compressed NFTs). " +
         "Get a free key at helius.dev (free tier: 50k requests/day). " +
         "Without this, the NFT holdings tool will not work."
+
+    // ── Reasoning (BAT-549) ────────────────────────────────────────
+
+    const val REASONING_ENABLED =
+        "Ask reasoning-capable models (e.g., Claude Opus 4.7, GPT-5.4) to " +
+        "do extended thinking before answering. Models that don't support " +
+        "this ignore the toggle (no extra tokens used).\n\n" +
+        "Cost: thinking adds output tokens. Quality: usually better on " +
+        "multi-step problems. Latency: each turn takes longer."
+
+    const val REASONING_DISPLAY_IN_CHAT =
+        "Show reasoning summaries to your Telegram chat as expandable " +
+        "blockquotes. Independent of the toggle above — you can capture " +
+        "reasoning into checkpoint state without surfacing it (lower " +
+        "noise) or display existing captured reasoning even with new " +
+        "thinking off."
 }
