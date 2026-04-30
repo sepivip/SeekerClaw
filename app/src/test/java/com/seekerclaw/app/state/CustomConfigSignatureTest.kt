@@ -121,10 +121,31 @@ class CustomConfigSignatureTest {
 
     @Test
     fun headerParser_jsonArray_returnsEmpty() {
-        // Array isn't a header map; treat as no headers.
-        // Note: Kotlin's JSONObject parses "["a","b"]" by throwing — same as malformed.
+        // Array isn't a header map; treat as no headers. kotlinx-serialization
+        // parses the array fine but `parsed.jsonObject` throws an exception
+        // — the signature must catch it and resolve to empty.
         assertEquals(emptyList<String>(),
             CustomConfigSignature.sortedHeaderKeys("""["a","b"]"""))
+    }
+
+    @Test
+    fun headerParser_jsonNull_returnsEmpty() {
+        // Top-level JSON `null`: parses fine as JsonNull, but
+        // .jsonObject throws — must resolve to empty (R10 R1 Copilot).
+        assertEquals(emptyList<String>(),
+            CustomConfigSignature.sortedHeaderKeys("null"))
+    }
+
+    @Test
+    fun headerParser_jsonPrimitive_returnsEmpty() {
+        // Top-level JSON number / string / boolean — parses fine but
+        // .jsonObject throws (R10 R1 Copilot regression).
+        assertEquals(emptyList<String>(),
+            CustomConfigSignature.sortedHeaderKeys("42"))
+        assertEquals(emptyList<String>(),
+            CustomConfigSignature.sortedHeaderKeys("true"))
+        assertEquals(emptyList<String>(),
+            CustomConfigSignature.sortedHeaderKeys(""""a-string""""))
     }
 
     @Test

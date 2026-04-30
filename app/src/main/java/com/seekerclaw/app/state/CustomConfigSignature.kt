@@ -99,9 +99,16 @@ object CustomConfigSignature {
         }
         val obj: JsonObject = try {
             parsed.jsonObject
-        } catch (_: IllegalArgumentException) {
+        } catch (_: Exception) {
             // Top-level wasn't an object (array, primitive, null) — treat
             // as no headers, mirroring the Node side's "non-object" guard.
+            // R10 R1 Copilot: `JsonElement.jsonObject` actually throws
+            // IllegalStateException (via `error(...)`), not
+            // IllegalArgumentException. Catch broadly so any non-object
+            // shape resolves to empty rather than crashing the signature
+            // computation. The signature is a best-effort change-
+            // detector — never let it bubble exceptions to the saveConfig
+            // hot path.
             return emptyList()
         }
         val seen = LinkedHashSet<String>()
