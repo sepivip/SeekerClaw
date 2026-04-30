@@ -37,7 +37,7 @@ const { log, OPENROUTER_FALLBACK_MODEL } = require('../config');
 // underlying model family.
 const { detectCustomEchoBehavior } = require('../reasoning-gating');
 
-function toApiMessages(messages, activeModel) {
+function toApiMessages(messages, activeModel, requestOptions) {
     const out = [];
 
     // Per-request echo policy for the bare `reasoning_content` field only.
@@ -46,9 +46,24 @@ function toApiMessages(messages, activeModel) {
     // - unknown → 'unknown' (capture-only — don't risk a 400 by echoing
     //   a bare reasoning_content field on a model whose contract we
     //   haven't tested)
-    // Native OpenRouter has no `customEchoReasoning` override yet —
-    // that lands with RuntimeState in Commit 3.
-    const echoBehavior = detectCustomEchoBehavior(activeModel, false);
+    //
+    // Native (non-Custom-delegated) gating uses override=false so a
+    // stale `customEchoReasoning=true` flag from a prior Custom session
+    // doesn't change behavior on native OpenRouter sessions. The
+    // override is per-Custom-config-tuple by design (see
+    // CustomConfigSignature).
+    const nativeEchoBehavior = detectCustomEchoBehavior(activeModel, false);
+    // Per-Custom-delegated gating respects the user's override toggle
+    // (R15 Copilot). When Custom delegates to OpenRouter (chat-
+    // completions format) AND the user has enabled "Echo reasoning
+    // to gateway" for an unknown model id, we promote 'unknown' to
+    // 'echo-on-tool-loop' for THAT specific block class only — keyed
+    // on `delegateAdapter === 'openrouter'` so we never let a
+    // Custom-only flag affect native OpenRouter blocks even within
+    // the same conversation history.
+    const customOverride = !!(requestOptions
+        && requestOptions.customEchoOverride === true);
+    const customDelegatedEchoBehavior = detectCustomEchoBehavior(activeModel, customOverride);
 
     for (const msg of messages) {
         if (msg.role === 'tool') {
@@ -114,6 +129,15 @@ function toApiMessages(messages, activeModel) {
                     const srcOk = blk.sourceAdapter === 'openrouter'
                         || blk.delegateAdapter === 'openrouter';
                     if (!srcOk) continue;
+                    // R15 Copilot: pick the gating behavior keyed on
+                    // whether this is a Custom-delegated block. Custom-
+                    // delegated blocks (delegateAdapter==='openrouter')
+                    // honor the per-Custom override; native OpenRouter
+                    // blocks ignore it (override is per-Custom-config-tuple
+                    // by design).
+                    const blockEchoBehavior = blk.delegateAdapter === 'openrouter'
+                        ? customDelegatedEchoBehavior
+                        : nativeEchoBehavior;
                     // OpenRouter native shape — push verbatim
                     if (blk.wire.reasoning_content === undefined) {
                         details.push(blk.wire);
@@ -127,7 +151,7 @@ function toApiMessages(messages, activeModel) {
                         // stripReasoningForCustomGating clears reasoningBlocks
                         // upstream when the Custom-side gating says strip — we
                         // only see blocks that survived that filter.
-                        if (echoBehavior === 'echo-on-tool-loop') {
+                        if (blockEchoBehavior === 'echo-on-tool-loop') {
                             plainReasoningContent = blk.wire.reasoning_content;
                         }
                         // 'strip' or 'unknown' → silently drop reasoning_content

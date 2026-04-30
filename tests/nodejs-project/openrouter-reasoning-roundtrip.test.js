@@ -335,6 +335,80 @@ eq('Round-trip: reasoning_details matches original byte-exactly',
     claudeViaORResponse.choices[0].message.reasoning_details);
 
 console.log();
+console.log('── 3e R1-of-R15: customEchoOverride threading (Custom-delegated only) ──');
+
+// Custom-delegated block on an UNKNOWN model:
+//   - override=false → behavior='unknown' → reasoning_content stripped
+//   - override=true  → behavior='echo-on-tool-loop' → reasoning_content emitted
+// Native OR block (delegateAdapter !== 'openrouter') ignores the override
+// even when set true, because the override is per-Custom-config-tuple.
+const customDelegatedUnknownMsg = {
+    role: 'assistant',
+    content: 'r',
+    toolCalls: [{ id: 'fc1', name: 'echo', input: {} }],
+    reasoningBlocks: [{
+        schemaVersion: 1,
+        provider: 'custom',
+        sourceAdapter: 'custom',
+        delegateAdapter: 'openrouter',
+        sourceModel: 'unknown-future-deepseek-fork',
+        wire: { reasoning_content: 'opaque-thoughts' },
+    }],
+};
+
+// Override=false → reasoning_content NOT emitted (unknown stays capture-only)
+const noOverrideOut = openrouter.toApiMessages(
+    [customDelegatedUnknownMsg],
+    'unknown-future-deepseek-fork',
+    { customEchoOverride: false },
+);
+const noOverrideAssistant = noOverrideOut.find((m) => m.role === 'assistant');
+ok('Custom-delegated unknown + override=false: reasoning_content NOT emitted',
+    noOverrideAssistant && noOverrideAssistant.reasoning_content === undefined);
+
+// Override=true → reasoning_content IS emitted (R15 fix — was broken pre-R15)
+const overrideOut = openrouter.toApiMessages(
+    [customDelegatedUnknownMsg],
+    'unknown-future-deepseek-fork',
+    { customEchoOverride: true },
+);
+const overrideAssistant = overrideOut.find((m) => m.role === 'assistant');
+eq('Custom-delegated unknown + override=true: reasoning_content emitted (R15 fix)',
+    overrideAssistant && overrideAssistant.reasoning_content,
+    'opaque-thoughts');
+
+// Native OR block (NOT Custom-delegated) IGNORES customEchoOverride.
+// Even with override=true, the native unknown-model gating stays.
+const nativeUnknownMsg = {
+    role: 'assistant',
+    content: 'r',
+    toolCalls: [{ id: 'fc2', name: 'echo', input: {} }],
+    reasoningBlocks: [{
+        schemaVersion: 1,
+        provider: 'openrouter',
+        sourceAdapter: 'openrouter',
+        // NO delegateAdapter — native block
+        sourceModel: 'some-unknown-or-model',
+        wire: { reasoning_content: 'native thoughts' },
+    }],
+};
+const nativeOverrideOut = openrouter.toApiMessages(
+    [nativeUnknownMsg],
+    'some-unknown-or-model',
+    { customEchoOverride: true },
+);
+const nativeAssistant = nativeOverrideOut.find((m) => m.role === 'assistant');
+ok('Native OR unknown + override=true: reasoning_content NOT emitted (override is per-Custom-tuple)',
+    nativeAssistant && nativeAssistant.reasoning_content === undefined);
+
+// Backward compat: no requestOptions arg → behaves as if override=false
+// (legacy callsites and direct openrouter usage still work).
+const legacyOut = openrouter.toApiMessages([customDelegatedUnknownMsg], 'unknown-future-deepseek-fork');
+const legacyAssistant = legacyOut.find((m) => m.role === 'assistant');
+ok('Legacy 2-arg call: reasoning_content NOT emitted (no override default)',
+    legacyAssistant && legacyAssistant.reasoning_content === undefined);
+
+console.log();
 if (failures === 0) {
     console.log('ALL TESTS PASS');
     process.exit(0);
