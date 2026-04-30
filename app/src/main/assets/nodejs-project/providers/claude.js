@@ -19,6 +19,33 @@ const { log } = require('../config');
  *   { role:'assistant', content:[{type:'text',text:'...'},{type:'tool_use',id,name,input}] }
  *   { role:'user', content:[{type:'tool_result', tool_use_id, content}] }
  */
+// BAT-549 Commit 2: collect Anthropic-stamped thinking/redacted_thinking
+// wire blocks from a stored assistant message's reasoningBlocks. These
+// must be echoed back UNCHANGED + IN ORDER on tool-use turns or the
+// signature fails server-side validation. Returns an array of wire
+// objects suitable for splicing into the front of content[].
+//
+// Activation: only blocks where sourceAdapter === 'claude' (i.e. captured
+// by THIS adapter from a previous Anthropic turn). Other-provider blocks
+// (custom/openrouter) pass through silently — they don't belong here.
+function _collectClaudeWireBlocks(msg) {
+    if (!msg || !Array.isArray(msg.reasoningBlocks)) return [];
+    const out = [];
+    for (const blk of msg.reasoningBlocks) {
+        if (!blk || blk.sourceAdapter !== 'claude') continue;
+        if (typeof blk.wire !== 'object' || blk.wire === null || Array.isArray(blk.wire)) continue;
+        const t = blk.wire.type;
+        if (t !== 'thinking' && t !== 'redacted_thinking') continue;
+        // Verify the shape minimally so a corrupted checkpoint can't
+        // submit nonsense: thinking needs string `thinking` + signature;
+        // redacted_thinking needs string `data`.
+        if (t === 'thinking' && (typeof blk.wire.thinking !== 'string' || typeof blk.wire.signature !== 'string')) continue;
+        if (t === 'redacted_thinking' && typeof blk.wire.data !== 'string') continue;
+        out.push(blk.wire);
+    }
+    return out;
+}
+
 function toApiMessages(messages) {
     const out = [];
     let pendingToolResults = [];
@@ -49,16 +76,25 @@ function toApiMessages(messages) {
         }
 
         if (msg.role === 'assistant') {
-            // If content is already a Claude-native array (legacy checkpoint), pass through
+            // If content is already a Claude-native array (legacy checkpoint), pass through.
+            // Such arrays may already include thinking blocks — don't re-emit from
+            // reasoningBlocks here because that would double-up.
             if (Array.isArray(msg.content)) {
                 out.push({ role: 'assistant', content: msg.content });
                 continue;
             }
+            // BAT-549 Commit 2: thinking/redacted_thinking blocks come FIRST
+            // in content[]. Echo only on tool-use turns (toolCalls present)
+            // — that's the Anthropic contract. For text-only assistant
+            // turns the thinking is captured but not replayed.
+            const hasToolCalls = Array.isArray(msg.toolCalls) && msg.toolCalls.length > 0;
+            const thinkingWire = hasToolCalls ? _collectClaudeWireBlocks(msg) : [];
             const content = [];
+            for (const w of thinkingWire) content.push(w);
             if (msg.content) {
                 content.push({ type: 'text', text: msg.content });
             }
-            if (msg.toolCalls && msg.toolCalls.length > 0) {
+            if (hasToolCalls) {
                 for (const tc of msg.toolCalls) {
                     content.push({
                         type: 'tool_use',
@@ -92,7 +128,16 @@ function toApiMessages(messages) {
 /**
  * Parse Claude API response into neutral format.
  * @param {object} raw - Raw Claude response (data field from httpStreamingRequest)
- * @returns {{ text: string|null, toolCalls: Array, stopReason: string, usage: object }}
+ * @returns {{ text, toolCalls, reasoningBlocks, stopReason, usage }}
+ *
+ * BAT-549 Commit 2: also captures `thinking` and `redacted_thinking`
+ * content blocks verbatim into `reasoningBlocks[]` (raw wire payloads,
+ * never re-normalized — Codex v3 finding 1). Required for tool-use
+ * loops with extended thinking enabled: Anthropic server-validates
+ * the `signature` field on every echoed block, so we MUST preserve
+ * them byte-exact + in original order. The `toApiMessages` path on the
+ * NEXT request splices these wire blocks back into the assistant
+ * message's content[] when the message has tool_calls.
  */
 function fromApiResponse(raw) {
     const content = raw.content || [];
@@ -103,9 +148,29 @@ function fromApiResponse(raw) {
         .filter(c => c.type === 'tool_use')
         .map(c => ({ id: c.id, name: c.name, input: c.input || {} }));
 
+    // BAT-549 Commit 2: capture thinking + redacted_thinking blocks
+    // verbatim — preserves the signature byte-exactly so a future
+    // request that echoes them passes Anthropic's server-side
+    // validation. raw.id is the message id (turn id from Anthropic).
+    const reasoningBlocks = [];
+    const turnId = (raw && typeof raw.id === 'string') ? raw.id : null;
+    const sourceModel = (raw && typeof raw.model === 'string') ? raw.model : null;
+    for (const c of content) {
+        if (!c || (c.type !== 'thinking' && c.type !== 'redacted_thinking')) continue;
+        reasoningBlocks.push({
+            schemaVersion: 1,
+            provider: 'anthropic',
+            sourceAdapter: 'claude',
+            sourceModel,
+            turnId,
+            wire: c, // verbatim block; signature stays unchanged
+        });
+    }
+
     return {
         text,
         toolCalls,
+        reasoningBlocks,
         stopReason: raw.stop_reason || 'end_turn',
         usage: raw.usage || {},
     };
