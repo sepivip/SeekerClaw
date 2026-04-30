@@ -32,14 +32,38 @@ const REASONING_400_PATTERN = /reasoning[_-]?content.*passed\s*back/i;
  * "reasoning_content must be passed back" 400. Cheap regex over the
  * provider's error message string.
  */
+// Cap the regex-match window for fallback stringify / Buffer decoding.
+// Provider error bodies that mention reasoning_content are ~50-200 chars
+// (e.g. DeepSeek's "The 'reasoning_content' in the thinking mode must be
+// passed back to the API.") — 4 KB is generous and bounds memory if a
+// caller passes a giant blob.
+const _REASONING_400_SCAN_LIMIT = 4096;
+
 function isReasoningContent400(status, data) {
     if (status !== 400) return false;
     if (!data) return false;
     const candidates = [];
-    if (typeof data === 'string') candidates.push(data);
-    if (data.error && typeof data.error.message === 'string') candidates.push(data.error.message);
-    if (typeof data.message === 'string') candidates.push(data.message);
-    try { candidates.push(JSON.stringify(data)); } catch (_) {}
+    if (typeof data === 'string') {
+        candidates.push(data.length > _REASONING_400_SCAN_LIMIT
+            ? data.slice(0, _REASONING_400_SCAN_LIMIT)
+            : data);
+    } else if (Buffer.isBuffer(data)) {
+        // 2c Copilot: skip JSON.stringify(Buffer) — that would expand to
+        // `{type:"Buffer",data:[...]}` and blow up on large bodies.
+        // Decode at most _REASONING_400_SCAN_LIMIT bytes as utf-8 (lossy
+        // for non-text bodies, which is fine — they wouldn't match the
+        // English-language regex anyway).
+        candidates.push(data.toString('utf8', 0, Math.min(data.length, _REASONING_400_SCAN_LIMIT)));
+    } else if (typeof data === 'object') {
+        if (data.error && typeof data.error.message === 'string') candidates.push(data.error.message);
+        if (typeof data.message === 'string') candidates.push(data.message);
+        try {
+            const s = JSON.stringify(data);
+            candidates.push(s.length > _REASONING_400_SCAN_LIMIT
+                ? s.slice(0, _REASONING_400_SCAN_LIMIT)
+                : s);
+        } catch (_) {}
+    }
     return candidates.some((s) => REASONING_400_PATTERN.test(s));
 }
 

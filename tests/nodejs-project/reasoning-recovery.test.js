@@ -45,6 +45,21 @@ ok('Embedded inside larger error JSON',
     recovery.isReasoningContent400(400, { error: { type: 'invalid_request_error', message: 'something something reasoning_content must be passed back something' } }));
 ok('Other 400s are NOT recovery-triggers',
     !recovery.isReasoningContent400(400, { error: { message: 'invalid api key' } }));
+
+// 2c Copilot: Buffer body handling — must NOT JSON.stringify the buffer
+ok('Buffer body containing the trigger phrase IS detected',
+    recovery.isReasoningContent400(400,
+        Buffer.from('Some HTML <p>reasoning_content must be passed back</p>', 'utf8')));
+ok('Buffer body without trigger is NOT detected',
+    !recovery.isReasoningContent400(400, Buffer.from('not relevant error', 'utf8')));
+// Large buffer — must complete quickly (bounded scan)
+const bigBuf = Buffer.alloc(1024 * 1024, 0x41); // 1 MB of 'A'
+const start = Date.now();
+const bigResult = recovery.isReasoningContent400(400, bigBuf);
+const elapsed = Date.now() - start;
+ok('Large Buffer (1MB) bounded scan returns false in <100ms (no JSON expansion)',
+    bigResult === false && elapsed < 100,
+    `elapsed=${elapsed}ms`);
 ok('Non-400 status is never a trigger',
     !recovery.isReasoningContent400(500, { error: { message: 'reasoning_content must be passed back' } }));
 ok('null data is safe',
