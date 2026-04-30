@@ -384,6 +384,53 @@ ok('No-taskId quarantine still produces a valid file path',
 ok('No-taskId path includes "no-task" disambiguator',
     r3.quarantinePath.includes('no-task'));
 
+console.log();
+console.log('── 2b Copilot: path-traversal defense on chatId/taskId ──');
+
+// chatId with `..` and `/` characters MUST be sanitized; quarantine
+// file MUST land under workDir/recovery, not somewhere outside.
+const evilChat = '../../etc/passwd';
+const evilTask = '../../../sneaky';
+const evilStep1 = recovery.quarantineActiveSegment({
+    chatId: evilChat,
+    messages: sampleConv,
+    workDir: tmpRoot,
+    step: 1,
+    taskId: evilTask,
+    now: () => 1700000000888,
+});
+ok('Path traversal: quarantine still ok=true (sanitized, not blocked)',
+    evilStep1.ok === true);
+ok('Path traversal: file path stays under workDir/recovery',
+    evilStep1.quarantinePath
+        && evilStep1.quarantinePath.startsWith(path.join(tmpRoot, 'recovery') + path.sep));
+ok('Path traversal: filename has no slashes or dots',
+    evilStep1.quarantinePath
+        && !path.basename(evilStep1.quarantinePath).includes('..')
+        && !path.basename(evilStep1.quarantinePath).includes('/'));
+ok('Path traversal: forensic file actually exists at sanitized path',
+    fs.existsSync(evilStep1.quarantinePath));
+
+// Verify nothing was written outside tmpRoot
+const tmpRootParent = path.dirname(tmpRoot);
+const evilEtcPasswd = path.join(tmpRootParent, '..', 'etc', 'passwd');
+ok('Path traversal: nothing written outside tmpRoot (no /etc/passwd)',
+    !fs.existsSync(evilEtcPasswd));
+
+// chatId that sanitizes to empty (all special chars) gets fallback
+const allSpecialChat = '////';
+const fallbackStep1 = recovery.quarantineActiveSegment({
+    chatId: allSpecialChat,
+    messages: sampleConv,
+    workDir: tmpRoot,
+    step: 1,
+    taskId: '////',
+    now: () => 1700000000999,
+});
+ok('All-special-char chatId still produces a valid file (fallback "x")',
+    fallbackStep1.quarantinePath
+        && fallbackStep1.quarantinePath.startsWith(path.join(tmpRoot, 'recovery') + path.sep));
+
 // Cleanup
 try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch (_) {}
 

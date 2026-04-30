@@ -198,8 +198,21 @@ function redactReasoningBlocks(blocks) {
 function redactReasoningField(value) {
     if (value === null || value === undefined) return 'absent';
     if (typeof value === 'string') return `len=${byteLen(value)} fp=${fingerprint(value)}`;
+    // 2b Copilot: Buffer fast-path. _safeStringify NO LONGER special-cases
+    // Buffer (R3 moved Buffer hashing into fingerprint() directly so two
+    // same-length Buffers produce different fingerprints — see fingerprint()
+    // contract). Without this fast-path, Buffer would fall through to the
+    // generic object branch and JSON.stringify(buffer) would expand to
+    // `{type:"Buffer",data:[...]}` — a perf hit for large buffers AND a
+    // nonsense `objLen` value. Use the Buffer's own byte length and let
+    // fingerprint() hash bytes directly.
+    if (Buffer.isBuffer(value)) {
+        return `bufferLen=${value.length} fp=${fingerprint(value)}`;
+    }
     if (typeof value === 'object') {
-        // R2 thread 1: _safeStringify handles BigInt/circular/Buffer
+        // R2 thread 1: _safeStringify handles BigInt + circular refs.
+        // Buffer is intentionally NOT handled here — caught by the
+        // Buffer.isBuffer fast-path above.
         const s = _safeStringify(value);
         return `objLen=${byteLen(s || '')} fp=${fingerprint(s)}`;
     }

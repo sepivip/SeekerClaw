@@ -92,6 +92,29 @@ function writeJsonAtomic(filePath, obj) {
     fs.renameSync(tmp, filePath);
 }
 
+// Copilot 2b finding: chatId comes from a Telegram-platform-provided value
+// and resumedFromTaskId is loaded from on-disk JSON — either could in
+// principle contain `/`, `..`, NUL, or other path-shaping characters. Strict
+// allowlist prevents path traversal: only [A-Za-z0-9_-], capped length, with
+// a non-empty fallback for inputs that sanitize to empty.
+function _sanitizePathComponent(input, maxLen = 64) {
+    const str = (typeof input === 'number' || typeof input === 'string') ? String(input) : '';
+    const cleaned = str.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, maxLen);
+    return cleaned.length > 0 ? cleaned : 'x';
+}
+
+// Verify a candidate path resolves under the expected base directory.
+// Defense-in-depth on top of _sanitizePathComponent — if the sanitization
+// somehow lets a traversal through (or fileBase logic regresses), this
+// catches it before we write/copy. Both inputs are normalized via
+// path.resolve so symlink/.. funkiness is collapsed before comparison.
+function _isUnderDir(candidate, baseDir) {
+    const resolvedCandidate = path.resolve(candidate);
+    const resolvedBase = path.resolve(baseDir);
+    if (resolvedCandidate === resolvedBase) return true;
+    return resolvedCandidate.startsWith(resolvedBase + path.sep);
+}
+
 /**
  * Compute the cut index for a given step against a given messages array.
  * Returns -1 if the step has no valid cut point against this input
@@ -161,11 +184,21 @@ function quarantineActiveSegment(ctx) {
     // R7 thread 1: include taskId in the filename so two calls within
     // the same millisecond (ai.js's recovery loop hits both fresh and
     // resumed-from taskIds when /resume triggers a 400) don't overwrite
-    // each other's forensic files. taskId is a hex string, so it's
-    // filesystem-safe; null/missing → "no-task".
-    const taskTag = taskId ? `-${taskId}` : '-no-task';
-    const fileBase = `${chatId}-${now}-step${step}${taskTag}`;
+    // each other's forensic files.
+    // 2b Copilot: chatId (platform-provided) and taskId (loaded from
+    // on-disk JSON via /resume's resumedFromTaskId) are NOT trusted
+    // path components. Sanitize before interpolation, then verify the
+    // resolved write path stays under recoveryDir. Both inputs sanitize
+    // to a-zA-Z0-9_- only, capped at 64 chars.
+    const safeChat = _sanitizePathComponent(chatId);
+    const safeTask = taskId ? _sanitizePathComponent(taskId) : 'no-task';
+    const taskTag = `-${safeTask}`;
+    const fileBase = `${safeChat}-${now}-step${step}${taskTag}`;
     const quarantinePath = path.join(recoveryDir, `${fileBase}.json`);
+    if (!_isUnderDir(quarantinePath, recoveryDir)) {
+        log(`[ReasoningRecovery] Step ${step} aborted — sanitized path escapes recoveryDir (chatId=${safeChat} taskId=${safeTask})`, 'ERROR');
+        return { newMessages: keptPrefix, systemNote, quarantinePath: null, checkpointPath: null, ok: true, cutIndex };
+    }
 
     let quarantineWritten = null;
     try {
@@ -190,9 +223,24 @@ function quarantineActiveSegment(ctx) {
     let checkpointPath = null;
     if (taskId) {
         try {
-            const taskFile = path.join(workDir, 'task-store', `${taskId}.json`);
+            // 2b Copilot: same sanitize+containment defense as the main
+            // forensic file. taskFile path uses the SANITIZED safeTask
+            // (not the raw taskId) so an injected `..` in the on-disk
+            // resumedFromTaskId can't write into a sibling directory.
+            // We DO need to read from the actual taskId-keyed file, so
+            // re-validate it explicitly stays under task-store/.
+            const taskStoreDir = path.join(workDir, 'task-store');
+            const taskFile = path.join(taskStoreDir, `${safeTask}.json`);
+            if (!_isUnderDir(taskFile, taskStoreDir)) {
+                log(`[ReasoningRecovery] Step ${step} skipped checkpoint mutation — sanitized taskId escapes task-store dir (taskId=${safeTask})`, 'WARN');
+                return { newMessages: keptPrefix, systemNote, quarantinePath: quarantineWritten, checkpointPath: null, ok: true, cutIndex };
+            }
             if (fs.existsSync(taskFile)) {
                 const cpForensic = path.join(recoveryDir, `${fileBase}-checkpoint.json`);
+                if (!_isUnderDir(cpForensic, recoveryDir)) {
+                    log(`[ReasoningRecovery] Step ${step} skipped checkpoint forensic — escapes recoveryDir`, 'WARN');
+                    return { newMessages: keptPrefix, systemNote, quarantinePath: quarantineWritten, checkpointPath: null, ok: true, cutIndex };
+                }
                 fs.copyFileSync(taskFile, cpForensic);
                 checkpointPath = cpForensic;
 

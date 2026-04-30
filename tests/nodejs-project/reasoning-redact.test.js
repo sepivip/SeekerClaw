@@ -206,6 +206,29 @@ notIncludes('No 16-char leak',  out, 'RECOGNIZABLE_LEA');
 notIncludes('No 32-char leak',  out, 'RECOGNIZABLE_LEAK_PHRASE_DO_NOT_');
 
 console.log();
+console.log('── 2b Copilot: redactReasoningField Buffer fast-path ──');
+// Test guards against the doc/impl drift: comment claimed
+// _safeStringify "handles Buffer" but it actually didn't (R3 moved
+// Buffer hashing into fingerprint() directly). redactReasoningField
+// must take a Buffer fast-path to avoid expanding to a giant
+// `{type:"Buffer",data:[...]}` JSON string. (redactReasoningField
+// already imported above.)
+const bufLarge = Buffer.alloc(2048, 0x42);
+const bufSmall = Buffer.from('hello', 'utf8');
+const bufResult = redactReasoningField(bufLarge);
+ok('Buffer redaction: returns "bufferLen=N fp=XXXXXXXX" shape',
+    /^bufferLen=\d+ fp=[0-9a-f]{8}$/.test(bufResult));
+ok('Buffer redaction: bufferLen matches actual byte length',
+    bufResult.includes('bufferLen=2048'));
+const smallResult = redactReasoningField(bufSmall);
+ok('Buffer redaction: small buffer also handled', smallResult.includes('bufferLen=5'));
+// Different-byte same-length Buffers produce different fingerprints
+const fieldBufA = Buffer.from('AAAAA', 'utf8');
+const fieldBufB = Buffer.from('BBBBB', 'utf8');
+ok('Buffer redaction: same-length different bytes → different fp',
+    redactReasoningField(fieldBufA) !== redactReasoningField(fieldBufB));
+
+console.log();
 console.log('── Safe stringify regression (Codex R2 thread 1) ──');
 // fingerprint() and the unknown/opaque paths must not throw on BigInt,
 // circular refs, or Buffer. Each of these would crash logging call sites
