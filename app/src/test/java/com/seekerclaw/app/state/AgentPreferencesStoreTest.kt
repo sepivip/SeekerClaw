@@ -462,7 +462,15 @@ class AgentPreferencesStoreTest {
         val putCounts = mutableMapOf<String, Int>()
 
         override fun getAll(): MutableMap<String, *> = map.toMutableMap()
-        override fun getString(key: String, defValue: String?): String? = map[key] ?: defValue
+        // R13 Copilot: distinguish "key absent" from "key present with
+        // stored null" so the fake matches SharedPreferences contract.
+        // `map[key] ?: defValue` would return `defValue` for both
+        // cases, hiding bugs where a present-but-null value should
+        // surface as null (the real platform never lets a key carry
+        // null since putString(key, null) removes — see FakeEditor
+        // putString below — but defensive symmetry costs nothing).
+        override fun getString(key: String, defValue: String?): String? =
+            if (map.containsKey(key)) map[key] else defValue
         override fun getStringSet(key: String, defValues: MutableSet<String>?): MutableSet<String>? = defValues
         override fun getInt(key: String, defValue: Int): Int = defValue
         override fun getLong(key: String, defValue: Long): Long = defValue
@@ -479,7 +487,19 @@ class AgentPreferencesStoreTest {
             private val removals = mutableSetOf<String>()
             private var clearAll = false
             override fun putString(key: String, value: String?): SharedPreferences.Editor {
-                pending[key] = value
+                // R13 Copilot: real `SharedPreferences.Editor.putString`
+                // treats `value == null` as a remove. Mapping it the
+                // same way here keeps `contains()` / `getString()`
+                // semantics consistent between the fake and prod —
+                // and matches how `mirrorIfChanged` would later
+                // round-trip such a value.
+                if (value == null) {
+                    pending.remove(key)
+                    removals += key
+                } else {
+                    removals.remove(key)
+                    pending[key] = value
+                }
                 putCounts[key] = (putCounts[key] ?: 0) + 1
                 return this
             }
