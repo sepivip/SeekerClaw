@@ -2,6 +2,7 @@ package com.seekerclaw.app.ui.settings
 
 import android.content.Intent
 import android.net.Uri
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
@@ -43,6 +44,8 @@ import com.seekerclaw.app.config.searchProviderById
 import com.seekerclaw.app.state.AgentPreferencesStore
 import com.seekerclaw.app.ui.theme.RethinkSans
 import com.seekerclaw.app.ui.theme.SeekerClawColors
+import com.seekerclaw.app.util.LogCollector
+import com.seekerclaw.app.util.LogLevel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -138,15 +141,53 @@ fun SearchProviderConfigScreen(onBack: () -> Unit) {
                                     // mid-flight.
                                     optimisticProvider = provider.id
                                     scope.launch(Dispatchers.IO) {
+                                        // R10 Copilot: capture the
+                                        // failure cause for the log
+                                        // path so a field issue is
+                                        // diagnosable from device logs
+                                        // (FS error vs validation
+                                        // error are different bugs to
+                                        // chase).
+                                        var validationError: String? = null
                                         val ok = try {
                                             AgentPreferencesStore.update {
                                                 it.copy(searchProvider = provider.id)
                                             }
-                                        } catch (_: IllegalArgumentException) {
+                                        } catch (e: IllegalArgumentException) {
+                                            validationError = e.message
                                             false
                                         }
                                         withContext(Dispatchers.Main) {
-                                            if (!ok) optimisticProvider = null
+                                            if (!ok) {
+                                                optimisticProvider = null
+                                                // R10 Copilot: surface
+                                                // the failure so a
+                                                // silent revert
+                                                // doesn't look like
+                                                // the tap was
+                                                // ignored. Toast for
+                                                // user-visible feedback
+                                                // (mirrors the failure-
+                                                // surface pattern other
+                                                // Settings screens use
+                                                // for irrecoverable
+                                                // saves); LogCollector
+                                                // entry for post-hoc
+                                                // triage when a user
+                                                // reports "the picker
+                                                // doesn't stick".
+                                                Toast.makeText(
+                                                    context,
+                                                    "Couldn't switch search provider — try again",
+                                                    Toast.LENGTH_SHORT,
+                                                ).show()
+                                                LogCollector.append(
+                                                    "[Settings] Search provider switch to '${provider.id}' failed " +
+                                                        (validationError?.let { "(validation: $it)" }
+                                                            ?: "(FS error or store uninitialized)"),
+                                                    LogLevel.WARN,
+                                                )
+                                            }
                                         }
                                     }
                                 }
