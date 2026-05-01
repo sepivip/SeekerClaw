@@ -620,6 +620,21 @@ body = JSON.parse(customResp.formatRequest('gpt-5.4', 4096, 'sys', [], [], {
 ok('Custom Responses reasoningMode=off: body.reasoning NOT emitted (delegates to OpenAI optional-off)',
     body.reasoning === undefined);
 
+// R3 Copilot: Custom Responses + codex model + reasoningMode='off'
+// MUST PRESERVE body.reasoning — the codex model-id-driven hardcode
+// in the openai delegate is transport-required (Codex endpoint
+// returns `output: []` without `body.reasoning`). The same exception
+// applies to Custom Responses because the delegation IS the OpenAI
+// Responses transport. Pinning this prevents a future refactor from
+// silently breaking Codex through a Custom-Responses gateway.
+body = JSON.parse(customResp.formatRequest('gpt-5.3-codex', 4096, 'sys', [], [], {
+    reasoningEnabled: false, reasoningSupport: 'yes',
+    reasoningMode: 'off',
+}));
+ok('Custom Responses + codex model + reasoningMode=off: body.reasoning STILL emitted (codex transport hardcode)',
+    body.reasoning && body.reasoning.effort === 'medium',
+    `actual: ${JSON.stringify(body.reasoning)}`);
+
 // ── BAT-558 v4 R4 — log dedup ────────────────────────────────────────
 // First occurrence per (process, reason) at INFO; subsequent at DEBUG.
 // Pin the level-selection logic so a future refactor doesn't regress

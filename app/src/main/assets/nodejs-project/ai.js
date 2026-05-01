@@ -2424,16 +2424,34 @@ async function chat(chatId, userMessage, options = {}) {
                 && requestOptions.reasoningSupport === 'yes';
             const _modelIsCodex = typeof activeModel === 'string'
                 && activeModel.includes('codex');
-            const _transportRequiresReasoning = (PROVIDER === 'openai'
-                && (OPENAI_AUTH_TYPE === 'oauth' || _modelIsCodex));
+            // R3 Copilot: Custom with CUSTOM_FORMAT='responses' DELEGATES
+            // to openai.formatRequest, which carries OpenAI's transport-
+            // required exceptions (OAuth + codex models). Pre-fix the
+            // gate only checked `PROVIDER === 'openai'`, so a
+            // Custom-Responses gateway pointing at a `*-codex` model
+            // would still trigger the suppression log even though the
+            // delegate emits `body.reasoning` regardless. Treating
+            // Custom-Responses as the OpenAI Responses transport here
+            // mirrors what the delegate actually does, so the log
+            // reflects effective behavior.
+            const _usesOpenAIResponsesTransport = (PROVIDER === 'openai')
+                || (PROVIDER === 'custom' && CUSTOM_FORMAT === 'responses');
+            const _effectiveTransportProvider = _usesOpenAIResponsesTransport
+                ? 'openai'
+                : PROVIDER;
+            const _effectiveTransportAuth = _usesOpenAIResponsesTransport
+                ? OPENAI_AUTH_TYPE
+                : AUTH_TYPE;
+            const _transportRequiresReasoning = _usesOpenAIResponsesTransport
+                && (_effectiveTransportAuth === 'oauth' || _modelIsCodex);
             if (effectiveReasoningMode === 'off'
                 && effectiveSynthetic === 'heartbeat'
                 && _userToggleWouldEmit
                 && !_transportRequiresReasoning) {
                 _logSuppression(
                     _SUPPRESSION_REASONS.SYNTHETIC_HEARTBEAT,
-                    `chatId=${String(chatId).slice(0, 32)} provider=${PROVIDER} `
-                    + `auth=${PROVIDER === 'openai' ? OPENAI_AUTH_TYPE : AUTH_TYPE} `
+                    `chatId=${String(chatId).slice(0, 32)} provider=${_effectiveTransportProvider} `
+                    + `auth=${_effectiveTransportAuth} `
                     + `model=${String(activeModel).slice(0, 48)}`,
                 );
             }
