@@ -365,8 +365,31 @@ object ConfigManager {
         // so the three persistent stores either all reflect the new
         // config or all keep the prior one. Same atomicity reasoning
         // as oldProvider/oldAuthType/oldModel above (BAT-513).
-        val oldAgentName = sp.getString(KEY_AGENT_NAME, null)
-        val oldSearchProvider = sp.getString(KEY_SEARCH_PROVIDER, null)
+        //
+        // R7 Copilot: read from AgentPreferencesStore (the authoritative
+        // cross-process state, kept fresh by R3.1's sync-update on
+        // every successful write/update) rather than prefs. Prefs
+        // legitimately lag agent_preferences.json while the observe-
+        // and-mirror collector mirrors asynchronously — a recent
+        // Settings > Search Provider tap (which writes
+        // agent_preferences.json first via
+        // `AgentPreferencesStore.update` and only mirrors prefs after
+        // the collector fires) would leave prefs at the OLD value for
+        // ~50–200 ms. Snapshotting prefs in that window captures a
+        // stale value; a rollback firing here would revert the user's
+        // just-applied cross-process change AND leave prefs diverged
+        // from the file. Snapshotting from the store closes the race.
+        //
+        // Falls back to prefs only when the store isn't initialized —
+        // i.e., in `:node` (where AgentPreferencesStore.init never
+        // runs). On the main process, init runs from
+        // SeekerClawApplication.onCreate before any UI surface can
+        // call saveConfig, so the fallback path doesn't fire.
+        val oldAgentPrefs = if (AgentPreferencesStore.isInitialized) {
+            AgentPreferencesStore.read()
+        } else null
+        val oldAgentName = oldAgentPrefs?.agentName ?: sp.getString(KEY_AGENT_NAME, null)
+        val oldSearchProvider = oldAgentPrefs?.searchProvider ?: sp.getString(KEY_SEARCH_PROVIDER, null)
 
         // BAT-515 v3 §4 step 2: pre-validate agent-preferences fields
         // BEFORE any persistence. The cap/allowlist gates inside
