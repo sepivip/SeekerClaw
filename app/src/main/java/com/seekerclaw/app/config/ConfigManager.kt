@@ -629,7 +629,16 @@ object ConfigManager {
             // sites (/provider, /model), not here.
             true
         }
-        if (loggedSigReset) {
+        // R4 Copilot: gate the reset-log on `runtimeWritten`. The
+        // `loggedSigReset` flag is set inside the `update {}`
+        // transform, but the transform can run even when the
+        // ultimate `update()` returns false (FS write failure
+        // after the in-lock state mutation). Logging unconditionally
+        // would tell the user "reset to false" even though the
+        // reset never persisted — misleading. Gating on
+        // `runtimeWritten` ensures the log only fires when the
+        // change actually reached disk.
+        if (loggedSigReset && runtimeWritten) {
             LogCollector.append(
                 "[Config] BAT-549: Custom config signature changed — reset " +
                     "customEchoReasoning to false (re-enable in Settings on the new gateway)",

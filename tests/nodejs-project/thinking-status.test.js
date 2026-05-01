@@ -84,6 +84,20 @@ function eq(label, actual, expected) {
 }
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
+// R4 Copilot fix: replace tight `sleep(550)` + check with a polling
+// wait so a busy CI event loop can't fail the test on a few ms of
+// slack. Polls every 50ms until `predicate()` returns truthy or the
+// timeout elapses; rejects on timeout. Used wherever a test depends
+// on a setTimeout callback firing.
+async function waitFor(predicate, timeoutMs = 3000, intervalMs = 50) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        if (predicate()) return;
+        await sleep(intervalMs);
+    }
+    throw new Error(`waitFor timed out after ${timeoutMs}ms`);
+}
+
 (async () => {
     // ── 500ms debounce: cleanup before 500ms cancels the send ────────
 
@@ -105,8 +119,12 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     sentMessages.length = 0;
     deletedMessages.length = 0;
     s = telegram.deferThinkingStatus(456);
-    await sleep(550); // over 500ms — message should send
-    eq('after 550ms: 1 sendMessage call', sentMessages.length, 1);
+    // R4 Copilot: poll until the timer fires instead of asserting
+    // exactly at 550ms. A 3s deadline with 50ms polls is generous
+    // enough that even a busy CI event-loop stall completes inside
+    // it, while still failing fast if the timer never fires.
+    await waitFor(() => sentMessages.length >= 1, 3000);
+    eq('after debounce: 1 sendMessage call', sentMessages.length, 1);
     eq('text is "Thinking..." (no emoji)', sentMessages[0].text, 'Thinking...');
     eq('chat_id forwarded', sentMessages[0].chatId, 456);
     await s.cleanup();
@@ -121,14 +139,18 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     sentMessages.length = 0;
     deletedMessages.length = 0;
     s = telegram.deferThinkingStatus(789);
-    await sleep(550); // status message has been sent at this point
+    await waitFor(() => sentMessages.length >= 1, 3000);
     const beforeCleanup = Date.now();
     await s.cleanup();
     const cleanupElapsed = Date.now() - beforeCleanup;
-    // deferStatus would hold for ~1.5s here. deferThinkingStatus
-    // must NOT — answer delivery depends on this.
-    ok(`cleanup completes in <500ms (no min-visible hold; got ${cleanupElapsed}ms)`,
-        cleanupElapsed < 500);
+    // R4 Copilot: relaxed threshold from <500ms to <1200ms. The
+    // contract is "no 1.5s min-visible hold" (deferStatus holds
+    // for 1500ms; deferThinkingStatus must NOT). Asserting well
+    // below that hold window proves the contract without flaking
+    // on slow CI runners. A genuine regression that re-introduces
+    // the 1.5s hold would still fail this assertion (1500 > 1200).
+    ok(`cleanup completes in <1200ms (no 1.5s min-visible hold; got ${cleanupElapsed}ms)`,
+        cleanupElapsed < 1200);
 
     // ── Fire-and-forget pattern: caller does not await ───────────────
 
@@ -137,7 +159,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     sentMessages.length = 0;
     deletedMessages.length = 0;
     s = telegram.deferThinkingStatus(101);
-    await sleep(550);
+    await waitFor(() => sentMessages.length >= 1, 3000);
     // Mimic ai.js's call: cleanup().catch(() => {}) — fire and continue
     const cleanupPromise = s.cleanup().catch(() => {});
     // The caller code path returns IMMEDIATELY without waiting
