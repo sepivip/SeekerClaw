@@ -3,6 +3,35 @@
 // message format and Claude Messages API format.
 
 const { log } = require('../config');
+const { logSuppression, SUPPRESSION_REASONS } = require('../reasoning-gating');
+
+// BAT-558 R1 — Claude extended-thinking clamp constants.
+//
+// Anthropic Messages API requires `thinking.budget_tokens < max_tokens`,
+// AND the thinking budget itself has a 1024-token floor. A naive
+// `min(DEFAULT, max_tokens - 1)` formula satisfies the validator but
+// can leave only single-digit tokens for the actual response on small
+// turns — useless. The `* 0.5` rule below splits the budget so every
+// emitted thinking turn has at least `ANTHROPIC_MIN_BUDGET` tokens for
+// thinking AND at least `MIN_THINKING_TURN - ANTHROPIC_MIN_BUDGET`
+// tokens left over for the final answer.
+//
+// The `MIN_THINKING_TURN < 2048 → omit thinking` short-circuit is the
+// load-bearing piece. Without it, a `max_tokens=1100` turn would emit
+// `budget_tokens=1024` and have 76 tokens for the answer — technically
+// valid Anthropic API, useless to the user. Skipping thinking entirely
+// for these small turns is the contract Codex signed off on (v3
+// amendment 1, ratified into v4).
+//
+// Practical sizing examples (max_tokens × 0.5, clamped to [1024, 16000]):
+//   1024 → omit (below MIN_THINKING_TURN floor)
+//   1536 → omit (below MIN_THINKING_TURN floor; v3 gap-case)
+//   2048 → 1024 budget, 1024 answer room
+//   4096 → 2048 budget, 2048 answer room (the heartbeat case)
+//   32000 → 16000 budget (DEFAULT_THINKING_BUDGET cap kicks in)
+const ANTHROPIC_MIN_BUDGET = 1024;
+const DEFAULT_THINKING_BUDGET = 16000;
+const MIN_THINKING_TURN = 2048;
 
 // ── Neutral ↔ Claude message translation ────────────────────────────────────
 
@@ -221,14 +250,33 @@ function formatTools(tools) {
 /**
  * Build full Claude API request body.
  *
- * BAT-549 Commit 3c: the optional 6th `requestOptions` arg gates extended
- * thinking. Emit `body.thinking` only when BOTH the user toggle
- * (`reasoningEnabled === true`) AND the registry confirms the model
- * supports it (`reasoningSupport === "yes"`). The "yes" gate is critical:
- *   - Haiku 4.5 returns 400 if `thinking` is sent → registry says "no".
- *   - Unknown models default to "unknown" → don't send (avoid surprise 400).
- * Existing call sites (vision/summary) that don't pass requestOptions get
- * the same no-`thinking` behavior as before — additive change.
+ * BAT-549 Commit 3c gated `body.thinking` emission on the user toggle
+ * (`reasoningEnabled === true`) AND registry confirmation
+ * (`reasoningSupport === "yes"`). BAT-558 v4 R1 layered a request-level
+ * BUDGET CLAMP on top of that: the budget must be `< max_tokens` per
+ * Anthropic, and `>= 1024` per Anthropic's thinking-budget floor — so
+ * the budget is sized as `floor(maxTokens * 0.5)` clamped to
+ * `[ANTHROPIC_MIN_BUDGET, DEFAULT_THINKING_BUDGET]`, and turns with
+ * `maxTokens < MIN_THINKING_TURN` (2048) skip thinking entirely so the
+ * answer always has at least `ANTHROPIC_MIN_BUDGET` tokens of room.
+ *
+ * Pre-clamp, this code emitted `budget_tokens=16000` regardless of
+ * `max_tokens`. ai.js calls `formatRequest(..., 4096, ...)` for normal
+ * chat, which Anthropic rejects with HTTP 400 ("max_tokens must be
+ * greater than thinking.budget_tokens"). The heartbeat path hit it
+ * first because the watchdog made the 400s visible; real user chats
+ * with Extended thinking on were silently failing too.
+ *
+ * BAT-558 v4 R3 also adds `reasoningMode: 'off'` short-circuit — when
+ * the caller (heartbeat / future synthetic turns) marks the request
+ * as opted out of app-controlled reasoning, skip thinking even when
+ * the user toggle is on. R2 documents this contract at the chat()
+ * boundary; ai.js threads it through `requestOptions` per BAT-549's
+ * existing pattern.
+ *
+ * Existing call sites (vision/summary) that pass small `maxTokens`
+ * (256, 500) or no `requestOptions` continue to emit no `thinking` —
+ * additive change.
  */
 function formatRequest(model, maxTokens, systemBlocks, messages, tools, requestOptions) {
     const body = {
@@ -239,17 +287,39 @@ function formatRequest(model, maxTokens, systemBlocks, messages, tools, requestO
         messages,
     };
     if (tools && tools.length > 0) body.tools = tools;
-    if (requestOptions
+
+    // BAT-558 v4 R3 — synthetic / opt-out short-circuit. Heartbeats
+    // pass `reasoningMode: 'off'` explicitly; ai.js also defensively
+    // sets it for `chatId === '__heartbeat__'`. Either path skips the
+    // thinking block regardless of user-toggle / registry-support state
+    // (those gates apply to the OPTIONAL emission below this).
+    const reasoningOff = !!(requestOptions && requestOptions.reasoningMode === 'off');
+    const userWantsReasoning = !!(requestOptions
         && requestOptions.reasoningEnabled === true
-        && requestOptions.reasoningSupport === 'yes') {
-        // budget_tokens is the upper bound on thinking output. 16K is the
-        // BAT-549 v4.1 default — large enough for non-trivial multi-step
-        // reasoning, capped well under Claude 4.x's 32K thinking ceiling
-        // so a runaway thinking pass doesn't burn the entire 200K context
-        // window before the user-facing response. Future Settings UI may
-        // expose this; until then it's a sensible single value.
-        body.thinking = { type: 'enabled', budget_tokens: 16000 };
+        && requestOptions.reasoningSupport === 'yes');
+    if (reasoningOff || !userWantsReasoning) {
+        return JSON.stringify(body);
     }
+
+    // BAT-558 v4 R1 — small-turn skip. `max_tokens < 2048` doesn't have
+    // headroom for both the 1024-floor budget AND a usable answer, so
+    // thinking is skipped (rate-limited INFO log so the suppression is
+    // discoverable in field reports without flooding the Logs screen).
+    if (maxTokens < MIN_THINKING_TURN) {
+        logSuppression(
+            SUPPRESSION_REASONS.MAX_TOKENS_BELOW_FLOOR,
+            `claude maxTokens=${maxTokens}`,
+        );
+        return JSON.stringify(body);
+    }
+
+    // BAT-558 v4 R1 — clamp budget to [ANTHROPIC_MIN_BUDGET,
+    // DEFAULT_THINKING_BUDGET], scaled at half of `maxTokens` so the
+    // final answer always has the other half. See module-level constant
+    // block for the worked-examples table.
+    const cap = Math.min(DEFAULT_THINKING_BUDGET, Math.floor(maxTokens * 0.5));
+    const budget = Math.max(ANTHROPIC_MIN_BUDGET, cap);
+    body.thinking = { type: 'enabled', budget_tokens: budget };
     return JSON.stringify(body);
 }
 

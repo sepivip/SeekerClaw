@@ -359,7 +359,17 @@ function formatRequest(model, maxTokens, instructions, input, tools, requestOpti
     // path: api_key calls to non-codex reasoning models (e.g., raw
     // gpt-5.4) when the user has explicitly toggled reasoning on AND
     // the registry confirms support.
-    const userToggleEnabled = !!(requestOptions
+    //
+    // BAT-558 v4 R3 — `reasoningMode: 'off'` (heartbeats / future
+    // synthetic turns) suppresses the OPTIONAL user-toggle path so
+    // app-controlled reasoning isn't requested for liveness probes.
+    // The TRANSPORT-required paths (OAuth/Codex endpoint OR a `*-codex`
+    // model id) MUST remain unconditional — the Codex endpoint returns
+    // `output: []` without `reasoning`, breaking Codex/OAuth users
+    // entirely. Pinned exception per BAT-485 (the original Codex OAuth
+    // contract); v4 R3 explicitly preserves it.
+    const reasoningOff = !!(requestOptions && requestOptions.reasoningMode === 'off');
+    const userToggleEnabled = !reasoningOff && !!(requestOptions
         && requestOptions.reasoningEnabled === true
         && requestOptions.reasoningSupport === 'yes');
     const wantReasoning = isOAuth

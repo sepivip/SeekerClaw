@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 // reasoning-request-enablement.test.js — pin BAT-549 Commit 3c per-adapter
-// request-side reasoning enablement gating:
+// request-side reasoning enablement gating, EXTENDED for BAT-558 v4:
+// per-request budget clamp on Claude, synthetic-turn marker
+// (`reasoningMode: 'off'`) suppression matrix, OpenRouter explicit
+// `effort: 'none'` disablement signal.
 //
 //  Adapter contract: each adapter's formatRequest accepts an optional 6th
 //  `requestOptions` argument. When BOTH `reasoningEnabled === true` AND
@@ -8,15 +11,20 @@
 //  specific reasoning param. Any other combination MUST NOT emit (the
 //  registry's "yes" gate is authoritative; "no"/"unknown" never sends).
 //
-//  Per-adapter body shapes:
-//   - claude.js → body.thinking = {type:"enabled", budget_tokens:16000}
+//  Per-adapter body shapes (BAT-549 baseline + BAT-558 v4 R1/R3):
+//   - claude.js → body.thinking = {type:"enabled", budget_tokens: <clamped>}
+//                  where <clamped> = min(16000, floor(maxTokens*0.5))
+//                  AND maxTokens >= 2048 (smaller turns SKIP thinking entirely)
 //   - openai.js (api_key) → body.reasoning = {effort:"medium", summary:"auto"}
 //                          + body.include = ["reasoning.encrypted_content"]
-//   - openrouter.js → body.reasoning = {effort:"medium"}
+//   - openrouter.js → body.reasoning = {effort:"medium"} OR
+//                     {effort:"none"} on `reasoningMode:'off'` (BAT-558 R3)
 //   - custom.js → forwards to delegate (or no-op for chat-completions)
 //
 //  Preservation of existing hardcodes (don't regress):
-//   - openai OAuth/Codex path: body.reasoning ALWAYS set (transport req)
+//   - openai OAuth/Codex path: body.reasoning ALWAYS set, even on
+//     `reasoningMode:'off'` — transport-required exception per BAT-485.
+//     v4 R3 explicitly preserves this; we pin it as a regression guard.
 //   - claude headers: anthropic-beta now includes interleaved-thinking-2025-05-14
 //
 //  Backward compat: callers that don't pass requestOptions get the same
@@ -71,12 +79,13 @@ function eq(label, actual, expected) {
 
 console.log('── claude.js: thinking gate ──');
 
-// reasoningEnabled + support===yes → emit
+// reasoningEnabled + support===yes + maxTokens=4096 → emit, BAT-558 R1 clamp
+// kicks in: budget = floor(4096*0.5) = 2048 (NOT the pre-558 unconditional 16000)
 let body = JSON.parse(claude.formatRequest('claude-opus-4-7', 4096, [], [], [], {
     reasoningEnabled: true, reasoningSupport: 'yes',
 }));
-eq('Claude yes/yes: body.thinking emitted',
-    body.thinking, { type: 'enabled', budget_tokens: 16000 });
+eq('Claude yes/yes maxTokens=4096: body.thinking emitted with clamped budget (BAT-558 R1)',
+    body.thinking, { type: 'enabled', budget_tokens: 2048 });
 
 // reasoningEnabled but support===no (Haiku) → DO NOT emit
 body = JSON.parse(claude.formatRequest('claude-haiku-4-5', 4096, [], [], [], {
@@ -433,6 +442,238 @@ ok("Delegate routing target: 'gpt-5.4' under 'openai' api_key is 'yes'",
     `actual: ${rsf('openai', 'gpt-5.4', 'api_key')}`);
 ok("Delegate-id robustness: unknown model id under 'openai' stays 'unknown'",
     rsf('openai', 'some-unknown-deepseek-id', 'api_key') === 'unknown');
+
+// ── BAT-558 v4 R1 — Claude budget clamp + small-turn skip ─────────────
+// Pinned per the v4 §R6 acceptance matrix. ai.js calls
+// formatRequest(..., 4096, ...) for normal chat — this 4096 is the
+// real-world value that surfaced the unclamped 16000 budget bug. Each
+// case here is taken from the v4 worked-examples table.
+
+console.log();
+console.log('── BAT-558 v4 R1: Claude budget clamp ──');
+
+// maxTokens=2048 → budget = floor(1024) = 1024 (Anthropic floor), answer room 1024.
+body = JSON.parse(claude.formatRequest('claude-opus-4-7', 2048, [], [], [], {
+    reasoningEnabled: true, reasoningSupport: 'yes',
+}));
+eq('Claude maxTokens=2048: budget clamped to floor (1024)',
+    body.thinking, { type: 'enabled', budget_tokens: 1024 });
+
+// maxTokens=1536 → SKIP thinking entirely (v3 amendment 1 gap-case Codex called out).
+body = JSON.parse(claude.formatRequest('claude-opus-4-7', 1536, [], [], [], {
+    reasoningEnabled: true, reasoningSupport: 'yes',
+}));
+ok('Claude maxTokens=1536: thinking SKIPPED (BAT-558 R1 small-turn floor)',
+    body.thinking === undefined,
+    `actual: ${JSON.stringify(body.thinking)}`);
+
+// maxTokens=1024 → SKIP thinking entirely (below MIN_THINKING_TURN=2048).
+body = JSON.parse(claude.formatRequest('claude-opus-4-7', 1024, [], [], [], {
+    reasoningEnabled: true, reasoningSupport: 'yes',
+}));
+ok('Claude maxTokens=1024: thinking SKIPPED',
+    body.thinking === undefined);
+
+// maxTokens=32000 → DEFAULT_THINKING_BUDGET cap (16000); not floor(32000*0.5)=16000.
+body = JSON.parse(claude.formatRequest('claude-opus-4-7', 32000, [], [], [], {
+    reasoningEnabled: true, reasoningSupport: 'yes',
+}));
+eq('Claude maxTokens=32000: budget at DEFAULT cap (16000)',
+    body.thinking, { type: 'enabled', budget_tokens: 16000 });
+
+// maxTokens=64000 → DEFAULT_THINKING_BUDGET cap (16000); leaves 48000 for answer.
+body = JSON.parse(claude.formatRequest('claude-opus-4-7', 64000, [], [], [], {
+    reasoningEnabled: true, reasoningSupport: 'yes',
+}));
+eq('Claude maxTokens=64000: budget still at DEFAULT cap (16000)',
+    body.thinking, { type: 'enabled', budget_tokens: 16000 });
+
+// Final invariant guard: across the entire matrix above, when emitted,
+// budget_tokens is ALWAYS strictly less than max_tokens (Anthropic's
+// hard requirement). This is the bug class the original 400 surfaced.
+const claudeBudgetCases = [
+    { maxTokens: 2048,  expectEmit: true },
+    { maxTokens: 4096,  expectEmit: true },
+    { maxTokens: 32000, expectEmit: true },
+    { maxTokens: 64000, expectEmit: true },
+];
+for (const c of claudeBudgetCases) {
+    const cb = JSON.parse(claude.formatRequest('claude-opus-4-7', c.maxTokens, [], [], [], {
+        reasoningEnabled: true, reasoningSupport: 'yes',
+    }));
+    if (c.expectEmit) {
+        ok(`Claude maxTokens=${c.maxTokens}: budget < max_tokens (Anthropic invariant)`,
+            cb.thinking && cb.thinking.budget_tokens < c.maxTokens,
+            `budget=${cb.thinking?.budget_tokens}, max=${c.maxTokens}`);
+        ok(`Claude maxTokens=${c.maxTokens}: budget >= ANTHROPIC_MIN_BUDGET (1024)`,
+            cb.thinking && cb.thinking.budget_tokens >= 1024,
+            `budget=${cb.thinking?.budget_tokens}`);
+    }
+}
+
+// ── BAT-558 v4 R3 — synthetic-turn marker `reasoningMode: 'off'` ──────
+// Per-provider behavior matrix from v4 R3. Heartbeat call site sends this;
+// ai.js also defensively forces it for chatId === '__heartbeat__'.
+
+console.log();
+console.log('── BAT-558 v4 R3: reasoningMode=off matrix ──');
+
+// Claude — OFF skips thinking even when toggle+support would emit.
+body = JSON.parse(claude.formatRequest('claude-opus-4-7', 4096, [], [], [], {
+    reasoningEnabled: true, reasoningSupport: 'yes',
+    reasoningMode: 'off',
+}));
+ok('Claude reasoningMode=off: thinking NOT emitted (synthetic suppression)',
+    body.thinking === undefined);
+
+// OpenAI api_key non-Codex — OFF suppresses body.reasoning + body.include.
+// Reload openai with api_key for this branch.
+delete require.cache[require.resolve('../../app/src/main/assets/nodejs-project/providers/openai')];
+_openaiAuthType = 'api_key';
+const openaiApiKey = require('../../app/src/main/assets/nodejs-project/providers/openai');
+body = JSON.parse(openaiApiKey.formatRequest('gpt-5.4', 4096, 'sys', [], [], {
+    reasoningEnabled: true, reasoningSupport: 'yes',
+    reasoningMode: 'off',
+}));
+ok('OpenAI api_key reasoningMode=off: body.reasoning NOT emitted',
+    body.reasoning === undefined);
+ok('OpenAI api_key reasoningMode=off: body.include NOT emitted',
+    body.include === undefined);
+
+// OpenAI OAuth/Codex — OFF MUST PRESERVE body.reasoning (transport-required).
+// This is the BAT-485 invariant pinned exception: Codex endpoint returns
+// `output: []` without reasoning, so suppressing it would break Codex
+// users entirely. v4 R3 explicitly excludes OAuth from synthetic suppression.
+delete require.cache[require.resolve('../../app/src/main/assets/nodejs-project/providers/openai')];
+_openaiAuthType = 'oauth';
+const openaiOauthOff = require('../../app/src/main/assets/nodejs-project/providers/openai');
+body = JSON.parse(openaiOauthOff.formatRequest('gpt-5.4', 4096, 'sys', [], [], {
+    reasoningEnabled: true, reasoningSupport: 'yes',
+    reasoningMode: 'off',
+}));
+ok('OpenAI OAuth reasoningMode=off: body.reasoning STILL emitted (BAT-485 transport invariant)',
+    body.reasoning && body.reasoning.effort === 'medium',
+    `actual: ${JSON.stringify(body.reasoning)}`);
+
+// OpenAI api_key + codex model — OFF MUST PRESERVE (model-id-driven hardcode).
+delete require.cache[require.resolve('../../app/src/main/assets/nodejs-project/providers/openai')];
+_openaiAuthType = 'api_key';
+const openaiCodexOff = require('../../app/src/main/assets/nodejs-project/providers/openai');
+body = JSON.parse(openaiCodexOff.formatRequest('gpt-5.3-codex', 4096, 'sys', [], [], {
+    reasoningEnabled: false, reasoningSupport: 'yes',
+    reasoningMode: 'off',
+}));
+ok('OpenAI api_key + codex model + reasoningMode=off: body.reasoning STILL emitted (codex hardcode)',
+    body.reasoning && body.reasoning.effort === 'medium');
+
+// OpenRouter — OFF emits explicit disablement signal `effort: 'none'`.
+// This is STRONGER than just omitting (some OR reasoning models reason by
+// default per OR docs). The `reasoning` key IS present, with the disable
+// signal — that's the v4 R3 contract.
+delete require.cache[require.resolve('../../app/src/main/assets/nodejs-project/providers/openrouter')];
+const openrouterOff = require('../../app/src/main/assets/nodejs-project/providers/openrouter');
+body = JSON.parse(openrouterOff.formatRequest('openai/gpt-5.4', 4096, 'sys', [], [], {
+    reasoningEnabled: true, reasoningSupport: 'yes',
+    reasoningMode: 'off',
+}));
+eq("OpenRouter reasoningMode=off: body.reasoning = { effort: 'none' } (explicit disable signal)",
+    body.reasoning, { effort: 'none' });
+
+// OpenRouter — OFF takes precedence over user-toggle (defensive, contract-belt).
+// If somehow both reasoningMode='off' AND reasoningEnabled=true coexist,
+// the off signal wins because the caller marked the turn synthetic.
+body = JSON.parse(openrouterOff.formatRequest('openai/gpt-5.4', 4096, 'sys', [], [], {
+    reasoningEnabled: true, reasoningSupport: 'yes',
+    reasoningMode: 'off',
+}));
+eq("OpenRouter reasoningMode=off + toggle on: off STILL wins",
+    body.reasoning, { effort: 'none' });
+
+// Custom chat-completions — already doesn't emit body.reasoning; OFF unchanged.
+const customPath = require.resolve('../../app/src/main/assets/nodejs-project/providers/custom');
+delete require.cache[customPath];
+delete require.cache[require.resolve('../../app/src/main/assets/nodejs-project/providers/openai')];
+_openaiAuthType = 'api_key';
+// Force chat_completions format
+const config2 = require.cache[configPath].exports;
+config2.CUSTOM_FORMAT = 'chat_completions';
+const customChat = require('../../app/src/main/assets/nodejs-project/providers/custom');
+body = JSON.parse(customChat.formatRequest('deepseek-v4', 4096, 'sys', [], [], {
+    reasoningEnabled: true, reasoningSupport: 'yes',
+    reasoningMode: 'off',
+}));
+ok('Custom chat-completions reasoningMode=off: body.reasoning NOT emitted (no regression)',
+    body.reasoning === undefined);
+
+// Custom Responses — delegates to openai.formatRequest, follows OpenAI
+// optional-off behavior (suppress body.reasoning + body.include for
+// non-OAuth/non-codex). Pin the round-trip.
+delete require.cache[customPath];
+delete require.cache[require.resolve('../../app/src/main/assets/nodejs-project/providers/openai')];
+_openaiAuthType = 'api_key';
+config2.CUSTOM_FORMAT = 'responses';
+const customResp = require('../../app/src/main/assets/nodejs-project/providers/custom');
+body = JSON.parse(customResp.formatRequest('gpt-5.4', 4096, 'sys', [], [], {
+    reasoningEnabled: true, reasoningSupport: 'yes',
+    reasoningMode: 'off',
+}));
+ok('Custom Responses reasoningMode=off: body.reasoning NOT emitted (delegates to OpenAI optional-off)',
+    body.reasoning === undefined);
+
+// ── BAT-558 v4 R4 — log dedup ────────────────────────────────────────
+// First occurrence per (process, reason) at INFO; subsequent at DEBUG.
+// Pin the level-selection logic so a future refactor doesn't regress
+// the rate limit (heartbeat probes every 30 min would otherwise flood
+// the Logs screen).
+
+console.log();
+console.log('── BAT-558 v4 R4: suppression-log dedup ──');
+
+// Capture log calls instead of printing them. Replace the test stub's
+// log() with a recorder. The reasoning-gating module already imported
+// log from config, but since we control config's exports via require.cache,
+// swap it now.
+const _logRecord = [];
+require.cache[configPath].exports.log = (msg, level) => {
+    _logRecord.push({ msg, level });
+};
+delete require.cache[require.resolve('../../app/src/main/assets/nodejs-project/reasoning-gating')];
+const rg = require('../../app/src/main/assets/nodejs-project/reasoning-gating');
+
+rg._resetSuppressionLogForTest();
+_logRecord.length = 0;
+
+rg.logSuppression(rg.SUPPRESSION_REASONS.SYNTHETIC_HEARTBEAT, 'first');
+rg.logSuppression(rg.SUPPRESSION_REASONS.SYNTHETIC_HEARTBEAT, 'second');
+rg.logSuppression(rg.SUPPRESSION_REASONS.SYNTHETIC_HEARTBEAT, 'third');
+ok('Dedup: first call to same reason → INFO',
+    _logRecord[0] && _logRecord[0].level === 'INFO',
+    `actual: ${JSON.stringify(_logRecord[0])}`);
+ok('Dedup: second call to same reason → DEBUG',
+    _logRecord[1] && _logRecord[1].level === 'DEBUG',
+    `actual: ${JSON.stringify(_logRecord[1])}`);
+ok('Dedup: third call to same reason → DEBUG',
+    _logRecord[2] && _logRecord[2].level === 'DEBUG');
+
+// Different reason → fresh INFO regardless of prior reasons.
+rg.logSuppression(rg.SUPPRESSION_REASONS.MAX_TOKENS_BELOW_FLOOR, 'first');
+ok('Dedup: different reason → INFO again',
+    _logRecord[3] && _logRecord[3].level === 'INFO');
+
+// Reset clears the dedup state.
+rg._resetSuppressionLogForTest();
+_logRecord.length = 0;
+rg.logSuppression(rg.SUPPRESSION_REASONS.SYNTHETIC_HEARTBEAT, 'after-reset');
+ok('Dedup: after _resetSuppressionLogForTest, same reason → INFO again',
+    _logRecord[0] && _logRecord[0].level === 'INFO');
+
+// Detail string is concatenated into the log line.
+rg._resetSuppressionLogForTest();
+_logRecord.length = 0;
+rg.logSuppression(rg.SUPPRESSION_REASONS.MAX_TOKENS_BELOW_FLOOR, 'claude maxTokens=1024');
+ok('Dedup: detail string appears in log message',
+    _logRecord[0] && _logRecord[0].msg.includes('maxTokens=1024'),
+    `actual: ${_logRecord[0]?.msg}`);
 
 console.log();
 if (failures === 0) {

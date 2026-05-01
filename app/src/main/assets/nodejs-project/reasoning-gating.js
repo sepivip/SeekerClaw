@@ -1,19 +1,38 @@
-// SeekerClaw — reasoning-gating.js (BAT-549)
+// SeekerClaw — reasoning-gating.js (BAT-549, extended for BAT-558)
 //
-// Conservative model-gating for the Custom adapter's reasoning-echo behavior.
+// Cross-cutting reasoning helpers. Two responsibilities:
 //
-// Codex v4.1 review finding 4 explicitly rejected blanket sniff-and-passthrough.
-// DeepSeek R1/reasoner returns 400 if `reasoning_content` is echoed; DeepSeek
-// V4-pro returns 400 if it ISN'T echoed after a tool call. Opposite contracts
-// on similar-looking field names — we MUST gate by model.
+// 1. (BAT-549) Conservative model-gating for the Custom adapter's
+//    reasoning-echo behavior. DeepSeek R1/reasoner returns 400 if
+//    `reasoning_content` is echoed; DeepSeek V4-pro returns 400 if it
+//    ISN'T echoed after a tool call. Opposite contracts on similar-
+//    looking field names — we MUST gate by model. Other "thinking"
+//    families (Qwen3, Mistral large-2407, Gemini deep-think, Llama 4
+//    thinking) start as `unknown` and capture-only until tested against
+//    their actual gateway contract.
 //
-// Other "thinking" model families (Qwen3-thinking, Mistral large-2407, Gemini
-// deep-think, Llama 4 thinking) start as `unknown` and capture-only until
-// tested against their actual gateway contract. User can flip the per-Custom-
-// config advanced override (`customEchoReasoning`) if their gateway requires
-// it.
+// 2. (BAT-558) Rate-limited logging for cross-provider reasoning
+//    suppression events. Heartbeat fires every 30 min by default, so
+//    naively logging a `synthetic-heartbeat` suppression on every probe
+//    would flood the Logs screen with ~48 INFO lines/day — actively
+//    HARMFUL signal-to-noise post-hotfix. The dedup `Set` here logs
+//    each `(process, reason)` pair once at INFO (so the reason stays
+//    discoverable in default views) and demotes subsequent occurrences
+//    to DEBUG (filtered out of the Logs screen by default). Reset on
+//    process restart by virtue of being module-level (intentional —
+//    restarts re-surface the configuration that triggered the
+//    suppression).
 
 'use strict';
+
+// `log` is intentionally lazy-loaded inside [logSuppression] (NOT at the
+// top of this file). reasoning-gating.js is included in the smoke
+// harness (`tests/nodejs-project/smoke.js` LOAD_TARGETS) which require()s
+// modules in a bare Node process without `config.json` on disk — a
+// top-level `require('./config')` would crash the smoke load. Lazy
+// loading keeps the module side-effect-free at top-level while still
+// resolving cleanly in production (where config.js loads at process
+// start, well before any chat() turn fires logSuppression).
 
 /**
  * Decide echo behavior for a Custom-adapter request.
@@ -133,7 +152,74 @@ function stripReasoningForCustomGating(messages, behavior) {
     });
 }
 
+// ─── Rate-limited suppression logger (BAT-558 R4) ─────────────────────────
+
+/**
+ * Reasons emitted by the per-provider adapters today. Centralized here as
+ * a closed enum so consumer call sites stay aligned and a typo doesn't
+ * defeat the dedup gate (a misspelt reason would surface as a "new"
+ * reason on every call → INFO every time, defeating the rate-limit).
+ *
+ * Add new reasons here when extending the matrix. Keep the list short
+ * and intentional — every entry shows up at INFO at least once per
+ * process, so adding a noisy reason will be visible in production logs.
+ */
+const SUPPRESSION_REASONS = Object.freeze({
+    // R1 clamp — Claude turn's maxTokens leaves no headroom for both
+    // a thinking budget AND a final answer (< MIN_THINKING_TURN = 2048).
+    MAX_TOKENS_BELOW_FLOOR: 'maxTokens-below-floor',
+    // R2/R3 — heartbeat AI turn carries reasoningMode='off'; no app-
+    // controlled optional reasoning emitted (heartbeats are liveness
+    // probes, not user reasoning turns).
+    SYNTHETIC_HEARTBEAT: 'synthetic-heartbeat',
+    // R3 OpenRouter — `body.reasoning = { effort: 'none' }` emitted as
+    // an explicit app-controlled disablement signal. Stronger than
+    // omitting the field because some OR reasoning models reason by
+    // default.
+    OPENROUTER_EFFORT_NONE: 'openrouter-effort-none',
+});
+
+const _seenSuppressionReasons = new Set();
+
+/**
+ * Log a reasoning-suppression event with per-(process, reason) dedup.
+ * First occurrence per reason fires at INFO (visible in the Logs
+ * screen's default view); subsequent occurrences with the same reason
+ * fire at DEBUG (filtered out unless the user toggles the DEBUG
+ * filter on).
+ *
+ * @param {string} reason — one of [SUPPRESSION_REASONS] values.
+ *                          A typo is silently allowed (treated as a
+ *                          new reason and INFO'd once); use the
+ *                          exported constants to avoid drift.
+ * @param {string} [detail] — short, redaction-safe context (e.g.
+ *                            `maxTokens=1536` or `chatId=__heartbeat__`).
+ *                            Concatenated into the log line; do NOT
+ *                            include secrets, raw user input, or PII.
+ */
+function logSuppression(reason, detail) {
+    const level = _seenSuppressionReasons.has(reason) ? 'DEBUG' : 'INFO';
+    _seenSuppressionReasons.add(reason);
+    const suffix = detail ? ` (${detail})` : '';
+    // Lazy require to keep this module side-effect-free at top-level
+    // (smoke harness compatibility — see file-header note).
+    const { log } = require('./config');
+    log(`[Reasoning] suppressed: ${reason}${suffix}`, level);
+}
+
+/**
+ * Test seam — clear the dedup set so unit tests can pin first/repeat
+ * behavior in isolation. Production code MUST NOT call this. Exported
+ * with a leading underscore to flag intent.
+ */
+function _resetSuppressionLogForTest() {
+    _seenSuppressionReasons.clear();
+}
+
 module.exports = {
     detectCustomEchoBehavior,
     stripReasoningForCustomGating,
+    SUPPRESSION_REASONS,
+    logSuppression,
+    _resetSuppressionLogForTest,
 };

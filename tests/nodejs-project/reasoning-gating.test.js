@@ -16,6 +16,17 @@
 
 'use strict';
 
+// BAT-558: reasoning-gating now imports `log` from config.js to power the
+// rate-limited suppression logger. Stub config.js with a no-op log so this
+// gating-specific test doesn't spin up the real config loader (which would
+// require a config.json fixture).
+const path = require('path');
+const configPath = path.resolve(__dirname, '../../app/src/main/assets/nodejs-project/config.js');
+require.cache[configPath] = {
+    id: configPath, filename: configPath, loaded: true,
+    exports: { log: () => {} },
+};
+
 const {
     detectCustomEchoBehavior,
     stripReasoningForCustomGating,

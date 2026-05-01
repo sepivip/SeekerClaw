@@ -2347,10 +2347,23 @@ async function chat(chatId, userMessage, options = {}) {
             } else {
                 _authForRegistry = AUTH_TYPE;
             }
+            // BAT-558 v4 R2 — synthetic-turn marker at the chat() boundary.
+            // Heartbeat (and future synthetic turns: summaries, etc.) pass
+            // `reasoningMode: 'off'` so app-controlled optional reasoning is
+            // suppressed across all providers. The defensive `__heartbeat__`
+            // override here is belt-and-suspenders for any code path that
+            // forgets to pass the option explicitly — the canonical contract
+            // is the explicit option at the call site (main.js heartbeat).
+            // R3 transport-required exceptions (OpenAI OAuth/Codex) are
+            // preserved at the adapter layer, not overridden here.
+            const isHeartbeatChat = chatId === '__heartbeat__';
+            const callerReasoningMode = (options && options.reasoningMode === 'off') ? 'off' : 'normal';
+            const effectiveReasoningMode = isHeartbeatChat ? 'off' : callerReasoningMode;
             const requestOptions = {
                 reasoningEnabled: !!(_liveRtState && _liveRtState.reasoningEnabled),
                 reasoningSupport: reasoningSupportFor(_registryProviderId, activeModel, _authForRegistry),
                 customEchoOverride: !!(_liveRtState && _liveRtState.customEchoReasoning),
+                reasoningMode: effectiveReasoningMode,
             };
 
             // Convert neutral messages to provider API format for the request.
@@ -2375,10 +2388,19 @@ async function chat(chatId, userMessage, options = {}) {
             // helper (telegram.js) which has a 500ms debounce (so
             // fast non-thinking turns never flash) and NO min-visible
             // hold (so cleanup never delays the final answer).
+            //
+            // BAT-558 v4 R2/R4: synthetic turns (heartbeat, future
+            // summaries) ALSO suppress the bubble — heartbeats are
+            // invisible liveness probes, a flickering "Thinking..."
+            // every 30 min would be a confusing UX surprise. The
+            // adapter layer already suppresses the wire-side reasoning
+            // request when reasoningMode='off' (R3 matrix); this gate
+            // just stops the local UI artifact too.
             const showThinkingStatus = !!(
                 requestOptions
                 && requestOptions.reasoningEnabled === true
                 && requestOptions.reasoningSupport === 'yes'
+                && requestOptions.reasoningMode !== 'off'
                 && _liveRtState
                 && _liveRtState.reasoningDisplayInChat === true
             );

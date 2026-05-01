@@ -5,6 +5,7 @@
 // Uses top-level cache_control for automatic prompt caching across providers.
 
 const { log, OPENROUTER_FALLBACK_MODEL } = require('../config');
+const { logSuppression, SUPPRESSION_REASONS } = require('../reasoning-gating');
 
 // ── Neutral ↔ Chat Completions message translation ─────────────────────────
 
@@ -350,7 +351,27 @@ function formatRequest(model, maxTokens, systemPrompt, messages, tools, requestO
     // "yes") can flip it on without further adapter changes. Until then
     // OpenRouter relies on the OR-side default behavior of any reasoning
     // models the user picks (most pass through provider defaults).
-    if (requestOptions
+    //
+    // BAT-558 v4 R3 — `reasoningMode: 'off'` (heartbeats / synthetic) emits
+    // `body.reasoning = { effort: 'none' }` as an EXPLICIT app-controlled
+    // disablement signal per OpenRouter's reasoning docs
+    // (https://openrouter.ai/docs/use-cases/reasoning-tokens). This is
+    // STRONGER than just omitting the field because some OR reasoning
+    // models reason by default — the `reasoning` key IS sent, carrying
+    // the disable signal. Beats the "off=omit" naive approach for OR.
+    //
+    // Take precedence over the user-toggle branch below: if both
+    // `reasoningMode==='off'` AND `reasoningEnabled===true` somehow
+    // coexist (shouldn't happen at the chat() boundary, defensive),
+    // the off signal wins because the caller marked the turn synthetic.
+    const reasoningOff = !!(requestOptions && requestOptions.reasoningMode === 'off');
+    if (reasoningOff) {
+        body.reasoning = { effort: 'none' };
+        logSuppression(
+            SUPPRESSION_REASONS.OPENROUTER_EFFORT_NONE,
+            `model=${model}`,
+        );
+    } else if (requestOptions
         && requestOptions.reasoningEnabled === true
         && requestOptions.reasoningSupport === 'yes') {
         body.reasoning = { effort: 'medium' };

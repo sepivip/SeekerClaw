@@ -1085,7 +1085,20 @@ async function runHeartbeat() {
             // (reads HEARTBEAT.md for state, not conversation history)
             clearConversation(HEARTBEAT_CHAT_ID);
 
-            const response = await chat(HEARTBEAT_CHAT_ID, HEARTBEAT_PROMPT);
+            // BAT-558 v4 R5 — heartbeat is a synthetic liveness probe, not a
+            // user reasoning turn. Pass `reasoningMode: 'off'` so app-controlled
+            // optional reasoning is suppressed across all providers (Claude
+            // omits `thinking`; OpenAI api_key omits `body.reasoning`+`include`;
+            // OpenRouter emits `reasoning.effort:'none'`; Custom Responses
+            // follows OpenAI). Pass `synthetic: 'heartbeat'` so the channel
+            // renderer suppresses the "Thinking..." bubble (heartbeats are
+            // invisible to the user; a flickering bubble would be confusing).
+            // ai.js ALSO defensively forces these for `chatId === '__heartbeat__'`
+            // (belt-and-suspenders), but the explicit pass here is the contract.
+            const response = await chat(HEARTBEAT_CHAT_ID, HEARTBEAT_PROMPT, {
+                reasoningMode: 'off',
+                synthetic: 'heartbeat',
+            });
             // Strip protocol tokens the agent may have mixed into content (OpenClaw parity 2026.3.1)
             if (containsSilentReply(response)) log('[Audit] Heartbeat sent SILENT_REPLY', 'DEBUG');
             const hadToken = /\bHEARTBEAT_OK\b/i.test(response);
