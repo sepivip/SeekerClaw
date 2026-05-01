@@ -1,7 +1,7 @@
 // tools/session.js — session_status handler
 
 const {
-    log, config, localDateStr,
+    log, localDateStr,
     getAgentName, getSearchProvider, resolveActiveModel,
 } = require('../config');
 
