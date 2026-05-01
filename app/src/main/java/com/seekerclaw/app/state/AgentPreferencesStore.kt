@@ -12,6 +12,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -86,6 +89,12 @@ object AgentPreferencesStore {
     private val _state = MutableStateFlow(AgentPreferences())
     private var appContext: Context? = null
 
+    // R1 Copilot: lenient `Json` mirroring `CrossProcessStore`'s
+    // `ignoreUnknownKeys = true`. Used by the strict file-parse path
+    // in the collector so a forward-build's extra fields don't fail
+    // the parse on a downgrade.
+    private val strictJson = Json { ignoreUnknownKeys = true }
+
     /**
      * Last valid [AgentPreferences] observed. UI binds to this;
      * invalid file content (manual edit, corrupted JSON, future-build
@@ -139,8 +148,66 @@ object AgentPreferencesStore {
                         "app proceeds with in-memory seed; a later save will retry",
                 )
             }
-            cps.state.collect { observed -> observeFromCollector(observed, sp) }
+            // R1 Copilot: use cps.state emissions as a TRIGGER, not a
+            // source of truth. CrossProcessStore.read() returns the
+            // construction-time `initialSnapshot` on JSON decode
+            // failure — so a corrupted `agent_preferences.json` would
+            // surface as a "valid" seeded value, regress `_state`
+            // from the user's actual chosen value back to the
+            // launch-time seed, and overwrite prefs (BAT-515 v3 §2
+            // contract violation: corruption MUST NOT silently reset
+            // a user's name).
+            //
+            // Fix: re-parse the file ourselves with strict semantics
+            // matching `agent-preferences.js` `readLiveOrNull` — null
+            // on absent / unreadable / parse-fail / wrong-type /
+            // unknown-provider / blank-name / missing-field. On null,
+            // skip the dispatch entirely so `_state` and prefs stay
+            // at the last valid value.
+            cps.state.collect { _ ->
+                val strict = parseFileStrictOrNull(File(app.filesDir, FILE_NAME))
+                if (strict != null) {
+                    observeFromCollector(strict, sp)
+                }
+                // null = corrupt or absent → keep last valid state,
+                // skip mirror, skip broadcast (BAT-515 v3 §2 + §3).
+            }
         }
+    }
+
+    /**
+     * Strict file parse mirroring `agent-preferences.js`
+     * `readLiveOrNull` — returns the parsed value only if the file
+     * exists, parses as a JSON object, has both string fields, the
+     * `searchProvider` is in the allowlist, and the `agentName` is
+     * non-blank. Migration paths legitimately carry over-cap names,
+     * so the cap is NOT enforced here (mirrors v3 §1).
+     *
+     * Returns null in every other case so the collector path can
+     * skip dispatch and avoid regressing live state on corruption.
+     *
+     * `internal` so unit tests can pin the parse contract directly
+     * — the corruption-doesn't-regress invariant is the whole point
+     * of this function existing, so it needs explicit test coverage.
+     */
+    internal fun parseFileStrictOrNull(file: File): AgentPreferences? {
+        if (!file.exists()) return null
+        val text = try { file.readText() } catch (_: Exception) { return null }
+        if (text.isBlank()) return null
+        val element = try { strictJson.parseToJsonElement(text) } catch (_: Exception) { return null }
+        val obj = element as? JsonObject ?: return null
+        // Both fields must be PRESENT and STRING — an empty `{}` or a
+        // missing field would deserialize to AgentPreferences defaults
+        // via kotlinx.serialization, which is exactly the "silent
+        // reset" we're trying to avoid. Pull primitives manually so a
+        // partial-shape file is rejected up front.
+        val sp = (obj["searchProvider"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+            ?: return null
+        val an = (obj["agentName"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+            ?: return null
+        if (sp !in AgentPreferences.KNOWN_SEARCH_PROVIDERS) return null
+        if (an.isBlank()) return null
+        return AgentPreferences(searchProvider = sp, agentName = an)
     }
 
     /**

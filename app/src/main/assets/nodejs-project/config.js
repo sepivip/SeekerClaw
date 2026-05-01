@@ -350,25 +350,46 @@ const MODEL = _runtimeModel || config.model || _defaultModel;
 //      under normal flow because saveConfig writes the cold-start
 //      keys for any user past Setup.
 
+// R1 Copilot: normalize + validate the cold-start fallback. Without
+// this, a malformed `config.json` field could escape past the live
+// readLiveOrNull check and reach callers — `tools/web.js` would hit
+// the `default:` branch with "Unknown search provider X", and
+// `/status` could surface a whitespace-only agent name. The live
+// path goes through readLiveOrNull which already enforces these
+// rules; the fallbacks need the same.
+function _normalizeAgentName(value) {
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    return trimmed ? trimmed : null;
+}
+
+function _normalizeSearchProvider(value) {
+    if (typeof value !== 'string') return null;
+    const normalized = value.trim().toLowerCase();
+    // Reuse the same allowlist agent-preferences.js's readLiveOrNull
+    // applies — keeps the live-vs-cold-start gates symmetric so a
+    // value that the live file would reject can't slip through the
+    // fallback either.
+    return _agentPreferencesModule.KNOWN_SEARCH_PROVIDERS.has(normalized)
+        ? normalized
+        : null;
+}
+
 function getAgentName() {
     const live = _agentPreferences.readLiveOrNull();
-    if (live && typeof live.agentName === 'string' && live.agentName) {
-        return live.agentName;
-    }
-    if (typeof config.agentName === 'string' && config.agentName) {
-        return config.agentName;
-    }
+    const liveName = live ? _normalizeAgentName(live.agentName) : null;
+    if (liveName) return liveName;
+    const coldName = _normalizeAgentName(config.agentName);
+    if (coldName) return coldName;
     return 'SeekerClaw';
 }
 
 function getSearchProvider() {
     const live = _agentPreferences.readLiveOrNull();
-    if (live && typeof live.searchProvider === 'string' && live.searchProvider) {
-        return live.searchProvider;
-    }
-    if (typeof config.searchProvider === 'string' && config.searchProvider) {
-        return config.searchProvider;
-    }
+    const liveProvider = live ? _normalizeSearchProvider(live.searchProvider) : null;
+    if (liveProvider) return liveProvider;
+    const coldProvider = _normalizeSearchProvider(config.searchProvider);
+    if (coldProvider) return coldProvider;
     return 'brave';
 }
 

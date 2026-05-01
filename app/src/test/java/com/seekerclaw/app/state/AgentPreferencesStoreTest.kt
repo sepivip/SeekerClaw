@@ -293,9 +293,168 @@ class AgentPreferencesStoreTest {
         assertFalse("redundant observation should not trigger mirror/broadcast", applied)
     }
 
+    // ── parseFileStrictOrNull (R1 Copilot — collector strict gate) ─
+
+    @Test
+    fun `parseFileStrictOrNull returns null on absent file`() {
+        val tmpDir = createTempDir()
+        try {
+            val absent = java.io.File(tmpDir, "agent_preferences.json")
+            assertNull(AgentPreferencesStore.parseFileStrictOrNull(absent))
+        } finally {
+            tmpDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `parseFileStrictOrNull returns null on parse failure`() {
+        val tmpDir = createTempDir()
+        try {
+            val file = java.io.File(tmpDir, "agent_preferences.json")
+            file.writeText("{not valid json}")
+            assertNull(AgentPreferencesStore.parseFileStrictOrNull(file))
+        } finally {
+            tmpDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `parseFileStrictOrNull returns null on empty object (missing fields)`() {
+        // BAT-515 v3 §2 + R1 Copilot: kotlinx.serialization would
+        // happily decode `{}` to AgentPreferences defaults via the
+        // data class defaults. That's exactly the silent-reset path
+        // we're guarding against — both fields must be PRESENT.
+        val tmpDir = createTempDir()
+        try {
+            val file = java.io.File(tmpDir, "agent_preferences.json")
+            file.writeText("{}")
+            assertNull(AgentPreferencesStore.parseFileStrictOrNull(file))
+        } finally {
+            tmpDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `parseFileStrictOrNull returns null on JSON null`() {
+        val tmpDir = createTempDir()
+        try {
+            val file = java.io.File(tmpDir, "agent_preferences.json")
+            file.writeText("null")
+            assertNull(AgentPreferencesStore.parseFileStrictOrNull(file))
+        } finally {
+            tmpDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `parseFileStrictOrNull returns null on JSON array`() {
+        val tmpDir = createTempDir()
+        try {
+            val file = java.io.File(tmpDir, "agent_preferences.json")
+            file.writeText("[1,2,3]")
+            assertNull(AgentPreferencesStore.parseFileStrictOrNull(file))
+        } finally {
+            tmpDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `parseFileStrictOrNull returns null on non-string agentName`() {
+        val tmpDir = createTempDir()
+        try {
+            val file = java.io.File(tmpDir, "agent_preferences.json")
+            file.writeText("""{"searchProvider":"brave","agentName":12345}""")
+            assertNull(AgentPreferencesStore.parseFileStrictOrNull(file))
+        } finally {
+            tmpDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `parseFileStrictOrNull returns null on unknown searchProvider`() {
+        val tmpDir = createTempDir()
+        try {
+            val file = java.io.File(tmpDir, "agent_preferences.json")
+            file.writeText("""{"searchProvider":"duckduckgo","agentName":"Cortana"}""")
+            assertNull(AgentPreferencesStore.parseFileStrictOrNull(file))
+        } finally {
+            tmpDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `parseFileStrictOrNull returns null on blank agentName`() {
+        val tmpDir = createTempDir()
+        try {
+            val file = java.io.File(tmpDir, "agent_preferences.json")
+            file.writeText("""{"searchProvider":"brave","agentName":""}""")
+            assertNull(AgentPreferencesStore.parseFileStrictOrNull(file))
+        } finally {
+            tmpDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `parseFileStrictOrNull accepts valid file with both fields`() {
+        val tmpDir = createTempDir()
+        try {
+            val file = java.io.File(tmpDir, "agent_preferences.json")
+            file.writeText("""{"searchProvider":"exa","agentName":"Cortana"}""")
+            val parsed = AgentPreferencesStore.parseFileStrictOrNull(file)
+            assertNotNull(parsed)
+            assertEquals("exa", parsed!!.searchProvider)
+            assertEquals("Cortana", parsed.agentName)
+        } finally {
+            tmpDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `parseFileStrictOrNull accepts over-cap agentName from migration paths`() {
+        // v3 §1: migration paths legitimately carry over-cap names;
+        // the cap only applies at the NEW-edit boundary. The strict
+        // parse must allow them through so an existing user's long
+        // name survives a downgrade or a service restart.
+        val longName = "A".repeat(100)
+        val tmpDir = createTempDir()
+        try {
+            val file = java.io.File(tmpDir, "agent_preferences.json")
+            file.writeText("""{"searchProvider":"brave","agentName":"$longName"}""")
+            val parsed = AgentPreferencesStore.parseFileStrictOrNull(file)
+            assertNotNull(parsed)
+            assertEquals(100, parsed!!.agentName.length)
+        } finally {
+            tmpDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `parseFileStrictOrNull tolerates unknown forward-build keys`() {
+        // ignoreUnknownKeys = true mirrors CrossProcessStore — a
+        // future build that adds new fields can roll back to current
+        // build without crashing its own data.
+        val tmpDir = createTempDir()
+        try {
+            val file = java.io.File(tmpDir, "agent_preferences.json")
+            file.writeText("""{"searchProvider":"brave","agentName":"X","futureField":"v2"}""")
+            val parsed = AgentPreferencesStore.parseFileStrictOrNull(file)
+            assertNotNull(parsed)
+            assertEquals("X", parsed!!.agentName)
+        } finally {
+            tmpDir.deleteRecursively()
+        }
+    }
+
     // --- helpers ---
 
     private fun fail(msg: String): Nothing = throw AssertionError(msg)
+
+    private fun createTempDir(): java.io.File {
+        val dir = java.io.File.createTempFile("bat515-test-", "")
+        if (!dir.delete()) throw java.io.IOException("Failed to delete tmp file before mkdir")
+        if (!dir.mkdir()) throw java.io.IOException("Failed to create tmp dir")
+        return dir
+    }
 
     private class FakePrefs : SharedPreferences {
         private val map = mutableMapOf<String, String?>()

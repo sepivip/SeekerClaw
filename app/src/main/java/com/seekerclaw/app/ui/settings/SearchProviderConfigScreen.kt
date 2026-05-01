@@ -188,7 +188,25 @@ fun SearchProviderConfigScreen(onBack: () -> Unit) {
             SectionLabel("${activeProvider.displayName} Settings")
             Spacer(modifier = Modifier.height(10.dp))
 
-            val activeApiKey: String? = config?.activeSearchApiKey
+            // R1 Copilot: derive the API key from `effectiveProvider`
+            // (the optimistic value), NOT `config.activeSearchApiKey`
+            // (which still reads the lagging `config.searchProvider`).
+            // During the optimistic window between the tap and the
+            // configVersion bump, `activeProvider.displayName` shows
+            // the new provider while `config.activeSearchApiKey`
+            // would still resolve to the OLD provider's key — a
+            // confusing visible mismatch. Looking up via
+            // `effectiveProvider` keeps the section label, masked-key
+            // value, and "missing key" warning all internally
+            // consistent for whichever provider is currently
+            // displayed as Active.
+            val activeApiKey: String? = when (effectiveProvider) {
+                "perplexity" -> config?.perplexityApiKey
+                "exa" -> config?.exaApiKey
+                "tavily" -> config?.tavilyApiKey
+                "firecrawl" -> config?.firecrawlApiKey
+                else -> config?.braveApiKey
+            }
             val isKeyMissing = activeApiKey.isNullOrBlank()
 
             Column(
