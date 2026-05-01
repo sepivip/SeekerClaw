@@ -52,6 +52,7 @@ import com.seekerclaw.app.ui.components.MorphActionButton
 import com.seekerclaw.app.ui.components.rememberOpenAIOAuthController
 import com.seekerclaw.app.ui.theme.Sizing
 import com.seekerclaw.app.config.ConfigManager
+import com.seekerclaw.app.config.ModelRegistry
 import com.seekerclaw.app.config.availableModels
 import com.seekerclaw.app.config.availableProviders
 import com.seekerclaw.app.config.OPENROUTER_DEFAULT_MODEL
@@ -548,27 +549,18 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                 }
             }
 
-            // BAT-549 Commit 3e: per-Custom advanced override row. Only
-            // visible when the Custom provider is active. Forces the
-            // adapter to echo `reasoning_content` on tool-loop turns
-            // for ANY model id (overrides the conservative default of
-            // capturing-only for unknown gateways). Required for
-            // gateways whose model id doesn't match the known DeepSeek-V4
-            // regex but whose server contract requires the echo —
-            // wrong override → 400 loop, so default OFF.
-            //
-            // Resets to false when [CustomConfigSignature] detects a
-            // change to (model | baseUrl | format | sortedHeaderKeys) —
-            // see ConfigManager.saveConfig (Commit 3d). The reset
-            // protects users from carrying a "yes echo" decision from
-            // gateway A onto gateway B.
-            if (activeProvider == "custom") {
-                Spacer(modifier = Modifier.height(28.dp))
-                SectionLabel("Advanced (Reasoning)")
-                Spacer(modifier = Modifier.height(10.dp))
-                CardSurface {
-                    CustomEchoReasoningRow()
-                }
+            // BAT-549: unified Reasoning section. Master toggles
+            // (Extended thinking, Display reasoning in chat) apply to
+            // ALL providers — the registry's `reasoningSupport`
+            // tri-state decides whether they take effect for the
+            // active model. The per-Custom advanced override (Echo
+            // reasoning to gateway) is only meaningful when on Custom
+            // and renders only then.
+            Spacer(modifier = Modifier.height(28.dp))
+            SectionLabel("Reasoning")
+            Spacer(modifier = Modifier.height(10.dp))
+            CardSurface {
+                ReasoningSectionInlined(activeProvider = activeProvider)
             }
 
             // Connection test
@@ -1388,6 +1380,142 @@ fun OpenRouterModelEditDialog(
  * [com.seekerclaw.app.state.CustomConfigSignature] change-detector
  * triggered by ConfigManager.saveConfig (Commit 3d).
  */
+/**
+ * BAT-549: unified Reasoning section card. Master toggles for Extended
+ * thinking and Display reasoning in chat (cross-provider, RuntimeState-
+ * backed) plus, when on Custom, the per-Custom Echo reasoning to gateway
+ * override. Moved here from SettingsScreen so all reasoning controls
+ * live next to the AI Provider config they affect (UX feedback from
+ * Beka 2026-04-30 — top-level Settings was the wrong home).
+ */
+@Composable
+private fun ReasoningSectionInlined(activeProvider: String) {
+    val rtState by RuntimeStateStore.state.collectAsState()
+    val scope = rememberCoroutineScope()
+
+    var optimisticEnabled by remember(rtState.reasoningEnabled) { mutableStateOf<Boolean?>(null) }
+    var optimisticDisplay by remember(rtState.reasoningDisplayInChat) { mutableStateOf<Boolean?>(null) }
+    val reasoningEnabled = optimisticEnabled ?: rtState.reasoningEnabled
+    val reasoningDisplay = optimisticDisplay ?: rtState.reasoningDisplayInChat
+
+    val support = remember(rtState.provider, rtState.model, rtState.authType) {
+        ModelRegistry.reasoningSupportFor(rtState.provider, rtState.model, rtState.authType)
+    }
+
+    Column {
+        ReasoningToggleRow(
+            label = "Extended thinking",
+            description = "Ask supported models to do extended thinking before answering. No effect on models without reasoning support.",
+            checked = reasoningEnabled,
+            onCheckedChange = { newValue ->
+                optimisticEnabled = newValue
+                runReasoningUpdate(scope, { it.copy(reasoningEnabled = newValue) }) { ok ->
+                    if (!ok) optimisticEnabled = null
+                }
+            },
+        )
+        ReasoningToggleRow(
+            label = "Display reasoning in chat",
+            description = "Surface reasoning summaries in your Telegram chat as expandable blockquotes (when the build supports rendering them). Independent of the toggle above.",
+            checked = reasoningDisplay,
+            onCheckedChange = { newValue ->
+                optimisticDisplay = newValue
+                runReasoningUpdate(scope, { it.copy(reasoningDisplayInChat = newValue) }) { ok ->
+                    if (!ok) optimisticDisplay = null
+                }
+            },
+        )
+
+        // No-op-for-this-model hint, only when the user has just enabled
+        // the master toggle on a non-yes model (less noise when off).
+        val hint = when (support) {
+            "no" -> "Active model does not support extended thinking — toggle has no effect."
+            "unknown" -> "Active model is not in the registry. Toggle has no effect unless your gateway supports it."
+            else -> null
+        }
+        if (hint != null && reasoningEnabled) {
+            Text(
+                text = hint,
+                fontFamily = RethinkSans,
+                fontSize = 12.sp,
+                color = SeekerClawColors.TextSecondary,
+                lineHeight = 18.sp,
+                modifier = Modifier.padding(top = 4.dp, bottom = 4.dp),
+            )
+        }
+
+        // Per-Custom override row only when on Custom provider.
+        if (activeProvider == "custom") {
+            Spacer(modifier = Modifier.height(8.dp))
+            HorizontalDivider(color = Color(0xFFFFFFFF).copy(alpha = 0.06f))
+            Spacer(modifier = Modifier.height(8.dp))
+            CustomEchoReasoningRow()
+        }
+    }
+}
+
+/**
+ * Master-toggle row used by [ReasoningSectionInlined]. Two-line layout
+ * (label + description) so users see what each toggle does without
+ * tapping an info icon.
+ */
+@Composable
+private fun ReasoningToggleRow(
+    label: String,
+    description: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+            Text(
+                text = label,
+                fontFamily = RethinkSans,
+                fontSize = 14.sp,
+                color = SeekerClawColors.TextPrimary,
+            )
+            Text(
+                text = description,
+                fontFamily = RethinkSans,
+                fontSize = 11.sp,
+                color = SeekerClawColors.TextDim,
+                lineHeight = 16.sp,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+        }
+        SeekerClawSwitch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+        )
+    }
+}
+
+/**
+ * Atomic field-local RuntimeStateStore.update on Dispatchers.IO.
+ * Mirrors the helper in SettingsScreen — duplicated here so this
+ * file is self-contained after the move-from-Settings UX refactor.
+ */
+private fun runReasoningUpdate(
+    scope: kotlinx.coroutines.CoroutineScope,
+    transform: (com.seekerclaw.app.state.RuntimeState) -> com.seekerclaw.app.state.RuntimeState,
+    callback: (Boolean) -> Unit,
+) {
+    scope.launch(Dispatchers.IO) {
+        val ok = try {
+            RuntimeStateStore.update(transform)
+        } catch (_: IllegalArgumentException) {
+            false
+        }
+        withContext(Dispatchers.Main) { callback(ok) }
+    }
+}
+
 @Composable
 private fun CustomEchoReasoningRow() {
     // R14 Copilot: observe the StateFlow so cross-process updates

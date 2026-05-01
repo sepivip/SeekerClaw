@@ -48,7 +48,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableIntStateOf
@@ -89,10 +88,8 @@ import androidx.compose.material3.IconButton
 import com.seekerclaw.app.config.ConfigClaimImport
 import com.seekerclaw.app.config.ConfigClaimImporter
 import com.seekerclaw.app.config.ConfigManager
-import com.seekerclaw.app.config.ModelRegistry
 import com.seekerclaw.app.config.availableModels
 import com.seekerclaw.app.config.searchProviderById
-import com.seekerclaw.app.state.RuntimeStateStore
 import com.seekerclaw.app.qr.QrScannerActivity
 import com.seekerclaw.app.service.SeekerClawService
 import com.seekerclaw.app.solana.SolanaAuthActivity
@@ -481,22 +478,6 @@ fun SettingsScreen(
                 )
             }
         }
-
-        Spacer(modifier = Modifier.height(28.dp))
-
-        // BAT-549 Commit 3e: "Reasoning" section — user-facing toggles for
-        // extended-thinking enablement and chat display. Both write through
-        // RuntimeStateStore so the :node side picks them up via the
-        // FileObserver / per-turn read in ai.js (Commit 3c). The "Display
-        // in chat" toggle is independent — a power user can capture
-        // reasoning into checkpoint state without surfacing it (lower
-        // chat noise) or vice versa (display already-captured reasoning
-        // from past turns even when not currently enabling new captures).
-        // R23 Copilot: ReasoningSection now reads provider/model/authType
-        // entirely from RuntimeStateStore.state (re-keyed support lookup
-        // matches the toggles' source of truth). No need to thread the
-        // ConfigManager snapshot through.
-        ReasoningSection()
 
         Spacer(modifier = Modifier.height(28.dp))
 
@@ -1444,155 +1425,6 @@ fun SettingsScreen(
 
 }
 
-
-/**
- * BAT-549 Commit 3e: "Reasoning" section. Two switches that write
- * through to RuntimeStateStore so the live cross-process state file
- * stays in sync with the UI. The :node side reads these per turn
- * (ai.js's chat() loop, Commit 3c) — no service restart needed.
- *
- * Note on the hint text: when the active model's `reasoningSupport`
- * is "no" (Haiku) or "unknown" (freeform/unregistered), the toggle is
- * a TRUE no-op — no request param is sent regardless. Showing this in
- * the UI prevents the "I turned it on but nothing changed" confusion
- * (Codex v4.1 watch-note 4: registry is the source of truth, never
- * silently lie about model support).
- *
- * Read-modify-write race: a concurrent Telegram /think handler could
- * land between our read and write. The window is ~ms and only matters
- * for a user who flips the toggle in Settings AND issues /think
- * simultaneously — exceedingly rare; the next interaction resolves.
- */
-@Composable
-private fun ReasoningSection() {
-    val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
-    // R14 Copilot: observe the StateFlow so cross-process updates
-    // (e.g., a Telegram /think command in Commit 4 writing
-    // runtime_state.json) flow through to the UI without requiring
-    // the user to leave + re-enter Settings. The local `optimistic`
-    // var below provides immediate visual feedback on tap so the
-    // switch doesn't briefly snap back while the IO dispatch
-    // completes.
-    val rtState by RuntimeStateStore.state.collectAsState()
-    val scope = rememberCoroutineScope()
-    // Optimistic local override, re-keyed on external state change so
-    // a Telegram /think (or any cross-process write) that lands AFTER
-    // the user toggled here propagates correctly. `null` means "no
-    // local override — show the StateFlow value".
-    var optimisticEnabled by remember(rtState.reasoningEnabled) { mutableStateOf<Boolean?>(null) }
-    var optimisticDisplay by remember(rtState.reasoningDisplayInChat) { mutableStateOf<Boolean?>(null) }
-    val reasoningEnabled = optimisticEnabled ?: rtState.reasoningEnabled
-    val reasoningDisplay = optimisticDisplay ?: rtState.reasoningDisplayInChat
-
-    // R21 Copilot: derive provider/model/authType from rtState (the
-    // RuntimeStateStore StateFlow) instead of the ConfigManager-loaded
-    // snapshot passed in via [currentProvider]/[currentModel]/[currentAuthType].
-    // The toggles already track rtState; mixing the support-lookup against
-    // a stale ConfigManager snapshot would let the hint disagree with the
-    // toggles' actual effect when Telegram /provider or /model has
-    // updated runtime_state.json without a same-tick recompose of the
-    // outer SettingsScreen config snapshot. Re-key on rtState so the
-    // hint refreshes with the toggles in lock-step.
-    val support = remember(rtState.provider, rtState.model, rtState.authType) {
-        ModelRegistry.reasoningSupportFor(rtState.provider, rtState.model, rtState.authType)
-    }
-
-    CollapsibleSection("Reasoning", initiallyExpanded = false) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(SeekerClawColors.Surface, shape)
-                .cornerGlowBorder()
-                .padding(horizontal = 16.dp),
-        ) {
-            SettingRow(
-                label = "Extended thinking",
-                checked = reasoningEnabled,
-                onCheckedChange = { newValue ->
-                    optimisticEnabled = newValue
-                    persistReasoningUpdateAsync(scope, { it.copy(reasoningEnabled = newValue) }) { ok ->
-                        // R17 Copilot: clear the optimistic override on
-                        // failure so the displayed value falls back to
-                        // the live StateFlow. `!newValue` would be
-                        // wrong if a concurrent cross-process write
-                        // (e.g., Telegram /think) had landed in the
-                        // meantime — clearing the override is always
-                        // correct because rtState reflects whatever's
-                        // persisted on disk.
-                        if (!ok) optimisticEnabled = null
-                    }
-                },
-                info = SettingsHelpTexts.REASONING_ENABLED,
-            )
-            SettingRow(
-                label = "Display reasoning in chat",
-                checked = reasoningDisplay,
-                onCheckedChange = { newValue ->
-                    optimisticDisplay = newValue
-                    persistReasoningUpdateAsync(scope, { it.copy(reasoningDisplayInChat = newValue) }) { ok ->
-                        if (!ok) optimisticDisplay = null
-                    }
-                },
-                info = SettingsHelpTexts.REASONING_DISPLAY_IN_CHAT,
-            )
-            // Surface the "no-op for this model" state so users don't
-            // think the toggle is broken when their model doesn't
-            // support reasoning. "yes" → no hint (toggle works as
-            // expected). "no" → explicit; "unknown" → softer wording
-            // since the user might have a freeform/Custom gateway
-            // that DOES support it.
-            val hint = when (support) {
-                "no" -> "This model does not support extended thinking — toggle has no effect."
-                "unknown" -> "This model is not in the registry. Toggle has no effect unless your custom gateway supports it (advanced)."
-                else -> null
-            }
-            if (hint != null && reasoningEnabled) {
-                Text(
-                    text = hint,
-                    fontFamily = RethinkSans,
-                    fontSize = 12.sp,
-                    color = SeekerClawColors.TextSecondary,
-                    lineHeight = 18.sp,
-                    modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
-                )
-            }
-        }
-    }
-}
-
-/**
- * Persist a BAT-549 RuntimeState field via [RuntimeStateStore.update]
- * — atomic field-local read-modify-write under the
- * CrossProcessStore's writeLock. R24 Copilot: prevents TOCTOU
- * lost-update races where a concurrent cross-process write (Telegram
- * /think handler, Commit 3d's signature reset, etc.) lands between
- * the snapshot read in the @Composable and our write — without the
- * lock our write would clobber the concurrent change. update {}
- * re-reads the latest persisted value INSIDE the lock and applies
- * [transform] to it, so we only mutate the field we intended to.
- *
- * R14 Copilot: cross-process-store does a tmp-write + atomic rename
- * which is sync disk I/O — fine on flash but trips StrictMode and
- * can produce visible jank on slow devices when the fsync stalls.
- * Dispatching to IO keeps the UI thread responsive while the
- * optimistic local state already gave the user immediate visual
- * feedback. [callback] runs on Main with the persistence result so
- * the caller can revert optimistic state on FS failure.
- */
-private fun persistReasoningUpdateAsync(
-    scope: kotlinx.coroutines.CoroutineScope,
-    transform: (com.seekerclaw.app.state.RuntimeState) -> com.seekerclaw.app.state.RuntimeState,
-    callback: (Boolean) -> Unit,
-) {
-    scope.launch(Dispatchers.IO) {
-        val ok = try {
-            RuntimeStateStore.update(transform)
-        } catch (_: IllegalArgumentException) {
-            false
-        }
-        kotlinx.coroutines.withContext(Dispatchers.Main) { callback(ok) }
-    }
-}
 
 @Composable
 private fun CollapsibleSection(
