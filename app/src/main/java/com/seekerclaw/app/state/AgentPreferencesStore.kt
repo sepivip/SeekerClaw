@@ -247,8 +247,16 @@ object AgentPreferencesStore {
      * Returns `false` if [init] wasn't called (`:node` process).
      */
     fun write(value: AgentPreferences): Boolean {
+        // R8 Copilot: gate on `store` BEFORE validating. KDoc promises
+        // `:node`-process callers (where init never ran) get a quiet
+        // `false` — running `validateForWrite` first would throw
+        // `IllegalArgumentException` for any invalid value even when
+        // there's no store to write to, breaking the documented
+        // contract. Same shape as [update]'s `val s = store ?: return
+        // false` early-out.
+        val initializedStore = store ?: return false
         validateForWrite(value, _state.value)
-        val ok = store?.write(value) ?: false
+        val ok = initializedStore.write(value)
         // R3 Copilot: sync-update [_state] on successful persistence so
         // same-process callers reading via [read] (= `_state.value`)
         // see the new value immediately. Pre-fix the collector path
