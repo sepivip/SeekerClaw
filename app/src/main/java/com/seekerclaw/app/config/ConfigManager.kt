@@ -706,6 +706,22 @@ object ConfigManager {
             else rollback.remove(KEY_AUTH_TYPE)
             if (oldModel != null) rollback.putString(KEY_MODEL, oldModel)
             else rollback.remove(KEY_MODEL)
+            // R5 Copilot: BAT-515 added KEY_AGENT_NAME / KEY_SEARCH_PROVIDER
+            // to the same `editor.commit()` block above (lines 367, 389).
+            // The pre-BAT-515 rollback only covered the BAT-513 runtime
+            // keys, so a RuntimeStateStore failure left prefs holding the
+            // NEW agentName/searchProvider while runtime_state.json kept
+            // the OLD values — and agent_preferences.json (which the
+            // saveConfig flow hasn't reached yet at this point) also has
+            // the old values. Without these two extra rollback lines,
+            // prefs and the cross-process files would diverge on the
+            // RuntimeStateStore-failure path, undoing the v3 §4 atomicity
+            // contract. Mirror the same put-or-remove shape the later
+            // AgentPreferencesStore-failure rollback already uses.
+            if (oldAgentName != null) rollback.putString(KEY_AGENT_NAME, oldAgentName)
+            else rollback.remove(KEY_AGENT_NAME)
+            if (oldSearchProvider != null) rollback.putString(KEY_SEARCH_PROVIDER, oldSearchProvider)
+            else rollback.remove(KEY_SEARCH_PROVIDER)
             rollback.putBoolean(KEY_SETUP_COMPLETE, oldSetupComplete)
             val rollbackOk = rollback.commit()
             if (!rollbackOk) {
@@ -716,7 +732,7 @@ object ConfigManager {
                 // still gets `false` so the UI surfaces the failure.
                 LogCollector.append(
                     "[Config] Rollback commit() returned false — prefs may be in inconsistent state " +
-                        "(some runtime fields possibly half-rolled-back)",
+                        "(some fields possibly half-rolled-back)",
                     LogLevel.ERROR,
                 )
             }
@@ -726,8 +742,9 @@ object ConfigManager {
             // second bump corrects the snapshot).
             bumpConfigVersionOnMain()
             LogCollector.append(
-                "[Config] RuntimeStateStore.write failed — rolled back prefs runtime fields " +
-                    "to (provider=$oldProvider, authType=$oldAuthType, model=$oldModel) " +
+                "[Config] RuntimeStateStore.write failed — rolled back prefs to " +
+                    "(provider=$oldProvider, authType=$oldAuthType, model=$oldModel, " +
+                    "agentName=$oldAgentName, searchProvider=$oldSearchProvider) " +
                     "and KEY_SETUP_COMPLETE to $oldSetupComplete (commit_ok=$rollbackOk)",
                 LogLevel.WARN,
             )
