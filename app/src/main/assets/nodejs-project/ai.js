@@ -2391,24 +2391,50 @@ async function chat(chatId, userMessage, options = {}) {
                 synthetic: effectiveSynthetic,
             };
 
-            // R1.3 Copilot: emit the SYNTHETIC_HEARTBEAT suppression log
-            // once per process so the v4 contract claim ("one INFO line
-            // per process per reason") actually surfaces in the Logs
-            // screen. Without this call site the SUPPRESSION_REASONS
-            // entry was exported but never written; field reports of
-            // "why did my heartbeat not reason" would have no
-            // discoverable signal. Dedup is per-process, so 30-min
-            // heartbeats don't flood the screen — the second probe
-            // onwards goes to DEBUG (filtered out of default view).
+            // R1.3 + R2.2 Copilot: emit the SYNTHETIC_HEARTBEAT
+            // suppression log once per process — but ONLY when the
+            // suppression actually has effect. The log says
+            // "[Reasoning] suppressed: synthetic-heartbeat", so it
+            // would mislead the reader if it fired in cases where
+            // the adapter still emits reasoning regardless:
             //
-            // The reason key only fires for heartbeat synthetic turns
-            // today; if a future synthetic class (e.g., 'summary')
-            // wants its own discoverable entry, add a SUPPRESSION_REASONS
-            // value and a branch here.
-            if (effectiveReasoningMode === 'off' && effectiveSynthetic === 'heartbeat') {
+            //   - User reasoning toggle is off OR registry support is
+            //     'no' / 'unknown' → no app-controlled emission was
+            //     ever queued, so 'off' is a no-op. Logging
+            //     "suppressed" implies an action that didn't happen.
+            //   - OpenAI OAuth/Codex transport-required path — the
+            //     Codex endpoint MUST receive `body.reasoning` or it
+            //     returns `output: []`. v4 R3 explicitly preserves
+            //     this exception. The synthetic 'off' marker is a
+            //     no-op here for the wire shape, so the log would
+            //     mislead.
+            //   - OpenAI api_key + codex model — same model-id-driven
+            //     hardcode, transport-required.
+            //
+            // Logging fires when ALL of these are true:
+            //   1. effectiveReasoningMode === 'off'
+            //   2. effectiveSynthetic === 'heartbeat'
+            //   3. user toggle would have triggered emission
+            //      (reasoningEnabled && reasoningSupport === 'yes')
+            //   4. no transport-required exception applies
+            //
+            // Detail string includes provider/auth/channel so a field
+            // report has the full context to triage from one log line.
+            const _userToggleWouldEmit = requestOptions.reasoningEnabled
+                && requestOptions.reasoningSupport === 'yes';
+            const _modelIsCodex = typeof activeModel === 'string'
+                && activeModel.includes('codex');
+            const _transportRequiresReasoning = (PROVIDER === 'openai'
+                && (OPENAI_AUTH_TYPE === 'oauth' || _modelIsCodex));
+            if (effectiveReasoningMode === 'off'
+                && effectiveSynthetic === 'heartbeat'
+                && _userToggleWouldEmit
+                && !_transportRequiresReasoning) {
                 _logSuppression(
                     _SUPPRESSION_REASONS.SYNTHETIC_HEARTBEAT,
-                    `chatId=${String(chatId).slice(0, 32)}`,
+                    `chatId=${String(chatId).slice(0, 32)} provider=${PROVIDER} `
+                    + `auth=${PROVIDER === 'openai' ? OPENAI_AUTH_TYPE : AUTH_TYPE} `
+                    + `model=${String(activeModel).slice(0, 48)}`,
                 );
             }
 

@@ -45,6 +45,7 @@ require.cache[configPath] = {
 const {
     displayNameForProvider,
     PROVIDER_DISPLAY_NAMES,
+    KNOWN_PROVIDERS,
 } = require('../../app/src/main/assets/nodejs-project/model-catalog');
 
 let failures = 0;
@@ -76,25 +77,25 @@ for (const [providerId, expectedLabel] of Object.entries(expectations)) {
         displayNameForProvider(providerId), expectedLabel);
 }
 
-// Every known provider must have an entry in PROVIDER_DISPLAY_NAMES.
+// Every registered provider must have an entry in PROVIDER_DISPLAY_NAMES.
 // If a future provider lands in the registry but forgets a displayName,
-// the helper falls back to a Capitalized id — flag that here so the
-// retry log doesn't end up surfacing a raw lowercase id like "[Retry]
-// foobar API 429".
+// `displayNameForProvider` falls back to a Capitalized id — surfacing as
+// "[Retry] Foobar API 429" in the user-visible Logs screen. Catch this
+// regression by iterating the AUTHORITATIVE provider list (`KNOWN_PROVIDERS`,
+// derived from registry.providers[].id), not the display-names map keys —
+// the map-keys iteration was tautological because it only visited providers
+// that already had a mapping (R2 Copilot finding).
 console.log();
-console.log('── BAT-559: every known provider has a display name (no Capitalized fallback) ──');
-const knownProviderIds = Object.keys(PROVIDER_DISPLAY_NAMES);
+console.log('── BAT-559: every registry provider has an explicit displayName ──');
 ok('At least 4 providers known to the registry',
-    knownProviderIds.length >= 4,
-    `actual count: ${knownProviderIds.length}`);
-for (const id of knownProviderIds) {
-    const label = displayNameForProvider(id);
-    ok(`${id} has explicit registry displayName (not the Capitalized fallback)`,
-        typeof label === 'string' && label.length > 0 && label !== (id.charAt(0).toUpperCase() + id.slice(1)) ||
-        // Allow Capitalized fallback IF it matches the registry value (e.g., 'Custom'
-        // happens to be the capitalized form of 'custom', and that's correct).
-        PROVIDER_DISPLAY_NAMES[id] === label,
-        `label="${label}", capitalized="${id.charAt(0).toUpperCase() + id.slice(1)}"`);
+    Array.isArray(KNOWN_PROVIDERS) && KNOWN_PROVIDERS.length >= 4,
+    `actual count: ${KNOWN_PROVIDERS?.length}`);
+for (const id of KNOWN_PROVIDERS) {
+    ok(`Registry provider '${id}' has an entry in PROVIDER_DISPLAY_NAMES`,
+        Object.prototype.hasOwnProperty.call(PROVIDER_DISPLAY_NAMES, id)
+            && typeof PROVIDER_DISPLAY_NAMES[id] === 'string'
+            && PROVIDER_DISPLAY_NAMES[id].length > 0,
+        `actual: ${JSON.stringify(PROVIDER_DISPLAY_NAMES[id])}`);
 }
 
 // Robustness: unknown / malformed provider id must not crash the log
