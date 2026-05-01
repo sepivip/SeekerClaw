@@ -270,9 +270,30 @@ object AgentPreferencesStore {
      * `synchronized(writeLock)` block — atomic w.r.t. both concurrent
      * `update {}` calls AND concurrent `write()` calls in the same
      * process.
+     *
+     * The "current" value passed to the transform is re-derived from
+     * the file via [parseFileStrictOrNull] inside the writeLock,
+     * NOT from the lambda's `current` arg. CrossProcessStore.read()
+     * (which feeds the lambda's `current`) returns its
+     * construction-time `initialSnapshot` on JSON decode failure —
+     * so a corrupted `agent_preferences.json` would feed the
+     * launch-time seed into the transform, and a partial update
+     * (e.g., changing only `searchProvider`) would silently regress
+     * the user's chosen `agentName` to the seed (R4 Copilot caught
+     * this as a regression vector matching the collector-path bug
+     * R1.3 already fixed).
+     *
+     * Falls back to `_state.value` (this wrapper's last-valid
+     * snapshot, kept fresh by the R3 sync-update path) when the
+     * file is corrupt or absent. Concurrent in-process updates
+     * still serialize correctly: the writeLock guarantees update2
+     * enters AFTER update1's persist completes, so update2's
+     * `parseFileStrictOrNull` reads update1's just-persisted value
+     * — no lost-update.
      */
     suspend fun update(transform: (AgentPreferences) -> AgentPreferences): Boolean {
         val s = store ?: return false
+        val ctx = appContext ?: return false
         // R3 Copilot: capture the value persisted by the transform (the
         // `next` returned inside the writeLock) so we can sync-update
         // `_state` after the underlying write succeeds. Without this,
@@ -280,7 +301,13 @@ object AgentPreferencesStore {
         // until the collector path fires (~50-200ms later) — same race
         // [write] had pre-fix.
         var persisted: AgentPreferences? = null
-        val ok = s.update { current ->
+        val ok = s.update { _ ->
+            // R4 Copilot: re-derive `current` via strict file parse
+            // (with `_state.value` fallback for corrupt/absent files)
+            // to bypass CrossProcessStore.read()'s decode-failure →
+            // initialSnapshot regression. See KDoc above.
+            val current = parseFileStrictOrNull(File(ctx.filesDir, FILE_NAME))
+                ?: _state.value
             val next = transform(current)
             validateForWrite(next, current)
             persisted = next
