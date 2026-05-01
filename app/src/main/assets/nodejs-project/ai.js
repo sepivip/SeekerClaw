@@ -28,6 +28,11 @@ const channel = require('./channel');
 const { sentMessageCache, SENT_CACHE_TTL } = require('./telegram');
 // deferStatus is Telegram-specific (inline status messages); no-op on other channels
 const deferStatus = CHANNEL === 'telegram' ? require('./telegram').deferStatus : () => ({ cleanup: async () => {} });
+// BAT-549 Commit 6: extended-thinking indicator. Telegram-only per v4
+// contract; Discord (and any future channel) gets a no-op stub so the
+// chat() call site stays uniform. Discord display work is deferred to
+// a future ticket.
+const deferThinkingStatus = CHANNEL === 'telegram' ? require('./telegram').deferThinkingStatus : () => ({ cleanup: async () => {} });
 const { httpStreamingRequest, httpOpenAIStreamingRequest, httpChatCompletionsStreamingRequest } = require('./http');
 const { getAdapter } = require('./providers');
 const { androidBridgeCall } = require('./bridge');
@@ -2360,7 +2365,40 @@ async function chat(chatId, userMessage, options = {}) {
             const apiMessages = adapter.toApiMessages(messages, activeModel, requestOptions);
             const body = adapter.formatRequest(activeModel, 4096, systemBlocks, apiMessages, formattedTools, requestOptions);
 
-            const res = await claudeApiCall(body, chatId, { turnId, iteration: stepCount });
+            // BAT-549 Commit 6: extended-thinking status indicator.
+            // Per v4 contract, the bubble appears ONLY when all three
+            // gates align — the toggle is on, the registry confirms
+            // reasoning support for this model, AND extended thinking
+            // is actually enabled. Anything less and the indicator
+            // would lie ("Thinking..." for a model that isn't).
+            // The bubble is rendered via the `deferThinkingStatus`
+            // helper (telegram.js) which has a 500ms debounce (so
+            // fast non-thinking turns never flash) and NO min-visible
+            // hold (so cleanup never delays the final answer).
+            const showThinkingStatus = !!(
+                requestOptions
+                && requestOptions.reasoningEnabled === true
+                && requestOptions.reasoningSupport === 'yes'
+                && _liveRtState
+                && _liveRtState.reasoningDisplayInChat === true
+            );
+            const thinkingStatus = showThinkingStatus
+                ? deferThinkingStatus(chatId)
+                : { cleanup: async () => {} };
+
+            let res;
+            try {
+                res = await claudeApiCall(body, chatId, { turnId, iteration: stepCount });
+            } finally {
+                // Codex v3/v4 sign-off adjustment: cleanup is
+                // fire-and-forget. Awaiting it inline would gate
+                // response delivery on the bubble-delete network
+                // round-trip — the whole point of the no-min-hold
+                // helper is so the answer can flow IMMEDIATELY.
+                // The .catch swallows so a deletion failure never
+                // surfaces to the user; status is bonus UX.
+                thinkingStatus.cleanup().catch(() => {});
+            }
 
             if (res.status !== 200) {
                 // BAT-549 R3 thread 2: error bodies can echo reasoning

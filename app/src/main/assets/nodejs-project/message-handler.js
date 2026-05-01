@@ -1329,38 +1329,53 @@ async function handleThinkCommand(chatId, args) {
     // No args → status display
     if (tokens.length === 0) {
         const modelCatalog = require('./model-catalog');
-        // R21 Copilot: use current.authType (live RuntimeState) instead
-        // of the startup AUTH_TYPE / OPENAI_AUTH_TYPE constants. The
-        // constants snapshot at Node startup and don't reflect mid-session
-        // /provider switches, but RuntimeState is the source of truth
-        // (FileObserver-backed, written by /provider, /model, Settings).
+        // Use current.authType from the live RuntimeState (R21
+        // contract preserved): the startup constants snapshot at
+        // Node startup and don't reflect mid-session /provider
+        // switches, but RuntimeState is the source of truth.
         const support = modelCatalog.reasoningSupportFor(
             current.provider,
             current.model,
             current.authType,
         );
         const lines = [];
-        lines.push('**Reasoning state**');
-        lines.push(`• Extended thinking: ${current.reasoningEnabled ? '✓ on' : '✗ off'}`);
-        lines.push(`• Display in chat: ${current.reasoningDisplayInChat ? '✓ on' : '✗ off'}`);
-        // R21 Copilot: surface the per-Custom override too (the third
-        // toggle the comment promised). Always include it so users on
-        // any provider see the same fields; non-Custom users see "off"
-        // and the action description tells them it's Custom-only.
-        lines.push(`• Echo reasoning to gateway (Custom only): ${current.customEchoReasoning ? '✓ on' : '✗ off'}`);
-        lines.push(`• Active model: \`${current.model}\` (\`reasoningSupport=${support}\`)`);
+        // BAT-549 Commit 6 / v4 PM addendum: rewrite to user-facing
+        // language. No more `reasoningSupport=yes/no/unknown` raw
+        // field exposure, no "request-side enablement" jargon, no
+        // "render reasoning summaries in chat" (we now show only a
+        // status, never content). Custom block hidden unless the
+        // user is actually on Custom — keeps the default output
+        // tight for the 95% case.
+        lines.push('**Thinking settings**');
+        lines.push('');
+        lines.push(`Extended thinking: ${current.reasoningEnabled ? 'On' : 'Off'}`);
+        lines.push(`Thinking status: ${current.reasoningDisplayInChat ? 'On' : 'Off'}`);
+        lines.push(`Active model: \`${current.model}\``);
         if (support === 'no') {
             lines.push('');
-            lines.push('⚠ Active model does not support reasoning — toggles have no request-side effect for this model.');
+            lines.push('This model does not support extended thinking, so these settings will not affect responses on this model.');
         } else if (support === 'unknown') {
             lines.push('');
-            lines.push('⚠ Active model is not in the registry — toggles may have no effect (depends on the gateway).');
+            lines.push('This model is not in SeekerClaw\'s known model list, so extended thinking may not be available.');
         }
         lines.push('');
-        lines.push('**Usage:**');
-        lines.push('• `/think on` / `/think off` — request-side enablement');
-        lines.push('• `/think show` / `/think hide` — render reasoning summaries in chat');
-        lines.push('• `/think echo on` / `/think echo off` — Custom advanced override (force echo on tool-loop, only when on Custom provider)');
+        lines.push('**Commands:**');
+        lines.push('`/think on` — turn extended thinking on');
+        lines.push('`/think off` — turn extended thinking off');
+        lines.push('`/think show` — show Thinking... status when thinking is used');
+        lines.push('`/think hide` — hide Thinking... status');
+        // Custom-only block (PM addendum): only surface when active
+        // provider is `custom`. The /think echo on|off subcommands
+        // remain functional for users who know the syntax even
+        // off-Custom — we just don't advertise them in the default
+        // status because they're irrelevant outside Custom.
+        if (current.provider === 'custom') {
+            lines.push('');
+            lines.push('**Custom gateway**');
+            lines.push(`Echo reasoning metadata: ${current.customEchoReasoning ? 'On' : 'Off'}`);
+            lines.push('`/think echo on` — turn on custom gateway echo');
+            lines.push('`/think echo off` — turn off custom gateway echo');
+        }
         return lines.join('\n');
     }
 
@@ -1380,22 +1395,22 @@ async function handleThinkCommand(chatId, args) {
             break;
         case 'show':
             patch.reasoningDisplayInChat = true;
-            action = 'Reasoning will be displayed in chat (when captured).';
+            action = 'Thinking... status will appear during extended thinking.';
             break;
         case 'hide':
             patch.reasoningDisplayInChat = false;
-            action = 'Reasoning will not be displayed in chat.';
+            action = 'Thinking... status hidden.';
             break;
         case 'echo on':
             patch.customEchoReasoning = true;
-            action = 'Custom echo override enabled (force reasoning_content echo on tool-loop turns).';
+            action = 'Custom gateway echo enabled.';
             if (current.provider !== 'custom') {
                 action += ' Note: only takes effect when provider=custom; you are currently on \`' + current.provider + '\`.';
             }
             break;
         case 'echo off':
             patch.customEchoReasoning = false;
-            action = 'Custom echo override disabled.';
+            action = 'Custom gateway echo disabled.';
             break;
         default:
             return `❌ Unknown subcommand \`${subcommand}\`. Try \`/think\` for usage.`;

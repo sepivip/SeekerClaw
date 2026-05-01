@@ -98,18 +98,44 @@ function ok(label, cond, hint = '') {
 // ── /think with no args → status display ──
 
 (async () => {
+    // Default state in this test fixture: provider=claude, model=claude-opus-4-7
+    // (reasoningSupport=yes), reasoningEnabled=false, reasoningDisplayInChat=false,
+    // customEchoReasoning=false. Per the v4 PM addendum, the no-args output is
+    // user-facing language only — no `reasoningSupport=...` raw field, no
+    // "Display in chat" wording (renamed to "Thinking status"), no
+    // "Echo reasoning to gateway" line for non-Custom providers.
     const reply = await messageHandler.handleCommand('123', '/think', '', null);
     ok('no-args: returns a status string', typeof reply === 'string' && reply.length > 0);
-    ok('no-args: includes "Reasoning state" header',
-        typeof reply === 'string' && reply.includes('Reasoning state'));
-    ok('no-args: shows extended thinking line',
-        typeof reply === 'string' && reply.includes('Extended thinking'));
-    ok('no-args: shows display-in-chat line',
-        typeof reply === 'string' && reply.includes('Display in chat'));
+    ok('no-args: includes "Thinking settings" header',
+        typeof reply === 'string' && reply.includes('Thinking settings'));
+    ok('no-args: shows "Extended thinking:" line',
+        typeof reply === 'string' && /Extended thinking: (On|Off)/.test(reply));
+    ok('no-args: shows "Thinking status:" line (renamed from Display in chat)',
+        typeof reply === 'string' && /Thinking status: (On|Off)/.test(reply));
     ok('no-args: shows active model',
         typeof reply === 'string' && reply.includes('claude-opus-4-7'));
-    ok('no-args: shows reasoningSupport tri-state',
-        typeof reply === 'string' && /reasoningSupport=(yes|no|unknown)/.test(reply));
+    // PM addendum: NO raw reasoningSupport field, NO "Display in chat" wording
+    ok('no-args: does NOT expose raw reasoningSupport field',
+        typeof reply === 'string' && !/reasoningSupport=/.test(reply));
+    ok('no-args: does NOT use old "Display in chat" wording',
+        typeof reply === 'string' && !/Display in chat/.test(reply));
+    // Active model is yes-supporting → no support hint should appear
+    ok('no-args (yes-supporting model): no "does not support" hint',
+        typeof reply === 'string' && !reply.includes('does not support extended thinking'));
+    ok('no-args (yes-supporting model): no "not in known model list" hint',
+        typeof reply === 'string' && !reply.includes('not in SeekerClaw'));
+    // Provider is Claude → Custom block hidden
+    ok('no-args (non-Custom provider): no Custom gateway block',
+        typeof reply === 'string' && !reply.includes('Custom gateway'));
+    ok('no-args (non-Custom provider): no Echo reasoning metadata line',
+        typeof reply === 'string' && !reply.includes('Echo reasoning metadata'));
+    // Commands block uses user-facing language
+    ok('no-args: Commands block present',
+        typeof reply === 'string' && reply.includes('Commands'));
+    ok('no-args: /think show describes status, not "render reasoning summaries"',
+        typeof reply === 'string'
+        && /think show.*Thinking\.\.\. status/.test(reply)
+        && !/render reasoning summaries/.test(reply));
 
     // ── /think on → reasoningEnabled=true, others preserved ──
     const onReply = await messageHandler.handleCommand('123', '/think', 'on', null);
@@ -174,11 +200,44 @@ function ok(label, cond, hint = '') {
     // Reset for downstream assertions
     await messageHandler.handleCommand('123', '/think', 'echo off', null);
 
-    // ── R21 Copilot: status surfaces the third toggle ──
-    const statusWithThird = await messageHandler.handleCommand('123', '/think', '', null);
-    ok('Status: includes Echo reasoning to gateway line',
-        typeof statusWithThird === 'string'
-        && statusWithThird.includes('Echo reasoning to gateway'));
+    // ── v4 PM addendum: Custom block hidden when not on Custom ──
+    // After all those echo on/off toggles, we're still on provider=claude.
+    // The /think output should NOT show the Custom block.
+    const statusOnClaude = await messageHandler.handleCommand('123', '/think', '', null);
+    ok('Status (claude provider): no "Custom gateway" header',
+        typeof statusOnClaude === 'string' && !statusOnClaude.includes('Custom gateway'));
+    ok('Status (claude provider): no "Echo reasoning metadata" line',
+        typeof statusOnClaude === 'string' && !statusOnClaude.includes('Echo reasoning metadata'));
+
+    // ── v4 PM addendum: Custom block VISIBLE when provider=custom ──
+    // Switch the persisted runtime state to Custom and re-query /think.
+    _runtimeState.write({
+        provider: 'custom',
+        authType: 'api_key',
+        model: 'deepseek-v4-pro',
+        customEchoReasoning: true, // turn ON so we can see the value rendered
+    });
+    const statusOnCustom = await messageHandler.handleCommand('123', '/think', '', null);
+    ok('Status (custom provider): "Custom gateway" header present',
+        typeof statusOnCustom === 'string' && statusOnCustom.includes('Custom gateway'));
+    ok('Status (custom provider): "Echo reasoning metadata: On" line',
+        typeof statusOnCustom === 'string' && /Echo reasoning metadata: On/.test(statusOnCustom));
+    ok('Status (custom provider): /think echo off command listed',
+        typeof statusOnCustom === 'string' && /think echo off/.test(statusOnCustom));
+    // deepseek-v4-pro is not in the registry (Custom is freeform) → "unknown" hint
+    ok('Status (custom + unknown model): "not in SeekerClaw\'s known model list" hint',
+        typeof statusOnCustom === 'string'
+        && statusOnCustom.includes("not in SeekerClaw's known model list"));
+
+    // Switch back to claude for the rest of the assertions
+    _runtimeState.write({
+        provider: 'claude',
+        authType: 'api_key',
+        model: 'claude-opus-4-7',
+        reasoningEnabled: false,
+        reasoningDisplayInChat: false,
+        customEchoReasoning: false,
+    });
 
     // ── Unknown subcommand → error with usage hint ──
     const errReply = await messageHandler.handleCommand('123', '/think', 'banana', null);
@@ -187,12 +246,14 @@ function ok(label, cond, hint = '') {
     ok('Unknown subcommand: hints at usage',
         typeof errReply === 'string' && errReply.includes('/think'));
 
-    // ── Status reflects the latest writes ──
+    // ── Status reflects the latest writes (using the v4 user-facing format) ──
     const finalStatus = await messageHandler.handleCommand('123', '/think', '', null);
-    ok('Final status: shows on/off correctly after multiple writes',
+    ok('Final status: "Extended thinking: Off"',
         typeof finalStatus === 'string'
-        && finalStatus.includes('Extended thinking: ✗ off')
-        && finalStatus.includes('Display in chat: ✗ off'));
+        && finalStatus.includes('Extended thinking: Off'));
+    ok('Final status: "Thinking status: Off" (renamed from Display in chat)',
+        typeof finalStatus === 'string'
+        && finalStatus.includes('Thinking status: Off'));
 
     // Cleanup
     try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch (_) {}

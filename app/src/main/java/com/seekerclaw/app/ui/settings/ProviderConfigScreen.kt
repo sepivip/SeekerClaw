@@ -1415,8 +1415,8 @@ private fun ReasoningSectionInlined(activeProvider: String) {
             },
         )
         ReasoningToggleRow(
-            label = "Display reasoning in chat",
-            description = "Surface reasoning summaries in your Telegram chat as expandable blockquotes (when the build supports rendering them). Independent of the toggle above.",
+            label = "Show thinking status",
+            description = "Shows a small \"Thinking...\" status while the model is using extended thinking. Reasoning details are never shown.",
             checked = reasoningDisplay,
             onCheckedChange = { newValue ->
                 optimisticDisplay = newValue

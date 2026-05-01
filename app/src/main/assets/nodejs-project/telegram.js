@@ -838,6 +838,30 @@ function deferStatus(chatId, statusText) {
     };
 }
 
+// BAT-549 Commit 6: extended-thinking status indicator. Same 500ms
+// debounce as `deferStatus` (so fast non-thinking turns never flash)
+// but NO min-visible hold — `cleanup()` deletes immediately on call.
+// Codex v4 sign-off explicitly required final answer delivery to
+// NOT be delayed by the bubble lifecycle: callers fire-and-forget
+// the cleanup so even the deletion network round-trip doesn't gate
+// response delivery. Hardcoded text ('Thinking...') rather than a
+// generic carrier — single-purpose helper per the v4 contract.
+function deferThinkingStatus(chatId) {
+    let msgId = null, pending = null;
+    const timer = setTimeout(() => {
+        pending = sendStatusMessage(chatId, 'Thinking...').then(id => {
+            msgId = id; pending = null;
+        });
+    }, 500);
+    return {
+        cleanup: async () => {
+            clearTimeout(timer);
+            if (pending) await pending;
+            if (msgId) await deleteStatusMessage(chatId, msgId);
+        }
+    };
+}
+
 // ============================================================================
 // STATUS REACTIONS — lifecycle emoji on user messages (OpenClaw parity)
 // ============================================================================
@@ -1097,6 +1121,7 @@ module.exports = {
     sendMessage,
     sendTyping,
     deferStatus,
+    deferThinkingStatus,
     createStatusReactionController,
     STATUS_EMOJIS,
     // Channel interface (BAT-483)
