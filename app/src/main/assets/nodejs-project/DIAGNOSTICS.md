@@ -373,14 +373,14 @@ grep -i "rate limit.*mcp\|rate limit.*exceeded" node_debug.log | tail -10
 
 ## Reasoning (Extended Thinking)
 
-BAT-549 introduced reasoning content preservation across all 4 providers, plus user-facing toggles for enabling thinking and displaying summaries in chat. The reasoning subsystem has several moving pieces — this section is the playbook for diagnosing each.
+BAT-549 introduced reasoning content preservation across all 4 providers, plus a user-facing "Extended thinking" toggle and a "Show thinking status" indicator. Reasoning content itself is never rendered in chat — the indicator is a temporary "Thinking..." Telegram bubble that appears during extended-thinking turns and is deleted when the response arrives. The reasoning subsystem has several moving pieces — this section is the playbook for diagnosing each.
 
 ### `/think on` Toggled But Model Doesn't Think Differently
-**Symptoms:** User toggled `/think on` (or Settings > Reasoning > Extended thinking ON) but responses look the same as before.
-**Diagnosis:** The toggle is a no-op for models whose registry tri-state is `"no"` (Haiku 4.5) or `"unknown"` (freeform / unregistered model ids). Run `/think` (no args) to see the active model's `reasoningSupport` value. The agent's system prompt also exposes this state — the agent itself can tell the user.
+**Symptoms:** User toggled `/think on` (or Settings > AI Provider > Reasoning > Extended thinking ON) but responses look the same as before.
+**Diagnosis:** The toggle is a no-op for models the registry doesn't list as supporting reasoning (Haiku 4.5; any freeform / unregistered model id). Run `/think` (no args) — it surfaces a user-facing hint when the active model isn't supported, e.g. "This model does not support extended thinking..." or "This model is not in SeekerClaw's known model list...". The agent's system prompt also exposes this state — the agent itself can tell the user.
 **Fix:**
-- `reasoningSupport=no`: switch to a yes-supporting model (Opus 4.7, Sonnet 4.6, GPT-5.4/5.5, Codex models) via `/model` or Settings.
-- `reasoningSupport=unknown`: this is the safe default for models not in the registry. If the user is on Custom and knows their gateway supports thinking, ask them to confirm (the request param genuinely isn't sent — registry is the source of truth).
+- "does not support" hint: switch to a yes-supporting model (Opus 4.7, Sonnet 4.6, GPT-5.4/5.5, Codex models) via `/model` or Settings.
+- "not in known model list" hint: this is the safe default for models not in the registry. If the user is on Custom and knows their gateway supports thinking, ask them to confirm — the request param genuinely isn't sent because the registry is the source of truth (a "thinking" status that lies about whether thinking is happening would be worse than no status).
 
 ### Custom + DeepSeek V4: 400 Loop on `/resume` After Tool Calls
 **Symptoms:** User on Custom provider with a DeepSeek V4 model gets `400` errors after tool calls, often in a loop after `/resume`.
@@ -419,4 +419,4 @@ BAT-549 introduced reasoning content preservation across all 4 providers, plus u
 ### Reasoning Logs Show `len=N fp=XXXXXXXX` Instead of Raw Text
 **Symptoms:** User looking at logs (or sending a bug report screenshot) doesn't see any reasoning content — just length + 8-char hex fingerprints.
 **Diagnosis:** This is BY DESIGN. `reasoning-redact.js` is the centralized redaction helper for reasoning logs. Mobile logs end up in bug-report screenshots — raw thinking text, signatures, and encrypted_content MUST never leak there. The fingerprint is enough for ops to confirm "the same reasoning block was seen / replayed across turns" without revealing content.
-**Fix:** No fix needed. If a user genuinely needs reasoning visibility, point them at the "Display reasoning in chat" toggle (Settings > Reasoning).
+**Fix:** No fix needed — log redaction is intentional. The "Show thinking status" toggle (Settings > AI Provider > Reasoning) gives the user a visible indicator that thinking is happening, but it does NOT reveal reasoning content. Reasoning text is never displayed to the user in this build (v4 contract).
