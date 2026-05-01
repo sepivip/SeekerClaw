@@ -79,8 +79,15 @@ object AgentPreferencesStore {
     // [com.seekerclaw.app.config.ConfigManager]. They are duplicated
     // here so AgentPreferencesStore stays self-contained for tests
     // (no Context required to resolve the constants). If ConfigManager
-    // ever changes any of these, change them here too — the matching
-    // tests in AgentPreferencesStoreTest will catch the drift.
+    // ever changes any of these, change them here too. R11 Copilot:
+    // `AgentPreferencesStoreTest` exercises behavior against these
+    // literal keys but does NOT independently assert parity with
+    // `ConfigManager`'s constants — a hypothetical edit to either
+    // side's strings would not fail the test suite. Drift is caught
+    // by code review and the warning above; a future refactor that
+    // pulls the keys into a shared object on [AgentPreferences] (the
+    // schema) would let both files reference one source of truth and
+    // make the drift impossible.
     private const val PREFS_NAME = "seekerclaw_prefs"
     private const val FILE_NAME = "agent_preferences.json"
     private const val KEY_AGENT_NAME = "agent_name"

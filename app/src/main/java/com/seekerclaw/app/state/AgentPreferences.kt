@@ -9,11 +9,14 @@ import kotlinx.serialization.Serializable
  * UI-side writes without a service restart) into a
  * [com.seekerclaw.app.util.CrossProcessStore]-backed file:
  *
- *  - [agentName] — display name + system-prompt identity. Live-updateable
- *    so a Settings change takes effect on the next AI turn without a
- *    service restart. Surfaces: System screen Agent row, Dashboard,
- *    Settings summary, `/status` Telegram reply, Node `buildSystemBlocks`
- *    per-turn.
+ *  - [agentName] — display/runtime identity label. Live-updateable so
+ *    a Settings change is reflected without a service restart in
+ *    surfaces that read this store. Surfaces: System screen Agent
+ *    row, Dashboard, Settings summary, `/status` Telegram reply, Node
+ *    startup banner (Telegram + Discord paths in `main.js`), and
+ *    `session_status.agent` (R11 Copilot — the agent's CORE identity
+ *    in the system prompt comes from `IDENTITY.md`, not this field;
+ *    `buildSystemBlocks` does not currently reference `agentName`).
  *
  *  - [searchProvider] — which web search backend the `web_search` tool
  *    uses (brave / perplexity / exa / tavily / firecrawl). Live-updateable
