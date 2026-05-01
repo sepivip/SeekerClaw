@@ -346,9 +346,13 @@ const MODEL = _runtimeModel || config.model || _defaultModel;
 //      fallback) — what saveConfig.writeConfigJson last wrote. Stays
 //      readable across service restarts even if the live file is
 //      genuinely absent or corrupt.
-//   3. Hardcoded fallback ('SeekerClaw' / 'brave') — unreachable
-//      under normal flow because saveConfig writes the cold-start
-//      keys for any user past Setup.
+//   3. Hardcoded fallback ('MyAgent' / 'brave') — unreachable under
+//      normal flow because saveConfig writes the cold-start keys for
+//      any user past Setup. R9 Copilot: lock-step with
+//      `AgentPreferences.DEFAULT_AGENT_NAME` (Kotlin) and
+//      `agent-preferences.js DEFAULTS.agentName` so the agent
+//      reports the same name across all three sources if the
+//      precedence chain bottoms out.
 
 // R1 Copilot: normalize + validate the cold-start fallback. Without
 // this, a malformed `config.json` field could escape past the live
@@ -381,7 +385,17 @@ function getAgentName() {
     if (liveName) return liveName;
     const coldName = _normalizeAgentName(config.agentName);
     if (coldName) return coldName;
-    return 'SeekerClaw';
+    // R9 Copilot: lock-step with the shared default. Pre-BAT-515 this
+    // returned 'SeekerClaw' (a Node-only value that diverged from
+    // Kotlin's `AgentPreferences.DEFAULT_AGENT_NAME = "MyAgent"` and
+    // `agent-preferences.js DEFAULTS.agentName = "MyAgent"`). The
+    // unreachable-under-normal-flow caveat still holds (saveConfig
+    // writes both the live file and config.json for any user past
+    // Setup) but keeping all three sources in sync means a
+    // hypothetical full-corruption scenario doesn't surface
+    // inconsistent agent names across `:node` startup banner,
+    // `/status`, and the Android UI.
+    return _agentPreferencesModule.DEFAULTS.agentName;
 }
 
 function getSearchProvider() {
@@ -390,7 +404,11 @@ function getSearchProvider() {
     if (liveProvider) return liveProvider;
     const coldProvider = _normalizeSearchProvider(config.searchProvider);
     if (coldProvider) return coldProvider;
-    return 'brave';
+    // R9 Copilot: lock-step with the shared default (currently
+    // 'brave' — same as the prior literal, but reading from the
+    // module so a future default change happens in one place across
+    // Kotlin + Node).
+    return _agentPreferencesModule.DEFAULTS.searchProvider;
 }
 
 /**
