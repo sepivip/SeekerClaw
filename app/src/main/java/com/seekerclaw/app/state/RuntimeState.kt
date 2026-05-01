@@ -84,15 +84,22 @@ data class RuntimeState(
      */
     val reasoningEnabled: Boolean = false,
     /**
-     * BAT-549 Commit 3b: when `true`, reasoning summaries are surfaced
-     * to the Telegram chat as expandable blockquotes (collapsed by
-     * default, tap-to-expand). When `false` (default), reasoning is
-     * captured into checkpoint state but never shown to the user.
+     * BAT-549 Commit 6 / v4 contract: when `true`, a temporary
+     * "Thinking..." Telegram bubble appears during extended-thinking
+     * turns (debounced 500ms; deleted on response arrival). When
+     * `false` (default), the bubble is never shown.
      *
-     * Independent of [reasoningEnabled] — a power user could enable
-     * thinking without surfacing it (e.g. for tool-loop quality
-     * without UI clutter), or vice versa (display already-captured
-     * reasoning from past turns even with the toggle off).
+     * Independent of [reasoningEnabled]: a user could enable thinking
+     * without the visible status (lower chat noise) or have the
+     * status on while thinking is off (no-op — both gates required
+     * for the bubble to appear).
+     *
+     * **Does NOT render reasoning content in chat.** Per v4 PM call,
+     * reasoning summaries / encrypted_content / raw thinking text are
+     * never surfaced to the user. The toggle controls a status
+     * indicator only. Internal field name kept as `reasoningDisplayInChat`
+     * for storage compat with existing on-disk runtime_state.json files;
+     * user-facing label is "Show thinking status".
      */
     val reasoningDisplayInChat: Boolean = false,
     /**

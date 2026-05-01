@@ -1,6 +1,10 @@
 #!/usr/bin/env node
-// thinking-status.test.js — pin BAT-549 Commit 6 extended-thinking
-// status indicator invariants per v4 contract sign-off.
+// thinking-status.test.js — pin BAT-549 extended-thinking status
+// indicator invariants per the v4 contract sign-off (see Linear
+// BAT-549 comment-b376b2b3 for the signed contract). The "Commit N"
+// numbering inside the BAT-549 PR is squash-merged so commit numbers
+// in code are always stale by the time anyone reads them; reference
+// the v4 contract directly instead.
 //
 // What this guards:
 //   - 500ms debounce: no status message sent if cleanup arrives < 500ms

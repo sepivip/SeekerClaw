@@ -1364,29 +1364,20 @@ fun OpenRouterModelEditDialog(
 }
 
 /**
- * BAT-549 Commit 3e: per-Custom advanced override toggle. Reads/writes
- * RuntimeState.customEchoReasoning. When `true`, the Custom adapter's
- * gating promotes "unknown" gateways to "echo-on-tool-loop", forcing
- * `reasoning_content` to be echoed back on subsequent tool-use turns.
+ * BAT-549: unified Reasoning section card. Master toggles for
+ * Extended thinking and Show thinking status (cross-provider,
+ * RuntimeState-backed) plus, when on Custom, the per-Custom Echo
+ * reasoning to gateway override. Moved here from SettingsScreen so
+ * all reasoning controls live next to the AI Provider config they
+ * affect (UX feedback from Beka 2026-04-30 — top-level Settings
+ * was the wrong home).
  *
- * Default OFF. The wrong setting → 400 loop on the next tool round
- * (some gateways reject the echo, some require it). Only enable if you
- * know your gateway requires the echo and the model id doesn't match
- * the known DeepSeek-V4 regex (e.g., a self-hosted V4 fork or a brand-
- * new V4-shaped model).
- *
- * The toggle automatically resets to false when the user edits any of
- * (model | baseUrl | format | sortedHeaderKeys) — the
- * [com.seekerclaw.app.state.CustomConfigSignature] change-detector
- * triggered by ConfigManager.saveConfig (Commit 3d).
- */
-/**
- * BAT-549: unified Reasoning section card. Master toggles for Extended
- * thinking and Display reasoning in chat (cross-provider, RuntimeState-
- * backed) plus, when on Custom, the per-Custom Echo reasoning to gateway
- * override. Moved here from SettingsScreen so all reasoning controls
- * live next to the AI Provider config they affect (UX feedback from
- * Beka 2026-04-30 — top-level Settings was the wrong home).
+ * BAT-549 Commit 6 / v4 contract: the "Show thinking status" toggle
+ * does NOT render reasoning content in chat. It controls a temporary
+ * "Thinking..." Telegram bubble during extended-thinking turns; no
+ * blockquotes, no reasoning summaries, no second messages. Reasoning
+ * content stays preserved in checkpoint state for tool-loop replay,
+ * but is never surfaced to the user.
  */
 @Composable
 private fun ReasoningSectionInlined(activeProvider: String) {
@@ -1516,6 +1507,23 @@ private fun runReasoningUpdate(
     }
 }
 
+/**
+ * BAT-549 Commit 3e: per-Custom advanced override toggle. Reads/writes
+ * RuntimeState.customEchoReasoning. When `true`, the Custom adapter's
+ * gating promotes "unknown" gateways to "echo-on-tool-loop", forcing
+ * `reasoning_content` to be echoed back on subsequent tool-use turns.
+ *
+ * Default OFF. The wrong setting → 400 loop on the next tool round
+ * (some gateways reject the echo, some require it). Only enable if you
+ * know your gateway requires the echo and the model id doesn't match
+ * the known DeepSeek-V4 regex (e.g., a self-hosted V4 fork or a brand-
+ * new V4-shaped model).
+ *
+ * The toggle automatically resets to false when the user edits any of
+ * (model | baseUrl | format | sortedHeaderKeys) — the
+ * [com.seekerclaw.app.state.CustomConfigSignature] change-detector
+ * triggered by ConfigManager.saveConfig (Commit 3d).
+ */
 @Composable
 private fun CustomEchoReasoningRow() {
     // R14 Copilot: observe the StateFlow so cross-process updates

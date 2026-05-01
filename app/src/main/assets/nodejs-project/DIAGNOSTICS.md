@@ -397,10 +397,19 @@ BAT-549 introduced reasoning content preservation across all 4 providers, plus u
 - Verify the model id matches the R1 regex (`/(?:^|\/)deepseek-(?:reasoner|r1)(?:-|$)/i`).
 - Check the user has NOT enabled the per-Custom echo override (`/think echo on` flips it from chat; Settings > AI Provider > Custom > Advanced (Reasoning) flips it from the UI). The override resets automatically when the user edits any signed Custom config field (model | baseUrl | format | header keys), so if they recently swapped from V4 to R1 the override should already be off — but confirm with `/think` (no args) which surfaces the current value.
 
-### Reasoning Captured But Not Displayed in Chat
-**Symptoms:** User toggled "Display reasoning in chat" but no blockquote appears below the agent's responses.
-**Diagnosis:** As of v1.9.x the display path is wired only at the Settings/state level — the actual blockquote-rendering integration into the response flow ships in a later release. The toggle persists correctly and `reasoning-display.js` formats blockquotes, but ai.js doesn't yet send them as a separate message.
-**Fix:** Tell the user this is a known scoped-out gap; reasoning IS being captured into checkpoint state (so future builds can replay/display it). Reference the CHANGELOG entry for the release that wires display.
+### "Show Thinking Status" Toggled But No "Thinking..." Bubble Appears
+**Symptoms:** User toggled "Show thinking status" on (Settings > AI Provider > Reasoning, or `/think show`) but the temporary "Thinking..." Telegram bubble never appears during turns.
+**Diagnosis:** The bubble requires ALL THREE gates: `reasoningEnabled === true`, `reasoningDisplayInChat === true`, AND `reasoningSupport === 'yes'` for the active model. If any are missing, the bubble is suppressed by design (a "Thinking..." status that lies about whether thinking is happening would be worse than no status). Common gaps:
+- `reasoningEnabled` is off → toggle on Settings > Reasoning > Extended thinking, OR `/think on`
+- Active model is `Haiku 4.5` → `reasoningSupport=no` → toggle is a true no-op for that model; switch model
+- Active model is on Custom (any model) or OpenRouter (any model) → freeform registry → `reasoningSupport=unknown` → bubble stays suppressed because "thinking" can't be reliably promised
+- The bubble has a 500ms debounce — if the model responds in under 500ms, the bubble never shows even when all gates align (by design — fast turns shouldn't flash)
+**Fix:** Confirm via `/think` (no-args) which surfaces the current toggle states and a "not in known model list" / "does not support" hint when applicable. The contract is "status is shown when extended thinking IS happening AND the user opted in" — anything else is silenced.
+
+### Reasoning Content Doesn't Render in Chat (Why "Show Thinking Status" Doesn't Show Reasoning Text)
+**Symptoms:** User toggled "Show thinking status" expecting to see the model's reasoning summary in chat (like Claude.ai's expandable thinking blocks), but only sees a temporary "Thinking..." bubble.
+**Diagnosis:** This is by design per the BAT-549 v4 contract. The toggle controls a status indicator only — reasoning content (summaries, encrypted_content, raw thinking text) is NEVER displayed in chat. Reasoning IS preserved in checkpoint state for tool-loop replay (that's what BAT-549's provider-preservation work is for) but it's not surfaced to the user. PM call: reasoning content rendering has streaming/lifecycle/privacy implications that warrant a separate ticket if/when revisited.
+**Fix:** Tell the user "Reasoning details are never shown" (matches the Settings helper text). The thinking-status bubble is the visible signal that extended thinking happened.
 
 ### `customConfigSignature` Reset The Echo Override After A Spurious Edit
 **Symptoms:** User reports that the "Echo reasoning to gateway" toggle reset to OFF after they "barely changed anything" in the Custom config.
