@@ -247,7 +247,22 @@ object AgentPreferencesStore {
      */
     fun write(value: AgentPreferences): Boolean {
         validateForWrite(value, _state.value)
-        return store?.write(value) ?: false
+        val ok = store?.write(value) ?: false
+        // R3 Copilot: sync-update [_state] on successful persistence so
+        // same-process callers reading via [read] (= `_state.value`)
+        // see the new value immediately. Pre-fix the collector path
+        // was the only writer to `_state`, leaving a brief window
+        // where [read] returned stale — a hazard for
+        // `ConfigManager.loadConfig` (which now overlays `read()`)
+        // when called by code that just performed an update.
+        //
+        // The collector still fires its own update later via
+        // [parseFileStrictOrNull] → [observeFromCollector]; it'll
+        // observe the same value already in `_state`, so
+        // [mirrorIfChanged]'s redundancy guard skips the prefs mirror
+        // and broadcast (no double-mirror).
+        if (ok) _state.value = value
+        return ok
     }
 
     /**
@@ -258,11 +273,21 @@ object AgentPreferencesStore {
      */
     suspend fun update(transform: (AgentPreferences) -> AgentPreferences): Boolean {
         val s = store ?: return false
-        return s.update { current ->
+        // R3 Copilot: capture the value persisted by the transform (the
+        // `next` returned inside the writeLock) so we can sync-update
+        // `_state` after the underlying write succeeds. Without this,
+        // [update]'s same-process callers see a stale [read] result
+        // until the collector path fires (~50-200ms later) — same race
+        // [write] had pre-fix.
+        var persisted: AgentPreferences? = null
+        val ok = s.update { current ->
             val next = transform(current)
             validateForWrite(next, current)
+            persisted = next
             next
         }
+        if (ok) persisted?.let { _state.value = it }
+        return ok
     }
 
     /**
