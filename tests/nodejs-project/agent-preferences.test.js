@@ -169,6 +169,49 @@ ok('update() applies transform',
 eq('update result', handle.read(),
     { searchProvider: 'brave', agentName: 'NewName' });
 
+console.log();
+console.log('── R2: write() context-sensitive validation (parity with Kotlin validateForWrite) ──');
+// BAT-515 v3 §1: migration paths legitimately carry over-cap names; the
+// 64-char cap only applies to NEW edits. Kotlin's validateForWrite skips
+// per-field validation when the field is unchanged from the persisted
+// current value. The Node side must match.
+//
+// Setup: persist an over-cap agentName the way Kotlin's seedFromPrefs
+// would (existing user upgraded from pre-BAT-515 with a long name).
+// Bypass the JS write() validation by writing the file directly — this
+// simulates the migration write coming from the Kotlin side.
+writeFile(JSON.stringify({ searchProvider: 'brave', agentName: 'A'.repeat(100) }));
+
+// Pre-fix: write({searchProvider: 'exa'}) alone passed (agentName not
+// in input → not validated). That works fine — keep it green.
+ok('partial write {searchProvider} succeeds with persisted over-cap name',
+    handle.write({ searchProvider: 'exa' }) === true);
+eq('after partial searchProvider write — over-cap name preserved',
+    handle.read(),
+    { searchProvider: 'exa', agentName: 'A'.repeat(100) });
+
+// The bug: a JS caller doing `update(c => ({...c, searchProvider: 'X'}))`
+// would have its transform return BOTH fields (over-cap name copied
+// from `current` AND the new searchProvider). Pre-fix this threw on
+// the unchanged over-cap name; post-fix the unchanged name skips the
+// cap check.
+ok('update() copying over-cap name + changing searchProvider succeeds (R2 fix)',
+    handle.update((current) => ({ ...current, searchProvider: 'tavily' })) === true);
+eq('after update — both fields land correctly',
+    handle.read(),
+    { searchProvider: 'tavily', agentName: 'A'.repeat(100) });
+
+// Sibling: changing the over-cap name to a NEW over-cap name still throws
+// (the cap applies to NEW edits, even if the prior was also over-cap).
+expectThrow('write rejects NEW over-cap agentName even when current is over-cap',
+    () => handle.write({ searchProvider: 'tavily', agentName: 'B'.repeat(100) }),
+    'exceeds max');
+
+// Sibling: changing searchProvider to an unknown one still throws.
+expectThrow('write rejects unknown new searchProvider even when other field unchanged',
+    () => handle.write({ searchProvider: 'duckduckgo', agentName: 'A'.repeat(100) }),
+    'invalid searchProvider');
+
 // Cleanup
 try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch (_) {}
 

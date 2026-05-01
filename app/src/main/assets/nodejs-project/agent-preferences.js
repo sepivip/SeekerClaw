@@ -197,11 +197,20 @@ function open(workDir) {
     }
 
     /**
-     * Persist `value` atomically. Validates ALL incoming fields (this
-     * is a NEW-write entry point — the unchanged-skip optimisation
-     * lives at the Kotlin caller layer; on the Node side `write()`
-     * goes through the same validation regardless of what's currently
-     * persisted).
+     * Persist `value` atomically. Validates ALL incoming fields that
+     * ACTUALLY DIFFER from the currently-persisted value — mirrors
+     * Kotlin's [AgentPreferencesStore.validateForWrite] context-
+     * sensitive contract (BAT-515 v3 §1 + Codex final guard).
+     *
+     * Why context-sensitive: an existing migrated over-cap `agentName`
+     * is preserved verbatim by Kotlin's seedFromPrefs and lands in the
+     * persisted file. A future Node-side caller doing
+     * `update(c => ({...c, searchProvider: 'exa'}))` would have its
+     * transform return both fields (the over-cap name copied from
+     * `current` AND the new searchProvider). Validating every present
+     * field unconditionally would throw on the unchanged over-cap
+     * name even though the cap only applies to genuinely-new edits.
+     * R2 Copilot caught this as the Node ↔ Kotlin asymmetry.
      *
      * Returns true on persisted, false on FS failure (logged by
      * cross-process-store). Throws on validation failure.
@@ -215,15 +224,20 @@ function open(workDir) {
         if (!value || typeof value !== 'object' || Array.isArray(value)) {
             throw new Error('agent-preferences: write expects a plain object');
         }
-        if (Object.prototype.hasOwnProperty.call(value, 'searchProvider')) {
+        // R2 Copilot: read the persisted state FIRST so validation
+        // can be context-sensitive. The same `persisted` value drives
+        // the partial-merge below — single read, two uses.
+        const persisted = read();
+        if (Object.prototype.hasOwnProperty.call(value, 'searchProvider')
+            && value.searchProvider !== persisted.searchProvider) {
             _validateSearchProvider(value.searchProvider);
         }
-        if (Object.prototype.hasOwnProperty.call(value, 'agentName')) {
+        if (Object.prototype.hasOwnProperty.call(value, 'agentName')
+            && value.agentName !== persisted.agentName) {
             _validateAgentName(value.agentName);
         }
         // Partial-update merge (mirrors runtime-state.js R2 fix). Legacy
         // callers writing only one field don't drop the other.
-        const persisted = read();
         const merged = {};
         for (const key of Object.keys(DEFAULTS)) {
             if (Object.prototype.hasOwnProperty.call(value, key) && value[key] !== undefined) {
