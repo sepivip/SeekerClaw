@@ -9,6 +9,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import androidx.core.content.ContextCompat
 import com.seekerclaw.app.config.ConfigManager
+import com.seekerclaw.app.state.AgentPreferencesStore
 import com.seekerclaw.app.state.McpServersStore
 import com.seekerclaw.app.state.RuntimeStateStore
 import com.seekerclaw.app.util.Analytics
@@ -84,6 +85,14 @@ class SeekerClawApplication : Application() {
             // `KEY_MCP_SERVERS_ENC` tokens into per-id encrypted files
             // and seeds the file. Sweeps orphan tokens after.
             McpServersStore.init(this)
+            // BAT-515: own searchProvider + agentName prefs cross-process
+            // (`agent_preferences.json`). Main process only — `:node`
+            // reads the same file directly via agent-preferences.js.
+            // Seed from existing `KEY_SEARCH_PROVIDER` / `KEY_AGENT_NAME`
+            // SharedPrefs values so existing-user upgrades are seamless
+            // (BAT-515 v3 §2). Migration preserves over-cap agentName
+            // verbatim with WARN — never truncates (BAT-515 v3 §1).
+            AgentPreferencesStore.init(this)
             registerConfigChangedReceiver()
         }
     }

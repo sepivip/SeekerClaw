@@ -1,7 +1,7 @@
 // tools/web.js — web_search, web_fetch handlers
 
 const {
-    log, config,
+    log, config, getSearchProvider,
 } = require('../config');
 
 const {
@@ -26,7 +26,7 @@ const tools = [
                 provider: {
                     type: 'string',
                     enum: ['auto', 'brave', 'perplexity', 'exa', 'tavily', 'firecrawl'],
-                    description: 'Search provider. "auto" uses the configured default (config.searchProvider).',
+                    description: 'Search provider. "auto" uses the live configured default from agent_preferences.json (Settings > Search Provider) — picks up Settings UI changes without a restart.',
                     default: 'auto',
                 },
                 count: { type: 'number', description: 'Number of results (1-10, default 5). Applies to Brave, Exa, Tavily, Firecrawl. Perplexity returns a single synthesized answer.' },
@@ -53,10 +53,14 @@ const tools = [
 
 const handlers = {
     async web_search(input, chatId) {
-        // Resolve provider: explicit override or configured default
+        // Resolve provider: explicit override or live configured default.
+        // BAT-515: getSearchProvider() reads agent_preferences.json per-call
+        // (precedence: live → config.json cold-start → 'brave'), so a
+        // Settings UI provider switch takes effect on the next web_search
+        // without a service restart.
         const rawProvider = (typeof input.provider === 'string' ? input.provider.trim().toLowerCase() : 'auto');
         const provider = rawProvider === 'auto'
-            ? (config.searchProvider || 'brave')
+            ? getSearchProvider()
             : rawProvider;
         const safeCount = Math.min(Math.max(Number(input.count) || 5, 1), 10);
 

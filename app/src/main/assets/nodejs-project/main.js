@@ -8,7 +8,7 @@ const fs = require('fs');
 // ============================================================================
 
 const {
-    ANTHROPIC_KEY, AUTH_TYPE, MODEL, AGENT_NAME, PROVIDER, CHANNEL,
+    ANTHROPIC_KEY, AUTH_TYPE, MODEL, getAgentName, PROVIDER, CHANNEL,
     MCP_SERVERS, REACTION_NOTIFICATIONS,
     MEMORY_DIR,
     localTimestamp, log, setRedactFn,
@@ -688,7 +688,7 @@ telegram('getMe')
             // Condensed startup banner (Phase 4 — single INFO line replaces 10+ verbose startup lines)
             const _skillCount = loadSkills().length;
             const _cronCount = cronService.store?.jobs?.length || 0;
-            log(`${AGENT_NAME} | ${PROVIDER}/${MODEL} | @${result.result.username} | ${_skillCount} skills | ${_resolveMcpConfigs().length} MCP | ${_cronCount} cron`, 'INFO');
+            log(`${getAgentName()} | ${PROVIDER}/${MODEL} | @${result.result.username} | ${_skillCount} skills | ${_resolveMcpConfigs().length} MCP | ${_cronCount} cron`, 'INFO');
 
             // Initialize SQL.js database before polling (non-fatal if WASM fails)
             await initDatabase();
@@ -709,9 +709,13 @@ telegram('getMe')
                 lastIncomingMessages,
             });
 
-            // Wire message handler deps: inject all dependencies into message-handler.js
+            // Wire message handler deps: inject all dependencies into message-handler.js.
+            // BAT-515: getAgentName is a function reference (not a frozen value)
+            // so message-handler reads the latest live name per /status — a
+            // Settings UI edit while the bot is running shows the new name on
+            // the next /status response without a restart.
             initMessageHandler({
-                AGENT_NAME, MODEL, MEMORY_DIR, REACTION_NOTIFICATIONS,
+                getAgentName, MODEL, MEMORY_DIR, REACTION_NOTIFICATIONS,
                 log, debugLog,
                 getOwnerId, setOwnerId,
                 config,
@@ -832,7 +836,7 @@ telegram('getMe')
     // Condensed startup banner
     const _skillCount = loadSkills().length;
     const _cronCount = cronService.store?.jobs?.length || 0;
-    log(`${AGENT_NAME} | ${PROVIDER}/${MODEL} | Discord | ${_skillCount} skills | ${_resolveMcpConfigs().length} MCP | ${_cronCount} cron`, 'INFO');
+    log(`${getAgentName()} | ${PROVIDER}/${MODEL} | Discord | ${_skillCount} skills | ${_resolveMcpConfigs().length} MCP | ${_cronCount} cron`, 'INFO');
 
     // Initialize SQL.js database (non-fatal if WASM fails)
     initDatabase().then(() => {
@@ -853,9 +857,10 @@ telegram('getMe')
             lastIncomingMessages,
         });
 
-        // Wire message handler deps
+        // Wire message handler deps. BAT-515: getAgentName is a function
+        // reference so /status reads the latest live name per-invocation.
         initMessageHandler({
-            AGENT_NAME, MODEL, MEMORY_DIR, REACTION_NOTIFICATIONS,
+            getAgentName, MODEL, MEMORY_DIR, REACTION_NOTIFICATIONS,
             log, debugLog,
             getOwnerId, setOwnerId,
             config,

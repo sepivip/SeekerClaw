@@ -188,6 +188,13 @@ let OWNER_ID = CHANNEL === 'discord'
 // (createStore preserved its own atomicity contract).
 const _runtimeStateModule = require('./runtime-state');
 const _runtimeState = _runtimeStateModule.open(workDir);
+// BAT-515: open the agent-preferences handle alongside runtime-state.
+// `getAgentName` / `getSearchProvider` below read this per-call so live
+// edits from the Settings UI (cross-process write to
+// agent_preferences.json) flow into the running agent on the next
+// inbound message — no service restart needed.
+const _agentPreferencesModule = require('./agent-preferences');
+const _agentPreferences = _agentPreferencesModule.open(workDir);
 let _runtimeStateValues = null;
 if (fs.existsSync(_runtimeState.filePath)) {
     try {
@@ -323,7 +330,47 @@ const _runtimeModel = (_runtimeStateValues && typeof _runtimeStateValues.model =
     ? _runtimeStateValues.model.trim()
     : '';
 const MODEL = _runtimeModel || config.model || _defaultModel;
-const AGENT_NAME = config.agentName || 'SeekerClaw';
+
+// BAT-515: agentName + searchProvider are no longer startup-frozen
+// constants — they're resolved per-call via the precedence chain below
+// so a Settings UI edit (cross-process write to agent_preferences.json)
+// takes effect on the next AI turn / next web_search call without a
+// service restart. See agent-preferences.js for the file shape and
+// AgentPreferencesStore.kt (Kotlin singleton) for the writer-side
+// contract.
+//
+// Precedence per BAT-515 v3 §3:
+//   1. agent_preferences.json (live, validated by readLiveOrNull) —
+//      what Settings/Telegram-flow writes update.
+//   2. config.json `agentName` / `searchProvider` (cold-start
+//      fallback) — what saveConfig.writeConfigJson last wrote. Stays
+//      readable across service restarts even if the live file is
+//      genuinely absent or corrupt.
+//   3. Hardcoded fallback ('SeekerClaw' / 'brave') — unreachable
+//      under normal flow because saveConfig writes the cold-start
+//      keys for any user past Setup.
+
+function getAgentName() {
+    const live = _agentPreferences.readLiveOrNull();
+    if (live && typeof live.agentName === 'string' && live.agentName) {
+        return live.agentName;
+    }
+    if (typeof config.agentName === 'string' && config.agentName) {
+        return config.agentName;
+    }
+    return 'SeekerClaw';
+}
+
+function getSearchProvider() {
+    const live = _agentPreferences.readLiveOrNull();
+    if (live && typeof live.searchProvider === 'string' && live.searchProvider) {
+        return live.searchProvider;
+    }
+    if (typeof config.searchProvider === 'string' && config.searchProvider) {
+        return config.searchProvider;
+    }
+    return 'brave';
+}
 
 /**
  * Resolve the currently-active model — the agent_settings.json overlay
@@ -460,7 +507,7 @@ if (!OWNER_ID) {
         'This is expected on first run; use the Android setup flow to set or reset the owner.', 'WARN');
 } else {
     const authLabel = PROVIDER === 'claude' ? (AUTH_TYPE === 'setup_token' ? 'setup-token' : 'api-key') : 'api-key';
-    log(`Agent: ${AGENT_NAME} | Provider: ${PROVIDER} | Model: ${MODEL} | Auth: ${authLabel} | Owner: ${OWNER_ID}`, 'DEBUG');
+    log(`Agent: ${getAgentName()} | Provider: ${PROVIDER} | Model: ${MODEL} | Auth: ${authLabel} | Owner: ${OWNER_ID}`, 'DEBUG');
 }
 
 function parseCustomHeaders(raw) {
@@ -758,7 +805,13 @@ module.exports = {
     AUTH_TYPE,
     MODEL,
     resolveActiveModel,
-    AGENT_NAME,
+    // BAT-515: per-call getters replace the startup-frozen `AGENT_NAME` /
+    // `config.searchProvider` reads. Consumers (main.js startup banner,
+    // message-handler /status, tools/session.js session_status,
+    // tools/web.js web_search) call these per-turn so a Settings UI
+    // edit takes effect on the next AI turn without a service restart.
+    getAgentName,
+    getSearchProvider,
     BRIDGE_TOKEN,
     USER_AGENT,
     MCP_SERVERS,

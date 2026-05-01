@@ -168,6 +168,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 - **Channel abstraction** — `channel.js` module provides a unified `sendMessage()`/`sendTyping()`/`sendReaction()` interface. Adding a new channel requires only a new adapter module — core agent logic is channel-agnostic.
 
 ### App (Android)
+- **Live cross-process state** — Provider/authType/model (BAT-513), MCP servers (BAT-514), and agent name + search provider (BAT-515) all live in CrossProcessStore-backed JSON files (`runtime_state.json`, `mcp_servers.json`, `agent_preferences.json`). Settings UI and `:node` see each other's writes without a service restart. Atomic-rollback in `saveConfig` keeps prefs and the cross-process files convergent on FS failure.
 - **Single theme** — DarkOps (dark navy + crimson red + green status), 12dp corners
 - **Setup wizard** — QR scan or manual API key entry, OAuth/setup token support, haptic feedback
 - **Dashboard** — Status with pulse animation (running) + dimming (stopped), uptime, message stats, active uplinks, mini terminal, API health monitoring (green/amber/red), dismissible error/network banners, deploy button disabled state when config incomplete
@@ -279,6 +280,7 @@ User (Telegram/Discord) <--HTTPS/WSS--> Channel API <--polling/WS--> Node.js Gat
 
 | Date | Feature | PR |
 |------|---------|-----|
+| 2026-04-30 | Feat: Migrate searchProvider + agentName to CrossProcessStore (BAT-515). Settings UI provider switch + agent name edit are live across processes — no service restart required. saveConfig atomically dual-writes prefs + RuntimeStateStore + AgentPreferencesStore with full rollback on failure. Node `getAgentName()` / `getSearchProvider()` walk the precedence chain `agent_preferences.json` (live) → `config.json` (cold-start) → defaults per call. | TBD |
 | 2026-04-21 | Feat: Add Claude Opus 4.7 + bump cc_version masquerade to 2.1.116 (BAT-498). Opus 4.7 becomes Anthropic default. Drop Sonnet 4.5 from dropdown/docs. | TBD |
 | 2026-04-17 | Feat: Env Vars — user-managed env var store (BAT-495). Feeds `process.env` + unlocks skill `requires.env` gates. New `env_list` tool (names only). Paste-`.env` bulk import. Skills screen inverse surfacing. | #332 |
 | 2026-04-15 | Fix: Settings defaults to OpenAI+OAuth + redesigned OAuth callback page (BAT-495) | #330 |

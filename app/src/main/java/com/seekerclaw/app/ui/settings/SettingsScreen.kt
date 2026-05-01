@@ -361,7 +361,20 @@ fun SettingsScreen(
     // Fields whose value is re-read live from agent_settings.json on the Node
     // side (no service restart needed). Keep in sync with live-pickup readers
     // in main.js (heartbeat) and ai.js (maxStepsPerTurn).
-    val liveUpdateFields = setOf("maxStepsPerTurn", "heartbeatIntervalMinutes")
+    //
+    // BAT-515 v3: agentName joins this set. saveConfig now dual-writes the
+    // value into the cross-process AgentPreferencesStore, which the `:node`
+    // process reads per-AI-turn via agent-preferences.js — no service
+    // restart required for the Identity line in the system prompt to pick
+    // up the new value. searchProvider is edited from
+    // SearchProviderConfigScreen, not here, but the same live-update
+    // contract applies.
+    val liveUpdateFields = setOf(
+        "maxStepsPerTurn",
+        "heartbeatIntervalMinutes",
+        "agentName",
+        "searchProvider",
+    )
 
     fun saveField(field: String, value: String) {
         ConfigManager.updateConfigField(context, field, value)

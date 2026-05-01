@@ -6,6 +6,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Migrate searchProvider + agentName to CrossProcessStore (BAT-515)** — both fields move out of process-local SharedPreferences into a shared `agent_preferences.json` file, mirroring the BAT-513/BAT-514 pattern.
+  - Settings UI changes are LIVE across processes — provider switch + agent-name edit take effect on the next AI turn / `web_search` / `/status` without a service restart. The `:node` process reads `agent_preferences.json` per call via the new `getAgentName()` / `getSearchProvider()` getters in `config.js`.
+  - `saveConfig` now atomically dual-writes prefs + RuntimeStateStore + AgentPreferencesStore. Pre-validation runs before persistence; if the second cross-process write (AgentPreferencesStore) fails, the rollback path restores prefs (5 keys + `setup_complete`) AND undoes the RuntimeStateStore forward update via a captured pre-forward snapshot — keeps all three stores convergent on FS failure.
+  - Migration of an existing over-cap `agentName` is preserved verbatim with a single WARN — the 64-char cap applies only to NEW writes, not migration paths (BAT-515 v3 §1, Codex final guard via context-sensitive `validateForWrite`).
+  - `tools/session.js` `webSearchProvider` now reports the live provider — replaces the long-stale `'duckduckgo'` fallback (BAT-481 dropped DDG, the report didn't follow).
+  - Settings > Search Provider switch follows the BAT-549 R14/R17/R24 pattern (StateFlow `collectAsState` + optimistic local override + `Dispatchers.IO` + clear-on-failure) so taps feel instant and survive concurrent cross-process writes without lost-update-clobber.
 - **Reasoning content preservation across all 4 providers (BAT-549)** — captures and (when supported) replays provider-native reasoning artifacts across tool-loop turns so multi-step thinking survives `/resume` and tool calls without re-prompting. Each provider preserves its own wire shape byte-exact:
   - Anthropic: `thinking` / `redacted_thinking` blocks with signature byte-exact, replayed with the `interleaved-thinking-2025-05-14` beta header
   - OpenAI Responses: full reasoning items with `encrypted_content` for `store:false` (OAuth/Codex) and api_key paths via `include:["reasoning.encrypted_content"]`

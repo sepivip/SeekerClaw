@@ -19,9 +19,11 @@ import androidx.compose.material3.HorizontalDivider
 
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -38,8 +40,12 @@ import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.config.SearchProviderInfo
 import com.seekerclaw.app.config.availableSearchProviders
 import com.seekerclaw.app.config.searchProviderById
+import com.seekerclaw.app.state.AgentPreferencesStore
 import com.seekerclaw.app.ui.theme.RethinkSans
 import com.seekerclaw.app.ui.theme.SeekerClawColors
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 fun SearchProviderConfigScreen(onBack: () -> Unit) {
@@ -47,7 +53,20 @@ fun SearchProviderConfigScreen(onBack: () -> Unit) {
     val configVer by ConfigManager.configVersion
     var config by remember(configVer) { mutableStateOf(ConfigManager.loadConfig(context)) }
 
-    val activeProvider: SearchProviderInfo = searchProviderById(config?.searchProvider ?: "brave")
+    // BAT-515 v3 §4 + R14: bind activeProvider directly to the
+    // AgentPreferencesStore StateFlow so cross-process writes (Telegram
+    // /provider when we add it, Node-side switch from the future
+    // session_status flow) flow through to the UI without a configVersion
+    // bump. The optimistic local override gives instant visual feedback
+    // on tap while the IO dispatch persists. Note: SearchProviderConfigScreen
+    // is a main-process-only UI surface, so AgentPreferencesStore.isInitialized
+    // is always true here — no fallback to config?.searchProvider needed.
+    val agentPrefs by AgentPreferencesStore.state.collectAsState()
+    val scope = rememberCoroutineScope()
+    var optimisticProvider by remember(agentPrefs.searchProvider) { mutableStateOf<String?>(null) }
+    val effectiveProvider = optimisticProvider ?: agentPrefs.searchProvider
+    val activeProvider: SearchProviderInfo = searchProviderById(effectiveProvider)
+
     var editField by remember { mutableStateOf<String?>(null) }
     var editLabel by remember { mutableStateOf("") }
     var editValue by remember { mutableStateOf("") }
@@ -101,7 +120,35 @@ fun SearchProviderConfigScreen(onBack: () -> Unit) {
                             .fillMaxWidth()
                             .clickable {
                                 if (!isActive) {
-                                    saveField("searchProvider", provider.id, needsRestart = true)
+                                    // BAT-515 v3 §4 + R14/R17/R24: optimistic
+                                    // local override + IO-dispatched atomic
+                                    // update. Switching is LIVE — `:node`
+                                    // reads `agent_preferences.json` per
+                                    // web_search call, so the next search
+                                    // uses the new provider without a
+                                    // service restart. R24 reasoning
+                                    // applies: AgentPreferencesStore.update
+                                    // re-reads inside the writeLock so a
+                                    // concurrent cross-process write isn't
+                                    // clobbered by a stale `current` from
+                                    // outside the lock. R17: clear the
+                                    // optimistic override on failure rather
+                                    // than reverting to the prior id — the
+                                    // canonical state may have changed
+                                    // mid-flight.
+                                    optimisticProvider = provider.id
+                                    scope.launch(Dispatchers.IO) {
+                                        val ok = try {
+                                            AgentPreferencesStore.update {
+                                                it.copy(searchProvider = provider.id)
+                                            }
+                                        } catch (_: IllegalArgumentException) {
+                                            false
+                                        }
+                                        withContext(Dispatchers.Main) {
+                                            if (!ok) optimisticProvider = null
+                                        }
+                                    }
                                 }
                             }
                             .padding(horizontal = 16.dp, vertical = 14.dp),

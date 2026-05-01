@@ -223,7 +223,7 @@ Use YAML frontmatter with \`name\`, \`description\`, and \`triggers\` fields.`;
                 } catch (_) {}
             }
             return `**SeekerClaw**
-Agent: \`${deps.AGENT_NAME}\`
+Agent: \`${deps.getAgentName()}\`
 Package: \`${pkgVersion}\`
 Model: \`${resolveActiveModel()}\`
 Node.js: \`${nodeVer}\`

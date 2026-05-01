@@ -2,7 +2,7 @@
 
 const {
     log, config, localDateStr,
-    AGENT_NAME, resolveActiveModel,
+    getAgentName, getSearchProvider, resolveActiveModel,
 } = require('../config');
 
 const { getDb } = require('../database');
@@ -31,7 +31,7 @@ const handlers = {
         conversations.forEach(conv => totalMessages += conv.length);
 
         const result = {
-            agent: AGENT_NAME,
+            agent: getAgentName(),
             model: resolveActiveModel(),
             uptime: {
                 seconds: uptime,
@@ -54,7 +54,12 @@ const handlers = {
             },
             features: {
                 webSearch: true,
-                webSearchProvider: config.braveApiKey ? 'brave' : 'duckduckgo',
+                // BAT-515: report the LIVE configured provider (read per
+                // session_status call), not a stale config.json snapshot
+                // and not the long-removed 'duckduckgo' (BAT-481 dropped
+                // DDG). getSearchProvider() walks the precedence chain
+                // agent_preferences.json → config.json → 'brave'.
+                webSearchProvider: getSearchProvider(),
                 reminders: true,
                 skills: loadSkills().length
             }

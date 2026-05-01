@@ -13,6 +13,8 @@ import android.util.Log
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.core.content.ContextCompat
 import com.seekerclaw.app.BuildConfig
+import com.seekerclaw.app.state.AgentPreferences
+import com.seekerclaw.app.state.AgentPreferencesStore
 import com.seekerclaw.app.state.CustomConfigSignature
 import com.seekerclaw.app.state.RuntimeState
 import com.seekerclaw.app.state.RuntimeStateStore
@@ -355,6 +357,48 @@ object ConfigManager {
         // is on first-install failures, which now correctly stay in the
         // "setup not complete" state until a successful retry.
         val oldSetupComplete = sp.getBoolean(KEY_SETUP_COMPLETE, false)
+        // BAT-515 v3 §4: snapshot the OLD agent-preferences fields (the
+        // second cross-process write site after RuntimeStateStore). If
+        // AgentPreferencesStore.update fails AFTER prefs.commit and
+        // RuntimeStateStore.update have both succeeded, we roll prefs
+        // back to these values AND undo the RuntimeStateStore write —
+        // so the three persistent stores either all reflect the new
+        // config or all keep the prior one. Same atomicity reasoning
+        // as oldProvider/oldAuthType/oldModel above (BAT-513).
+        val oldAgentName = sp.getString(KEY_AGENT_NAME, null)
+        val oldSearchProvider = sp.getString(KEY_SEARCH_PROVIDER, null)
+
+        // BAT-515 v3 §4 step 2: pre-validate agent-preferences fields
+        // BEFORE any persistence. The cap/allowlist gates inside
+        // AgentPreferencesStore.update would fire AFTER prefs.commit
+        // (and possibly RuntimeStateStore.update) had already
+        // succeeded — leaving prefs holding values the file refuses
+        // to take. Up-front gate keeps all three stores
+        // either fully-saved or fully-unchanged.
+        //
+        // Validation is context-sensitive (Codex final guard): only
+        // fields that genuinely DIFFER from the current
+        // AgentPreferencesStore state hit the cap/allowlist. An
+        // existing migrated long agentName that the UI is just
+        // carrying through (unchanged from the live store) does NOT
+        // fail here.
+        if (AgentPreferencesStore.isInitialized) {
+            try {
+                AgentPreferencesStore.validateForWrite(
+                    next = AgentPreferences(
+                        searchProvider = config.searchProvider,
+                        agentName = config.agentName,
+                    ),
+                    current = AgentPreferencesStore.read(),
+                )
+            } catch (e: IllegalArgumentException) {
+                LogCollector.append(
+                    "[Config] saveConfig rejected agent preferences: ${e.message}",
+                    LogLevel.WARN,
+                )
+                return false
+            }
+        }
 
         val encApiKey = KeystoreHelper.encrypt(config.anthropicApiKey)
         val encBotToken = KeystoreHelper.encrypt(config.telegramBotToken)
@@ -582,10 +626,21 @@ object ConfigManager {
         //   - When the new sig != current.customConfigSignature, reset
         //     customEchoReasoning to false (gateway-specific contract;
         //     see RuntimeState.kt KDoc). Otherwise carry forward.
+        // BAT-515 v3 §4 step 5 rollback: capture the RuntimeState as it
+        // existed at the moment our forward `update {}` ran (the value
+        // passed in as `current`). If AgentPreferencesStore.update fails
+        // later, we restore THIS snapshot via a second `update {}` so
+        // runtime_state.json reverts to where it was before saveConfig
+        // touched it. Captured inside the lambda — outside-the-lock
+        // RuntimeStateStore.read() could observe a different value if
+        // a concurrent /think writer landed between the read and our
+        // update's writeLock acquisition.
+        var preForwardRuntime: RuntimeState? = null
         var loggedSigReset = false
         val runtimeWritten = if (RuntimeStateStore.isInitialized) try {
             kotlinx.coroutines.runBlocking(kotlinx.coroutines.Dispatchers.IO) {
                 RuntimeStateStore.update { current ->
+                    preForwardRuntime = current
                     val newCustomSig = if (config.provider == "custom") {
                         CustomConfigSignature.compute(
                             customModel = config.model,
@@ -628,22 +683,6 @@ object ConfigManager {
             // sync in `:node` happens at the runtime-state.js write
             // sites (/provider, /model), not here.
             true
-        }
-        // R4 Copilot: gate the reset-log on `runtimeWritten`. The
-        // `loggedSigReset` flag is set inside the `update {}`
-        // transform, but the transform can run even when the
-        // ultimate `update()` returns false (FS write failure
-        // after the in-lock state mutation). Logging unconditionally
-        // would tell the user "reset to false" even though the
-        // reset never persisted — misleading. Gating on
-        // `runtimeWritten` ensures the log only fires when the
-        // change actually reached disk.
-        if (loggedSigReset && runtimeWritten) {
-            LogCollector.append(
-                "[Config] BAT-549: Custom config signature changed — reset " +
-                    "customEchoReasoning to false (re-enable in Settings on the new gateway)",
-                LogLevel.INFO,
-            )
         }
         if (!runtimeWritten) {
             // Roll back prefs runtime fields AND KEY_SETUP_COMPLETE to
@@ -694,6 +733,139 @@ object ConfigManager {
             )
             return false
         }
+
+        // BAT-515 v3 §4 step 5: AgentPreferencesStore.update is the
+        // SECOND cross-process write site. By this point prefs and
+        // runtime_state.json already reflect the new config. If THIS
+        // write fails, agent_preferences.json is the only persistent
+        // store still holding the OLD values — the three would
+        // diverge (a downgrade would land on prefs values that never
+        // reached agent_preferences.json). The rollback below restores
+        // the prior state across ALL THREE stores.
+        //
+        // PROCESS GUARD: AgentPreferencesStore.init only runs in the
+        // main process (mirrors RuntimeStateStore.isInitialized
+        // gating above). In `:node`, AgentPreferencesStore.update
+        // would always return false → saveConfig would always fail —
+        // breaking AndroidBridge / service-process callers. Treat
+        // uninitialized as no-op success; agent_preferences.json sync
+        // in `:node` happens at the agent-preferences.js write sites
+        // directly.
+        //
+        // Defense-in-depth catch: pre-validation above should have
+        // already caught any allowlist/cap violation. The catch here
+        // covers the narrow race where the observe-and-mirror
+        // collector pulled in a DIFFERENT current value between
+        // pre-validation and this update {}'s writeLock — making the
+        // (next, current-inside-lock) pair newly-invalid. Rare, but
+        // the rollback path keeps things atomic if it happens.
+        val agentPrefsWritten = if (AgentPreferencesStore.isInitialized) try {
+            kotlinx.coroutines.runBlocking(kotlinx.coroutines.Dispatchers.IO) {
+                AgentPreferencesStore.update { current ->
+                    current.copy(
+                        searchProvider = config.searchProvider,
+                        agentName = config.agentName,
+                    )
+                }
+            }
+        } catch (e: IllegalArgumentException) {
+            LogCollector.append(
+                "[Config] saveConfig produced invalid AgentPreferences (defense-in-depth): " +
+                    "${e.message}",
+                LogLevel.WARN,
+            )
+            false
+        } else {
+            // `:node` — see PROCESS GUARD comment above.
+            true
+        }
+        if (!agentPrefsWritten) {
+            // Roll back ALL prefs touched by this saveConfig (the
+            // runtime fields AND the new agent-prefs fields AND
+            // KEY_SETUP_COMPLETE) so the user's pre-save state is
+            // restored. Then undo the RuntimeStateStore.update from
+            // step 4 by writing the captured `preForwardRuntime`
+            // snapshot back into the file via a second `update {}`.
+            //
+            // The second update's lambda IGNORES the latest `current`
+            // (passes `_` and returns the snapshot) — by-design per
+            // v3 §4, "undo step 4 → restore prior runtime state". A
+            // concurrent /think writer that landed between our forward
+            // update and this rollback gets clobbered; that's the
+            // intentional rollback semantic. /think writes are
+            // tolerable to lose under this rare path; preferring user-
+            // intent atomicity over inter-update concurrent retention.
+            val rollback = sp.edit()
+            if (oldProvider != null) rollback.putString(KEY_PROVIDER, oldProvider)
+            else rollback.remove(KEY_PROVIDER)
+            if (oldAuthType != null) rollback.putString(KEY_AUTH_TYPE, oldAuthType)
+            else rollback.remove(KEY_AUTH_TYPE)
+            if (oldModel != null) rollback.putString(KEY_MODEL, oldModel)
+            else rollback.remove(KEY_MODEL)
+            if (oldAgentName != null) rollback.putString(KEY_AGENT_NAME, oldAgentName)
+            else rollback.remove(KEY_AGENT_NAME)
+            if (oldSearchProvider != null) rollback.putString(KEY_SEARCH_PROVIDER, oldSearchProvider)
+            else rollback.remove(KEY_SEARCH_PROVIDER)
+            rollback.putBoolean(KEY_SETUP_COMPLETE, oldSetupComplete)
+            val rollbackOk = rollback.commit()
+            if (!rollbackOk) {
+                LogCollector.append(
+                    "[Config] Rollback commit() returned false — prefs may be in inconsistent state " +
+                        "(some runtime/agent fields possibly half-rolled-back)",
+                    LogLevel.ERROR,
+                )
+            }
+            // Undo the RuntimeStateStore forward update by restoring
+            // the captured snapshot. Skip when preForwardRuntime is
+            // null (RuntimeStateStore wasn't initialized OR an
+            // IllegalArgumentException short-circuited the lambda
+            // before assignment — in that latter case the forward
+            // update never persisted, so there's nothing to undo).
+            val runtimeUndone = if (RuntimeStateStore.isInitialized && preForwardRuntime != null) try {
+                kotlinx.coroutines.runBlocking(kotlinx.coroutines.Dispatchers.IO) {
+                    RuntimeStateStore.update { _ -> preForwardRuntime!! }
+                }
+            } catch (e: IllegalArgumentException) {
+                // Should not happen — preForwardRuntime came out of
+                // RuntimeStateStore itself, so its (provider,authType)
+                // is guaranteed valid. Defense-in-depth log.
+                LogCollector.append(
+                    "[Config] RuntimeStateStore rollback rejected snapshot (unexpected): ${e.message}",
+                    LogLevel.ERROR,
+                )
+                false
+            } else true
+            bumpConfigVersionOnMain()
+            LogCollector.append(
+                "[Config] AgentPreferencesStore.update failed — rolled back prefs to " +
+                    "(provider=$oldProvider, authType=$oldAuthType, model=$oldModel, " +
+                    "agentName=$oldAgentName, searchProvider=$oldSearchProvider) and " +
+                    "KEY_SETUP_COMPLETE to $oldSetupComplete " +
+                    "(commit_ok=$rollbackOk, runtime_undone=$runtimeUndone)",
+                LogLevel.WARN,
+            )
+            return false
+        }
+
+        // R4 Copilot (BAT-549) + BAT-515 v3 §4 step 5: gate the
+        // BAT-549 reset-log on BOTH stores succeeding. The
+        // `loggedSigReset` flag is set inside the RuntimeStateStore
+        // forward `update {}` lambda — but if AgentPreferencesStore
+        // failed afterwards, the rollback path above already restored
+        // RuntimeStateStore via the `preForwardRuntime` snapshot,
+        // including reverting `customEchoReasoning` to whatever it
+        // was. Logging "reset to false" in that case would tell the
+        // user about a reset that didn't actually persist. Gating on
+        // `runtimeWritten && agentPrefsWritten` ensures the log fires
+        // only when the change actually reached disk in BOTH stores.
+        if (loggedSigReset && runtimeWritten && agentPrefsWritten) {
+            LogCollector.append(
+                "[Config] BAT-549: Custom config signature changed — reset " +
+                    "customEchoReasoning to false (re-enable in Settings on the new gateway)",
+                LogLevel.INFO,
+            )
+        }
+
         // BAT-513 round-9: write the overlay AND broadcast the change
         // ONLY after both prefs commit + RuntimeStateStore.write
         // succeeded. The overlay persists provider/authType/model too;
@@ -924,6 +1096,24 @@ object ConfigManager {
             ""
         }
 
+        // BAT-515 v3 §4: prefer live AgentPreferencesStore values over
+        // raw prefs. The observe-and-mirror collector already keeps
+        // prefs in sync with `agent_preferences.json`, but a fresh
+        // file write hasn't necessarily round-tripped to prefs by the
+        // time loadConfig runs (collector dispatch latency, or a
+        // racing reader between the file write and the prefs commit).
+        // Reading from the in-memory StateFlow guarantees this
+        // loadConfig sees the latest value the store holds — no
+        // staleness window.
+        //
+        // Falls back to the prefs read for `:node` (where
+        // AgentPreferencesStore.init never ran) and for the rare
+        // pre-init main-process load (config.json cold-start path
+        // before the collector kicks in). The defaults at the bottom
+        // ("MyAgent", "brave") match AgentPreferences.DEFAULT_*.
+        val livePrefs: AgentPreferences? = if (AgentPreferencesStore.isInitialized) {
+            AgentPreferencesStore.read()
+        } else null
         val fromPrefs = AppConfig(
             anthropicApiKey = apiKey,
             setupToken = setupToken,
@@ -931,9 +1121,9 @@ object ConfigManager {
             telegramBotToken = botToken,
             telegramOwnerId = loadOwnerIdFromFile(context, "telegram"),
             model = p.getString(KEY_MODEL, "claude-opus-4-7") ?: "claude-opus-4-7",
-            agentName = p.getString(KEY_AGENT_NAME, "MyAgent") ?: "MyAgent",
+            agentName = livePrefs?.agentName ?: (p.getString(KEY_AGENT_NAME, "MyAgent") ?: "MyAgent"),
             braveApiKey = braveApiKey,
-            searchProvider = p.getString(KEY_SEARCH_PROVIDER, "brave") ?: "brave",
+            searchProvider = livePrefs?.searchProvider ?: (p.getString(KEY_SEARCH_PROVIDER, "brave") ?: "brave"),
             perplexityApiKey = perplexityApiKey,
             exaApiKey = exaApiKey,
             tavilyApiKey = tavilyApiKey,

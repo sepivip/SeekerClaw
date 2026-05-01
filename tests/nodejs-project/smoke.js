@@ -80,6 +80,11 @@ const LOAD_TARGETS = [
     // no top-level IO. Loaded here so the smoke harness catches a syntax
     // or top-level throw on every commit.
     'custom-config-signature.js',
+    // BAT-515: agent-preferences.js is a thin wrapper around
+    // cross-process-store + read()/readLiveOrNull()/write()/update().
+    // No top-level IO; read calls happen only when `open(workDir)` is
+    // invoked by config.js with a real workDir.
+    'agent-preferences.js',
 ];
 
 // Files skipped intentionally. Most modules depend on config.js (which
