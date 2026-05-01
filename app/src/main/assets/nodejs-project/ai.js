@@ -19,7 +19,7 @@ const {
     config: _config,
     runtimeState: _runtimeState,
 } = require('./config');
-const { reasoningSupportFor } = require('./model-catalog');
+const { reasoningSupportFor, displayNameForProvider } = require('./model-catalog');
 
 const { redactSecrets } = require('./security');
 // Channel abstraction — routes to telegram.js or discord.js based on config
@@ -1495,7 +1495,7 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
                         // these writes relied on database.js's now-removed 60s
                         // setInterval safety net.
                         markDbDirty();
-                    } catch (e) { log(`[Claude] Failed to log network error to DB: ${e.message}`, 'WARN'); }
+                    } catch (e) { log(`[${displayNameForProvider(PROVIDER)}] Failed to log network error to DB: ${e.message}`, 'WARN'); }
                 }
                 if (!background) updateAgentHealth('error', { type: isTimeoutClass ? 'timeout' : 'network', status: -1, message: networkErr.message });
                 throw networkErr;
@@ -1533,7 +1533,14 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
                     // BAT-253: Add ±25% jitter to prevent thundering herd; respect server retry-after exactly
                     const jitteredBackoff = Math.round(backoffMs * (0.75 + Math.random() * 0.5));
                     const waitMs = retryAfterMs > 0 ? retryAfterMs : jitteredBackoff;
-                    log(`[Retry] Claude API ${res.status} (${errClass.type}), retry ${retries + 1}/${MAX_RETRIES}, base ${backoffMs}ms, waiting ${waitMs}ms`, 'WARN');
+                    // BAT-559: log the active provider's display name (Claude /
+                    // OpenAI / OpenRouter / Custom) instead of the pre-multi-
+                    // provider hardcoded "Claude API". Misleading observability
+                    // noticed during BAT-515 device test — an OpenAI 429 from a
+                    // rate-limited account was logged as "Claude API 429",
+                    // making "why is Claude rate limiting me" support tickets
+                    // ambiguous about which provider actually returned the error.
+                    log(`[Retry] ${displayNameForProvider(PROVIDER)} API ${res.status} (${errClass.type}), retry ${retries + 1}/${MAX_RETRIES}, base ${backoffMs}ms, waiting ${waitMs}ms`, 'WARN');
                     if (!background) updateAgentHealth('degraded', { type: errClass.type, status: res.status, message: errClass.userMessage });
                     retries++;
                     await new Promise(r => setTimeout(r, waitMs));
