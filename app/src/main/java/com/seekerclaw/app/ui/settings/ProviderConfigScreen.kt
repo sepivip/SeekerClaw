@@ -550,12 +550,15 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
             }
 
             // BAT-549: unified Reasoning section. Master toggles
-            // (Extended thinking, Display reasoning in chat) apply to
+            // (Extended thinking, Show thinking status) apply to
             // ALL providers — the registry's `reasoningSupport`
             // tri-state decides whether they take effect for the
-            // active model. The per-Custom advanced override (Echo
-            // reasoning to gateway) is only meaningful when on Custom
-            // and renders only then.
+            // active model. "Show thinking status" controls a
+            // temporary "Thinking..." Telegram bubble during
+            // extended-thinking turns; reasoning content is never
+            // rendered in chat (v4 contract). The per-Custom
+            // advanced override (Echo reasoning to gateway) is
+            // only meaningful when on Custom and renders only then.
             Spacer(modifier = Modifier.height(28.dp))
             SectionLabel("Reasoning")
             Spacer(modifier = Modifier.height(10.dp))
