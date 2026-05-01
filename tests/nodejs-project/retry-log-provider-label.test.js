@@ -28,8 +28,14 @@
 
 const path = require('path');
 
-// Stub config.js with no-op log so model-catalog loads cleanly (it
-// imports config transitively via dependencies).
+// Defensive config.js stub. R1 Copilot: model-catalog.js does NOT
+// currently import config (it only requires fs/path and reads
+// model-registry.json), so the stub is not load-bearing today. It's
+// kept as a guard for future model-catalog edits that might bring in
+// a config dependency — without it, those tests would silently start
+// requiring a config.json fixture on disk and fail in CI with a
+// confusing "config.json not found" trace. Cheap insurance against
+// a hard-to-diagnose future regression.
 const configPath = path.resolve(__dirname, '../../app/src/main/assets/nodejs-project/config.js');
 require.cache[configPath] = {
     id: configPath, filename: configPath, loaded: true,

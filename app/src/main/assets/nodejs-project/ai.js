@@ -20,6 +20,7 @@ const {
     runtimeState: _runtimeState,
 } = require('./config');
 const { reasoningSupportFor, displayNameForProvider } = require('./model-catalog');
+const { logSuppression: _logSuppression, SUPPRESSION_REASONS: _SUPPRESSION_REASONS } = require('./reasoning-gating');
 
 const { redactSecrets } = require('./security');
 // Channel abstraction — routes to telegram.js or discord.js based on config
@@ -2363,15 +2364,53 @@ async function chat(chatId, userMessage, options = {}) {
             // is the explicit option at the call site (main.js heartbeat).
             // R3 transport-required exceptions (OpenAI OAuth/Codex) are
             // preserved at the adapter layer, not overridden here.
+            //
+            // R1.1 Copilot: `synthetic` is the metadata marker the v4
+            // contract calls out for telemetry / future channel-renderer
+            // hooks. Threading it through `requestOptions` makes the
+            // option actually read — without this it would be a contract
+            // surface promised by main.js's call site but unused below
+            // ai.js. The current consumer is the SYNTHETIC_HEARTBEAT
+            // suppression log (see R1.3 / R4 dedup helper); future
+            // surfaces (e.g., a "background" tag in the api_request_log
+            // database) can read the same marker.
             const isHeartbeatChat = chatId === '__heartbeat__';
             const callerReasoningMode = (options && options.reasoningMode === 'off') ? 'off' : 'normal';
             const effectiveReasoningMode = isHeartbeatChat ? 'off' : callerReasoningMode;
+            const callerSynthetic = (options && typeof options.synthetic === 'string')
+                ? options.synthetic : null;
+            // Defensive: any `__heartbeat__` chat counts as synthetic
+            // 'heartbeat' for log/telemetry purposes, even if the caller
+            // forgot to pass the marker explicitly.
+            const effectiveSynthetic = isHeartbeatChat ? 'heartbeat' : callerSynthetic;
             const requestOptions = {
                 reasoningEnabled: !!(_liveRtState && _liveRtState.reasoningEnabled),
                 reasoningSupport: reasoningSupportFor(_registryProviderId, activeModel, _authForRegistry),
                 customEchoOverride: !!(_liveRtState && _liveRtState.customEchoReasoning),
                 reasoningMode: effectiveReasoningMode,
+                synthetic: effectiveSynthetic,
             };
+
+            // R1.3 Copilot: emit the SYNTHETIC_HEARTBEAT suppression log
+            // once per process so the v4 contract claim ("one INFO line
+            // per process per reason") actually surfaces in the Logs
+            // screen. Without this call site the SUPPRESSION_REASONS
+            // entry was exported but never written; field reports of
+            // "why did my heartbeat not reason" would have no
+            // discoverable signal. Dedup is per-process, so 30-min
+            // heartbeats don't flood the screen — the second probe
+            // onwards goes to DEBUG (filtered out of default view).
+            //
+            // The reason key only fires for heartbeat synthetic turns
+            // today; if a future synthetic class (e.g., 'summary')
+            // wants its own discoverable entry, add a SUPPRESSION_REASONS
+            // value and a branch here.
+            if (effectiveReasoningMode === 'off' && effectiveSynthetic === 'heartbeat') {
+                _logSuppression(
+                    _SUPPRESSION_REASONS.SYNTHETIC_HEARTBEAT,
+                    `chatId=${String(chatId).slice(0, 32)}`,
+                );
+            }
 
             // Convert neutral messages to provider API format for the request.
             // BAT-549 R2 thread 3: pass `activeModel` as 2nd arg so the
