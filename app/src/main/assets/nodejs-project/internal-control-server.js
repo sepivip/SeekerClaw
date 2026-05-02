@@ -284,10 +284,35 @@ async function _route(req, res) {
             // still covers realistic flush profiles (a real flush is
             // <100ms; the budget exists for an unresponsive SQL.js
             // reentry case).
-            await _flushShutdown('USER_STOP', { summaryTimeoutMs: 1200 });
-            return _json(res, 200, { ok: true });
+            //
+            // R5 Copilot: flushShutdown returns a {ok, summaryFailed?,
+            // dbFailed?} result instead of just resolving. Pre-fix it
+            // caught all errors internally and resolved unconditionally,
+            // so this endpoint always returned 200/{ok:true} even when
+            // the flush genuinely failed — Kotlin's "flush acknowledged"
+            // log was misleading in the exact failure mode this
+            // endpoint exists to surface. Now: 200 only on a clean
+            // result.ok=true; 500/{ok:false, ...details} when either
+            // the summary path threw OR saveDatabase reported an I/O
+            // error. The catch below covers the rare case where
+            // flushShutdown itself throws (shouldn't happen — all
+            // step errors are caught inside — but defense-in-depth).
+            const result = await _flushShutdown('USER_STOP', { summaryTimeoutMs: 1200 });
+            if (result && result.ok) {
+                return _json(res, 200, { ok: true });
+            }
+            const detail = result || {};
+            _logFn(
+                `[ControlServer] /shutdown/flush partial: summary=${detail.summaryFailed || 'ok'} db=${detail.dbFailed ? 'failed' : 'ok'}`,
+                'ERROR',
+            );
+            return _json(res, 500, {
+                ok: false,
+                summaryFailed: detail.summaryFailed || null,
+                dbFailed: !!detail.dbFailed,
+            });
         } catch (err) {
-            _logFn(`[ControlServer] /shutdown/flush failed: ${err.message}`, 'ERROR');
+            _logFn(`[ControlServer] /shutdown/flush threw: ${err.message}`, 'ERROR');
             return _json(res, 500, { ok: false, error: err.message });
         }
     }

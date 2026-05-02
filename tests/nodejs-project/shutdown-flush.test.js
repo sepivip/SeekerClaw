@@ -39,10 +39,91 @@ test('database.js exposes a non-exiting shutdown flush helper', () => {
         'flushForShutdown must not exit before the HTTP caller receives an ack');
 });
 
+test('R5 Copilot: saveDatabase returns Boolean so flush can detect I/O failures', () => {
+    // Pre-fix saveDatabase returned undefined and caught I/O errors
+    // internally — flushForShutdown couldn't tell whether the DB
+    // actually persisted. Now saveDatabase returns true on
+    // success/no-op and false on caught error.
+    const src = fs.readFileSync(DATABASE_JS, 'utf8');
+    const fnMatch = src.match(/function saveDatabase\s*\([^)]*\)\s*\{([\s\S]*?)\n\}/);
+    assert.ok(fnMatch, 'saveDatabase function body not found');
+    const body = fnMatch[1];
+    // Three return paths: db-not-init, idle-no-op, success → all true.
+    // The catch must end with `return false`.
+    assert.ok(/if\s*\(!db\)\s*return\s+true/.test(body),
+        'saveDatabase must return true on no-op (db not initialized)');
+    assert.ok(/if\s*\(!dirty\s*&&\s*!force\)\s*return\s+true/.test(body),
+        'saveDatabase must return true on idle no-op');
+    assert.ok(/return\s+true\s*;\s*\}\s*catch/.test(body),
+        'saveDatabase must return true after a successful write');
+    assert.ok(/return\s+false\s*;\s*\}\s*\}/.test(body) || /return\s+false\s*;\s*\}\s*$/.test(body.trim()),
+        'saveDatabase must return false when the catch block runs (caught I/O error)');
+});
+
+test('R5 Copilot: flushForShutdown returns {ok, summaryFailed?, dbFailed?} result', () => {
+    // Pre-fix flushForShutdown caught both summary and saveDatabase
+    // errors and resolved unconditionally, so the HTTP endpoint
+    // always returned 200/{ok:true} even when the flush failed.
+    const src = fs.readFileSync(DATABASE_JS, 'utf8');
+    const fnMatch = src.match(/async\s+function\s+flushForShutdown\s*\([^)]*\)\s*\{([\s\S]*?)\n\}/);
+    assert.ok(fnMatch, 'flushForShutdown function body not found');
+    const body = fnMatch[1];
+    // Must capture summary error (string), then return result with ok flag.
+    assert.ok(/summaryFailed\s*=\s*err\.message/.test(body),
+        'flushForShutdown must capture the summary error message into summaryFailed');
+    assert.ok(/const\s+dbOk\s*=\s*saveDatabase\s*\(/.test(body),
+        'flushForShutdown must capture saveDatabase return value');
+    assert.ok(/result\.summaryFailed\s*=\s*summaryFailed/.test(body),
+        'flushForShutdown result must include summaryFailed when present');
+    assert.ok(/result\.dbFailed\s*=\s*true/.test(body),
+        'flushForShutdown result must set dbFailed when saveDatabase returns false');
+    assert.ok(/return\s+result\s*;?\s*$/.test(body.trim()),
+        'flushForShutdown must return the result object');
+});
+
+test('R5 Copilot: /shutdown/flush returns 500 when flushForShutdown reports failure', () => {
+    // Pre-fix the endpoint always returned 200/{ok:true} unless
+    // flushForShutdown threw — but it never throws, since it catches
+    // both summary and DB errors internally. R5 makes the endpoint
+    // inspect the returned result and surface 500 + details when
+    // ok=false.
+    const src = fs.readFileSync(CONTROL_JS, 'utf8');
+    const startIdx = src.indexOf("url === '/shutdown/flush'");
+    const tail = src.slice(startIdx);
+    const endIdx = tail.search(/(?:^|\n)\s{4}(?:if \(url ===|return _json\(res, 404)/);
+    const flushBlock = endIdx >= 0 ? tail.slice(0, endIdx) : tail;
+    // Must capture the result and gate the 200 response on result.ok.
+    assert.ok(/const\s+result\s*=\s*await\s+_flushShutdown\s*\(/.test(flushBlock),
+        '/shutdown/flush must capture the flushForShutdown result');
+    assert.ok(/result\s*&&\s*result\.ok/.test(flushBlock) || /result\.ok\s*===\s*true/.test(flushBlock),
+        '/shutdown/flush 200 response must be gated on result.ok');
+    // Failure response must surface the per-step details in the
+    // body so a user-Stop log triage can identify which path
+    // failed (summary vs db).
+    assert.ok(/summaryFailed\s*:\s*detail\.summaryFailed/.test(flushBlock),
+        '/shutdown/flush 500 body must include summaryFailed detail');
+    assert.ok(/dbFailed\s*:\s*!!detail\.dbFailed/.test(flushBlock),
+        '/shutdown/flush 500 body must include dbFailed detail');
+});
+
 test('database.js keeps signal shutdown as flush then process exit', () => {
     const src = fs.readFileSync(DATABASE_JS, 'utf8');
-    assert.ok(/async function gracefulShutdown\s*\([^)]*\)\s*\{\s*await flushForShutdown\s*\([^)]*\)\s*;\s*process\.exit\s*\(0\)/.test(src),
-        'gracefulShutdown should await the shared flush helper and then exit');
+    // Match the gracefulShutdown function body and assert it awaits
+    // flushForShutdown AND exits via process.exit(0). R5 added a
+    // result-inspection block between them to log partial failures
+    // (summary/db); the SEMANTIC ordering "await flush, then exit"
+    // is preserved — just allow text between the two anchors.
+    const fnMatch = src.match(/async\s+function\s+gracefulShutdown\s*\([^)]*\)\s*\{([\s\S]*?)\n\}/);
+    assert.ok(fnMatch, 'gracefulShutdown function body not found');
+    const body = fnMatch[1];
+    assert.ok(/await\s+flushForShutdown\s*\(/.test(body),
+        'gracefulShutdown must await the shared flushForShutdown helper');
+    assert.ok(/process\.exit\s*\(\s*0\s*\)/.test(body),
+        'gracefulShutdown must call process.exit(0)');
+    const flushIdx = body.search(/await\s+flushForShutdown/);
+    const exitIdx = body.search(/process\.exit\s*\(\s*0\s*\)/);
+    assert.ok(flushIdx < exitIdx,
+        'flushForShutdown must be awaited BEFORE process.exit so persistence completes pre-termination');
 });
 
 test('internal-control-server.js exposes POST /shutdown/flush', () => {
