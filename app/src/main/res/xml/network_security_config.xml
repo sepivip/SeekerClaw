@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Network security configuration.
+
+    Default policy: cleartextTrafficPermitted=false (matches Android API 28+ default).
+    All outbound HTTPS traffic (api.anthropic.com, api.openai.com, openrouter.ai,
+    api.telegram.org, the user's Custom gateway, etc.) continues to use TLS — no change.
+
+    Cleartext exception: 127.0.0.1 ONLY.
+
+    The :node process embeds a Node.js runtime via JNI (libnode.so) and runs the
+    `internal-control-server.js` HTTP listener on 127.0.0.1:8766 (BAT-514). Both
+    the Kotlin main process (NodeControlClient.reconcile / healthz / flushShutdown)
+    and the Kotlin :node process (SeekerClawService.flushNodeBeforeProcessKill —
+    BAT-525) make POST requests to this loopback. There is no TLS terminator
+    on the loopback — wrapping it in HTTPS would require an in-app cert + key
+    bundled in the APK, which has worse security properties (cert in APK vs.
+    no exposure beyond the loopback interface).
+
+    Without this exception, every HttpURLConnection to 127.0.0.1:8766 throws
+    `java.io.IOException: Cleartext HTTP traffic to 127.0.0.1 not permitted` —
+    which is what surfaced BAT-525's flush failure (and was silently failing
+    every NodeControlClient.reconcile / healthz call too — pre-existing bug
+    BAT-525 device test exposed).
+
+    Scoping the exception to `127.0.0.1` (NOT 0.0.0.0, NOT a hostname pattern)
+    ensures public network traffic still goes through the strict default
+    policy — no regression in TLS enforcement for actual remote endpoints.
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+    </domain-config>
+</network-security-config>
