@@ -52,8 +52,8 @@ test('internal-control-server.js exposes POST /shutdown/flush', () => {
     const src = fs.readFileSync(CONTROL_JS, 'utf8');
     assert.ok(/url\s*===\s*'\/shutdown\/flush'/.test(src),
         'internal-control-server must expose /shutdown/flush');
-    assert.ok(/await\s+_flushShutdown\s*\(\s*'USER_STOP'\s*,\s*\{\s*summaryTimeoutMs:\s*1500\s*\}\s*\)/.test(src),
-        'POST /shutdown/flush must await the wired flushShutdown callback with summaryTimeoutMs<2000ms (Kotlin waits 2s)');
+    assert.ok(/await\s+_flushShutdown\s*\(\s*'USER_STOP'\s*,\s*\{\s*summaryTimeoutMs:\s*1200\s*\}\s*\)/.test(src),
+        'POST /shutdown/flush must await flushShutdown with summaryTimeoutMs=1200 — the R4-tightened budget that fits within Kotlin\'s 1750ms worst-case wall time (CONNECT 250 + READ 1500), which itself fits within the 2000ms outer withTimeoutOrNull. HttpURLConnection isn\'t cooperatively cancellable so the bound MUST come from the underlying timeouts, not the outer coroutine timeout.');
 });
 
 test('R1 Copilot: /shutdown/flush drains the request body', () => {
@@ -143,6 +143,38 @@ test('SeekerClawService posts to Node flush endpoint with a bounded timeout', ()
     // post-fix code shouldn't have either form.
     assert.ok(!/:\s*HttpURLConnection\??|as\s+HttpURLConnection|URL\s*\(\s*"http:\/\/127\.0\.0\.1:8766/.test(src),
         'Kotlin must NOT roll its own HTTP client for the flush — the rolled-own version omitted the X-Bridge-Token header and 401\'d the endpoint');
+});
+
+test('R4 Copilot: timeout budget chain stays within outer 2000ms (HttpURLConnection isn\'t cancellable)', () => {
+    // R4 Copilot: HttpURLConnection's blocking connect/read can't be
+    // interrupted by withTimeoutOrNull on the outer coroutine. The
+    // hard upper bound MUST therefore come from the underlying
+    // connect+read timeouts, summed against the Node-side
+    // summaryTimeoutMs. Pin both ends so a future "let's bump the
+    // read timeout to 5000" change immediately fails this guard
+    // instead of silently breaking the 2s service-teardown SLA.
+    const NCC_KT = path.join(ROOT, 'app', 'src', 'main', 'java', 'com',
+        'seekerclaw', 'app', 'bridge', 'NodeControlClient.kt');
+    const ncc = fs.readFileSync(NCC_KT, 'utf8');
+    const connect = parseInt((ncc.match(/CONNECT_TIMEOUT_MS\s*=\s*(\d+)/) || [])[1], 10);
+    const read = parseInt((ncc.match(/READ_TIMEOUT_MS\s*=\s*(\d+)/) || [])[1], 10);
+    assert.ok(Number.isFinite(connect) && Number.isFinite(read),
+        'NodeControlClient must declare numeric CONNECT_TIMEOUT_MS + READ_TIMEOUT_MS');
+    const ktWorstCase = connect + read;
+    assert.ok(ktWorstCase <= 2000,
+        `NodeControlClient timeout budget (CONNECT=${connect} + READ=${read} = ${ktWorstCase}ms) must fit within SeekerClawService.onDestroy() outer withTimeoutOrNull(2000)`);
+
+    const ctrl = fs.readFileSync(CONTROL_JS, 'utf8');
+    const summary = parseInt((ctrl.match(/summaryTimeoutMs:\s*(\d+)/) || [])[1], 10);
+    assert.ok(Number.isFinite(summary),
+        'internal-control-server.js /shutdown/flush must set summaryTimeoutMs');
+    // Node-side flush must finish AND respond before Kotlin's read
+    // timeout fires; need a small buffer for response stream + JSON
+    // encode + socket write back to Kotlin.
+    assert.ok(summary < read,
+        `Node summaryTimeoutMs (${summary}) must be less than Kotlin READ_TIMEOUT_MS (${read}) so the flush response actually lands`);
+    assert.ok(read - summary >= 200,
+        `Node summaryTimeoutMs (${summary}) needs ≥200ms buffer below Kotlin READ_TIMEOUT_MS (${read}) for response encode + socket write — current buffer is ${read - summary}ms`);
 });
 
 test('NodeControlClient exposes flushShutdown that hits POST /shutdown/flush with auth', () => {

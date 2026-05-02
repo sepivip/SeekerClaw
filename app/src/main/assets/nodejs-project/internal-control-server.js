@@ -274,7 +274,17 @@ async function _route(req, res) {
         // `{ok:true}` only on clean success; 500 + `{ok:false,
         // error:...}` if `flushShutdown` rejects.
         try {
-            await _flushShutdown('USER_STOP', { summaryTimeoutMs: 1500 });
+            // R4 Copilot: summaryTimeoutMs reduced 1500 → 1200 so the
+            // Kotlin-side worst-case wall time (CONNECT 250 + READ
+            // 1500 = 1750ms) fits within SeekerClawService.onDestroy()'s
+            // outer withTimeoutOrNull(2000) budget. HttpURLConnection
+            // isn't cooperatively cancellable, so the underlying
+            // timeouts must guarantee the bound — the outer coroutine
+            // timeout can't interrupt an in-flight blocking I/O. 1200ms
+            // still covers realistic flush profiles (a real flush is
+            // <100ms; the budget exists for an unresponsive SQL.js
+            // reentry case).
+            await _flushShutdown('USER_STOP', { summaryTimeoutMs: 1200 });
             return _json(res, 200, { ok: true });
         } catch (err) {
             _logFn(`[ControlServer] /shutdown/flush failed: ${err.message}`, 'ERROR');
