@@ -552,15 +552,21 @@ class SeekerClawService : Service() {
 
     override fun onDestroy() {
         LogCollector.append("[Service] Stopping Claw Engine...")
+        // BAT-525: flush Node BEFORE everything else. The bridge token
+        // and Node process must both still be alive for the loopback
+        // POST /shutdown/flush to land. This call is bounded
+        // (NodeControlClient timeouts ≤ 1750ms inside an outer 2000ms
+        // withTimeoutOrNull) and intentionally precedes scope cancel,
+        // observer stop, NodeBridge.stop, and clearBridgeToken below.
         flushNodeBeforeProcessKill()
-        // Cancel the service scope FIRST. This stops any in-flight
-        // forwardNewNodeDebugLines or observer reattach coroutines that
-        // would otherwise race the observer.stopWatching() below — they
-        // hold nodeDebugMutex while reading the file, and could land
-        // a stale lastPos write or trigger the now-stopped observer's
-        // unrelated event handler. cancel() is non-blocking and
-        // synchronous; in-flight launches reach a suspension point and
-        // exit.
+        // Cancel the service scope before stopping the FileObserver
+        // below. This stops any in-flight forwardNewNodeDebugLines or
+        // observer reattach coroutines that would otherwise race
+        // observer.stopWatching() — they hold nodeDebugMutex while
+        // reading the file, and could land a stale lastPos write or
+        // trigger the now-stopped observer's unrelated event handler.
+        // cancel() is non-blocking and synchronous; in-flight launches
+        // reach a suspension point and exit.
         scopeJob.cancel()
         // Stop the node-debug FileObserver (BAT-518: was nodeDebugJob coroutine).
         nodeDebugObserver?.stopWatching()

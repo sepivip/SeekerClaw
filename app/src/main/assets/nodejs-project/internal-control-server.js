@@ -302,9 +302,16 @@ async function _route(req, res) {
                 return _json(res, 200, { ok: true });
             }
             const detail = result || {};
+            // R8 Copilot: log partial flush at WARN, not ERROR. A partial
+            // flush is best-effort degradation (one summary timed out OR
+            // saveDatabase hit transient I/O); the caller proceeds with
+            // killProcess() either way and the next service start
+            // reconciles via mcp_servers.json + AutoResume. Match the
+            // gracefulShutdown convention in database.js so operators
+            // don't treat partial results as fatal.
             _logFn(
                 `[ControlServer] /shutdown/flush partial: summary=${detail.summaryFailed || 'ok'} db=${detail.dbFailed ? 'failed' : 'ok'}`,
-                'ERROR',
+                'WARN',
             );
             return _json(res, 500, {
                 ok: false,
