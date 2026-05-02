@@ -234,8 +234,8 @@ async function initDatabase() {
  *        lie. Init keeps the default so a failed bootstrap write
  *        retries before any mutation arrives.
  */
-// BAT-525 R5 Copilot: saveDatabase returns a tri-state result so callers
-// that need to distinguish "actually persisted to disk" from "swallowed
+// BAT-525 R5 Copilot: saveDatabase returns a Boolean so callers that
+// need to distinguish "actually persisted to disk" from "swallowed
 // I/O error" — specifically [flushForShutdown], driving the
 // `POST /shutdown/flush` endpoint that surfaces 500 vs 200/{ok:true}
 // to Kotlin — can do so. Pre-fix the function returned `undefined` and
@@ -245,9 +245,12 @@ async function initDatabase() {
 // callers (the debounced save timer + initDatabase bootstrap) can
 // continue to ignore the return value — the contract is additive.
 //
-// Return semantics:
+// Return semantics (Boolean):
 //   - true  : either persisted to disk OR no-op (db not initialized,
-//             or dirty=false && force=false — nothing to save).
+//             or dirty=false && force=false — nothing to save). The
+//             "persisted" and "no-op" cases collapse into the same
+//             return value because callers only care about
+//             "shutdown work completed without an I/O error".
 //   - false : the write attempt threw an I/O error. The error has
 //             already been logged with the same level + message it
 //             always was; the boolean is purely for flow control.
