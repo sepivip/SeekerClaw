@@ -23,7 +23,7 @@
 
 ---
 
-SeekerClaw embeds a Node.js AI agent inside an Android app, running 24/7 as a foreground service. You interact through Telegram — ask questions, control your phone, trade crypto, schedule tasks. **71 tools, 35+ skills, Solana wallet, multi-provider AI (Claude + OpenAI + OpenRouter + any OpenAI-compatible gateway)**, all running locally on your device. Built for the Solana Seeker, runs on any Android 14+ phone.
+SeekerClaw embeds a Node.js AI agent inside an Android app, running 24/7 as a foreground service. You interact through Telegram or Discord — ask questions, control your phone, trade crypto, schedule tasks. **60+ built-in tools (plus MCP remote tools), 35+ partner skills, Solana wallet, multi-provider AI (Claude + OpenAI + OpenRouter + any OpenAI-compatible gateway), extended thinking, graceful Stop**, all running locally on your device. Built for the Solana Seeker, runs on any Android 14+ phone.
 
 <div align="center">
   <img src="design/screenshots/01-first-launch.png" width="130">
@@ -38,14 +38,15 @@ SeekerClaw embeds a Node.js AI agent inside an Android app, running 24/7 as a fo
 
 | | Feature | What it does |
 |---|---|---|
-| :robot: | **AI Engine** | Claude, OpenAI, OpenRouter, or any OpenAI-compatible gateway (Custom) with multi-turn tool use |
-| :speech_balloon: | **Telegram** | Full bot — reactions, file sharing, inline keyboards, 12 commands |
+| :robot: | **AI Engine** | Claude, OpenAI (API key + Codex OAuth), OpenRouter, or any OpenAI-compatible gateway (Custom). Multi-turn tool use, extended thinking on supported models |
+| :speech_balloon: | **Channels** | Telegram (full bot — reactions, file sharing, inline keyboards) or Discord (Gateway v10 — DMs, media, reply threading) |
 | :link: | **Solana Wallet** | Swaps, limit orders, DCA, transfers via Jupiter + MWA |
 | :iphone: | **Device Control** | Battery, GPS, camera, SMS, calls, clipboard, TTS |
-| :brain: | **Memory** | Persistent personality, daily notes, ranked keyword search |
+| :brain: | **Memory** | Persistent personality, daily notes, ranked keyword search, session summaries preserved across user-Stop |
 | :alarm_clock: | **Scheduling** | Cron jobs with natural language ("remind me in 30 min") |
 | :globe_with_meridians: | **Web Intel** | Search (Brave / Perplexity / Exa / Tavily / Firecrawl), fetch, caching |
-| :electric_plug: | **Extensible** | 35 skills + custom skills + MCP remote tools |
+| :gear: | **Live Settings** | Switch model or provider from Telegram with `/model` and `/provider`; no app reopen needed |
+| :electric_plug: | **Extensible** | 35+ partner skills + custom skills + MCP remote tools |
 
 <details>
 <summary><strong>Architecture</strong></summary>
@@ -65,27 +66,40 @@ graph LR
 **On-device stack:**
 
 ```
-Android App (Kotlin, Jetpack Compose)
- └─ Foreground Service
-     └─ Node.js Runtime (nodejs-mobile)
-         ├─ ai.js             — AI provider API, system prompt, conversations
-         ├─ message-handler.js — Inbound message routing, commands, auto-resume
-         ├─ providers/        — Claude, OpenAI, OpenRouter, Custom adapters
-         ├─ tools/            — 71 tool handlers across 12 modules
-         ├─ http.js           — HTTP/HTTPS transport, SSE streaming
-         ├─ task-store.js     — Persistent task checkpoints
-         ├─ solana.js         — Jupiter swaps, DCA, limit orders
-         ├─ telegram.js       — Bot, formatting, commands, repetition detector
-         ├─ memory.js         — Persistent memory + ranked search
-         ├─ skills.js         — Skill loading + semantic routing
-         ├─ cron.js           — Job scheduling + natural language parsing
-         ├─ mcp-client.js     — MCP Streamable HTTP client
-         ├─ web.js            — Search providers + fetch + caching
-         ├─ database.js       — SQL.js analytics
-         ├─ security.js       — Prompt injection defense
-         ├─ bridge.js         — Android Bridge HTTP client
-         ├─ config.js         — Config loading + validation
-         └─ main.js           — Orchestrator + heartbeat
+Android App (Kotlin, Jetpack Compose)  ~27K lines, 68 files
+ └─ Foreground Service (:node process)
+     └─ Node.js Runtime (nodejs-mobile)  ~24K lines, 50+ JS modules
+         ├─ ai.js                    — AI provider API, system prompt, conversations, /think
+         ├─ message-handler.js       — Inbound message routing, commands, auto-resume
+         ├─ providers/               — Claude, OpenAI (API key + Codex OAuth), OpenRouter, Custom adapters
+         ├─ tools/                   — 60 tool handlers across 12 modules
+         ├─ reasoning-gating.js      — Per-provider reasoning echo policy (R1 strip, V4 echo, etc.)
+         ├─ reasoning-recovery.js    — Adaptive 3-step quarantine on 400 reasoning_content errors
+         ├─ reasoning-redact.js      — sha256 fingerprint-only logging for reasoning content
+         ├─ silent-reply.js          — [[SILENT_REPLY]] sentinel handling
+         ├─ loop-detector.js         — Identical-call loop detection (3 warn / 5 break)
+         ├─ http.js                  — HTTP/HTTPS transport, SSE streaming
+         ├─ task-store.js            — Persistent task checkpoints
+         ├─ solana.js                — Jupiter swaps, DCA, limit orders
+         ├─ telegram.js              — Bot, formatting, commands, repetition detector
+         ├─ telegram-commands.js     — Single-source registry for /commands menu + /help (drift-guarded)
+         ├─ discord.js               — Discord Gateway v10 client + REST sends
+         ├─ channel.js               — Channel router (telegram | discord)
+         ├─ memory.js                — Persistent memory + ranked search
+         ├─ skills.js                — Skill loading + semantic routing
+         ├─ cron.js                  — Job scheduling + natural language parsing
+         ├─ mcp-client.js            — MCP Streamable HTTP client (rug-pull detection)
+         ├─ mcp-servers.js           — MCP server config CrossProcessStore (BAT-514)
+         ├─ internal-control-server.js — Loopback control endpoints (/healthz, /mcp/reconcile, /shutdown/flush)
+         ├─ runtime-state.js         — Live provider/authType/model overlay (BAT-513)
+         ├─ agent-preferences.js     — searchProvider + agentName cross-process store (BAT-515)
+         ├─ model-catalog.js         — Shared model registry (BAT-517)
+         ├─ web.js                   — Search providers + fetch + caching
+         ├─ database.js              — SQL.js analytics + flushForShutdown (BAT-525)
+         ├─ security.js              — Prompt injection defense
+         ├─ bridge.js                — Android Bridge HTTP client (main process)
+         ├─ config.js                — Config loading + validation
+         └─ main.js                  — Orchestrator + heartbeat + cron timer
 ```
 
 </details>
