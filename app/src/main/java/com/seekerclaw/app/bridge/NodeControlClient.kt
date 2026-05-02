@@ -64,6 +64,32 @@ object NodeControlClient {
         post("/healthz", "{}")
     }
 
+    /**
+     * Drive Node's graceful-shutdown flush before
+     * [com.seekerclaw.app.service.SeekerClawService] kills the
+     * `:node` process (BAT-525). Persists pending session summaries
+     * + dirty SQL.js mutations so the last ~60s of `api_request_log`
+     * activity isn't lost on user-initiated Stop.
+     *
+     * Returns `true` on a 2xx response (Node confirmed flush
+     * complete). Returns `false` on connect-refused (service
+     * already down), 401 (bridge token rotated), 500
+     * (`flushForShutdown` rejected), or transport timeout — in
+     * every case the caller proceeds with the unconditional
+     * `killProcess()` fallback. Bridge-token auth is provided by
+     * the shared [post] helper so the endpoint's POST-auth gate
+     * doesn't 401 every Stop event.
+     *
+     * The Node side caps `summaryTimeoutMs` at 1500ms; the
+     * client's READ_TIMEOUT_MS (1500) gives the response just
+     * enough time to land. SeekerClawService wraps the suspend
+     * call in `withTimeoutOrNull(2000)` as a hard outer bound
+     * so a hung Node can't deadlock service teardown.
+     */
+    suspend fun flushShutdown(): Boolean = withContext(Dispatchers.IO) {
+        post("/shutdown/flush", "{}")
+    }
+
     private fun post(path: String, body: String): Boolean {
         val token = ServiceState.bridgeToken
         if (token.isNullOrBlank()) {

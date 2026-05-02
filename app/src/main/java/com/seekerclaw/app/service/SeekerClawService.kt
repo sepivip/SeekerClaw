@@ -15,6 +15,7 @@ import com.seekerclaw.app.MainActivity
 import com.seekerclaw.app.R
 import com.seekerclaw.app.SeekerClawApplication
 import com.seekerclaw.app.bridge.AndroidBridge
+import com.seekerclaw.app.bridge.NodeControlClient
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.util.LogCollector
 import com.seekerclaw.app.util.LogLevel
@@ -30,11 +31,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
-import java.net.HttpURLConnection
-import java.net.URL
 import java.util.UUID
 
 class SeekerClawService : Service() {
@@ -608,13 +606,29 @@ class SeekerClawService : Service() {
         android.os.Process.killProcess(android.os.Process.myPid())
     }
 
+    /**
+     * BAT-525: ask `:node` to flush pending session summaries + dirty
+     * SQL.js mutations BEFORE [killProcess]. Without this hook, the
+     * last ~60s of `api_request_log` rows in BAT-523's debounce
+     * window are lost on every user-initiated Stop.
+     *
+     * Bounded by [timeoutMs] (default 2s) so a hung Node can't
+     * deadlock the service teardown — the unconditional [killProcess]
+     * call below this still fires either way.
+     *
+     * R3 Copilot: delegates to [NodeControlClient.flushShutdown] so
+     * the shared `X-Bridge-Token` auth + JSON body + response-drain
+     * + connect/read-timeout logic stays in one place. Pre-fix this
+     * rolled its own [HttpURLConnection] client without setting the
+     * auth header, which would have 401'd at the bridge-token gate
+     * `/shutdown/flush` enforces — the flush would never have run
+     * in production.
+     */
     private fun flushNodeBeforeProcessKill(timeoutMs: Long = 2_000L) {
         if (!NodeBridge.isAlive()) return
         val flushed = runBlocking {
             withTimeoutOrNull(timeoutMs) {
-                withContext(Dispatchers.IO) {
-                    postNodeShutdownFlush(timeoutMs)
-                }
+                NodeControlClient.flushShutdown()
             }
         } == true
 
@@ -625,26 +639,6 @@ class SeekerClawService : Service() {
                 "[Shutdown] Node flush timed out or failed; continuing process kill",
                 LogLevel.WARN,
             )
-        }
-    }
-
-    private fun postNodeShutdownFlush(timeoutMs: Long): Boolean {
-        var conn: HttpURLConnection? = null
-        return try {
-            conn = (URL("http://127.0.0.1:8766/shutdown/flush").openConnection() as HttpURLConnection).apply {
-                requestMethod = "POST"
-                connectTimeout = 250
-                readTimeout = (timeoutMs - 250L).coerceAtLeast(250L).toInt()
-                doOutput = true
-                setRequestProperty("Content-Type", "application/json")
-            }
-            conn.outputStream.use { it.write("{}".toByteArray(Charsets.UTF_8)) }
-            conn.responseCode in 200..299
-        } catch (e: Exception) {
-            LogCollector.append("[Shutdown] Node flush request failed: ${e.message}", LogLevel.WARN)
-            false
-        } finally {
-            conn?.disconnect()
         }
     }
 

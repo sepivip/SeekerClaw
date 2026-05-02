@@ -125,11 +125,46 @@ test('SeekerClawService calls Node flush before stopping NodeBridge', () => {
 });
 
 test('SeekerClawService posts to Node flush endpoint with a bounded timeout', () => {
+    // R3 Copilot: SeekerClawService used to roll its own
+    // HttpURLConnection POST without setting `X-Bridge-Token`, which
+    // meant /shutdown/flush would 401 every user-Stop in production.
+    // The fix delegates to NodeControlClient.flushShutdown(), which
+    // already handles auth, JSON body, response drain, and timeouts —
+    // assert that both the bounded outer timeout AND the shared
+    // client are used.
     const src = fs.readFileSync(SERVICE_KT, 'utf8');
     assert.ok(/withTimeoutOrNull\s*\(\s*timeoutMs\s*\)/.test(src),
-        'flush wait must be bounded');
-    assert.ok(/http:\/\/127\.0\.0\.1:8766\/shutdown\/flush/.test(src),
-        'Kotlin must call the local Node shutdown flush endpoint');
+        'flush wait must be bounded by withTimeoutOrNull');
+    assert.ok(/NodeControlClient\.flushShutdown\s*\(\s*\)/.test(src),
+        'Kotlin must delegate to NodeControlClient.flushShutdown() so the bridge-token header is set (otherwise /shutdown/flush 401s in production)');
+    // Match actual usage patterns (variable type, cast, instantiation) — not
+    // KDoc prose. The pre-fix code had `var conn: HttpURLConnection?` and
+    // `URL("http://127.0.0.1:8766/shutdown/flush").openConnection()`; the
+    // post-fix code shouldn't have either form.
+    assert.ok(!/:\s*HttpURLConnection\??|as\s+HttpURLConnection|URL\s*\(\s*"http:\/\/127\.0\.0\.1:8766/.test(src),
+        'Kotlin must NOT roll its own HTTP client for the flush — the rolled-own version omitted the X-Bridge-Token header and 401\'d the endpoint');
+});
+
+test('NodeControlClient exposes flushShutdown that hits POST /shutdown/flush with auth', () => {
+    // R3.1 Copilot: pin the auth-header behavior of the shared client
+    // so a future refactor can't silently drop it. The endpoint
+    // requires X-Bridge-Token (every POST does, per BAT-514's
+    // internal-control-server contract).
+    const NCC_KT = path.join(ROOT, 'app', 'src', 'main', 'java', 'com',
+        'seekerclaw', 'app', 'bridge', 'NodeControlClient.kt');
+    const src = fs.readFileSync(NCC_KT, 'utf8');
+    assert.ok(/suspend\s+fun\s+flushShutdown\s*\(\s*\)/.test(src),
+        'NodeControlClient must expose suspend fun flushShutdown()');
+    assert.ok(/post\s*\(\s*"\/shutdown\/flush"/.test(src),
+        'flushShutdown must POST to /shutdown/flush via the shared post() helper');
+    // The shared post() helper sets the X-Bridge-Token header from
+    // ServiceState.bridgeToken — these are pre-existing invariants
+    // (since BAT-514) but pinning them here as well makes the
+    // BAT-525 contract robust against drift in either layer.
+    assert.ok(/AUTH_HEADER\s*=\s*"X-Bridge-Token"/.test(src),
+        'NodeControlClient must declare the X-Bridge-Token auth header');
+    assert.ok(/setRequestProperty\s*\(\s*AUTH_HEADER\s*,\s*token\s*\)/.test(src),
+        'NodeControlClient.post() must set the X-Bridge-Token header on every request');
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);
