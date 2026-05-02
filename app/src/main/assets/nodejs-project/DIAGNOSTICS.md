@@ -420,3 +420,60 @@ BAT-549 introduced reasoning content preservation across all 4 providers, plus a
 **Symptoms:** User looking at logs (or sending a bug report screenshot) doesn't see any reasoning content — just length + 8-char hex fingerprints.
 **Diagnosis:** This is BY DESIGN. `reasoning-redact.js` is the centralized redaction helper for reasoning logs. Mobile logs end up in bug-report screenshots — raw thinking text, signatures, and encrypted_content MUST never leak there. The fingerprint is enough for ops to confirm "the same reasoning block was seen / replayed across turns" without revealing content.
 **Fix:** No fix needed — log redaction is intentional. The "Show thinking status" toggle (Settings > AI Provider > Reasoning) gives the user a visible indicator that thinking is happening, but it does NOT reveal reasoning content. Reasoning text is never displayed to the user in this build (v4 contract).
+
+---
+
+## Service Lifecycle
+
+### Shutdown Flush Timed Out or Failed (BAT-525)
+**Symptoms:** User taps Stop Agent on the dashboard. Logs show `[Shutdown] Node flush timed out or failed; continuing process kill` instead of the success path `[Shutdown] Node flush acknowledged`. Some `api_request_log` rows or session summaries from the last ~60s before Stop are missing after restart.
+**Check:**
+```
+grep -i "Shutdown.*flush\|/shutdown/flush" node_debug.log | tail -20
+adb logcat -d 2>/dev/null | grep -i "NodeControlClient\|Cleartext"
+```
+**Diagnosis:** The graceful-shutdown handshake (POST /shutdown/flush over 127.0.0.1:8766) failed before the killProcess() fallback. Possible causes:
+- **Cleartext blocked (pre-`ee29727` builds):** `IOException: Cleartext HTTP traffic to 127.0.0.1 not permitted` — fixed by `network_security_config.xml` scoped to loopback. If still seen, the manifest is missing `android:networkSecurityConfig`.
+- **Bridge token rotated mid-shutdown:** 401 from the endpoint. Rare — would require the token to have been cleared between flush call and process kill.
+- **Node-side flush threw or timed out:** Endpoint returned 500 with `{ok: false, summaryFailed?, dbFailed?}`. Look for `[ControlServer] /shutdown/flush partial` (WARN) or `[ControlServer] /shutdown/flush threw` (ERROR) in node_debug.log.
+- **Real timeout:** SQL.js write or session-summary HTTP took >1.75s wall time. Check `[Trace]` entries for the relevant turn — payloadSize or tool count abnormal?
+**Fix:**
+1. If `Cleartext HTTP traffic to 127.0.0.1 not permitted` appears: rebuild from a commit including `app/src/main/res/xml/network_security_config.xml` and reinstall.
+2. If `[ControlServer] /shutdown/flush partial` shows `dbFailed`: device storage or filesystem error — check `df -h` and free space.
+3. If `summaryFailed`: a session-summary API call exceeded the 1.2s Node-side budget. Usually transient; Stop again later or restart the service so summaries finish in background.
+4. If timeouts persist: the next service start auto-resumes via AutoResume; no manual intervention typically needed.
+
+### /model or /provider Switch Didn't Take Effect (BAT-504)
+**Symptoms:** User runs `/model <name>` or `/provider <name>` in Telegram, the bot acknowledges, but the next response uses the OLD model/provider. UI may show the new one while the agent runs on the old one.
+**Check:**
+```
+grep -i "/model\|/provider\|runtime_state" node_debug.log | tail -20
+read runtime_state.json
+```
+**Diagnosis:** `/model` and `/provider` write to `runtime_state.json` (live overlay) and require either an in-place update (model) or a service restart (provider). Common failure log lines:
+- `[/model] runtime_state.json write threw: <err>` (ERROR) — disk write failed
+- `[/model] runtime_state.json write returned false` (WARN) — write returned a soft-fail; UI may show stale model
+- `[/provider] runtime_state.json write returned false / write threw` (ERROR) — provider switch couldn't persist; overlay reverted
+- `[/provider] runtime_state revert failed` (WARN) — UI may show stale state
+- `[Config] runtime_state.json has invalid content` / `decode failed` (WARN) — fallback to config.json on next read
+**Fix:**
+1. If write failed: check device storage (`android_storage` tool or `df -h`); a full filesystem prevents `runtime_state.json` writes.
+2. If `/provider` is stuck mid-switch: the overlay auto-reverts on write failure. Re-issue `/provider <name>` once storage is healthy.
+3. For provider switches, the service restarts to pick up new credentials — give it 5-10s before sending the next message.
+4. If UI keeps showing stale state after a successful write: kill and reopen the SeekerClaw app (the dashboard reads `runtime_state.json` independently).
+
+### MCP Reconcile Silently Failed (BAT-514)
+**Symptoms:** User edits an MCP server in Settings (toggle enable, edit token, add/remove). UI updates but the agent still has the OLD active tool set — or no MCP tools at all when there should be some.
+**Check:**
+```
+grep -i "MCP.*reconcile\|MCP.*Failed to" node_debug.log | tail -20
+```
+**Diagnosis:** Settings → MCP servers writes `mcp_servers.json` and POSTs `/mcp/reconcile` to the loopback control server. If the POST fails, the file write still landed but the running :node process didn't pick up the change until next service restart. Common failure log lines:
+- `[MCP] reconcile drain error` (ERROR) — request body couldn't drain
+- `[MCP] configsProvider threw during reconcile` (ERROR) — `mcp_servers.json` couldn't be re-read
+- `[MCP] Failed to (re)connect <name>` (ERROR) — the new/edited server URL is unreachable or auth-rejected
+- `[MCP] Skipping server with missing id` / `Duplicate server id` (WARN) — config validation rejected an entry
+**Fix:**
+1. The cleartext loopback fix (`ee29727`) repaired this path — pre-fix, `[NodeControlClient] reconcile failed: Cleartext HTTP not permitted` was silent and fell through to "next service start picks up the change."
+2. If reconcile is still failing post-`ee29727`: stop and restart the agent — the next service start reads `mcp_servers.json` fresh and connects all enabled servers via the normal startup path.
+3. If a specific server keeps failing in `[MCP] Failed to (re)connect`: verify the URL and auth in Settings → MCP Servers. Test reachability with `curl -I <server-url>` if it has a public health endpoint.

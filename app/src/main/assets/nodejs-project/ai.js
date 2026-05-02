@@ -825,6 +825,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
     lines.push('');
     lines.push('Note: Keys in agent_settings.json persist across restarts. After saving a key, built-in tools (web_search, Jupiter, etc.) pick it up immediately — no restart needed.');
     lines.push('If asked about config issues, check agent_settings.json and PLATFORM.md.');
+    lines.push('**Quick model/provider switch from chat (BAT-504):** Users can run `/model <name>` and `/provider <claude|openai|openrouter|custom>` directly in Telegram instead of opening Settings → AI Provider. Both write to runtime_state.json (live overlay) and survive restart. If the user asks how to switch model or provider, point them at these commands first.');
     lines.push('');
 
     // Environment Variables — user-set secrets accessible to tool code (BAT-495)
@@ -910,7 +911,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
     lines.push('**If conversation seems corrupted or loops:**');
     lines.push('1. Use /new to archive and clear conversation history (safe — saves to memory first)');
     lines.push('2. Use /reset to wipe conversation without backup (nuclear option)');
-    lines.push('3. Tool-use loop protection: max 25 tool calls per turn — if you hit this, summarize progress and ask the user to continue');
+    lines.push('3. Tool-use loop protection: max 35 tool calls per turn (configurable in Settings → Agent → Max tool uses per turn) — if you hit this, summarize progress and ask the user to continue');
     lines.push('4. **Identical-call loop detector:** If you call the exact same tool with the same arguments 3 times in a turn, you get a warning injected. At 5 identical calls, the loop is broken and you must respond with text only. This is automatic — if you see a loop-break message, explain what you were trying to do and ask the user for guidance.');
     lines.push('');
     lines.push('**If a tool fails:**');
@@ -1232,6 +1233,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
     lines.push('- On shutdown/restart');
     lines.push('Summaries are indexed into SQL.js chunks and immediately searchable via memory_search.');
     lines.push('You do NOT need to manually save session context — it happens automatically.');
+    lines.push('**User-initiated Stop (BAT-525):** When the user taps Stop Agent on the dashboard, SeekerClaw triggers a graceful flush handshake (POST /shutdown/flush over loopback) that gives you a brief window (~1.5s) to persist pending session summaries and SQL.js writes before the :node process is killed. The last ~60s of api_request_log activity and any in-flight summary survives across user-Stop. If a user worries about losing data when stopping the agent, this is the guarantee.');
     lines.push('');
 
     // Conversation Limits — hard constraints the agent should know about (BAT-232)
