@@ -39,6 +39,7 @@ SeekerClaw embeds a Node.js AI agent inside an Android app, running 24/7 as a fo
 | | Feature | What it does |
 |---|---|---|
 | :robot: | **AI Engine** | Claude, OpenAI (API key + Codex OAuth), OpenRouter, or any OpenAI-compatible gateway (Custom). Multi-turn tool use, extended thinking on supported models |
+| :thought_balloon: | **Extended Thinking** | Toggle in Settings → AI Provider → Reasoning or via `/think` from chat. Supported models (Opus 4.7, Sonnet 4.6, GPT-5.5, GPT-5.4, Codex) think across tool calls, with reasoning preserved across `/resume` and tool-loop turns |
 | :speech_balloon: | **Channels** | Telegram (full bot — reactions, file sharing, inline keyboards) or Discord (Gateway v10 — DMs, media, reply threading) |
 | :link: | **Solana Wallet** | Swaps, limit orders, DCA, transfers via Jupiter + MWA |
 | :iphone: | **Device Control** | Battery, GPS, camera, SMS, calls, clipboard, TTS |
@@ -46,6 +47,8 @@ SeekerClaw embeds a Node.js AI agent inside an Android app, running 24/7 as a fo
 | :alarm_clock: | **Scheduling** | Cron jobs with natural language ("remind me in 30 min") |
 | :globe_with_meridians: | **Web Intel** | Search (Brave / Perplexity / Exa / Tavily / Firecrawl), fetch, caching |
 | :gear: | **Live Settings** | Switch model or provider from Telegram with `/model` and `/provider`; no app reopen needed |
+| :key: | **Env Vars** | Plug arbitrary API keys into the agent via Settings → Env Vars (single add or `.env`-style bulk paste). Skills and tools read them at runtime via `process.env.KEY`; values masked from debug logs. Skills can gate on `requires.env` so missing keys block activation cleanly |
+| :bar_chart: | **Activity** | 26-week heatmap of your agent's API requests on the System screen — see when it's active, spot quiet days. Up to 13 months of daily history persisted on-device |
 | :electric_plug: | **Extensible** | 35+ partner skills + custom skills + MCP remote tools |
 
 <details>
