@@ -22,12 +22,18 @@ import java.math.RoundingMode
  *
  * **Edge cases the parsers reject (return null):**
  *   - Empty / blank input
- *   - Negative values
- *   - Scientific notation ("1e-9") — explicit decimal-only policy
+ *   - Negative values ("-1") and leading-plus ("+1")
+ *   - Scientific notation ("1e-9", "0.5e2") — explicit decimal-only policy
  *   - Locale-style "0,5"
+ *   - Leading dot (".5") and trailing dot ("5.") — Node parity
  *   - Sub-atomic precision (e.g. 0.000_000_000_5 SOL — beyond lamport
  *     resolution; truncating is a footgun, rounding is silent loss)
  *   - Non-numeric input
+ *
+ * The accepted shape is exactly `^\d+(\.\d+)?$` — strict parity with the
+ * Node-side `_decimalToAtomic` regex used in caps/preflight.js and
+ * tools/wallet.js, so a UI-stored cap is guaranteed to match what the
+ * Node-side routing math sees.
  *
  * The formatters always trim trailing zeros so cap displays don't fill
  * with noise; minimum-displayed precision is 2 fractional digits for
@@ -42,9 +48,31 @@ object WalletAmountFormat {
     private val MICRO_PER_USDC: BigInteger = BigInteger.TEN.pow(USDC_DECIMALS)
 
     /**
+     * BAT-582 R4: strict decimal regex — exact mirror of the Node-side
+     * `^\d+(\.\d+)?$` used in `caps/preflight.js#_decimalToAtomic` and
+     * `tools/wallet.js#_decimalToAtomic`. Rejects:
+     *   - `.5`     (no leading digit)
+     *   - `5.`     (trailing dot, no fractional digits)
+     *   - `+1`     (leading sign)
+     *   - `-1`     (negative — also caught by the dedicated negative check)
+     *   - `1e9`    (scientific notation)
+     *   - `0.5e2`  (mixed)
+     *   - `5,5`    (locale comma)
+     *   - any non-digit character
+     *
+     * BigDecimal accepts `.5`, `5.`, `+1`, scientific notation — all
+     * inputs the Node side rejects. Without this regex the Kotlin parser
+     * would be strictly more permissive than Node, producing a stored cap
+     * value on Android that Node-side routing math then rejects, leaving
+     * the cap UI claiming success while routing silently degrades to main.
+     */
+    private val DECIMAL_RE = Regex("""^\d+(\.\d+)?$""")
+
+    /**
      * Decimal SOL string -> lamports BigInteger, or null on parse failure.
-     * Accepts forms: "0.5", "0", ".5", "1.234567890". Rejects: "1e-9",
-     * "0,5", "-1", "", "abc".
+     * Accepts forms: "0.5", "0", "1.234567890". Rejects: ".5" (no leading
+     * digit), "5." (trailing dot), "1e-9", "0,5", "-1", "+1", "", "abc".
+     * See [DECIMAL_RE] for the full reject list and Node-side parity.
      */
     fun parseSolToLamports(decimal: String): BigInteger? =
         parseDecimalToAtomic(decimal, SOL_DECIMALS)
@@ -88,28 +116,28 @@ object WalletAmountFormat {
      * so callers can show a stable error to the user.
      */
     private fun parseDecimalToAtomic(decimal: String, decimals: Int): BigInteger? {
+        // Trim to match Node's `String(decimal).trim()` behavior in
+        // caps/preflight.js#_decimalToAtomic. (Node side does trim, so
+        // trimming here is parity, not divergence — verified 2026-05-06.)
         val trimmed = decimal.trim()
         if (trimmed.isEmpty()) return null
-        // Reject scientific notation explicitly — BigDecimal accepts "1e-9"
-        // which would silently produce 1 lamport for 1 SOL etc.
-        if (trimmed.contains('e', ignoreCase = true)) return null
-        // Reject locale comma. BigDecimal would reject this anyway, but
-        // we want a deterministic answer regardless of JDK behavior.
-        if (trimmed.contains(',')) return null
-        // Reject negatives — caps are non-negative quantities.
-        if (trimmed.startsWith('-')) return null
-        // BAT-582 R1: reject leading '+' too. BigDecimal accepts "+0.5"
-        // but Node-side _decimalToAtomic (caps/preflight.js) rejects it
-        // via `^\d+(\.\d+)?$`. Without this guard the Kotlin parser was
-        // strictly more permissive than the Node side — same input would
-        // produce a stored cap on Android but be rejected by Node's
-        // routing math, leaving the cap UI claiming success while the
-        // routing decision silently degrades to 'main'.
-        if (trimmed.startsWith('+')) return null
+        // BAT-582 R4: single regex pre-check that mirrors the Node-side
+        // `^\d+(\.\d+)?$` exactly. This is the contract boundary: any
+        // input that fails this regex MUST be rejected so the Kotlin
+        // parser is byte-for-byte identical to Node's. The regex already
+        // rejects scientific notation, locale comma, negative, leading
+        // '+', leading '.', trailing '.', unicode digits, and any
+        // non-numeric character — so the individual `contains`/
+        // `startsWith` checks from R1/R2 are subsumed by this single
+        // gate. See [DECIMAL_RE] for the rationale.
+        if (!DECIMAL_RE.matches(trimmed)) return null
 
         val bd = try {
             BigDecimal(trimmed)
         } catch (_: NumberFormatException) {
+            // Defense-in-depth — the regex already guarantees BigDecimal
+            // parses, but a surprise from the JDK should still degrade
+            // gracefully rather than crash.
             return null
         }
         // Detect precision overflow. setScale with UNNECESSARY throws

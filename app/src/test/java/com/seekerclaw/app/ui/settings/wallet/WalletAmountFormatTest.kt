@@ -53,6 +53,39 @@ class WalletAmountFormatTest {
         assertNull(WalletAmountFormat.parseSolToLamports("1e-9"))
         assertNull(WalletAmountFormat.parseSolToLamports("1E-9"))
         assertNull(WalletAmountFormat.parseSolToLamports("1.5e9"))
+        // BAT-582 R4: also reject mixed forms with both a fractional
+        // part and an exponent — Node regex `^\d+(\.\d+)?$` rejects.
+        assertNull(WalletAmountFormat.parseSolToLamports("0.5e2"))
+        assertNull(WalletAmountFormat.parseSolToLamports("1e9"))
+    }
+
+    @Test fun `parseSolToLamports rejects leading dot (parity with Node regex)`() {
+        // BAT-582 R4 (CRITICAL): BigDecimal accepts ".5" (= 0.5), but
+        // Node's `^\d+(\.\d+)?$` requires at least one leading digit.
+        // Without this rejection, the Kotlin parser would store a cap
+        // for ".5 SOL" that Node-side routing would reject — UI claims
+        // success while routing silently degrades to 'main'.
+        assertNull(WalletAmountFormat.parseSolToLamports(".5"))
+        assertNull(WalletAmountFormat.parseSolToLamports(".05"))
+        assertNull(WalletAmountFormat.parseSolToLamports("."))
+    }
+
+    @Test fun `parseSolToLamports rejects trailing dot (parity with Node regex)`() {
+        // BAT-582 R4: BigDecimal accepts "5." (= 5.0), but Node's
+        // `^\d+(\.\d+)?$` requires `\.\d+` — a dot must be followed by
+        // at least one digit. Reject for parity.
+        assertNull(WalletAmountFormat.parseSolToLamports("5."))
+        assertNull(WalletAmountFormat.parseSolToLamports("0."))
+        assertNull(WalletAmountFormat.parseSolToLamports("100."))
+    }
+
+    @Test fun `parseSolToLamports rejects unicode digits (parity with Node regex)`() {
+        // BAT-582 R4: \d in JavaScript regex (without /u flag) matches
+        // ONLY ASCII 0-9. Kotlin Regex \d is also ASCII-only by default.
+        // Verify Arabic-Indic digits (U+0660-0669) and full-width digits
+        // are rejected.
+        assertNull(WalletAmountFormat.parseSolToLamports("٠١"))  // Arabic-Indic 01
+        assertNull(WalletAmountFormat.parseSolToLamports("１"))         // Fullwidth 1
     }
 
     @Test fun `parseSolToLamports rejects locale comma`() {
@@ -112,6 +145,13 @@ class WalletAmountFormatTest {
     @Test fun `parseUsdcToMicroUnits rejects leading plus (parity with Node)`() {
         assertNull(WalletAmountFormat.parseUsdcToMicroUnits("+5"))
         assertNull(WalletAmountFormat.parseUsdcToMicroUnits("+0.10"))
+    }
+
+    @Test fun `parseUsdcToMicroUnits rejects leading and trailing dot (R4)`() {
+        // BAT-582 R4: parity with Node regex `^\d+(\.\d+)?$`.
+        assertNull(WalletAmountFormat.parseUsdcToMicroUnits(".5"))
+        assertNull(WalletAmountFormat.parseUsdcToMicroUnits("5."))
+        assertNull(WalletAmountFormat.parseUsdcToMicroUnits("."))
     }
 
     // --- SOL formatting ---

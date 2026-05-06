@@ -7,6 +7,7 @@ import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters
 import org.bouncycastle.crypto.signers.Ed25519Signer
 import java.io.File
 import java.util.Arrays
+import java.util.Base64
 
 /**
  * EncryptedPrefsKeyVault — V1 KeyVault impl (BAT-582).
@@ -35,6 +36,28 @@ class EncryptedPrefsKeyVault(
         // Same alphabet pattern as McpTokenStore — defense against path
         // traversal even though V1 only uses id="burner".
         private val ID_REGEX = Regex("^[A-Za-z0-9_-]+$")
+
+        /**
+         * BAT-582 R4: encode raw key bytes for the KeystoreHelper String
+         * boundary using Base64 (RFC 4648, no wrap). Pure function —
+         * exposed for round-trip unit tests that must run without
+         * Android Keystore.
+         *
+         * Use [java.util.Base64] (Java 8+, available on minSdk 34) rather
+         * than [android.util.Base64] so this helper is callable from pure
+         * JVM tests without Robolectric.
+         */
+        internal fun encodeForVault(bytes: ByteArray): String =
+            Base64.getEncoder().encodeToString(bytes)
+
+        /**
+         * BAT-582 R4: reverse of [encodeForVault]. Returns the original
+         * raw bytes. Throws [IllegalArgumentException] on malformed
+         * Base64 — caller catches via the surrounding decrypt try/catch
+         * and returns null.
+         */
+        internal fun decodeFromVault(s: String): ByteArray =
+            Base64.getDecoder().decode(s)
     }
 
     private fun dir(): File {
@@ -52,11 +75,31 @@ class EncryptedPrefsKeyVault(
         require(expanded64.size == 64) { "expanded64 must be 64 bytes" }
         val file = fileFor(id) ?: throw IllegalArgumentException("invalid id")
         val tmp = File(file.parentFile, "${file.name}.tmp")
-        // KeystoreHelper.encrypt operates on String; encode raw bytes via
-        // Latin1 so every byte 0x00-0xFF round-trips losslessly. Base64
-        // would work too but adds 33% size for no security gain — the
-        // ciphertext still goes to the same encrypted file.
-        val encoded = String(expanded64, Charsets.ISO_8859_1)
+        // BAT-582 R4 (CRITICAL CORRECTNESS): KeystoreHelper.encrypt operates
+        // on String and INTERNALLY encodes via UTF-8. Earlier rounds used
+        // `String(bytes, ISO_8859_1)` here, relying on a two-charset hop
+        // (ISO-8859-1 in / UTF-8 across the cipher / ISO-8859-1 out) to
+        // round-trip the raw bytes. Even when the JDK happens to make
+        // that round-trip work, mixing two charsets at a single boundary
+        // is fragile — small implementation differences (JDK version,
+        // codec choice, future stdlib changes) can silently corrupt key
+        // material that the user can never recover from.
+        //
+        // Base64 output is pure ASCII (0x20-0x7E), so every char is a
+        // single-byte UTF-8 sequence whose byte value equals the char
+        // value. That makes the round-trip trivially correct — no
+        // charset surprises possible regardless of platform. The 33%
+        // size cost is acceptable; ciphertext lands in the same encrypted
+        // file either way. Pinned by EncryptedPrefsKeyVaultTest.
+        //
+        // Heap-residence-time tradeoff: the Base64 String itself contains
+        // key material in plaintext (just Base64-encoded). Strings are
+        // immutable in Kotlin — we cannot zero them. The GC will eventually
+        // clear the reference, but during its lifetime the encoded key
+        // lives in heap. Acceptable for V1; for V2, switching KeystoreHelper
+        // to take ByteArray would close this gap (bigger refactor — touches
+        // every other API key/token caller). Tracked for follow-up.
+        val encoded = encodeForVault(expanded64)
         try {
             val enc = KeystoreHelper.encrypt(encoded)
             tmp.writeBytes(enc)
@@ -101,8 +144,9 @@ class EncryptedPrefsKeyVault(
         if (!file.exists()) return null
         return try {
             val plain = KeystoreHelper.decrypt(file.readBytes())
-            // Reverse of the Latin1 encoding in [store].
-            plain.toByteArray(Charsets.ISO_8859_1)
+            // Reverse of the Base64 encoding in [store]. See R4 comment
+            // there for why we use Base64 instead of ISO-8859-1.
+            decodeFromVault(plain)
         } catch (e: Exception) {
             Log.w(TAG, "loadKey($id) decrypt failed: ${e.message}")
             null
