@@ -25,6 +25,22 @@ import java.util.Base64
  * flipped to true in the future, a `data_extraction_rules.xml` `<exclude
  * domain="file" path="burner_keys/" />` entry MUST be added in the same
  * change.
+ *
+ * **V2 follow-ups** (consolidated for grep-ability — referenced by the
+ * inline R4 comment in [store] and the heap-residence note there):
+ *   1. Switch [KeystoreHelper] to a ByteArray-taking API. The current
+ *      String boundary forces a Base64 hop whose intermediate plaintext
+ *      lives in the immutable String heap until GC. A ByteArray API would
+ *      let us zero the encoded buffer in `finally`. Refactor scope:
+ *      every existing caller (anthropic key, OAuth tokens, MCP tokens,
+ *      etc.) — non-trivial but the win is uniform across callers.
+ *   2. Hardware-backed Keystore key. The current `KeystoreHelper` AES key
+ *      is software-backed by default. On Seeker hardware the StrongBox /
+ *      hardware-backed keystore is available and would tie key extraction
+ *      to the secure element. Cost: minSdk + device feature gating.
+ *   3. SeedVaultKeyVault impl. The `KeyVault` interface is the seam; V2
+ *      adds a new impl that stores the burner secret in the Solana
+ *      Seeker Seed Vault. No interface change required — pure addition.
  */
 class EncryptedPrefsKeyVault(
     private val context: Context,
