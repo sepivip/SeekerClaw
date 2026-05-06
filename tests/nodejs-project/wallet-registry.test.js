@@ -59,71 +59,79 @@ const { BurnerSigner } = require(path.join(BUNDLE, 'wallet', 'burner-signer'));
 const { MwaSigner } = require(path.join(BUNDLE, 'wallet', 'mwa-signer'));
 
 let failures = 0;
-function check(label, fn) {
-    try { fn(); console.log(`  ✓ ${label}`); }
+// Async test runner — fn may be sync or async. Awaits the returned
+// promise so async assertion failures surface as ✗ instead of unhandled
+// rejections (which Node logs but doesn't fail the process for).
+async function check(label, fn) {
+    try { await fn(); console.log(`  ✓ ${label}`); }
     catch (e) { failures++; console.error(`  ✗ ${label}\n    ${e.message}`); }
 }
 
-_resetForTests();
+(async () => {
+    _resetForTests();
 
-check("getWallet('burner') returns a wallet with role 'burner' and BurnerSigner", () => {
-    const w = getWallet('burner');
-    assert.ok(w, 'should not be null');
-    assert.strictEqual(w.role(), 'burner');
-    assert.ok(w.signer() instanceof BurnerSigner, 'signer must be BurnerSigner');
-});
+    await check("getWallet('burner') returns a wallet with role 'burner' and BurnerSigner", () => {
+        const w = getWallet('burner');
+        assert.ok(w, 'should not be null');
+        assert.strictEqual(w.role(), 'burner');
+        assert.ok(w.signer() instanceof BurnerSigner, 'signer must be BurnerSigner');
+    });
 
-check("getWallet('main') returns a wallet with role 'main' and MwaSigner", () => {
-    const w = getWallet('main');
-    assert.ok(w, 'should not be null');
-    assert.strictEqual(w.role(), 'main');
-    assert.ok(w.signer() instanceof MwaSigner, 'signer must be MwaSigner');
-});
+    await check("getWallet('main') returns a wallet with role 'main' and MwaSigner", () => {
+        const w = getWallet('main');
+        assert.ok(w, 'should not be null');
+        assert.strictEqual(w.role(), 'main');
+        assert.ok(w.signer() instanceof MwaSigner, 'signer must be MwaSigner');
+    });
 
-check("getWallet returns the same instance on repeated calls (singleton)", () => {
-    const a = getWallet('burner');
-    const b = getWallet('burner');
-    assert.strictEqual(a, b);
-});
+    await check("getWallet returns the same instance on repeated calls (singleton)", () => {
+        const a = getWallet('burner');
+        const b = getWallet('burner');
+        assert.strictEqual(a, b);
+    });
 
-check("getWallet returns null for unknown roles", () => {
-    assert.strictEqual(getWallet('nonsense'), null);
-    assert.strictEqual(getWallet(''), null);
-    assert.strictEqual(getWallet(null), null);
-    assert.strictEqual(getWallet(undefined), null);
-});
+    await check("getWallet returns null for unknown roles", () => {
+        assert.strictEqual(getWallet('nonsense'), null);
+        assert.strictEqual(getWallet(''), null);
+        assert.strictEqual(getWallet(null), null);
+        assert.strictEqual(getWallet(undefined), null);
+    });
 
-check("getWalletState returns burnerConfigured=false when bridge returns empty", async () => {
-    const s = await getWalletState('memory_save', {});
-    assert.strictEqual(s.burnerConfigured, false);
-});
+    await check("getWalletState returns burnerConfigured=false when bridge returns empty", async () => {
+        const s = await getWalletState('memory_save', {});
+        assert.strictEqual(s.burnerConfigured, false);
+    });
 
-check("getWalletState routes Solana write tools through routeFor (uncapped → main, underCap=true)", async () => {
-    // BONK send isn't in (SOL, USDC) so principal=null → routing='main', underCap=true.
-    const s = await getWalletState('solana_send', { to: 'X', amount: '1', token: 'BONK' });
-    assert.strictEqual(s.routingDecision, 'main');
-    assert.strictEqual(s.underCap, true);
-});
+    await check("getWalletState routes Solana write tools through routeFor (uncapped → main, underCap=true)", async () => {
+        // BONK send isn't in (SOL, USDC) so principal=null → routing='main', underCap=true.
+        const s = await getWalletState('solana_send', { to: 'X', amount: '1', token: 'BONK' });
+        assert.strictEqual(s.routingDecision, 'main');
+        assert.strictEqual(s.underCap, true);
+    });
 
-check("getWalletState looks up Jupiter cancel ownership", async () => {
-    bridgeCalls.length = 0;
-    const s = await getWalletState('jupiter_trigger_cancel', { orderId: 'order-abc' });
-    // creatorRole defaults to 'unknown' when bridge returns empty {}
-    assert.ok(['burner', 'main', 'unknown'].includes(s.creatorRole), `bad creatorRole: ${s.creatorRole}`);
-    assert.strictEqual(s.creatorRole, 'unknown'); // empty bridge response → unknown
-    // Bridge was called for the lookup
-    const ownerCall = bridgeCalls.find(c => c.endpoint === '/jupiter/order-owner/get');
-    assert.ok(ownerCall, 'expected /jupiter/order-owner/get bridge call');
-    assert.strictEqual(ownerCall.body.orderId, 'order-abc');
-});
+    await check("getWalletState looks up Jupiter cancel ownership", async () => {
+        bridgeCalls.length = 0;
+        const s = await getWalletState('jupiter_trigger_cancel', { orderId: 'order-abc' });
+        // creatorRole defaults to 'unknown' when bridge returns empty {}
+        assert.ok(['burner', 'main', 'unknown'].includes(s.creatorRole), `bad creatorRole: ${s.creatorRole}`);
+        assert.strictEqual(s.creatorRole, 'unknown'); // empty bridge response → unknown
+        // Bridge was called for the lookup
+        const ownerCall = bridgeCalls.find(c => c.endpoint === '/jupiter/order-owner/get');
+        assert.ok(ownerCall, 'expected /jupiter/order-owner/get bridge call');
+        assert.strictEqual(ownerCall.body.orderId, 'order-abc');
+    });
 
-check("getWalletState handles missing orderId on cancel (creatorRole='unknown')", async () => {
-    const s = await getWalletState('jupiter_dca_cancel', {});
-    assert.strictEqual(s.creatorRole, 'unknown');
-});
+    await check("getWalletState handles missing orderId on cancel (creatorRole='unknown')", async () => {
+        const s = await getWalletState('jupiter_dca_cancel', {});
+        assert.strictEqual(s.creatorRole, 'unknown');
+    });
 
-if (failures > 0) {
-    console.error(`\n${failures} failure(s).`);
+    if (failures > 0) {
+        console.error(`\n${failures} failure(s).`);
+        process.exit(1);
+    }
+    console.log('\nPASS: wallet-registry.test.js');
+})().catch((e) => {
+    console.error('Unhandled error in test runner:', e);
     process.exit(1);
-}
-console.log('\nPASS: wallet-registry.test.js');
+});

@@ -421,12 +421,41 @@ class SeekerClawService : Service() {
         // passed is auto-released so its committed-to-cap bytes don't
         // permanently consume the daily window. The coroutine lives on
         // [scope] (SupervisorJob), so it's cancelled atomically with the
-        // service in onDestroy. CapEnforcer.get() is a process-singleton;
-        // we lazily attach the FileObserver on first sweep call.
+        // service in onDestroy.
+        //
+        // BAT-582 R1: two cost optimizations applied here.
+        //   (a) Gate the sweep on burner being configured. If no caps
+        //       have been set (capPerTxSol == "0" AND capPerTxUsdc == "0"),
+        //       there are no reservations and the lazy-init of
+        //       CapEnforcer.get() can be deferred. The configured signal
+        //       comes from the burner_caps.json file's existence on
+        //       disk: pre-config the file is absent, so a cheap
+        //       File.exists() check tells us whether it's worth touching
+        //       CapEnforcer at all. This file is the same one
+        //       CrossProcessStore writes the first time setCaps() runs,
+        //       so the gate flips on within 30s of the user saving caps
+        //       in Settings.
+        //   (b) Once we DO touch CapEnforcer.get(applicationContext),
+        //       cache the reference so subsequent ticks skip the
+        //       singleton-getter overhead. The first call pays for
+        //       CrossProcessStore + FileObserver allocation; subsequent
+        //       calls were already O(1) but the cache makes that
+        //       explicit and makes the optimization survive any future
+        //       refactor of CapEnforcer.get's hot path.
+        val capsFile = File(filesDir, com.seekerclaw.app.data.caps.BurnerCapsState.FILE_NAME)
+        var cachedCapEnforcer: com.seekerclaw.app.data.caps.CapEnforcer? = null
         scope.launch {
             while (isActive) {
                 try {
-                    com.seekerclaw.app.data.caps.CapEnforcer.get(applicationContext).sweepStale()
+                    // capsFile.exists() is cheap — single fstat on a
+                    // small JSON file in the app's private dir.
+                    if (capsFile.exists()) {
+                        val enforcer = cachedCapEnforcer
+                            ?: com.seekerclaw.app.data.caps.CapEnforcer
+                                .get(applicationContext)
+                                .also { cachedCapEnforcer = it }
+                        enforcer.sweepStale()
+                    }
                 } catch (e: Exception) {
                     // Sweep failures should never bring the service down.
                     // Log and keep going; next iteration retries.

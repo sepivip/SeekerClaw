@@ -13,7 +13,39 @@ const { BurnerWallet } = require('./burner-wallet');
 const { MainWallet } = require('./main-wallet');
 const { androidBridgeCall } = require('../bridge');
 const { routeFor } = require('../caps/preflight');
-const { SOLANA_WRITE_TOOLS, JUPITER_CANCEL_TOOLS } = require('../confirmation/policy');
+const { V1_STATIC_CONFIRM, SOLANA_WRITE_TOOLS, JUPITER_CANCEL_TOOLS } = require('../confirmation/policy');
+
+// BAT-582 R1: tools whose confirmation policy can read burner state. For
+// any tool NOT in this set the policy hook returns 'none' or a v1.0-static
+// answer that doesn't depend on /burner/status — so we can short-circuit
+// the bridge round-trip on the hot path (every tool dispatch in ai.js).
+//
+// Membership rule: a tool belongs here iff `getConfirmationPolicy()`
+// reads any field of walletState that's populated by /burner/status —
+// burnerConfigured / burnerCaps / burnerSpentToday — OR it's in the v1.0
+// static set (kept for safety: even though policy.js doesn't currently
+// read state for those, the regression contract requires the gate to
+// behave identically when burnerConfigured=true, so future changes to
+// any v1-static tool's policy can rely on state being populated).
+//
+// JUPITER_CANCEL_TOOLS aren't in here on the burner-status axis (their
+// policy reads creatorRole, populated by a SEPARATE bridge call below) —
+// but we keep them so the cancel handler still benefits from the
+// per-tool gate; the burner-status read is a no-op cost for them since
+// JUPITER_CANCEL_TOOLS doesn't intersect SOLANA_WRITE_TOOLS or v1-static.
+//
+// wallet_status / agent_pay don't actually consult burner state in
+// policy.js, but they're trivial-frequency tools — keeping them in the
+// gate set costs nothing and avoids a "policy hook adds a state read in
+// future, but gate already excluded the tool" footgun.
+const _GATE_TOOLS = new Set([
+    ...V1_STATIC_CONFIRM,
+    ...SOLANA_WRITE_TOOLS,
+    ...JUPITER_CANCEL_TOOLS,
+    'wallet_status',
+    'wallet_set_caps',
+    'agent_pay',
+]);
 
 let _burner = null;
 let _main = null;
@@ -57,6 +89,16 @@ function getWallet(role) {
  */
 async function getWalletState(toolName, args) {
     const state = { burnerConfigured: false };
+
+    // BAT-582 R1: hot-path optimization. ai.js calls getWalletState before
+    // EVERY tool dispatch — but for tools whose confirmation policy doesn't
+    // read burner state (memory_save, web_fetch, file_*, etc.), the
+    // /burner/status round-trip is wasted. Short-circuit here. Solana
+    // write tools and Jupiter cancels still flow into the appropriate
+    // branches below.
+    if (!_GATE_TOOLS.has(toolName)) {
+        return state;
+    }
 
     // 1) Status read (cap state + pubkey).
     let status;

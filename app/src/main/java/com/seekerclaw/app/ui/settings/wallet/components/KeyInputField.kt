@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -23,6 +24,9 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -91,6 +95,22 @@ fun KeyInputField(
                 singleLine = true,
                 enabled = enabled,
                 visualTransformation = PasswordVisualTransformation(),
+                // BAT-582 R1 (security): force the IME into password mode
+                // and disable autocorrect/capitalization so the OS keyboard
+                // never shows pasted private-key bytes in its suggestion
+                // bar / shared dictionary. PasswordVisualTransformation
+                // alone hides the GLYPHS but not the KEYBOARD's preview /
+                // suggestion strip — the keyboard still sees the raw
+                // string and may surface it via Smart Compose, predictive
+                // text learning, or accessibility services. KeyboardType
+                // .Password is the documented signal to suppress all of
+                // that on every Android IME.
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Password,
+                    autoCorrectEnabled = false,
+                    capitalization = KeyboardCapitalization.None,
+                    imeAction = ImeAction.Done,
+                ),
                 textStyle = TextStyle(
                     color = SeekerClawColors.TextPrimary,
                     fontSize = TypeScale.bodyMedium.value.sp,

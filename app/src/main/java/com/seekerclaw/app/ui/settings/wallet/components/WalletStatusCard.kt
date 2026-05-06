@@ -71,7 +71,11 @@ fun WalletStatusCard(
             // Truncated pubkey + tap-to-copy
             Row(
                 modifier = Modifier.clickable {
-                    copyToClipboard(context, fullAddress)
+                    // BAT-582 R1: pass the role through to the clipboard
+                    // label so this composable stays generic — pre-fix it
+                    // hard-coded "burner address" but the card is shared
+                    // with the Main wallet preview (and any future role).
+                    copyToClipboard(context, fullAddress, role)
                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 },
                 verticalAlignment = Alignment.CenterVertically,
@@ -103,9 +107,14 @@ fun WalletStatusCard(
     }
 }
 
-private fun copyToClipboard(context: Context, value: String) {
+private fun copyToClipboard(context: Context, value: String, role: String) {
     val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-    cm.setPrimaryClip(ClipData.newPlainText("burner address", value))
+    // Use the role text (e.g. "Burner wallet", "Main wallet") as the clip
+    // label so OS clipboard managers / paste pickers identify which wallet
+    // address was copied. Falls back to "wallet address" if the caller
+    // passed an empty role.
+    val label = if (role.isNotBlank()) "$role address" else "wallet address"
+    cm.setPrimaryClip(ClipData.newPlainText(label, value))
     Toast.makeText(context, "Address copied", Toast.LENGTH_SHORT).show()
 }
 

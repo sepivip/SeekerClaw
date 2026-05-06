@@ -98,6 +98,14 @@ object WalletAmountFormat {
         if (trimmed.contains(',')) return null
         // Reject negatives — caps are non-negative quantities.
         if (trimmed.startsWith('-')) return null
+        // BAT-582 R1: reject leading '+' too. BigDecimal accepts "+0.5"
+        // but Node-side _decimalToAtomic (caps/preflight.js) rejects it
+        // via `^\d+(\.\d+)?$`. Without this guard the Kotlin parser was
+        // strictly more permissive than the Node side — same input would
+        // produce a stored cap on Android but be rejected by Node's
+        // routing math, leaving the cap UI claiming success while the
+        // routing decision silently degrades to 'main'.
+        if (trimmed.startsWith('+')) return null
 
         val bd = try {
             BigDecimal(trimmed)

@@ -1,9 +1,12 @@
 // tests/payment/fixture-loader.js — BAT-582 Phase 6.
 //
-// Reads x402 / pay.sh test fixtures from JSON. Strips the leading `_fixture`
-// metadata object so consumers see only the wire-shape (status, headers,
-// body). Tests can use `loadFixture('paysh-sandbox-402')` for a clean
-// {status, headers, body} object.
+// Reads x402 / pay.sh test fixtures from JSON. Splits the leading
+// `_fixture` metadata object out of the wire-shape (status, headers, body)
+// so consumers can match against either independently. Tests can use
+// `loadFixture('paysh-sandbox-402')` to get `{ wire: <wire-shape>, meta:
+// <fixture metadata or null> }` — `wire` is the {status, headers, body}
+// payload tests assert against; `meta` carries human-readable context
+// (description, source URL, etc.).
 
 'use strict';
 

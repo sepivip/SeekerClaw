@@ -2,6 +2,7 @@ package com.seekerclaw.app.ui.settings.wallet
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.math.BigInteger
 
@@ -64,6 +65,14 @@ class WalletAmountFormatTest {
         assertNull(WalletAmountFormat.parseSolToLamports("-0.05"))
     }
 
+    @Test fun `parseSolToLamports rejects leading plus (parity with Node-side _decimalToAtomic)`() {
+        // BigDecimal accepts "+0.5" but Node's caps/preflight.js
+        // _decimalToAtomic rejects via `^\d+(\.\d+)?$`. Reject in Kotlin
+        // too so cap-config UX is symmetric with Node-side routing math.
+        assertNull(WalletAmountFormat.parseSolToLamports("+1"))
+        assertNull(WalletAmountFormat.parseSolToLamports("+0.05"))
+    }
+
     @Test fun `parseSolToLamports rejects empty and garbage`() {
         assertNull(WalletAmountFormat.parseSolToLamports(""))
         assertNull(WalletAmountFormat.parseSolToLamports("   "))
@@ -98,6 +107,11 @@ class WalletAmountFormatTest {
 
     @Test fun `parseUsdcToMicroUnits rejects negative`() {
         assertNull(WalletAmountFormat.parseUsdcToMicroUnits("-5"))
+    }
+
+    @Test fun `parseUsdcToMicroUnits rejects leading plus (parity with Node)`() {
+        assertNull(WalletAmountFormat.parseUsdcToMicroUnits("+5"))
+        assertNull(WalletAmountFormat.parseUsdcToMicroUnits("+0.10"))
     }
 
     // --- SOL formatting ---
@@ -160,9 +174,12 @@ class WalletAmountFormatTest {
             val out = WalletAmountFormat.formatLamportsToSol(atomic)
             // BigDecimal.equals compares scale too; compareTo compares value.
             // The format may pad zeros (1 -> 1.00), so we want value equality.
-            assert(input.toBigDecimal().compareTo(out.toBigDecimal()) == 0) {
-                "round-trip mismatch on $input -> $out"
-            }
+            // Use JUnit assertTrue (not Kotlin's `assert`, which is disabled
+            // without `-ea` and would silently pass on regression).
+            assertTrue(
+                "round-trip mismatch on $input -> $out",
+                input.toBigDecimal().compareTo(out.toBigDecimal()) == 0,
+            )
         }
     }
 
@@ -176,9 +193,10 @@ class WalletAmountFormatTest {
         for (input in inputs) {
             val atomic = WalletAmountFormat.parseUsdcToMicroUnits(input)!!
             val out = WalletAmountFormat.formatMicroUnitsToUsdc(atomic)
-            assert(input.toBigDecimal().compareTo(out.toBigDecimal()) == 0) {
-                "round-trip mismatch on $input -> $out"
-            }
+            assertTrue(
+                "round-trip mismatch on $input -> $out",
+                input.toBigDecimal().compareTo(out.toBigDecimal()) == 0,
+            )
         }
     }
 

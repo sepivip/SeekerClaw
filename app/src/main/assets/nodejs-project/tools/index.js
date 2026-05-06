@@ -3,6 +3,9 @@
 
 const { log, CHANNEL } = require('../config');
 const channel = require('../channel');
+// BAT-582 R1: BigInt-safe decimal math for monetary values (e.g. DCA total
+// deposit display). Avoids JS Number coercion on user-supplied strings.
+const { _decimalToAtomic } = require('../caps/preflight');
 
 // ── Domain modules ───────────────────────────────────────────────────────────
 
@@ -77,6 +80,66 @@ function numberToDecimalString(n) {
     return n.toFixed(20).replace(/\.?0+$/, '');
 }
 
+// BAT-582 R1: BigInt → decimal string for confirmation-message display.
+// Inverse of caps/preflight's _decimalToAtomic; formats `atomicBig` (BigInt)
+// using `decimals` fractional digits and trims trailing zeros so the
+// confirmation prompt reads "1.5" not "1.500000000". Returns null on
+// non-BigInt input so caller can fall back to a "?" placeholder rather
+// than rendering "[object Object]".
+function _atomicBigIntToDecimal(atomicBig, decimals) {
+    if (typeof atomicBig !== 'bigint') return null;
+    let s = atomicBig.toString();
+    const negative = s.startsWith('-');
+    if (negative) s = s.slice(1);
+    if (s === '0') return '0';
+    const pad = s.padStart(decimals + 1, '0');
+    const head = pad.slice(0, pad.length - decimals);
+    const tail = pad.slice(pad.length - decimals).replace(/0+$/, '');
+    const out = tail.length ? `${head}.${tail}` : head;
+    return negative ? `-${out}` : out;
+}
+
+// BAT-582 R1: BigInt-safe DCA total-deposit math for the confirmation
+// message. amountPerCycle is a user-supplied decimal string; multiplying
+// it by JS Number (`input.amountPerCycle * cycles`) silently produces
+// NaN/precision loss (e.g. "0.1" × 30 = 3.0000000000000004) and on string
+// inputs always yields NaN. We parse to atomic BigInt, multiply by cycles
+// as BigInt, then format back to a clean decimal string for display.
+//
+// Token decimals are derived from the input symbol/mint: SOL → 9 lamports,
+// USDC (or its mainnet mint) → 6 microunits, anything else → null and we
+// fall back to a placeholder. This keeps the confirmation message correct
+// for the 99% case (SOL/USDC DCA) without hard-coding decimals for every
+// possible SPL — that decision belongs in routing / tool execution, not in
+// the confirmation prompt's display string.
+const _SOL_DECIMALS_DISPLAY = 9;
+const _USDC_DECIMALS_DISPLAY = 6;
+const _USDC_MINT_DISPLAY = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+function _decimalsForToken(tokenSymbolOrMint) {
+    if (!tokenSymbolOrMint) return null;
+    const s = String(tokenSymbolOrMint).trim();
+    const lower = s.toLowerCase();
+    if (lower === 'sol' || lower === 'so11111111111111111111111111111111111111112') {
+        return _SOL_DECIMALS_DISPLAY;
+    }
+    if (lower === 'usdc' || s === _USDC_MINT_DISPLAY) {
+        return _USDC_DECIMALS_DISPLAY;
+    }
+    return null;
+}
+function _formatDcaTotalDeposit(amountPerCycle, totalCycles, inputToken) {
+    const decimals = _decimalsForToken(inputToken);
+    if (decimals == null) return '?'; // unknown token decimals — agent will see the per-cycle amount; total is a hint
+    const cyclesBig = (typeof totalCycles === 'number' && Number.isInteger(totalCycles) && totalCycles > 0)
+        ? BigInt(totalCycles) : 30n;
+    const perCycleAtomic = _decimalToAtomic(amountPerCycle, decimals);
+    if (perCycleAtomic == null) return '?';
+    let perCycleBig;
+    try { perCycleBig = BigInt(perCycleAtomic); } catch (_) { return '?'; }
+    const totalBig = perCycleBig * cyclesBig;
+    return _atomicBigIntToDecimal(totalBig, decimals) || '?';
+}
+
 // ── Wire cross-module dependencies ───────────────────────────────────────────
 
 solanaMod._setNumberToDecimalString(numberToDecimalString);
@@ -123,9 +186,19 @@ function formatConfirmationMessage(toolName, input, policyMessage) {
             case 'jupiter_trigger_create':
                 details = `📊 **Create Trigger Order**\n  Sell: ${esc(input.inputAmount)} ${esc(input.inputToken)}\n  For: ${esc(input.outputToken)}\n  Trigger price: ${esc(input.triggerPrice)}`;
                 break;
-            case 'jupiter_dca_create':
-                details = `🔄 **Create DCA Order**\n  ${esc(input.amountPerCycle)} ${esc(input.inputToken)} → ${esc(input.outputToken)}\n  Every: ${esc(input.cycleInterval)}\n  Cycles: ${input.totalCycles != null ? esc(String(input.totalCycles)) : '30 (default)'}\n  Total deposit: ${esc(input.amountPerCycle * (input.totalCycles || 30))} ${esc(input.inputToken)}`;
+            case 'jupiter_dca_create': {
+                // BAT-582 R1: total deposit was previously computed via
+                // `input.amountPerCycle * (input.totalCycles || 30)` — JS
+                // Number multiplication on user-supplied strings produces
+                // NaN, and on big values loses precision. Now BigInt-safe.
+                const totalDeposit = _formatDcaTotalDeposit(
+                    input.amountPerCycle,
+                    input.totalCycles,
+                    input.inputToken,
+                );
+                details = `🔄 **Create DCA Order**\n  ${esc(input.amountPerCycle)} ${esc(input.inputToken)} → ${esc(input.outputToken)}\n  Every: ${esc(input.cycleInterval)}\n  Cycles: ${input.totalCycles != null ? esc(String(input.totalCycles)) : '30 (default)'}\n  Total deposit: ${esc(totalDeposit)} ${esc(input.inputToken)}`;
                 break;
+            }
             default:
                 details = `**${esc(toolName)}**`;
         }

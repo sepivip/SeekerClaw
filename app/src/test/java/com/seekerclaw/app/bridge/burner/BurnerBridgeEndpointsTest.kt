@@ -1,5 +1,6 @@
 package com.seekerclaw.app.bridge.burner
 
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -17,6 +18,19 @@ import org.junit.Test
  * stops accidental key bytes from leaving Android in any response.
  */
 class BurnerBridgeEndpointsTest {
+
+    @After
+    fun tearDown() {
+        // BAT-582 R1: TestEndpointBuilder allocates a tmp dir per
+        // CapEnforcer + JupiterOwnershipEndpoint inside `build()`. Each
+        // test creates its own pair (via `newEndpoints()`), so without
+        // an explicit cleanup the dirs leak across runs and bloat the
+        // OS tmp space. We track them in `TestEndpointBuilder` and
+        // delete here — JUnit 4 calls @After after every @Test (success
+        // OR failure) so cleanup is guaranteed even on assertion
+        // failures.
+        TestEndpointBuilder.cleanupTempDirs()
+    }
 
     private fun newEndpoints(): BurnerBridgeEndpoints {
         // Build via reflection-bypass: use a no-op fake KeyVault +
@@ -164,6 +178,12 @@ class BurnerBridgeEndpointsTest {
  * dependencies, replace this with a Robolectric-backed instance.
  */
 private object TestEndpointBuilder {
+    // BAT-582 R1: track every tmp dir allocated by build() so the test
+    // class's @After can recursively delete them. Without this, every
+    // @Test run leaks two temp dirs (one for caps, one for ownership)
+    // that survive on disk across test runs and bloat the OS tmp space.
+    private val tempDirs = mutableListOf<java.io.File>()
+
     fun build(): BurnerBridgeEndpoints {
         // Use the internal test-only constructor that bypasses the
         // Context-resolving production wiring. NoopKeyVault provides
@@ -178,6 +198,24 @@ private object TestEndpointBuilder {
         )
     }
 
+    fun cleanupTempDirs() {
+        synchronized(tempDirs) {
+            for (dir in tempDirs) {
+                try { dir.deleteRecursively() } catch (_: Exception) { /* best-effort */ }
+            }
+            tempDirs.clear()
+        }
+    }
+
+    private fun newTempDir(prefix: String): java.io.File {
+        val dir = java.io.File.createTempFile(prefix, "").apply {
+            delete()
+            mkdirs()
+        }
+        synchronized(tempDirs) { tempDirs.add(dir) }
+        return dir
+    }
+
     private object NoopKeyVault : com.seekerclaw.app.data.wallet.KeyVault {
         override suspend fun store(id: String, expanded64: ByteArray) = Unit
         override suspend fun signTransaction(id: String, txBytes: ByteArray): ByteArray =
@@ -189,11 +227,8 @@ private object TestEndpointBuilder {
     private fun noopCapEnforcer(): com.seekerclaw.app.data.caps.CapEnforcer {
         // CapEnforcer requires a ReservationLedger which requires a
         // CrossProcessStore. We use the test-only constructor with a
-        // tmp dir.
-        val tmp = java.io.File.createTempFile("scrub-test-caps", "").apply {
-            delete()
-            mkdirs()
-        }
+        // tmp dir tracked via newTempDir() for @After cleanup.
+        val tmp = newTempDir("scrub-test-caps")
         val store = com.seekerclaw.app.util.CrossProcessStore(
             filesDir = tmp,
             fileName = com.seekerclaw.app.data.caps.BurnerCapsState.FILE_NAME,
@@ -206,10 +241,7 @@ private object TestEndpointBuilder {
     }
 
     private fun noopOwnership(): JupiterOwnershipEndpoint {
-        val tmp = java.io.File.createTempFile("scrub-test-own", "").apply {
-            delete()
-            mkdirs()
-        }
+        val tmp = newTempDir("scrub-test-own")
         val store = com.seekerclaw.app.util.CrossProcessStore(
             filesDir = tmp,
             fileName = JupiterOwnershipState.FILE_NAME,
