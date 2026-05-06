@@ -416,6 +416,29 @@ class SeekerClawService : Service() {
         ServiceState.updateStatus(ServiceStatus.RUNNING)
         LogCollector.append("[Service] Claw Engine is now RUNNING")
 
+        // BAT-582 Phase 3: periodic sweep of stale Burner Wallet cap
+        // reservations. Every 30s, any reservation whose expiresAtMs has
+        // passed is auto-released so its committed-to-cap bytes don't
+        // permanently consume the daily window. The coroutine lives on
+        // [scope] (SupervisorJob), so it's cancelled atomically with the
+        // service in onDestroy. CapEnforcer.get() is a process-singleton;
+        // we lazily attach the FileObserver on first sweep call.
+        scope.launch {
+            while (isActive) {
+                try {
+                    com.seekerclaw.app.data.caps.CapEnforcer.get(applicationContext).sweepStale()
+                } catch (e: Exception) {
+                    // Sweep failures should never bring the service down.
+                    // Log and keep going; next iteration retries.
+                    LogCollector.append(
+                        "[Service] Burner cap sweepStale error: ${e.javaClass.simpleName}: ${e.message}",
+                        LogLevel.WARN,
+                    )
+                }
+                delay(30_000L)
+            }
+        }
+
         // Start watchdog
         // Note: Node.js can only start once per process. If it dies,
         // we need to kill this :node process and let Android restart it (START_STICKY).
