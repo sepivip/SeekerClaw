@@ -203,14 +203,27 @@ class AndroidBridge(
                 "/stats/db-summary" -> proxyToNodeStats()
                 "/ping" -> jsonResponse(200, mapOf("status" to "ok", "bridge" to "AndroidBridge"))
                 else -> {
-                    // BAT-582: try burner endpoint dispatch before
-                    // returning 404. dispatch() returns null for
-                    // non-burner URIs so the existing 404 path is
-                    // preserved for everything else.
-                    val burnerResult = burnerEndpoints.dispatch(uri, params)
-                    if (burnerResult != null) {
-                        val scrubbed = burnerEndpoints.scrubResponse(burnerResult.body)
-                        jsonResponse(burnerResult.httpStatus, scrubbed)
+                    // BAT-582: try burner endpoint dispatch before returning 404.
+                    // BAT-582 R2: gate on a cheap URI prefix check before touching
+                    // `burnerEndpoints` so unknown endpoints (typos like /sm or
+                    // /battary) don't force lazy-init of the burner store + its
+                    // FileObserver. The lazy property is supposed to allocate
+                    // only when a real burner request lands; a typo budget that
+                    // tripped initialization defeated that.
+                    val isBurnerUri = uri.startsWith("/burner/") ||
+                            uri.startsWith("/jupiter/order-owner/") ||
+                            uri == "/config/burner-caps"
+                    if (isBurnerUri) {
+                        val burnerResult = burnerEndpoints.dispatch(uri, params)
+                        if (burnerResult != null) {
+                            val scrubbed = burnerEndpoints.scrubResponse(burnerResult.body)
+                            jsonResponse(burnerResult.httpStatus, scrubbed)
+                        } else {
+                            // Prefix matched but dispatch() returned null — should be
+                            // unreachable since the URI list above is the canonical set,
+                            // but treat it as a 404 to stay consistent.
+                            jsonResponse(404, mapOf("error" to "Unknown endpoint: $uri"))
+                        }
                     } else {
                         jsonResponse(404, mapOf("error" to "Unknown endpoint: $uri"))
                     }

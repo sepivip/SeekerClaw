@@ -2867,7 +2867,17 @@ async function chat(chatId, userMessage, options = {}) {
                     const policy = normalizePolicy(getConfirmationPolicy(toolUse.name, toolUse.input, walletState));
 
                     if (policy.policy === 'block') {
-                        result = { error: policy.message || policy.reason || 'Tool blocked by policy.' };
+                        // BAT-582 R2: Preserve the structured {reason, message} shape from
+                        // confirmation/policy.js so the stable error CODE (e.g.
+                        // "burner_cap_exceeded", "agent_pay_missing_max_usdc") flows
+                        // through to the tool result `error` field unchanged. Diagnostics
+                        // and the model see the code in `error` and the human-readable
+                        // explanation in `message` — collapsing them into a single string
+                        // (the v1 shape) loses the stable code.
+                        result = {
+                            error: policy.reason || 'tool_blocked',
+                            message: policy.message || 'Tool blocked by policy.',
+                        };
                         log(`[Confirm] ${toolUse.name} blocked: ${policy.reason || 'unspecified'}`, 'WARN');
                     } else if (policy.policy === 'confirm') {
                         // Rate limit check first (matches v1.0 behavior — confirmable tools
