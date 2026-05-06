@@ -10,7 +10,7 @@ const crypto = require('crypto');
 const {
     workDir, MODEL, resolveActiveModel, PROVIDER, CHANNEL, ANTHROPIC_KEY, OPENAI_KEY, OPENROUTER_KEY, CUSTOM_KEY, CUSTOM_BASE_URL, CUSTOM_FORMAT, OPENROUTER_FALLBACK_MODEL, OPENROUTER_MODEL_CONTEXT, OPENROUTER_FALLBACK_CONTEXT, AUTH_TYPE, OPENAI_AUTH_TYPE,
     REACTION_GUIDANCE, REACTION_NOTIFICATIONS, MEMORY_DIR,
-    CONFIRM_REQUIRED, TOOL_RATE_LIMITS, TOOL_STATUS_MAP,
+    TOOL_RATE_LIMITS, TOOL_STATUS_MAP,
     API_TIMEOUT_RETRIES, API_TIMEOUT_BACKOFF_MS, API_TIMEOUT_MAX_BACKOFF_MS,
     truncateToolResult,
     localTimestamp, localDateStr, log,
@@ -52,6 +52,10 @@ const loopDetector = require('./loop-detector');
 const _reasoningRecovery = require('./reasoning-recovery');
 // BAT-549 R3: fingerprint for sanitized error logging (no raw payloads)
 const { fingerprint: _reasoningFingerprint } = require('./reasoning-redact');
+// BAT-582 Phase 4: dynamic confirmation hook + wallet state collector.
+// Replaces the static CONFIRM_REQUIRED set in config.js.
+const { getConfirmationPolicy, normalizePolicy } = require('./confirmation');
+const { getWalletState } = require('./wallet');
 
 // ── Injected dependencies (set from main.js at startup) ───────────────────
 // These break circular deps and reference things that still live in main.js
@@ -2737,9 +2741,36 @@ async function chat(chatId, userMessage, options = {}) {
                 let result;
 
                 try {
-                    // Confirmation gate: high-impact tools require explicit user YES
-                    if (CONFIRM_REQUIRED.has(toolUse.name)) {
-                        // Rate limit check first
+                    // ────────────────────────────────────────────────────────────────────
+                    // BAT-582 Phase 4: Dynamic confirmation policy hook.
+                    //
+                    // Replaces the v1.0 static CONFIRM_REQUIRED.has(name) check. The
+                    // hook reads wallet state (burner configured? cap fitness? Jupiter
+                    // order ownership?) and returns one of:
+                    //   "none"                                 → dispatch directly
+                    //   { policy: "confirm", message? }        → existing confirmation flow
+                    //   { policy: "block", reason, message }   → return tool error, no dispatch
+                    //
+                    // Regression safety: when burner is unconfigured, the hook returns
+                    // exactly the v1.0 static set's behavior. See BAT-582 v1.4 spec
+                    // "Confirmation policy" + tests/nodejs-project/confirmation-policy.test.js.
+                    // ────────────────────────────────────────────────────────────────────
+                    let walletState;
+                    try {
+                        walletState = await getWalletState(toolUse.name, toolUse.input);
+                    } catch (e) {
+                        // Defensive: degrade to v1.0 baseline on any failure.
+                        walletState = { burnerConfigured: false };
+                        log(`[Confirm] getWalletState failed for ${toolUse.name}: ${e.message}`, 'WARN');
+                    }
+                    const policy = normalizePolicy(getConfirmationPolicy(toolUse.name, toolUse.input, walletState));
+
+                    if (policy.policy === 'block') {
+                        result = { error: policy.message || policy.reason || 'Tool blocked by policy.' };
+                        log(`[Confirm] ${toolUse.name} blocked: ${policy.reason || 'unspecified'}`, 'WARN');
+                    } else if (policy.policy === 'confirm') {
+                        // Rate limit check first (matches v1.0 behavior — confirmable tools
+                        // are also the ones we rate-limit against rapid-fire abuse).
                         const rateLimit = TOOL_RATE_LIMITS[toolUse.name];
                         const lastUse = _deps.lastToolUseTime ? _deps.lastToolUseTime.get(toolUse.name) : undefined;
                         if (rateLimit && lastUse && (Date.now() - lastUse) < rateLimit) {
@@ -2747,8 +2778,10 @@ async function chat(chatId, userMessage, options = {}) {
                             result = { error: `Rate limited: ${toolUse.name} can only be used once per ${rateLimit / 1000}s. Try again in ${waitSec}s.` };
                             log(`[RateLimit] ${toolUse.name} blocked — ${waitSec}s remaining`, 'WARN');
                         } else {
-                            // Ask user for confirmation
-                            const confirmed = await _deps.requestConfirmation(chatId, toolUse.name, toolUse.input);
+                            // Ask user for confirmation. Pass policy.message so dynamic
+                            // surfaces (e.g. wallet_set_caps old → new diff) appear in
+                            // the confirmation card.
+                            const confirmed = await _deps.requestConfirmation(chatId, toolUse.name, toolUse.input, policy.message);
                             if (confirmed) {
                                 const status = deferStatus(chatId, TOOL_STATUS_MAP[toolUse.name]);
                                 try {
@@ -2763,7 +2796,7 @@ async function chat(chatId, userMessage, options = {}) {
                             }
                         }
                     } else {
-                        // Normal tool execution (no confirmation needed)
+                        // policy === "none" — normal tool execution (no confirmation needed).
                         const status = deferStatus(chatId, TOOL_STATUS_MAP[toolUse.name]);
                         try {
                             result = await _deps.executeTool(toolUse.name, toolUse.input, chatId);

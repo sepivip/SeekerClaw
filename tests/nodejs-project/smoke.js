@@ -145,6 +145,7 @@ const SKIP_REASONS = {
     'tools/system.js': 'runs shell commands',
     'tools/telegram.js': 'requires telegram.js',
     'tools/web.js': 'requires web.js caches',
+    'tools/wallet.js': 'requires bridge.js (BAT-582 burner wallet bridge calls)',
     'sql-wasm.js': 'third-party bundle (sql.js)',
     'markdown-it.min.js': 'third-party bundle (markdown-it)',
     'cross-process-store.js': 'requires config-aware filesystem path (BAT-512 store helper, fixture-only)',

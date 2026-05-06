@@ -1,21 +1,37 @@
 #!/usr/bin/env node
-// confirmation-policy.test.js — BAT-582 Phase 1 regression-snapshot test.
+// confirmation-policy.test.js — BAT-582 regression-snapshot test.
 //
 // PURPOSE
 // -------
 // The Phase 4 confirmation hook MUST preserve v1.0 behavior for every
 // existing tool when the burner wallet is unconfigured. This test pins
-// that contract by verifying:
+// that contract.
 //
-//   1. confirmation/policy.js's `V1_STATIC_CONFIRM` is byte-equal to
-//      config.js's live `CONFIRM_REQUIRED` set. If drift, the snapshot
-//      is wrong and the regression guarantee is broken.
+// HISTORY
+//   - Phase 1: snapshot was anchored against the live CONFIRM_REQUIRED set
+//     in config.js (string-parsing the source).
+//   - Phase 4: CONFIRM_REQUIRED was REMOVED from config.js in favor of the
+//     dynamic policy hook. The snapshot in confirmation/policy.js
+//     (V1_STATIC_CONFIRM) is now the source of truth.
 //
-//   2. getConfirmationPolicy(toolName) returns "confirm" for every tool
-//      in the live CONFIRM_REQUIRED set, "none" for tools NOT in it.
-//      This is the v1.0 behavior — Phase 4 replaces the static check
-//      in ai.js with this hook and any divergence here would silently
-//      change which tools require confirmation.
+// WHAT THIS ASSERTS
+// -----------------
+//   1. V1_STATIC_CONFIRM matches the documented v1.0 contract — exactly
+//      these 8 tools (no more, no less). Drift here means we either added
+//      a v1.0-style "always confirm" tool without updating the snapshot,
+//      or removed one without auditing the regression case.
+//
+//   2. getConfirmationPolicy(toolName, {}, { burnerConfigured: false })
+//      returns "confirm" for every tool in V1_STATIC_CONFIRM. This is the
+//      v1.0 behavior — Phase 4 replaced the static check in ai.js with this
+//      hook and any divergence here would silently change which tools
+//      require confirmation.
+//
+//   3. Hook returns "none" for sample non-confirm tools (wallet_status,
+//      memory_save, etc.) when burner is unconfigured.
+//
+//   4. config.js no longer exports CONFIRM_REQUIRED — guards against
+//      accidental re-introduction.
 //
 // HOW TO RUN
 //   node tests/nodejs-project/confirmation-policy.test.js
@@ -24,30 +40,13 @@
 
 'use strict';
 
+const assert = require('assert');
+const fs = require('fs');
 const path = require('path');
 
 const BUNDLE = path.resolve(__dirname, '..', '..', 'app', 'src', 'main', 'assets', 'nodejs-project');
 
-// Read the live set straight from config.js — but DON'T require config.js
-// itself (it has IO + may exit). Parse the source instead.
-const fs = require('fs');
-const configSrc = fs.readFileSync(path.join(BUNDLE, 'config.js'), 'utf8');
-
-// Match the literal `const CONFIRM_REQUIRED = new Set([...])` block.
-// Tolerant to comments and whitespace inside the array.
-const setMatch = configSrc.match(/const\s+CONFIRM_REQUIRED\s*=\s*new\s+Set\(\[([\s\S]*?)\]\)/);
-if (!setMatch) {
-    console.error('FAIL: could not locate CONFIRM_REQUIRED in config.js');
-    process.exit(1);
-}
-
-// Extract quoted strings from the body, ignore comments.
-const body = setMatch[1].replace(/\/\/[^\n]*\n/g, '\n');
-const liveTools = new Set(
-    Array.from(body.matchAll(/['"]([^'"]+)['"]/g)).map((m) => m[1])
-);
-
-const { getConfirmationPolicy, V1_STATIC_CONFIRM } = require(
+const { getConfirmationPolicy, normalizePolicy, V1_STATIC_CONFIRM } = require(
     path.join(BUNDLE, 'confirmation', 'policy')
 );
 
@@ -57,39 +56,72 @@ function fail(msg) {
     failures++;
 }
 
-// 1. Snapshot must equal live set
-const liveSorted = Array.from(liveTools).sort();
+// ── 1. Snapshot matches the documented v1.0 contract ────────────────────────
+//
+// The 8 tools below ARE the v1.0 contract. If you change either side, you
+// must update the contract docs (BAT-582 Phase 4 spec — Confirmation policy)
+// AND walk through the regression case in your PR description.
+const EXPECTED_V1 = [
+    'android_call',
+    'android_camera_capture',
+    'android_location',
+    'android_sms',
+    'jupiter_dca_create',
+    'jupiter_trigger_create',
+    'solana_send',
+    'solana_swap',
+];
 const snapSorted = Array.from(V1_STATIC_CONFIRM).sort();
-if (JSON.stringify(liveSorted) !== JSON.stringify(snapSorted)) {
+if (JSON.stringify(snapSorted) !== JSON.stringify(EXPECTED_V1)) {
     fail(
-        'V1_STATIC_CONFIRM drifts from config.js CONFIRM_REQUIRED.\n' +
-            `  live: ${JSON.stringify(liveSorted)}\n` +
-            `  snap: ${JSON.stringify(snapSorted)}\n` +
-            '  Fix: update confirmation/policy.js V1_STATIC_CONFIRM to match config.js, ' +
-            'OR update config.js CONFIRM_REQUIRED to match the new contract.'
+        'V1_STATIC_CONFIRM does not match the documented v1.0 contract.\n' +
+            `  expected: ${JSON.stringify(EXPECTED_V1)}\n` +
+            `  actual:   ${JSON.stringify(snapSorted)}\n` +
+            '  Fix: update either confirmation/policy.js V1_STATIC_CONFIRM or\n' +
+            '  the EXPECTED_V1 list in this test (and the contract docs).'
     );
 }
 
-// 2. Hook returns "confirm" for every tool in the live set
-for (const tool of liveTools) {
-    const policy = getConfirmationPolicy(tool, {}, { burnerConfigured: false });
-    if (policy !== 'confirm') {
-        fail(`getConfirmationPolicy("${tool}") returned "${policy}", expected "confirm"`);
+// ── 2. Hook returns "confirm" for every v1.0 tool when burner is unconfigured ─
+for (const tool of V1_STATIC_CONFIRM) {
+    const result = normalizePolicy(getConfirmationPolicy(tool, {}, { burnerConfigured: false }));
+    if (result.policy !== 'confirm') {
+        fail(`getConfirmationPolicy("${tool}") returned "${result.policy}", expected "confirm" (no-burner regression case)`);
     }
 }
 
-// 3. Hook returns "none" for some tools NOT in the live set (smoke)
-const sampleNone = ['wallet_status', 'memory_save', 'web_search', 'skill_read'];
+// ── 3. Hook returns "none" for sample non-confirm tools ─────────────────────
+const sampleNone = ['memory_save', 'web_search', 'skill_read', 'session_status'];
 for (const tool of sampleNone) {
-    if (liveTools.has(tool)) continue;
-    const policy = getConfirmationPolicy(tool, {}, { burnerConfigured: false });
-    if (policy !== 'none') {
-        fail(`getConfirmationPolicy("${tool}") returned "${policy}", expected "none"`);
+    if (V1_STATIC_CONFIRM.has(tool)) continue;
+    const result = normalizePolicy(getConfirmationPolicy(tool, {}, { burnerConfigured: false }));
+    if (result.policy !== 'none') {
+        fail(`getConfirmationPolicy("${tool}") returned "${result.policy}", expected "none"`);
     }
+}
+
+// wallet_status is its own special case (always "none" regardless of state).
+{
+    const r = normalizePolicy(getConfirmationPolicy('wallet_status', {}, { burnerConfigured: true }));
+    assert.strictEqual(r.policy, 'none', 'wallet_status must always be "none"');
+}
+
+// ── 4. config.js no longer exports CONFIRM_REQUIRED (guard against regress) ─
+const configSrc = fs.readFileSync(path.join(BUNDLE, 'config.js'), 'utf8');
+// Match a literal `const CONFIRM_REQUIRED = new Set([...])` block.
+// Any active definition (uncommented) would re-introduce static behavior.
+// Comments mentioning CONFIRM_REQUIRED are fine.
+if (/^\s*const\s+CONFIRM_REQUIRED\s*=\s*new\s+Set/m.test(configSrc)) {
+    fail(
+        'config.js re-introduced `const CONFIRM_REQUIRED = new Set(...)`.\n' +
+            '  BAT-582 Phase 4 removed this in favor of confirmation/policy.js\'s\n' +
+            '  dynamic hook. If you need a new "always-confirm" tool, add it to\n' +
+            '  V1_STATIC_CONFIRM in confirmation/policy.js instead.'
+    );
 }
 
 if (failures > 0) {
     console.error(`\n${failures} failure(s).`);
     process.exit(1);
 }
-console.log(`PASS: confirmation policy snapshot matches config.js (${liveTools.size} tools).`);
+console.log(`PASS: confirmation policy regression snapshot (${V1_STATIC_CONFIRM.size} tools, no-burner branch verified, config.js clean).`);

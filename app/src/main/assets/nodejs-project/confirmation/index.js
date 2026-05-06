@@ -4,7 +4,13 @@
 
 'use strict';
 
-const { getConfirmationPolicy: defaultPolicy, V1_STATIC_CONFIRM } = require('./policy');
+const {
+    getConfirmationPolicy: defaultPolicy,
+    normalizePolicy,
+    V1_STATIC_CONFIRM,
+    SOLANA_WRITE_TOOLS,
+    JUPITER_CANCEL_TOOLS,
+} = require('./policy');
 
 let _override = null;
 
@@ -22,7 +28,10 @@ function getConfirmationPolicy(toolName, args, walletState) {
 
 module.exports = {
     getConfirmationPolicy,
+    normalizePolicy,
     setPolicyOverrideForTests,
     clearPolicyOverrideForTests,
     V1_STATIC_CONFIRM,
+    SOLANA_WRITE_TOOLS,
+    JUPITER_CANCEL_TOOLS,
 };
