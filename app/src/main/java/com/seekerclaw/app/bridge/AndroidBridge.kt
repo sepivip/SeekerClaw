@@ -21,6 +21,7 @@ import android.speech.tts.TextToSpeech
 import android.telephony.SmsManager
 import android.util.Log
 import androidx.core.content.ContextCompat
+import com.seekerclaw.app.bridge.burner.BurnerBridgeEndpoints
 import com.seekerclaw.app.camera.CameraCaptureActivity
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.service.SeekerClawService
@@ -67,6 +68,12 @@ class AndroidBridge(
     private var tts: TextToSpeech? = null
     private var ttsReady = false
 
+    // BAT-582: burner endpoints are lazily-built so they don't allocate
+    // their CrossProcessStore (and the FileObserver it attaches) until
+    // the first burner request lands. Most installs never use the
+    // burner — no point eager-initializing.
+    private val burnerEndpoints by lazy { BurnerBridgeEndpoints(context) }
+
     // Per-endpoint rate limiting (thread-safe for NanoHTTPD's thread pool)
     private val rateLimiter = ConcurrentHashMap<String, MutableList<Long>>()
     private val rateLimits = mapOf(
@@ -87,6 +94,18 @@ class AndroidBridge(
         // bursts during Settings edits without throttling normal use.
         "/config/mcp-token" to Pair(30, 60_000L),
         "/service/restart" to Pair(3, 60_000L),
+        // BAT-582: burner endpoints. 30/min per-endpoint is generous for
+        // expected use (one reserve+sign per autonomous tx; one status
+        // poll per chat turn). Throttles a misbehaving caller without
+        // blocking realistic agent loops.
+        "/burner/status" to Pair(60, 60_000L),
+        "/burner/reserve" to Pair(30, 60_000L),
+        "/burner/sign-transaction" to Pair(30, 60_000L),
+        "/burner/sign-and-send" to Pair(30, 60_000L),
+        "/burner/commit" to Pair(60, 60_000L),
+        "/burner/release" to Pair(60, 60_000L),
+        "/config/burner-caps" to Pair(10, 60_000L),
+        "/jupiter/order-owner/set" to Pair(60, 60_000L),
     )
 
     @Synchronized
@@ -178,7 +197,19 @@ class AndroidBridge(
                 "/service/restart" -> handleServiceRestart()
                 "/stats/db-summary" -> proxyToNodeStats()
                 "/ping" -> jsonResponse(200, mapOf("status" to "ok", "bridge" to "AndroidBridge"))
-                else -> jsonResponse(404, mapOf("error" to "Unknown endpoint: $uri"))
+                else -> {
+                    // BAT-582: try burner endpoint dispatch before
+                    // returning 404. dispatch() returns null for
+                    // non-burner URIs so the existing 404 path is
+                    // preserved for everything else.
+                    val burnerResult = burnerEndpoints.dispatch(uri, params)
+                    if (burnerResult != null) {
+                        val scrubbed = burnerEndpoints.scrubResponse(burnerResult.body)
+                        jsonResponse(burnerResult.httpStatus, scrubbed)
+                    } else {
+                        jsonResponse(404, mapOf("error" to "Unknown endpoint: $uri"))
+                    }
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error handling $uri", e)
