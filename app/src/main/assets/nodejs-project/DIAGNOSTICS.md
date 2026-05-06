@@ -552,3 +552,49 @@ grep -i "MCP.*reconcile\|MCP.*Failed to" node_debug.log | tail -20
 2. If the order was actually created from the burner: the cancel still works through main if the main wallet is the same authority (it isn't, in V1 — burner ≠ main pubkey). For now, this means the cancel will fail to authorize at Jupiter; the user must wait for the order to expire OR contact Jupiter support.
 3. Long-term fix: enable the Jupiter ownership write retry queue (Phase 6+ scope).
 
+---
+
+## agent_pay (BAT-582 — x402 client)
+
+### `agent_pay: rejected (non-HTTPS / private IP / non-Solana / non-USDC / demand > max_usdc)`
+**Symptoms:** Tool result `error: "non_https" | "private_ip" | "non_solana_network" | "non_usdc_asset" | "demand_exceeds_max_usdc" | "method_not_get"`.
+**Diagnosis:** Pre-flight or 402-body validation refused the call before any payment was attempted. Each error is a hard V1 boundary:
+- `non_https` — URL must be `https://` (debug builds also accept `http://localhost`)
+- `private_ip` — DNS resolved to a private/loopback IP (10/8, 172.16/12, 192.168/16, 127/8, 169.254/16, ::1, fc00::/7, fe80::/10) — SSRF defense
+- `non_solana_network` — pay.sh requirement `network` field was not `solana`
+- `non_usdc_asset` — pay.sh requirement `asset` was not USDC (mint `EPjFWdd5...`)
+- `demand_exceeds_max_usdc` — server demanded more than the agent's `max_usdc` cap
+- `method_not_get` — V1 only supports GET (no POST/PUT)
+
+**Fix:**
+1. For `demand_exceeds_max_usdc`: re-invoke with a higher `max_usdc` if the user agrees, OR accept the rejection (this is the cap working as designed).
+2. For `non_https` / `private_ip`: this is a security boundary — do not bypass. If the user genuinely wants to call a localhost service from a debug build, ensure NODE_ENV=development is set.
+3. For `non_solana_network` / `non_usdc_asset`: the endpoint isn't compatible with V1. Tell the user "this endpoint requires <network>/<asset>, which agent_pay doesn't support yet (V1 = Solana mainnet USDC only)."
+
+### `agent_pay: response too large` / `agent_pay: timeout`
+**Symptoms:** Tool result `error: "response_too_large"` or `error: "timeout"`.
+**Diagnosis:** V1 caps response body at 1 MB and total request time at 30 s. Either the endpoint streams more than 1 MB or it's slow.
+**Fix:**
+1. For large responses: the endpoint isn't a fit for agent_pay V1. Suggest the user fetch directly via web browser, or escalate to a follow-up ticket if the use case is common.
+2. For timeouts: retry once. If persistent, the endpoint is degraded — wait, OR check connectivity (`grep -i ENOTFOUND node_debug.log | tail -5`).
+
+### `agent_pay: burner not configured`
+**Symptoms:** Tool result `error: "burner_not_configured"`. NO HTTP request to the URL was made.
+**Diagnosis:** agent_pay refuses to fetch when there's no burner wallet; it would have nothing to pay with. /burner/status returned `configured: false`.
+**Fix:** Open SeekerClaw → Settings → Burner Wallet → import a key. Fund the burner with USDC (mainnet). Re-invoke agent_pay.
+
+### `agent_pay: no x402 protocol detected for this response`
+**Symptoms:** Tool result `error: "no_protocol_match"` after a 402 response.
+**Diagnosis:** The endpoint returned 402 but the JSON body didn't match any registered payment-protocol shape (V1 supports pay.sh-style x402 only). Possibilities: a non-x402 paywall (Stripe, custom), an unknown x402 dialect, or a malformed body.
+**Fix:**
+1. Check the response body shape — does it have `accepts: [...]` or `paymentRequirements: [...]` with `scheme: "exact"` and `network: "solana"`?
+2. If it's a different x402 dialect (e.g., Coinbase's variant), V1 doesn't support it — track as a follow-up to commit a fixture for that variant.
+3. If it's a non-x402 paywall, agent_pay can't handle it. Tell the user "this endpoint uses a paywall format I don't support."
+
+### `agent_pay: cap exceeded` (per-tx or daily USDC)
+**Symptoms:** Tool result `error: "burner_cap_exceeded"` mentioning USDC. The 402 demand was within `max_usdc` but exceeded the burner's per-tx or daily USDC cap.
+**Diagnosis:** Two different ceilings: `max_usdc` is the agent-side cap (per-call), `burner.pertx.usdc` and `burner.daily.usdc` are user-controlled caps (per-burner). Both must allow the demand.
+**Fix:**
+1. Run `wallet_status` to show the current caps + remaining daily.
+2. Suggest `wallet_set_caps({per_tx_usdc: "..."})` (always with user confirmation) OR wait for daily reset at 00:00 UTC.
+

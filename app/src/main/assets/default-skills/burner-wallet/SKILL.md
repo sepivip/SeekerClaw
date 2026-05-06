@@ -90,7 +90,7 @@ V1 supports **Solana mainnet only**. Devnet is deferred to V2. Caps + the design
 → `solana_quote` first (always), confirm with user, `solana_swap`. Routing decides; the agent narrates which wallet signed.
 
 **User: "Pay this x402 endpoint"**
-→ `agent_pay` (Phase 6) reads max_usdc the user provided, fetches the 402 challenge, builds a USDC transfer, routes through burner.
+→ `agent_pay(url, max_usdc)` reads the cap the user provided, fetches the 402 challenge, builds a USDC transfer, routes through burner. See **## agent_pay** below.
 
 **User: "What's my burner balance?"**
 → `wallet_status` returns balances + caps + remaining daily for both wallets.
@@ -100,3 +100,49 @@ V1 supports **Solana mainnet only**. Devnet is deferred to V2. Caps + the design
 
 **User: "Cancel my limit order #abc"**
 → `jupiter_trigger_cancel({orderId: "abc"})`. Ownership lookup decides routing — burner-created → silent, main-created → MWA popup. The agent should NOT pick a wallet for cancels; the bridge map is the source of truth.
+
+## agent_pay
+
+**What it does:** `agent_pay(url, max_usdc)` fetches an x402-protected HTTP endpoint and pays the demanded USDC fee from the burner wallet. The flow is: GET → 402 with payment requirements → build USDC transfer → burner signs → retry GET with proof header → return resource. The whole thing is one tool call.
+
+**When to use it:**
+- Paid APIs (pay.sh catalog services, x402-enabled endpoints)
+- Micro-payments for individual data lookups, model inference, premium content
+- Any endpoint that returns 402 Payment Required with x402 v1 payment requirements
+
+**Hard limits (V1):**
+- HTTPS only (debug builds also accept http://localhost for sandbox testing)
+- GET only — no POST, PUT, DELETE
+- Solana mainnet only
+- USDC only (asset must be the canonical USDC mint `EPjFWdd5...`)
+- Single payment per call (no retry chains)
+- Response body capped at 1 MB; total timeout 30 s
+- Refuses if no burner is configured (no fallback to main wallet — agent_pay is burner-only by design)
+
+**How `max_usdc` gates spending:** `max_usdc` is a per-call ceiling expressed as a decimal string (e.g. `"0.10"`). The tool rejects with `demand_exceeds_max_usdc` if the 402 demand exceeds it. This is independent of the burner's per-tx and daily USDC caps — the demand must fit BOTH ceilings.
+
+**What NOT to use it for:**
+- Regular HTTP fetches — use `web_fetch` for unauthenticated content
+- POST / PUT / DELETE — agent_pay is GET-only
+- Authenticated APIs that use Bearer tokens, API keys, or OAuth — agent_pay only handles x402
+- Endpoints that don't speak x402 — if the response isn't 402 with x402 v1 requirements, the tool either returns the resource directly (200) or fails with `no_protocol_match`
+
+**Example:**
+```
+Result: agent_pay(url="https://pay.sh/sandbox/echo", max_usdc="0.10")
+→ returns the API response (status, headers, body) plus a `payment` block with
+  amount_atomic_usdc, recipient, signature, protocol="x402".
+```
+
+**Patterns:**
+
+> User: "Get me the latest data from <pay.sh url>, willing to spend up to 25 cents"
+> → `agent_pay({url: "<url>", max_usdc: "0.25"})`. Tool either returns the resource (success) or a clear error (boundary rejection / cap insufficient / endpoint unreachable).
+
+> User: "Try this paid API: <url>"
+> → Ask: "What's the most you're willing to pay per call?" — never pick a `max_usdc` value yourself; the user controls the ceiling.
+
+> 402 demand > max_usdc:
+> → Tool returns `demand_exceeds_max_usdc`. Tell the user the actual demand and ask whether to retry with a higher cap.
+
+**Diagnostics:** see DIAGNOSTICS.md → "agent_pay" section for the full error catalog (`non_https`, `private_ip`, `non_solana_network`, `non_usdc_asset`, `demand_exceeds_max_usdc`, `response_too_large`, `timeout`, `burner_not_configured`, `no_protocol_match`, `burner_cap_exceeded`).

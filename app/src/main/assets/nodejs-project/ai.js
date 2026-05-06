@@ -680,6 +680,10 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
             lines.push('- **Main** (via MWA) — user\'s wallet. Every action requires their approval popup. Use for large or user-explicit transfers.');
             lines.push('Always name them by role, never paraphrase as "your wallet." Confirmation surfaces explicitly say "Burner wallet" or "Main wallet" — never "your wallet."');
             lines.push('Use `wallet_status` for live balances + remaining caps. Use `wallet_set_caps` to raise/lower caps (always confirms, shows old → new diff).');
+            // BAT-582 Phase 6: agent_pay capability — only mentioned when the burner
+            // is configured (the tool refuses without one, so no point advertising it
+            // when it would just refuse). The user controls max_usdc per call.
+            lines.push('**Paid APIs (x402)**: Use `agent_pay(url, max_usdc)` to fetch x402-protected endpoints (e.g., pay.sh catalog services). Settles in USDC from the **Burner wallet**. Mainnet only, HTTPS GET only. The user controls `max_usdc` per call; the tool rejects if the 402 demand exceeds it.');
         } else {
             lines.push('You have one wallet:');
             lines.push('- **Main** (via MWA) — user\'s wallet. Approval popup required for every action.');

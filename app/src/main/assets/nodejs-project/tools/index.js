@@ -19,6 +19,8 @@ const systemMod   = require('./system');
 const envMod      = require('./env');
 // BAT-582 Phase 4: wallet_status + wallet_set_caps
 const walletMod   = require('./wallet');
+// BAT-582 Phase 6: agent_pay (x402 client)
+const agentPayMod = require('./agent_pay');
 
 // ── Merged TOOLS array ───────────────────────────────────────────────────────
 
@@ -35,6 +37,7 @@ const TOOLS = [
     ...systemMod.tools,
     ...envMod.tools,
     ...walletMod.tools,
+    ...agentPayMod.tools,
 ];
 
 // ── Handler dispatch map ─────────────────────────────────────────────────────
@@ -52,6 +55,7 @@ const handlerMap = Object.assign({},
     systemMod.handlers,
     envMod.handlers,
     walletMod.handlers,
+    agentPayMod.handlers,
 );
 
 // ── Shared state ─────────────────────────────────────────────────────────────
