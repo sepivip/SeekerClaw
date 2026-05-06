@@ -121,9 +121,17 @@ async function getWalletState(toolName, args) {
     }
 
     // 2) For Solana write tools, compute routing decision + cap fitness.
+    //
+    // BAT-582 R3: thread the `status` we already fetched above into routeFor
+    // (and transitively wouldReserve) so the routing branch reuses the same
+    // bridge response instead of issuing 2 more /burner/status round-trips
+    // (one per-tx + one daily). Saves 2 HTTP calls on every Solana write
+    // tool dispatch, which is hot-path territory in ai.js. We pass `status`
+    // even when null/error — wouldReserve interprets that as bridge_unreachable
+    // and fails closed, which matches the live-fetch failure path exactly.
     if (SOLANA_WRITE_TOOLS.has(toolName)) {
         try {
-            const route = await routeFor(toolName, args || {});
+            const route = await routeFor(toolName, args || {}, status);
             state.routingDecision = route.routingDecision;
             state.underCap = route.underCap;
         } catch (_) {

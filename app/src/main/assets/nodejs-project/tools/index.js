@@ -130,8 +130,19 @@ function _decimalsForToken(tokenSymbolOrMint) {
 function _formatDcaTotalDeposit(amountPerCycle, totalCycles, inputToken) {
     const decimals = _decimalsForToken(inputToken);
     if (decimals == null) return '?'; // unknown token decimals — agent will see the per-cycle amount; total is a hint
-    const cyclesBig = (typeof totalCycles === 'number' && Number.isInteger(totalCycles) && totalCycles > 0)
-        ? BigInt(totalCycles) : 30n;
+    // BAT-582 R3: accept numeric strings ("10") in addition to numbers.
+    // The agent (especially via prompt-injected JSON) regularly passes
+    // numeric fields as strings; the previous `typeof === 'number'` check
+    // silently fell through to the 30-cycle default, producing
+    // "Cycles: 10, Total deposit: <30-cycle value>" — a confirmation
+    // message internally inconsistent with what the user reads.
+    let cyclesBig = 30n;
+    if (typeof totalCycles === 'number' && Number.isInteger(totalCycles) && totalCycles > 0) {
+        cyclesBig = BigInt(totalCycles);
+    } else if (typeof totalCycles === 'string' && /^\d+$/.test(totalCycles)) {
+        const n = parseInt(totalCycles, 10);
+        if (n > 0) cyclesBig = BigInt(n);
+    }
     const perCycleAtomic = _decimalToAtomic(amountPerCycle, decimals);
     if (perCycleAtomic == null) return '?';
     let perCycleBig;

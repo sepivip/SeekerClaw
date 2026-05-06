@@ -29,6 +29,11 @@ const CAP_MAP = {
  *
  * @param {string} name - cap name from CAP_MAP
  * @param {string|bigint} atomicAmount - amount in atomic units (lamports / USDC microunits)
+ * @param {object} [statusOverride] - optional pre-fetched /burner/status payload
+ *   (BAT-582 R3). When provided, skips the bridge round-trip and uses this
+ *   object directly. Caller is responsible for passing a fresh status — do
+ *   NOT cache across event-loop ticks. Falls back to a live bridge fetch
+ *   when omitted, preserving existing call sites (agent_pay.js etc.).
  * @returns {Promise<{wouldAllow: boolean, reason?: string}>}
  *
  * NEVER writes cap state. NEVER reserves. Acceptable to be slightly stale —
@@ -39,7 +44,7 @@ const CAP_MAP = {
  * are ownership-gated, do NOT consume principal, and route through the
  * burner without reserving. Negative amounts are still rejected.
  */
-async function wouldReserve(name, atomicAmount) {
+async function wouldReserve(name, atomicAmount, statusOverride) {
     const cap = CAP_MAP[name];
     if (!cap) return { wouldAllow: false, reason: `unknown_cap:${name}` };
 
@@ -51,12 +56,25 @@ async function wouldReserve(name, atomicAmount) {
     }
     if (amt < 0n) return { wouldAllow: false, reason: 'negative_amount' };
 
+    // BAT-582 R3: hot-path optimization. getWalletState() reads /burner/status
+    // ONCE per dispatch and threads the result down through routeFor → here.
+    // When `statusOverride` is provided we skip the bridge call; otherwise
+    // we fetch live (preserves direct callers like agent_pay.js).
+    async function fetchStatus() {
+        if (statusOverride !== undefined) return statusOverride;
+        try {
+            return await androidBridgeCall('/burner/status', {}, 5000);
+        } catch (_) {
+            return null;
+        }
+    }
+
     // BAT-582 Phase 5: zero-amount path for cancels. Still verifies burner is
     // configured (so the cancel can route to a real burner), but skips per-tx
     // and daily window math. The Android side similarly skips reserve for
     // amount=0 (handled in the cancel dispatch path — see wallet/dispatch.js).
     if (amt === 0n) {
-        const status = await androidBridgeCall('/burner/status', {}, 5000);
+        const status = await fetchStatus();
         if (!status || status.error) {
             return { wouldAllow: false, reason: 'bridge_unreachable' };
         }
@@ -66,7 +84,7 @@ async function wouldReserve(name, atomicAmount) {
         return { wouldAllow: true };
     }
 
-    const status = await androidBridgeCall('/burner/status', {}, 5000);
+    const status = await fetchStatus();
     if (!status || status.error) {
         return { wouldAllow: false, reason: 'bridge_unreachable' };
     }
@@ -200,7 +218,21 @@ function _principalForTool(toolName, args) {
         // Conservative: total commitment = amountPerCycle × totalCycles (default 30 per existing tool default)
         const input = a.inputToken;
         const perCycle = a.amountPerCycle;
-        const cycles = (typeof a.totalCycles === 'number' && a.totalCycles > 0) ? a.totalCycles : 30;
+        // BAT-582 R3: accept numeric strings ("10") in addition to numbers.
+        // The agent — especially via prompt-injected JSON — frequently emits
+        // numeric fields as strings. Without this normalization the cap math
+        // silently used the 30-cycle default, under-reporting the actual
+        // committed principal (e.g. agent says totalCycles="10", we'd compute
+        // for 30 cycles and reject borderline-fitting orders, OR worse, the
+        // confirmation message would show "Cycles: 10, Total deposit: <30×>"
+        // and the user approves a number that doesn't match what they see).
+        let cycles = 30;
+        if (typeof a.totalCycles === 'number' && a.totalCycles > 0 && Number.isFinite(a.totalCycles)) {
+            cycles = a.totalCycles;
+        } else if (typeof a.totalCycles === 'string' && /^\d+$/.test(a.totalCycles)) {
+            const n = parseInt(a.totalCycles, 10);
+            if (n > 0) cycles = n;
+        }
         const decimals = _isSol(input) ? SOL_DECIMALS : (_isUsdc(input) ? USDC_DECIMALS : null);
         if (decimals == null) return null;
         const perCycleAtomic = _decimalToAtomic(perCycle, decimals);
@@ -227,6 +259,13 @@ function _principalForTool(toolName, args) {
  *   4. Otherwise routing="burner", underCap=false. Caller (or the
  *      confirmation hook) decides whether to block or fall back to main.
  *
+ * @param {string} toolName
+ * @param {object} args
+ * @param {object} [statusOverride] - optional pre-fetched /burner/status
+ *   payload (BAT-582 R3). Threaded through to wouldReserve so getWalletState
+ *   can fetch /burner/status ONCE and avoid 2 redundant bridge round-trips
+ *   on every Solana write tool dispatch (per-tx + daily). Omitting it
+ *   preserves existing call sites (solana.js routing hints, dispatch.js).
  * @returns {Promise<{
  *     routingDecision: "burner" | "main",
  *     underCap: boolean,
@@ -235,7 +274,7 @@ function _principalForTool(toolName, args) {
  *     reason?: string,
  * }>}
  */
-async function routeFor(toolName, args) {
+async function routeFor(toolName, args, statusOverride) {
     const principal = _principalForTool(toolName, args);
 
     // Non-spending tools or uncapped assets → main path; let MWA handle.
@@ -250,7 +289,7 @@ async function routeFor(toolName, args) {
     }
 
     // Per-tx check.
-    const perTx = await wouldReserve(principal.capName, principal.principalAtomic);
+    const perTx = await wouldReserve(principal.capName, principal.principalAtomic, statusOverride);
     if (!perTx.wouldAllow) {
         // burner_not_configured → main path (no popup needed for main user; MWA handles confirmation).
         if (perTx.reason === 'burner_not_configured') {
@@ -275,7 +314,7 @@ async function routeFor(toolName, args) {
 
     // Daily-cap check (already encodes spent + amt > limit logic).
     if (principal.dailyCapName) {
-        const daily = await wouldReserve(principal.dailyCapName, principal.principalAtomic);
+        const daily = await wouldReserve(principal.dailyCapName, principal.principalAtomic, statusOverride);
         if (!daily.wouldAllow) {
             if (daily.reason === 'burner_not_configured') {
                 return {

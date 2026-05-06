@@ -21,15 +21,21 @@ require.cache[configPath] = {
 };
 
 // Programmable bridge mock — tests overwrite `_burnerStatus` per case.
+// `_bridgeCallCount` lets the BAT-582 R3 statusOverride test count how many
+// /burner/status round-trips routeFor issues with vs. without an override.
 const bridgePath = require.resolve(path.join(BUNDLE, 'bridge.js'));
 let _burnerStatus = { configured: false };
+let _bridgeCallCount = 0;
 require.cache[bridgePath] = {
     id: bridgePath,
     filename: bridgePath,
     loaded: true,
     exports: {
         androidBridgeCall: async (endpoint /* , body */) => {
-            if (endpoint === '/burner/status') return _burnerStatus;
+            if (endpoint === '/burner/status') {
+                _bridgeCallCount++;
+                return _burnerStatus;
+            }
             return {};
         },
     },
@@ -97,6 +103,37 @@ async function check(label, fn) {
             amountPerCycle: '1',
         });
         assert.strictEqual(p.principalAtomic, 30000000n); // 1 × 30 USDC
+    });
+    // BAT-582 R3: same-class sweep — agent-emitted JSON often passes numeric
+    // fields as strings. Without normalization, `typeof '10' !== 'number'`
+    // silently fell through to the 30-cycle default, under-reporting the
+    // committed principal in cap math. Regression contract: numeric strings
+    // must be honored for the totalCycles field.
+    await check('_principalForTool: jupiter_dca_create accepts numeric-string totalCycles="10"', () => {
+        const p = _principalForTool('jupiter_dca_create', {
+            inputToken: 'USDC', outputToken: 'SOL',
+            amountPerCycle: '0.5', totalCycles: '10',
+        });
+        // 0.5 USDC × 10 cycles = 5 USDC = 5_000_000 microunits.
+        // Pre-fix this returned 0.5 × 30 = 15_000_000 (the wrong default).
+        assert.strictEqual(p.principalAtomic, 5000000n,
+            `expected 5_000_000n (10 cycles); got ${p.principalAtomic} — fell through to 30-cycle default?`);
+    });
+    await check('_principalForTool: jupiter_dca_create rejects non-positive numeric strings', () => {
+        // "0" and "-5" should fall through to the 30-cycle default (treated as garbage).
+        const pZero = _principalForTool('jupiter_dca_create', {
+            inputToken: 'USDC', amountPerCycle: '1', totalCycles: '0',
+        });
+        assert.strictEqual(pZero.principalAtomic, 30000000n);
+        const pNeg = _principalForTool('jupiter_dca_create', {
+            inputToken: 'USDC', amountPerCycle: '1', totalCycles: '-5',
+        });
+        assert.strictEqual(pNeg.principalAtomic, 30000000n);
+        // "abc" / "1.5" / "" are also rejected (default to 30).
+        const pBad = _principalForTool('jupiter_dca_create', {
+            inputToken: 'USDC', amountPerCycle: '1', totalCycles: 'abc',
+        });
+        assert.strictEqual(pBad.principalAtomic, 30000000n);
     });
     await check('_principalForTool: jupiter_trigger_create', () => {
         const p = _principalForTool('jupiter_trigger_create', {
@@ -195,6 +232,64 @@ async function check(label, fn) {
         const r = await routeFor('jupiter_trigger_cancel', { orderId: 'abc' });
         assert.strictEqual(r.routingDecision, 'main');
         assert.strictEqual(r.principalAtomic, null);
+    });
+
+    // BAT-582 R3: hot-path optimization. routeFor (and wouldReserve) accept a
+    // `statusOverride` argument that bypasses the /burner/status bridge call.
+    // getWalletState fetches /burner/status ONCE per dispatch and threads the
+    // result down — avoiding 2 redundant round-trips on every Solana write
+    // tool. This is a contract test: the bridge call count must drop to 0
+    // when an override is supplied (vs. 2 without — per-tx + daily checks).
+    await check('routeFor: statusOverride bypasses bridge fetch (saves 2 round-trips)', async () => {
+        _burnerStatus = {
+            configured: true,
+            capPerTxSol: '50000000',
+            capDailySol: '200000000',
+            capPerTxUsdc: '0',
+            capDailyUsdc: '0',
+            spentTodaySol: '0',
+            spentTodayUsdc: '0',
+        };
+
+        // Baseline — no override; routeFor should hit the bridge twice
+        // (per-tx + daily). This pins the pre-fix call count so a future
+        // refactor that accidentally adds extra fetches gets caught.
+        _bridgeCallCount = 0;
+        const noOverride = await routeFor('solana_send', { to: 'X', amount: '0.001' });
+        assert.strictEqual(noOverride.routingDecision, 'burner');
+        assert.strictEqual(_bridgeCallCount, 2,
+            `expected 2 bridge fetches without override; got ${_bridgeCallCount}`);
+
+        // With override — same status payload, but routeFor should make
+        // ZERO bridge calls because both wouldReserve invocations reuse the
+        // override.
+        _bridgeCallCount = 0;
+        const withOverride = await routeFor('solana_send', { to: 'X', amount: '0.001' }, _burnerStatus);
+        assert.strictEqual(withOverride.routingDecision, 'burner');
+        assert.strictEqual(withOverride.underCap, true);
+        assert.strictEqual(_bridgeCallCount, 0,
+            `expected 0 bridge fetches with statusOverride; got ${_bridgeCallCount}`);
+    });
+
+    await check('wouldReserve: statusOverride supports zero-amount path (cancels)', async () => {
+        // Cancels go through wouldReserve with amount=0 — verify the override
+        // works on the zero path too (otherwise getWalletState's hot-path
+        // optimization would silently miss the cancel branch).
+        _bridgeCallCount = 0;
+        const r = await wouldReserve('burner.pertx.sol', '0', { configured: true });
+        assert.strictEqual(r.wouldAllow, true);
+        assert.strictEqual(_bridgeCallCount, 0);
+    });
+
+    await check('wouldReserve: null statusOverride → bridge_unreachable (matches live failure)', async () => {
+        // Defensive contract: passing null/error status (as wallet/index.js
+        // does when the live fetch fails) must produce the same response as
+        // a failed live fetch — not a successful proceed.
+        _bridgeCallCount = 0;
+        const r = await wouldReserve('burner.pertx.sol', '1000', null);
+        assert.strictEqual(r.wouldAllow, false);
+        assert.strictEqual(r.reason, 'bridge_unreachable');
+        assert.strictEqual(_bridgeCallCount, 0);
     });
 
     if (failures > 0) {

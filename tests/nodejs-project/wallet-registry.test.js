@@ -126,6 +126,19 @@ async function check(label, fn) {
         assert.strictEqual(s.creatorRole, 'unknown');
     });
 
+    // BAT-582 R3: /burner/status is fetched ONCE per dispatch. Pre-fix,
+    // getWalletState fetched once for state hydration, then routeFor()
+    // fetched it AGAIN inside both wouldReserve calls — 3 round-trips per
+    // Solana write tool. The fix threads the cached status into routeFor.
+    // Contract: at most ONE /burner/status call regardless of routing branch.
+    await check('getWalletState dispatches /burner/status exactly once for solana_send', async () => {
+        bridgeCalls.length = 0;
+        await getWalletState('solana_send', { to: 'X', amount: '0.001' });
+        const statusCalls = bridgeCalls.filter(c => c.endpoint === '/burner/status');
+        assert.strictEqual(statusCalls.length, 1,
+            `expected exactly 1 /burner/status fetch; got ${statusCalls.length}`);
+    });
+
     if (failures > 0) {
         console.error(`\n${failures} failure(s).`);
         process.exit(1);
