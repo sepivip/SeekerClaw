@@ -85,6 +85,17 @@ const LOAD_TARGETS = [
     // No top-level IO; read calls happen only when `open(workDir)` is
     // invoked by config.js with a real workDir.
     'agent-preferences.js',
+    // BAT-582 (burner wallet): pure interface modules + the registries that
+    // only depend on those interfaces. Anything that requires bridge.js is
+    // listed under SKIP_REASONS instead — bridge.js is itself skipped because
+    // it targets localhost:8765 at module load time via require('./config').
+    'wallet/signer.js',
+    'wallet/wallet.js',
+    'payment/protocol.js',
+    'payment/x402.js',
+    'payment/index.js',
+    'confirmation/policy.js',
+    'confirmation/index.js',
 ];
 
 // Files skipped intentionally. Most modules depend on config.js (which
@@ -138,6 +149,15 @@ const SKIP_REASONS = {
     'markdown-it.min.js': 'third-party bundle (markdown-it)',
     'cross-process-store.js': 'requires config-aware filesystem path (BAT-512 store helper, fixture-only)',
     'runtime-state.js': 'requires workDir to derive filesDir (BAT-513 helper, fixture-only)',
+    // BAT-582 burner wallet — modules that transitively require bridge.js
+    // (which targets localhost:8765) or that hold runtime singletons that
+    // shouldn't be eagerly constructed during smoke.
+    'wallet/burner-signer.js': 'requires bridge.js (Android Bridge HTTP client)',
+    'wallet/mwa-signer.js': 'requires bridge.js (existing /solana/sign endpoint)',
+    'wallet/burner-wallet.js': 'requires burner-signer.js → bridge.js',
+    'wallet/main-wallet.js': 'requires mwa-signer.js → bridge.js',
+    'wallet/index.js': 'singleton registry; requires burner-wallet.js + main-wallet.js',
+    'caps/preflight.js': 'requires bridge.js for /burner/status reads',
 };
 
 const GREEN = '\x1b[32m';
