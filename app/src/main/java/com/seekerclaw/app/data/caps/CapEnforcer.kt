@@ -75,7 +75,14 @@ class CapEnforcer internal constructor(
         atomicAmount: BigInteger,
         ttlMs: Long = 60_000L,
     ): ReserveResult = mutex.withLock {
-        if (atomicAmount <= BigInteger.ZERO) {
+        // BAT-582 Phase 5: zero-amount reservations are valid for cancel
+        // flows (Jupiter trigger/DCA cancel). Cancels are ownership-gated,
+        // not principal-gated, so they don't consume cap state — but they
+        // DO need to verify the burner is configured (the cancel has to
+        // route to a real burner signer). We short-circuit the cap math
+        // and produce a reservationId that commit/release can dispose of.
+        // Negative amounts are still rejected.
+        if (atomicAmount < BigInteger.ZERO) {
             return@withLock ReserveResult.Rejected("invalid_amount")
         }
 
@@ -94,23 +101,29 @@ class CapEnforcer internal constructor(
             return@withLock ReserveResult.Rejected("burner_not_configured")
         }
 
-        if (atomicAmount > perTxCap) {
-            return@withLock ReserveResult.Rejected("over_per_tx_cap")
-        }
+        // Skip per-tx and daily window math for zero-amount cancels —
+        // there's nothing to charge against the cap. We still ran the
+        // perTxCap=null check above so cancels don't slip through on
+        // unconfigured burners.
+        if (atomicAmount > BigInteger.ZERO) {
+            if (atomicAmount > perTxCap) {
+                return@withLock ReserveResult.Rejected("over_per_tx_cap")
+            }
 
-        // Daily cap check: spent_in_window + atomicAmount must be ≤ dailyCap.
-        // dailyCap == 0 means "no daily cap configured" → also treat as
-        // burner_not_configured for the asset (per-tx cap alone isn't
-        // a meaningful spend bound).
-        if (dailyCap == null || dailyCap == BigInteger.ZERO) {
-            return@withLock ReserveResult.Rejected("burner_not_configured")
-        }
+            // Daily cap check: spent_in_window + atomicAmount must be ≤ dailyCap.
+            // dailyCap == 0 means "no daily cap configured" → also treat as
+            // burner_not_configured for the asset (per-tx cap alone isn't
+            // a meaningful spend bound).
+            if (dailyCap == null || dailyCap == BigInteger.ZERO) {
+                return@withLock ReserveResult.Rejected("burner_not_configured")
+            }
 
-        val dailyName = toDailyCapName(name)
-        if (dailyName != null) {
-            val spent = ledger.spentInWindow(dailyName, now)
-            if (spent + atomicAmount > dailyCap) {
-                return@withLock ReserveResult.Rejected("over_daily_cap")
+            val dailyName = toDailyCapName(name)
+            if (dailyName != null) {
+                val spent = ledger.spentInWindow(dailyName, now)
+                if (spent + atomicAmount > dailyCap) {
+                    return@withLock ReserveResult.Rejected("over_daily_cap")
+                }
             }
         }
 

@@ -477,3 +477,78 @@ grep -i "MCP.*reconcile\|MCP.*Failed to" node_debug.log | tail -20
 1. The cleartext loopback fix (`ee29727`) repaired this path — pre-fix, `[NodeControlClient] reconcile failed: Cleartext HTTP not permitted` was silent and fell through to "next service start picks up the change."
 2. If reconcile is still failing post-`ee29727`: stop and restart the agent — the next service start reads `mcp_servers.json` fresh and connects all enabled servers via the normal startup path.
 3. If a specific server keeps failing in `[MCP] Failed to (re)connect`: verify the URL and auth in Settings → MCP Servers. Test reachability with `curl -I <server-url>` if it has a public health endpoint.
+
+---
+
+## Burner Wallet (BAT-582)
+
+### `burner: invalid key format`
+**Symptoms:** Burner setup screen rejects the pasted key with "invalid key format."
+**Diagnosis:** `KeyImporter` could not parse the input as base58 OR a JSON byte array of length 32 or 64 bytes. Common causes: trailing whitespace, extra characters, wrong format (e.g., a hex string), wrong length (the wallet exported a 33-byte compressed key instead of a 32-byte seed).
+**Fix:**
+1. Re-export the key from the source wallet (Phantom: Settings → Security → Reveal Secret Recovery Phrase → derive specific account).
+2. Strip whitespace; ensure the value is base58 OR a `[1, 2, …, 64]` JSON array.
+3. If the source provides only a seed phrase (12/24 words), use a wallet's "export private key" feature — SeekerClaw does not derive from mnemonics in V1.
+
+### `burner: invalid keypair (pubkey/seed mismatch)`
+**Symptoms:** Burner setup rejects a 64-byte expanded key with "pubkey mismatch."
+**Diagnosis:** The trailing 32 bytes of the expanded key don't match the public key derived from the leading 32-byte seed. The key is corrupted or was assembled incorrectly.
+**Fix:** Re-export from the source wallet. If the issue persists, switch to importing only the 32-byte seed (SeekerClaw will derive the public half itself).
+
+### `burner: cap exceeded (per-tx)`
+**Symptoms:** Tool result includes `error: "burner_cap_exceeded"` or `over_per_tx_cap`. Agent tells the user "this is over your burner per-tx cap."
+**Diagnosis:** The principal (lamports for SOL, microunits for USDC) of the tx exceeds the configured `capPerTxSol` / `capPerTxUsdc`.
+**Fix:**
+1. Use `wallet_set_caps` to raise the per-tx cap (confirmation popup shows old → new diff).
+2. Or pass `_allowMainFallback: true` in the tool args to retry through the main MWA wallet (popup required).
+3. Or split the spend into smaller chunks if appropriate.
+
+### `burner: cap exceeded (daily, X remaining, resets at HH:MM UTC)`
+**Symptoms:** Tool result includes `over_daily_cap`. Agent should report remaining daily allowance.
+**Diagnosis:** `spentTodaySol + atomicAmount > capDailySol` (or USDC equivalent). The 24-hour window resets at 00:00 UTC.
+**Fix:**
+1. Wait for the daily reset (00:00 UTC).
+2. Raise the daily cap via `wallet_set_caps`.
+3. Use the main wallet (popup) for the over-cap portion.
+
+### `burner: no burner configured`
+**Symptoms:** `wallet_status` returns `burner: null`. Tools route to main MWA path with confirmation popup. Bridge calls return `burner_not_configured`.
+**Diagnosis:** No private key has been imported yet; the burner is in the "single-wallet" baseline mode.
+**Fix:** Open SeekerClaw → Settings → Burner Wallet → import a key. Until then, every tool routes through MWA exactly like v1.0.
+
+### `burner: tx unsupported`
+**Symptoms:** `/burner/sign-transaction` returns one of:
+- `unsupported_tx_format` — the bytes aren't a recognizable Solana legacy or v0 tx
+- `burner_not_required_signer` — the burner pubkey is not in the required-signers list
+- `additional_signers_required` — there are other required signers who haven't signed yet (V1 only supports single-signer or pre-signed-by-others)
+- `bogus_shortvec` — compact-u16 length encoding is malformed
+**Diagnosis:** The Jupiter Ultra / Trigger / Recurring API returned an unexpected tx shape, OR the tool built a tx with the wrong signer. Most common in development when adding a new flow.
+**Fix:**
+1. Check `node_debug.log` for `[Jupiter ...] Tx verified` lines preceding the failure.
+2. Verify the tool is passing the correct signer pubkey to the Jupiter API (`maker` / `payer` / `user` field).
+3. Re-fetch the order — Jupiter Ultra payloads have ~2 min TTL; an expired payload re-served from cache could mismatch.
+
+### `burner: reservation expired (tx took longer than 60s)`
+**Symptoms:** `/burner/sign-transaction` returns `reservation_expired`. The reservation TTL elapsed before signing happened.
+**Diagnosis:** Default reservation TTL is 60s. Signing should be near-instant; if it took longer, something blocked the sign path (heavy GC, bridge stall).
+**Fix:**
+1. Retry the operation — the agent's tool-use loop will request a fresh reservation.
+2. If recurrent, check device load — is another foreground app starving the :node process?
+3. Android's periodic sweep auto-releases stale reservations every 30s, so daily spend isn't burned.
+
+### `burner: bridge unreachable (Node ↔ Android)`
+**Symptoms:** Tool result `error: "bridge_unreachable"` or `Android Bridge unavailable`. /burner/* calls fail at the HTTP transport.
+**Diagnosis:** AndroidBridge HTTP server (localhost:8765) isn't responding. Either the foreground service isn't running, the bridge port is blocked, or the auth token is wrong.
+**Fix:**
+1. Check `grep -i "Android Bridge" node_debug.log | tail -20`.
+2. Open the Dashboard in SeekerClaw — is the agent showing GREEN? If RED/yellow, restart the agent from Settings → Service Control.
+3. If persistent: stop and start the SeekerClawService. The bridge initializes on service start.
+
+### Jupiter ownership map missed a write
+**Symptoms:** Cancel-tool returns `creatorRole: "unknown"` for an order created via SeekerClaw on this device.
+**Diagnosis:** `/jupiter/order-owner/set` failed AFTER the create succeeded. Per contract, the create is not unwound — the order is real on-chain — but the cancel falls back to the "unknown → main + confirm + diagnostic" path.
+**Fix:**
+1. Confirm the user wants to cancel via main wallet (MWA popup).
+2. If the order was actually created from the burner: the cancel still works through main if the main wallet is the same authority (it isn't, in V1 — burner ≠ main pubkey). For now, this means the cancel will fail to authorize at Jupiter; the user must wait for the order to expire OR contact Jupiter support.
+3. Long-term fix: enable the Jupiter ownership write retry queue (Phase 6+ scope).
+

@@ -33,6 +33,11 @@ const CAP_MAP = {
  *
  * NEVER writes cap state. NEVER reserves. Acceptable to be slightly stale —
  * Android is the final gate at /burner/reserve and /burner/sign-* time.
+ *
+ * BAT-582 Phase 5: an atomicAmount of 0 is allowed and short-circuits to
+ * wouldAllow=true after burner-configured check. Cancels (jupiter_*_cancel)
+ * are ownership-gated, do NOT consume principal, and route through the
+ * burner without reserving. Negative amounts are still rejected.
  */
 async function wouldReserve(name, atomicAmount) {
     const cap = CAP_MAP[name];
@@ -44,7 +49,22 @@ async function wouldReserve(name, atomicAmount) {
     } catch (_) {
         return { wouldAllow: false, reason: 'invalid_atomic_amount' };
     }
-    if (amt <= 0n) return { wouldAllow: false, reason: 'non_positive_amount' };
+    if (amt < 0n) return { wouldAllow: false, reason: 'negative_amount' };
+
+    // BAT-582 Phase 5: zero-amount path for cancels. Still verifies burner is
+    // configured (so the cancel can route to a real burner), but skips per-tx
+    // and daily window math. The Android side similarly skips reserve for
+    // amount=0 (handled in the cancel dispatch path — see wallet/dispatch.js).
+    if (amt === 0n) {
+        const status = await androidBridgeCall('/burner/status', {}, 5000);
+        if (!status || status.error) {
+            return { wouldAllow: false, reason: 'bridge_unreachable' };
+        }
+        if (!status.configured) {
+            return { wouldAllow: false, reason: 'burner_not_configured' };
+        }
+        return { wouldAllow: true };
+    }
 
     const status = await androidBridgeCall('/burner/status', {}, 5000);
     if (!status || status.error) {

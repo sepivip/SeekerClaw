@@ -158,6 +158,7 @@ const SKIP_REASONS = {
     'wallet/burner-wallet.js': 'requires burner-signer.js → bridge.js',
     'wallet/main-wallet.js': 'requires mwa-signer.js → bridge.js',
     'wallet/index.js': 'singleton registry; requires burner-wallet.js + main-wallet.js',
+    'wallet/dispatch.js': 'requires bridge.js + caps/preflight (BAT-582 Phase 5 routing helper)',
     'caps/preflight.js': 'requires bridge.js for /burner/status reads',
 };
 

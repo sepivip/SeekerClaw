@@ -99,6 +99,8 @@ class BurnerBridgeEndpointsTest {
             "reservationId" to "uuid",
             "signedTxBase64" to "AAA=",
             "signature" to "SIG",
+            // BAT-582 Phase 5: /jupiter/order-owner/get response field.
+            "creatorWalletRole" to "burner",
         )
         val scrubbed = ep.scrubResponse(full)
         // Every field survives

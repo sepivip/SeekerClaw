@@ -56,6 +56,12 @@ const { fingerprint: _reasoningFingerprint } = require('./reasoning-redact');
 // Replaces the static CONFIRM_REQUIRED set in config.js.
 const { getConfirmationPolicy, normalizePolicy } = require('./confirmation');
 const { getWalletState } = require('./wallet');
+// BAT-582 Phase 5: bridge.js for the burner status read used by the system
+// prompt's Wallets section. Cached in _walletPromptSnapshot below — refreshed
+// asynchronously by a kick-off at every buildSystemBlocks call so subsequent
+// turns see live data, while the call itself stays sync (the prompt builder
+// runs on every API call and must not introduce extra round-trips per turn).
+const { androidBridgeCall: _bridgeForWalletSnapshot } = require('./bridge');
 
 // ── Injected dependencies (set from main.js at startup) ───────────────────
 // These break circular deps and reference things that still live in main.js
@@ -75,6 +81,50 @@ function setChatDeps(deps) {
         if (key in _deps) _deps[key] = deps[key];
         else log(`[claude] setChatDeps: unknown key "${key}"`, 'WARN');
     }
+}
+
+// ── BAT-582 Phase 5: burner snapshot cache for system prompt ─────────────
+//
+// buildSystemBlocks() runs synchronously on every API call, so it can't
+// await /burner/status. We cache the last-known status here and trigger
+// an async refresh on every buildSystemBlocks invocation. First-call
+// behavior: snapshot is null → prompt shows "no burner configured" copy.
+// Once a refresh lands (typically <100ms), subsequent prompts include the
+// live pubkey + cap values.
+//
+// Cache lifetime: until the next refresh. Caps + pubkey rarely change
+// (Settings UI edit triggers a /burner/status read elsewhere) so a TTL
+// isn't needed beyond the per-turn refresh.
+let _walletPromptSnapshot = null;     // null until first refresh; { configured, pubkey?, capPerTxSol, ... }
+let _walletPromptRefreshing = false;  // single-flight guard
+
+function _refreshWalletPromptSnapshot() {
+    if (_walletPromptRefreshing) return;
+    _walletPromptRefreshing = true;
+    // Fire-and-forget: bridge call resolves on its own; we just update
+    // the cache and clear the flag. Failures degrade to "no burner
+    // configured" copy, matching v1.0 behavior exactly.
+    _bridgeForWalletSnapshot('/burner/status', {}, 5000)
+        .then((status) => {
+            if (status && !status.error) {
+                _walletPromptSnapshot = status;
+            } else {
+                _walletPromptSnapshot = { configured: false };
+            }
+        })
+        .catch((e) => {
+            log(`[buildSystemBlocks] burner snapshot refresh failed: ${e.message}`, 'WARN');
+            _walletPromptSnapshot = { configured: false };
+        })
+        .finally(() => {
+            _walletPromptRefreshing = false;
+        });
+}
+
+// Test hook — lets unit tests pre-seed the snapshot without spinning up
+// the bridge. Production code never calls this.
+function _setWalletPromptSnapshotForTests(snapshot) {
+    _walletPromptSnapshot = snapshot;
 }
 
 function getProviderApiKey() {
@@ -592,6 +642,53 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
     lines.push('- For simple queries, respond directly without preamble.');
     lines.push('- When uncertain, state your confidence level.');
     lines.push('');
+
+    // BAT-582 Phase 5: Wallets section — agent self-awareness for the
+    // burner + main wallet pair. Reads cached snapshot from
+    // _walletPromptSnapshot (refreshed asynchronously below). When the
+    // snapshot says burner is unconfigured (or hasn't refreshed yet), we
+    // emit the single-wallet copy with a hint about Settings → Burner Wallet.
+    // SAB probe: "what wallets do you have?" should produce both names
+    // with caps + network from this section.
+    _refreshWalletPromptSnapshot();
+    {
+        const snap = _walletPromptSnapshot;
+        const burnerOn = !!(snap && snap.configured);
+
+        // Cap helpers — atomic-string → decimal display ("50000000" → "0.05").
+        const _atomicToDecimal = (atomic, decimals) => {
+            if (atomic == null) return '0';
+            let s;
+            try { s = BigInt(String(atomic)).toString(); } catch (_) { return String(atomic); }
+            if (s === '0') return '0';
+            const pad = s.padStart(decimals + 1, '0');
+            const head = pad.slice(0, pad.length - decimals);
+            const tail = pad.slice(pad.length - decimals).replace(/0+$/, '');
+            return tail.length ? `${head}.${tail}` : head;
+        };
+
+        lines.push('## Wallets');
+        if (burnerOn) {
+            const burnerPub = snap.pubkey || 'pending refresh';
+            const perTxSol = _atomicToDecimal(snap.capPerTxSol, 9);
+            const perTxUsdc = _atomicToDecimal(snap.capPerTxUsdc, 6);
+            const dailySol = _atomicToDecimal(snap.capDailySol, 9);
+            const dailyUsdc = _atomicToDecimal(snap.capDailyUsdc, 6);
+            lines.push('You have two wallets:');
+            lines.push(`- **Burner** (\`${burnerPub}\`, autonomous, capped at ${perTxSol} SOL / ${perTxUsdc} USDC per tx, ${dailySol} SOL / ${dailyUsdc} USDC daily) — yours to spend within caps. No popup.`);
+            lines.push('  Use for small autonomous actions, x402 payments, micro-swaps, price-triggered orders.');
+            lines.push('- **Main** (via MWA) — user\'s wallet. Every action requires their approval popup. Use for large or user-explicit transfers.');
+            lines.push('Always name them by role, never paraphrase as "your wallet." Confirmation surfaces explicitly say "Burner wallet" or "Main wallet" — never "your wallet."');
+            lines.push('Use `wallet_status` for live balances + remaining caps. Use `wallet_set_caps` to raise/lower caps (always confirms, shows old → new diff).');
+        } else {
+            lines.push('You have one wallet:');
+            lines.push('- **Main** (via MWA) — user\'s wallet. Approval popup required for every action.');
+            lines.push('A "burner wallet" — small, app-managed, autonomous within caps — can be configured in Settings → Burner Wallet to enable price-triggered swaps, x402 payments, and recurring DCA without per-tx confirmation popups.');
+            lines.push('Read the burner-wallet skill for details if the user asks. Never claim a burner exists when one isn\'t configured.');
+        }
+        lines.push('Network: Solana mainnet only.');
+        lines.push('');
+    }
 
     // Tooling section - tool schemas are provided via the tools API array;
     // only behavioral guidance here to avoid duplicating ~1,500 tokens of tool descriptions
@@ -3149,4 +3246,8 @@ module.exports = {
     getActiveTask, clearActiveTask,
     // Injection
     setChatDeps,
+    // BAT-582 Phase 5: exposed for tests + parent helpers (buildSystemBlocks
+    // reads cached burner state). Production code never calls these.
+    buildSystemBlocks,
+    _setWalletPromptSnapshotForTests,
 };

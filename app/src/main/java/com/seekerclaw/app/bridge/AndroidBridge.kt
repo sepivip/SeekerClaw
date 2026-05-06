@@ -106,6 +106,11 @@ class AndroidBridge(
         "/burner/release" to Pair(60, 60_000L),
         "/config/burner-caps" to Pair(10, 60_000L),
         "/jupiter/order-owner/set" to Pair(60, 60_000L),
+        // BAT-582 Phase 5: ownership lookup is called once per Jupiter cancel
+        // tool dispatch (and from getWalletState when a cancel tool is the
+        // pending tool). 30/min matches the burner endpoints' steady-state
+        // budget — comfortably above any realistic agent loop.
+        "/jupiter/order-owner/get" to Pair(30, 60_000L),
     )
 
     @Synchronized

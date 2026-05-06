@@ -99,6 +99,8 @@ class BurnerBridgeEndpoints internal constructor(
         "reservationId",
         "signedTxBase64",
         "signature",
+        // BAT-582 Phase 5: /jupiter/order-owner/get response shape.
+        "creatorWalletRole",
     )
 
     /**
@@ -119,6 +121,7 @@ class BurnerBridgeEndpoints internal constructor(
             "/burner/release" -> handleRelease(params)
             "/config/burner-caps" -> handleConfigBurnerCaps(params)
             "/jupiter/order-owner/set" -> handleJupiterOwnershipSet(params)
+            "/jupiter/order-owner/get" -> handleJupiterOwnershipGet(params)
             else -> null
         }
     }
@@ -201,8 +204,13 @@ class BurnerBridgeEndpoints internal constructor(
         } catch (_: Exception) {
             return invalidInput("atomicAmount must be a decimal integer string")
         }
-        if (atomicAmount <= BigInteger.ZERO) {
-            return invalidInput("atomicAmount must be > 0")
+        // BAT-582 Phase 5: zero-amount reservations are valid for cancel
+        // flows (Jupiter trigger/DCA cancel are ownership-gated, not
+        // principal-gated, so they don't consume cap state). CapEnforcer
+        // skips the cap math when atomicAmount==0 but still verifies the
+        // burner is configured. Negative amounts remain invalid.
+        if (atomicAmount < BigInteger.ZERO) {
+            return invalidInput("atomicAmount must be >= 0")
         }
         if (ttlMs <= 0 || ttlMs > 10 * 60_000L) {
             return invalidInput("ttlMs out of range")
@@ -330,6 +338,34 @@ class BurnerBridgeEndpoints internal constructor(
             if (ok) EndpointResult(200, mapOf("ok" to true))
             else errorResp(500, "ownership_write_failed", "Failed to persist ownership")
         }
+    }
+
+    /**
+     * BAT-582 Phase 5: read ownership for a Jupiter order.
+     *
+     * Body: `{orderId: string}`.
+     * Response: `{creatorWalletRole: "burner" | "main" | null}` — null when
+     * unknown (order never recorded, or was created on another device).
+     * The Node-side caller treats null as "fall back to main + confirm +
+     * diagnostic" per contract v1.4.
+     *
+     * Defense in depth: the response field name `creatorWalletRole` is in
+     * the allowlist; null serializes through JSON normally; this endpoint
+     * never returns key-shaped fields.
+     */
+    private fun handleJupiterOwnershipGet(params: JSONObject): EndpointResult {
+        val orderId = params.optString("orderId", "").trim()
+        if (orderId.isEmpty()) {
+            return invalidInput("orderId required")
+        }
+        val role = jupiterOwnership.get(orderId) // null when unknown
+        // Wrap with JSONObject.NULL so JSONObject(map).toString() preserves
+        // the explicit "creatorWalletRole":null shape — a plain Kotlin null
+        // would be stripped by JSONObject's serializer, breaking the
+        // contract's documented response shape.
+        val body = LinkedHashMap<String, Any?>()
+        body["creatorWalletRole"] = role ?: JSONObject.NULL
+        return EndpointResult(200, body)
     }
 
     // --- helpers ---
