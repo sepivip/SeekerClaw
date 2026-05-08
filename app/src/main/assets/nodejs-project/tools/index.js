@@ -138,10 +138,17 @@ function _formatDcaTotalDeposit(amountPerCycle, totalCycles, inputToken) {
     // message internally inconsistent with what the user reads.
     let cyclesBig = 30n;
     if (typeof totalCycles === 'number' && Number.isInteger(totalCycles) && totalCycles > 0) {
+        // Number path: config/internal callers — assumed within Number.MAX_SAFE_INTEGER
+        // since these values come from user-typed cycle counts (typical max: thousands).
+        // The string path below is the agent-controlled path; that one MUST avoid
+        // any Number round-trip to preserve precision for arbitrarily large digit strings.
         cyclesBig = BigInt(totalCycles);
     } else if (typeof totalCycles === 'string' && /^\d+$/.test(totalCycles)) {
-        const n = parseInt(totalCycles, 10);
-        if (n > 0) cyclesBig = BigInt(n);
+        // BAT-582 R7: convert digit string directly to BigInt — `parseInt` would
+        // truncate to a Number first, losing precision past 2^53-1 and silently
+        // corrupting cap-math for very large totalCycles values.
+        const n = BigInt(totalCycles);
+        if (n > 0n) cyclesBig = n;
     }
     const perCycleAtomic = _decimalToAtomic(amountPerCycle, decimals);
     if (perCycleAtomic == null) return '?';
@@ -304,4 +311,7 @@ module.exports = {
     pendingConfirmations, lastToolUseTime,
     listFilesRecursive, formatBytes,
     setMcpExecuteTool, setFullToolRegistry,
+    // BAT-582 R7: exposed for unit tests — verifies BigInt cycles preservation
+    // for very large totalCycles digit strings (above Number.MAX_SAFE_INTEGER).
+    _formatDcaTotalDeposit,
 };

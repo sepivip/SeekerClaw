@@ -226,18 +226,25 @@ function _principalForTool(toolName, args) {
         // for 30 cycles and reject borderline-fitting orders, OR worse, the
         // confirmation message would show "Cycles: 10, Total deposit: <30×>"
         // and the user approves a number that doesn't match what they see).
-        let cycles = 30;
-        if (typeof a.totalCycles === 'number' && a.totalCycles > 0 && Number.isFinite(a.totalCycles)) {
-            cycles = a.totalCycles;
+        // BAT-582 R7: store cycles as BigInt to preserve precision for very
+        // large digit strings. `parseInt(s, 10)` truncates to a Number first,
+        // losing precision past 2^53-1 — a corrupted `cycles` here gives wrong
+        // cap-math (perCycle × cycles) and either over- or under-charges the
+        // burner's daily/per-tx caps. Number path is config/internal-only and
+        // assumed within Number.MAX_SAFE_INTEGER; string path is agent-controlled
+        // and must round-trip arbitrarily large digit strings safely.
+        let cyclesBig = 30n;
+        if (typeof a.totalCycles === 'number' && a.totalCycles > 0 && Number.isFinite(a.totalCycles) && Number.isInteger(a.totalCycles)) {
+            cyclesBig = BigInt(a.totalCycles);
         } else if (typeof a.totalCycles === 'string' && /^\d+$/.test(a.totalCycles)) {
-            const n = parseInt(a.totalCycles, 10);
-            if (n > 0) cycles = n;
+            const n = BigInt(a.totalCycles);
+            if (n > 0n) cyclesBig = n;
         }
         const decimals = _isSol(input) ? SOL_DECIMALS : (_isUsdc(input) ? USDC_DECIMALS : null);
         if (decimals == null) return null;
         const perCycleAtomic = _decimalToAtomic(perCycle, decimals);
         if (perCycleAtomic == null) return null;
-        const total = perCycleAtomic * BigInt(cycles);
+        const total = perCycleAtomic * cyclesBig;
         return _isSol(input)
             ? { capName: 'burner.pertx.sol',  dailyCapName: 'burner.daily.sol',  principalAtomic: total }
             : { capName: 'burner.pertx.usdc', dailyCapName: 'burner.daily.usdc', principalAtomic: total };
