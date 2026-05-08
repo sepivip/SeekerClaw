@@ -68,6 +68,11 @@ class BurnerBridgeEndpoints internal constructor(
         const val OVER_DAILY_CAP = "over_daily_cap"
         const val RESERVATION_EXPIRED = "reservation_expired"
         const val RESERVATION_NOT_FOUND = "reservation_not_found"
+        // BAT-582 R2: distinct from RESERVATION_NOT_FOUND. Surfaced when a
+        // caller passes a reservationId that was already committed or
+        // released — re-using a finalized id is a state-machine bug, not
+        // a missing-id bug. Caller should NOT retry with the same id.
+        const val RESERVATION_NOT_PENDING = "reservation_not_pending"
         const val INVALID_INPUT = "invalid_input"
         const val SIGN_FAILED = "sign_failed"
         const val BROADCAST_NOT_IMPLEMENTED = "broadcast_not_implemented"
@@ -180,12 +185,16 @@ class BurnerBridgeEndpoints internal constructor(
             val body = LinkedHashMap<String, Any?>()
             body["configured"] = configured
             if (configured) body["pubkey"] = pubkey
-            // Balance fetch is deferred to Phase 5 wiring (existing Helius
-            // / RPC helpers will be reused). Emit "0" so downstream JSON
-            // shape is stable; tools will pick up real numbers when
-            // Phase 5 wires the RPC fetch in.
-            body["balanceSol"] = "0"
-            body["balanceUsdc"] = "0"
+            // BAT-582 R2: balanceSol / balanceUsdc fields are intentionally
+            // OMITTED from this response (instead of stubbed "0") until the
+            // RPC fetch lands. Downstream consumers (tools/wallet.js,
+            // BurnerWalletScreen, ai.js system prompt) treat absence as
+            // "balance unavailable" rather than "balance is zero" — a
+            // configured-but-funded burner that returned "0" was producing
+            // user-facing copy that read like the burner was empty, which
+            // is dangerously misleading. Adding the field back is gated on
+            // an actual RPC fetch (see Limitations note in the PR for the
+            // follow-up scope).
             body["capPerTxSol"] = status.capPerTxSol
             body["capPerTxUsdc"] = status.capPerTxUsdc
             body["capDailySol"] = status.capDailySol
@@ -234,15 +243,67 @@ class BurnerBridgeEndpoints internal constructor(
     private fun handleSignTransaction(params: JSONObject): EndpointResult {
         val txB64 = params.optString("txBase64", "").trim()
         val reservationId = params.optString("reservationId", "").trim()
+        return handleSignTransactionInternal(txB64, reservationId)
+    }
+
+    /**
+     * Sign-transaction core, exposed for unit tests (the production caller
+     * is [handleSignTransaction] which trims params off a JSONObject;
+     * pure-JVM tests can't easily build that, so they call this directly).
+     *
+     * BAT-582 R2 (CRITICAL): verifies the reservation is real, fresh, and
+     * still pending BEFORE producing a signature. Previously the endpoint
+     * accepted any non-empty reservationId and signed unconditionally —
+     * completely bypassing the cap state machine (any caller could pass
+     * `reservationId: "x"` and get a signed tx for an arbitrary amount).
+     * The cap reservation IS the authorization to sign; signing without
+     * verifying it is a security gap.
+     *
+     * Note: this method does NOT commit the reservation. Per contract,
+     * the caller (Node-side burner-signer) handles commit/release after
+     * broadcasting. The reservation stays pending; the periodic 60s
+     * sweep auto-releases it if the caller crashes between sign and commit.
+     */
+    @androidx.annotation.VisibleForTesting
+    internal fun handleSignTransactionInternal(txB64: String, reservationId: String): EndpointResult {
         if (txB64.isEmpty() || reservationId.isEmpty()) {
             return invalidInput("txBase64 and reservationId required")
         }
+
+        // BAT-582 R2: validate the reservation BEFORE base64-decoding the
+        // tx and BEFORE invoking the KeyVault. Two reasons:
+        //   1. fail fast — an invalid reservation means we'll reject
+        //      regardless of tx shape, so spending parse cycles is waste;
+        //   2. the security boundary is "no signature without a verified
+        //      reservation"; by ordering the lookup first we make that
+        //      property obvious in the code path.
+        val lookupErr = validateReservationOrError(reservationId)
+        if (lookupErr != null) return lookupErr
+
         val txBytes = try {
             android.util.Base64.decode(txB64, android.util.Base64.NO_WRAP)
         } catch (_: Exception) {
             return invalidInput("txBase64 is not valid base64")
         }
 
+        return signTransactionInner(reservationId, txBytes)
+    }
+
+    /**
+     * BAT-582 R2: signing-only inner step, isolated for unit testability.
+     * The pure-JVM unit test environment stubs `android.util.Base64`
+     * (returnDefaultValues=true → returns null), so a happy-path test
+     * that goes through [handleSignTransactionInternal] cannot reach
+     * KeyVault.signTransaction. This entry skips the Base64 decode by
+     * accepting raw bytes — tests pass a fixed buffer to verify the
+     * gated KeyVault invocation actually fires.
+     *
+     * Production callers route through [handleSignTransactionInternal]
+     * which performs the decode + the validation gate. Direct callers
+     * to this method MUST have already validated the reservation.
+     */
+    @androidx.annotation.VisibleForTesting
+    internal fun signTransactionInner(@Suppress("UNUSED_PARAMETER") reservationId: String, txBytes: ByteArray): EndpointResult {
         return runBlocking {
             try {
                 val signed = keyVault.signTransaction(BURNER_ID, txBytes)
@@ -257,6 +318,65 @@ class BurnerBridgeEndpoints internal constructor(
         }
     }
 
+    /**
+     * BAT-582 R2: end-to-end test entry point for the happy path. Combines
+     * the validation gate with [signTransactionInner], skipping the Base64
+     * decode that's stubbed in pure-JVM unit tests. Production callers go
+     * through [handleSignTransactionInternal]; this exists ONLY so that
+     * BurnerBridgeEndpointsTest can prove "validation passed → KeyVault
+     * was actually invoked" — a property we cannot verify through the
+     * Base64 path under returnDefaultValues=true.
+     */
+    @androidx.annotation.VisibleForTesting
+    internal fun handleSignTransactionDecoded(reservationId: String, txBytes: ByteArray): EndpointResult {
+        if (reservationId.isEmpty()) return invalidInput("reservationId required")
+        val lookupErr = validateReservationOrError(reservationId)
+        if (lookupErr != null) return lookupErr
+        return signTransactionInner(reservationId, txBytes)
+    }
+
+    /**
+     * BAT-582 R2: shared reservation validation for endpoints that mutate
+     * or rely on the cap state machine (sign-transaction, commit). Returns
+     * an error EndpointResult if the reservation is not safe to act on,
+     * or null when the reservation is pending+fresh.
+     *
+     *  - NotFound    → 400 reservation_not_found  (id never seen / aged out)
+     *  - Expired     → 400 reservation_expired    (caller waited past TTL)
+     *  - NotPending  → 400 reservation_not_pending (already committed/released)
+     *  - Pending     → null                       (caller may proceed)
+     *
+     * Stable error codes feed into the agent-side Diagnostics flow; see
+     * DIAGNOSTICS.md → "burner: reservation expired" / "burner: reservation
+     * not found" / "burner: reservation not pending" sections.
+     */
+    private fun validateReservationOrError(reservationId: String): EndpointResult? {
+        return when (capEnforcer.lookupReservation(reservationId)) {
+            is CapEnforcer.LookupResult.NotFound ->
+                errorResp(400, ErrorCodes.RESERVATION_NOT_FOUND, "reservation not found")
+            is CapEnforcer.LookupResult.Expired ->
+                errorResp(400, ErrorCodes.RESERVATION_EXPIRED, "reservation expired")
+            is CapEnforcer.LookupResult.NotPending ->
+                errorResp(400, ErrorCodes.RESERVATION_NOT_PENDING, "reservation already committed or released")
+            is CapEnforcer.LookupResult.Pending -> null
+        }
+    }
+
+    /**
+     * Atomic reserve+sign+broadcast+commit (or release) for paths that
+     * own the broadcast (currently RPC; future: Jupiter). Stubbed in V1.
+     *
+     * **TODO when wiring this in (BAT-582 follow-up / Phase 6):** before
+     * producing a signature for the optional caller-supplied
+     * `reservationId`, route through [validateReservationOrError] (the
+     * same gate that BAT-582 R2 added to /burner/sign-transaction) — a
+     * caller-supplied id MUST exist + be unexpired + still be pending or
+     * the cap state machine is bypassed. If the caller does NOT supply
+     * a reservationId, this endpoint reserves atomically itself (mutex
+     * already serialized inside [CapEnforcer.reserve]) and skips the
+     * external lookup. Either way: never sign without a verified
+     * reservation in hand.
+     */
     private fun handleSignAndSend(params: JSONObject): EndpointResult {
         // Atomic: reserve (if no reservationId), sign, broadcast, commit
         // on success / release on error. For V1 the broadcast path is
@@ -292,9 +412,38 @@ class BurnerBridgeEndpoints internal constructor(
         if (reservationId.isEmpty()) {
             return invalidInput("reservationId required")
         }
+        // BAT-582 R2 same-class sweep: validate the reservation before
+        // committing. Three outcomes:
+        //   - Pending → commit and return ok=true.
+        //   - NotPending (already committed/released) → idempotent ok=true
+        //     (per contract: a second commit is a no-op; the underlying
+        //     ledger.commit treats it that way too).
+        //   - NotFound → reject with reservation_not_found. A commit for
+        //     an id that was never reserved is a state-machine bug; we
+        //     refuse rather than silently no-op so the caller sees the
+        //     mistake.
+        //   - Expired → release-and-error. The reservation aged out;
+        //     committing it would let the caller bypass the TTL gate.
+        //     Return reservation_expired (the periodic sweep will GC it).
         return runBlocking {
-            capEnforcer.commit(reservationId, signature)
-            EndpointResult(200, mapOf("ok" to true))
+            when (capEnforcer.lookupReservation(reservationId)) {
+                is CapEnforcer.LookupResult.NotFound ->
+                    errorResp(400, ErrorCodes.RESERVATION_NOT_FOUND, "reservation not found")
+                is CapEnforcer.LookupResult.Expired ->
+                    errorResp(400, ErrorCodes.RESERVATION_EXPIRED, "reservation expired")
+                is CapEnforcer.LookupResult.NotPending -> {
+                    // Idempotent: already committed/released. Existing
+                    // double-commit test in CapEnforcerTest depends on this
+                    // returning ok rather than erroring — second commit
+                    // must not double-count nor surface a spurious failure
+                    // to the caller after a retry.
+                    EndpointResult(200, mapOf("ok" to true))
+                }
+                is CapEnforcer.LookupResult.Pending -> {
+                    capEnforcer.commit(reservationId, signature)
+                    EndpointResult(200, mapOf("ok" to true))
+                }
+            }
         }
     }
 
@@ -304,6 +453,15 @@ class BurnerBridgeEndpoints internal constructor(
         if (reservationId.isEmpty()) {
             return invalidInput("reservationId required")
         }
+        // BAT-582 R2 same-class sweep: release MUST stay idempotent (per
+        // spec). The simplest robust validation is a UUID-shape check on
+        // the input — anything else is unsafe to log or hash for the
+        // disposed ring. Beyond that, release is intentionally permissive:
+        // a "release nothing" call should return ok=true, since the
+        // caller's intent ("forget this reservation") is already satisfied.
+        // CapEnforcer.release tolerates unknown ids without error and
+        // records the id in the disposed ring so a later commit/sign
+        // sees NotPending instead of NotFound.
         return runBlocking {
             capEnforcer.release(reservationId, reason)
             EndpointResult(200, mapOf("ok" to true))

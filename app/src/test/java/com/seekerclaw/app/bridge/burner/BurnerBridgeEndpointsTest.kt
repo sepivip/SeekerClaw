@@ -1,11 +1,13 @@
 package com.seekerclaw.app.bridge.burner
 
+import com.seekerclaw.app.data.caps.CapEnforcer
+import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.math.BigInteger
 
 /**
  * Pure-JVM tests for the response allowlist + scrubber on
@@ -168,6 +170,157 @@ class BurnerBridgeEndpointsTest {
         assertEquals(1, scrubbed.size)
         assertEquals(true, scrubbed["ok"])
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // BAT-582 R2: /burner/sign-transaction reservation-validation gate
+    //
+    // The CRITICAL security finding from PR #364 R2: the endpoint accepted
+    // any non-empty reservationId and produced a signature unconditionally,
+    // bypassing the cap state machine entirely. These tests verify the
+    // four lookup outcomes — NotFound, Expired, NotPending, Pending — each
+    // map to the right error code (or to a sign attempt for the happy path).
+    //
+    // Why the tests live HERE and not in CapEnforcerTest: CapEnforcer.lookupReservation
+    // has its own lookup-shape tests in CapEnforcerTest. THIS file's tests
+    // cover the bridge integration: that handleSignTransactionInternal
+    // actually CALLS the lookup before signing, and that the error codes
+    // surface correctly through the ErrorCodes vocabulary.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `sign-transaction with unknown reservationId returns reservation_not_found`() = runBlocking {
+        val (ep, _, recorder) = TestEndpointBuilder.buildWithRealCapEnforcer()
+        // Pre-fix bug: this would have signed for arbitrary input.
+        val res = ep.handleSignTransactionInternal(
+            txB64 = "AAA=",
+            reservationId = "totally-fake-id",
+        )
+        assertEquals("must reject pre-sign with 400", 400, res.httpStatus)
+        assertEquals(BurnerBridgeEndpoints.ErrorCodes.RESERVATION_NOT_FOUND, res.body["error"])
+        assertNull("must NOT produce signedTxBase64 on validation failure", res.body["signedTxBase64"])
+        assertEquals("KeyVault.signTransaction must NOT be invoked", 0, recorder.signCount)
+    }
+
+    @Test
+    fun `sign-transaction with expired reservation returns reservation_expired`() = runBlocking {
+        val (ep, enforcer, recorder) = TestEndpointBuilder.buildWithRealCapEnforcer(clockTickMs = 0L)
+        // Configure caps so reserve will succeed.
+        enforcer.setCaps(capPerTxSol = "100000000", capDailySol = "1000000000")
+        val r = enforcer.reserve("burner.daily.sol", BigInteger("50000000"), ttlMs = 60_000)
+        val resId = (r as CapEnforcer.ReserveResult.Ok).reservationId
+
+        // Advance the clock past the TTL — the lookup must see Expired.
+        TestEndpointBuilder.advanceTestClock(70_000)
+
+        val res = ep.handleSignTransactionInternal(
+            txB64 = "AAA=",
+            reservationId = resId,
+        )
+        assertEquals(400, res.httpStatus)
+        assertEquals(BurnerBridgeEndpoints.ErrorCodes.RESERVATION_EXPIRED, res.body["error"])
+        assertNull(res.body["signedTxBase64"])
+        assertEquals("KeyVault must NOT sign for expired reservation", 0, recorder.signCount)
+    }
+
+    @Test
+    fun `sign-transaction with already-committed reservation returns reservation_not_pending`() = runBlocking {
+        val (ep, enforcer, recorder) = TestEndpointBuilder.buildWithRealCapEnforcer()
+        enforcer.setCaps(capPerTxSol = "100000000", capDailySol = "1000000000")
+        val r = enforcer.reserve("burner.daily.sol", BigInteger("50000000"))
+        val resId = (r as CapEnforcer.ReserveResult.Ok).reservationId
+
+        // Commit it — disposed-id ring now records this id as finalized.
+        enforcer.commit(resId, signature = null)
+
+        val res = ep.handleSignTransactionInternal(
+            txB64 = "AAA=",
+            reservationId = resId,
+        )
+        assertEquals(400, res.httpStatus)
+        assertEquals(
+            BurnerBridgeEndpoints.ErrorCodes.RESERVATION_NOT_PENDING,
+            res.body["error"]
+        )
+        assertNull(res.body["signedTxBase64"])
+        assertEquals("KeyVault must NOT sign a committed reservation", 0, recorder.signCount)
+    }
+
+    @Test
+    fun `sign-transaction with already-released reservation returns reservation_not_pending`() = runBlocking {
+        val (ep, enforcer, recorder) = TestEndpointBuilder.buildWithRealCapEnforcer()
+        enforcer.setCaps(capPerTxSol = "100000000", capDailySol = "1000000000")
+        val r = enforcer.reserve("burner.daily.sol", BigInteger("50000000"))
+        val resId = (r as CapEnforcer.ReserveResult.Ok).reservationId
+
+        // Release it — disposed-id ring records this id as finalized too.
+        enforcer.release(resId, "test-release")
+
+        val res = ep.handleSignTransactionInternal(
+            txB64 = "AAA=",
+            reservationId = resId,
+        )
+        assertEquals(400, res.httpStatus)
+        assertEquals(
+            BurnerBridgeEndpoints.ErrorCodes.RESERVATION_NOT_PENDING,
+            res.body["error"]
+        )
+        assertEquals("KeyVault must NOT sign a released reservation", 0, recorder.signCount)
+    }
+
+    @Test
+    fun `sign-transaction with pending unexpired reservation reaches the signer`() = runBlocking {
+        val (ep, enforcer, recorder) = TestEndpointBuilder.buildWithRealCapEnforcer()
+        enforcer.setCaps(capPerTxSol = "100000000", capDailySol = "1000000000")
+        val r = enforcer.reserve("burner.daily.sol", BigInteger("50000000"))
+        val resId = (r as CapEnforcer.ReserveResult.Ok).reservationId
+
+        // Use the decoded entry point — the Base64 decode in the public
+        // handler is stubbed in pure-JVM tests (returnDefaultValues=true
+        // → returns null), so we'd never reach the KeyVault to verify the
+        // sign call. signTransactionDecoded skips the decode and runs
+        // identical validation + signing. This proves "validation passes
+        // → KeyVault.signTransaction is invoked exactly once".
+        val res = ep.handleSignTransactionDecoded(
+            reservationId = resId,
+            txBytes = ByteArray(8) { 0x01.toByte() },
+        )
+
+        assertEquals(
+            "KeyVault.signTransaction must be invoked exactly once for a pending+fresh reservation",
+            1,
+            recorder.signCount,
+        )
+        // No reservation-validation error code on the happy path.
+        val errCode = res.body["error"] as String?
+        if (errCode != null) {
+            assertNotEquals(
+                BurnerBridgeEndpoints.ErrorCodes.RESERVATION_NOT_FOUND,
+                errCode,
+            )
+            assertNotEquals(
+                BurnerBridgeEndpoints.ErrorCodes.RESERVATION_EXPIRED,
+                errCode,
+            )
+            assertNotEquals(
+                BurnerBridgeEndpoints.ErrorCodes.RESERVATION_NOT_PENDING,
+                errCode,
+            )
+        }
+    }
+
+    @Test
+    fun `sign-transaction missing fields still fails before reservation lookup`() = runBlocking {
+        val (ep, _, recorder) = TestEndpointBuilder.buildWithRealCapEnforcer()
+        val res1 = ep.handleSignTransactionInternal(txB64 = "", reservationId = "anything")
+        assertEquals(400, res1.httpStatus)
+        assertEquals(BurnerBridgeEndpoints.ErrorCodes.INVALID_INPUT, res1.body["error"])
+
+        val res2 = ep.handleSignTransactionInternal(txB64 = "AAA=", reservationId = "")
+        assertEquals(400, res2.httpStatus)
+        assertEquals(BurnerBridgeEndpoints.ErrorCodes.INVALID_INPUT, res2.body["error"])
+
+        assertEquals("KeyVault never invoked when args are malformed", 0, recorder.signCount)
+    }
 }
 
 /**
@@ -184,6 +337,12 @@ private object TestEndpointBuilder {
     // that survive on disk across test runs and bloat the OS tmp space.
     private val tempDirs = mutableListOf<java.io.File>()
 
+    // BAT-582 R2: shared mutable clock for sign-transaction tests that
+    // need to age reservations past TTL. Each call to buildWithRealCapEnforcer
+    // resets it to a known epoch; advanceTestClock() bumps it forward.
+    @Volatile
+    private var testClockMs: Long = 0L
+
     fun build(): BurnerBridgeEndpoints {
         // Use the internal test-only constructor that bypasses the
         // Context-resolving production wiring. NoopKeyVault provides
@@ -196,6 +355,49 @@ private object TestEndpointBuilder {
             capEnforcer = noopCapEnforcer(),
             jupiterOwnership = noopOwnership(),
         )
+    }
+
+    /**
+     * BAT-582 R2: build the endpoints with a REAL CapEnforcer + a
+     * recording KeyVault, so sign-transaction validation tests can
+     * exercise the actual reserve/commit/release/lookup state machine.
+     *
+     * The third tuple element is the [RecordingKeyVault] — tests use it
+     * to assert "signTransaction was (or was not) called", which is the
+     * canonical proof that the validation gate either passed or short-
+     * circuited as expected.
+     *
+     * [clockTickMs] is the initial epoch for the cap enforcer's clock;
+     * tests then call [advanceTestClock] to age reservations past TTL.
+     */
+    fun buildWithRealCapEnforcer(
+        clockTickMs: Long = 1_700_000_000_000L,
+    ): Triple<BurnerBridgeEndpoints, com.seekerclaw.app.data.caps.CapEnforcer, RecordingKeyVault> {
+        testClockMs = clockTickMs
+        val tmpCaps = newTempDir("signtx-caps")
+        val capStore = com.seekerclaw.app.util.CrossProcessStore(
+            filesDir = tmpCaps,
+            fileName = com.seekerclaw.app.data.caps.BurnerCapsState.FILE_NAME,
+            serializer = com.seekerclaw.app.data.caps.BurnerCapsState.serializer(),
+            initial = com.seekerclaw.app.data.caps.BurnerCapsState(),
+        )
+        val ledger = com.seekerclaw.app.data.caps.ReservationLedger(capStore)
+        val enforcer = com.seekerclaw.app.data.caps.CapEnforcer(
+            ledger = ledger,
+            clock = { testClockMs },
+        )
+        val keyVault = RecordingKeyVault()
+        val ep = BurnerBridgeEndpoints(
+            keyVault = keyVault,
+            capEnforcer = enforcer,
+            jupiterOwnership = noopOwnership(),
+        )
+        return Triple(ep, enforcer, keyVault)
+    }
+
+    /** Advance the shared test clock by [deltaMs] for currently-running test. */
+    fun advanceTestClock(deltaMs: Long) {
+        testClockMs += deltaMs
     }
 
     fun cleanupTempDirs() {
@@ -220,6 +422,29 @@ private object TestEndpointBuilder {
         override suspend fun store(id: String, expanded64: ByteArray) = Unit
         override suspend fun signTransaction(id: String, txBytes: ByteArray): ByteArray =
             throw NotImplementedError()
+        override suspend fun getPubkey(id: String): String? = null
+        override suspend fun wipe(id: String) = Unit
+    }
+
+    /**
+     * BAT-582 R2: KeyVault that counts how many times signTransaction is
+     * invoked. Tests assert the count to prove the validation gate either
+     * blocked or admitted the request as intended. signTransaction
+     * returns a fixed byte array (so the success path doesn't trip
+     * null-checks); the actual signature bytes are not inspected.
+     */
+    class RecordingKeyVault : com.seekerclaw.app.data.wallet.KeyVault {
+        @Volatile var signCount: Int = 0
+            private set
+
+        override suspend fun store(id: String, expanded64: ByteArray) = Unit
+        override suspend fun signTransaction(id: String, txBytes: ByteArray): ByteArray {
+            signCount++
+            // Return fake "signed" bytes — base64 encoding is stubbed in
+            // unit tests (returnDefaultValues=true) so the exact contents
+            // don't matter for the assertion-by-call-count strategy.
+            return ByteArray(64) { 0xAB.toByte() }
+        }
         override suspend fun getPubkey(id: String): String? = null
         override suspend fun wipe(id: String) = Unit
     }

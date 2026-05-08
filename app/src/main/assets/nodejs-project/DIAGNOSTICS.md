@@ -548,6 +548,24 @@ grep -i "MCP.*reconcile\|MCP.*Failed to" node_debug.log | tail -20
 2. If recurrent, check device load — is another foreground app starving the :node process?
 3. Android's periodic sweep auto-releases stale reservations every 30s, so daily spend isn't burned.
 
+### `burner: reservation not found`
+**Symptoms:** `/burner/sign-transaction` or `/burner/commit` returns `reservation_not_found`. Caller passed a reservationId that the cap state machine has never seen (or that aged out of the in-memory disposed-id ring).
+**Diagnosis:** Most common cause is a code bug: a caller forged a reservationId or held one across a process restart (the disposed-id ring is process-local). Could also happen if a very old id was retried after the ring evicted it (bound: 1024 most recent ids).
+**Fix:**
+1. Always go through `/burner/reserve` to mint an id, then immediately use it for sign + commit/release. Never reuse ids across operations.
+2. If the bug is in a tool: trace the lifecycle of the reservationId through your code path. Per contract, the issuer of `/burner/reserve` is the same caller that does `/burner/sign-transaction` + commit/release.
+3. BAT-582 R2 added this validation. Pre-R2, sign-transaction would silently sign without verifying the id — that was a security gap, not a feature.
+
+### `burner: reservation not pending`
+**Symptoms:** `/burner/sign-transaction` returns `reservation_not_pending`. The reservationId was previously committed or released; re-using a finalized id is a state-machine violation.
+**Diagnosis:** Caller is double-spending a reservation OR retrying after a transient error without re-reserving. The cap state machine refuses because either:
+- the id was already committed (the reservation already counted toward daily spend), or
+- the id was already released (the caller already abandoned it).
+**Fix:**
+1. Don't retry sign-transaction with the same id after a successful commit. Reserve a new one.
+2. If you need to retry after a transient error: `/burner/release` the old id (idempotent), then `/burner/reserve` for a fresh attempt.
+3. `/burner/commit` is idempotent in the OTHER direction: a second commit with the same id returns ok=true (no-op). Sign-transaction is intentionally stricter.
+
 ### `burner: bridge unreachable (Node ↔ Android)`
 **Symptoms:** Tool result `error: "bridge_unreachable"` or `Android Bridge unavailable`. /burner/* calls fail at the HTTP transport.
 **Diagnosis:** AndroidBridge HTTP server (localhost:8765) isn't responding. Either the foreground service isn't running, the bridge port is blocked, or the auth token is wrong.

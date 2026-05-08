@@ -38,6 +38,19 @@ class ReservationLedger(
     fun snapshot(): BurnerCapsState = store.read()
 
     /**
+     * Look up a pending reservation by id. Returns null if no reservation
+     * with that id exists in the current pending set (i.e., either it
+     * never existed, or it was already committed/released and removed).
+     *
+     * Caller (CapEnforcer.lookupReservation) layers a "previously disposed"
+     * check on top so /burner/sign-transaction can return a different
+     * error code when the id was committed/released vs. genuinely unknown.
+     */
+    fun findPending(reservationId: String): PendingReservation? {
+        return store.read().pending.firstOrNull { it.id == reservationId }
+    }
+
+    /**
      * Append a new reservation. Caller (CapEnforcer.reserve) holds the
      * mutex AND has already verified the cap math. The transform here
      * is straight append — we don't second-guess the caller.

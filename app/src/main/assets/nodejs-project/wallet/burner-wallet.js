@@ -37,16 +37,23 @@ class BurnerWallet extends Wallet {
     }
 
     /**
-     * Returns balances as atomic-unit strings. Network is mainnet for V1
+     * Returns balances as atomic-unit strings, OR null fields when the
+     * RPC fetch hasn't landed yet (BAT-582 R2 — /burner/status omits
+     * balance fields until the RPC fetch is wired). Callers must treat
+     * null as "unavailable", not "zero". Network is mainnet for V1
      * (per BAT-582 contract); the network field comes from /burner/status
      * for forward-compat.
      */
     async balance() {
         const s = await this._status();
-        if (!s.configured) return { sol: '0', usdc: '0' };
+        if (!s.configured) return { sol: null, usdc: null };
+        // BAT-582 R2: surface null when /burner/status doesn't include
+        // the field. The previous "|| '0'" fallback created the
+        // user-facing bug where a configured-but-funded burner displayed
+        // as "0 SOL, 0 USDC" — caller has to check for null.
         return {
-            sol: String(s.balanceSol || '0'),
-            usdc: String(s.balanceUsdc || '0'),
+            sol:  (s.balanceSol  != null) ? String(s.balanceSol)  : null,
+            usdc: (s.balanceUsdc != null) ? String(s.balanceUsdc) : null,
         };
     }
 

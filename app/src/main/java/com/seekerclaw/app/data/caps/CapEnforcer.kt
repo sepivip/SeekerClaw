@@ -58,6 +58,73 @@ class CapEnforcer internal constructor(
     }
 
     /**
+     * Result of [lookupReservation] used by `/burner/sign-transaction` and
+     * `/burner/commit` to validate the cap state machine BEFORE producing
+     * a signature or counting a spend.
+     *
+     * - [NotFound] — reservation id was never seen, or has aged out of
+     *   the disposed-id ring (treated identically by callers).
+     * - [Expired] — reservation exists in `pending` but its `expiresAtMs`
+     *   has passed; sweep will release it shortly.
+     * - [NotPending] — reservation was previously committed or released;
+     *   re-using the id is a state-machine violation, not a missing-id
+     *   bug. Distinct from NotFound so callers can surface a different
+     *   error code (and so logs distinguish "rotten id" from "wrong id").
+     * - [Pending] — reservation is live and signable.
+     *
+     * BAT-582 R2: gates the sign-transaction endpoint, which previously
+     * accepted any non-empty reservationId and produced a signature
+     * unconditionally — bypassing the cap state machine entirely.
+     */
+    sealed class LookupResult {
+        object NotFound : LookupResult()
+        object Expired : LookupResult()
+        object NotPending : LookupResult()
+        data class Pending(val name: String, val atomicAmount: BigInteger) : LookupResult()
+    }
+
+    /**
+     * In-memory ring of recently-disposed reservation ids (committed or
+     * released). Lets [lookupReservation] return [LookupResult.NotPending]
+     * instead of [LookupResult.NotFound] for ids that have already been
+     * through the state machine. Bounded: capped at [DISPOSED_RING_MAX]
+     * so a long-running process can't grow it without bound. Eviction is
+     * FIFO by insertion order — a caller that re-uses a very old id will
+     * see NotFound rather than NotPending, which is fine: NotFound is the
+     * conservative answer (caller cannot proceed in either case).
+     *
+     * Synchronized on `this` ring instance — the operations are O(1) so
+     * a process-wide lock is cheap. Not persisted across process restarts:
+     * after a restart, callers see NotFound for any id that had been
+     * disposed, which matches the contract (the id was never going to
+     * sign anyway).
+     */
+    private val disposedIds: java.util.LinkedHashSet<String> = java.util.LinkedHashSet()
+
+    private fun rememberDisposed(reservationId: String) {
+        synchronized(disposedIds) {
+            // LinkedHashSet preserves insertion order — re-adding moves
+            // to end. We don't want that: oldest-first eviction is the
+            // intended behavior, so remove-then-add (a no-op if absent).
+            disposedIds.remove(reservationId)
+            disposedIds.add(reservationId)
+            while (disposedIds.size > DISPOSED_RING_MAX) {
+                val oldest = disposedIds.iterator()
+                if (oldest.hasNext()) {
+                    oldest.next()
+                    oldest.remove()
+                } else break
+            }
+        }
+    }
+
+    private fun wasDisposed(reservationId: String): Boolean {
+        synchronized(disposedIds) {
+            return disposedIds.contains(reservationId)
+        }
+    }
+
+    /**
      * Atomic check+reserve. Mutex-guarded so batched tool calls cannot
      * race past the cap. Default TTL is 60s.
      *
@@ -147,11 +214,51 @@ class CapEnforcer internal constructor(
         // caps and storing it would only enlarge the ledger. The
         // parameter is kept on the interface for future audit-log use.
         ledger.commit(reservationId, clock())
+        // BAT-582 R2: record the id in the disposed ring so a later
+        // /burner/sign-transaction or /burner/commit lookup with the
+        // same id distinguishes "already committed" from "never existed".
+        rememberDisposed(reservationId)
     }
 
     /** Idempotent. Releases a reservation without spending it. */
     suspend fun release(reservationId: String, @Suppress("unused") reason: String) {
         ledger.release(reservationId)
+        // BAT-582 R2: track disposed ids (see commit() comment).
+        rememberDisposed(reservationId)
+    }
+
+    /**
+     * BAT-582 R2: validate a reservation before signing.
+     *
+     * Three-way classification:
+     *   - found in pending and not yet expired    → [LookupResult.Pending]
+     *   - found in pending but past expiresAtMs    → [LookupResult.Expired]
+     *   - not in pending and id is in disposed ring → [LookupResult.NotPending]
+     *   - otherwise                                → [LookupResult.NotFound]
+     *
+     * Pure read — does NOT mutate state. The sweep timer auto-releases
+     * expired reservations every 30s; this lookup returns Expired without
+     * forcing a sweep so /burner/sign-transaction can return a stable
+     * error code immediately and the next sweep cycle handles cleanup.
+     *
+     * Must be called BEFORE [com.seekerclaw.app.data.wallet.KeyVault.signTransaction]
+     * by the sign-transaction bridge endpoint — the contract is "the
+     * reservation is the cap state machine's authorization to sign;
+     * signing without one is a security gap".
+     */
+    fun lookupReservation(reservationId: String): LookupResult {
+        val pending = ledger.findPending(reservationId)
+        if (pending != null) {
+            return if (pending.expiresAtMs <= clock()) {
+                LookupResult.Expired
+            } else {
+                val amt = try { BigInteger(pending.atomicAmount) } catch (_: Exception) { BigInteger.ZERO }
+                LookupResult.Pending(name = pending.name, atomicAmount = amt)
+            }
+        }
+        // Not in pending. If we recently disposed of it (commit/release),
+        // surface NotPending — the caller is reusing a finalized id.
+        return if (wasDisposed(reservationId)) LookupResult.NotPending else LookupResult.NotFound
     }
 
     /** Sweep stale reservations (called by periodic timer in service). */
@@ -264,6 +371,17 @@ class CapEnforcer internal constructor(
     }
 
     companion object {
+        /**
+         * Cap on the in-memory disposed-id ring. Sized for "many days of
+         * normal device usage" — the burner is expected to do a few txs
+         * per day, so 1024 is comfortably oversized but still trivial for
+         * memory (~64 KB at 64 bytes per UUID string entry). Aging out
+         * the oldest entries first means a long-running process never
+         * grows this without bound; old ids that age out fall back to
+         * NotFound, which is conservative (callers can't proceed either way).
+         */
+        private const val DISPOSED_RING_MAX = 1024
+
         @Volatile
         private var instance: CapEnforcer? = null
 

@@ -235,6 +235,94 @@ class CapEnforcerTest {
         assertTrue(enforcer.setCaps(capPerTxSol = "1000"))
     }
 
+    // --- BAT-582 R2: lookupReservation ---
+
+    @Test
+    fun `lookupReservation returns NotFound for unknown id`() = runBlocking {
+        val (enforcer, _) = makeEnforcer()
+        val result = enforcer.lookupReservation("never-existed")
+        assertTrue("expected NotFound, got $result", result is CapEnforcer.LookupResult.NotFound)
+    }
+
+    @Test
+    fun `lookupReservation returns Pending for live reservation`() = runBlocking {
+        val (enforcer, _) = makeEnforcer()
+        seedCaps(enforcer, perTxSol = "100000000", dailySol = "200000000")
+        val r = enforcer.reserve("burner.daily.sol", BigInteger("50000000"))
+        val resId = (r as CapEnforcer.ReserveResult.Ok).reservationId
+
+        val result = enforcer.lookupReservation(resId)
+        assertTrue("expected Pending, got $result", result is CapEnforcer.LookupResult.Pending)
+        val pending = result as CapEnforcer.LookupResult.Pending
+        assertEquals("burner.daily.sol", pending.name)
+        assertEquals(BigInteger("50000000"), pending.atomicAmount)
+    }
+
+    @Test
+    fun `lookupReservation returns Expired for past-TTL reservation`() = runBlocking {
+        var now = 1_700_000_000_000L
+        val clock = { now }
+        val (enforcer, _) = makeEnforcer(clock)
+        seedCaps(enforcer, perTxSol = "100000000", dailySol = "200000000")
+        val r = enforcer.reserve("burner.daily.sol", BigInteger("50000000"), ttlMs = 60_000)
+        val resId = (r as CapEnforcer.ReserveResult.Ok).reservationId
+
+        // Advance past TTL — reservation still in pending (sweep hasn't run)
+        // but the lookup must classify it as Expired anyway.
+        now += 70_000
+
+        val result = enforcer.lookupReservation(resId)
+        assertTrue("expected Expired, got $result", result is CapEnforcer.LookupResult.Expired)
+    }
+
+    @Test
+    fun `lookupReservation returns NotPending for committed id`() = runBlocking {
+        val (enforcer, _) = makeEnforcer()
+        seedCaps(enforcer, perTxSol = "100000000", dailySol = "200000000")
+        val r = enforcer.reserve("burner.daily.sol", BigInteger("50000000"))
+        val resId = (r as CapEnforcer.ReserveResult.Ok).reservationId
+        enforcer.commit(resId)
+
+        val result = enforcer.lookupReservation(resId)
+        assertTrue(
+            "expected NotPending after commit, got $result",
+            result is CapEnforcer.LookupResult.NotPending,
+        )
+    }
+
+    @Test
+    fun `lookupReservation returns NotPending for released id`() = runBlocking {
+        val (enforcer, _) = makeEnforcer()
+        seedCaps(enforcer, perTxSol = "100000000", dailySol = "200000000")
+        val r = enforcer.reserve("burner.daily.sol", BigInteger("50000000"))
+        val resId = (r as CapEnforcer.ReserveResult.Ok).reservationId
+        enforcer.release(resId, "test")
+
+        val result = enforcer.lookupReservation(resId)
+        assertTrue(
+            "expected NotPending after release, got $result",
+            result is CapEnforcer.LookupResult.NotPending,
+        )
+    }
+
+    @Test
+    fun `lookupReservation does not mutate state`() = runBlocking {
+        val (enforcer, ledger) = makeEnforcer()
+        seedCaps(enforcer, perTxSol = "100000000", dailySol = "200000000")
+        val r = enforcer.reserve("burner.daily.sol", BigInteger("50000000"))
+        val resId = (r as CapEnforcer.ReserveResult.Ok).reservationId
+        val sizeBefore = ledger.snapshot().pending.size
+
+        enforcer.lookupReservation(resId)
+        enforcer.lookupReservation("another-not-real-id")
+
+        assertEquals(
+            "lookupReservation must NOT mutate the pending ledger",
+            sizeBefore,
+            ledger.snapshot().pending.size,
+        )
+    }
+
     // --- ReservationLedger directly ---
 
     @Test

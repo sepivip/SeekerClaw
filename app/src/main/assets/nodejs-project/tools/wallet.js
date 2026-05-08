@@ -95,6 +95,12 @@ const handlers = {
      * wallet_status — pure read. Reads /burner/status, plus main wallet
      * pubkey + balance from existing helpers. Output schema documented in
      * BAT-582 Phase 4 spec.
+     *
+     * BAT-582 R2: balance fields surface as null + a "balance unavailable"
+     * display string until the RPC fetch is wired (the previous "0"-stub
+     * was misleading: a configured-but-funded burner read like an empty
+     * one). Caps and spend totals are still real numbers — they live in
+     * Android-local state and don't need an RPC fetch.
      */
     async wallet_status(_input, _chatId) {
         // 1) Burner — read /burner/status directly so we can include cap fields.
@@ -108,12 +114,19 @@ const handlers = {
                 const capDailyUsdc = String(status.capDailyUsdc || '0');
                 const spentTodaySol  = String(status.spentTodaySol  || '0');
                 const spentTodayUsdc = String(status.spentTodayUsdc || '0');
+                // BAT-582 R2: /burner/status no longer emits balanceSol /
+                // balanceUsdc until the RPC fetch lands. Use null to mark
+                // "unavailable" rather than fabricating "0" — the agent
+                // and UI both check for null and surface the right copy.
+                const hasSolBalance  = (status.balanceSol  != null);
+                const hasUsdcBalance = (status.balanceUsdc != null);
                 burnerOut = {
                     pubkey: status.pubkey || null,
                     balance: {
-                        sol:  String(status.balanceSol  || '0'),
-                        usdc: String(status.balanceUsdc || '0'),
+                        sol:  hasSolBalance  ? String(status.balanceSol)  : null,
+                        usdc: hasUsdcBalance ? String(status.balanceUsdc) : null,
                     },
+                    balanceAvailable: (hasSolBalance && hasUsdcBalance),
                     spentToday: {
                         sol:  spentTodaySol,
                         usdc: spentTodayUsdc,
@@ -130,8 +143,8 @@ const handlers = {
                     },
                     // Decimal display for human-friendly chat surfaces.
                     display: {
-                        balanceSol:    _atomicToDecimal(status.balanceSol,  SOL_DECIMALS),
-                        balanceUsdc:   _atomicToDecimal(status.balanceUsdc, USDC_DECIMALS),
+                        balanceSol:    hasSolBalance  ? _atomicToDecimal(status.balanceSol,  SOL_DECIMALS) : 'unavailable',
+                        balanceUsdc:   hasUsdcBalance ? _atomicToDecimal(status.balanceUsdc, USDC_DECIMALS) : 'unavailable',
                         capPerTxSol:   _atomicToDecimal(capPerTxSol,  SOL_DECIMALS),
                         capDailySol:   _atomicToDecimal(capDailySol,  SOL_DECIMALS),
                         capPerTxUsdc:  _atomicToDecimal(capPerTxUsdc, USDC_DECIMALS),
