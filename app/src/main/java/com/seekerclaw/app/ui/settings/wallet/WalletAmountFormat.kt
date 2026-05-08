@@ -83,6 +83,28 @@ object WalletAmountFormat {
     private val DECIMAL_RE = Regex("""^[0-9]+(\.[0-9]+)?$""")
 
     /**
+     * BAT-582 R11: input-length cap on the parser to prevent paste-DoS
+     * via the Settings UI. R10 hardened the seven Node-side BigInt-of-
+     * untrusted-string sites with explicit digit-length caps; the same
+     * defense applies here. Without a cap, pasting a multi-MB string
+     * into a SOL/USDC cap field would block the UI thread on the regex
+     * match + BigDecimal allocation (BigDecimal parses are roughly
+     * O(n²) on input length for large strings).
+     *
+     * **Why 40:** the largest realistic atomic-amount input is ~30
+     * characters wide (1 trillion SOL = `1` followed by 12 digits and
+     * 9 fractional digits = 22 chars; we leave headroom). 40 is
+     * generous enough that no user could reasonably hit it and tight
+     * enough that worst-case parser cost is single-digit microseconds.
+     * The Node-side equivalent is `_MAX_ATOMIC_DIGITS_X402 = 30` in
+     * payment/x402.js — we set Kotlin slightly higher because the
+     * Kotlin regex accepts the decimal-point character (the Node-side
+     * `_parseAmountAtomic` rejects fractional input, so its 30-char
+     * cap is digits-only).
+     */
+    private const val MAX_DECIMAL_INPUT_LEN = 40
+
+    /**
      * Decimal SOL string -> lamports BigInteger, or null on parse failure.
      * Accepts forms: "0.5", "0", "1.234567890". Rejects: ".5" (no leading
      * digit), "5." (trailing dot), "1e-9", "0,5", "-1", "+1", "", "abc".
@@ -130,6 +152,13 @@ object WalletAmountFormat {
      * so callers can show a stable error to the user.
      */
     private fun parseDecimalToAtomic(decimal: String, decimals: Int): BigInteger? {
+        // BAT-582 R11: paste-DoS defense. Bail BEFORE the regex — Java's
+        // regex engine is well-behaved on a simple pattern like ours, but
+        // the BigDecimal allocation downstream is O(n²) on input length.
+        // We check `decimal.length` (not `trimmed.length`) so a paste of
+        // 10MB-of-spaces also gets rejected up-front instead of allocating
+        // a giant trim copy first. See [MAX_DECIMAL_INPUT_LEN] for rationale.
+        if (decimal.length > MAX_DECIMAL_INPUT_LEN) return null
         // Trim to match Node's `String(decimal).trim()` behavior in
         // caps/preflight.js#_decimalToAtomic. (Node side does trim, so
         // trimming here is parity, not divergence — verified 2026-05-06.)

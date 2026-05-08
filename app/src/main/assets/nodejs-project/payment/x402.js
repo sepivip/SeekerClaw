@@ -98,6 +98,16 @@ function _decodeSolanaPubkey(s) {
     return decoded;
 }
 
+// BAT-582 R11: pre-decoded buffer constants. Program IDs and the USDC
+// mint are byte-stable strings — base58-decoding them once at module load
+// is dramatically cheaper than re-decoding on every agent_pay call. The
+// hot path (_findAssociatedTokenAddress + _buildUsdcTransferTx) called
+// _base58Decode 4× per payment; with the constants hoisted, only the
+// recipient pubkey + recent blockhash need runtime decoding.
+const _USDC_MINT_BYTES = _base58Decode(USDC_MINT);
+const _TOKEN_PROGRAM_ID_BYTES = _base58Decode(TOKEN_PROGRAM_ID);
+const _ATA_PROGRAM_ID_BYTES = _base58Decode(ASSOCIATED_TOKEN_PROGRAM_ID);
+
 // ── Compact-u16 (shortvec) encoding for tx wire format ───────────────────────
 
 function _encodeCompactU16(n) {
@@ -246,10 +256,11 @@ function _isOnCurve(pubkeyBytes) {
 }
 
 function _findAssociatedTokenAddress(ownerPubkeyBytes, mintPubkeyBytes) {
-    const tokenProgramBytes = _base58Decode(TOKEN_PROGRAM_ID);
-    const associatedTokenProgramBytes = _base58Decode(ASSOCIATED_TOKEN_PROGRAM_ID);
-    const seeds = [ownerPubkeyBytes, tokenProgramBytes, mintPubkeyBytes];
-    return _findProgramAddress(seeds, associatedTokenProgramBytes);
+    // BAT-582 R11: token program + ATA program pubkeys are constants — use
+    // the module-level pre-decoded buffers (see _TOKEN_PROGRAM_ID_BYTES /
+    // _ATA_PROGRAM_ID_BYTES above).
+    const seeds = [ownerPubkeyBytes, _TOKEN_PROGRAM_ID_BYTES, mintPubkeyBytes];
+    return _findProgramAddress(seeds, _ATA_PROGRAM_ID_BYTES);
 }
 
 // ── SPL Token TransferChecked instruction builder ────────────────────────────
@@ -300,8 +311,11 @@ function _buildUsdcTransferTx(burnerPubkey58, recipientPubkey58, amountAtomic, r
     if (!burnerBytes) throw new Error('invalid burner pubkey');
     if (!recipientBytes) throw new Error('invalid recipient pubkey');
 
-    const mintBytes = _base58Decode(USDC_MINT);
-    const tokenProgramBytes = _base58Decode(TOKEN_PROGRAM_ID);
+    // BAT-582 R11: USDC mint + token program pubkeys are constants —
+    // reuse the module-level pre-decoded buffers. Only the per-payment
+    // recent blockhash still needs runtime decoding.
+    const mintBytes = _USDC_MINT_BYTES;
+    const tokenProgramBytes = _TOKEN_PROGRAM_ID_BYTES;
     const blockhashBytes = _base58Decode(recentBlockhash58);
     if (blockhashBytes.length !== 32) throw new Error('invalid blockhash');
 
@@ -454,9 +468,16 @@ async function _fetchRecentBlockhash() {
     if (_blockhashOverride) return _blockhashOverride();
     // Lazy require — solana.js loads config.js.
     const { solanaRpc } = require('../solana');
+    // BAT-582 R11 (CRITICAL): solanaRpc() already unwraps the JSON-RPC
+    // envelope and returns `json.result` (see solana.js:52). The shape we
+    // see HERE is therefore `{context, value: {blockhash, lastValidBlockHeight}}`,
+    // NOT `{result: {context, value: {...}}}`. Earlier code did
+    // `res.result.value.blockhash` and silently returned undefined,
+    // breaking agent_pay end-to-end (could not build the USDC SPL transfer
+    // tx). The expected shape is documented in solana.js#solanaRpcOnce.
     const res = await solanaRpc('getLatestBlockhash', [{ commitment: 'finalized' }]);
     if (!res || res.error) throw new Error(`getLatestBlockhash failed: ${res && res.error ? res.error : 'unknown'}`);
-    const bh = res && res.result && res.result.value && res.result.value.blockhash;
+    const bh = res && res.value && res.value.blockhash;
     if (!bh) throw new Error('getLatestBlockhash response missing blockhash');
     return bh;
 }
@@ -491,9 +512,15 @@ class X402Protocol extends PaymentProtocol {
         if (typeof maxUsdcAtomic !== 'bigint') {
             return { error: 'invalid_input', reason: 'ctx.maxUsdcAtomic must be a BigInt' };
         }
-        const burnerPubkey58 = ws.burnerPubkey || (ws.signerWallet && typeof ws.signerWallet.pubkeySync === 'function' ? ws.signerWallet.pubkeySync() : null);
-        // burnerPubkey is awaited from /burner/status by the caller; make sure
-        // we have it as a string here.
+        // BAT-582 R11: caller passes `ctx.burnerPubkey` (resolved via
+        // `await /burner/status` upstream — see tools/agent_pay.js:472).
+        // We previously fell back to `ctx.signerWallet.pubkeySync()` if
+        // `burnerPubkey` was missing, but the Wallet interface
+        // (wallet/wallet.js) only defines async `pubkey()` — there is no
+        // `pubkeySync` on any implementation. The fallback path was dead
+        // code that would have thrown if exercised. Remove the broken
+        // fallback; require the caller to pass `burnerPubkey` directly.
+        const burnerPubkey58 = ws.burnerPubkey;
         if (typeof burnerPubkey58 !== 'string' || !_decodeSolanaPubkey(burnerPubkey58)) {
             return { error: 'invalid_burner_pubkey', reason: 'burner pubkey not available or invalid' };
         }

@@ -108,6 +108,60 @@ class SolanaTxSignerTest {
         }
     }
 
+    @Test
+    fun `R11 - shortvec rejects 3-byte encoding above 0xFFFF (compact-u16 contract)`() {
+        // BAT-582 R11: the compact-u16 wire format caps values at 0xFFFF
+        // by spec, but a 3-byte encoding has 21 payload bits — there is
+        // physical room for 0x10000..0x1FFFFF. Pre-fix, decodeShortvec
+        // accepted these silently, contradicting the KDoc claim "Values
+        // 0..127 fit in 1 byte; 128..16383 in 2; 16384..65535 in 3".
+        //
+        // For 0x10000 = 65536 (one above the u16 max), the LSB-first 7-bit
+        // payload split is: byte 0 = bits 0..6 = 0; byte 1 = bits 7..13 = 0;
+        // byte 2 = bits 14..20 = 0b0000100 = 4. With continuation bits on
+        // bytes 0 + 1: [0x80, 0x80, 0x04].
+        val encoded = byteArrayOf(0x80.toByte(), 0x80.toByte(), 0x04.toByte())
+        // Reference (pre-R11 lenient) decode would return 0x10000.
+        val refValue = decodeShortvecLikeJs(encoded, 0)
+        assertEquals("reference decoder returns 0x10000 for these bytes", 0x10000, refValue)
+
+        // Production decoder must now REJECT this as bogus_shortvec.
+        try {
+            SolanaTxSigner.decodeShortvec(encoded, 0)
+            fail("Expected SigningException(bogus_shortvec) for value 0x10000 above u16 max")
+        } catch (e: SigningException) {
+            assertEquals("bogus_shortvec", e.code)
+            assertTrue(
+                "error message must mention u16 / 0xFFFF / value: ${e.message}",
+                e.message?.contains("0xFFFF") == true || e.message?.contains("65535") == true,
+            )
+        }
+    }
+
+    @Test
+    fun `R11 - shortvec accepts max u16 value 0xFFFF`() {
+        // Sanity: the boundary case (exactly 0xFFFF) MUST still decode.
+        val encoded = encodeShortvec(0xFFFF)
+        assertEquals("max u16 is 3 bytes", 3, encoded.size)
+        val (value, _) = SolanaTxSigner.decodeShortvec(encoded, 0)
+        assertEquals(0xFFFF, value)
+    }
+
+    @Test
+    fun `R11 - shortvec rejects 3-byte encoding for largest 21-bit value`() {
+        // 0x1FFFFF — the maximum representable in 3 × 7-bit payload bytes.
+        // Pre-fix this would silently decode; post-fix it's rejected.
+        val encoded = byteArrayOf(0xFF.toByte(), 0xFF.toByte(), 0x7F.toByte())
+        val refValue = decodeShortvecLikeJs(encoded, 0)
+        assertEquals("reference decoder returns 0x1FFFFF", 0x1FFFFF, refValue)
+        try {
+            SolanaTxSigner.decodeShortvec(encoded, 0)
+            fail("Expected SigningException for 0x1FFFFF (>u16 max)")
+        } catch (e: SigningException) {
+            assertEquals("bogus_shortvec", e.code)
+        }
+    }
+
     // --- legacy tx parse + sign ---
 
     @Test

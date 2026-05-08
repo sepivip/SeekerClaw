@@ -36,6 +36,15 @@ import java.util.Arrays
  */
 object KeyImporter {
 
+    /**
+     * BAT-582 R11: paste-DoS defense (same-class sweep companion to
+     * [WalletAmountFormat.MAX_DECIMAL_INPUT_LEN]). Legitimate inputs
+     * are ~88 chars (base58 of 64 raw bytes) or ~256 chars (JSON byte
+     * array `[255,255,...]`). 1024 is a generous ceiling that still
+     * bounds the worst-case base58 decode (which is O(n²)).
+     */
+    internal const val MAX_KEY_INPUT_LEN = 1024
+
     sealed class Result {
         data class Ok(val expanded64: ByteArray, val pubkey: ByteArray) : Result()
         data class Err(val code: String, val message: String) : Result()
@@ -57,6 +66,21 @@ object KeyImporter {
      * zeroed before return on every path.
      */
     fun import(input: String): Result {
+        // BAT-582 R11: same-class sweep companion to WalletAmountFormat's
+        // input-length cap. A user-pasted private key is ALWAYS small —
+        // 64 raw bytes serialized as base58 is ~88 chars; as a JSON byte
+        // array it's at most ~256 chars (3-digit + comma per byte).
+        // Reject anything wildly larger than the legitimate ceiling so a
+        // multi-MB paste can't DoS the Settings UI thread on `parseBytes`
+        // (base58 decoding is O(n²) on the input length; JSON array
+        // parsing allocates one Int per comma).
+        //
+        // 1024 is generous (~5x the JSON-array ceiling) but small enough
+        // that base58 decode of even an adversarial input completes in
+        // single-digit microseconds.
+        if (input.length > MAX_KEY_INPUT_LEN) {
+            return Result.Err("invalid_key_length", "Input too large (max $MAX_KEY_INPUT_LEN chars)")
+        }
         val trimmed = input.trim()
         if (trimmed.isEmpty()) {
             return Result.Err("invalid_key_format", "Empty input")

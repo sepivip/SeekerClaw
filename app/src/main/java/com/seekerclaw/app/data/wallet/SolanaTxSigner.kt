@@ -231,6 +231,21 @@ object SolanaTxSigner {
                 if (consumed > 3) {
                     throw SigningException("bogus_shortvec", "shortvec length exceeds 3 bytes")
                 }
+                // BAT-582 R11: enforce the documented compact-u16 range.
+                // A 3-byte encoding can technically hold 21 bits of payload
+                // (3 × 7), which extends to 0x1FFFFF — but the Solana
+                // wire-format spec caps the value at 0xFFFF (u16). Without
+                // this check we silently accept values 0x10000..0x1FFFFF
+                // as valid lengths, which would let a malformed tx claim
+                // an account-key vector of e.g. 0x1FFFFF entries; the
+                // downstream `numAccountKeys > 1024` guard would reject
+                // it later, but only after we've parsed past the bogus
+                // shortvec. Reject here instead so the contract documented
+                // in the KDoc above ("Values 0..127 fit in 1 byte; 128..16383
+                // in 2; 16384..65535 in 3") is enforced byte-for-byte.
+                if (value > 0xFFFF) {
+                    throw SigningException("bogus_shortvec", "compact-u16 value $value exceeds 0xFFFF")
+                }
                 return Pair(value, pos)
             }
             shift += 7

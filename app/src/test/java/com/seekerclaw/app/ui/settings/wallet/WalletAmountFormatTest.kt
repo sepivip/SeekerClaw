@@ -264,4 +264,69 @@ class WalletAmountFormatTest {
         assertEquals(BigInteger("1"), atomic)
         assertEquals("0.00", WalletAmountFormat.formatMicroUnitsToUsdc(atomic))
     }
+
+    // --- BAT-582 R11: paste-DoS defense (input-length cap) ---
+
+    @Test fun `parseSolToLamports rejects oversize paste without allocating BigDecimal`() {
+        // BAT-582 R11: Settings UI inputs that bypass the regex+BigDecimal
+        // path via huge paste must short-circuit early. Pre-fix, a 10K-char
+        // paste would run the regex AND allocate BigDecimal, blocking the
+        // UI thread for many ms.
+        val huge = "1".repeat(10_000)
+        val start = System.nanoTime()
+        val result = WalletAmountFormat.parseSolToLamports(huge)
+        val elapsedMs = (System.nanoTime() - start) / 1_000_000.0
+        assertNull("oversize input must be rejected", result)
+        // Wall-clock budget: must complete in well under 100ms even on a
+        // slow CI runner. Pre-fix this would have spent O(n²) time in
+        // BigDecimal parsing — easily 10ms+ on 10KB input.
+        assertTrue(
+            "DoS cap must short-circuit fast (< 100ms); took ${elapsedMs}ms",
+            elapsedMs < 100,
+        )
+    }
+
+    @Test fun `parseUsdcToMicroUnits rejects oversize paste`() {
+        val huge = "9".repeat(50_000) + ".000001"
+        assertNull(WalletAmountFormat.parseUsdcToMicroUnits(huge))
+    }
+
+    @Test fun `parseDecimalToAtomic accepts inputs at the boundary`() {
+        // 40 chars of digits — at the cap exactly, should still pass the
+        // length gate (will then be rejected by sub-atomic precision /
+        // exact-decimal logic, returning null — the IMPORTANT check is
+        // that we don't bail early on length).
+        // 30 digits + "." + 9 fractional = 40 chars. SOL has 9 decimals
+        // and rejects sub-atomic precision, so this parses to a valid
+        // atomic value.
+        val boundary = "1".repeat(30) + ".000000000"
+        assertEquals(40, boundary.length)
+        // Should parse successfully — 30-digit integer with 9 fractional
+        // zero digits is a valid SOL atomic-amount input.
+        val parsed = WalletAmountFormat.parseSolToLamports(boundary)
+        assertTrue("$boundary should parse at the 40-char boundary", parsed != null)
+    }
+
+    @Test fun `parseDecimalToAtomic rejects one char over the boundary`() {
+        // 41 chars of digits — over cap, must reject without examining content.
+        val overCap = "1".repeat(31) + ".000000000"
+        assertEquals(41, overCap.length)
+        assertNull(WalletAmountFormat.parseSolToLamports(overCap))
+    }
+
+    @Test fun `parseSolToLamports rejects 1MB-of-spaces paste fast`() {
+        // Adversarial: a paste of pure whitespace would trigger
+        // `decimal.trim()` to allocate a giant copy before the empty-check
+        // catches it. The R11 guard checks `decimal.length` BEFORE
+        // trimming so this also short-circuits.
+        val whitespace = " ".repeat(1_000_000)
+        val start = System.nanoTime()
+        val result = WalletAmountFormat.parseSolToLamports(whitespace)
+        val elapsedMs = (System.nanoTime() - start) / 1_000_000.0
+        assertNull(result)
+        assertTrue(
+            "1MB-whitespace paste must short-circuit fast (< 100ms); took ${elapsedMs}ms",
+            elapsedMs < 100,
+        )
+    }
 }

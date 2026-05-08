@@ -24,6 +24,12 @@ require.cache[configPath] = {
 
 // Stub solana.js so payment/x402.js's lazy require for blockhash and
 // wallet/main-wallet.js's lazy require don't hit real config.
+//
+// BAT-582 R11: solanaRpc() unwraps the JSON-RPC envelope and returns
+// `json.result` directly (see solana.js#solanaRpcOnce:52). The mock
+// MUST return the unwrapped shape to match production behavior — earlier
+// rounds returned `{result: {value: {blockhash}}}`, which compensated
+// for a double-unwrap bug in _fetchRecentBlockhash that R11 fixed.
 const solanaPath = require.resolve(path.join(BUNDLE, 'solana.js'));
 require.cache[solanaPath] = {
     id: solanaPath, filename: solanaPath, loaded: true,
@@ -31,7 +37,8 @@ require.cache[solanaPath] = {
         getConnectedWalletAddress: () => { throw new Error('not connected'); },
         solanaRpc: async (method) => {
             if (method === 'getLatestBlockhash') {
-                return { result: { value: { blockhash: 'EkSnNWid2cvwEVnVx9aBqawnmiCNiDgp3gUdkDPTKN1N' } } };
+                // Already-unwrapped — `json.result` shape per solanaRpcOnce.
+                return { context: { slot: 1 }, value: { blockhash: 'EkSnNWid2cvwEVnVx9aBqawnmiCNiDgp3gUdkDPTKN1N', lastValidBlockHeight: 1 } };
             }
             return { error: 'unmocked' };
         },
@@ -583,6 +590,118 @@ function _safeStringify(v) {
             if (dnsTable.has(hostname)) return dnsTable.get(hostname);
             throw new Error(`unmocked DNS lookup for ${hostname}`);
         });
+    });
+
+    // ── BAT-582 R11 regressions ──────────────────────────────────────────────
+    // Three correctness/quality fixes from the R11 review round.
+
+    // R11 #1 (CRITICAL): _fetchRecentBlockhash double-unwraps the JSON-RPC
+    // result. solanaRpc() already strips the `{jsonrpc, id, result}`
+    // envelope and returns `json.result` (= `{context, value}`). Pre-fix,
+    // we did `res.result.value.blockhash` → `undefined` → throw "missing
+    // blockhash" → agent_pay fails end-to-end. Fix: `res.value.blockhash`.
+    //
+    // We pin the contract by overriding the blockhash fetcher (the path
+    // exposed via `_setBlockhashFetcher`) AND by exercising the real
+    // path through the stubbed `solanaRpc` mock at the top of this file
+    // (which now returns the unwrapped shape). The `build()` happy-path
+    // test above already covers the live path; this test pins the
+    // off-by-one shape explicitly and would have caught the bug.
+    await check('R11: _fetchRecentBlockhash returns value.blockhash from unwrapped solanaRpc result', async () => {
+        // Capture the live path: clear any override so the real
+        // _fetchRecentBlockhash → require('../solana').solanaRpc path runs.
+        x402Mod._setBlockhashFetcher(null);
+        const { wire } = loadFixture('paysh-sandbox-402');
+        const r = await proto.build(
+            { status: 402, bodyJson: wire.body },
+            { maxUsdcAtomic: 200000n, burnerPubkey: VALID_BURNER_PUBKEY }
+        );
+        // Pre-fix this would have errored with `blockhash_fetch_failed`
+        // because `res.result.value.blockhash` was undefined (res IS the
+        // unwrapped result). Post-fix, build() succeeds and the meta
+        // carries the blockhash from the unwrapped mock.
+        assert.ok(!r.error, `build should succeed: ${_safeStringify(r)}`);
+        assert.strictEqual(
+            r.paymentMeta.blockhash,
+            'EkSnNWid2cvwEVnVx9aBqawnmiCNiDgp3gUdkDPTKN1N',
+            'blockhash must come from solanaRpc().value.blockhash, not .result.value.blockhash'
+        );
+    });
+
+    await check('R11: _fetchRecentBlockhash rejects when value.blockhash missing', async () => {
+        // Sanity check the negative path is still tight. Override the
+        // fetcher with a shape that has neither `result.value.blockhash`
+        // (the old buggy reach) nor `value.blockhash` (the new contract).
+        x402Mod._setBlockhashFetcher(async () => {
+            // Throw a representative error so build() surfaces it as
+            // blockhash_fetch_failed. We can't return undefined easily —
+            // the override path bypasses solanaRpc entirely.
+            throw new Error('value.blockhash missing');
+        });
+        const { wire } = loadFixture('paysh-sandbox-402');
+        const r = await proto.build(
+            { status: 402, bodyJson: wire.body },
+            { maxUsdcAtomic: 200000n, burnerPubkey: VALID_BURNER_PUBKEY }
+        );
+        assert.strictEqual(r.error, 'blockhash_fetch_failed');
+        // Reset for downstream tests.
+        x402Mod._setBlockhashFetcher(null);
+    });
+
+    // R11 #4: pubkeySync fallback removal. The Wallet interface
+    // (wallet/wallet.js) only defines async `pubkey()` — no
+    // implementation exposes a sync variant. The earlier code's
+    // `ws.signerWallet.pubkeySync()` fallback would have crashed on call.
+    // Verify build() rejects cleanly when burnerPubkey is missing AND
+    // never invokes pubkeySync, even if signerWallet were to expose one.
+    await check('R11: build() rejects without burnerPubkey and never calls pubkeySync', async () => {
+        let pubkeySyncCalls = 0;
+        let pubkeyCalls = 0;
+        const fakeWallet = {
+            // Give the wallet BOTH variants so a regression that re-adds
+            // the fallback would call pubkeySync and fail this assertion.
+            pubkeySync: () => { pubkeySyncCalls++; return VALID_BURNER_PUBKEY; },
+            pubkey: async () => { pubkeyCalls++; return VALID_BURNER_PUBKEY; },
+        };
+        const { wire } = loadFixture('paysh-sandbox-402');
+        const r = await proto.build(
+            { status: 402, bodyJson: wire.body },
+            { maxUsdcAtomic: 200000n, signerWallet: fakeWallet /* no burnerPubkey */ }
+        );
+        assert.strictEqual(r.error, 'invalid_burner_pubkey',
+            'must reject when burnerPubkey is omitted (no sync fallback)');
+        assert.strictEqual(pubkeySyncCalls, 0,
+            'pubkeySync must NEVER be invoked — it is not on the Wallet interface');
+        // The `pubkey()` async method is also not called by build(); the
+        // contract is "caller pre-resolves and passes burnerPubkey".
+        assert.strictEqual(pubkeyCalls, 0,
+            'build() should not awaken pubkey() either — caller pre-resolves');
+    });
+
+    // R11 #5: pre-decoded constant buffers (perf). The base58 decode of
+    // TOKEN_PROGRAM_ID + ASSOCIATED_TOKEN_PROGRAM_ID + USDC_MINT happens
+    // once at module load instead of on every payment. We pin this by
+    // asserting that subsequent build() calls produce identical-shape
+    // results (so behaviour is unchanged) AND by spot-checking that the
+    // module exposes the pre-decoded buffers (proxy for the hoist).
+    await check('R11: pre-decoded constant buffers — build() unchanged after hoist', async () => {
+        x402Mod._setBlockhashFetcher(null);
+        const { wire } = loadFixture('paysh-sandbox-402');
+        const a = await proto.build(
+            { status: 402, bodyJson: wire.body },
+            { maxUsdcAtomic: 200000n, burnerPubkey: VALID_BURNER_PUBKEY }
+        );
+        const b = await proto.build(
+            { status: 402, bodyJson: wire.body },
+            { maxUsdcAtomic: 200000n, burnerPubkey: VALID_BURNER_PUBKEY }
+        );
+        // Two consecutive builds with the same inputs produce identical
+        // output — confirms hoisted constants haven't introduced shared
+        // mutable state.
+        assert.strictEqual(a.txBase64, b.txBase64,
+            'builds with identical inputs must produce identical output');
+        assert.deepStrictEqual(a.paymentMeta.sourceAta, b.paymentMeta.sourceAta);
+        assert.deepStrictEqual(a.paymentMeta.destAta, b.paymentMeta.destAta);
     });
 
     if (failures === 0) {

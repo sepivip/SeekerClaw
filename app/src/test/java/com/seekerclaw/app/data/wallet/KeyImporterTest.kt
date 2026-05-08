@@ -139,4 +139,46 @@ class KeyImporterTest {
         val pub2 = KeyImporter.derivePubkey(testSeed.copyOf())
         assertArrayEquals(pub1, pub2)
     }
+
+    // --- BAT-582 R11: paste-DoS defense (same-class sweep) ---
+
+    @Test
+    fun `R11 - rejects oversized input fast (paste-DoS defense)`() {
+        // Pre-fix: a 100KB paste would force base58 decoding of the entire
+        // input (O(n²)) before anyone noticed. Post-fix: short-circuit at
+        // the input-length cap.
+        val huge = "x".repeat(100_000)
+        val start = System.nanoTime()
+        val result = KeyImporter.import(huge)
+        val elapsedMs = (System.nanoTime() - start) / 1_000_000.0
+        assertTrue("must reject oversize input", result is KeyImporter.Result.Err)
+        assertEquals("invalid_key_length", (result as KeyImporter.Result.Err).code)
+        // Must short-circuit fast (<100ms) — no base58 decode allowed.
+        assertTrue(
+            "DoS cap must short-circuit fast (< 100ms); took ${elapsedMs}ms",
+            elapsedMs < 100,
+        )
+    }
+
+    @Test
+    fun `R11 - accepts input at the boundary (1024 chars)`() {
+        // 1024 chars of all '1' — base58 alphabet, but the resulting
+        // bytes won't be 32 or 64, so we expect invalid_key_length
+        // (semantic), NOT the new R11 size-cap rejection.
+        val boundary = "1".repeat(KeyImporter.MAX_KEY_INPUT_LEN)
+        val result = KeyImporter.import(boundary)
+        assertTrue("at-boundary input must reach length-class check", result is KeyImporter.Result.Err)
+        assertEquals(
+            "should be rejected for byte-length, not paste-DoS guard",
+            "invalid_key_length",
+            (result as KeyImporter.Result.Err).code,
+        )
+        // Both paths use the same code — distinguish by message
+        // (the paste-DoS guard says "Input too large", the byte-length
+        // check says "Expected 32 or 64 bytes, got N").
+        assertTrue(
+            "boundary input should be rejected for byte-count, not paste-DoS: ${result.message}",
+            result.message.startsWith("Expected"),
+        )
+    }
 }
