@@ -176,6 +176,39 @@ async function check(label, fn) {
         assert.strictEqual(s.creatorRole, 'unknown');
     });
 
+    // BAT-582 R9: agent_pay's confirmation policy reads only args.max_usdc
+    // (block-or-none gate) and never reads burner state. The agent_pay
+    // handler ALSO does its own /burner/status fetch internally to refuse
+    // fast when unconfigured (before any outbound HTTP). Pre-fix, the gate
+    // ALSO fetched /burner/status — a wasted bridge round-trip on every
+    // agent_pay dispatch. The fix removes agent_pay from the gate set.
+    await check('R9: getWalletState skips /burner/status for agent_pay', async () => {
+        bridgeCalls.length = 0;
+        const s = await getWalletState('agent_pay', { max_usdc: '0.10', url: 'https://example.com' });
+        const statusCalls = bridgeCalls.filter(c => c.endpoint === '/burner/status');
+        assert.strictEqual(statusCalls.length, 0,
+            `agent_pay must NOT fetch /burner/status from the gate (got ${statusCalls.length} calls)`);
+        // Sanity: state shape is the empty short-circuit shape — handler
+        // populates everything it needs on its own.
+        assert.strictEqual(s.burnerConfigured, false,
+            'short-circuit path leaves burnerConfigured=false (handler does its own fetch)');
+        assert.strictEqual(bridgeCalls.length, 0,
+            `agent_pay gate should make 0 bridge calls (got ${bridgeCalls.length})`);
+    });
+
+    // BAT-582 R9: wallet_status's confirmation policy returns the literal
+    // 'none' regardless of state — pre-fix, the gate fetched /burner/status
+    // anyway (the handler does its own fetch to populate the response).
+    // Wasted round-trip removed.
+    await check('R9: getWalletState skips /burner/status for wallet_status', async () => {
+        bridgeCalls.length = 0;
+        const s = await getWalletState('wallet_status', {});
+        const statusCalls = bridgeCalls.filter(c => c.endpoint === '/burner/status');
+        assert.strictEqual(statusCalls.length, 0,
+            `wallet_status must NOT fetch /burner/status from the gate (got ${statusCalls.length} calls)`);
+        assert.strictEqual(s.burnerConfigured, false);
+    });
+
     if (failures > 0) {
         console.error(`\n${failures} failure(s).`);
         process.exit(1);

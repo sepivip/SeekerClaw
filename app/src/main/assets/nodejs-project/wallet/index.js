@@ -36,16 +36,19 @@ const { V1_STATIC_CONFIRM, SOLANA_WRITE_TOOLS, JUPITER_CANCEL_TOOLS } = require(
 // every cancel even though policy.js never reads burner-status for cancels.
 // We branch on JUPITER_CANCEL_TOOLS below to handle them via ownership-only.
 //
-// wallet_status / agent_pay don't actually consult burner state in
-// policy.js, but they're trivial-frequency tools — keeping them in the
-// gate set costs nothing and avoids a "policy hook adds a state read in
-// future, but gate already excluded the tool" footgun.
+// BAT-582 R9: wallet_status and agent_pay deliberately NOT included.
+//   - wallet_status: policy hook returns the literal 'none' regardless of
+//     state. The handler does its own /burner/status fetch internally to
+//     populate the response — gating here was a wasted bridge round-trip.
+//   - agent_pay: policy hook only inspects args.max_usdc (block-or-none)
+//     and never reads burner state. The handler ALSO does its own
+//     /burner/status fetch (refuses fast when unconfigured, before any
+//     outbound HTTP). Gating here was a duplicate fetch every dispatch
+//     and the cached state was never read by the policy hook anyway.
 const _BURNER_STATUS_GATE_TOOLS = new Set([
     ...V1_STATIC_CONFIRM,
     ...SOLANA_WRITE_TOOLS,
-    'wallet_status',
     'wallet_set_caps',
-    'agent_pay',
 ]);
 
 // Combined gate: tools that need ANY state hydration (burner-status OR
