@@ -93,7 +93,7 @@ V1 supports **Solana mainnet only**. Devnet is deferred to V2. Caps + the design
 → `agent_pay(url, max_usdc)` reads the cap the user provided, fetches the 402 challenge, builds a USDC transfer, routes through burner. See **## agent_pay** below.
 
 **User: "What's my burner balance?"**
-→ `wallet_status` returns balances + caps + remaining daily for both wallets.
+→ `wallet_status` returns caps + today's spend + remaining daily for the burner. The burner's BALANCE field is currently `null` / "unavailable" (RPC balance fetch is a known follow-up). Tell the user "burner balance is temporarily unavailable" rather than reporting "0". Main-wallet balance is fetched live and is real.
 
 **User: "Raise my daily SOL cap to 0.5"**
 → `wallet_set_caps({daily_sol: "0.5"})`. The confirmation card auto-shows the old → new diff.
