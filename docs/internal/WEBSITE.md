@@ -1,6 +1,6 @@
 # WEBSITE.md — Website Content
 
-> Last updated: 2026-04-21 | Last deployed: _never_
+> Last updated: 2026-05-08 | Last deployed: _never_
 >
 > **Rule:** Every item must earn its screen space. Less is more.
 > Before deploying, review the Editorial Notes in each section.
@@ -38,7 +38,7 @@
 |-------|-------|---------------|
 | 150,000+ | Seeker Devices | Social proof — large addressable market |
 | 60+ | Built-in Tools | Shows depth — but consider "50+" for cleaner number |
-| 320+ | PRs Shipped | Shows velocity — but do users care about PRs? |
+| 360+ | PRs Shipped | Shows velocity — but do users care about PRs? |
 | 24/7 | Autonomous Agent | Key differentiator — always on |
 
 <!-- REVIEW: Is "PRs Shipped" the right 3rd stat? Alternatives:
@@ -197,6 +197,10 @@ reminders, research, and more. Export, import, and share skills as files.
 - Multi-provider support (Claude + OpenAI + OpenRouter + Custom OpenAI-compatible gateways)
 - OAuth / ChatGPT subscription auth — connect your Claude Max or ChatGPT plan instead of paying per token
 - User-managed env vars — skill `requires.env` gates unlocked, paste-`.env` bulk import
+- Extended thinking on every provider (Anthropic, OpenAI, OpenRouter, Custom) — survives tool calls + `/resume`
+- Live Settings — provider, model, MCP servers, search provider, agent name all change without a restart
+- `/model` and `/provider` Telegram commands — switch live from chat
+- 26-week activity heatmap on the System screen
 - OpenClaw v2026.4.10 parity
 - Open-source: MIT license, CI/CD, community contribution ready
 - Self-aware agent: 100% SAB score (36/36 audit points)
@@ -206,6 +210,12 @@ reminders, research, and more. Export, import, and share skills as files.
      OAuth lets users bring their existing Claude Max / ChatGPT subscriptions — strong hook.
      Consider promoting OAuth to a Feature Card (replace "Modular Skill System" which is weaker)
      or lead with it in the hero subheader. -->
+<!-- REVIEW 2026-05-08 (post-v1.10.0): Extended Thinking, Env Vars, /model + /provider, Live Settings,
+     and Activity Heatmap are the v1.10.0 user-facing wins. Strongest hooks for the homepage:
+     1. "Extended Thinking on every provider" — differentiates from single-provider agents.
+     2. "Bring Your Own Keys (Env Vars)" — concrete, lets users wire up GitHub/Linear/etc.
+     3. "Switch model + provider live from Telegram" — power-user tangible.
+     Consider replacing a weaker feature card (e.g. "Modular Skill System") with one of these. -->
 <!-- REVIEW 2026-04-21: Shipped list now 21 items — still too long. Candidates to cut for
      user-facing deploy: "Open-source", "OpenClaw parity", "MCP server support".
      Keep "Self-aware agent" — the 100% SAB is a tangible quality signal. -->

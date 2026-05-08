@@ -237,8 +237,8 @@ User (Telegram/Discord) <--HTTPS/WSS--> Channel API <--polling/WS--> Node.js Gat
 
 | Metric | Count |
 |--------|-------|
-| Total commits | 522+ |
-| PRs merged | 320+ |
+| Total commits | 548+ |
+| PRs merged | 361+ |
 | Tools | 60 (17 Solana/Jupiter, 13 Android bridge, 6 memory, 6 file, 5 cron, 4 telegram, 3 system, 2 web, 2 skill, 1 session, 1 env) + MCP dynamic |
 | Skills | 35 (20 bundled + 13 workspace + 2 user-created) |
 | Android Bridge endpoints | 18+ |
@@ -280,8 +280,29 @@ User (Telegram/Discord) <--HTTPS/WSS--> Channel API <--polling/WS--> Node.js Gat
 
 | Date | Feature | PR |
 |------|---------|-----|
-| 2026-04-30 | Feat: Migrate searchProvider + agentName to CrossProcessStore (BAT-515). Settings UI provider switch + agent name edit are live across processes — no service restart required. saveConfig atomically dual-writes prefs + RuntimeStateStore + AgentPreferencesStore with full rollback on failure. Node `getAgentName()` / `getSearchProvider()` walk the precedence chain `agent_preferences.json` (live) → `config.json` (cold-start) → defaults per call. | TBD |
-| 2026-04-21 | Feat: Add Claude Opus 4.7 + bump cc_version masquerade to 2.1.116 (BAT-498). Opus 4.7 becomes Anthropic default. Drop Sonnet 4.5 from dropdown/docs. | TBD |
+| 2026-05-04 | Release: v1.10.0 — Env Vars, Extended Thinking on every provider, /model + /provider Telegram switches, live cross-process Settings, Activity Heatmap, BAT-525 graceful Stop. | #359, #360, #361 |
+| 2026-05-02 | Docs: SAB-AUDIT-v24 — BAT-525 + BAT-504 + MAX_STEPS post-merge gap fix. | #357 |
+| 2026-05-02 | Fix: Flush Node state before user-initiated Stop (BAT-525). Bounded shutdown handshake over loopback persists pending session summaries + dirty SQL.js writes within ~1.5s before `killProcess()`. | #349 |
+| 2026-05-02 | Feat: Cross-provider reasoning hotfix (BAT-558, BAT-559). `/think` echo override fix + provider label cleanup across dashboard pills, Settings, and `displayNameForProvider`. | #356 |
+| 2026-05-01 | Feat: Reasoning content preservation across all 4 providers (BAT-549). Anthropic/OpenAI/OpenRouter/Custom. Extended thinking now survives tool calls + `/resume`. New `/think` Telegram command, Settings → Reasoning section, adaptive 3-step quarantine recovery, `reasoningSupport` tri-state, centralized log redaction. Headline fix: DeepSeek V4-via-Custom `/resume` 400 loop. | #354 |
+| 2026-05-01 | Feat: Migrate searchProvider + agentName to CrossProcessStore (BAT-515). Provider switch + agent name edit live across processes — no restart. Atomic dual-write with full rollback. | #355 |
+| 2026-04-30 | Feat: Single shared `model-registry.json` (BAT-517). One source of truth for the model picker; new models slot in by editing one file. | #353 |
+| 2026-04-29 | Feat: Migrate MCP server config to CrossProcessStore (BAT-514). Settings → MCP Servers writes propagate live; backed by per-boot bridge-token loopback control. | #352 |
+| 2026-04-29 | Feat: Migrate runtime config (provider/authType/model) to CrossProcessStore (BAT-513). | #351 |
+| 2026-04-29 | Feat: Generic `CrossProcessStore<T>` abstraction (BAT-512). Foundation for all live cross-process state. | #350 |
+| 2026-04-28 | Perf: Per-chat idle-summary timers replace global 60s sweep (BAT-524). | #348 |
+| 2026-04-28 | Perf: Dirty-flag + debounced DB autosave (BAT-523). Idle agent now produces zero database writes. | #347 |
+| 2026-04-28 | Perf: Derive uptime locally instead of writing it every second (BAT-522). Eliminates 1 disk write/second 24/7. | #346 |
+| 2026-04-28 | Perf: FileObserver replaces 1s/500ms polling loops (BAT-518 phase 1). Battery-positive on Seeker. | #343 |
+| 2026-04-27 | Refactor: Rename `OpenClawService` → `SeekerClawService` (BAT-509). | #341 |
+| 2026-04-27 | Feat: `/model` and `/provider` Telegram commands (BAT-504). Switch model or provider live from chat; survives restart via `runtime_state.json` overlay. Includes 2 related bugfixes. | #339 |
+| 2026-04-24 | Feat: Add GPT-5.5 to OpenAI model picker, drop GPT-5.2. | #338 |
+| 2026-04-24 | Feat: User-configurable max tool uses per turn (default raised 25 → 35). Settings → Agent → Max tool uses per turn. | #337 |
+| 2026-04-22 | Feat: `scripts/pre-push-check.sh` — local Kotlin compile gate (BAT-502). Catches missing imports + type errors in ~5–10s before CI burns 4 minutes. | #336 |
+| 2026-04-22 | Feat: Self-Awareness Checklist in PR template — SAB pre-merge gate (BAT-503). | #335 |
+| 2026-04-21 | Docs: SAB-AUDIT-v23 — heatmap (BAT-500) post-merge gap fix. | direct |
+| 2026-04-21 | Feat: Message Activity Heatmap on System screen — 26-week heatmap of daily `api_request_log` counts; up to 13 months of data. Agent door for "show me my activity" questions. | #304 |
+| 2026-04-21 | Feat: Add Claude Opus 4.7 + bump cc_version masquerade to 2.1.116 (BAT-498). Opus 4.7 becomes Anthropic default. Drop Sonnet 4.5 from dropdown/docs. | #334 |
 | 2026-04-17 | Feat: Env Vars — user-managed env var store (BAT-495). Feeds `process.env` + unlocks skill `requires.env` gates. New `env_list` tool (names only). Paste-`.env` bulk import. Skills screen inverse surfacing. | #332 |
 | 2026-04-15 | Fix: Settings defaults to OpenAI+OAuth + redesigned OAuth callback page (BAT-495) | #330 |
 | 2026-04-14 | Fix: foreground service keeps network alive during OAuth on Pixel 7 (BAT-494) | #328–329 |
