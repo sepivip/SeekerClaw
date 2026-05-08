@@ -495,6 +495,18 @@ grep -i "MCP.*reconcile\|MCP.*Failed to" node_debug.log | tail -20
 **Diagnosis:** The trailing 32 bytes of the expanded key don't match the public key derived from the leading 32-byte seed. The key is corrupted or was assembled incorrectly.
 **Fix:** Re-export from the source wallet. If the issue persists, switch to importing only the 32-byte seed (SeekerClaw will derive the public half itself).
 
+### `burner: storage_failure (Failed to persist key)`
+**Symptoms:** Burner setup parses + validates the key, but the Save step returns `storage_failure`. Bridge endpoints / Settings UI report "Failed to persist key" or `error: "storage_failure"`.
+**Diagnosis:** `KeyImporter` accepted the bytes (format + pubkey check passed), but writing to encrypted storage failed AFTER validation. This is NOT an invalid-key error — the key itself is fine. Likely causes:
+- Device storage is full or near full (atomic move + ciphertext write fails on ENOSPC).
+- Android Keystore initialization failure (rare on Solana Seeker, more common on heavily customized OEM ROMs).
+- Filesystem permissions / SELinux denial under `filesDir/burner_keys/` (also rare).
+**Fix:**
+1. Tell the user: "The burner key looked valid but couldn't be saved to encrypted storage." Do NOT tell them to re-paste — the key wasn't the problem.
+2. Check device storage: `android_storage` tool or Settings → Storage. Free space if under ~100 MB.
+3. Restart the app — Keystore alias may re-initialize cleanly on next start.
+4. If persistent across restarts: collect logcat (`adb logcat | grep KeystoreHelper\|EncryptedPrefsKeyVault`) and file a bug.
+
 ### `burner: cap exceeded (per-tx)`
 **Symptoms:** Tool result includes `error: "burner_cap_exceeded"` or `over_per_tx_cap`. Agent tells the user "this is over your burner per-tx cap."
 **Diagnosis:** The principal (lamports for SOL, microunits for USDC) of the tx exceeds the configured `capPerTxSol` / `capPerTxUsdc`.

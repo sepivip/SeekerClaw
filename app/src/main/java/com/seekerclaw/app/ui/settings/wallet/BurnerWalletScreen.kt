@@ -566,6 +566,33 @@ private fun parseOrToast(
     return atomic
 }
 
+/**
+ * Wipe the burner wallet. Per BAT-582 R1 (PR #364 review), this is a
+ * FULL RESET — after wipe, the device state is indistinguishable from
+ * "burner never configured":
+ *   1. Encrypted key file at `filesDir/burner_keys/burner` is overwritten
+ *      and deleted (KeyVault.wipe).
+ *   2. Cap configuration is zeroed (defense-in-depth: setCaps to "0"
+ *      so any in-process CapEnforcer references see a wiped state
+ *      immediately, before the file delete in step 3 lands).
+ *   3. `burner_caps.json` itself is deleted. This is the gate-correctness
+ *      step: SeekerClawService's periodic sweep used to gate on
+ *      `burner_caps.json.exists()` as a proxy for "configured" — that
+ *      proxy was wrong because zeroed-caps left the file present. The
+ *      service now gates on the burner KEY file (the real ground truth),
+ *      but we delete the caps file too so a future re-import starts from
+ *      true defaults (0.05 / 0.5 SOL, 5 / 50 USDC) instead of zeros.
+ *
+ * Persisting state intentionally NOT cleared by wipe:
+ *   - Jupiter ownership map (`jupiter_owner_<orderId>`): orders the
+ *     burner created on-chain still exist after wipe; the cancel-tool
+ *     needs the ownership map to route those cancels to the right
+ *     wallet authority. Wiping it would orphan those orders. (The keys
+ *     to actually authorize a cancel are gone, so this is purely
+ *     informational at that point — but the metadata helps the agent
+ *     give the user an honest "you can't cancel that, the burner that
+ *     created it has been wiped" instead of silently routing to main.)
+ */
 private suspend fun wipeBurner(
     context: Context,
     keyVault: EncryptedPrefsKeyVault,
@@ -578,8 +605,11 @@ private suspend fun wipeBurner(
             // Best-effort — even if wipe surface-fails, the file is
             // overwritten by KeyVault.wipe().
         }
-        // Also clear cap configuration so the caps don't dangle for a
-        // future re-import (which might be a different wallet).
+        // Zero cap configuration so any in-process CapEnforcer reference
+        // sees a wiped state immediately. The file delete below replaces
+        // this from a future re-import's perspective, but the in-memory
+        // CrossProcessStore still has the zeroed values until the next
+        // file change is observed.
         try {
             capEnforcer.setCaps(
                 capPerTxSol = "0",
@@ -589,6 +619,25 @@ private suspend fun wipeBurner(
             )
         } catch (_: Exception) {
             // Same — best-effort cleanup.
+        }
+        // Delete the caps file itself so post-wipe state is
+        // indistinguishable from "burner never configured". This is the
+        // cleanup step that lets a future re-import seed defaults from
+        // BurnerCapsState() instead of inheriting the zeroed values.
+        try {
+            val capsFile = java.io.File(
+                context.applicationContext.filesDir,
+                com.seekerclaw.app.data.caps.BurnerCapsState.FILE_NAME,
+            )
+            if (capsFile.exists()) capsFile.delete()
+            // Also wipe any leftover .tmp from an interrupted store —
+            // matches the defensive cleanup in EncryptedPrefsKeyVault.wipe.
+            val tmp = java.io.File(capsFile.parentFile, "${capsFile.name}.tmp")
+            if (tmp.exists()) tmp.delete()
+        } catch (_: Exception) {
+            // Best-effort. If the file delete fails (e.g., locked by
+            // another reader), the next setCaps call will rewrite it
+            // from the zeroed in-memory state — degraded but safe.
         }
     }
     Toast.makeText(context, "Burner wiped", Toast.LENGTH_SHORT).show()

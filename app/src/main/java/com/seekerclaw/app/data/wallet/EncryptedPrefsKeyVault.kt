@@ -87,6 +87,26 @@ class EncryptedPrefsKeyVault(
         return File(dir(), id)
     }
 
+    /**
+     * Cheap "is this id configured" probe for the periodic sweep gate.
+     * Does NOT decrypt or read the file — just an `fstat`. Used by
+     * SeekerClawService to decide whether to allocate CapEnforcer +
+     * run sweepStale on a wiped wallet's empty pending queue.
+     *
+     * Returns false if [id] is malformed (path traversal defense), if
+     * the parent directory doesn't exist, or if the key file itself is
+     * absent. A `true` here is necessary-but-not-sufficient — the file
+     * could still fail to decrypt (corrupt ciphertext, Keystore
+     * reinitialized, etc.) — but that's acceptable for a sweep gate
+     * because the sweep iteration is harmless when there's no pending
+     * work, just wasted CPU. The gate's job is ruling out the WIPED
+     * case where there's no key AND no caps state.
+     */
+    fun isConfigured(id: String): Boolean {
+        val file = fileFor(id) ?: return false
+        return file.exists()
+    }
+
     override suspend fun store(id: String, expanded64: ByteArray) {
         require(expanded64.size == 64) { "expanded64 must be 64 bytes" }
         val file = fileFor(id) ?: throw IllegalArgumentException("invalid id")
@@ -135,8 +155,15 @@ class EncryptedPrefsKeyVault(
             }
         } catch (e: Exception) {
             Log.e(TAG, "store($id) failed: ${e.message}", e)
-            // Don't include any byte from the secret in the thrown msg.
-            throw SigningException("invalid_key_format", "Failed to persist key")
+            // BAT-582 R1: surface the actual failure class. The key has
+            // already been parsed + normalized + pubkey-verified by
+            // KeyImporter at this point, so a failure here is a
+            // Keystore / IO / encryption error, NOT an "invalid format."
+            // Misreporting it as `invalid_key_format` would tell the
+            // user to fix their key when the actual problem is device
+            // storage or Keystore. Don't include any byte from the
+            // secret in the thrown msg.
+            throw SigningException("storage_failure", "Failed to persist key")
         } finally {
             if (tmp.exists()) tmp.delete()
             // Best-effort scrub of the encoded string is impossible

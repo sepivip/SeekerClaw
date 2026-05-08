@@ -71,6 +71,11 @@ class BurnerBridgeEndpoints internal constructor(
         const val INVALID_INPUT = "invalid_input"
         const val SIGN_FAILED = "sign_failed"
         const val BROADCAST_NOT_IMPLEMENTED = "broadcast_not_implemented"
+        // BAT-582 R1: distinct error class for Keystore/IO failures inside
+        // EncryptedPrefsKeyVault.store. Different remediation than
+        // invalid_key_format — caller should retry / check device storage,
+        // not re-paste their key.
+        const val STORAGE_FAILURE = "storage_failure"
     }
 
     /**
