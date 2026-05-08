@@ -84,10 +84,19 @@ function _atomicToDecimal(atomic, decimals) {
     return tail.length ? `${head}.${tail}` : head;
 }
 
+// BAT-582 R10: bound model-controlled input length for parity with the
+// other `_decimalToAtomic` clones (caps/preflight.js, tools/agent_pay.js,
+// tools/wallet.js). This copy doesn't itself construct a BigInt — it
+// returns the digit string for downstream display — but the regex still
+// has no length anchor, so a pathological input would burn CPU on the
+// regex test alone. 40 chars covers any realistic SOL/USDC value.
+const _MAX_DECIMAL_INPUT_LEN = 40;
+
 function _decimalToAtomic(decimal, decimals) {
     if (decimal == null) return null;
     const s = String(decimal).trim();
-    if (!/^\d+(\.\d+)?$/.test(s)) return null;
+    if (s.length === 0 || s.length > _MAX_DECIMAL_INPUT_LEN) return null;
+    if (!/^[0-9]+(\.[0-9]+)?$/.test(s)) return null;
     const [intPart, fracPart = ''] = s.split('.');
     if (fracPart.length > decimals) return null;
     const padded = fracPart.padEnd(decimals, '0');

@@ -51,10 +51,18 @@ const RESERVE_TTL_MS = 60 * 1000;          // 60 s (matches dispatch.js)
 
 // ── Decimal → atomic helper (USDC, 6 decimals) ───────────────────────────────
 
+// BAT-582 R10: bound model-controlled input length BEFORE the regex +
+// BigInt() pipeline. `max_usdc` is model-supplied; a 10MB digit payload
+// would burn O(n²) CPU in BigInt parsing. 40 chars covers any realistic
+// USDC value (1 trillion USDC is 19 digits at 6 decimals) and rejects
+// pathological prompt-injection inputs.
+const _MAX_DECIMAL_INPUT_LEN = 40;
+
 function _decimalToAtomic(decimal, decimals = USDC_DECIMALS) {
     if (decimal == null) return null;
     const s = String(decimal).trim();
-    if (!/^\d+(\.\d+)?$/.test(s)) return null;
+    if (s.length === 0 || s.length > _MAX_DECIMAL_INPUT_LEN) return null;
+    if (!/^[0-9]+(\.[0-9]+)?$/.test(s)) return null;
     const [intPart, fracPart = ''] = s.split('.');
     if (fracPart.length > decimals) return null;
     const padded = fracPart.padEnd(decimals, '0');

@@ -50,9 +50,9 @@ object WalletAmountFormat {
     private const val USDC_DECIMALS = 6
 
     /**
-     * BAT-582 R4: strict decimal regex — exact mirror of the Node-side
-     * `^\d+(\.\d+)?$` used in `caps/preflight.js#_decimalToAtomic` and
-     * `tools/wallet.js#_decimalToAtomic`. Rejects:
+     * BAT-582 R4 / R10: strict decimal regex — exact mirror of the
+     * Node-side `^\d+(\.\d+)?$` used in `caps/preflight.js#_decimalToAtomic`
+     * and `tools/wallet.js#_decimalToAtomic`. Rejects:
      *   - `.5`     (no leading digit)
      *   - `5.`     (trailing dot, no fractional digits)
      *   - `+1`     (leading sign)
@@ -61,14 +61,26 @@ object WalletAmountFormat {
      *   - `0.5e2`  (mixed)
      *   - `5,5`    (locale comma)
      *   - any non-digit character
+     *   - any non-ASCII digit (Arabic-Indic `٥`, Devanagari `५`, full-width `５`, etc.)
      *
-     * BigDecimal accepts `.5`, `5.`, `+1`, scientific notation — all
-     * inputs the Node side rejects. Without this regex the Kotlin parser
-     * would be strictly more permissive than Node, producing a stored cap
-     * value on Android that Node-side routing math then rejects, leaving
-     * the cap UI claiming success while routing silently degrades to main.
+     * BigDecimal accepts `.5`, `5.`, `+1`, scientific notation, AND
+     * Unicode digit characters (e.g. Arabic-Indic `٥٠٠` parses as 500) —
+     * all inputs the Node side rejects. Without this regex the Kotlin
+     * parser would be strictly more permissive than Node, producing a
+     * stored cap value on Android that Node-side routing math then
+     * rejects, leaving the cap UI claiming success while routing silently
+     * degrades to main.
+     *
+     * **Why `[0-9]` and not `\d` (R10):** in Java/Kotlin regex `\d` is
+     * ASCII-only by default (unlike Python or JavaScript-with-`/u`-flag),
+     * but the spec is subtle and easy to misread. Spelling the character
+     * class out as `[0-9]` makes the ASCII-strict intent self-evident
+     * from the regex itself — no "trust me, I read the Pattern javadoc"
+     * required. Node's default `\d` semantics are the same (ASCII-only
+     * without the `u` flag), so `[0-9]` is byte-for-byte parity with
+     * Node's `^\d+(\.\d+)?$`.
      */
-    private val DECIMAL_RE = Regex("""^\d+(\.\d+)?$""")
+    private val DECIMAL_RE = Regex("""^[0-9]+(\.[0-9]+)?$""")
 
     /**
      * Decimal SOL string -> lamports BigInteger, or null on parse failure.
@@ -123,15 +135,17 @@ object WalletAmountFormat {
         // trimming here is parity, not divergence — verified 2026-05-06.)
         val trimmed = decimal.trim()
         if (trimmed.isEmpty()) return null
-        // BAT-582 R4: single regex pre-check that mirrors the Node-side
-        // `^\d+(\.\d+)?$` exactly. This is the contract boundary: any
-        // input that fails this regex MUST be rejected so the Kotlin
-        // parser is byte-for-byte identical to Node's. The regex already
+        // BAT-582 R4 / R10: single regex pre-check that mirrors the
+        // Node-side `^\d+(\.\d+)?$` exactly. This is the contract
+        // boundary: any input that fails this regex MUST be rejected so
+        // the Kotlin parser is byte-for-byte identical to Node's. The
+        // regex (using ASCII-strict `[0-9]` rather than Java's `\d`)
         // rejects scientific notation, locale comma, negative, leading
-        // '+', leading '.', trailing '.', unicode digits, and any
-        // non-numeric character — so the individual `contains`/
-        // `startsWith` checks from R1/R2 are subsumed by this single
-        // gate. See [DECIMAL_RE] for the rationale.
+        // '+', leading '.', trailing '.', unicode digits (Arabic-Indic,
+        // Devanagari, full-width, etc.), and any non-numeric character —
+        // so the individual `contains`/`startsWith` checks from R1/R2
+        // are subsumed by this single gate. See [DECIMAL_RE] for the
+        // rationale.
         if (!DECIMAL_RE.matches(trimmed)) return null
 
         val bd = try {

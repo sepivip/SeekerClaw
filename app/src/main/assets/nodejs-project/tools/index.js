@@ -127,6 +127,18 @@ function _decimalsForToken(tokenSymbolOrMint) {
     }
     return null;
 }
+// BAT-582 R10: maximum digit-string length we'll BigInt-parse on the
+// agent-controlled `totalCycles` path. V8's BigInt construction is O(n²)
+// in the digit count for large arbitrary-precision values — a 10MB digit
+// string would burn CPU and heap before the rest of the cap-math runs.
+// 20 digits comfortably allows the R7 BigInt-precision regression test
+// (which uses 16-digit values past Number.MAX_SAFE_INTEGER, e.g.
+// 9007199254740993) and rejects any pathological prompt-injection payload.
+// Bound is in DIGIT COUNT, not byte count, but [0-9]-class strings are
+// 1:1 with bytes here (regex already gated to ASCII 0-9). Precompiled at
+// module load — `_formatDcaTotalDeposit` is on the per-tool-call hot path.
+const _BOUNDED_CYCLES_RE = /^[0-9]{1,20}$/;
+
 function _formatDcaTotalDeposit(amountPerCycle, totalCycles, inputToken) {
     const decimals = _decimalsForToken(inputToken);
     if (decimals == null) return '?'; // unknown token decimals — agent will see the per-cycle amount; total is a hint
@@ -143,12 +155,20 @@ function _formatDcaTotalDeposit(amountPerCycle, totalCycles, inputToken) {
         // The string path below is the agent-controlled path; that one MUST avoid
         // any Number round-trip to preserve precision for arbitrarily large digit strings.
         cyclesBig = BigInt(totalCycles);
-    } else if (typeof totalCycles === 'string' && /^\d+$/.test(totalCycles)) {
+    } else if (typeof totalCycles === 'string' && _BOUNDED_CYCLES_RE.test(totalCycles)) {
         // BAT-582 R7: convert digit string directly to BigInt — `parseInt` would
         // truncate to a Number first, losing precision past 2^53-1 and silently
         // corrupting cap-math for very large totalCycles values.
-        const n = BigInt(totalCycles);
-        if (n > 0n) cyclesBig = n;
+        // BAT-582 R10: regex bounds the digit string to ≤20 chars BEFORE
+        // BigInt() runs so model-controlled `totalCycles` can't DoS the
+        // confirmation pipeline with a 10MB digit payload. The try/catch
+        // is defense in depth — the regex already guarantees BigInt()
+        // succeeds, but a future refactor that weakens the regex must
+        // not crash the confirmation generator.
+        try {
+            const n = BigInt(totalCycles);
+            if (n > 0n) cyclesBig = n;
+        } catch (_) { /* fall through to the 30-cycle default */ }
     }
     const perCycleAtomic = _decimalToAtomic(amountPerCycle, decimals);
     if (perCycleAtomic == null) return '?';

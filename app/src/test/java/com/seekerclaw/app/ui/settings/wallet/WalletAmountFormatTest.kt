@@ -80,12 +80,29 @@ class WalletAmountFormatTest {
     }
 
     @Test fun `parseSolToLamports rejects unicode digits (parity with Node regex)`() {
-        // BAT-582 R4: \d in JavaScript regex (without /u flag) matches
-        // ONLY ASCII 0-9. Kotlin Regex \d is also ASCII-only by default.
-        // Verify Arabic-Indic digits (U+0660-0669) and full-width digits
-        // are rejected.
-        assertNull(WalletAmountFormat.parseSolToLamports("٠١"))  // Arabic-Indic 01
+        // BAT-582 R4 / R10: \d in JavaScript regex (without /u flag)
+        // matches ONLY ASCII 0-9. Kotlin Regex `\d` is ALSO ASCII-only
+        // by default (Pattern.UNICODE_CHARACTER_CLASS is OFF unless set),
+        // but R10 made the regex use the literal `[0-9]` class instead
+        // of `\d` so the ASCII-strict intent is self-evident from the
+        // pattern. These tests pin the contract independent of which
+        // regex engine flags happen to be on.
+        //
+        // Pre-R10 demonstration: the equivalent BigDecimal("٥٠٠")
+        // succeeds and parses to 500 — without the regex gate the cap
+        // UI would accept Arabic-Indic 500 and Node-side routing would
+        // then reject it, producing the silent-degrade-to-main bug.
+        assertNull(WalletAmountFormat.parseSolToLamports("٠١"))         // Arabic-Indic 01
         assertNull(WalletAmountFormat.parseSolToLamports("１"))         // Fullwidth 1
+        // R10 spec cases — three different scripts, each tests a
+        // different Unicode block (Arabic-Indic U+0660-0669, Devanagari
+        // U+0966-096F, Halfwidth/Fullwidth Forms U+FF10-FF19).
+        assertNull(WalletAmountFormat.parseSolToLamports("٥٠٠"))         // Arabic-Indic 500
+        assertNull(WalletAmountFormat.parseSolToLamports("५००"))         // Devanagari 500
+        assertNull(WalletAmountFormat.parseSolToLamports("５００"))      // Fullwidth 500
+        // Bengali (U+09E6-09EF) and Tamil (U+0BE6-0BEF) — paranoia coverage
+        assertNull(WalletAmountFormat.parseSolToLamports("০"))           // Bengali 0
+        assertNull(WalletAmountFormat.parseSolToLamports("௫"))           // Tamil 5
     }
 
     @Test fun `parseSolToLamports rejects locale comma`() {

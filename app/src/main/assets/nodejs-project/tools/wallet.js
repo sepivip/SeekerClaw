@@ -19,10 +19,19 @@ const USDC_DECIMALS = 6;
 
 // ── Decimal/atomic helpers (local — kept BigInt-pure, no Number math) ───────
 
+// BAT-582 R10: bound model-controlled cap-decimal input BEFORE the regex
+// + BigInt() pipeline. `wallet_set_caps` args are model-controlled (the
+// agent calls this tool to set per-tx and daily caps). A pathological
+// 10MB digit payload would burn O(n²) CPU before cap state mutates.
+// 40 chars covers any realistic SOL/USDC cap (1 trillion SOL is 22
+// lamport digits at 9 decimals) while rejecting DoS attempts.
+const _MAX_DECIMAL_INPUT_LEN = 40;
+
 function _decimalToAtomic(decimal, decimals) {
     if (decimal == null) return null;
     const s = String(decimal).trim();
-    if (!/^\d+(\.\d+)?$/.test(s)) return null;
+    if (s.length === 0 || s.length > _MAX_DECIMAL_INPUT_LEN) return null;
+    if (!/^[0-9]+(\.[0-9]+)?$/.test(s)) return null;
     const [intPart, fracPart = ''] = s.split('.');
     if (fracPart.length > decimals) return null;
     const padded = fracPart.padEnd(decimals, '0');

@@ -138,10 +138,23 @@ function _isUsdc(tokenSymbolOrMint) {
     return s.toLowerCase() === 'usdc' || s === USDC_MINT;
 }
 
+// BAT-582 R10: maximum total length for a decimal-string monetary input.
+// V8's BigInt construction is O(n²) in digit count. SOL has 9 decimals
+// and USDC has 6; even 1 trillion SOL is 22 lamport digits, so 40 chars
+// total (int + '.' + frac) covers any realistic monetary value while
+// rejecting a 10MB DoS payload. The regex pre-check has no length anchor
+// of its own, so we MUST bound here BEFORE it runs to avoid
+// catastrophic-backtracking-class behavior on degenerate inputs.
+const _MAX_DECIMAL_INPUT_LEN = 40;
+
 function _decimalToAtomic(decimal, decimals) {
     if (decimal == null) return null;
     const s = String(decimal).trim();
-    if (!/^\d+(\.\d+)?$/.test(s)) return null;
+    // BAT-582 R10: cap input length BEFORE the regex + BigInt() pipeline.
+    // Tool args are model-controlled — without this gate a pathological
+    // string (e.g. "1" repeated 10^7 times) would burn CPU and heap.
+    if (s.length === 0 || s.length > _MAX_DECIMAL_INPUT_LEN) return null;
+    if (!/^[0-9]+(\.[0-9]+)?$/.test(s)) return null;
     const [intPart, fracPart = ''] = s.split('.');
     if (fracPart.length > decimals) return null;
     const padded = fracPart.padEnd(decimals, '0');
@@ -236,9 +249,20 @@ function _principalForTool(toolName, args) {
         let cyclesBig = 30n;
         if (typeof a.totalCycles === 'number' && a.totalCycles > 0 && Number.isFinite(a.totalCycles) && Number.isInteger(a.totalCycles)) {
             cyclesBig = BigInt(a.totalCycles);
-        } else if (typeof a.totalCycles === 'string' && /^\d+$/.test(a.totalCycles)) {
-            const n = BigInt(a.totalCycles);
-            if (n > 0n) cyclesBig = n;
+        } else if (typeof a.totalCycles === 'string' && /^[0-9]{1,20}$/.test(a.totalCycles)) {
+            // BAT-582 R10: bound the digit string to ≤20 chars BEFORE BigInt()
+            // runs. Tool args are model-controlled; a 10MB digit payload would
+            // burn O(n²) CPU + heap in the BigInt parser before any cap-math
+            // executes. 20 digits comfortably covers the R7 BigInt-precision
+            // regression case (16 digits past Number.MAX_SAFE_INTEGER) and
+            // exceeds any realistic DCA cycle count by ~11 orders of magnitude.
+            // The try/catch is defense in depth — the regex already guarantees
+            // BigInt() succeeds, but a future refactor that weakens the regex
+            // must not crash routing math.
+            try {
+                const n = BigInt(a.totalCycles);
+                if (n > 0n) cyclesBig = n;
+            } catch (_) { /* fall through to 30-cycle default */ }
         }
         const decimals = _isSol(input) ? SOL_DECIMALS : (_isUsdc(input) ? USDC_DECIMALS : null);
         if (decimals == null) return null;

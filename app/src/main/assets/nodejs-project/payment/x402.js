@@ -426,10 +426,20 @@ function _isUsdcAsset(asset) {
     return s === USDC_MINT || s.toLowerCase() === 'usdc' || s.toLowerCase() === 'usd-coin';
 }
 
+// BAT-582 R10: maximum atomic-amount digit length we'll BigInt-parse on
+// the x402 server-controlled path. `paymentRequirements.maxAmountRequired`
+// comes over the wire from a third-party 402 challenge response — a
+// malicious or misbehaving server could emit a 10MB digit string and burn
+// O(n²) CPU in BigInt parsing. 30 digits is far past any realistic USDC
+// atomic value (1 trillion USDC is 19 microunit digits) while bounding
+// the worst case to single-digit microseconds.
+const _MAX_ATOMIC_DIGITS_X402 = 30;
+
 function _parseAmountAtomic(s) {
     if (s == null) return null;
     const str = String(s).trim();
-    if (!/^\d+$/.test(str)) return null;
+    if (str.length === 0 || str.length > _MAX_ATOMIC_DIGITS_X402) return null;
+    if (!/^[0-9]+$/.test(str)) return null;
     try { return BigInt(str); } catch (_) { return null; }
 }
 
