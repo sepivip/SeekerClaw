@@ -66,7 +66,7 @@ Never raise caps without showing the diff. Never lower-then-raise to bypass a re
 
 The burner has its own pubkey separate from the main wallet. To fund it, the user sends SOL or USDC from any source (their main wallet, an exchange, another wallet) to the burner's address.
 
-The agent can show the burner address via `wallet_status`. Settings → Burner Wallet also has a copy button + QR code.
+The agent can show the burner address via `wallet_status`. Settings → Burner Wallet has a copy button for the address (QR code rendering is deferred to a follow-up). Users fund the burner by copying the address and pasting it into their main wallet's Send screen.
 
 Recommend small amounts — the burner is **disposable**. Don't suggest funding it with more than the user is willing to lose to a bug, key compromise, or runaway spend (caps protect against the last but not the first two).
 

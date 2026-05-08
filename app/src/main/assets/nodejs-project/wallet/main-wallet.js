@@ -65,9 +65,15 @@ class MainWallet extends Wallet {
         } catch (_) { /* ignore — keep "0" */ }
 
         try {
+            // BAT-582 R6: filter directly by the USDC mint instead of fetching
+            // every SPL token account. This returns 1 row (or none) instead of
+            // N — for NFT collectors / memecoin holders the previous programId
+            // filter could pull dozens of accounts and parse the heaviest RPC
+            // response in this file. tools/solana.js:635 already uses this
+            // pattern for swap balance checks; main wallet now matches.
             const tokenResult = await _solanaMod().solanaRpc('getTokenAccountsByOwner', [
                 address,
-                { programId: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA' },
+                { mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v' },
                 { encoding: 'jsonParsed' },
             ]);
             if (tokenResult && tokenResult.value) {

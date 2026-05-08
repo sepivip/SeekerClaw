@@ -102,19 +102,37 @@ function _refreshWalletPromptSnapshot() {
     if (_walletPromptRefreshing) return;
     _walletPromptRefreshing = true;
     // Fire-and-forget: bridge call resolves on its own; we just update
-    // the cache and clear the flag. Failures degrade to "no burner
-    // configured" copy, matching v1.0 behavior exactly.
+    // the cache and clear the flag.
+    //
+    // BAT-582 R6: distinguish between "explicit non-configured" (the
+    // bridge replies cleanly that no burner exists — overwrite the
+    // cache to {configured: false}) and "transient bridge failure"
+    // (network blip, bridge not running yet, exception — leave the
+    // existing cache alone so a previously-good snapshot survives).
+    // Blanking the cache on every error caused two bugs:
+    //   1) tests could not seed a stable snapshot — the next async
+    //      refresh would erase _setWalletPromptSnapshotForTests output
+    //   2) production agents would briefly forget about a configured
+    //      burner during a bridge restart, emitting the single-wallet
+    //      copy mid-conversation
     _bridgeForWalletSnapshot('/burner/status', {}, 5000)
         .then((status) => {
             if (status && !status.error) {
                 _walletPromptSnapshot = status;
+            } else if (status && status.error) {
+                // Bridge replied with an error envelope — treat as transient,
+                // keep the existing cache. Log so we can see if it's chronic.
+                log(`[buildSystemBlocks] burner snapshot bridge error: ${status.error} — keeping cached snapshot`, 'WARN');
             } else {
-                _walletPromptSnapshot = { configured: false };
+                // status is null/undefined — same transient-failure handling.
+                log(`[buildSystemBlocks] burner snapshot returned empty — keeping cached snapshot`, 'WARN');
             }
         })
         .catch((e) => {
-            log(`[buildSystemBlocks] burner snapshot refresh failed: ${e.message}`, 'WARN');
-            _walletPromptSnapshot = { configured: false };
+            log(`[buildSystemBlocks] burner snapshot refresh failed: ${e.message} — keeping cached snapshot`, 'WARN');
+            // Don't overwrite — keep whatever's cached. A transient bridge
+            // failure shouldn't blank our snapshot. The next successful
+            // refresh restores it.
         })
         .finally(() => {
             _walletPromptRefreshing = false;

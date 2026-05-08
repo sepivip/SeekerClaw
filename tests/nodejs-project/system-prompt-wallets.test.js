@@ -93,9 +93,12 @@ _stub(path.join(BUNDLE, 'http.js'), {
 _stub(path.join(BUNDLE, 'providers/index.js'), { getAdapter: () => null });
 _stub(path.join(BUNDLE, 'bridge.js'), {
     androidBridgeCall: async (endpoint) => {
-        // Return empty so _refreshWalletPromptSnapshot does NOT
-        // overwrite our test-injected snapshot. The test calls
-        // _setWalletPromptSnapshotForTests directly to seed the cache.
+        // Returns an error envelope. Per BAT-582 R6, error envelopes are
+        // treated as transient failures and DO NOT overwrite the cache —
+        // so the snapshot we seed via _setWalletPromptSnapshotForTests
+        // survives across the async refresh that buildSystemBlocks kicks off.
+        // (Pre-R6 the error path overwrote with {configured: false}, which
+        // races with the test seed — see catch-snapshot-overwrite test.)
         if (endpoint === '/burner/status') return { error: 'mocked-no-bridge' };
         return {};
     },
@@ -223,8 +226,78 @@ check('burner snapshot null (first call): prompt falls back to single-wallet cop
         'null snapshot must produce single-wallet copy (matches v1.0 baseline before first refresh lands)');
 });
 
-if (failures > 0) {
-    console.error(`\n${failures} failure(s).`);
-    process.exit(1);
+// ── BAT-582 R6: bridge failure must NOT overwrite cached snapshot ───────────
+//
+// Pre-R6, the .catch() and the {error: ...} branch in
+// _refreshWalletPromptSnapshot both wrote { configured: false } to the
+// cache. That meant a transient bridge blip during a real conversation
+// would silently replace a valid burner snapshot with the unconfigured
+// copy, causing the agent to forget its burner mid-turn. It also meant
+// tests that injected a snapshot then triggered buildSystemBlocks would
+// have their seed erased by the next async tick.
+//
+// This is an async test because the overwrite happens INSIDE the
+// promise chain — we have to give the microtask queue a tick to flush
+// before asserting the cache is intact.
+
+async function asyncCheck(label, fn) {
+    try { await fn(); console.log(`  ✓ ${label}`); }
+    catch (e) { failures++; console.error(`  ✗ ${label}\n    ${e.stack || e.message}`); }
 }
-console.log('\nPASS: system-prompt-wallets.test.js (3 wallet-section scenarios verified).');
+
+async function flushMicrotasks() {
+    // Two ticks: first lets the bridge promise resolve, second lets the
+    // .then/.catch and .finally callbacks run in order.
+    for (let i = 0; i < 5; i++) {
+        await new Promise((r) => setImmediate(r));
+        await Promise.resolve();
+    }
+}
+
+(async () => {
+    await asyncCheck('bridge failure does NOT overwrite a configured-burner snapshot', async () => {
+        // Seed a fully-configured snapshot.
+        const seeded = {
+            configured: true,
+            pubkey: 'PERSISTED-PUBKEY-9999',
+            balanceSol: '0',
+            balanceUsdc: '0',
+            capPerTxSol: '50000000',
+            capDailySol: '100000000',
+            capPerTxUsdc: '5000000',
+            capDailyUsdc: '20000000',
+            spentTodaySol: '0',
+            spentTodayUsdc: '0',
+            network: 'mainnet',
+        };
+        _setWalletPromptSnapshotForTests(seeded);
+
+        // First buildSystemBlocks: kicks off async refresh against our
+        // bridge stub which returns {error: 'mocked-no-bridge'}.
+        let { stable: first } = buildSystemBlocks([], 'test-chat-r6', 'claude-opus-4-7');
+        assert.ok(first.includes('PERSISTED-PUBKEY-9999'),
+            'first call: stable should include seeded burner pubkey');
+        assert.ok(first.includes('You have two wallets'),
+            'first call: must show two-wallet copy for configured burner');
+
+        // Wait for the bridge promise + .then/.catch/.finally to settle.
+        await flushMicrotasks();
+
+        // Second buildSystemBlocks: the cache MUST still hold our seed.
+        // Pre-fix, the {error: ...} branch wrote {configured: false} and
+        // this assertion would fail (we'd see the single-wallet copy).
+        const { stable: second } = buildSystemBlocks([], 'test-chat-r6', 'claude-opus-4-7');
+        assert.ok(second.includes('PERSISTED-PUBKEY-9999'),
+            'after bridge error: snapshot pubkey must be preserved (transient failure must not blank cache)');
+        assert.ok(second.includes('You have two wallets'),
+            'after bridge error: still must show two-wallet copy (cache survived)');
+        assert.ok(!second.includes('You have one wallet'),
+            'after bridge error: must NOT regress to single-wallet copy');
+    });
+
+    if (failures > 0) {
+        console.error(`\n${failures} failure(s).`);
+        process.exit(1);
+    }
+    console.log('\nPASS: system-prompt-wallets.test.js (4 wallet-section scenarios verified).');
+})();
