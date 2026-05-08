@@ -57,6 +57,7 @@ import kotlinx.serialization.Serializable
 @Serializable object SearchConfigRoute
 @Serializable object McpConfigRoute
 @Serializable object DiscordConfigRoute
+@Serializable object BurnerWalletRoute
 @Serializable data class EnvVarsRoute(val prefillKey: String? = null)
 
 data class BottomNavItem(
@@ -93,6 +94,7 @@ fun SeekerClawNavHost() {
                 dest.hasRoute(SearchConfigRoute::class) -> "SearchProviderConfig"
                 dest.hasRoute(McpConfigRoute::class) -> "McpConfig"
                 dest.hasRoute(DiscordConfigRoute::class) -> "DiscordConfig"
+                dest.hasRoute(BurnerWalletRoute::class) -> "BurnerWallet"
                 dest.hasRoute(EnvVarsRoute::class) -> "EnvVars"
                 else -> dest.route ?: "Unknown"
             }
@@ -247,6 +249,9 @@ fun SeekerClawNavHost() {
                     onNavigateToEnvVars = {
                         navController.navigate(EnvVarsRoute())
                     },
+                    onNavigateToBurnerWallet = {
+                        navController.navigate(BurnerWalletRoute)
+                    },
                 )
             }
             composable<ProviderConfigRoute> {
@@ -283,6 +288,11 @@ fun SeekerClawNavHost() {
             }
             composable<DiscordConfigRoute> {
                 com.seekerclaw.app.ui.settings.DiscordConfigScreen(
+                    onBack = { navController.popBackStack() }
+                )
+            }
+            composable<BurnerWalletRoute> {
+                com.seekerclaw.app.ui.settings.wallet.BurnerWalletScreen(
                     onBack = { navController.popBackStack() }
                 )
             }

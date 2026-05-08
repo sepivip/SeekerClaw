@@ -1,0 +1,188 @@
+package com.seekerclaw.app.ui.settings.wallet
+
+import java.math.BigDecimal
+import java.math.BigInteger
+import java.math.RoundingMode
+
+/**
+ * WalletAmountFormat — pure decimal <-> atomic-unit converters for the
+ * Burner Wallet Settings UI (BAT-582).
+ *
+ * **Money math contract (BAT-582 §Money math):** all storage and on-the-wire
+ * values are atomic-unit decimal strings (BigInteger-compatible). The UI
+ * accepts decimal user input and renders atomic stored values, but every
+ * call to the bridge / KeyVault / CapEnforcer goes through atomic units.
+ * This file is the single decimal/atomic boundary for the Burner UI — no
+ * Float/Double touches a monetary value anywhere.
+ *
+ * **Locale policy (V1):** only `.` decimal separator is supported. `,` is
+ * rejected — locale-style "0,5" produces null. This is consistent with
+ * the underlying [BigDecimal] contract and avoids the device-locale trap
+ * where the same input produces different cap values on different phones.
+ *
+ * **Edge cases the parsers reject (return null):**
+ *   - Empty / blank input
+ *   - Negative values ("-1") and leading-plus ("+1")
+ *   - Scientific notation ("1e-9", "0.5e2") — explicit decimal-only policy
+ *   - Locale-style "0,5"
+ *   - Leading dot (".5") and trailing dot ("5.") — Node parity
+ *   - Sub-atomic precision (e.g. 0.000_000_000_5 SOL — beyond lamport
+ *     resolution; truncating is a footgun, rounding is silent loss)
+ *   - Non-numeric input
+ *
+ * The accepted shape is exactly `^\d+(\.\d+)?$` — strict parity with the
+ * Node-side `_decimalToAtomic` regex used in caps/preflight.js and
+ * tools/wallet.js, so a UI-stored cap is guaranteed to match what the
+ * Node-side routing math sees.
+ *
+ * The formatters always trim trailing zeros so cap displays don't fill
+ * with noise; minimum-displayed precision is 2 fractional digits for
+ * readability ("0.00" rather than "0").
+ */
+object WalletAmountFormat {
+
+    private const val SOL_DECIMALS = 9
+    private const val USDC_DECIMALS = 6
+
+    private val LAMPORTS_PER_SOL: BigInteger = BigInteger.TEN.pow(SOL_DECIMALS)
+    private val MICRO_PER_USDC: BigInteger = BigInteger.TEN.pow(USDC_DECIMALS)
+
+    /**
+     * BAT-582 R4: strict decimal regex — exact mirror of the Node-side
+     * `^\d+(\.\d+)?$` used in `caps/preflight.js#_decimalToAtomic` and
+     * `tools/wallet.js#_decimalToAtomic`. Rejects:
+     *   - `.5`     (no leading digit)
+     *   - `5.`     (trailing dot, no fractional digits)
+     *   - `+1`     (leading sign)
+     *   - `-1`     (negative — also caught by the dedicated negative check)
+     *   - `1e9`    (scientific notation)
+     *   - `0.5e2`  (mixed)
+     *   - `5,5`    (locale comma)
+     *   - any non-digit character
+     *
+     * BigDecimal accepts `.5`, `5.`, `+1`, scientific notation — all
+     * inputs the Node side rejects. Without this regex the Kotlin parser
+     * would be strictly more permissive than Node, producing a stored cap
+     * value on Android that Node-side routing math then rejects, leaving
+     * the cap UI claiming success while routing silently degrades to main.
+     */
+    private val DECIMAL_RE = Regex("""^\d+(\.\d+)?$""")
+
+    /**
+     * Decimal SOL string -> lamports BigInteger, or null on parse failure.
+     * Accepts forms: "0.5", "0", "1.234567890". Rejects: ".5" (no leading
+     * digit), "5." (trailing dot), "1e-9", "0,5", "-1", "+1", "", "abc".
+     * See [DECIMAL_RE] for the full reject list and Node-side parity.
+     */
+    fun parseSolToLamports(decimal: String): BigInteger? =
+        parseDecimalToAtomic(decimal, SOL_DECIMALS)
+
+    /**
+     * Decimal USDC string -> microunits BigInteger, or null on parse
+     * failure. Accepts forms: "5", "0.10", "1.234567". Same rejection
+     * rules as [parseSolToLamports].
+     */
+    fun parseUsdcToMicroUnits(decimal: String): BigInteger? =
+        parseDecimalToAtomic(decimal, USDC_DECIMALS)
+
+    /**
+     * lamports BigInteger -> decimal SOL string (4 fractional digits,
+     * trimmed). Returns "0.00" for zero/null inputs so the UI never
+     * shows an empty cap.
+     */
+    fun formatLamportsToSol(atomic: BigInteger?): String =
+        formatAtomicToDecimal(atomic, SOL_DECIMALS, displayDigits = 4)
+
+    /**
+     * USDC microunits BigInteger -> decimal USDC string (2 fractional
+     * digits, trimmed). Returns "0.00" for zero/null inputs.
+     */
+    fun formatMicroUnitsToUsdc(atomic: BigInteger?): String =
+        formatAtomicToDecimal(atomic, USDC_DECIMALS, displayDigits = 2)
+
+    /** Convenience overload — atomic-unit decimal string. */
+    fun formatLamportsToSol(atomicStr: String?): String =
+        formatLamportsToSol(safeBigInt(atomicStr))
+
+    /** Convenience overload — atomic-unit decimal string. */
+    fun formatMicroUnitsToUsdc(atomicStr: String?): String =
+        formatMicroUnitsToUsdc(safeBigInt(atomicStr))
+
+    /**
+     * Strict decimal -> atomic conversion.
+     *
+     * Trims whitespace; rejects empty, scientific notation, locale-comma,
+     * negative, and sub-atomic precision. Returns null on any rejection
+     * so callers can show a stable error to the user.
+     */
+    private fun parseDecimalToAtomic(decimal: String, decimals: Int): BigInteger? {
+        // Trim to match Node's `String(decimal).trim()` behavior in
+        // caps/preflight.js#_decimalToAtomic. (Node side does trim, so
+        // trimming here is parity, not divergence — verified 2026-05-06.)
+        val trimmed = decimal.trim()
+        if (trimmed.isEmpty()) return null
+        // BAT-582 R4: single regex pre-check that mirrors the Node-side
+        // `^\d+(\.\d+)?$` exactly. This is the contract boundary: any
+        // input that fails this regex MUST be rejected so the Kotlin
+        // parser is byte-for-byte identical to Node's. The regex already
+        // rejects scientific notation, locale comma, negative, leading
+        // '+', leading '.', trailing '.', unicode digits, and any
+        // non-numeric character — so the individual `contains`/
+        // `startsWith` checks from R1/R2 are subsumed by this single
+        // gate. See [DECIMAL_RE] for the rationale.
+        if (!DECIMAL_RE.matches(trimmed)) return null
+
+        val bd = try {
+            BigDecimal(trimmed)
+        } catch (_: NumberFormatException) {
+            // Defense-in-depth — the regex already guarantees BigDecimal
+            // parses, but a surprise from the JDK should still degrade
+            // gracefully rather than crash.
+            return null
+        }
+        // Detect precision overflow. setScale with UNNECESSARY throws
+        // ArithmeticException if any non-zero digits would be discarded;
+        // exactly the contract we want — we'd rather reject than round.
+        return try {
+            bd.setScale(decimals, RoundingMode.UNNECESSARY).movePointRight(decimals).toBigIntegerExact()
+        } catch (_: ArithmeticException) {
+            null
+        }
+    }
+
+    /**
+     * Format atomic units into a decimal string with [displayDigits]
+     * fractional digits, trailing zeros trimmed but always keeping at
+     * least 2 to avoid bare integers.
+     */
+    private fun formatAtomicToDecimal(
+        atomic: BigInteger?,
+        decimals: Int,
+        displayDigits: Int,
+    ): String {
+        val a = atomic ?: BigInteger.ZERO
+        if (a.signum() < 0) return "0.00" // defensive — corrupt persisted value
+        val full = BigDecimal(a).movePointLeft(decimals)
+        val rounded = full.setScale(displayDigits, RoundingMode.DOWN)
+        // Strip trailing zeros but keep at least 2 fractional digits
+        // (e.g. "0.00" not "0", "0.05" not "0.0500", "1.234" not "1.2340").
+        return trimTrailingZeros(rounded.toPlainString(), minFractional = 2)
+    }
+
+    private fun trimTrailingZeros(s: String, minFractional: Int): String {
+        val dot = s.indexOf('.')
+        if (dot < 0) return "$s." + "0".repeat(minFractional)
+        var end = s.length
+        // Trim trailing zeros, but stop at minFractional digits past the
+        // decimal point.
+        val minLen = dot + 1 + minFractional
+        while (end > minLen && s[end - 1] == '0') end--
+        return s.substring(0, end)
+    }
+
+    /** Defensive BigInteger parse. Returns null on any malformed input. */
+    private fun safeBigInt(s: String?): BigInteger? {
+        if (s.isNullOrBlank()) return null
+        return try { BigInteger(s) } catch (_: Exception) { null }
+    }
+}
