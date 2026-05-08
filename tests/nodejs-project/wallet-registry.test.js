@@ -139,6 +139,43 @@ async function check(label, fn) {
             `expected exactly 1 /burner/status fetch; got ${statusCalls.length}`);
     });
 
+    // BAT-582 R5: Jupiter cancel tools' confirmation policy reads
+    // walletState.creatorRole (populated via /jupiter/order-owner/get) and
+    // ignores burnerConfigured / burnerCaps / burnerSpentToday. Pre-fix,
+    // getWalletState ALSO fetched /burner/status for cancels — a wasted
+    // bridge round-trip on every cancel call. The fix branches: cancels
+    // skip /burner/status entirely.
+    await check('R5: getWalletState skips /burner/status for jupiter_trigger_cancel', async () => {
+        bridgeCalls.length = 0;
+        const s = await getWalletState('jupiter_trigger_cancel', { orderId: 'order-abc' });
+        const statusCalls = bridgeCalls.filter(c => c.endpoint === '/burner/status');
+        const ownerCalls = bridgeCalls.filter(c => c.endpoint === '/jupiter/order-owner/get');
+        assert.strictEqual(statusCalls.length, 0,
+            `cancels must NOT fetch /burner/status (got ${statusCalls.length} calls)`);
+        assert.strictEqual(ownerCalls.length, 1,
+            `cancels must fetch /jupiter/order-owner/get exactly once (got ${ownerCalls.length})`);
+        // Sanity: state shape is correct
+        assert.strictEqual(s.burnerConfigured, false, 'creatorRole-only path leaves burnerConfigured=false');
+        assert.ok(['burner', 'main', 'unknown'].includes(s.creatorRole));
+    });
+
+    await check('R5: getWalletState skips /burner/status for jupiter_dca_cancel', async () => {
+        bridgeCalls.length = 0;
+        await getWalletState('jupiter_dca_cancel', { orderId: 'order-xyz' });
+        const statusCalls = bridgeCalls.filter(c => c.endpoint === '/burner/status');
+        assert.strictEqual(statusCalls.length, 0,
+            `dca cancels must NOT fetch /burner/status (got ${statusCalls.length})`);
+    });
+
+    await check('R5: cancel without orderId — no bridge calls at all', async () => {
+        bridgeCalls.length = 0;
+        const s = await getWalletState('jupiter_trigger_cancel', {});
+        // No orderId → no /jupiter/order-owner/get either; creatorRole=unknown.
+        assert.strictEqual(bridgeCalls.length, 0,
+            `cancel without orderId should make 0 bridge calls (got ${bridgeCalls.length})`);
+        assert.strictEqual(s.creatorRole, 'unknown');
+    });
+
     if (failures > 0) {
         console.error(`\n${failures} failure(s).`);
         process.exit(1);

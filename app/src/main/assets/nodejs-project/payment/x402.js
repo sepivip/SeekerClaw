@@ -58,9 +58,17 @@ function _base58Decode(str) {
         if (idx < 0) throw new Error('Invalid base58 character: ' + str[i]);
         value = value * 58n + BigInt(idx);
     }
+    // BAT-582 R5 fix: when value === 0n, value.toString(16) returns "0",
+    // which then pads to "00" and produces a 1-byte Buffer([0]) — adding a
+    // spurious trailing zero byte to the decoded result. The correct payload
+    // for a zero-value bigint is an empty buffer; the leading-zero count alone
+    // populates the result. Failure case: the System Program ID
+    // "11111111111111111111111111111111" (32 chars of '1') decodes to value=0n
+    // and should produce a 32-byte all-zero buffer, but pre-fix produced 33
+    // bytes (and was rejected by _decodeSolanaPubkey's length check).
     const hex = value.toString(16);
     const hexPadded = hex.length % 2 ? '0' + hex : hex;
-    const decoded = Buffer.from(hexPadded, 'hex');
+    const decoded = value === 0n ? Buffer.alloc(0) : Buffer.from(hexPadded, 'hex');
     const result = Buffer.alloc(zeros + decoded.length);
     decoded.copy(result, zeros);
     return result;

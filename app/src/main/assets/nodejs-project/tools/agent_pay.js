@@ -125,17 +125,54 @@ function isPrivateIp(ip) {
 
 // Resolve hostname once (DNS rebinding defense). Returns first IP from
 // dns.lookup. Tests can override _setDnsLookup.
+//
+// BAT-582 R5 fix: a slow or hung resolver previously could block agent_pay
+// indefinitely, breaking the advertised TOTAL_TIMEOUT_MS = 30s wall-clock
+// contract. We now race the lookup against a deadline derived from the
+// SHARED 30s budget — caller passes deadlineMs computed once at the start
+// of agent_pay. DNS gets `deadlineMs - Date.now()` ms, NOT a fresh 30s,
+// so DNS + HTTP fetch + sign + settle together respect the same overall
+// budget.
 let _dnsLookupOverride = null;
 function _setDnsLookup(fn) { _dnsLookupOverride = fn; }
 
-function _lookupHost(hostname) {
-    if (_dnsLookupOverride) return _dnsLookupOverride(hostname);
-    return new Promise((resolve, reject) => {
-        dns.lookup(hostname, { all: false }, (err, address, family) => {
-            if (err) reject(err);
-            else resolve({ address, family });
+const DNS_DEFAULT_TIMEOUT_MS = TOTAL_TIMEOUT_MS;
+
+function _lookupHost(hostname, deadlineMs) {
+    // Compute remaining budget from shared deadline. Default to the full
+    // total timeout when no deadline is given (back-compat for tests/
+    // direct callers).
+    const remainingMs = (typeof deadlineMs === 'number' && isFinite(deadlineMs))
+        ? Math.max(0, deadlineMs - Date.now())
+        : DNS_DEFAULT_TIMEOUT_MS;
+    if (remainingMs === 0) {
+        return Promise.reject(new Error('dns_timeout'));
+    }
+
+    const lookupPromise = _dnsLookupOverride
+        ? Promise.resolve().then(() => _dnsLookupOverride(hostname))
+        : new Promise((resolve, reject) => {
+            dns.lookup(hostname, { all: false }, (err, address, family) => {
+                if (err) reject(err);
+                else resolve({ address, family });
+            });
         });
+
+    let timer = null;
+    const timeoutPromise = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('dns_timeout')), remainingMs);
+        // Intentionally NOT unref'd: we WANT the timer to keep the loop alive
+        // long enough for the timeout to fire. Without that, a process whose
+        // only outstanding work is a hung DNS lookup would exit early
+        // (skipping the timeout) — which is what tests would observe but
+        // also what would happen in agent shutdown scenarios where Telegram
+        // long-polling has already been torn down.
     });
+
+    return Promise.race([lookupPromise, timeoutPromise])
+        .finally(() => {
+            if (timer) clearTimeout(timer);
+        });
 }
 
 // Determine whether localhost-debug exception applies. Gated by NODE_ENV.
@@ -178,11 +215,23 @@ function preflightUrlSync(url, method) {
 // DNS resolve (and pin) to detect private-IP rebinding. Skip resolution for
 // localhost in debug mode — there's no rebinding attack against a fixed
 // loopback host. Returns {pinnedIp, pinnedFamily} on success or {error, reason}.
-async function preflightDns(parsed, isLocal) {
+//
+// BAT-582 R5 fix: `deadlineMs` (optional) is the SHARED end-of-budget
+// timestamp from agent_pay's caller. It's forwarded to _lookupHost so a
+// hung DNS resolver can't burn the whole 30s budget on its own. Omitting
+// it preserves back-compat for direct callers / tests (a fresh 30s
+// fallback applies inside _lookupHost).
+async function preflightDns(parsed, isLocal, deadlineMs) {
     if (isLocal) return { ok: true, pinnedIp: null, pinnedFamily: null };
     let r;
-    try { r = await _lookupHost(parsed.hostname); }
-    catch (e) { return { error: 'dns_lookup_failed', reason: e.message || String(e) }; }
+    try { r = await _lookupHost(parsed.hostname, deadlineMs); }
+    catch (e) {
+        const msg = e && e.message ? e.message : String(e);
+        if (msg === 'dns_timeout') {
+            return { error: 'dns_timeout', reason: 'dns lookup exceeded remaining budget' };
+        }
+        return { error: 'dns_lookup_failed', reason: msg };
+    }
     if (isPrivateIp(r.address)) {
         return { error: 'private_ip', reason: `resolved to private IP ${r.address}` };
     }
@@ -192,10 +241,10 @@ async function preflightDns(parsed, isLocal) {
 // Combined pre-flight (sync + DNS). Kept for tests that want to assert the
 // full chain. Internal call sites use the split sync/dns variants so the
 // burner-not-configured check can short-circuit BEFORE DNS resolution.
-async function preflightUrl(url, method) {
+async function preflightUrl(url, method, deadlineMs) {
     const sync = preflightUrlSync(url, method);
     if (sync.error) return sync;
-    const dnsRes = await preflightDns(sync.parsed, sync.isLocal);
+    const dnsRes = await preflightDns(sync.parsed, sync.isLocal, deadlineMs);
     if (dnsRes.error) return dnsRes;
     return { ok: true, parsed: sync.parsed, pinnedIp: dnsRes.pinnedIp, pinnedFamily: dnsRes.pinnedFamily };
 }
@@ -339,6 +388,15 @@ async function _handle(input /* , chatId */) {
         };
     }
 
+    // BAT-582 R5: SHARED 30s deadline. Computed once at the top so DNS,
+    // initial fetch, sign, and settle all draw from the SAME wall-clock
+    // budget. Pre-fix, DNS had no timeout (could hang the turn) AND the
+    // settle phase computed `remaining` from a separate `startMs` after
+    // DNS, which meant a slow DNS could push total wall-clock well past
+    // 30s. Sharing one deadline closes that loophole.
+    const startMs = Date.now();
+    const deadlineMs = startMs + TOTAL_TIMEOUT_MS;
+
     // 1a. Cheap pre-flight (URL parse + scheme + method). Synchronous — no
     // bridge calls, no DNS. Fails fast on the dumbest input mistakes before
     // we bother the bridge at all.
@@ -365,17 +423,19 @@ async function _handle(input /* , chatId */) {
     }
 
     // 1c. DNS resolution (with private-IP / rebinding defense). Only happens
-    // once we know we have a burner to spend from.
-    const dnsRes = await preflightDns(parsed, isLocal);
+    // once we know we have a burner to spend from. Threads the SHARED
+    // deadline so a hung resolver can't burn the whole budget.
+    const dnsRes = await preflightDns(parsed, isLocal, deadlineMs);
     if (dnsRes.error) {
         log(`[agent_pay] rejected: ${dnsRes.error} — ${dnsRes.reason}`, 'WARN');
         return { error: dnsRes.error, reason: dnsRes.reason };
     }
     const { pinnedIp, pinnedFamily } = dnsRes;
 
-    // 3. Initial fetch.
-    const startMs = Date.now();
-    const firstResp = await _fetchWithLimits(parsed, pinnedIp, pinnedFamily, {}, TOTAL_TIMEOUT_MS);
+    // 3. Initial fetch — bounded by the SHARED remaining budget so DNS +
+    // fetch can't together exceed TOTAL_TIMEOUT_MS.
+    const fetchTimeoutMs = Math.max(1, deadlineMs - Date.now());
+    const firstResp = await _fetchWithLimits(parsed, pinnedIp, pinnedFamily, {}, fetchTimeoutMs);
     if (firstResp.error) {
         log(`[agent_pay] initial fetch failed: ${firstResp.error}`, 'WARN');
         return { error: firstResp.error, reason: firstResp.reason };
@@ -469,9 +529,10 @@ async function _handle(input /* , chatId */) {
     }
 
     // 10. Settle: replay GET with proof header(s). Single retry only — no
-    //     retry chains (per contract).
-    const elapsedMs = Date.now() - startMs;
-    const remaining = Math.max(1000, TOTAL_TIMEOUT_MS - elapsedMs);
+    //     retry chains (per contract). BAT-582 R5: settle inherits the
+    //     SAME shared deadline so total wall-clock is bounded by
+    //     TOTAL_TIMEOUT_MS regardless of how DNS / fetch / sign spent it.
+    const remaining = Math.max(1000, deadlineMs - Date.now());
     const originalRequest = { parsed, pinnedIp, pinnedFamily, timeoutLeftMs: remaining };
     const settled = await protocol.settle(originalRequest, signedTxBase64, paymentMeta, { _fetchWithLimits });
     if (!settled || settled.error) {

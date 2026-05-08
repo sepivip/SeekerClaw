@@ -15,36 +15,45 @@ const { androidBridgeCall } = require('../bridge');
 const { routeFor } = require('../caps/preflight');
 const { V1_STATIC_CONFIRM, SOLANA_WRITE_TOOLS, JUPITER_CANCEL_TOOLS } = require('../confirmation/policy');
 
-// BAT-582 R1: tools whose confirmation policy can read burner state. For
-// any tool NOT in this set the policy hook returns 'none' or a v1.0-static
-// answer that doesn't depend on /burner/status — so we can short-circuit
-// the bridge round-trip on the hot path (every tool dispatch in ai.js).
+// BAT-582 R1: tools whose confirmation policy reads burner-status state.
+// For any tool NOT in this set the policy hook returns 'none' or a
+// v1.0-static answer that doesn't depend on /burner/status — so we can
+// short-circuit the bridge round-trip on the hot path (every tool dispatch
+// in ai.js).
 //
-// Membership rule: a tool belongs here iff `getConfirmationPolicy()`
-// reads any field of walletState that's populated by /burner/status —
+// Membership rule: a tool belongs here iff `getConfirmationPolicy()` reads
+// any field of walletState that's populated by /burner/status —
 // burnerConfigured / burnerCaps / burnerSpentToday — OR it's in the v1.0
-// static set (kept for safety: even though policy.js doesn't currently
-// read state for those, the regression contract requires the gate to
-// behave identically when burnerConfigured=true, so future changes to
-// any v1-static tool's policy can rely on state being populated).
+// static set (kept for safety: even though policy.js doesn't currently read
+// state for those, the regression contract requires the gate to behave
+// identically when burnerConfigured=true, so future changes to any v1-static
+// tool's policy can rely on state being populated).
 //
-// JUPITER_CANCEL_TOOLS aren't in here on the burner-status axis (their
-// policy reads creatorRole, populated by a SEPARATE bridge call below) —
-// but we keep them so the cancel handler still benefits from the
-// per-tool gate; the burner-status read is a no-op cost for them since
-// JUPITER_CANCEL_TOOLS doesn't intersect SOLANA_WRITE_TOOLS or v1-static.
+// BAT-582 R5: JUPITER_CANCEL_TOOLS deliberately NOT included here. Their
+// confirmation policy is ownership-based (`ws.creatorRole`), populated via
+// /jupiter/order-owner/get — a separate, cheaper lookup. Including cancels
+// here previously triggered an unconditional /burner/status round-trip on
+// every cancel even though policy.js never reads burner-status for cancels.
+// We branch on JUPITER_CANCEL_TOOLS below to handle them via ownership-only.
 //
 // wallet_status / agent_pay don't actually consult burner state in
 // policy.js, but they're trivial-frequency tools — keeping them in the
 // gate set costs nothing and avoids a "policy hook adds a state read in
 // future, but gate already excluded the tool" footgun.
-const _GATE_TOOLS = new Set([
+const _BURNER_STATUS_GATE_TOOLS = new Set([
     ...V1_STATIC_CONFIRM,
     ...SOLANA_WRITE_TOOLS,
-    ...JUPITER_CANCEL_TOOLS,
     'wallet_status',
     'wallet_set_caps',
     'agent_pay',
+]);
+
+// Combined gate: tools that need ANY state hydration (burner-status OR
+// ownership lookup). Used for the early short-circuit return when the
+// tool needs no state at all.
+const _GATE_TOOLS = new Set([
+    ..._BURNER_STATUS_GATE_TOOLS,
+    ...JUPITER_CANCEL_TOOLS,
 ]);
 
 let _burner = null;
@@ -92,15 +101,46 @@ async function getWalletState(toolName, args) {
 
     // BAT-582 R1: hot-path optimization. ai.js calls getWalletState before
     // EVERY tool dispatch — but for tools whose confirmation policy doesn't
-    // read burner state (memory_save, web_fetch, file_*, etc.), the
-    // /burner/status round-trip is wasted. Short-circuit here. Solana
-    // write tools and Jupiter cancels still flow into the appropriate
-    // branches below.
+    // read burner state (memory_save, web_fetch, file_*, etc.), state
+    // hydration is wasted. Short-circuit here. Solana write tools and
+    // Jupiter cancels still flow into the appropriate branches below.
     if (!_GATE_TOOLS.has(toolName)) {
         return state;
     }
 
-    // 1) Status read (cap state + pubkey).
+    // BAT-582 R5: Jupiter cancel tools are ownership-gated only —
+    // policy.js reads ws.creatorRole and ignores burnerConfigured /
+    // burnerCaps / burnerSpentToday. Pre-fix, this branch ALSO fetched
+    // /burner/status (a real ~5-30ms bridge round-trip) before falling
+    // through to the order-owner lookup, even though the result was
+    // discarded by the policy hook. Cancels now run the ownership
+    // lookup in isolation and return — no /burner/status round-trip.
+    if (JUPITER_CANCEL_TOOLS.has(toolName)) {
+        const orderId = (args && (args.orderId || args.order_id)) || null;
+        if (!orderId) {
+            state.creatorRole = 'unknown';
+            return state;
+        }
+        try {
+            const lookup = await androidBridgeCall(
+                '/jupiter/order-owner/get',
+                { orderId },
+                5000
+            );
+            if (lookup && !lookup.error && typeof lookup.creatorWalletRole === 'string') {
+                const role = lookup.creatorWalletRole;
+                state.creatorRole = (role === 'burner' || role === 'main') ? role : 'unknown';
+            } else {
+                state.creatorRole = 'unknown';
+            }
+        } catch (_) {
+            state.creatorRole = 'unknown';
+        }
+        return state;
+    }
+
+    // 1) Status read (cap state + pubkey). Required for everything that
+    // remains in _BURNER_STATUS_GATE_TOOLS.
     let status;
     try {
         status = await androidBridgeCall('/burner/status', {}, 5000);
@@ -138,30 +178,6 @@ async function getWalletState(toolName, args) {
             // Defensive: routing failure → conservative confirm path
             state.routingDecision = 'main';
             state.underCap = true;
-        }
-    }
-
-    // 3) For Jupiter cancel tools, look up the order's creator role.
-    if (JUPITER_CANCEL_TOOLS.has(toolName)) {
-        const orderId = (args && (args.orderId || args.order_id)) || null;
-        if (!orderId) {
-            state.creatorRole = 'unknown';
-        } else {
-            try {
-                const lookup = await androidBridgeCall(
-                    '/jupiter/order-owner/get',
-                    { orderId },
-                    5000
-                );
-                if (lookup && !lookup.error && typeof lookup.creatorWalletRole === 'string') {
-                    const role = lookup.creatorWalletRole;
-                    state.creatorRole = (role === 'burner' || role === 'main') ? role : 'unknown';
-                } else {
-                    state.creatorRole = 'unknown';
-                }
-            } catch (_) {
-                state.creatorRole = 'unknown';
-            }
         }
     }
 
