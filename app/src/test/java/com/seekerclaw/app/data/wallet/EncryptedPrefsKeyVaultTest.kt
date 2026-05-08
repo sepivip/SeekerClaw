@@ -3,10 +3,14 @@ package com.seekerclaw.app.data.wallet
 import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters
 import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters
 import org.bouncycastle.crypto.signers.Ed25519Signer
+import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
+import java.io.File
 
 /**
  * Pure JVM tests for the [EncryptedPrefsKeyVault] byte/String encoding
@@ -209,6 +213,132 @@ class EncryptedPrefsKeyVaultTest {
         } catch (_: IllegalArgumentException) {
             // Expected — caller-side try/catch in loadKey() turns this
             // into a null return.
+        }
+    }
+
+    // --- isConfiguredAt: no-side-effect contract (R4 review fix) ---
+    //
+    // The periodic sweep gate in SeekerClawService calls isConfigured()
+    // every 30 seconds. Pre-fix, that path went through fileFor() →
+    // dir() → mkdirs(), so a never-configured install grew
+    // `filesDir/burner_keys/` as a side effect of the gate check —
+    // unnecessary directory creation, flash wear, false signal that
+    // the dir matters. The R4 fix routes through [isConfiguredAt],
+    // a pure helper that does NOT mkdirs the parent.
+    //
+    // The tests below pin the no-side-effect contract so a future
+    // refactor can't reintroduce the mkdirs.
+
+    private lateinit var sideEffectTmpDir: File
+
+    @Before
+    fun setUpSideEffectTmpDir() {
+        sideEffectTmpDir = File.createTempFile("bat582-isConfigured", "").apply {
+            delete()
+            mkdirs()
+        }
+    }
+
+    @After
+    fun tearDownSideEffectTmpDir() {
+        if (::sideEffectTmpDir.isInitialized) {
+            sideEffectTmpDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `isConfiguredAt returns false on fresh state — no parent dir`() {
+        // Setup: tmp filesDir exists but `burner_keys/` does NOT.
+        val burnerKeysDir = File(sideEffectTmpDir, "burner_keys")
+        assertFalse("setup: burner_keys must not exist yet", burnerKeysDir.exists())
+
+        val configured = EncryptedPrefsKeyVault.isConfiguredAt(sideEffectTmpDir, "burner")
+
+        assertFalse("isConfiguredAt must return false on fresh state", configured)
+    }
+
+    @Test
+    fun `isConfiguredAt does NOT create burner_keys as a side effect`() {
+        // **The R4 review-finding regression pin.** Pre-fix, calling
+        // isConfigured("burner") on a never-configured install
+        // mkdir'd `filesDir/burner_keys/` because the path went
+        // through dir() → mkdirs(). Post-fix the call is a pure
+        // read — two `fstat`s, no writes.
+        //
+        // If a future refactor reintroduces the mkdirs (e.g. by
+        // routing through fileFor(), which still calls dir()),
+        // this assertion fails.
+        val burnerKeysDir = File(sideEffectTmpDir, "burner_keys")
+        assertFalse("setup: burner_keys must not exist yet", burnerKeysDir.exists())
+
+        EncryptedPrefsKeyVault.isConfiguredAt(sideEffectTmpDir, "burner")
+
+        assertFalse(
+            "isConfiguredAt must NOT create burner_keys/ as a side effect — " +
+                "the periodic sweep gate runs every 30s and would otherwise " +
+                "produce an empty directory + flash wear on every install " +
+                "where the burner is never configured",
+            burnerKeysDir.exists(),
+        )
+    }
+
+    @Test
+    fun `pre-fix path (dir + mkdirs) DID create burner_keys — bug evidence`() {
+        // Documents the BUGGY pre-fix behavior so a future reader can
+        // see what the R4 fix prevents. We replicate the pre-fix path
+        // inline — `dir()` was a private helper that called `mkdirs()`,
+        // and `fileFor()` routed through it. So calling `fileFor("burner")`
+        // followed by `.exists()` on the result both checked AND created.
+        //
+        // After running this buggy path, `burner_keys/` exists on disk
+        // even though no key was ever stored — exactly the bug we
+        // patched. This test exists to make the regression visible if
+        // anyone later asks "what was the bug, exactly?"
+        val burnerKeysDir = File(sideEffectTmpDir, "burner_keys")
+        assertFalse("setup: burner_keys must not exist yet", burnerKeysDir.exists())
+
+        // Pre-fix logic (buggy): mkdirs the parent then check the file.
+        val d = File(sideEffectTmpDir, "burner_keys")
+        if (!d.exists()) d.mkdirs()
+        val f = File(d, "burner")
+        val configuredViaBuggyPath = f.exists()
+
+        assertFalse("the buggy path still returned the right boolean", configuredViaBuggyPath)
+        assertTrue(
+            "pre-fix BUG evidence: the gate check itself created burner_keys/ — " +
+                "this is exactly what the R4 fix avoids by routing through " +
+                "isConfiguredAt instead of fileFor()/dir()",
+            burnerKeysDir.exists(),
+        )
+    }
+
+    @Test
+    fun `isConfiguredAt returns true when key file is present`() {
+        // Sanity: the post-fix contract still produces the right answer
+        // when a burner IS configured. `true` necessary-but-not-sufficient
+        // (per the KDoc) — the file could still fail to decrypt — but
+        // that's the gate's contract.
+        val burnerKeysDir = File(sideEffectTmpDir, "burner_keys").apply { mkdirs() }
+        val keyFile = File(burnerKeysDir, "burner")
+        keyFile.writeBytes(ByteArray(80) { it.toByte() })
+
+        val configured = EncryptedPrefsKeyVault.isConfiguredAt(sideEffectTmpDir, "burner")
+
+        assertTrue("isConfiguredAt must return true when key file exists", configured)
+    }
+
+    @Test
+    fun `isConfiguredAt rejects path-traversal ids`() {
+        // ID_REGEX guard from the companion: must reject `..`, `/`,
+        // any non-[A-Za-z0-9_-] char. Even though V1 only ever calls
+        // with id="burner", the gate must defend against future code
+        // that might pass through user input.
+        val malformed = listOf("..", "../escape", "/abs", "burner/sub", "burner.tmp", "")
+        for (id in malformed) {
+            assertFalse(
+                "isConfiguredAt must reject malformed id `$id`",
+                EncryptedPrefsKeyVault.isConfiguredAt(sideEffectTmpDir, id),
+            )
         }
     }
 

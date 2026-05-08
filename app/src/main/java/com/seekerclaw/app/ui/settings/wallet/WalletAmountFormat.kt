@@ -41,11 +41,13 @@ import java.math.RoundingMode
  */
 object WalletAmountFormat {
 
+    // Decimal-place counts for the two assets the burner can spend. SOL
+    // has 9 decimals (1 SOL = 10^9 lamports); USDC has 6 (1 USDC = 10^6
+    // microunits). Conversion uses BigDecimal.movePointRight/Left rather
+    // than a precomputed `10^decimals` constant — the JDK fast path for
+    // movePoint avoids materializing the BigInteger multiplier.
     private const val SOL_DECIMALS = 9
     private const val USDC_DECIMALS = 6
-
-    private val LAMPORTS_PER_SOL: BigInteger = BigInteger.TEN.pow(SOL_DECIMALS)
-    private val MICRO_PER_USDC: BigInteger = BigInteger.TEN.pow(USDC_DECIMALS)
 
     /**
      * BAT-582 R4: strict decimal regex — exact mirror of the Node-side

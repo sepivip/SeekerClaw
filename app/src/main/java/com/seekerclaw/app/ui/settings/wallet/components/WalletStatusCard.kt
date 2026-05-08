@@ -38,8 +38,18 @@ import com.seekerclaw.app.ui.theme.Spacing
  * (Phase 5+) can use the same composable.
  *
  * Tap-to-copy uses system [ClipboardManager] directly (we want to expose
- * the full address, not the truncated one). Long-press haptic confirms
- * the copy without a popup.
+ * the full address, not the truncated one). Confirmation has two channels
+ * (R4 review fix — earlier KDoc said "without a popup" which mismatched
+ * the actual code path):
+ *   - Long-press haptic via [HapticFeedbackType.LongPress] for tactile
+ *     feedback that the tap registered.
+ *   - A short [Toast] reading "Address copied" — chosen because some
+ *     users won't notice the haptic (vibration off, in-pocket copy from
+ *     a paired Bluetooth keyboard, etc.) and silent copies of a wallet
+ *     address are an easy way to ship the wrong address by accident.
+ *
+ * If a future redesign opts for haptic-only, drop the `Toast.makeText`
+ * call in [copyToClipboard] and update this KDoc in the same change.
  */
 @Composable
 fun WalletStatusCard(

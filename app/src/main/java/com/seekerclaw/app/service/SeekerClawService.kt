@@ -436,13 +436,15 @@ class SeekerClawService : Service() {
         // reclaims a few hundred bytes), but the gate's correctness
         // doesn't depend on that.
         //
-        //   (a) Gate via [EncryptedPrefsKeyVault.isConfigured]. Cheap
-        //       `fstat` on the key file in `filesDir/burner_keys/burner`.
-        //       Pre-import the file is absent → gate is false → no
-        //       CapEnforcer allocation. Post-import the file exists →
-        //       gate is true → sweep runs every 30s. Post-wipe the file
-        //       is gone → gate goes false → sweep stops within 30s of
-        //       wipe completing.
+        //   (a) Gate via [EncryptedPrefsKeyVault.isConfigured]. Two
+        //       `fstat` calls: parent dir + key file in
+        //       `filesDir/burner_keys/burner`. Pure read — no mkdirs,
+        //       so a never-configured install never grows the dir as
+        //       a side effect of the gate (R4 fix). Pre-import the file
+        //       is absent → gate is false → no CapEnforcer allocation.
+        //       Post-import the file exists → gate is true → sweep runs
+        //       every 30s. Post-wipe the file is gone → gate goes false
+        //       → sweep stops within 30s of wipe completing.
         //   (b) Once we DO touch CapEnforcer.get(applicationContext),
         //       cache the reference so subsequent ticks skip the
         //       singleton-getter overhead. The first call pays for
@@ -457,10 +459,14 @@ class SeekerClawService : Service() {
         scope.launch {
             while (isActive) {
                 try {
-                    // isConfigured is a single fstat on a small file
-                    // in the app's private dir — same cost as the
+                    // isConfigured is two fstats (parent dir + key file)
+                    // in the app's private dir — same cost class as the
                     // previous capsFile.exists() check, but tracks the
                     // actual configured state instead of leftover state.
+                    // Pure read: does NOT mkdirs the parent as a side
+                    // effect (R4 fix — earlier impl created
+                    // burner_keys/ on every tick for never-configured
+                    // installs).
                     if (burnerKeyVault.isConfigured(
                             com.seekerclaw.app.bridge.burner.BurnerBridgeEndpoints.BURNER_ID,
                         )

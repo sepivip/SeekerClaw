@@ -74,6 +74,40 @@ class EncryptedPrefsKeyVault(
          */
         internal fun decodeFromVault(s: String): ByteArray =
             Base64.getDecoder().decode(s)
+
+        /**
+         * BAT-582 R4 (R4 review fix): pure-function variant of [isConfigured].
+         *
+         * **Why this exists:** the periodic sweep in
+         * [com.seekerclaw.app.service.SeekerClawService] gates on
+         * `isConfigured("burner")` every 30s. The earlier impl routed
+         * through `fileFor()` → `dir()` which calls `mkdirs()` if the
+         * parent doesn't exist — so the gate created `filesDir/burner_keys/`
+         * for users who never configured a burner. Cheap, but: unnecessary
+         * directory creation, flash wear on a 30s loop, and a false signal
+         * to anyone auditing the device that the dir "matters" when it's
+         * actually empty.
+         *
+         * Routed through this pure helper instead — no `mkdirs()`, no
+         * `dir()` call, just two `fstat` calls (parent + file). Exposed
+         * `internal` so [EncryptedPrefsKeyVaultTest] can verify the
+         * no-side-effect contract without standing up a Robolectric
+         * Context (we have JUnit + coroutines-test in the test classpath
+         * but no Android instrumentation framework).
+         *
+         * Returns false if [id] is malformed (path traversal defense),
+         * if the parent directory doesn't exist (= burner never
+         * configured on this install), or if the key file itself is
+         * absent. See the instance-method KDoc for the necessary-but-
+         * not-sufficient caveat (a `true` here doesn't guarantee
+         * decryption will succeed; it just rules out the WIPED case).
+         */
+        internal fun isConfiguredAt(filesDir: File, id: String): Boolean {
+            if (!ID_REGEX.matches(id)) return false
+            val parent = File(filesDir, DIR_NAME)
+            if (!parent.exists()) return false
+            return File(parent, id).exists()
+        }
     }
 
     private fun dir(): File {
@@ -89,9 +123,11 @@ class EncryptedPrefsKeyVault(
 
     /**
      * Cheap "is this id configured" probe for the periodic sweep gate.
-     * Does NOT decrypt or read the file — just an `fstat`. Used by
-     * SeekerClawService to decide whether to allocate CapEnforcer +
-     * run sweepStale on a wiped wallet's empty pending queue.
+     * Does NOT decrypt or read the file, AND does NOT create the parent
+     * directory as a side effect — just two `fstat` calls (parent +
+     * file). Used by SeekerClawService to decide whether to allocate
+     * CapEnforcer + run sweepStale on a wiped wallet's empty pending
+     * queue.
      *
      * Returns false if [id] is malformed (path traversal defense), if
      * the parent directory doesn't exist, or if the key file itself is
@@ -101,11 +137,17 @@ class EncryptedPrefsKeyVault(
      * because the sweep iteration is harmless when there's no pending
      * work, just wasted CPU. The gate's job is ruling out the WIPED
      * case where there's no key AND no caps state.
+     *
+     * **R4 review fix:** the earlier impl went through `fileFor()` →
+     * `dir()` which called `mkdirs()`. That meant calling `isConfigured`
+     * on a never-configured install created `filesDir/burner_keys/` as
+     * a side effect of the sweep gate (called every 30s). Routes through
+     * the pure [Companion.isConfiguredAt] helper now — no directory
+     * creation. See its KDoc for the rationale + the JVM test that
+     * pins the no-side-effect contract.
      */
-    fun isConfigured(id: String): Boolean {
-        val file = fileFor(id) ?: return false
-        return file.exists()
-    }
+    fun isConfigured(id: String): Boolean =
+        isConfiguredAt(context.applicationContext.filesDir, id)
 
     override suspend fun store(id: String, expanded64: ByteArray) {
         require(expanded64.size == 64) { "expanded64 must be 64 bytes" }
