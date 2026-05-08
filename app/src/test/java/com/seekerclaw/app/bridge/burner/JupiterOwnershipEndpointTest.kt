@@ -80,6 +80,80 @@ class JupiterOwnershipEndpointTest {
         assertEquals("burner", endpoint.get("order-1"))
     }
 
+    /**
+     * R3 review (Copilot): the same-role fast-path must NOT call
+     * CrossProcessStore.update — that always rewrites the file and
+     * broadcasts cross-process. We assert this by injecting a sentinel
+     * into the on-disk file between writes; if `set()` short-circuits
+     * before `update()`, the sentinel survives. If it doesn't, the
+     * `update()` round-trip re-encodes from the schema and drops the
+     * sentinel.
+     *
+     * This is a behavioral test of the contract "same-role re-set
+     * does not touch disk", not an implementation test — it would
+     * still pass if a future refactor short-circuited via a different
+     * mechanism, as long as the no-write contract holds.
+     */
+    @Test
+    fun `same-role re-set does not rewrite the persisted file`() = runBlocking {
+        val (endpoint, _) = newEndpoint()
+        assertTrue(endpoint.set("order-1", "burner"))
+
+        // Sentinel: append a non-schema field to the persisted JSON.
+        // CrossProcessStore.read() honors `ignoreUnknownKeys = true`,
+        // so it parses without complaint. If `set()` falls through
+        // to `store.update {}`, the read+transform+encode pipeline
+        // re-emits ONLY the schema fields and the sentinel disappears.
+        // If `set()` correctly short-circuits, the sentinel survives.
+        val file = File(workDir, JupiterOwnershipState.FILE_NAME)
+        val original = file.readText()
+        assertTrue("expected file to exist after first set", file.exists())
+        // Inject sentinel by inserting a new key before the closing brace.
+        val sentinelMark = "\"_sentinel_r3\":\"survived\""
+        val sentinelText = original.replaceFirst("\"orders\"", "$sentinelMark,\"orders\"")
+        assertTrue("sentinel injection failed", sentinelText.contains("_sentinel_r3"))
+        file.writeText(sentinelText)
+
+        // Same-role re-set — must NOT rewrite file (must NOT call update()).
+        assertTrue(endpoint.set("order-1", "burner"))
+
+        // If short-circuit fires, sentinel survives. If update() is called,
+        // it re-encodes from the schema and drops the sentinel.
+        val afterReSet = file.readText()
+        assertTrue(
+            "expected sentinel to survive same-role re-set, got: $afterReSet",
+            afterReSet.contains("_sentinel_r3"),
+        )
+
+        // Logical state still correct (read tolerates the unknown key).
+        assertEquals("burner", endpoint.get("order-1"))
+    }
+
+    /**
+     * R3 review: the conflict path (different role on same orderId)
+     * must still call update() and overwrite. Sentinel is dropped.
+     */
+    @Test
+    fun `conflicting role re-set does call update and overwrites`() = runBlocking {
+        val (endpoint, _) = newEndpoint()
+        assertTrue(endpoint.set("order-1", "burner"))
+
+        val file = File(workDir, JupiterOwnershipState.FILE_NAME)
+        val original = file.readText()
+        val sentinelMark = "\"_sentinel_r3\":\"survived\""
+        file.writeText(original.replaceFirst("\"orders\"", "$sentinelMark,\"orders\""))
+
+        // Different role — fast-path must NOT fire; update() runs.
+        assertTrue(endpoint.set("order-1", "main"))
+
+        val afterReSet = file.readText()
+        assertFalse(
+            "expected sentinel to be dropped by update() round-trip, got: $afterReSet",
+            afterReSet.contains("_sentinel_r3"),
+        )
+        assertEquals("main", endpoint.get("order-1"))
+    }
+
     @Test
     fun `re-set with different role overwrites`() = runBlocking {
         val (endpoint, _) = newEndpoint()

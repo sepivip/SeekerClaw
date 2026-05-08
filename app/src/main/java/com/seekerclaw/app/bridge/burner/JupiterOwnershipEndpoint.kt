@@ -30,10 +30,11 @@ class JupiterOwnershipEndpoint internal constructor(
 
     /**
      * Set ownership for an order id. Idempotent: re-setting the same
-     * orderId to the same role is a no-op (same byte-for-byte file
-     * after the update); re-setting to a DIFFERENT role overwrites
-     * with a diagnostic log (shouldn't happen in V1 — indicates a
-     * bug, tampering, or a re-used orderId).
+     * orderId to the same role is a TRUE no-op — a fast-path read
+     * before update() short-circuits without touching disk or
+     * broadcasting. Re-setting to a DIFFERENT role overwrites with a
+     * diagnostic log (shouldn't happen in V1 — indicates a bug,
+     * tampering, or a re-used orderId).
      *
      * Returns true on successful write (or no-op same-role re-set);
      * false on filesystem failure.
@@ -41,22 +42,27 @@ class JupiterOwnershipEndpoint internal constructor(
     suspend fun set(orderId: String, role: String): Boolean {
         if (orderId.isBlank()) return false
         if (role != "burner" && role != "main") return false
-        return store.update { current ->
-            val existing = current.orders[orderId]
-            if (existing == role) {
-                // Identical re-write; CrossProcessStore.update is a no-op
-                // ONLY when the next value equals current — we still
-                // return current so the in-memory clone matches and the
-                // file isn't rewritten gratuitously.
-                return@update current
-            }
+
+        // R3 review fix (Copilot): CrossProcessStore.update() does NOT
+        // short-circuit when next == current — it always persists and
+        // broadcasts. Without this fast-path, every same-role re-set
+        // (idempotent retry, replay) would rewrite the file and fire
+        // a cross-process FileObserver notify for no logical change.
+        // The race window between read() and update() is acceptable in
+        // V1: the Node tool is the only writer of Jupiter ownership and
+        // doesn't issue concurrent same-orderId writes.
+        val current = store.read()
+        if (current.orders[orderId] == role) return true
+
+        return store.update { state ->
+            val existing = state.orders[orderId]
             if (existing != null && existing != role) {
                 Log.w(
                     TAG,
                     "Jupiter ownership conflict for $orderId: $existing → $role (overwriting)",
                 )
             }
-            current.copy(orders = current.orders + (orderId to role))
+            state.copy(orders = state.orders + (orderId to role))
         }
     }
 
