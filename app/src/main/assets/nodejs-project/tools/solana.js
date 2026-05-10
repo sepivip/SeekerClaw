@@ -73,7 +73,7 @@ const tools = [
     },
     {
         name: 'solana_send',
-        description: 'Send SOL to a Solana address. IMPORTANT: This prompts the user to approve the transaction in their wallet app on the phone. ALWAYS confirm with the user in chat before calling this tool.',
+        description: 'Send SOL to a Solana address. **Routing (BAT-582)**: under burner per-tx + daily SOL caps -> signs silently from the **Burner wallet** (no popup); over cap or burner not configured -> prompts the **Main wallet** for approval (MWA popup). ALWAYS confirm with the user in chat before calling this tool.',
         input_schema: {
             type: 'object',
             properties: {
@@ -114,7 +114,7 @@ const tools = [
     },
     {
         name: 'solana_swap',
-        description: 'Swap tokens using Jupiter Ultra (gasless, no SOL needed for fees). IMPORTANT: This prompts the user to approve the transaction in their wallet app on the phone. ALWAYS confirm with the user and show the quote first before calling this tool.',
+        description: 'Swap tokens using Jupiter Ultra (gasless, no SOL needed for fees). **Routing (BAT-582)**: under burner per-tx + daily caps for the input asset -> silent burner sign; over cap or burner not configured -> Main wallet popup. ALWAYS confirm with the user and show the quote first before calling this tool.',
         input_schema: {
             type: 'object',
             properties: {
@@ -127,7 +127,7 @@ const tools = [
     },
     {
         name: 'jupiter_trigger_create',
-        description: 'Create a trigger (limit) order on Jupiter. Requires Jupiter API key (get free at portal.jup.ag). Order executes automatically when price condition is met. Use for: buy at lower price (limit buy) or sell at higher price (limit sell).',
+        description: 'Create a trigger (limit) order on Jupiter. Requires Jupiter API key (get free at portal.jup.ag). Order executes automatically when price condition is met. Use for: buy at lower price (limit buy) or sell at higher price (limit sell). **Routing (BAT-582)**: under burner caps -> silent burner sign; over cap or burner not configured -> Main wallet popup.',
         input_schema: {
             type: 'object',
             properties: {
@@ -154,7 +154,7 @@ const tools = [
     },
     {
         name: 'jupiter_trigger_cancel',
-        description: 'Cancel an active limit or stop order on Jupiter. Requires the order ID from jupiter_trigger_list. Requires Jupiter API key.',
+        description: 'Cancel an active limit or stop order on Jupiter. Requires the order ID from jupiter_trigger_list. Requires Jupiter API key. **Routing (BAT-582)**: cancels for orders the burner created -> silent burner sign; cancels for main-wallet orders (or unknown ownership) -> Main wallet popup. Cancels do not consume cap principal.',
         input_schema: {
             type: 'object',
             properties: {
@@ -165,7 +165,7 @@ const tools = [
     },
     {
         name: 'jupiter_dca_create',
-        description: 'Create a recurring DCA (Dollar Cost Averaging) order on Jupiter. Automatically buys tokens on a schedule to average out price. Perfect for building positions over time. Requires Jupiter API key.',
+        description: 'Create a recurring DCA (Dollar Cost Averaging) order on Jupiter. Automatically buys tokens on a schedule to average out price. Perfect for building positions over time. Requires Jupiter API key. **Routing (BAT-582)**: total committed amount (amountPerCycle x cycles) is checked against burner caps; under cap -> silent burner sign; over cap or burner not configured -> Main wallet popup.',
         input_schema: {
             type: 'object',
             properties: {
@@ -192,7 +192,7 @@ const tools = [
     },
     {
         name: 'jupiter_dca_cancel',
-        description: 'Cancel an active DCA (recurring) order on Jupiter. Stops all future executions. Requires the order ID from jupiter_dca_list. Requires Jupiter API key.',
+        description: 'Cancel an active DCA (recurring) order on Jupiter. Stops all future executions. Requires the order ID from jupiter_dca_list. Requires Jupiter API key. **Routing (BAT-582)**: cancels for orders the burner created -> silent burner sign; cancels for main-wallet orders (or unknown ownership) -> Main wallet popup. Cancels do not consume cap principal.',
         input_schema: {
             type: 'object',
             properties: {
