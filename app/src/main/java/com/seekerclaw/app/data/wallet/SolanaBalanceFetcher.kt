@@ -43,10 +43,17 @@ class SolanaBalanceFetcher(
      */
     suspend fun fetch(pubkey: String): Balances? {
         val sol = getSolBalance(pubkey) ?: return null
-        // USDC ATA may not exist yet (burner never received USDC). Treat
-        // "no token accounts" as zero balance, NOT as a fetch failure —
-        // SOL succeeded so the wallet IS reachable.
-        val usdc = getUsdcBalance(pubkey) ?: BigInteger.ZERO
+        // getUsdcBalance() already differentiates two cases internally:
+        //   - returns ZERO when getTokenAccountsByOwner returned 200 with
+        //     an empty value array (wallet has never held USDC — no ATA
+        //     exists yet — that IS a valid zero balance, not an error).
+        //   - returns null on RPC failure, JSON-RPC error, or parse error
+        //     (real failure — we don't know the actual balance).
+        // Propagate the null upward instead of masking it with ZERO.
+        // Pre-fix the UI showed "0 USDC" on a transient RPC blip even when
+        // the wallet held real USDC, which read like funds vanished —
+        // misleading the user is the worst possible failure mode here.
+        val usdc = getUsdcBalance(pubkey) ?: return null
         return Balances(sol, usdc)
     }
 
