@@ -1,0 +1,41 @@
+{
+  "_meta": {
+    "label": "coingecko-trending-pools",
+    "description": "v2 endpoint, expected free at probe time",
+    "capturedAt": "2026-05-10T12:28:37.993Z",
+    "note": "Sanitized per BAT-582 v1.6 contract amendment 6."
+  },
+  "url": "https://pro-api.coingecko.com/api/v3/x402/onchain/networks/solana/trending_pools",
+  "method": "GET",
+  "status": 402,
+  "headers": {
+    "date": "Sun, 10 May 2026 12:28:52 GMT",
+    "content-type": "application/json; charset=utf-8",
+    "transfer-encoding": "chunked",
+    "connection": "keep-alive",
+    "server": "cloudflare",
+    "x-frame-options": "SAMEORIGIN",
+    "x-xss-protection": "0",
+    "x-content-type-options": "nosniff",
+    "x-permitted-cross-domain-policies": "none",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "payment-required": "eyJ4NDAyVmVyc2lvbiI6MiwicmVzb3VyY2UiOnsidXJsIjoiaHR0cHM6Ly9wcm8tYXBpLmNvaW5nZWNrby5jb20vYXBpL3YzL3g0MDIvb25jaGFpbi9uZXR3b3Jrcy9zb2xhbmEvdHJlbmRpbmdfcG9vbHMiLCJkZXNjcmlwdGlvbiI6IlF1ZXJ5IHRoZSBsYXRlc3Qgb25jaGFpbiBERVggdHJlbmRpbmcgcG9vbHMgXHUwMDI2IHRva2VucywgYmFzZWQgb24gYSBwcm92aWRlZCBuZXR3b3JrLiIsIm1pbWVUeXBlIjoiYXBwbGljYXRpb24vanNvbiJ9LCJhY2NlcHRzIjpbeyJzY2hlbWUiOiJleGFjdCIsIm5ldHdvcmsiOiJlaXAxNTU6ODQ1MyIsImFtb3VudCI6IjEwMDAwIiwiYXNzZXQiOiIweDgzMzU4OWZDRDZlRGI2RTA4ZjRjN0MzMkQ0ZjcxYjU0YmRBMDI5MTMiLCJwYXlUbyI6IjB4MTEwY2RCYmE3RkU2NDM0RWM0Q0UzNDY0Q0M1MjM5NDJhZDZGYjc4NCIsIm1heFRpbWVvdXRTZWNvbmRzIjo2MCwiZXh0cmEiOnsibmFtZSI6IlVTRCBDb2luIiwidmVyc2lvbiI6IjIifX0seyJzY2hlbWUiOiJleGFjdCIsIm5ldHdvcmsiOiJzb2xhbmE6NWV5a3Q0VXNGdjhQOE5KZFRSRXBZMXZ6cUtxWkt2ZHAiLCJhbW91bnQiOiIxMDAwMCIsImFzc2V0IjoiRVBqRldkZDVBdWZxU1NxZU0ycU4xeHp5YmFwQzhHNHdFR0drWnd5VER0MXYiLCJwYXlUbyI6IjhYaG5nVFJpdFRjVUpNaWFESjZhenc4R1JTaUZQcHdobm1WM0hZUUxIVXBMIiwibWF4VGltZW91dFNlY29uZHMiOjYwLCJleHRyYSI6eyJmZWVQYXllciI6IkQ2Wmh0TlE1blQ5Wm5USFVicVhac1R4NU1IMnJQRmlCQmdnWDRoWTFXZVBNIn19XSwiZXh0ZW5zaW9ucyI6eyJiYXphYXIiOnsiaW5mbyI6eyJpbnB1dCI6eyJ0eXBlIjoiaHR0cCIsIm1ldGhvZCI6IkdFVCIsInF1ZXJ5UGFyYW1zIjp7ImluY2x1ZGUiOiJiYXNlX3Rva2VuIiwicGFnZSI6MSwiZHVyYXRpb24iOiIyNGgiLCJpbmNsdWRlX2d0X2NvbW11bml0eV9kYXRhIjp0cnVlfX0sIm91dHB1dCI6eyJ0eXBlIjoianNvbiIsImV4YW1wbGUiOnsiZGF0YSI6W3siaWQiOiJldGhfMHg4OGU2YTBjMmRkZDI2ZmVlYjY0ZjAzOWEyYzQxMjk2ZmNiM2Y1NjQwIiwidHlwZSI6InBvb2wiLCJhdHRyaWJ1dGVzIjp7ImJhc2VfdG9rZW5fcHJpY2VfdXNkIjoiMzY1My4xMjQ5MTY0NTE3NiIsImJhc2VfdG9rZW5fcHJpY2VfbmF0aXZlX2N1cnJlbmN5IjoiMS4wIiwicXVvdGVfdG9rZW5fcHJpY2VfdXNkIjoiMC45OTgzNDM3MDc5MjYyNDUiLCJxdW90ZV90b2tlbl9wcmljZV9uYXRpdmVfY3VycmVuY3kiOiIwLjAwMDI3MzA0MDU0NTA5MzIyMSIsImJhc2VfdG9rZW5fcHJpY2VfcXVvdGVfdG9rZW4iOiIzNjYyLjQ2IiwicXVvdGVfdG9rZW5fcHJpY2VfYmFzZV90b2tlbiI6IjAuMDAwMjczMDQiLCJhZGRyZXNzIjoiMHg4OGU2YTBjMmRkZDI2ZmVlYjY0ZjAzOWEyYzQxMjk2ZmNiM2Y1NjQwIiwibmFtZSI6IldFVEggLyBVU0RDIDAuMDUlIiwicG9vbF9jcmVhdGVkX2F0IjoiMjAyMS0xMi0yOVQxMjozNToxNFoiLCJmZHZfdXNkIjoiMTEwMDcwNDEwNDEiLCJtYXJrZXRfY2FwX3VzZCI6bnVsbCwicHJpY2VfY2hhbmdlX3BlcmNlbnRhZ2UiOnsibTUiOiIwIiwibTE1IjoiMC4yMSIsIm0zMCI6IjAuMzEiLCJoMSI6IjAuNTEiLCJoNiI6IjAuODYiLCJoMjQiOiI3LjcxIn0sInRyYW5zYWN0aW9ucyI6eyJtNSI6eyJidXlzIjo3LCJzZWxscyI6MiwiYnV5ZXJzIjo3LCJzZWxsZXJzIjoyfSwibTE1Ijp7ImJ1eXMiOjE5LCJzZWxscyI6MjcsImJ1eWVycyI6MTksInNlbGxlcnMiOjI3fSwibTMwIjp7ImJ1eXMiOjQ5LCJzZWxscyI6NjEsImJ1eWVycyI6NDUsInNlbGxlcnMiOjU3fSwiaDEiOnsiYnV5cyI6OTcsInNlbGxzIjoxNDQsImJ1eWVycyI6ODMsInNlbGxlcnMiOjEyNH0sImgyNCI6eyJidXlzIjoyOTY2LCJzZWxscyI6Mzg0NywiYnV5ZXJzIjoxNjI1LCJzZWxsZXJzIjoyMzk5fX0sInZvbHVtZV91c2QiOnsibTUiOiI4Njg1ODEuNzM0ODMxNCIsIm0xNSI6IjIwNTYyNjIuODg1MDk4IiwibTMwIjoiNDA4MTIzMC4wOTg0NTYiLCJoMSI6IjE2Nzk4MTU4LjAxMzg1MjYiLCJoNiI6IjE2NDA1NDYxMC44NTAxODgiLCJoMjQiOiI1MzY1NDU0NDQuOTA0NTM1In0sInJlc2VydmVfaW5fdXNkIjoiMTYzOTg4NTQxLjM4MTIiLCJzZW50aW1lbnRfdm90ZV9wb3NpdGl2ZV9wZXJjZW50YWdlIjowLCJzZW50aW1lbnRfdm90ZV9uZWdhdGl2ZV9wZXJjZW50YWdlIjowLCJjb21tdW5pdHlfc3VzX3JlcG9ydCI6MH0sInJlbGF0aW9uc2hpcHMiOnsiYmFzZV90b2tlbiI6eyJkYXRhIjp7ImlkIjoiZXRoXzB4YzAyYWFhMzliMjIzZmU4ZDBhMGU1YzRmMjdlYWQ5MDgzYzc1NmNjMiIsInR5cGUiOiJ0b2tlbiJ9fSwicXVvdGVfdG9rZW4iOnsiZGF0YSI6eyJpZCI6ImV0aF8weGEwYjg2OTkxYzYyMThiMzZjMWQxOWQ0YTJlOWViMGNlMzYwNmViNDgiLCJ0eXBlIjoidG9rZW4ifX0sImRleCI6eyJkYXRhIjp7ImlkIjoidW5pc3dhcF92MyIsInR5cGUiOiJkZXgifX19fV0sImluY2x1ZGVkIjpbeyJpZCI6ImV0aF8weGMwMmFhYTM5YjIyM2ZlOGQwYTBlNWM0ZjI3ZWFkOTA4M2M3NTZjYzIiLCJ0eXBlIjoidG9rZW4iLCJhdHRyaWJ1dGVzIjp7ImFkZHJlc3MiOiIweGMwMmFhYTM5YjIyM2ZlOGQwYTBlNWM0ZjI3ZWFkOTA4M2M3NTZjYzIiLCJuYW1lIjoiV3JhcHBlZCBFdGhlciIsInN5bWJvbCI6IldFVEgiLCJkZWNpbWFscyI6MTgsImltYWdlX3VybCI6Imh0dHBzOi8vYXNzZXRzLmNvaW5nZWNrby5jb20vY29pbnMvaW1hZ2VzLzI1MTgvc21hbGwvd2V0aC5wbmc/MTY5NjUwMzMzMiIsImNvaW5nZWNrb19jb2luX2lkIjoid2V0aCJ9fV19fX0sInNjaGVtYSI6eyIkc2NoZW1hIjoiaHR0cHM6Ly9qc29uLXNjaGVtYS5vcmcvZHJhZnQvMjAyMC0xMi9zY2hlbWEiLCJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJpbnB1dCI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJ0eXBlIjp7InR5cGUiOiJzdHJpbmciLCJjb25zdCI6Imh0dHAifSwibWV0aG9kIjp7InR5cGUiOiJzdHJpbmciLCJlbnVtIjpbIkdFVCJdfSwicXVlcnlQYXJhbXMiOnsidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnsiaW5jbHVkZSI6eyJ0eXBlIjoic3RyaW5nIn0sInBhZ2UiOnsidHlwZSI6ImludGVnZXIifSwiZHVyYXRpb24iOnsidHlwZSI6ImVudW0ifSwiaW5jbHVkZV9ndF9jb21tdW5pdHlfZGF0YSI6eyJ0eXBlIjoiYm9vbGVhbiJ9fX19LCJyZXF1aXJlZCI6WyJ0eXBlIiwibWV0aG9kIl0sImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjpmYWxzZX0sIm91dHB1dCI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJ0eXBlIjp7InR5cGUiOiJzdHJpbmcifSwiZXhhbXBsZSI6eyJ0eXBlIjoib2JqZWN0In19LCJyZXF1aXJlZCI6WyJ0eXBlIiwiZXhhbXBsZSJdfX0sInJlcXVpcmVkIjpbImlucHV0Iiwib3V0cHV0Il19fX19",
+    "access-control-allow-origin": "*",
+    "access-control-allow-methods": "POST, PUT, DELETE, GET, OPTIONS",
+    "access-control-request-method": "*",
+    "access-control-allow-headers": "Origin, X-Requested-With, Content-Type, Accept, Authorization",
+    "access-control-expose-headers": "link, per-page, total",
+    "vary": "Accept-Encoding, Origin",
+    "cache-control": "no-cache",
+    "x-request-id": "984b2947-f849-43bd-bd0b-9ef4db2c229c",
+    "x-runtime": "0.002794",
+    "content-security-policy-report-only": "script-src https://accounts.google.com/gsi/client; frame-src https://accounts.google.com/gsi/; connect-src https://accounts.google.com/gsi/;",
+    "strict-transport-security": "max-age=15724800; includeSubdomains",
+    "cf-cache-status": "MISS",
+    "cf-ray": "9f98f23a9cd4f937-SOF"
+  },
+  "body": {
+    "error": "Payment required",
+    "message": "Payment is required to access this resource"
+  }
+}

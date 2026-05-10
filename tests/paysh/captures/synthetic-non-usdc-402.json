@@ -1,0 +1,36 @@
+{
+  "_meta": {
+    "label": "synthetic-non-usdc-402",
+    "description": "Synthetic fail-closed fixture: x402 v2 402 offering Solana mainnet but with non-USDC asset (USDT mint). Parser must reject with non_usdc_asset.",
+    "kind": "synthetic",
+    "purpose": "Per BAT-582 v1.4+ contract — USDC-only is a hard security envelope rule. Test proves we reject other SPL stablecoins even on Solana mainnet.",
+    "expectedRejection": "non_usdc_asset"
+  },
+  "url": "https://example.invalid/api/usdt-only",
+  "method": "GET",
+  "status": 402,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "x402Version": 2,
+    "error": "Payment required",
+    "resource": {
+      "url": "https://example.invalid/api/usdt-only",
+      "description": "Synthetic USDT-priced endpoint",
+      "mimeType": "application/json"
+    },
+    "accepts": [
+      {
+        "scheme": "exact",
+        "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        "amount": "10000",
+        "asset": "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
+        "payTo": "8XhngTRitTcUJMiaDJ6azw8GRSiFPpwhnmV3HYQLHUpL",
+        "maxTimeoutSeconds": 300,
+        "extra": { "feePayer": "D6ZhtNQ5nT9ZnTHUbqXZsTx5MH2rPFiBBggX4hY1WePM" }
+      }
+    ],
+    "extensions": {}
+  }
+}
