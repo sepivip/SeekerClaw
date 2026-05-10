@@ -7,9 +7,13 @@
 // Wire format we handle:
 //   [compact-u16 sigCount][sigCount × 64-byte signature][message bytes]
 //
-// We only support sigCount === 1 (the burner is the sole signer for both
-// Jupiter Ultra swaps and x402 USDC transfers we build). Multisig is out of
-// scope for these tests.
+// We ONLY support sigCount === 1. The burner is the sole signer for both
+// Jupiter Ultra swaps (Ultra builds a single-signer tx — Jupiter pays gas
+// and rent via gasless mode, so no co-signer fee payer) and x402 USDC
+// transfers we build (also single-signer). Hard-failing on sigCount > 1
+// here prevents a subtle bug class: signing slot 0 in a multi-sig tx and
+// proceeding produces an unsigned-but-positionally-shifted tx that the
+// network rejects later with a confusing "missing signature" error.
 
 'use strict';
 
@@ -56,8 +60,13 @@ function makePrivateKey(secret32, pubkey32) {
 function signSolanaTx(txBase64, secret32, pubkey32) {
     const buf = Buffer.from(txBase64, 'base64');
     const { value: sigCount, length: sigCountLen } = readCompactU16(buf, 0);
-    if (sigCount < 1) throw new Error('tx has no signature slots');
-    if (sigCount > 4) throw new Error(`tx has too many signers (${sigCount}) — burner is sole signer`);
+    if (sigCount !== 1) {
+        // See top-of-file comment: any tx with multiple required signers is
+        // out of scope. Filling slot 0 only would produce an invalid tx
+        // that fails late on /execute or chain submission with a confusing
+        // error — fail loud here instead.
+        throw new Error(`tx requires ${sigCount} signers but this signer only fills slot 0 — burner-only single-signer tx required`);
+    }
     const sigStart = sigCountLen;
     const messageStart = sigStart + sigCount * 64;
     if (messageStart > buf.length) throw new Error('tx truncated — sig section runs past end');

@@ -66,17 +66,33 @@ function requireKeys(env, layer) {
 }
 
 function parseSecretKey(str) {
-    // Accepts a JSON array of 64 numbers OR a base58 string.
+    // Accepts the Solana convention: a JSON array of exactly 64 integers
+    // [secret 32 bytes || public 32 bytes]. Base58 input is NOT supported
+    // here — generate-wallet.js emits the JSON-array form, which is what
+    // every Solana CLI and SDK round-trips natively.
     str = str.trim();
     if (str.startsWith('[')) {
         const arr = JSON.parse(str);
         if (!Array.isArray(arr) || arr.length !== 64) {
             throw new Error(`BURNER_SECRET_KEY: JSON array must have exactly 64 numbers, got ${arr.length}`);
         }
+        // Buffer.from(arr) silently coerces out-of-range values (e.g. -1
+        // becomes 255, 999 becomes 231 via mod 256), which would produce
+        // the WRONG key material without any error — and an Ed25519
+        // signature with a wrong key produces a perfectly valid-looking
+        // signature against a different pubkey, so the failure surfaces
+        // way downstream as "tx signed by unexpected wallet" or "Ultra
+        // /execute rejected: signature invalid". Validate up front.
+        for (let i = 0; i < arr.length; i++) {
+            const n = arr[i];
+            if (!Number.isInteger(n) || n < 0 || n > 255) {
+                throw new Error(`BURNER_SECRET_KEY: element ${i} = ${n} is not an integer in [0,255]`);
+            }
+        }
         const buf = Buffer.from(arr);
         return { secret: buf.subarray(0, 32), pubkey: buf.subarray(32, 64) };
     }
-    throw new Error('BURNER_SECRET_KEY must be a JSON array (e.g. [1,2,3,...]) of 64 numbers');
+    throw new Error('BURNER_SECRET_KEY must be a JSON array of 64 integers in [0,255], e.g. [1,2,3,...] — base58 is not supported here; run lib/generate-wallet.js for the correct format');
 }
 
 module.exports = { load, requireKeys, parseSecretKey };

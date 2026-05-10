@@ -10,6 +10,7 @@
 const crypto = require('crypto');
 const { signSolanaTx, isSigned, readCompactU16 } = require('./lib/sign-tx');
 const base58 = require('./lib/base58');
+const { parseSecretKey } = require('./lib/load-env');
 
 let failures = 0;
 function assert(cond, msg) {
@@ -93,6 +94,40 @@ const expectedV0Msg = Buffer.concat([Buffer.from([0x80]), Buffer.from('messagebo
 const v0Sig = v0SignedBuf.subarray(1, 65);
 const v0Verified = crypto.verify(null, expectedV0Msg, publicKey, v0Sig);
 assert(v0Verified, 'v0 tx signature verifies — version byte is part of signed message');
+
+// 5b. Multi-signer tx is rejected (was silently producing an invalid tx)
+console.log('');
+console.log('[5a] sign-tx rejects multi-signer transactions');
+const multiSigTx = Buffer.concat([
+    Buffer.from([0x02]),           // sigCount = 2 — burner can't fill both
+    Buffer.alloc(64 * 2),
+    Buffer.from('msg'),
+]);
+let threw = false;
+try { signSolanaTx(multiSigTx.toString('base64'), secret, pub); }
+catch (e) { threw = e.message.includes('signers') || e.message.includes('signer') || e.message.includes('slot'); }
+assert(threw, 'sigCount=2 throws with "signer" in message');
+
+// 5c. parseSecretKey rejects out-of-range integers
+console.log('');
+console.log('[5b] parseSecretKey validates integer range');
+const badRange = Array(64).fill(0); badRange[10] = 999;
+let rangeThrew = false;
+try { parseSecretKey(JSON.stringify(badRange)); }
+catch (e) { rangeThrew = e.message.includes('[0,255]') || e.message.includes('integer'); }
+assert(rangeThrew, '999 in slot 10 → throws on integer range check');
+
+const badType = Array(64).fill(0); badType[5] = 1.5;
+let typeThrew = false;
+try { parseSecretKey(JSON.stringify(badType)); }
+catch (e) { typeThrew = e.message.includes('integer') || e.message.includes('[0,255]'); }
+assert(typeThrew, 'non-integer 1.5 → throws on integer check');
+
+const badNeg = Array(64).fill(0); badNeg[20] = -1;
+let negThrew = false;
+try { parseSecretKey(JSON.stringify(badNeg)); }
+catch (e) { negThrew = e.message.includes('[0,255]') || e.message.includes('integer'); }
+assert(negThrew, '-1 in slot 20 → throws on integer range check');
 
 // 5. base58 pubkey from secret matches generated public
 console.log('');
