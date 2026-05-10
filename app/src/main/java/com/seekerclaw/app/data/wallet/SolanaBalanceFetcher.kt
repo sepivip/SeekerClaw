@@ -55,7 +55,14 @@ class SolanaBalanceFetcher(
         val params = """[${JSONObject.quote(pubkey)}]"""
         val res = jsonRpc("getBalance", params) ?: return null
         return try {
-            BigInteger.valueOf(res.getJSONObject("result").getLong("value"))
+            // SOL balances are u64 lamports per the Solana spec. JSONObject.getLong
+            // would limit us to signed 64-bit (Long.MAX_VALUE ≈ 9.2B SOL) and throw
+            // on values outside that range. Total SOL supply (~580M) means real
+            // wallets won't hit this, but the JSON-RPC value field is documented
+            // as u64 — parsing via toString() → BigInteger preserves the full
+            // unsigned range so this code stays correct against a spec-compliant
+            // node. Applies to any Solana RPC `lamports` field elsewhere too.
+            BigInteger(res.getJSONObject("result").get("value").toString())
         } catch (e: Exception) {
             Log.w(TAG, "getBalance result parse failed: ${e.message}")
             null
@@ -98,11 +105,16 @@ class SolanaBalanceFetcher(
                 requestMethod = "POST"
                 connectTimeout = timeoutMs
                 readTimeout = timeoutMs
-                setRequestProperty("Content-Type", "application/json")
+                // Explicit UTF-8 charset on both header + body. The platform-default
+                // charset that `String.toByteArray()` uses can vary by device/locale
+                // (rare on Android but technically possible) and would silently
+                // produce wrong wire bytes for any non-ASCII content. JSON-RPC is
+                // strictly UTF-8 per the spec — pin both ends.
+                setRequestProperty("Content-Type", "application/json; charset=utf-8")
                 setRequestProperty("Accept", "application/json")
                 doOutput = true
             }
-            conn.outputStream.use { it.write(body.toByteArray()) }
+            conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
             val code = conn.responseCode
             if (code !in 200..299) {
                 Log.w(TAG, "RPC $method HTTP $code")
