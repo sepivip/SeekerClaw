@@ -622,6 +622,20 @@ const handlers = {
             // BAT-255: Pre-swap balance check — fail fast before wallet popup / Jupiter order
             const SOL_NATIVE_MINT = 'So11111111111111111111111111111111111111112';
             const isNativeSOL = inputToken.address === SOL_NATIVE_MINT;
+            // BAT-582 follow-up: native SOL swaps need headroom for tx fees +
+            // ATA rent on top of the swap amount. Pre-fix the check passed
+            // when amount exactly equalled balance — Ultra then rejected with
+            // "Insufficient funds" because there was nothing left for fees.
+            // Reserve a small buffer so the error happens here (with a clear
+            // message) instead of after a round-trip to Ultra.
+            //
+            // 0.005 SOL covers: ~5000 lamports per signature × up to ~3 sigs
+            // (Ultra route may chain 2-3 hops), plus ~2,039,280 lamports for
+            // a fresh USDC ATA if the destination doesn't have one yet, plus
+            // a small priority-fee margin. Tuned conservatively — the user
+            // can always retry with `amount - 0.005` if they want to swap
+            // closer to the limit.
+            const NATIVE_SOL_FEE_BUFFER = 0.005;
             try {
                 if (isNativeSOL) {
                     const bal = await solanaRpc('getBalance', [userPublicKey]);
@@ -629,6 +643,11 @@ const handlers = {
                         const solBalance = (bal.value || 0) / 1e9;
                         if (input.amount > solBalance) {
                             return { error: `Insufficient SOL balance: you have ${solBalance} SOL but tried to swap ${input.amount} SOL.` };
+                        }
+                        if (input.amount + NATIVE_SOL_FEE_BUFFER > solBalance) {
+                            return {
+                                error: `SOL balance too tight: you have ${solBalance} SOL and tried to swap ${input.amount} SOL, but Jupiter also needs ~${NATIVE_SOL_FEE_BUFFER} SOL for tx fees + ATA rent. Try swapping at most ${(solBalance - NATIVE_SOL_FEE_BUFFER).toFixed(6)} SOL or fund the wallet with a bit more SOL.`,
+                            };
                         }
                     }
                 } else {
@@ -680,7 +699,30 @@ const handlers = {
             const fetchAndVerifyOrder = async () => {
                 log(`[Jupiter Ultra] Getting order: ${input.amount} ${inputToken.symbol} → ${outputToken.symbol}`, 'INFO');
                 const o = await jupiterUltraOrder(inputToken.address, outputToken.address, amountRaw, userPublicKey);
-                if (!o.transaction) throw new Error('Jupiter Ultra did not return a transaction.');
+                if (!o.transaction) {
+                    // BAT-582 follow-up (local Jupiter test layer 1): Ultra returns
+                    // 200 OK with a structured `errorMessage`/`errorCode` when it
+                    // can route on paper but won't build a tx (sponsored-mode
+                    // floor exceeded → gasless mode → output value < $5 →
+                    // "Minimum $5 for gasless"; or balance < amount + fees →
+                    // "Insufficient funds"). Pre-fix this threw a generic
+                    // "did not return a transaction" message and dropped the
+                    // diagnostic — surface Ultra's own explanation, then add an
+                    // actionable hint for the gasless dead zone (the band where
+                    // sponsored-mode rejected the size but the swap value is
+                    // still below $5 so gasless rejects too — Jupiter's
+                    // routing engine; nothing we can route around).
+                    const detail = o.errorMessage || o.error || 'no detail returned';
+                    const code = (o.errorCode != null) ? ` [code=${o.errorCode}]` : '';
+                    let hint = '';
+                    const detailLower = String(detail).toLowerCase();
+                    if (detailLower.includes('gasless')) {
+                        hint = ' — Jupiter\'s gasless mode requires output ≥ $5 for this route. Try a smaller swap (~$1 or less, sponsored mode) or a larger one (~$5+ output, gasless mode).';
+                    } else if (detailLower.includes('insufficient')) {
+                        hint = ' — wallet may not have enough SOL to cover the swap amount + tx fees. Fund the wallet with a bit more SOL and retry.';
+                    }
+                    throw new Error(`Jupiter Ultra did not return a transaction: ${detail}${code}${hint}`);
+                }
                 if (!o.requestId) throw new Error('Jupiter Ultra did not return a requestId.');
 
                 // Verify transaction before sending to wallet

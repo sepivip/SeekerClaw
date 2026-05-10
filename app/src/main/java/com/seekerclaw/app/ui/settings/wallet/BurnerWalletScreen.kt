@@ -35,6 +35,7 @@ import androidx.compose.ui.unit.sp
 import com.seekerclaw.app.data.caps.CapEnforcer
 import com.seekerclaw.app.data.wallet.EncryptedPrefsKeyVault
 import com.seekerclaw.app.data.wallet.KeyImporter
+import com.seekerclaw.app.data.wallet.SolanaBalanceFetcher
 import com.seekerclaw.app.ui.components.ActionResult
 import com.seekerclaw.app.ui.components.CardSurface
 import com.seekerclaw.app.ui.components.MorphActionButton
@@ -47,6 +48,10 @@ import com.seekerclaw.app.ui.settings.wallet.components.CapsConfigSection
 import com.seekerclaw.app.ui.settings.wallet.components.DangerZoneSection
 import com.seekerclaw.app.ui.settings.wallet.components.KeyInputField
 import com.seekerclaw.app.ui.settings.wallet.components.WalletStatusCard
+import com.seekerclaw.app.ui.settings.wallet.components.copyToClipboard
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import com.seekerclaw.app.ui.theme.RethinkSans
 import com.seekerclaw.app.ui.theme.SeekerClawColors
 import com.seekerclaw.app.ui.theme.Spacing
@@ -100,6 +105,7 @@ fun BurnerWalletScreen(onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     val keyVault = remember { EncryptedPrefsKeyVault(context.applicationContext) }
     val capEnforcer = remember { CapEnforcer.get(context.applicationContext) }
+    val balanceFetcher = remember { SolanaBalanceFetcher() }
 
     // Loaded state (refreshes when caps file changes via CrossProcessStore
     // or after an explicit save).
@@ -108,6 +114,13 @@ fun BurnerWalletScreen(onBack: () -> Unit) {
     var loaded by remember { mutableStateOf(false) }
     // Bumped on save/wipe so the LaunchedEffect re-runs and reloads state.
     var refreshKey by remember { mutableStateOf(0) }
+
+    // Balance state — fetched from Solana RPC on screen open + refresh tap.
+    // null = not yet fetched / fetch failed → UI shows "balance unavailable".
+    var balances by remember { mutableStateOf<SolanaBalanceFetcher.Balances?>(null) }
+    var balancesLoading by remember { mutableStateOf(false) }
+    // Auto-fetch when pubkey first becomes known.
+    var lastFetchedPubkey by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(refreshKey) {
         val pk = withContext(Dispatchers.IO) {
@@ -127,6 +140,37 @@ fun BurnerWalletScreen(onBack: () -> Unit) {
         pubkey = pk
         status = s
         loaded = true
+    }
+
+    // Fetch balances once per pubkey-change. Bumping `refreshKey` doesn't
+    // refetch on its own — explicit refresh tap goes through `refreshBalances`
+    // below. Wiped pubkey clears the cached balance so the next
+    // configured-state load shows "—" until the fetch completes.
+    LaunchedEffect(pubkey) {
+        val pk = pubkey
+        if (pk == null) {
+            balances = null
+            lastFetchedPubkey = null
+            return@LaunchedEffect
+        }
+        if (lastFetchedPubkey == pk && balances != null) return@LaunchedEffect
+        balancesLoading = true
+        val fetched = withContext(Dispatchers.IO) { balanceFetcher.fetch(pk) }
+        balances = fetched
+        balancesLoading = false
+        lastFetchedPubkey = pk
+    }
+
+    val refreshBalances: () -> Unit = {
+        val pk = pubkey
+        if (pk != null && !balancesLoading) {
+            scope.launch {
+                balancesLoading = true
+                val fetched = withContext(Dispatchers.IO) { balanceFetcher.fetch(pk) }
+                balances = fetched
+                balancesLoading = false
+            }
+        }
     }
 
     SeekerClawScaffold(title = "Burner wallet", onBack = onBack) { padding ->
@@ -159,6 +203,9 @@ fun BurnerWalletScreen(onBack: () -> Unit) {
                 ConfiguredStateSection(
                     pubkey = pubkey!!,
                     status = status,
+                    balances = balances,
+                    balancesLoading = balancesLoading,
+                    onRefreshBalances = refreshBalances,
                     onCapsChanged = { caps ->
                         scope.launch {
                             saveCaps(context, capEnforcer, caps)
@@ -407,12 +454,24 @@ private fun ClipboardAdvisoryRow(onClear: () -> Unit) {
 private fun ConfiguredStateSection(
     pubkey: String,
     status: CapEnforcer.CapStatus?,
+    balances: SolanaBalanceFetcher.Balances?,
+    balancesLoading: Boolean,
+    onRefreshBalances: () -> Unit,
     onCapsChanged: (BurnerCaps) -> Unit,
     onWipe: () -> Unit,
     onRotate: () -> Unit,
 ) {
-    val balanceSol = "balance unavailable"
-    val balanceUsdc = "balance unavailable"
+    // Balances render as decimal strings when fetched, "balance unavailable"
+    // when null (fetch never ran OR fetch failed). Loading state is hoisted
+    // to the WalletStatusCard's refresh affordance — we don't replace the
+    // values here so the previously-fetched balance remains visible during
+    // refresh (avoids a UI flicker that reads as "balance went to zero").
+    val balanceSol = balances
+        ?.let { WalletAmountFormat.formatLamportsToSol(it.solLamports.toString()) }
+        ?: "balance unavailable"
+    val balanceUsdc = balances
+        ?.let { WalletAmountFormat.formatMicroUnitsToUsdc(it.usdcMicrounits.toString()) }
+        ?: "balance unavailable"
 
     val s = status
     val spentSol = s?.let { WalletAmountFormat.formatLamportsToSol(it.spentTodaySol) } ?: "0.00"
@@ -430,6 +489,8 @@ private fun ConfiguredStateSection(
         spentTodayUsdc = spentUsdc,
         remainingDailySol = remainingSol,
         remainingDailyUsdc = remainingUsdc,
+        onRefresh = onRefreshBalances,
+        isRefreshing = balancesLoading,
     )
 
     val initialCaps = remember(s) {
@@ -448,22 +509,34 @@ private fun ConfiguredStateSection(
         )
     }
 
+    val fundingContext = LocalContext.current
+    val fundingHaptic = LocalHapticFeedback.current
     CardSurface {
         SectionLabel("Funding")
         Spacer(Modifier.height(Spacing.sm))
         Text(
-            text = "Send SOL or USDC to this address from your main wallet to fund the burner. Address is shown above and can be tapped to copy.",
+            text = "Send SOL or USDC from your main wallet to the address below. Tap to copy.",
             fontFamily = RethinkSans,
             fontSize = 12.sp,
             color = SeekerClawColors.TextDim,
             lineHeight = 17.sp,
         )
         Spacer(Modifier.height(Spacing.sm))
+        // Full pubkey, tap-to-copy. Reuses the WalletStatusCard helper so
+        // the Toast wording + clipboard label are consistent across both
+        // copy surfaces (truncated form in the status card header, full
+        // form here in the funding card).
         Text(
             text = pubkey,
             fontFamily = FontFamily.Monospace,
             fontSize = 12.sp,
             color = SeekerClawColors.TextPrimary,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable {
+                    copyToClipboard(fundingContext, pubkey, "Burner wallet")
+                    fundingHaptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                },
         )
         // TODO(BAT-582-followup): render a QR code for [pubkey] once a
         //   QR generator is wired in via build.gradle.kts. zxing-core is
