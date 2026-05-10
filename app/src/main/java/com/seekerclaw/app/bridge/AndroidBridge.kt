@@ -94,10 +94,21 @@ class AndroidBridge(
         // bursts during Settings edits without throttling normal use.
         "/config/mcp-token" to Pair(30, 60_000L),
         "/service/restart" to Pair(3, 60_000L),
-        // BAT-582: burner endpoints. 30/min per-endpoint is generous for
-        // expected use (one reserve+sign per autonomous tx; one status
-        // poll per chat turn). Throttles a misbehaving caller without
-        // blocking realistic agent loops.
+        // BAT-582: burner endpoints, tiered rate limits per call pattern:
+        //   - Read / lifecycle (status, commit, release): 60/min — these
+        //     are called multiple times per autonomous tx (status before
+        //     reserve, commit on broadcast success, release on failure)
+        //     and additionally as status snapshots during chat turns. The
+        //     higher budget avoids throttling a healthy agent loop.
+        //   - Cap-mutating (reserve, sign-transaction, sign-and-send):
+        //     30/min — slower budget because each call moves real money.
+        //     30/min still leaves 1 tx every 2s headroom which exceeds any
+        //     realistic agent autonomy. A misbehaving caller hits this
+        //     before it hits the cap state machine.
+        //   - Config write (config/burner-caps): 10/min — settings UI
+        //     writes are infrequent; 10/min is plenty for a human user
+        //     plus an agent-driven cap-raise flow.
+        // All limits throttle abusers without blocking realistic loops.
         "/burner/status" to Pair(60, 60_000L),
         "/burner/reserve" to Pair(30, 60_000L),
         "/burner/sign-transaction" to Pair(30, 60_000L),

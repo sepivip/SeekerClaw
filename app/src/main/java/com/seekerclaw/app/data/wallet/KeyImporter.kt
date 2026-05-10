@@ -153,12 +153,26 @@ object KeyImporter {
             if (inner.isEmpty()) return null
             val parts = inner.split(",")
             val out = ByteArray(parts.size)
-            for (i in parts.indices) {
-                val n = parts[i].trim().toIntOrNull() ?: return null
-                if (n < 0 || n > 255) return null
-                out[i] = n.toByte()
+            // Wipe `out` on every failure path — pre-fix the early-return
+            // branches (`toIntOrNull` returning null, range check failing)
+            // could leave some bytes already filled into `out` from earlier
+            // iterations. Even though the failure-mode input is malformed
+            // (parser rejected it), the partial bytes could be the prefix
+            // of a real key on a typo'd paste. Caller treats null as "not a
+            // key" and never attempts to wipe — so the wipe is OUR
+            // responsibility before returning the null.
+            var ok = false
+            try {
+                for (i in parts.indices) {
+                    val n = parts[i].trim().toIntOrNull() ?: return null
+                    if (n < 0 || n > 255) return null
+                    out[i] = n.toByte()
+                }
+                ok = true
+                return out
+            } finally {
+                if (!ok) Arrays.fill(out, 0.toByte())
             }
-            return out
         }
         // Base58
         return try {
