@@ -21,11 +21,13 @@ const crypto = require('crypto');
 
 const BUNDLE = path.resolve(__dirname, '..', '..', 'app', 'src', 'main', 'assets', 'nodejs-project');
 
-// Stub config.js for transitive requires (matches other test files).
+// Stub config.js for transitive requires. tools/index.js → security.js
+// destructures `config` and iterates its keys at module load, so the
+// stub must include `config: {}` (empty object) to avoid the load crash.
 const configPath = require.resolve(path.join(BUNDLE, 'config.js'));
 require.cache[configPath] = {
     id: configPath, filename: configPath, loaded: true,
-    exports: { BRIDGE_TOKEN: 't', log: () => {} },
+    exports: { BRIDGE_TOKEN: 't', log: () => {}, config: {}, workDir: '/tmp' },
 };
 
 // Stub bridge.js so the handler-level tests don't need a live bridge.
@@ -560,47 +562,65 @@ async function check(label, fn) {
         assert.ok(r.message.includes('0.10'));
     });
 
-    await check('policy: POST confirm message escapes Markdown metacharacters in body (R-pr370-fix-12)', () => {
-        // Model-controlled body content could inject backticks, links, bold,
-        // newlines, HTML — all of which markdown-it renders. The escape
-        // function must neutralize each.
+    await check('policy: POST confirm hook literalizes body newlines (no structural breakout)', () => {
+        // Body content with real \n must NOT break out into a new
+        // structural line of the confirmation card. The hook is responsible
+        // for collapsing body newlines to literal "\\n" — Markdown escaping
+        // itself happens at the render boundary (formatConfirmationMessage).
         const r = getConfirmationPolicy('agent_pay', {
             url: 'https://api.example.com/x', max_usdc: '0.10',
-            method: 'POST', body: { evil: '`code` [click](http://bad) **bold** <script>alert(1)</script>\nnewline' },
+            method: 'POST', body: { evil: 'line1\nline2\rline3' },
         }, { burnerConfigured: true });
         assert.strictEqual(r.policy, 'confirm');
-        const msg = r.message;
-        // Each Markdown metacharacter present in input should be backslash-escaped.
-        assert.ok(!/[^\\]`/.test(msg.replace(/^.+max_usdc.+\n/, '')),
-            'unescaped backtick must not appear in the body line');
-        assert.ok(msg.includes('\\['), 'left bracket must be escaped');
-        assert.ok(msg.includes('\\]'), 'right bracket must be escaped');
-        assert.ok(msg.includes('\\('), 'left paren must be escaped');
-        assert.ok(msg.includes('\\)'), 'right paren must be escaped');
-        assert.ok(msg.includes('\\*'), 'asterisk must be escaped');
-        assert.ok(msg.includes('\\<'), 'less-than must be escaped');
-        assert.ok(msg.includes('\\>'), 'greater-than must be escaped');
-        // Newlines inside the body preview become literal "\\n" so they
-        // don't reflow the card. The card's own structure newlines (between
-        // POST line / max_usdc line / body line) remain.
-        const bodyLine = msg.split('\n').find(l => l.startsWith('body:')) || '';
-        assert.ok(!bodyLine.includes('\n'), 'body line must be a single line');
-        assert.ok(bodyLine.includes('\\n'), 'embedded newline must be literalized as \\\\n');
+        const bodyLine = r.message.split('\n').find(l => l.startsWith('body:')) || '';
+        assert.ok(!bodyLine.includes('\n'), 'body line must be a single structural line');
+        assert.ok(bodyLine.includes('\\n'), 'embedded newline must be literalized');
     });
 
-    await check('policy: POST confirm message escapes Markdown in URL too', () => {
-        // Even though URLs shouldn't contain markdown metachars, an attacker
-        // could craft a URL with backticks/etc. — sanitize defensively.
-        const r = getConfirmationPolicy('agent_pay', {
-            url: 'https://api.example.com/`evil`?q=*test*',
+    await check('render: formatConfirmationMessage escapes Markdown in policyMessage (R-pr370-fix-13)', () => {
+        // Security: the WHOLE policyMessage gets Markdown-escaped at the
+        // render boundary so EVERY policy hook is safe by default — agent_pay
+        // POST, wallet_set_caps diff, any future hook. Test by routing a
+        // policy hook with model-controlled content through format() and
+        // asserting the rendered message has all metachars escaped.
+        const { formatConfirmationMessage } = require(path.join(BUNDLE, 'tools', 'index'));
+        const policy = getConfirmationPolicy('agent_pay', {
+            url: 'https://api.example.com/`evil`',
             max_usdc: '0.10',
-            method: 'POST', body: { ok: true },
+            method: 'POST',
+            body: { evil: '`code` [click](http://bad) **bold** <script>alert(1)</script>' },
         }, { burnerConfigured: true });
-        assert.strictEqual(r.policy, 'confirm');
-        // The URL backticks must be escaped, not preserved literally.
-        const urlLine = r.message.split('\n')[0];
-        assert.ok(urlLine.includes('\\`'), 'URL backticks must be escaped');
-        assert.ok(urlLine.includes('\\*'), 'URL asterisks must be escaped');
+        assert.strictEqual(policy.policy, 'confirm');
+        const rendered = formatConfirmationMessage('agent_pay', {}, policy.message);
+        // Every Markdown metacharacter from the input must be backslash-escaped.
+        assert.ok(rendered.includes('\\`'), 'backtick must be escaped');
+        assert.ok(rendered.includes('\\['), 'left bracket must be escaped');
+        assert.ok(rendered.includes('\\]'), 'right bracket must be escaped');
+        assert.ok(rendered.includes('\\('), 'left paren must be escaped');
+        assert.ok(rendered.includes('\\)'), 'right paren must be escaped');
+        assert.ok(rendered.includes('\\*'), 'asterisk must be escaped');
+        assert.ok(rendered.includes('\\<'), 'less-than must be escaped');
+        assert.ok(rendered.includes('\\>'), 'greater-than must be escaped');
+        // Structural newlines (between POST line / max_usdc line / body line)
+        // MUST be preserved so the card renders multi-line.
+        const lines = rendered.split('\n');
+        assert.ok(lines.length >= 3, `expected ≥3 structural lines, got ${lines.length}`);
+    });
+
+    await check('render: formatConfirmationMessage escapes wallet_set_caps diff content (defense-in-depth)', () => {
+        // Even other policy hooks benefit from the render-boundary escape.
+        // wallet_set_caps's diff message embeds raw arg values; a malicious
+        // value with backticks would inject without the format-level escape.
+        const { formatConfirmationMessage } = require(path.join(BUNDLE, 'tools', 'index'));
+        const policy = getConfirmationPolicy('wallet_set_caps', {
+            per_tx_sol: '0.05`evil`',  // crafted to look like a normal decimal
+        }, {
+            burnerConfigured: true,
+            burnerCaps: { capPerTxSol: '50000000' },
+        });
+        const rendered = formatConfirmationMessage('wallet_set_caps', {}, policy.message);
+        // The crafted backticks in the arg must be escaped, not rendered.
+        assert.ok(rendered.includes('\\`'), 'wallet_set_caps args must be escaped at render');
     });
 
     await check('policy: POST + no body → block (body_required_for_post)', () => {

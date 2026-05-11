@@ -586,17 +586,20 @@ grep -i "MCP.*reconcile\|MCP.*Failed to" node_debug.log | tail -20
 
 ## agent_pay (BAT-582 — x402 client)
 
-### `agent_pay: rejected (non-HTTPS / private IP / non-Solana / non-USDC / demand > max_usdc / method or body invalid)`
-**Symptoms:** Tool result `error: "non_https" | "private_ip" | "non_solana_network" | "non_usdc_asset" | "demand_exceeds_max_usdc" | "method_not_allowed" | "body_required_for_post" | "body_not_json" | "body_too_large"`.
+### `agent_pay: rejected (non-HTTPS / private IP / non-Solana / non-USDC / demand > max_usdc / method or body invalid / URL or DNS errors)`
+**Symptoms:** Tool result `error: "non_https" | "private_ip" | "non_solana_network" | "non_usdc_asset" | "demand_exceeds_max_usdc" | "method_not_allowed" | "body_required_for_post" | "body_not_json" | "body_too_large" | "invalid_url" | "dns_timeout" | "dns_lookup_failed"`. (List is non-exhaustive — the tool can also surface bridge / settle / response errors documented in their own sections below.)
 **Diagnosis:** Pre-flight or 402-body validation refused the call. Two layers:
 
 **Pre-DNS rejections** (fire BEFORE any DNS lookup — operator typos diagnosed cleanly without touching attacker-supplied hosts):
+- `invalid_url` — URL fails URL parse (e.g., not a string, missing scheme)
 - `non_https` — URL must be `https://`
 - `method_not_allowed` — only GET / POST supported (BAT-664)
 - `body_required_for_post` / `body_not_json` / `body_too_large` — POST body issues (BAT-664)
 
-**Post-DNS, pre-HTTP rejections** (fire AFTER the DNS resolve but BEFORE any HTTP request to the URL):
+**Post-DNS, pre-HTTP rejections** (fire AFTER the DNS resolve attempt but BEFORE any HTTP request to the URL):
 - `private_ip` — DNS resolved to a private IP (SSRF defense — rejection happens immediately after resolve, before any HTTP fetch)
+- `dns_timeout` — DNS lookup exceeded the shared 30 s wall-clock budget
+- `dns_lookup_failed` — DNS resolver returned an error (NXDOMAIN, ENOTFOUND, etc.)
 
 **Post-fetch, pre-payment rejections** (fire AFTER fetching the 402 challenge but BEFORE attempting payment — server response failed v1.6 boundary checks):
 - `non_solana_network` — pay.sh requirement `network` field was not `solana`

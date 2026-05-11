@@ -212,9 +212,27 @@ function formatConfirmationMessage(toolName, input, policyMessage) {
     // body previews aren't decapitated. 1024 chars covers a long URL +
     // a 200-char body preview + framing comfortably; still bounded so
     // a buggy hook can't blow up the confirmation card.
+    //
+    // R-pr370-fix-13 (security): the policyMessage can include
+    // model-controlled args (e.g. wallet_set_caps decimals, agent_pay
+    // URL/body). markdown-it on the channel side renders backticks as
+    // code, [text](url) as links, ** as bold, etc. Escape Markdown
+    // metacharacters here at the render boundary so EVERY policy hook
+    // is safe by default — individual hooks don't have to remember to
+    // sanitize. Newlines are PRESERVED so multi-line cards still
+    // render as separate visual lines (hooks that want a single-line
+    // preview must literalize their own newlines first).
     const escPolicy = (s) => {
         let v = String(s ?? '');
         if (v.length > 1024) v = v.slice(0, 1021) + '...';
+        // Escape backslash first (so we don't double-escape markers below).
+        v = v.replace(/\\/g, '\\\\');
+        // Markdown structure characters + HTML angle brackets.
+        v = v.replace(/[`*_~[\](){}#>|!<>]/g, (c) => '\\' + c);
+        // Strip control chars OTHER than newlines (newlines are the
+        // structural separator for multi-line cards and must survive).
+        // eslint-disable-next-line no-control-regex
+        v = v.replace(/[\x00-\x09\x0B-\x1F\x7F]/g, ' ');
         return v;
     };
     let details;
