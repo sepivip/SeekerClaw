@@ -277,6 +277,69 @@ class SolanaTxSignerTest {
     }
 
     @Test
+    fun `BAT-582 R-pr367-fix-4 - allowPartiallySigned rejects 3-signer layout`() {
+        // Defense against the flag becoming a "skip safeguard for any
+        // multisig" toggle. x402 v2 is ALWAYS exactly 2 signers; a
+        // 3-signer tx (e.g., governance) must reject even with the flag.
+        val cosigner1 = KeyImporter.derivePubkey(ByteArray(32) { (it + 7).toByte() })
+        val cosigner2 = KeyImporter.derivePubkey(ByteArray(32) { (it + 13).toByte() })
+        val tx = buildLegacyTxMultiSigner(
+            signerPubkeys = listOf(cosigner1, burnerPubkey, cosigner2),
+            preSignedSignatures = listOf(null, null, null),
+            blockhash = ByteArray(32),
+        )
+        val parsed = SolanaTxSigner.parse(tx)
+        assertEquals(3, parsed.numRequiredSignatures)
+        try {
+            SolanaTxSigner.insertSignature(tx, parsed, burnerPubkey, ByteArray(64), allowPartiallySigned = true)
+            fail("Expected unexpected_partial_sign_layout for 3-signer tx")
+        } catch (e: SigningException) {
+            assertEquals("unexpected_partial_sign_layout", e.code)
+        }
+    }
+
+    @Test
+    fun `BAT-582 R-pr367-fix-4 - allowPartiallySigned rejects burner at slot 0`() {
+        // x402 v2 puts the facilitator at slot 0 (server co-signs) and
+        // the burner at slot 1. A tx where the burner is at slot 0
+        // doesn't match the v2 layout and must reject even with the flag.
+        val cosigner = KeyImporter.derivePubkey(ByteArray(32) { (it + 7).toByte() })
+        val tx = buildLegacyTxMultiSigner(
+            signerPubkeys = listOf(burnerPubkey, cosigner),     // burner at slot 0 — wrong!
+            preSignedSignatures = listOf(null, null),
+            blockhash = ByteArray(32),
+        )
+        val parsed = SolanaTxSigner.parse(tx)
+        try {
+            SolanaTxSigner.insertSignature(tx, parsed, burnerPubkey, ByteArray(64), allowPartiallySigned = true)
+            fail("Expected unexpected_partial_sign_layout when burner is at slot 0")
+        } catch (e: SigningException) {
+            assertEquals("unexpected_partial_sign_layout", e.code)
+        }
+    }
+
+    @Test
+    fun `BAT-582 R-pr367-fix-4 - allowPartiallySigned rejects pre-signed facilitator slot`() {
+        // If slot 0 already has a non-zero signature, something is off:
+        // either we're being asked to re-sign over a message the
+        // facilitator already signed (invalidating their sig), or the tx
+        // came from a non-x402 source. Either way, reject.
+        val facilitator = KeyImporter.derivePubkey(ByteArray(32) { (it + 7).toByte() })
+        val tx = buildLegacyTxMultiSigner(
+            signerPubkeys = listOf(facilitator, burnerPubkey),
+            preSignedSignatures = listOf(ByteArray(64) { 0x42.toByte() }, null),  // slot 0 pre-filled
+            blockhash = ByteArray(32),
+        )
+        val parsed = SolanaTxSigner.parse(tx)
+        try {
+            SolanaTxSigner.insertSignature(tx, parsed, burnerPubkey, ByteArray(64), allowPartiallySigned = true)
+            fail("Expected unexpected_partial_sign_layout when slot 0 is pre-signed")
+        } catch (e: SigningException) {
+            assertEquals("unexpected_partial_sign_layout", e.code)
+        }
+    }
+
+    @Test
     fun `BAT-582 v1_6 Phase 5d - default allowPartiallySigned=false preserves v1 behavior`() {
         // Same multi-signer tx, but without opting in — must reject as
         // before (regression guard against accidentally weakening v1).

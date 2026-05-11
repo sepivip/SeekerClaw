@@ -420,7 +420,10 @@ private object TestEndpointBuilder {
 
     private object NoopKeyVault : com.seekerclaw.app.data.wallet.KeyVault {
         override suspend fun store(id: String, expanded64: ByteArray) = Unit
-        override suspend fun signTransaction(id: String, txBytes: ByteArray): ByteArray =
+        // BAT-582 v1.6 Phase 5d: signTransaction grew an allowPartiallySigned
+        // param. Default values only apply at call sites; overrides must
+        // explicitly declare the param to match the interface contract.
+        override suspend fun signTransaction(id: String, txBytes: ByteArray, allowPartiallySigned: Boolean): ByteArray =
             throw NotImplementedError()
         override suspend fun getPubkey(id: String): String? = null
         override suspend fun wipe(id: String) = Unit
@@ -438,7 +441,10 @@ private object TestEndpointBuilder {
             private set
 
         override suspend fun store(id: String, expanded64: ByteArray) = Unit
-        override suspend fun signTransaction(id: String, txBytes: ByteArray): ByteArray {
+        // BAT-582 v1.6 Phase 5d: signTransaction grew an allowPartiallySigned
+        // param. Recording stub ignores the flag — call-count is what these
+        // tests assert.
+        override suspend fun signTransaction(id: String, txBytes: ByteArray, allowPartiallySigned: Boolean): ByteArray {
             signCount++
             // Return fake "signed" bytes — base64 encoding is stubbed in
             // unit tests (returnDefaultValues=true) so the exact contents

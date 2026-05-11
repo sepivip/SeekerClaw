@@ -693,12 +693,14 @@ function _safeStringify(v) {
         const path = require('path');
         const fs = require('fs');
         const capPath = path.resolve(__dirname, '..', 'paysh', 'captures', 'tripadvisor-search-402.json');
-        if (!fs.existsSync(capPath)) {
-            // Capture not committed yet (e.g. running on a branch that
-            // doesn't include tests/paysh/) — skip rather than fail.
-            console.log('    (skipped — Tripadvisor capture not in this branch)');
-            return;
-        }
+        // BAT-582 v1.6 R-pr367-fix-2: HARD REQUIRE the fixture. Pre-fix
+        // we conditionally skipped if the file was missing, which would
+        // silently drop this regression guard if tests/paysh/captures/
+        // were ever removed or moved. The fixture IS in-repo (committed
+        // alongside Phase 0+1+2 of v1.6 implementation); if this assertion
+        // fires, something has gone wrong with the test setup.
+        assert.ok(fs.existsSync(capPath),
+            `regression guard requires fixture at ${capPath} — must stay committed alongside this test`);
         const capture = JSON.parse(fs.readFileSync(capPath, 'utf8'));
         const response = { status: capture.status, bodyJson: capture.body, headers: capture.headers };
         // Stub blockhash so build() doesn't hit RPC

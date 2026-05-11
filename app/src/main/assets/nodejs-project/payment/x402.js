@@ -615,8 +615,13 @@ function _buildV2UsdcTransferTx(burnerPubkey58, recipientPubkey58, facilitatorPu
     ]);
 
     // Two empty 64-byte signature slots (facilitator at 0, burner at 1).
-    // Caller fills slot 1 via Android KeyVault bridge (sign-transaction
-    // with slotIndex=1) before sending PAYMENT-SIGNATURE.
+    // Caller fills slot 1 via the Android KeyVault bridge before sending
+    // PAYMENT-SIGNATURE. The bridge does NOT take an explicit slot index
+    // — SolanaTxSigner locates the burner's slot by matching the burner
+    // pubkey against the tx's account_keys in the first
+    // numRequiredSignatures positions. To opt into partial-sign mode
+    // (slot 0 left empty for the facilitator), agent_pay sends
+    // `allowPartiallySigned: true` on the /burner/sign-transaction call.
     const tx = Buffer.concat([
         _encodeCompactU16(2),       // 2 sig slots
         Buffer.alloc(64),           // slot 0 (facilitator, empty)

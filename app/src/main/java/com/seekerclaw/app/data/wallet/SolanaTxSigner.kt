@@ -191,13 +191,51 @@ object SolanaTxSigner {
         // Phase 5d: x402 v2 explicitly opts out via `allowPartiallySigned`
         // (facilitator co-signs server-side; the tx is partially signed
         // by design when it leaves the device).
-        if (parsed.numRequiredSignatures > 1 && !allowPartiallySigned) {
-            for (i in 0 until parsed.numRequiredSignatures) {
-                if (i == burnerIndex) continue
-                if (isZero(parsed.signatures[i])) {
+        //
+        // BAT-582 v1.6 R-pr367-fix-4: when allowPartiallySigned=true,
+        // ENFORCE the x402 v2 layout invariants — pre-fix the flag was a
+        // blanket "skip the safeguard for any multi-signer tx" toggle,
+        // which would let a malicious/buggy caller get the burner to
+        // partially-sign ARBITRARY multisig txs (e.g., a 3-signer
+        // governance tx). The flag is purpose-built for x402 v2, which
+        // is ALWAYS a 2-signer layout with facilitator at slot 0 and
+        // burner at slot 1. Reject anything else as
+        // `unexpected_partial_sign_layout`.
+        if (parsed.numRequiredSignatures > 1) {
+            if (!allowPartiallySigned) {
+                for (i in 0 until parsed.numRequiredSignatures) {
+                    if (i == burnerIndex) continue
+                    if (isZero(parsed.signatures[i])) {
+                        throw SigningException(
+                            "additional_signers_required",
+                            "Slot $i has no signature (caller must opt in via allowPartiallySigned for x402 v2)",
+                        )
+                    }
+                }
+            } else {
+                // Partial-sign mode: enforce the x402 v2 invariants.
+                if (parsed.numRequiredSignatures != 2) {
                     throw SigningException(
-                        "additional_signers_required",
-                        "Slot $i has no signature (caller must opt in via allowPartiallySigned for x402 v2)",
+                        "unexpected_partial_sign_layout",
+                        "allowPartiallySigned requires exactly 2 required signers (x402 v2); got ${parsed.numRequiredSignatures}",
+                    )
+                }
+                if (burnerIndex != 1) {
+                    throw SigningException(
+                        "unexpected_partial_sign_layout",
+                        "allowPartiallySigned requires burner at slot 1 (facilitator at slot 0); burner found at slot $burnerIndex",
+                    )
+                }
+                // Slot 0 (facilitator) must remain empty — server co-signs
+                // after receiving PAYMENT-SIGNATURE. If already filled,
+                // something is off: either we're being asked to re-sign a
+                // tx the facilitator already touched (which would
+                // invalidate their sig over our message bytes) or the tx
+                // came from a non-x402 source.
+                if (!isZero(parsed.signatures[0])) {
+                    throw SigningException(
+                        "unexpected_partial_sign_layout",
+                        "allowPartiallySigned requires slot 0 (facilitator) to be empty; found pre-existing signature",
                     )
                 }
             }
