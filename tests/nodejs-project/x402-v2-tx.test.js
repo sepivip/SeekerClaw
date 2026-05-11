@@ -202,6 +202,44 @@ check('_buildV2PaymentSignatureHeader preserves server-provided extra fields (R-
     assert.strictEqual(decoded.accepted.extra.expiresAt, 1234567890, 'extension field must be preserved');
 });
 
+check('_buildV2PaymentSignatureHeader rejects oversized proofs (R-pr367-fix-8 DoS guard)', () => {
+    // Hostile facilitator inflates server-controlled fields (extra.*,
+    // resource.description, mimeType) to force a huge PAYMENT-SIGNATURE
+    // header. Must fail closed with v2_settle_proof_too_large before any
+    // network call.
+    const meta = {
+        requirement: {
+            extra: { feePayer: FACILITATOR, junk: 'A'.repeat(10_000) },
+            resource: { url: 'https://x' },
+            payTo: RECIPIENT,
+        },
+        memo: MEMO_FIXED,
+        amountAtomic: AMOUNT_USDC,
+        negotiatedNetwork: 'solana',
+    };
+    const r = _buildV2PaymentSignatureHeader(meta, 'AQABBA==');
+    assert.strictEqual(r.error, 'v2_settle_proof_too_large');
+    assert.ok(!r.value);
+});
+
+check('_buildV2PaymentSignatureHeader accepts normal-sized proofs (under 8KB cap)', () => {
+    // Sanity: a reasonable proof (small extra, small description) must
+    // pass — the cap exists to block pathological inputs only.
+    const meta = {
+        requirement: {
+            extra: { feePayer: FACILITATOR, signingNonce: 'abc123' },
+            resource: { url: 'https://x.example.com/resource', description: 'A short description' },
+            payTo: RECIPIENT,
+        },
+        memo: MEMO_FIXED,
+        amountAtomic: AMOUNT_USDC,
+        negotiatedNetwork: 'solana',
+    };
+    const r = _buildV2PaymentSignatureHeader(meta, 'AQABBA==');
+    assert.ok(r.value, 'normal proof must pass the size check');
+    assert.ok(r.value.length <= 8192);
+});
+
 check('_buildV2PaymentSignatureHeader overrides server-provided memo with paymentMeta.memo', () => {
     // build() may have generated a random nonce if challenge had no
     // extra.memo; the proof must reflect what's actually IN the signed tx,

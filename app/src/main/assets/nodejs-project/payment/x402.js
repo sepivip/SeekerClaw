@@ -774,6 +774,20 @@ function _buildV2PaymentSignatureHeader(paymentMeta, signedTxBase64) {
         },
     };
     const value = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64');
+    // BAT-582 v1.6 R-pr367-fix-8: cap header size to defend against a
+    // hostile/buggy facilitator inflating server-controlled fields
+    // (extra.*, resource.description, mimeType) to force oversized
+    // PAYMENT-SIGNATURE headers. Common HTTP server limits cap individual
+    // headers at 8KB; 8192 bytes here is well above any legitimate proof
+    // size (~1-2 KB) and below typical server limits. Fail closed before
+    // the network call instead of letting the request blow up with a
+    // generic 431/400 from an upstream proxy.
+    if (value.length > 8192) {
+        return {
+            error: 'v2_settle_proof_too_large',
+            reason: `PAYMENT-SIGNATURE header serialized to ${value.length} bytes (max 8192) — server may be inflating extra/resource fields`,
+        };
+    }
     return { value };
 }
 
