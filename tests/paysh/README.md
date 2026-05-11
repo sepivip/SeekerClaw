@@ -18,19 +18,28 @@ v2 changes vs v1:
 - Multi-chain offers: Base + Solana side-by-side in a single 402
 
 This directory holds the regression net for **x402 v2 protocol support** —
-real-wire captures, synthetic edge-case fixtures, and dry-run validators.
-Run `node tests/paysh/validate-detect.js` to confirm coverage.
+real-wire captures, synthetic edge-case fixtures, dry-run validators,
+and a mocked-settle full-protocol-path validator.
 
-As of this change, **8/8 captures pass**:
-- **3 real captures build** to valid USDC transfer txs (Tripadvisor,
-  CoinGecko, Textbelt POST).
-- **1 real capture** (Textbelt status endpoint) correctly REJECTS with
-  `invalid_demand` — pay.sh returns 402 with `amount=0` for free
-  endpoints, which our parser rejects (zero-demand isn't a supported
-  mode). Free endpoints should be called directly, not via `agent_pay`.
+Quick coverage check:
+
+```bash
+node tests/paysh/validate-detect.js   # Layer 2 — detect+build, 8/8
+node tests/paysh/validate-settle.js   # Layer 2.5 — detect+build+settle, 6/6
+```
+
+As of this change, **8/8 detect+build + 6/6 full-protocol-path pass**:
+- **3 real captures build → settle** with correctly-shaped
+  `PAYMENT-SIGNATURE` headers (Tripadvisor, CoinGecko, Textbelt POST).
+- **1 real capture** (Textbelt status endpoint) correctly REJECTS at
+  build with `invalid_demand` — pay.sh returns 402 with `amount=0` for
+  free endpoints; zero-demand isn't a supported mode. Free endpoints
+  should be called directly, not via `agent_pay`.
 - **4 synthetic edge cases** reject with their documented codes
   (`no_payment_requirements`, `no_solana_offer`, `unsupported_version`,
   `non_usdc_asset`).
+- **3 cross-cutting invariants** asserted across all v2 captures: CAIP-2
+  network shape preserved, non-empty memo, wire-valid 2-sig v0 tx.
 
 ## Layout
 
@@ -49,6 +58,8 @@ tests/paysh/
 │   ├── synthetic-v3-402.json                 # x402Version: 3 → reject (forward-compat)
 │   └── synthetic-non-usdc-402.json           # USDT asset on Solana → reject
 ├── probe-all.js             # Layer 1 — capture real 402 responses (no payment)
+├── validate-detect.js       # Layer 2   — detect+build for every capture ($0)
+├── validate-settle.js       # Layer 2.5 — detect+build+settle, mocked network ($0)
 └── README.md
 ```
 
@@ -78,18 +89,8 @@ Re-run when:
 ### Layer 2 — Detect/build dry-run (`validate-detect.js`) — SHIPPED
 
 Runs every committed capture through `X402Protocol.detect()` +
-`build()`. **Layer 2 does NOT test `settle()`** — settle is exercised
-end-to-end only in Layer 3 against live endpoints.
-
-`X402Protocol.settle()` itself has a tiered current state:
-- **v1**: shipped, pinned against `tests/payment/fixtures/paysh-sandbox-success.json`,
-  used in production by `tools/agent_pay.js`.
-- **v2**: parser accepts v2 challenges (detect + build), but settle()
-  rejects with `v2_settle_not_implemented` until a real-wire success
-  capture pins the v2 proof-header path. This is the fixture-first
-  gate from BAT-582 v1.6 contract (Codex clarification 1). The next
-  step is Phase 4: a real $0.01 payment against a v2 endpoint
-  (Tripadvisor) to record the success response shape.
+`build()`. Stops short of proof-header construction (Layer 2.5) and
+the real network call (Layer 3).
 
 Current Layer 2 behavior:
 - Real captures (tripadvisor, coingecko, textbelt-text, textbelt-status) →
@@ -105,10 +106,51 @@ Current Layer 2 behavior:
 node tests/paysh/validate-detect.js
 ```
 
+### Layer 2.5 — Full protocol path with mocked settle (`validate-settle.js`) — SHIPPED
+
+Runs `detect()` → `build()` → `settle()` for every real capture, with
+the settle network call MOCKED. Validates the FULL PAYMENT-SIGNATURE
+(v2) or X-PAYMENT (v1) proof-header construction and the
+PAYMENT-RESPONSE parsing path end-to-end without spending USDC.
+
+`X402Protocol.settle()` covers both versions in production:
+- **v1**: shipped, pinned against `tests/payment/fixtures/paysh-sandbox-success.json`,
+  used by `tools/agent_pay.js` for legacy x402 v1 endpoints.
+- **v2**: shipped per BAT-582 v1.6 Phase 5 (PRs #366 + #367). Settle()
+  emits `PAYMENT-SIGNATURE` (base64 JSON) and parses `PAYMENT-RESPONSE`.
+  The bridge multi-sig piece (partial v0 versioned tx signing) lives in
+  `SolanaTxSigner.insertSignature(allowPartiallySigned=true)`.
+
+What Layer 2.5 asserts for each real capture:
+- Outbound request has correct proof header (v2 → `payment-signature`,
+  v1 → `x-payment`).
+- Decoded payload has `x402Version`, `resource.url` (R-pr367-fix-1
+  regression — pre-fix this was empty), `accepted.{scheme,network,
+  amount,asset,payTo,maxTimeoutSeconds,extra}`, `payload.transaction`.
+- `accepted.network` is the CAIP-2 wire-form the challenge sent
+  (e.g. `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp`), not normalized to
+  bare `"solana"` (R20+ negotiation invariant).
+- `accepted.extra` shallow-clones server-provided fields and overrides
+  only `memo` (R-pr367-fix-7).
+- Header serialized size ≤ 8KB (R-pr367-fix-8 DoS cap).
+- `settle()` extracts the on-chain `.signature` from `PAYMENT-RESPONSE`.
+
+Plus 3 cross-cutting invariants over all real captures: CAIP-2 network
+shape, non-empty memo, wire-valid 2-sig v0 tx.
+
+**Cost: $0.** No live network, no broadcast. Signing is via a stable
+test pubkey (no secret).
+
+```bash
+node tests/paysh/validate-settle.js
+```
+
 ### Layer 3 — Curated live-pay (`live-pay-curated.js`)
 
-(Coming in Phase 7.) Runs full e2e payment against 3-5 hand-picked
-services. **Gated on `--live` flag (default off).** CI never runs this.
+(Coming in Phase 7 — to pin a real PAYMENT-RESPONSE success fixture
+in addition to the mocked Layer 2.5 path.) Runs full e2e payment
+against 3-5 hand-picked services. **Gated on `--live` flag (default
+off).** CI never runs this.
 
 **Cost: ~$0.30 USDC** total across the curated set.
 

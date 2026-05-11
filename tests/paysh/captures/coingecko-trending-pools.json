@@ -2,14 +2,14 @@
   "_meta": {
     "label": "coingecko-trending-pools",
     "description": "v2 endpoint, expected free at probe time",
-    "capturedAt": "2026-05-10T12:28:37.993Z",
+    "capturedAt": "2026-05-11T15:07:57.973Z",
     "note": "Sanitized per BAT-582 v1.6 contract amendment 6."
   },
   "url": "https://pro-api.coingecko.com/api/v3/x402/onchain/networks/solana/trending_pools",
   "method": "GET",
   "status": 402,
   "headers": {
-    "date": "Sun, 10 May 2026 12:28:52 GMT",
+    "date": "Mon, 11 May 2026 15:07:58 GMT",
     "content-type": "application/json; charset=utf-8",
     "transfer-encoding": "chunked",
     "connection": "keep-alive",
@@ -27,12 +27,12 @@
     "access-control-expose-headers": "link, per-page, total",
     "vary": "Accept-Encoding, Origin",
     "cache-control": "no-cache",
-    "x-request-id": "984b2947-f849-43bd-bd0b-9ef4db2c229c",
-    "x-runtime": "0.002794",
+    "x-request-id": "8aa31cb0-ffd4-45d7-8fcb-de7451b17450",
+    "x-runtime": "0.002804",
     "content-security-policy-report-only": "script-src https://accounts.google.com/gsi/client; frame-src https://accounts.google.com/gsi/; connect-src https://accounts.google.com/gsi/;",
     "strict-transport-security": "max-age=15724800; includeSubdomains",
     "cf-cache-status": "MISS",
-    "cf-ray": "9f98f23a9cd4f937-SOF"
+    "cf-ray": "9fa218a6faa2d103-SOF"
   },
   "body": {
     "error": "Payment required",
