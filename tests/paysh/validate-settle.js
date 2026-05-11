@@ -99,18 +99,26 @@ const SETTLE_CAPTURES = [
     },
 ];
 
-// Detect which delivery mode a capture uses. Mirrors the parser's logic:
-// challenges arrive either inline in JSON body (`accepts` / `paymentRequirements`)
-// or via the `payment-required` response header (base64-encoded JSON). We
-// assert the captured delivery matches what each fixture's entry declares —
-// pinning that the parser handles BOTH paths.
+// Detect which delivery mode a capture uses. Mirrors `_extractPayload`
+// in payment/x402.js exactly: body delivery requires accepts OR
+// paymentRequirements to be a NON-EMPTY array; header delivery checks
+// both lowercase and capitalized `payment-required` (HTTP headers are
+// case-insensitive). Keeping these in lockstep so this test reflects
+// real parser behavior — a future tweak to the parser that this helper
+// doesn't mirror would silently mask delivery-mismatch bugs.
 function detectDelivery(capture) {
     const body = capture.body;
-    if (body && typeof body === 'object' && (body.accepts || body.paymentRequirements)) {
-        return 'body';
+    if (body && typeof body === 'object' && !Array.isArray(body)) {
+        if ((Array.isArray(body.accepts) && body.accepts.length > 0) ||
+            (Array.isArray(body.paymentRequirements) && body.paymentRequirements.length > 0)) {
+            return 'body';
+        }
     }
-    if (capture.headers && capture.headers['payment-required']) {
-        return 'header';
+    if (capture.headers && typeof capture.headers === 'object') {
+        const headerVal = capture.headers['payment-required'] || capture.headers['Payment-Required'];
+        if (typeof headerVal === 'string' && headerVal.length > 0) {
+            return 'header';
+        }
     }
     return 'none';
 }
@@ -266,7 +274,45 @@ async function runSettleForCapture(captureEntry) {
     return { built, capturedHeaders, result };
 }
 
+// Coverage guard: every real capture in captures/ that should pass through
+// Layer 2.5 MUST appear in SETTLE_CAPTURES, else a new fixture committed
+// without an entry would silently bypass settle-path coverage. Mirrors the
+// "fail loud" pattern from validate-detect.js (R19 in PR #366 review).
+//
+// What's NOT covered here (and shouldn't be):
+//   - Synthetic edge-case fixtures (filename prefix `synthetic-`) — they
+//     reject at detect/build, so settle is never reached in production;
+//     validate-detect.js asserts their rejection codes.
+//   - The `textbelt-status-free` fixture — pay.sh returns 402 with
+//     amount=0 for free endpoints, which build() correctly rejects as
+//     `invalid_demand`. settle never runs.
+function _isExcludedFromSettleCoverage(fname) {
+    if (fname.startsWith('synthetic-')) return true;
+    if (fname === 'textbelt-status-free.json') return true;
+    return false;
+}
+
+function _assertSettleCoverage() {
+    const all = fs.readdirSync(CAPTURES_DIR).filter(f => f.endsWith('.json'));
+    const covered = new Set(SETTLE_CAPTURES.map(e => e.file));
+    const missing = [];
+    for (const fname of all) {
+        if (_isExcludedFromSettleCoverage(fname)) continue;
+        if (!covered.has(fname)) missing.push(fname);
+    }
+    if (missing.length > 0) {
+        console.error('');
+        console.error(`✗ COVERAGE GAP: real capture(s) committed without a SETTLE_CAPTURES entry:`);
+        for (const m of missing) console.error(`    - ${m}`);
+        console.error(`  Add an entry to SETTLE_CAPTURES in this file (or, if the capture should NOT`);
+        console.error(`  exercise settle, document why in _isExcludedFromSettleCoverage).`);
+        process.exit(1);
+    }
+}
+
 async function main() {
+    _assertSettleCoverage();
+
     console.log(`═══ Layer 2.5 — validate-settle (${SETTLE_CAPTURES.length} real captures, mocked network) ═══`);
     console.log('');
 

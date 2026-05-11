@@ -28,9 +28,9 @@ node tests/paysh/validate-detect.js   # Layer 2 — detect+build, 8/8
 node tests/paysh/validate-settle.js   # Layer 2.5 — detect+build+settle, 6/6
 ```
 
-As of this change, **8/8 detect+build + 6/6 full-protocol-path pass**:
-- **3 real captures build → settle** with correctly-shaped
-  `PAYMENT-SIGNATURE` headers (Tripadvisor, CoinGecko, Textbelt POST).
+As of this change, **8/8 detect+build + 3/3 captures + 3/3 invariants pass**:
+- **3 real captures build → settle** (Tripadvisor, CoinGecko, Textbelt POST)
+  with correctly-shaped `PAYMENT-SIGNATURE` headers.
 - **1 real capture** (Textbelt status endpoint) correctly REJECTS at
   build with `invalid_demand` — pay.sh returns 402 with `amount=0` for
   free endpoints; zero-demand isn't a supported mode. Free endpoints
