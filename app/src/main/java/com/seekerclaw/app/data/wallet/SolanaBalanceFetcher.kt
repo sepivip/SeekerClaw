@@ -9,9 +9,16 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 /**
- * SolanaBalanceFetcher — minimal mainnet RPC reader for the Burner Wallet
- * UI (BAT-582 follow-up). Fetches SOL balance + USDC ATA balance for a
- * burner pubkey via JSON-RPC.
+ * SolanaBalanceFetcher — minimal mainnet RPC reader for the Burner
+ * Wallet UI. Fetches SOL balance + USDC ATA balance (summed across
+ * all matching token accounts, BigInt-safe) for a burner pubkey via
+ * JSON-RPC. Wired into [BurnerWalletScreen]'s status card auto-fetch
+ * on screen open + refresh button.
+ *
+ * Originally scoped as a BAT-582 follow-up in the v1.4 contract;
+ * folded into PR #364 along with the v1.6 x402 v2 addendum to ship a
+ * complete burner UX (R27 fixed the null-on-failure contract so the
+ * UI distinguishes transient outages from real zero balances).
  *
  * **Why a dedicated client (not the Node bridge):** the burner-wallet
  * Settings screen runs in the UI process and needs balances on demand
