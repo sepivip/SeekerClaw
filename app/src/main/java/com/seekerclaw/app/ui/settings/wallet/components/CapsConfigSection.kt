@@ -45,8 +45,12 @@ data class BurnerCaps(
 
 /**
  * CapsConfigSection — 4-input cap editor for the Burner Wallet screen
- * (BAT-582). Reusable: any future capped-resource UI (rate limits,
- * daily-message ceilings) can plug in by parameterizing the labels.
+ * (BAT-582). Labels and placeholders are CURRENTLY HARDCODED to
+ * "Per-tx SOL", "Daily SOL", "Per-tx USDC", "Daily USDC" — this
+ * composable is purpose-built for the burner-caps shape. If a future
+ * capped-resource UI (rate limits, daily-message ceilings) wants to
+ * reuse the four-input layout, parameterize the labels and asset names
+ * at THAT TIME rather than speculatively now.
  *
  * Validation is intentionally NOT done here — the parent screen owns the
  * decimal/atomic boundary via [com.seekerclaw.app.ui.settings.wallet.WalletAmountFormat]
