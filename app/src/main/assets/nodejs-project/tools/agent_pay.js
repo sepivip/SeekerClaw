@@ -516,9 +516,21 @@ async function _handle(input /* , chatId */) {
     const reservationId = reserveRes.reservationId;
 
     // 9. Sign via burner.
+    //
+    // BAT-582 v1.6 Phase 5d/5e: x402 v2 challenges produce partially-
+    // signed txs (facilitator co-signs slot 0 server-side after we send
+    // PAYMENT-SIGNATURE). The burner signs slot 1 only; the wire tx
+    // leaving the device has slot 0 still empty. We must opt in to the
+    // bridge's partial-sign mode for v2 — otherwise SolanaTxSigner
+    // rejects with `additional_signers_required`. v1 callers (and
+    // legacy v1-shaped pay.sh services) skip the flag and use the
+    // fully-signed-only path.
+    const isV2 = paymentMeta && paymentMeta.x402Version === 2;
     let signedTxBase64;
     try {
-        const signed = await burner.signer().signTransaction(txBase64, { reservationId });
+        const signOpts = { reservationId };
+        if (isV2) signOpts.allowPartiallySigned = true;
+        const signed = await burner.signer().signTransaction(txBase64, signOpts);
         if (!signed || signed.error) {
             await _release(reservationId, signed && signed.error ? signed.error : 'sign_failed');
             return {

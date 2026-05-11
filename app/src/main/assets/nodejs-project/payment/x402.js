@@ -37,12 +37,17 @@
 //   - v1 (paymentMeta.x402Version === 1): replays request with
 //     `x-payment` base64-JSON header per the canonical fixture
 //     tests/payment/fixtures/paysh-sandbox-success.json. SHIPPED.
-//   - v2 (paymentMeta.x402Version === 2): REJECTS with
-//     `v2_settle_not_implemented` until a real-wire success capture
-//     pins the v2 proof-header path (Phase 5 of v1.6 implementation).
-//     Agent_pay caller surfaces this to the user as "v2 endpoint
-//     detected but settlement not yet supported." This is the
-//     fixture-first gate Codex required.
+//   - v2 (paymentMeta.x402Version === 2): replays request with
+//     `PAYMENT-SIGNATURE` base64-JSON header carrying a structured
+//     PaymentPayload per Coinbase x402 v2 spec — outer keys:
+//     `x402Version`, `resource`, `accepted` (singular, the chosen
+//     requirement from `accepts[]`), `payload.transaction`. Parses
+//     `PAYMENT-RESPONSE` header on 200 to surface the on-chain
+//     signature (`SettlementResponse.transaction`) and explicitly
+//     fails as `settle_failed` when SettlementResponse.success=false.
+//     Successful v2 end-to-end requires Android bridge multi-sig
+//     signing (Phase 5d) so the burner signs slot 1 (facilitator
+//     signs slot 0 server-side). SHIPPED at Phase 5c.
 //
 // PRE-FLIGHT REJECTIONS (HTTPS-only, private-IP, DNS rebinding, max
 // body, etc.) happen in the agent_pay tool before detect(). This
@@ -305,6 +310,52 @@ function _buildSplTransferCheckedData(amountAtomic, decimals) {
     return data;
 }
 
+// ── x402 v2: ComputeBudget + Memo instruction builders ───────────────────────
+// Solana well-known program IDs (base58):
+const COMPUTE_BUDGET_PROGRAM_ID = 'ComputeBudget111111111111111111111111111111';
+const MEMO_PROGRAM_ID           = 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr';
+
+// Pre-decoded program-ID bytes — same hoisting pattern as USDC_MINT
+// (avoids re-decoding on every v2 tx build).
+const _COMPUTE_BUDGET_PROGRAM_ID_BYTES = _base58Decode(COMPUTE_BUDGET_PROGRAM_ID);
+const _MEMO_PROGRAM_ID_BYTES           = _base58Decode(MEMO_PROGRAM_ID);
+
+// ComputeBudgetProgram::SetComputeUnitLimit
+//   tag (1 byte) = 0x02
+//   units (u32 LE) = 4 bytes
+// Total: 5 bytes.
+function _buildCuLimitData(limit) {
+    const data = Buffer.alloc(5);
+    data.writeUInt8(0x02, 0);
+    data.writeUInt32LE(limit >>> 0, 1);
+    return data;
+}
+
+// ComputeBudgetProgram::SetComputeUnitPrice
+//   tag (1 byte) = 0x03
+//   micro_lamports (u64 LE) = 8 bytes
+// Total: 9 bytes.
+function _buildCuPriceData(microLamports) {
+    const data = Buffer.alloc(9);
+    data.writeUInt8(0x03, 0);
+    data.writeBigUInt64LE(BigInt(microLamports), 1);
+    return data;
+}
+
+// Memo program v2 takes the memo content as raw UTF-8 bytes (no
+// discriminator). Per BAT-582 v1.6 contract amendment 4 + x402 v2 spec:
+// the client MUST include a Memo instruction containing either
+// `extra.memo` from the challenge (if present) or a random ≥16-byte
+// hex nonce. We use 32 hex chars (16 bytes of entropy) when generating.
+function _buildMemoData(memoString) {
+    return Buffer.from(String(memoString), 'utf8');
+}
+
+function _generateRandomMemoNonce() {
+    // 16 bytes random → 32 hex chars. Spec minimum.
+    return crypto.randomBytes(16).toString('hex');
+}
+
 // ── Build a legacy USDC SPL transfer transaction ─────────────────────────────
 // Returns { txBuffer, paymentMeta }. Caller serializes to base64.
 //
@@ -409,6 +460,264 @@ function _buildUsdcTransferTx(burnerPubkey58, recipientPubkey58, amountAtomic, r
             mint: USDC_MINT,
         },
     };
+}
+
+// ── x402 v2 USDC transfer transaction builder ────────────────────────────────
+// Per Coinbase x402 v2 spec (specs/schemes/exact/scheme_exact_svm.md):
+//
+// PARTIALLY-SIGNED versioned (v0) transaction with 4 instructions in
+// this exact order:
+//   1. ComputeBudgetProgram::SetComputeUnitLimit
+//   2. ComputeBudgetProgram::SetComputeUnitPrice
+//   3. SPL TransferChecked (USDC, burner → recipient ATA)
+//   4. Memo with `extra.memo` from challenge OR random ≥16-byte hex nonce
+//
+// Two required signers:
+//   - slot 0: facilitator (feePayer, signer + writable) — left empty;
+//     server co-signs after receiving PAYMENT-SIGNATURE.
+//   - slot 1: burner (signer + readonly) — caller fills this slot.
+//
+// Account-keys order (Solana convention — writable signers first, then
+// readonly signers, then writable non-signers, then readonly non-signers):
+//   idx 0: facilitator    (signer, writable, feePayer)
+//   idx 1: burner         (signer, readonly — only authorizes SPL transfer)
+//   idx 2: source ATA     (writable)
+//   idx 3: dest ATA       (writable)
+//   idx 4: USDC mint      (readonly)
+//   idx 5: ComputeBudget  (readonly program)
+//   idx 6: Token program  (readonly program)
+//   idx 7: Memo program   (readonly program)
+//
+// Header: numRequiredSignatures=2, numReadonlySigned=1 (burner),
+//         numReadonlyUnsigned=4 (mint + 3 programs).
+//
+// Returns { txBuffer, paymentMeta } — caller writes burner sig at slot 1
+// (offset = 1 + 64 = 65 of the tx buffer), then base64-encodes.
+//
+// Default compute-budget values are conservative for a TransferChecked +
+// Memo flow. Caller can override via opts if a service demands higher.
+function _buildV2UsdcTransferTx(burnerPubkey58, recipientPubkey58, facilitatorPubkey58, amountAtomic, recentBlockhash58, memoString, opts = {}) {
+    const burnerBytes      = _decodeSolanaPubkey(burnerPubkey58);
+    const recipientBytes   = _decodeSolanaPubkey(recipientPubkey58);
+    const facilitatorBytes = _decodeSolanaPubkey(facilitatorPubkey58);
+    if (!burnerBytes)      throw new Error(`v2: invalid burner pubkey: ${burnerPubkey58}`);
+    if (!recipientBytes)   throw new Error(`v2: invalid recipient pubkey: ${recipientPubkey58}`);
+    if (!facilitatorBytes) throw new Error(`v2: invalid facilitator pubkey: ${facilitatorPubkey58}`);
+
+    const mintBytes          = _USDC_MINT_BYTES;
+    const tokenProgramBytes  = _TOKEN_PROGRAM_ID_BYTES;
+    const cuProgramBytes     = _COMPUTE_BUDGET_PROGRAM_ID_BYTES;
+    const memoProgramBytes   = _MEMO_PROGRAM_ID_BYTES;
+
+    const sourceAta = _findAssociatedTokenAddress(burnerBytes, mintBytes).address;
+    const destAta   = _findAssociatedTokenAddress(recipientBytes, mintBytes).address;
+
+    const blockhashBytes = _base58Decode(recentBlockhash58);
+    if (blockhashBytes.length !== 32) throw new Error(`v2: blockhash must decode to 32 bytes, got ${blockhashBytes.length}`);
+
+    // Compute-budget defaults. 50000 CU is generous for a TransferChecked
+    // + Memo (each is a few hundred CU); 1000 microlamports/CU is a
+    // modest priority fee that helps with mainnet congestion without
+    // burning much fee. Override via opts only if a specific facilitator
+    // requires higher.
+    const cuLimit         = (opts.cuLimit | 0) || 50_000;
+    const cuPriceMicroLam = (opts.cuPriceMicroLamports != null) ? BigInt(opts.cuPriceMicroLamports) : 1000n;
+
+    // Account-keys layout (see header comment).
+    const accountKeys = [
+        facilitatorBytes,    // 0: feePayer (signer, writable)
+        burnerBytes,         // 1: burner   (signer, readonly)
+        sourceAta,           // 2: source ATA (writable)
+        destAta,             // 3: dest ATA   (writable)
+        mintBytes,           // 4: USDC mint  (readonly)
+        cuProgramBytes,      // 5: ComputeBudget program
+        tokenProgramBytes,   // 6: Token program
+        memoProgramBytes,    // 7: Memo program
+    ];
+
+    // Header per Solana message format.
+    const header = Buffer.from([
+        2, // numRequiredSignatures (facilitator + burner)
+        1, // numReadonlySignedAccounts (burner is readonly-signer)
+        4, // numReadonlyUnsignedAccounts (mint, ComputeBudget, Token, Memo)
+    ]);
+
+    // Instructions (4 total, in spec-required order).
+    const ixCuLimit = (() => {
+        const data = _buildCuLimitData(cuLimit);
+        return Buffer.concat([
+            Buffer.from([5]),                       // programIdIndex = ComputeBudget (idx 5)
+            _encodeCompactU16(0),                   // no accounts
+            _encodeCompactU16(data.length),
+            data,
+        ]);
+    })();
+    const ixCuPrice = (() => {
+        const data = _buildCuPriceData(cuPriceMicroLam);
+        return Buffer.concat([
+            Buffer.from([5]),                       // programIdIndex = ComputeBudget
+            _encodeCompactU16(0),
+            _encodeCompactU16(data.length),
+            data,
+        ]);
+    })();
+    const ixTransferChecked = (() => {
+        const data = _buildSplTransferCheckedData(amountAtomic, USDC_DECIMALS);
+        // accounts: source ATA (2), mint (4), dest ATA (3), owner=burner (1)
+        const ixAccounts = Buffer.from([2, 4, 3, 1]);
+        return Buffer.concat([
+            Buffer.from([6]),                       // programIdIndex = Token (idx 6)
+            _encodeCompactU16(ixAccounts.length),
+            ixAccounts,
+            _encodeCompactU16(data.length),
+            data,
+        ]);
+    })();
+    const ixMemo = (() => {
+        const data = _buildMemoData(memoString);
+        // Memo can run without specifying accounts. Per Solana convention,
+        // including the burner (signer) makes the memo verifiable as
+        // authored by them — useful for downstream tooling. We include it.
+        const ixAccounts = Buffer.from([1]);
+        return Buffer.concat([
+            Buffer.from([7]),                       // programIdIndex = Memo (idx 7)
+            _encodeCompactU16(ixAccounts.length),
+            ixAccounts,
+            _encodeCompactU16(data.length),
+            data,
+        ]);
+    })();
+
+    const accountKeysBuf = Buffer.concat([
+        _encodeCompactU16(accountKeys.length),
+        ...accountKeys,
+    ]);
+    const instructionsBuf = Buffer.concat([
+        _encodeCompactU16(4),
+        ixCuLimit,
+        ixCuPrice,
+        ixTransferChecked,
+        ixMemo,
+    ]);
+    // Address Lookup Tables section (v0 only). Empty: compact-u16(0).
+    const altBuf = _encodeCompactU16(0);
+
+    // v0 versioned message: prefix byte 0x80 | 0 = 0x80, then standard
+    // message bytes, then ALT section.
+    const versionByte = Buffer.from([0x80]);
+    const message = Buffer.concat([
+        versionByte,
+        header,
+        accountKeysBuf,
+        blockhashBytes,
+        instructionsBuf,
+        altBuf,
+    ]);
+
+    // Two empty 64-byte signature slots (facilitator at 0, burner at 1).
+    // Caller fills slot 1 via Android KeyVault bridge (sign-transaction
+    // with slotIndex=1) before sending PAYMENT-SIGNATURE.
+    const tx = Buffer.concat([
+        _encodeCompactU16(2),       // 2 sig slots
+        Buffer.alloc(64),           // slot 0 (facilitator, empty)
+        Buffer.alloc(64),           // slot 1 (burner, empty until signed)
+        message,
+    ]);
+
+    return {
+        txBuffer: tx,
+        paymentMeta: {
+            x402Version: 2,
+            amountAtomic: BigInt(amountAtomic),
+            recipient: recipientPubkey58,
+            facilitator: facilitatorPubkey58,
+            sourceAta: _base58Encode(sourceAta),
+            destAta:   _base58Encode(destAta),
+            blockhash: recentBlockhash58,
+            mint: USDC_MINT,
+            memo: memoString,
+            burnerSigSlot: 1,                 // for Android bridge: sign slot 1
+            cuLimit,
+            cuPriceMicroLamports: cuPriceMicroLam.toString(),
+        },
+    };
+}
+
+// ── x402 v2: PAYMENT-SIGNATURE header builder ────────────────────────────────
+// Per Coinbase x402 v2 spec (specs/transports-v2/http.md +
+// specs/schemes/exact/scheme_exact_svm.md): the proof header carries
+// a base64-encoded `PaymentPayload` with this exact shape (note
+// `accepted` is SINGULAR — the chosen requirement from the challenge's
+// `accepts` array):
+//
+//   {
+//     "x402Version": 2,
+//     "resource": { url, description, mimeType },
+//     "accepted": {
+//       "scheme": "exact",
+//       "network": "solana:<genesis>",
+//       "amount": "10000",
+//       "asset": "EPjFW...",
+//       "payTo": "<recipient>",
+//       "maxTimeoutSeconds": 300,
+//       "extra": { "feePayer": "<facilitator>", "memo": "..." }
+//     },
+//     "payload": { "transaction": "<base64 signed tx>" }
+//   }
+//
+// Returns { value: <base64 string> } on success or { error, reason }
+// if paymentMeta is missing required fields (defensive — build()
+// should have provided everything).
+function _buildV2PaymentSignatureHeader(paymentMeta, signedTxBase64) {
+    if (!paymentMeta || typeof paymentMeta !== 'object') {
+        return { error: 'v2_settle_missing_meta', reason: 'paymentMeta is null or not an object' };
+    }
+    const req = paymentMeta.requirement || {};
+    const extra = req.extra || {};
+    if (typeof extra.feePayer !== 'string' || !_decodeSolanaPubkey(extra.feePayer)) {
+        return { error: 'v2_settle_missing_facilitator', reason: 'paymentMeta.requirement.extra.feePayer not present' };
+    }
+    if (typeof paymentMeta.memo !== 'string' || paymentMeta.memo.length === 0) {
+        return { error: 'v2_settle_missing_memo', reason: 'paymentMeta.memo not present (build should have set it)' };
+    }
+    if (typeof paymentMeta.amountAtomic !== 'bigint') {
+        return { error: 'v2_settle_missing_amount', reason: 'paymentMeta.amountAtomic missing or not BigInt' };
+    }
+    // Resource may be an object (per spec) or a string (older v1-shaped
+    // captures). Normalize to the v2 object shape — facilitators require
+    // it. If only a string is present, treat it as `url` with sensible
+    // empty defaults for description + mimeType.
+    let resource = req.resource;
+    if (typeof resource === 'string') {
+        resource = { url: resource, description: req.description || '', mimeType: 'application/json' };
+    } else if (!resource || typeof resource !== 'object') {
+        resource = { url: '', description: req.description || '', mimeType: 'application/json' };
+    }
+
+    const payload = {
+        x402Version: 2,
+        resource,
+        accepted: {
+            scheme: req.scheme || 'exact',
+            // Use the CAIP-2 wire-form network the challenge actually sent.
+            // paymentMeta.negotiatedNetwork is the preserved wire string
+            // ("solana" or "solana:<genesis>"); we echo it back verbatim.
+            network: paymentMeta.negotiatedNetwork || req.network || 'solana',
+            amount: paymentMeta.amountAtomic.toString(),
+            asset: paymentMeta.asset || USDC_MINT,
+            payTo: req.payTo || paymentMeta.recipient,
+            maxTimeoutSeconds: typeof req.maxTimeoutSeconds === 'number' ? req.maxTimeoutSeconds : 300,
+            extra: {
+                feePayer: extra.feePayer,
+                memo: paymentMeta.memo,
+            },
+        },
+        payload: {
+            transaction: signedTxBase64,
+        },
+    };
+    const value = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64');
+    return { value };
 }
 
 // ── Payment requirement parsing per pay.sh fixture ───────────────────────────
@@ -804,11 +1113,40 @@ class X402Protocol extends PaymentProtocol {
         try { recentBlockhash = await _fetchRecentBlockhash(); }
         catch (e) { return { error: 'blockhash_fetch_failed', reason: e.message }; }
 
+        const negotiatedVersion = versionCheck.version;
         let built;
-        try {
-            built = _buildUsdcTransferTx(burnerPubkey58, recipient, demand, recentBlockhash);
-        } catch (e) {
-            return { error: 'tx_build_failed', reason: e.message };
+        if (negotiatedVersion === 2) {
+            // BAT-582 v1.6 Phase 5b: v2 challenges produce v2-shape txs.
+            // v2 requires the facilitator's pubkey from `extra.feePayer`
+            // (the server-side co-signer who pays gas + submits the tx)
+            // and a Memo instruction containing either the challenge's
+            // `extra.memo` or a fresh random ≥16-byte hex nonce per spec.
+            const extra = r.extra || {};
+            const facilitatorPubkey58 = extra.feePayer;
+            if (typeof facilitatorPubkey58 !== 'string' || !_decodeSolanaPubkey(facilitatorPubkey58)) {
+                return {
+                    error: 'missing_facilitator',
+                    reason: 'v2 challenge has no extra.feePayer — required for the partially-signed flow',
+                };
+            }
+            const memoString = (typeof extra.memo === 'string' && extra.memo.length > 0)
+                ? extra.memo
+                : _generateRandomMemoNonce();
+            try {
+                built = _buildV2UsdcTransferTx(
+                    burnerPubkey58, recipient, facilitatorPubkey58,
+                    demand, recentBlockhash, memoString,
+                );
+            } catch (e) {
+                return { error: 'tx_build_failed', reason: e.message };
+            }
+        } else {
+            // v1: single-signer legacy tx, burner pays gas + signs slot 0.
+            try {
+                built = _buildUsdcTransferTx(burnerPubkey58, recipient, demand, recentBlockhash);
+            } catch (e) {
+                return { error: 'tx_build_failed', reason: e.message };
+            }
         }
 
         const txBase64 = built.txBuffer.toString('base64');
@@ -817,9 +1155,7 @@ class X402Protocol extends PaymentProtocol {
         // string from the requirement (could be bare "solana" or
         // "solana:<genesis>"). settle() uses these to decide whether to
         // emit a v1 proof header (existing path, fixture-pinned) or to
-        // reject as v2_settle_not_implemented (until Phase 5 captures a
-        // real v2 success and pins the v2 proof header).
-        const negotiatedVersion = versionCheck.version;
+        // build a v2 PAYMENT-SIGNATURE proof (Phase 5c).
         const meta = {
             ...built.paymentMeta,
             scheme: 'exact',
@@ -836,6 +1172,7 @@ class X402Protocol extends PaymentProtocol {
                 resource: r.resource,
                 description: r.description,
                 maxTimeoutSeconds: r.maxTimeoutSeconds,
+                extra: r.extra,                   // v2 settle needs `extra.feePayer`
             },
         };
         return { txBase64, paymentMeta: meta };
@@ -859,49 +1196,43 @@ class X402Protocol extends PaymentProtocol {
         const { parsed, pinnedIp, pinnedFamily, timeoutLeftMs } = originalRequest || {};
         if (!parsed) return { error: 'missing_request_context', reason: 'originalRequest.parsed missing' };
 
-        // BAT-582 R22 / v1.6 Codex clarification 1: settle() ONLY handles
-        // x402 v1's proof-header path right now. v1 emits a plaintext-ish
-        // JSON via the `x-payment` header, pinned against the existing
-        // tests/payment/fixtures/paysh-sandbox-success.json fixture.
-        //
-        // v2's proof-header path is NOT YET pinned by a real-wire
-        // success capture (Phase 4 of v1.6 implementation — requires a
-        // real $0.01 payment against Tripadvisor or similar to record
-        // the success response and determine whether v2 uses `x-payment`,
-        // `payment-signature`, or some other header form). Until that
-        // capture is committed, settle() refuses v2 explicitly with a
-        // stable error code so callers (agent_pay tool) can surface a
-        // clear "v2 settlement not yet implemented" message instead of
-        // sending a malformed v1-shaped proof to a v2 endpoint.
+        // BAT-582 v1.6 Phase 5c: settle() dispatches v1 vs v2 proof-header
+        // paths per paymentMeta.x402Version.
+        //   v1: legacy `x-payment` header carrying a flat PaymentPayload
+        //       (x402Version, scheme, network, payload.transaction).
+        //       Pinned against tests/payment/fixtures/paysh-sandbox-success.json.
+        //   v2: `PAYMENT-SIGNATURE` header carrying a structured
+        //       PaymentPayload (x402Version, resource, accepted, payload).
+        //       Per Coinbase x402 v2 spec
+        //       (specs/transports-v2/http.md +
+        //        specs/schemes/exact/scheme_exact_svm.md).
         const negotiatedVersion = paymentMeta && paymentMeta.x402Version;
-        if (negotiatedVersion === 2) {
-            return {
-                error: 'v2_settle_not_implemented',
-                reason: 'x402 v2 settlement proof-header path is gated on a real-wire success capture (BAT-582 Phase 5). detect() and build() accept v2 challenges, but the agent cannot complete payment on v2 endpoints until the success fixture is committed.',
-            };
-        }
-        if (negotiatedVersion !== 1) {
-            // Should be impossible — build() rejects unsupported versions
-            // before producing paymentMeta. Defensive fail-closed.
+        if (negotiatedVersion !== 1 && negotiatedVersion !== 2) {
             return {
                 error: 'unsupported_settle_version',
                 reason: `paymentMeta.x402Version=${negotiatedVersion} is not a settleable version`,
             };
         }
 
-        const xPaymentPayload = {
-            x402Version: 1,
-            scheme: 'exact',
-            network: 'solana',
-            payload: {
-                transaction: signedTxBase64,
-            },
-        };
-        const xPaymentHeader = Buffer.from(JSON.stringify(xPaymentPayload), 'utf8').toString('base64');
+        let proofHeaders;
+        if (negotiatedVersion === 2) {
+            const built = _buildV2PaymentSignatureHeader(paymentMeta, signedTxBase64);
+            if (built.error) return built;
+            proofHeaders = { 'payment-signature': built.value };
+        } else {
+            const xPaymentPayload = {
+                x402Version: 1,
+                scheme: 'exact',
+                network: 'solana',
+                payload: {
+                    transaction: signedTxBase64,
+                },
+            };
+            const xPaymentHeader = Buffer.from(JSON.stringify(xPaymentPayload), 'utf8').toString('base64');
+            proofHeaders = { 'x-payment': xPaymentHeader };
+        }
 
-        const resp = await fetchFn(parsed, pinnedIp, pinnedFamily, {
-            'x-payment': xPaymentHeader,
-        }, timeoutLeftMs || 30000);
+        const resp = await fetchFn(parsed, pinnedIp, pinnedFamily, proofHeaders, timeoutLeftMs || 30000);
 
         if (resp.error) return { error: resp.error, reason: resp.reason };
         if (resp.status === 402) {
@@ -911,23 +1242,47 @@ class X402Protocol extends PaymentProtocol {
             return { error: 'settle_http_error', reason: `server returned ${resp.status} after payment` };
         }
 
-        // Settlement signature: pay.sh returns a `X-Payment-Response` header
-        // (base64-encoded JSON) on success. We surface the on-chain signature
-        // if present so the agent can show a Solscan link.
+        // Settlement signature: server returns the on-chain payment
+        // signature on a successful 200 via a base64-encoded response
+        // header. The header NAME differs by version:
+        //   v1: `X-Payment-Response` (pay.sh sandbox-success fixture)
+        //   v2: `PAYMENT-RESPONSE` (per Coinbase x402 v2 spec — a
+        //       `SettlementResponse` object: { success, transaction,
+        //       network, payer } or { success: false, errorReason, ... }).
+        // The inner JSON shape converged across versions enough that we
+        // can read `.transaction` (v1 & v2 both use that key for the
+        // signature) — fall back to `.signature` for any legacy variant.
+        // We check both header names to be liberal in what we accept.
         let signature = null;
-        const respHeader = resp.headers && (resp.headers['x-payment-response'] || resp.headers['X-Payment-Response']);
+        let v2SettlementResponse = null;
+        const respHeader = resp.headers && (
+            resp.headers['payment-response'] ||       // v2 (lowercased by Node)
+            resp.headers['PAYMENT-RESPONSE'] ||       // v2 (defensive)
+            resp.headers['x-payment-response'] ||     // v1
+            resp.headers['X-Payment-Response']        // v1 (defensive)
+        );
         if (typeof respHeader === 'string') {
             try {
                 const decoded = JSON.parse(Buffer.from(respHeader, 'base64').toString('utf8'));
                 if (decoded && typeof decoded.transaction === 'string') signature = decoded.transaction;
                 else if (decoded && typeof decoded.signature === 'string') signature = decoded.signature;
-            } catch (_) { /* leave null */ }
+                // v2 spec: SettlementResponse with explicit success boolean.
+                // When success=false the on-chain tx didn't land — surface
+                // as an error rather than a fake success.
+                if (negotiatedVersion === 2 && decoded && decoded.success === false) {
+                    return {
+                        error: 'settle_failed',
+                        reason: `facilitator reported failure: ${decoded.errorReason || 'no reason given'}`,
+                        response: resp,
+                    };
+                }
+                if (negotiatedVersion === 2) v2SettlementResponse = decoded;
+            } catch (_) { /* leave signature null */ }
         }
 
-        return {
-            response: resp,
-            signature,
-        };
+        const out = { response: resp, signature };
+        if (v2SettlementResponse) out.settlementResponse = v2SettlementResponse;
+        return out;
     }
 }
 
@@ -938,6 +1293,14 @@ module.exports = {
     TOKEN_PROGRAM_ID,
     ASSOCIATED_TOKEN_PROGRAM_ID,
     _buildUsdcTransferTx,
+    _buildV2UsdcTransferTx,
+    _buildCuLimitData,
+    _buildCuPriceData,
+    _buildMemoData,
+    _generateRandomMemoNonce,
+    _buildV2PaymentSignatureHeader,
+    COMPUTE_BUDGET_PROGRAM_ID,
+    MEMO_PROGRAM_ID,
     _findAssociatedTokenAddress,
     _isOnCurve,
     _decodeSolanaPubkey,

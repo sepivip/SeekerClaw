@@ -54,8 +54,17 @@ interface KeyVault {
      * signed payload is returned as a fresh ByteArray. The internally
      * loaded secret key bytes are zeroed before return. Callers may
      * safely reuse [txBytes] (in contrast to [store]'s [expanded64]).
+     *
+     * @param allowPartiallySigned BAT-582 v1.6 Phase 5d: when `true`,
+     *   allows signing a multi-signer tx whose other required-signer
+     *   slots are still empty. Used for x402 v2 where the facilitator
+     *   co-signs server-side AFTER receiving the PAYMENT-SIGNATURE
+     *   header — the wire tx that leaves the device is partially
+     *   signed by design. When `false` (default — v1 behavior), all
+     *   other signer slots must already contain a non-zero signature
+     *   or the call rejects with `additional_signers_required`.
      */
-    suspend fun signTransaction(id: String, txBytes: ByteArray): ByteArray
+    suspend fun signTransaction(id: String, txBytes: ByteArray, allowPartiallySigned: Boolean = false): ByteArray
 
     /**
      * Derive and return the 32-byte Ed25519 public key as a base58 string.

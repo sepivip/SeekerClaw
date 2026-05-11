@@ -147,17 +147,26 @@ object SolanaTxSigner {
      * [original] and return the updated transaction bytes. Preserves any
      * pre-existing signatures from co-signers.
      *
+     * @param allowPartiallySigned When `true`, other signer slots may
+     *   remain all-zero (used for x402 v2 where the facilitator
+     *   co-signs server-side AFTER receiving PAYMENT-SIGNATURE — the
+     *   wire tx that leaves the device is partially signed by design).
+     *   When `false` (default — v1 behavior), all other required
+     *   signer slots must already contain a non-zero signature.
+     *
      * Throws [SigningException]:
      *   - `burner_not_required_signer` if [burnerPubkey] is not in the
      *     first numRequiredSignatures account-key slots.
-     *   - `additional_signers_required` when numRequiredSignatures > 1
-     *     AND any other signer slot is still all-zeros.
+     *   - `additional_signers_required` when numRequiredSignatures > 1,
+     *     `allowPartiallySigned` is false, AND any other signer slot
+     *     is still all-zeros.
      */
     fun insertSignature(
         original: ByteArray,
         parsed: ParsedTx,
         burnerPubkey: ByteArray,
         signature: ByteArray,
+        allowPartiallySigned: Boolean = false,
     ): ByteArray {
         require(burnerPubkey.size == 32) { "burnerPubkey must be 32 bytes" }
         require(signature.size == 64) { "signature must be 64 bytes" }
@@ -178,15 +187,17 @@ object SolanaTxSigner {
         }
 
         // V1 co-sign rule: if there are additional required signers, they
-        // must already have non-zero signatures present. We don't attempt
-        // any kind of multi-party signing.
-        if (parsed.numRequiredSignatures > 1) {
+        // must already have non-zero signatures present. BAT-582 v1.6
+        // Phase 5d: x402 v2 explicitly opts out via `allowPartiallySigned`
+        // (facilitator co-signs server-side; the tx is partially signed
+        // by design when it leaves the device).
+        if (parsed.numRequiredSignatures > 1 && !allowPartiallySigned) {
             for (i in 0 until parsed.numRequiredSignatures) {
                 if (i == burnerIndex) continue
                 if (isZero(parsed.signatures[i])) {
                     throw SigningException(
                         "additional_signers_required",
-                        "Slot $i has no signature (V1 supports single or pre-cosigned only)",
+                        "Slot $i has no signature (caller must opt in via allowPartiallySigned for x402 v2)",
                     )
                 }
             }
