@@ -43,12 +43,18 @@ const TEST_MAX_USDC_ATOMIC = 100_000_000n; // 100 USDC
 // Inject deterministic blockhash so build() never touches RPC.
 _setBlockhashFetcher(async () => '2tLBHqeQdeq4Pzioote4ueMkQjrpdnNLBTuDtyKo4ds9');
 
+// Fake on-chain signature the mock facilitator "returns" in PAYMENT-RESPONSE.
+// Asserted exactly by per-capture checks so a parsing regression that picks
+// the wrong field (e.g. reads payer/network instead of transaction) fails
+// loud rather than silently returning a non-empty-but-wrong value.
+const FAKE_SETTLEMENT_SIGNATURE = '5gZxBkLZ7gXrZyrwbqWUf8x8tNzM1tQyVfYwwjmHKvL3xVNbZK4Av7PKLfvgwjJa7vYpqEPTH1WuxPLnAvjGm9zQ';
+
 // Build a fake PAYMENT-RESPONSE header value the server would return on a
 // successful settlement. v2 spec: base64-encoded JSON SettlementResponse.
 function _buildFakeV2SuccessHeader() {
     return Buffer.from(JSON.stringify({
         success: true,
-        transaction: '5gZxBkLZ7gXrZyrwbqWUf8x8tNzM1tQyVfYwwjmHKvL3xVNbZK4Av7PKLfvgwjJa7vYpqEPTH1WuxPLnAvjGm9zQ',
+        transaction: FAKE_SETTLEMENT_SIGNATURE,
         network: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
         payer: TEST_BURNER_PUBKEY,
     }), 'utf8').toString('base64');
@@ -251,9 +257,11 @@ async function runSettleForCapture(captureEntry) {
     }
 
     // Settle response parsing — must surface the on-chain signature from
-    // PAYMENT-RESPONSE.
-    if (!result.signature) {
-        throw new Error(`settle() did not extract .signature from PAYMENT-RESPONSE`);
+    // PAYMENT-RESPONSE. Pin the exact value (not just truthy) so a
+    // parser regression that picks the wrong field (e.g. payer, network,
+    // or a generic non-empty stub) fails loud here.
+    if (result.signature !== FAKE_SETTLEMENT_SIGNATURE) {
+        throw new Error(`settle() returned signature="${result.signature}" — expected exact match against fake PAYMENT-RESPONSE.transaction (parser may be reading the wrong field)`);
     }
     return { built, capturedHeaders, result };
 }

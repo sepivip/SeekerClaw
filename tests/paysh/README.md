@@ -109,9 +109,17 @@ node tests/paysh/validate-detect.js
 ### Layer 2.5 — Full protocol path with mocked settle (`validate-settle.js`) — SHIPPED
 
 Runs `detect()` → `build()` → `settle()` for every real capture, with
-the settle network call MOCKED. Validates the FULL PAYMENT-SIGNATURE
-(v2) or X-PAYMENT (v1) proof-header construction and the
-PAYMENT-RESPONSE parsing path end-to-end without spending USDC.
+the settle network call MOCKED. Validates the v2 `PAYMENT-SIGNATURE`
+proof-header construction and the `PAYMENT-RESPONSE` parsing path
+end-to-end without spending USDC.
+
+**Scope:** currently v2-only — all committed real captures (tripadvisor,
+coingecko, textbelt-text) are v2. The v1 settle path is exercised by
+the legacy tests in `tests/nodejs-project/x402.test.js` against the
+pinned `tests/payment/fixtures/paysh-sandbox-success.json` fixture; no
+real v1 pay.sh endpoint exists in the wild to capture. If a v1 service
+shows up in the future, add a v1 fixture + `expectV2: false` entry and
+extend the assertions to cover `x-payment` header shape.
 
 `X402Protocol.settle()` covers both versions in production:
 - **v1**: shipped, pinned against `tests/payment/fixtures/paysh-sandbox-success.json`,
