@@ -1,0 +1,29 @@
+{
+  "_fixture": {
+    "_kind": "synthetic",
+    "_capturedAt": "2026-05-06",
+    "_capturedFrom": "synthetic — pay.sh sandbox URL not confirmed at Phase 6 implementation time",
+    "_targetUrl": "https://pay.sh/sandbox/echo — NOT actually fetched (see paysh-sandbox-402.json)",
+    "_schema": "x402 v1 — see https://github.com/coinbase/x402",
+    "_notes": [
+      "Wire format below mirrors the canonical x402 v1 success response shape.",
+      "Request header sent on retry: X-PAYMENT (base64-encoded JSON, not stored here — built at runtime by X402Protocol.settle()).",
+      "Response header X-Payment-Response is base64-encoded JSON whose `transaction` field carries the on-chain Solana signature.",
+      "If a live pay.sh sandbox capture differs in exact field names, regenerate this fixture and re-run x402.test.js."
+    ],
+    "_requestHeadersSentOnRetry": {
+      "x-payment": "<base64(JSON.stringify({x402Version:1, scheme:'exact', network:'solana', payload:{transaction:<signedTxBase64>}}))>"
+    }
+  },
+  "status": 200,
+  "headers": {
+    "content-type": "application/json",
+    "x-payment-response": "eyJ0cmFuc2FjdGlvbiI6IjVmaXh0dXJlc2lnbmF0dXJlYmFzZTU4cGxhY2Vob2xkZXJ4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHgifQ==",
+    "cache-control": "no-store"
+  },
+  "body": {
+    "ok": true,
+    "echo": "hello",
+    "_note": "Decoded x-payment-response: {\"transaction\":\"5fixturesignaturebase58placeholderxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"} — surfaced by X402Protocol.settle() as `signature`."
+  }
+}

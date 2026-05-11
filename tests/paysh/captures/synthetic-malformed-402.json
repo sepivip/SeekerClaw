@@ -1,0 +1,19 @@
+{
+  "_meta": {
+    "label": "synthetic-malformed-402",
+    "description": "Synthetic fail-closed fixture: HTTP 402 with no x402 payment-requirements field anywhere (neither body nor payment-required header). Parser must reject with no_payment_requirements.",
+    "kind": "synthetic",
+    "purpose": "Per BAT-582 v1.6 contract amendment 2 — fail-closed proof that we don't accept malformed 402 responses as payable.",
+    "expectedRejection": "no_payment_requirements"
+  },
+  "url": "https://example.invalid/api/malformed",
+  "method": "GET",
+  "status": 402,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "error": "payment_required",
+    "message": "Some service-specific error message that doesn't conform to x402"
+  }
+}

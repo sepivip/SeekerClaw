@@ -21,6 +21,7 @@ import android.speech.tts.TextToSpeech
 import android.telephony.SmsManager
 import android.util.Log
 import androidx.core.content.ContextCompat
+import com.seekerclaw.app.bridge.burner.BurnerBridgeEndpoints
 import com.seekerclaw.app.camera.CameraCaptureActivity
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.service.SeekerClawService
@@ -67,6 +68,12 @@ class AndroidBridge(
     private var tts: TextToSpeech? = null
     private var ttsReady = false
 
+    // BAT-582: burner endpoints are lazily-built so they don't allocate
+    // their CrossProcessStore (and the FileObserver it attaches) until
+    // the first burner request lands. Most installs never use the
+    // burner — no point eager-initializing.
+    private val burnerEndpoints by lazy { BurnerBridgeEndpoints(context) }
+
     // Per-endpoint rate limiting (thread-safe for NanoHTTPD's thread pool)
     private val rateLimiter = ConcurrentHashMap<String, MutableList<Long>>()
     private val rateLimits = mapOf(
@@ -87,6 +94,34 @@ class AndroidBridge(
         // bursts during Settings edits without throttling normal use.
         "/config/mcp-token" to Pair(30, 60_000L),
         "/service/restart" to Pair(3, 60_000L),
+        // BAT-582: burner endpoints, tiered rate limits per call pattern:
+        //   - Read / lifecycle (status, commit, release): 60/min — these
+        //     are called multiple times per autonomous tx (status before
+        //     reserve, commit on broadcast success, release on failure)
+        //     and additionally as status snapshots during chat turns. The
+        //     higher budget avoids throttling a healthy agent loop.
+        //   - Cap-mutating (reserve, sign-transaction, sign-and-send):
+        //     30/min — slower budget because each call moves real money.
+        //     30/min still leaves 1 tx every 2s headroom which exceeds any
+        //     realistic agent autonomy. A misbehaving caller hits this
+        //     before it hits the cap state machine.
+        //   - Config write (config/burner-caps): 10/min — settings UI
+        //     writes are infrequent; 10/min is plenty for a human user
+        //     plus an agent-driven cap-raise flow.
+        // All limits throttle abusers without blocking realistic loops.
+        "/burner/status" to Pair(60, 60_000L),
+        "/burner/reserve" to Pair(30, 60_000L),
+        "/burner/sign-transaction" to Pair(30, 60_000L),
+        "/burner/sign-and-send" to Pair(30, 60_000L),
+        "/burner/commit" to Pair(60, 60_000L),
+        "/burner/release" to Pair(60, 60_000L),
+        "/config/burner-caps" to Pair(10, 60_000L),
+        "/jupiter/order-owner/set" to Pair(60, 60_000L),
+        // BAT-582 Phase 5: ownership lookup is called once per Jupiter cancel
+        // tool dispatch (and from getWalletState when a cancel tool is the
+        // pending tool). 30/min matches the burner endpoints' steady-state
+        // budget — comfortably above any realistic agent loop.
+        "/jupiter/order-owner/get" to Pair(30, 60_000L),
     )
 
     @Synchronized
@@ -178,7 +213,32 @@ class AndroidBridge(
                 "/service/restart" -> handleServiceRestart()
                 "/stats/db-summary" -> proxyToNodeStats()
                 "/ping" -> jsonResponse(200, mapOf("status" to "ok", "bridge" to "AndroidBridge"))
-                else -> jsonResponse(404, mapOf("error" to "Unknown endpoint: $uri"))
+                else -> {
+                    // BAT-582: try burner endpoint dispatch before returning 404.
+                    // BAT-582 R2: gate on a cheap URI prefix check before touching
+                    // `burnerEndpoints` so unknown endpoints (typos like /sm or
+                    // /battary) don't force lazy-init of the burner store + its
+                    // FileObserver. The lazy property is supposed to allocate
+                    // only when a real burner request lands; a typo budget that
+                    // tripped initialization defeated that.
+                    val isBurnerUri = uri.startsWith("/burner/") ||
+                            uri.startsWith("/jupiter/order-owner/") ||
+                            uri == "/config/burner-caps"
+                    if (isBurnerUri) {
+                        val burnerResult = burnerEndpoints.dispatch(uri, params)
+                        if (burnerResult != null) {
+                            val scrubbed = burnerEndpoints.scrubResponse(burnerResult.body)
+                            jsonResponse(burnerResult.httpStatus, scrubbed)
+                        } else {
+                            // Prefix matched but dispatch() returned null — should be
+                            // unreachable since the URI list above is the canonical set,
+                            // but treat it as a 404 to stay consistent.
+                            jsonResponse(404, mapOf("error" to "Unknown endpoint: $uri"))
+                        }
+                    } else {
+                        jsonResponse(404, mapOf("error" to "Unknown endpoint: $uri"))
+                    }
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error handling $uri", e)

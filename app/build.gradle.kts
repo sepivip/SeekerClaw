@@ -268,6 +268,12 @@ dependencies {
     // Solana transaction building (pure Kotlin)
     implementation("org.sol4k:sol4k:0.4.2")
 
+    // BouncyCastle — Ed25519 signing for the burner wallet (BAT-582).
+    // Not transitively available from Android Keystore (which uses platform
+    // crypto for AES-GCM); must be declared explicitly. R8/ProGuard strips
+    // unused BC classes, so APK impact is bounded to the Ed25519 surface.
+    implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
+
     // Coil — image loading for skill avatars
     implementation(libs.coil.compose)
 

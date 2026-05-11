@@ -1,0 +1,45 @@
+{
+  "_fixture": {
+    "_kind": "synthetic",
+    "_capturedAt": "2026-05-06",
+    "_capturedFrom": "synthetic — pay.sh sandbox URL not confirmed at Phase 6 implementation time",
+    "_targetUrl": "https://pay.sh/sandbox/echo (per BAT-582 contract test plan step 10) — NOT actually fetched",
+    "_attempts": [
+      "2026-05-06: pay.sh sandbox endpoint URL is unconfirmed in the contract; no live capture attempted from this dev environment.",
+      "Per contract risk note 2 (pay.sh sandbox availability from CI), fixture is committed locally; live calls deferred to device-test step 10."
+    ],
+    "_schema": "x402 v1 — see https://github.com/coinbase/x402 and pay.sh protocol docs",
+    "_notes": [
+      "Wire format below mirrors the canonical x402 v1 402 response shape.",
+      "If a live pay.sh sandbox capture differs in exact field names, regenerate this fixture and re-run x402.test.js.",
+      "Header set: x402 v1 Accept-Payment is communicated via JSON body (not headers) on the 402; the X-PAYMENT header carries the proof on retry — see paysh-sandbox-success.json."
+    ]
+  },
+  "status": 402,
+  "headers": {
+    "content-type": "application/json",
+    "www-authenticate": "x402 version=1",
+    "cache-control": "no-store"
+  },
+  "body": {
+    "x402Version": 1,
+    "error": "payment_required",
+    "accepts": [
+      {
+        "scheme": "exact",
+        "network": "solana",
+        "maxAmountRequired": "100000",
+        "resource": "https://pay.sh/sandbox/echo",
+        "description": "Echo paid sandbox endpoint (0.10 USDC)",
+        "mimeType": "application/json",
+        "payTo": "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1",
+        "maxTimeoutSeconds": 60,
+        "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "extra": {
+          "name": "USDC",
+          "version": "2"
+        }
+      }
+    ]
+  }
+}

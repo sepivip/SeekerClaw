@@ -125,6 +125,7 @@ fun SettingsScreen(
     onNavigateToSearchConfig: () -> Unit = {},
     onNavigateToMcpConfig: () -> Unit = {},
     onNavigateToEnvVars: () -> Unit = {},
+    onNavigateToBurnerWallet: () -> Unit = {},
 ) {
     val context = LocalContext.current
     // Observe configVersion so UI refreshes when bridge saves owner ID (auto-detect)
@@ -773,8 +774,19 @@ fun SettingsScreen(
                     editLabel = "Helius API Key"
                     editValue = config?.heliusApiKey ?: ""
                 },
-                showDivider = false,
+                showDivider = true,
                 info = SettingsHelpTexts.HELIUS_API_KEY,
+            )
+
+            // Burner wallet (BAT-582) — agent-controlled signer for
+            // autonomous Solana actions. Shows as a navigation row
+            // because the configuration surface is a full screen
+            // (key import, caps, danger zone).
+            ConfigField(
+                label = "Burner Wallet",
+                value = "Agent-controlled signer (experimental)",
+                onClick = onNavigateToBurnerWallet,
+                showDivider = false,
             )
             }
         }

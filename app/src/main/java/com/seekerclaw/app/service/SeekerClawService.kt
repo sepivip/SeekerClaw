@@ -416,6 +416,79 @@ class SeekerClawService : Service() {
         ServiceState.updateStatus(ServiceStatus.RUNNING)
         LogCollector.append("[Service] Claw Engine is now RUNNING")
 
+        // BAT-582 Phase 3: periodic sweep of stale Burner Wallet cap
+        // reservations. Every 30s, any reservation whose expiresAtMs has
+        // passed is auto-released so its committed-to-cap bytes don't
+        // permanently consume the daily window. The coroutine lives on
+        // [scope] (SupervisorJob), so it's cancelled atomically with the
+        // service in onDestroy.
+        //
+        // BAT-582 R1 (PR #364 review): the sweep is gated on the burner
+        // KEY file existing — not on `burner_caps.json`. The previous
+        // version used the caps file as a configured-proxy, which was
+        // wrong: `wipe()` zeros caps but didn't (until this commit)
+        // delete the caps file itself, so a wiped wallet would still
+        // pass the gate and run sweepStale + allocate CapEnforcer
+        // forever. The KEY file is the actual ground truth for "burner
+        // is configured" — the wipe flow deletes it (KeyVault.wipe),
+        // so post-wipe the gate goes false within one tick. The wipe
+        // flow ALSO deletes burner_caps.json now (defense-in-depth +
+        // reclaims a few hundred bytes), but the gate's correctness
+        // doesn't depend on that.
+        //
+        //   (a) Gate via [EncryptedPrefsKeyVault.isConfigured]. Two
+        //       `fstat` calls: parent dir + key file in
+        //       `filesDir/burner_keys/burner`. Pure read — no mkdirs,
+        //       so a never-configured install never grows the dir as
+        //       a side effect of the gate (R4 fix). Pre-import the file
+        //       is absent → gate is false → no CapEnforcer allocation.
+        //       Post-import the file exists → gate is true → sweep runs
+        //       every 30s. Post-wipe the file is gone → gate goes false
+        //       → sweep stops within 30s of wipe completing.
+        //   (b) Once we DO touch CapEnforcer.get(applicationContext),
+        //       cache the reference so subsequent ticks skip the
+        //       singleton-getter overhead. The first call pays for
+        //       CrossProcessStore + FileObserver allocation; subsequent
+        //       calls were already O(1) but the cache makes that
+        //       explicit and makes the optimization survive any future
+        //       refactor of CapEnforcer.get's hot path.
+        val burnerKeyVault = com.seekerclaw.app.data.wallet.EncryptedPrefsKeyVault(
+            applicationContext,
+        )
+        var cachedCapEnforcer: com.seekerclaw.app.data.caps.CapEnforcer? = null
+        scope.launch {
+            while (isActive) {
+                try {
+                    // isConfigured is two fstats (parent dir + key file)
+                    // in the app's private dir — same cost class as the
+                    // previous capsFile.exists() check, but tracks the
+                    // actual configured state instead of leftover state.
+                    // Pure read: does NOT mkdirs the parent as a side
+                    // effect (R4 fix — earlier impl created
+                    // burner_keys/ on every tick for never-configured
+                    // installs).
+                    if (burnerKeyVault.isConfigured(
+                            com.seekerclaw.app.bridge.burner.BurnerBridgeEndpoints.BURNER_ID,
+                        )
+                    ) {
+                        val enforcer = cachedCapEnforcer
+                            ?: com.seekerclaw.app.data.caps.CapEnforcer
+                                .get(applicationContext)
+                                .also { cachedCapEnforcer = it }
+                        enforcer.sweepStale()
+                    }
+                } catch (e: Exception) {
+                    // Sweep failures should never bring the service down.
+                    // Log and keep going; next iteration retries.
+                    LogCollector.append(
+                        "[Service] Burner cap sweepStale error: ${e.javaClass.simpleName}: ${e.message}",
+                        LogLevel.WARN,
+                    )
+                }
+                delay(30_000L)
+            }
+        }
+
         // Start watchdog
         // Note: Node.js can only start once per process. If it dies,
         // we need to kill this :node process and let Android restart it (START_STICKY).
