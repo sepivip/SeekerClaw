@@ -218,8 +218,9 @@ function _isLocalhostHostname(h) {
     return s === 'localhost' || s === '127.0.0.1' || s === '::1';
 }
 
-// Validate URL + scheme + method (cheap, synchronous). Returns null on
-// success or {error, reason} on rejection. NEVER opens a network connection.
+// Validate URL + scheme + method (cheap, synchronous).
+// Returns `{ ok: true, parsed, isLocal, method }` on success or
+// `{ error, reason }` on rejection. NEVER opens a network connection.
 //
 // BAT-664: `method` can be 'GET' or 'POST'. Anything else rejected with
 // `method_not_allowed` (stable code matching v1.6 contract).

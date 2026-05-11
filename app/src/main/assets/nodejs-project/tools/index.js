@@ -241,7 +241,12 @@ function formatConfirmationMessage(toolName, input, policyMessage) {
         // to break linkify's detection. URLs remain visually readable
         // (the ZWSP renders as nothing) but copy/paste users get a tiny
         // anomaly they can clean up — preferable to a one-click phish.
-        v = v.replace(/(https?|ftp|ws|wss|file|data):\/\//gi, '$1:​//');
+        // R-pr370-fix-19: use the explicit `​` escape so the
+        // zero-width-space is visible in diffs/reviews; a literal
+        // invisible character would silently change behavior under a
+        // copy-paste or unicode-aware editor.
+        const ZWSP = '​';
+        v = v.replace(/(https?|ftp|ws|wss|file|data):\/\//gi, `$1:${ZWSP}//`);
         // R-pr370-fix-15: cap AFTER escaping + de-linkify so the rendered
         // message is actually bounded. Escaping can roughly double the
         // byte count (every `*` becomes `\*`); de-linkify adds ~1 char

@@ -639,15 +639,19 @@ async function check(label, fn) {
             body: { phish: 'http://attacker.evil.com/take-money' },
         }, { burnerConfigured: true });
         const rendered = formatConfirmationMessage('agent_pay', {}, policy.message);
+        // R-pr370-fix-19: use ​ explicit escape so the test is
+        // readable in diffs (a literal invisible char would silently
+        // alter behavior under copy/paste or editor configs).
+        const ZWSP = '​';
         // Raw `http://...` would be linkified. After the fix, the scheme
-        // has a zero-width space (​) inserted before //.
-        assert.ok(!/(?<![:​])http:\/\//.test(rendered),
+        // has a zero-width space inserted before //.
+        assert.ok(!new RegExp(`(?<!:${ZWSP})http:\\/\\/`).test(rendered),
             `attacker URL should be de-linkified (no raw http:// substring left); rendered: ${JSON.stringify(rendered)}`);
-        assert.ok(rendered.includes('http:​//'),
+        assert.ok(rendered.includes(`http:${ZWSP}//`),
             'URL should have zero-width-space inserted between scheme and //');
         // The agent_pay URL (also in the rendered message) gets the same
         // treatment — it's part of the policyMessage too.
-        assert.ok(rendered.includes('https:​//api.example.com'),
+        assert.ok(rendered.includes(`https:${ZWSP}//api.example.com`),
             'agent_pay URL should also be de-linkified');
     });
 
@@ -701,6 +705,18 @@ async function check(label, fn) {
         }, { burnerConfigured: true });
         assert.strictEqual(r.policy, 'block');
         assert.strictEqual(r.reason, 'body_too_large');
+    });
+
+    await check('policy: POST + no burner → block (burner_not_configured, R-pr370-fix-20)', () => {
+        // Fail-fast at gate when no burner. POST without a burner deterministically
+        // rejects at the handler; the policy gate should block early instead of
+        // prompting the user to confirm an action that can't succeed.
+        const r = getConfirmationPolicy('agent_pay', {
+            url: 'https://api.example.com/x', max_usdc: '0.10',
+            method: 'POST', body: { ok: true },
+        }, { burnerConfigured: false });
+        assert.strictEqual(r.policy, 'block');
+        assert.strictEqual(r.reason, 'burner_not_configured');
     });
 
     await check('policy: GET unchanged (no body validation needed)', () => {

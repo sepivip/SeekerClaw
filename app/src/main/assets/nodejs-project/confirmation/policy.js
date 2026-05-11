@@ -307,6 +307,18 @@ function getConfirmationPolicy(toolName, args, walletState) {
             };
         }
         if (method === 'POST') {
+            // R-pr370-fix-20: fail-fast at gate when no burner. POST
+            // deterministically rejects with burner_not_configured at the
+            // handler — prompting the user to confirm an action that
+            // can't succeed is bad UX. Block early so the agent gets the
+            // signal without involving the user.
+            if (!burnerConfigured) {
+                return {
+                    policy: 'block',
+                    reason: 'burner_not_configured',
+                    message: 'agent_pay POST requires a burner wallet. Configure one in Settings → Burner Wallet.',
+                };
+            }
             // R-pr370-fix-4: validate the body here BEFORE asking the user
             // to confirm. Pre-fix the user could confirm a POST that the
             // tool then deterministically rejects with body_required_for_post
