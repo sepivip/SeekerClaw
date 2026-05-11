@@ -591,7 +591,7 @@ grep -i "MCP.*reconcile\|MCP.*Failed to" node_debug.log | tail -20
 **Diagnosis:** Pre-flight or 402-body validation refused the call. Two layers:
 
 **Pre-DNS rejections** (fire BEFORE any DNS lookup — operator typos diagnosed cleanly without touching attacker-supplied hosts):
-- `invalid_url` — URL fails URL parse (e.g., not a string, missing scheme)
+- `invalid_url` — string URL fails `new URL()` parsing (missing scheme, invalid characters, etc.). Note: a non-string `url` argument is rejected earlier as `invalid_input`, not `invalid_url`.
 - `non_https` — URL must be `https://`
 - `method_not_allowed` — only GET / POST supported (BAT-664)
 - `body_required_for_post` / `body_not_json` / `body_too_large` — POST body issues (BAT-664)

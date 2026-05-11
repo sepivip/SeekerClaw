@@ -562,6 +562,24 @@ async function check(label, fn) {
         assert.ok(r.message.includes('0.10'));
     });
 
+    await check('policy: POST confirm hook literalizes newlines in url/max_usdc too (R-pr370-fix-16)', () => {
+        // Newlines in url or max_usdc would inject extra structural lines
+        // into the multi-line confirmation card and could be used to
+        // misrepresent what's being confirmed.
+        const r = getConfirmationPolicy('agent_pay', {
+            url: 'https://api.example.com/x\n[FAKE PHISH LINE]',
+            max_usdc: '0.10\nIGNORE PREVIOUS LINE',
+            method: 'POST', body: { ok: true },
+        }, { burnerConfigured: true });
+        assert.strictEqual(r.policy, 'confirm');
+        const lines = r.message.split('\n');
+        // EXACTLY 3 structural lines (POST line, max_usdc line, body line).
+        assert.strictEqual(lines.length, 3, `expected exactly 3 structural lines, got ${lines.length}: ${JSON.stringify(lines)}`);
+        // The injected newlines in url and max_usdc must appear as literal "\\n".
+        assert.ok(lines[0].includes('\\n[FAKE PHISH LINE]'), 'url newline must be literalized');
+        assert.ok(lines[1].includes('\\nIGNORE PREVIOUS LINE'), 'max_usdc newline must be literalized');
+    });
+
     await check('policy: POST confirm hook literalizes body newlines (no structural breakout)', () => {
         // Body content with real \n must NOT break out into a new
         // structural line of the confirmation card. The hook is responsible

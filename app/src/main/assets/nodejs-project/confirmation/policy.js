@@ -176,8 +176,15 @@ function _literalizeNewlines(s) {
 }
 
 function _agentPayPostConfirmMessage(args) {
-    const url = typeof args.url === 'string' ? args.url : '<missing url>';
-    const max = typeof args.max_usdc === 'string' ? args.max_usdc : String(args.max_usdc);
+    // R-pr370-fix-16: literalize newlines in EVERY interpolated field so
+    // a model-controlled url or max_usdc with embedded \n can't inject
+    // extra structural lines into the confirmation card. Pre-fix only the
+    // body had newline literalization — url/max_usdc were passed through
+    // verbatim and formatConfirmationMessage's escape preserves real
+    // newlines for structure, which is the exact lever an attacker would
+    // use to misrepresent the action being confirmed.
+    const url = typeof args.url === 'string' ? _literalizeNewlines(args.url) : '<missing url>';
+    const max = _literalizeNewlines(typeof args.max_usdc === 'string' ? args.max_usdc : String(args.max_usdc));
     let bodyPreview = '';
     if (args.body !== undefined && args.body !== null) {
         let s;
@@ -186,10 +193,6 @@ function _agentPayPostConfirmMessage(args) {
         if (s.length > _BODY_PREVIEW_MAX) {
             s = s.slice(0, _BODY_PREVIEW_MAX - _BODY_PREVIEW_SUFFIX.length) + _BODY_PREVIEW_SUFFIX;
         }
-        // Literalize newlines inside the body content so a model-supplied
-        // JSON containing real newlines can't reflow the card across
-        // structural lines. Markdown char escaping happens at the render
-        // boundary (formatConfirmationMessage).
         bodyPreview = `body: ${_literalizeNewlines(s)}`;
     } else {
         bodyPreview = 'body: <empty>';

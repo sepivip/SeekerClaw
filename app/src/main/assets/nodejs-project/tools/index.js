@@ -224,7 +224,6 @@ function formatConfirmationMessage(toolName, input, policyMessage) {
     // preview must literalize their own newlines first).
     const escPolicy = (s) => {
         let v = String(s ?? '');
-        if (v.length > 1024) v = v.slice(0, 1021) + '...';
         // Escape backslash first (so we don't double-escape markers below).
         v = v.replace(/\\/g, '\\\\');
         // Markdown structure characters + HTML angle brackets.
@@ -233,6 +232,11 @@ function formatConfirmationMessage(toolName, input, policyMessage) {
         // structural separator for multi-line cards and must survive).
         // eslint-disable-next-line no-control-regex
         v = v.replace(/[\x00-\x09\x0B-\x1F\x7F]/g, ' ');
+        // R-pr370-fix-15: cap AFTER escaping so the rendered message is
+        // actually bounded. Escaping can roughly double the byte count
+        // (every `*` becomes `\*`), so a pre-escape cap of 1024 could
+        // produce a ~2 KB rendered card. Cap the final escaped output.
+        if (v.length > 1024) v = v.slice(0, 1021) + '...';
         return v;
     };
     let details;
