@@ -33,7 +33,7 @@ const fs = require('fs');
 const path = require('path');
 
 const X402_PATH = require.resolve('../../app/src/main/assets/nodejs-project/payment/x402.js');
-const { X402Protocol, _setBlockhashFetcher } = require(X402_PATH);
+const { X402Protocol, _setBlockhashFetcher, _extractPayload } = require(X402_PATH);
 
 const CAPTURES_DIR = path.join(__dirname, 'captures');
 
@@ -99,28 +99,20 @@ const SETTLE_CAPTURES = [
     },
 ];
 
-// Detect which delivery mode a capture uses. Mirrors `_extractPayload`
-// in payment/x402.js exactly: body delivery requires accepts OR
-// paymentRequirements to be a NON-EMPTY array; header delivery checks
-// both lowercase and capitalized `payment-required` (HTTP headers are
-// case-insensitive). Keeping these in lockstep so this test reflects
-// real parser behavior — a future tweak to the parser that this helper
-// doesn't mirror would silently mask delivery-mismatch bugs.
+// Detect which delivery mode a capture uses by calling the parser's own
+// `_extractPayload` directly. R-pr368-fix-4: prior versions duplicated
+// the logic and drifted from the parser (missing max-base64 length cap,
+// no body-shape decode/parse, etc.). Using the exported helper keeps
+// this test bit-identical to production behavior — any parser change
+// flows through automatically.
 function detectDelivery(capture) {
-    const body = capture.body;
-    if (body && typeof body === 'object' && !Array.isArray(body)) {
-        if ((Array.isArray(body.accepts) && body.accepts.length > 0) ||
-            (Array.isArray(body.paymentRequirements) && body.paymentRequirements.length > 0)) {
-            return 'body';
-        }
-    }
-    if (capture.headers && typeof capture.headers === 'object') {
-        const headerVal = capture.headers['payment-required'] || capture.headers['Payment-Required'];
-        if (typeof headerVal === 'string' && headerVal.length > 0) {
-            return 'header';
-        }
-    }
-    return 'none';
+    const response = {
+        status: capture.status,
+        bodyJson: capture.body,
+        headers: capture.headers,
+    };
+    const extracted = _extractPayload(response);
+    return extracted ? extracted.source : 'none';
 }
 
 let pass = 0, fail = 0;
