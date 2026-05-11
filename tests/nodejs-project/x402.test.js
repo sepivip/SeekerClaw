@@ -370,7 +370,12 @@ function _safeStringify(v) {
         const out = await proto.settle(
             { parsed, pinnedIp: '1.2.3.4', pinnedFamily: 4, timeoutLeftMs: 30000 },
             'SIGNED-TX-FIXTURE',
-            { amountAtomic: 100000n, recipient: VALID_BURNER_PUBKEY, network: 'solana', asset: x402Mod.USDC_MINT },
+            // BAT-582 R22: settle() now reads paymentMeta.x402Version to
+            // decide between v1 (replay with x-payment) and v2 (reject
+            // until success fixture is captured). Synthetic paymentMeta
+            // must include x402Version=1 to exercise the v1 path that
+            // existing real production builds produce.
+            { amountAtomic: 100000n, recipient: VALID_BURNER_PUBKEY, network: 'solana', asset: x402Mod.USDC_MINT, x402Version: 1 },
             { _fetchWithLimits: fetchFn }
         );
         assert.ok(!out.error, `settle should succeed: ${JSON.stringify(out)}`);
@@ -436,6 +441,35 @@ function _safeStringify(v) {
             'AWS metadata-style link-local IP must be rejected');
     });
 
+    // BAT-582 R22: settle() rejects v2 challenges until a real-wire v2
+    // success fixture is committed. Phase 5 of v1.6 will lift this when
+    // the v2 proof-header path is pinned.
+    await check('settle: v2 paymentMeta rejects with v2_settle_not_implemented', async () => {
+        let fetchCalled = false;
+        const fetchFn = async () => { fetchCalled = true; return { status: 200, bodyJson: {} }; };
+        const out = await proto.settle(
+            { parsed: new URL('https://pay.sh/x'), pinnedIp: '1.2.3.4', pinnedFamily: 4, timeoutLeftMs: 1000 },
+            'SIGNED',
+            { amountAtomic: 100000n, recipient: VALID_BURNER_PUBKEY, x402Version: 2 },
+            { _fetchWithLimits: fetchFn }
+        );
+        assert.strictEqual(out.error, 'v2_settle_not_implemented');
+        assert.ok(!fetchCalled, 'settle must NOT touch network when refusing v2');
+    });
+
+    await check('settle: missing x402Version rejects with unsupported_settle_version', async () => {
+        let fetchCalled = false;
+        const fetchFn = async () => { fetchCalled = true; return { status: 200, bodyJson: {} }; };
+        const out = await proto.settle(
+            { parsed: new URL('https://pay.sh/x'), pinnedIp: '1.2.3.4', pinnedFamily: 4, timeoutLeftMs: 1000 },
+            'SIGNED',
+            { amountAtomic: 100000n, recipient: VALID_BURNER_PUBKEY }, // no x402Version
+            { _fetchWithLimits: fetchFn }
+        );
+        assert.strictEqual(out.error, 'unsupported_settle_version');
+        assert.ok(!fetchCalled, 'settle must NOT touch network when version is missing');
+    });
+
     // ── Boundary rejection: response_too_large + timeout via fetch mock ─────
     // These tests target the protocol/handler pair using a controlled mock.
     // Since agent_pay's _handle calls `_fetchWithLimits` via closure (not via
@@ -448,7 +482,7 @@ function _safeStringify(v) {
         const fetchFn = async () => ({ error: 'response_too_large', reason: 'fixture' });
         const out = await proto.settle(
             { parsed: new URL('https://pay.sh/x'), pinnedIp: '1.2.3.4', pinnedFamily: 4, timeoutLeftMs: 1000 },
-            'SIGNED', { amountAtomic: 100000n, recipient: VALID_BURNER_PUBKEY },
+            'SIGNED', { amountAtomic: 100000n, recipient: VALID_BURNER_PUBKEY, x402Version: 1 },
             { _fetchWithLimits: fetchFn }
         );
         assert.strictEqual(out.error, 'response_too_large');
@@ -458,7 +492,7 @@ function _safeStringify(v) {
         const fetchFn = async () => ({ error: 'timeout', reason: 'fixture' });
         const out = await proto.settle(
             { parsed: new URL('https://pay.sh/x'), pinnedIp: '1.2.3.4', pinnedFamily: 4, timeoutLeftMs: 1000 },
-            'SIGNED', { amountAtomic: 100000n, recipient: VALID_BURNER_PUBKEY },
+            'SIGNED', { amountAtomic: 100000n, recipient: VALID_BURNER_PUBKEY, x402Version: 1 },
             { _fetchWithLimits: fetchFn }
         );
         assert.strictEqual(out.error, 'timeout');

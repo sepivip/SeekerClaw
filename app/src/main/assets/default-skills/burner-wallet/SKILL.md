@@ -108,13 +108,18 @@ V1 supports **Solana mainnet only**. Devnet is deferred to V2. Caps + the design
 **When to use it:**
 - Paid APIs (pay.sh catalog services, x402-enabled endpoints)
 - Micro-payments for individual data lookups, model inference, premium content
-- Any endpoint that returns 402 Payment Required with x402 v1 payment requirements
+- Any endpoint that returns 402 Payment Required with x402 v1 OR v2 payment requirements
 
-**Hard limits (V1):**
+**x402 protocol version support:**
+- **v1** — fully supported: detect, build, AND settle. Production-pinned against `tests/payment/fixtures/paysh-sandbox-success.json`.
+- **v2** — detect + build supported (handles CAIP-2 `solana:<genesis>` network, `amount` field, `payment-required` header delivery, multi-chain pick-Solana). **Settle on v2 currently rejects with `v2_settle_not_implemented`** — the agent recognizes v2 challenges and can build the USDC transfer, but cannot complete payment until the v2 success-response fixture is captured from a real endpoint (Phase 5 of BAT-582 v1.6). If the user wants to pay a v2 endpoint right now, surface this honestly: "I can detect this is x402 v2 and prepare the payment, but settlement on v2 isn't yet wired — try again after the v2 capture lands."
+- **v3+** — rejected as `unsupported_version` (forward-compat fail-closed).
+
+**Hard limits (V1 envelope):**
 - HTTPS only (debug builds also accept http://localhost for sandbox testing)
-- GET only — no POST, PUT, DELETE
-- Solana mainnet only
-- USDC only (asset must be the canonical USDC mint `EPjFWdd5...`)
+- GET only — no POST, PUT, DELETE (POST support is planned in a follow-up phase)
+- Solana mainnet only — multi-chain offers (Base + Solana) pick Solana; EVM-only is rejected as `no_solana_offer`
+- USDC only (asset must be the canonical USDC mint `EPjFWdd5...`; EVM USDC contracts rejected as `non_usdc_asset`)
 - Single payment per call (no retry chains)
 - Response body capped at 1 MB; total timeout 30 s
 - Refuses if no burner is configured (no fallback to main wallet — agent_pay is burner-only by design)
@@ -123,9 +128,9 @@ V1 supports **Solana mainnet only**. Devnet is deferred to V2. Caps + the design
 
 **What NOT to use it for:**
 - Regular HTTP fetches — use `web_fetch` for unauthenticated content
-- POST / PUT / DELETE — agent_pay is GET-only
+- POST / PUT / DELETE — agent_pay is GET-only (POST support is a future BAT)
 - Authenticated APIs that use Bearer tokens, API keys, or OAuth — agent_pay only handles x402
-- Endpoints that don't speak x402 — if the response isn't 402 with x402 v1 requirements, the tool either returns the resource directly (200) or fails with `no_protocol_match`
+- Endpoints that don't speak x402 — if the response isn't 402 with x402 v1/v2 requirements, the tool either returns the resource directly (200) or fails with `no_protocol_match`
 
 **Example:**
 ```

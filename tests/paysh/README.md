@@ -69,12 +69,20 @@ Re-run when:
 ### Layer 2 — Detect/build dry-run (`validate-detect.js`) — SHIPPED
 
 Runs every committed capture through `X402Protocol.detect()` +
-`build()`. **No `settle()` yet** — that gate opens in Phase 5 once we've
-captured a real v2 success fixture proving the proof-header path (v1
-uses `X-PAYMENT`, v2 may use `X-PAYMENT` or `PAYMENT-SIGNATURE`; we
-won't ship the settle code until a real wire capture pins it).
+`build()`. **Layer 2 does NOT test `settle()`** — settle is exercised
+end-to-end only in Layer 3 against live endpoints.
 
-Current behavior (this commit):
+`X402Protocol.settle()` itself has a tiered current state:
+- **v1**: shipped, pinned against `tests/payment/fixtures/paysh-sandbox-success.json`,
+  used in production by `tools/agent_pay.js`.
+- **v2**: parser accepts v2 challenges (detect + build), but settle()
+  rejects with `v2_settle_not_implemented` until a real-wire success
+  capture pins the v2 proof-header path. This is the fixture-first
+  gate from BAT-582 v1.6 contract (Codex clarification 1). The next
+  step is Phase 4: a real $0.01 payment against a v2 endpoint
+  (Tripadvisor) to record the success response shape.
+
+Current Layer 2 behavior:
 - Real captures (tripadvisor, coingecko, textbelt-text, textbelt-status) →
   detect/build matches their `EXPECTATIONS` entry.
 - Synthetic captures → detect/build reject with the documented

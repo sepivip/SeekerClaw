@@ -1,33 +1,52 @@
 // SeekerClaw — payment/x402.js
-// X402 protocol implementation (BAT-582 Phase 6). pay.sh-compatible
-// Solana mainnet USDC settlement.
+// X402 protocol implementation. pay.sh-compatible Solana mainnet USDC
+// settlement.
 //
-// CONTRACT (per BAT-582 v1.4 "x402 V1 boundary")
-// ----------------------------------------------
+// CONTRACT (per BAT-582 v1.6 — Codex sign-off 2026-05-10)
+// -------------------------------------------------------
+// Detect + build support BOTH x402 v1 AND v2. Settle currently
+// implements ONLY v1; v2 settle is gated on a real-wire success
+// capture (Phase 5).
+//
 // detect(response):
-//   - true when response.status === 402 AND body parses as the x402 JSON
-//     shape (has `accepts: [...]` or `paymentRequirements: [...]`).
+//   - true when response.status === 402 AND a usable Solana mainnet
+//     payment requirement exists (body OR `payment-required` header,
+//     scheme=exact, version 1 or 2). False for v3+, malformed bodies,
+//     EVM-only multi-chain offers, devnet/testnet Solana variants.
 //
 // build(response, ctx):
-//   - Parse JSON payment requirements per the captured pay.sh fixture.
-//   - Validate `network === "solana"` (else: non_solana_network).
-//   - Validate `asset === "USDC"` or asset matches the pinned USDC mint
-//     EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v (else: non_usdc_asset).
-//   - Parse demand `maxAmountRequired` (atomic USDC microunits) — must be
-//     ≤ ctx.maxUsdcAtomic (else: demand_exceeds_max_usdc).
-//   - Validate `payTo` is a valid Solana base58 pubkey (32 bytes when decoded).
-//   - Build a USDC SPL TransferChecked tx from burner pubkey → recipient.
-//     Returns { txBase64, paymentMeta }.
+//   - Extracts requirements payload from body (`accepts` /
+//     `paymentRequirements`) OR `payment-required` header (base64 JSON).
+//   - Validates x402Version (1 or 2 accepted; 3+ → unsupported_version;
+//     missing → missing_x402_version).
+//   - Walks `accepts` for first Solana mainnet entry with scheme=exact:
+//     - bare network "solana" → mainnet (v1 backward compat)
+//     - CAIP-2 network "solana:5eykt4Us…vdp" → mainnet
+//     - any other Solana genesis → non_mainnet_solana
+//     - no Solana entry → no_solana_offer
+//   - Reads `amount` (v2) or `maxAmountRequired` (v1). Both present
+//     and differing → conflicting_amount_fields.
+//   - Validates asset = USDC mint (rejects EVM-shaped 0x… addresses
+//     defensively even if upstream picked solana).
+//   - Validates payTo as valid Solana base58 pubkey.
+//   - Builds USDC SPL TransferChecked tx.
+//   - Returns { txBase64, paymentMeta } with paymentMeta.x402Version
+//     and paymentMeta.negotiatedNetwork captured for settle().
 //
 // settle(originalRequest, signedTxBase64, paymentMeta):
-//   - Replay original GET with the X-PAYMENT proof header (per fixture).
-//   - X-PAYMENT is base64-encoded JSON: { x402Version, scheme, network,
-//     payload: { transaction: <signedTxBase64> } }. The exact shape comes
-//     from the committed pay.sh sandbox-success fixture — see
-//     tests/payment/fixtures/paysh-sandbox-success.json.
+//   - v1 (paymentMeta.x402Version === 1): replays request with
+//     `x-payment` base64-JSON header per the canonical fixture
+//     tests/payment/fixtures/paysh-sandbox-success.json. SHIPPED.
+//   - v2 (paymentMeta.x402Version === 2): REJECTS with
+//     `v2_settle_not_implemented` until a real-wire success capture
+//     pins the v2 proof-header path (Phase 5 of v1.6 implementation).
+//     Agent_pay caller surfaces this to the user as "v2 endpoint
+//     detected but settlement not yet supported." This is the
+//     fixture-first gate Codex required.
 //
-// PRE-FLIGHT REJECTIONS happen in the agent_pay tool before detect().
-// This module focuses on the x402-specific protocol mechanics only.
+// PRE-FLIGHT REJECTIONS (HTTPS-only, private-IP, DNS rebinding, max
+// body, etc.) happen in the agent_pay tool before detect(). This
+// module focuses on the x402-specific protocol mechanics only.
 
 'use strict';
 
@@ -793,12 +812,21 @@ class X402Protocol extends PaymentProtocol {
         }
 
         const txBase64 = built.txBuffer.toString('base64');
+        // BAT-582 R22 / v1.6 Codex clarification 1: pass through the
+        // ACTUAL negotiated x402Version (1 or 2) and the ACTUAL network
+        // string from the requirement (could be bare "solana" or
+        // "solana:<genesis>"). settle() uses these to decide whether to
+        // emit a v1 proof header (existing path, fixture-pinned) or to
+        // reject as v2_settle_not_implemented (until Phase 5 captures a
+        // real v2 success and pins the v2 proof header).
+        const negotiatedVersion = versionCheck.version;
         const meta = {
             ...built.paymentMeta,
             scheme: 'exact',
-            network: 'solana',
+            network: 'solana',                   // normalized for tx-build purposes
+            negotiatedNetwork: String(r.network || 'solana'),  // wire form for settle
             asset: USDC_MINT,
-            x402Version: X402_VERSION,
+            x402Version: negotiatedVersion,
             // Store a short-lived ref to the original requirement so settle()
             // can echo back any extension fields if the server requires them.
             requirement: {
@@ -831,8 +859,38 @@ class X402Protocol extends PaymentProtocol {
         const { parsed, pinnedIp, pinnedFamily, timeoutLeftMs } = originalRequest || {};
         if (!parsed) return { error: 'missing_request_context', reason: 'originalRequest.parsed missing' };
 
+        // BAT-582 R22 / v1.6 Codex clarification 1: settle() ONLY handles
+        // x402 v1's proof-header path right now. v1 emits a plaintext-ish
+        // JSON via the `x-payment` header, pinned against the existing
+        // tests/payment/fixtures/paysh-sandbox-success.json fixture.
+        //
+        // v2's proof-header path is NOT YET pinned by a real-wire
+        // success capture (Phase 4 of v1.6 implementation — requires a
+        // real $0.01 payment against Tripadvisor or similar to record
+        // the success response and determine whether v2 uses `x-payment`,
+        // `payment-signature`, or some other header form). Until that
+        // capture is committed, settle() refuses v2 explicitly with a
+        // stable error code so callers (agent_pay tool) can surface a
+        // clear "v2 settlement not yet implemented" message instead of
+        // sending a malformed v1-shaped proof to a v2 endpoint.
+        const negotiatedVersion = paymentMeta && paymentMeta.x402Version;
+        if (negotiatedVersion === 2) {
+            return {
+                error: 'v2_settle_not_implemented',
+                reason: 'x402 v2 settlement proof-header path is gated on a real-wire success capture (BAT-582 Phase 5). detect() and build() accept v2 challenges, but the agent cannot complete payment on v2 endpoints until the success fixture is committed.',
+            };
+        }
+        if (negotiatedVersion !== 1) {
+            // Should be impossible — build() rejects unsupported versions
+            // before producing paymentMeta. Defensive fail-closed.
+            return {
+                error: 'unsupported_settle_version',
+                reason: `paymentMeta.x402Version=${negotiatedVersion} is not a settleable version`,
+            };
+        }
+
         const xPaymentPayload = {
-            x402Version: X402_VERSION,
+            x402Version: 1,
             scheme: 'exact',
             network: 'solana',
             payload: {
