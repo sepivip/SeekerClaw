@@ -305,6 +305,52 @@ function _buildSplTransferCheckedData(amountAtomic, decimals) {
     return data;
 }
 
+// ── x402 v2: ComputeBudget + Memo instruction builders ───────────────────────
+// Solana well-known program IDs (base58):
+const COMPUTE_BUDGET_PROGRAM_ID = 'ComputeBudget111111111111111111111111111111';
+const MEMO_PROGRAM_ID           = 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr';
+
+// Pre-decoded program-ID bytes — same hoisting pattern as USDC_MINT
+// (avoids re-decoding on every v2 tx build).
+const _COMPUTE_BUDGET_PROGRAM_ID_BYTES = _base58Decode(COMPUTE_BUDGET_PROGRAM_ID);
+const _MEMO_PROGRAM_ID_BYTES           = _base58Decode(MEMO_PROGRAM_ID);
+
+// ComputeBudgetProgram::SetComputeUnitLimit
+//   tag (1 byte) = 0x02
+//   units (u32 LE) = 4 bytes
+// Total: 5 bytes.
+function _buildCuLimitData(limit) {
+    const data = Buffer.alloc(5);
+    data.writeUInt8(0x02, 0);
+    data.writeUInt32LE(limit >>> 0, 1);
+    return data;
+}
+
+// ComputeBudgetProgram::SetComputeUnitPrice
+//   tag (1 byte) = 0x03
+//   micro_lamports (u64 LE) = 8 bytes
+// Total: 9 bytes.
+function _buildCuPriceData(microLamports) {
+    const data = Buffer.alloc(9);
+    data.writeUInt8(0x03, 0);
+    data.writeBigUInt64LE(BigInt(microLamports), 1);
+    return data;
+}
+
+// Memo program v2 takes the memo content as raw UTF-8 bytes (no
+// discriminator). Per BAT-582 v1.6 contract amendment 4 + x402 v2 spec:
+// the client MUST include a Memo instruction containing either
+// `extra.memo` from the challenge (if present) or a random ≥16-byte
+// hex nonce. We use 32 hex chars (16 bytes of entropy) when generating.
+function _buildMemoData(memoString) {
+    return Buffer.from(String(memoString), 'utf8');
+}
+
+function _generateRandomMemoNonce() {
+    // 16 bytes random → 32 hex chars. Spec minimum.
+    return crypto.randomBytes(16).toString('hex');
+}
+
 // ── Build a legacy USDC SPL transfer transaction ─────────────────────────────
 // Returns { txBuffer, paymentMeta }. Caller serializes to base64.
 //
@@ -407,6 +453,187 @@ function _buildUsdcTransferTx(burnerPubkey58, recipientPubkey58, amountAtomic, r
             destAta: _base58Encode(destAta),
             blockhash: recentBlockhash58,
             mint: USDC_MINT,
+        },
+    };
+}
+
+// ── x402 v2 USDC transfer transaction builder ────────────────────────────────
+// Per Coinbase x402 v2 spec (specs/schemes/exact/scheme_exact_svm.md):
+//
+// PARTIALLY-SIGNED versioned (v0) transaction with 4 instructions in
+// this exact order:
+//   1. ComputeBudgetProgram::SetComputeUnitLimit
+//   2. ComputeBudgetProgram::SetComputeUnitPrice
+//   3. SPL TransferChecked (USDC, burner → recipient ATA)
+//   4. Memo with `extra.memo` from challenge OR random ≥16-byte hex nonce
+//
+// Two required signers:
+//   - slot 0: facilitator (feePayer, signer + writable) — left empty;
+//     server co-signs after receiving PAYMENT-SIGNATURE.
+//   - slot 1: burner (signer + readonly) — caller fills this slot.
+//
+// Account-keys order (Solana convention — writable signers first, then
+// readonly signers, then writable non-signers, then readonly non-signers):
+//   idx 0: facilitator    (signer, writable, feePayer)
+//   idx 1: burner         (signer, readonly — only authorizes SPL transfer)
+//   idx 2: source ATA     (writable)
+//   idx 3: dest ATA       (writable)
+//   idx 4: USDC mint      (readonly)
+//   idx 5: ComputeBudget  (readonly program)
+//   idx 6: Token program  (readonly program)
+//   idx 7: Memo program   (readonly program)
+//
+// Header: numRequiredSignatures=2, numReadonlySigned=1 (burner),
+//         numReadonlyUnsigned=4 (mint + 3 programs).
+//
+// Returns { txBuffer, paymentMeta } — caller writes burner sig at slot 1
+// (offset = 1 + 64 = 65 of the tx buffer), then base64-encodes.
+//
+// Default compute-budget values are conservative for a TransferChecked +
+// Memo flow. Caller can override via opts if a service demands higher.
+function _buildV2UsdcTransferTx(burnerPubkey58, recipientPubkey58, facilitatorPubkey58, amountAtomic, recentBlockhash58, memoString, opts = {}) {
+    const burnerBytes      = _decodeSolanaPubkey(burnerPubkey58);
+    const recipientBytes   = _decodeSolanaPubkey(recipientPubkey58);
+    const facilitatorBytes = _decodeSolanaPubkey(facilitatorPubkey58);
+    if (!burnerBytes)      throw new Error(`v2: invalid burner pubkey: ${burnerPubkey58}`);
+    if (!recipientBytes)   throw new Error(`v2: invalid recipient pubkey: ${recipientPubkey58}`);
+    if (!facilitatorBytes) throw new Error(`v2: invalid facilitator pubkey: ${facilitatorPubkey58}`);
+
+    const mintBytes          = _USDC_MINT_BYTES;
+    const tokenProgramBytes  = _TOKEN_PROGRAM_ID_BYTES;
+    const cuProgramBytes     = _COMPUTE_BUDGET_PROGRAM_ID_BYTES;
+    const memoProgramBytes   = _MEMO_PROGRAM_ID_BYTES;
+
+    const sourceAta = _findAssociatedTokenAddress(burnerBytes, mintBytes).address;
+    const destAta   = _findAssociatedTokenAddress(recipientBytes, mintBytes).address;
+
+    const blockhashBytes = _base58Decode(recentBlockhash58);
+    if (blockhashBytes.length !== 32) throw new Error(`v2: blockhash must decode to 32 bytes, got ${blockhashBytes.length}`);
+
+    // Compute-budget defaults. 50000 CU is generous for a TransferChecked
+    // + Memo (each is a few hundred CU); 1000 microlamports/CU is a
+    // modest priority fee that helps with mainnet congestion without
+    // burning much fee. Override via opts only if a specific facilitator
+    // requires higher.
+    const cuLimit         = (opts.cuLimit | 0) || 50_000;
+    const cuPriceMicroLam = (opts.cuPriceMicroLamports != null) ? BigInt(opts.cuPriceMicroLamports) : 1000n;
+
+    // Account-keys layout (see header comment).
+    const accountKeys = [
+        facilitatorBytes,    // 0: feePayer (signer, writable)
+        burnerBytes,         // 1: burner   (signer, readonly)
+        sourceAta,           // 2: source ATA (writable)
+        destAta,             // 3: dest ATA   (writable)
+        mintBytes,           // 4: USDC mint  (readonly)
+        cuProgramBytes,      // 5: ComputeBudget program
+        tokenProgramBytes,   // 6: Token program
+        memoProgramBytes,    // 7: Memo program
+    ];
+
+    // Header per Solana message format.
+    const header = Buffer.from([
+        2, // numRequiredSignatures (facilitator + burner)
+        1, // numReadonlySignedAccounts (burner is readonly-signer)
+        4, // numReadonlyUnsignedAccounts (mint, ComputeBudget, Token, Memo)
+    ]);
+
+    // Instructions (4 total, in spec-required order).
+    const ixCuLimit = (() => {
+        const data = _buildCuLimitData(cuLimit);
+        return Buffer.concat([
+            Buffer.from([5]),                       // programIdIndex = ComputeBudget (idx 5)
+            _encodeCompactU16(0),                   // no accounts
+            _encodeCompactU16(data.length),
+            data,
+        ]);
+    })();
+    const ixCuPrice = (() => {
+        const data = _buildCuPriceData(cuPriceMicroLam);
+        return Buffer.concat([
+            Buffer.from([5]),                       // programIdIndex = ComputeBudget
+            _encodeCompactU16(0),
+            _encodeCompactU16(data.length),
+            data,
+        ]);
+    })();
+    const ixTransferChecked = (() => {
+        const data = _buildSplTransferCheckedData(amountAtomic, USDC_DECIMALS);
+        // accounts: source ATA (2), mint (4), dest ATA (3), owner=burner (1)
+        const ixAccounts = Buffer.from([2, 4, 3, 1]);
+        return Buffer.concat([
+            Buffer.from([6]),                       // programIdIndex = Token (idx 6)
+            _encodeCompactU16(ixAccounts.length),
+            ixAccounts,
+            _encodeCompactU16(data.length),
+            data,
+        ]);
+    })();
+    const ixMemo = (() => {
+        const data = _buildMemoData(memoString);
+        // Memo can run without specifying accounts. Per Solana convention,
+        // including the burner (signer) makes the memo verifiable as
+        // authored by them — useful for downstream tooling. We include it.
+        const ixAccounts = Buffer.from([1]);
+        return Buffer.concat([
+            Buffer.from([7]),                       // programIdIndex = Memo (idx 7)
+            _encodeCompactU16(ixAccounts.length),
+            ixAccounts,
+            _encodeCompactU16(data.length),
+            data,
+        ]);
+    })();
+
+    const accountKeysBuf = Buffer.concat([
+        _encodeCompactU16(accountKeys.length),
+        ...accountKeys,
+    ]);
+    const instructionsBuf = Buffer.concat([
+        _encodeCompactU16(4),
+        ixCuLimit,
+        ixCuPrice,
+        ixTransferChecked,
+        ixMemo,
+    ]);
+    // Address Lookup Tables section (v0 only). Empty: compact-u16(0).
+    const altBuf = _encodeCompactU16(0);
+
+    // v0 versioned message: prefix byte 0x80 | 0 = 0x80, then standard
+    // message bytes, then ALT section.
+    const versionByte = Buffer.from([0x80]);
+    const message = Buffer.concat([
+        versionByte,
+        header,
+        accountKeysBuf,
+        blockhashBytes,
+        instructionsBuf,
+        altBuf,
+    ]);
+
+    // Two empty 64-byte signature slots (facilitator at 0, burner at 1).
+    // Caller fills slot 1 via Android KeyVault bridge (sign-transaction
+    // with slotIndex=1) before sending PAYMENT-SIGNATURE.
+    const tx = Buffer.concat([
+        _encodeCompactU16(2),       // 2 sig slots
+        Buffer.alloc(64),           // slot 0 (facilitator, empty)
+        Buffer.alloc(64),           // slot 1 (burner, empty until signed)
+        message,
+    ]);
+
+    return {
+        txBuffer: tx,
+        paymentMeta: {
+            x402Version: 2,
+            amountAtomic: BigInt(amountAtomic),
+            recipient: recipientPubkey58,
+            facilitator: facilitatorPubkey58,
+            sourceAta: _base58Encode(sourceAta),
+            destAta:   _base58Encode(destAta),
+            blockhash: recentBlockhash58,
+            mint: USDC_MINT,
+            memo: memoString,
+            burnerSigSlot: 1,                 // for Android bridge: sign slot 1
+            cuLimit,
+            cuPriceMicroLamports: cuPriceMicroLam.toString(),
         },
     };
 }
@@ -938,6 +1165,13 @@ module.exports = {
     TOKEN_PROGRAM_ID,
     ASSOCIATED_TOKEN_PROGRAM_ID,
     _buildUsdcTransferTx,
+    _buildV2UsdcTransferTx,
+    _buildCuLimitData,
+    _buildCuPriceData,
+    _buildMemoData,
+    _generateRandomMemoNonce,
+    COMPUTE_BUDGET_PROGRAM_ID,
+    MEMO_PROGRAM_ID,
     _findAssociatedTokenAddress,
     _isOnCurve,
     _decodeSolanaPubkey,
