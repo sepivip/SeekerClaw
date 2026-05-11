@@ -219,11 +219,14 @@ function preflightUrlSync(url, method) {
     catch (_) { return { error: 'invalid_url', reason: 'URL parse failed' }; }
 
     // R-pr370-fix-6: defensive type check. Tool inputs aren't schema-validated
-    // at runtime, so a malformed call could pass `method: 123` / `method: {}`.
-    // `(non-string).toUpperCase()` would throw an uninformative TypeError;
-    // we treat any non-string as "missing" → default GET, but reject other
-    // truthy non-strings as method_not_allowed so the operator gets a clear
-    // signal that the type was wrong.
+    // at runtime, so a malformed call could pass `method: 123` / `method: {}` /
+    // method: []`. `(non-string).toUpperCase()` would throw an uninformative
+    // TypeError. Behavior:
+    //   - undefined / null → default to GET (treat as "method omitted")
+    //   - any other non-string (number, boolean, object, array) → reject
+    //     with method_not_allowed and the type name so the operator gets a
+    //     clear signal
+    //   - string → uppercase + check against ALLOWED_METHODS
     let m;
     if (method === undefined || method === null) m = 'GET';
     else if (typeof method !== 'string') {
@@ -253,14 +256,19 @@ function preflightUrlSync(url, method) {
 // BAT-664: validate + serialize a POST body BEFORE DNS / network / payment.
 // Returns { bodyJsonStr } on success, or { error, reason } on rejection.
 //
-// Rules (per contract v2):
+// Rules (per contract v2 + R-pr370-fix-2):
 //   - method === 'POST' ⇒ body required; `undefined` or `null` rejected as
 //     body_required_for_post (treated as "no body supplied")
-//   - body string ⇒ MUST parse as JSON (else body_not_json)
-//   - body object/array ⇒ pass through
-//   - body of other types (boolean, number) ⇒ accepted only if
-//     JSON.stringify produces a string (matches JSON.stringify semantics);
-//     functions / symbols-only / circular refs return body_not_json
+//   - body string ⇒ MUST parse as JSON via JSON.parse and the parsed value
+//     MUST be a non-null object or array (else body_not_json)
+//   - body non-null object or array ⇒ pass through
+//   - body primitives (number, boolean, plain string-after-parse) ⇒
+//     rejected as body_not_json — the input_schema describes body as a
+//     JSON object/array, and paid POST endpoints expect structured payloads
+//     (textbelt: {phone, message}; coingecko-like: query objects). A bare
+//     primitive would deterministically confuse upstream services.
+//   - body that JSON.stringify can't represent (functions, symbols-only,
+//     circular refs) ⇒ body_not_json
 //   - Final compact-serialized form ≤ 8192 UTF-8 bytes (body_too_large)
 //
 // The returned bodyJsonStr is REUSED byte-identically for probe and settle
@@ -279,6 +287,12 @@ function validateAndSerializeBody(method, body) {
         catch (_) {
             return { error: 'body_not_json', reason: 'string body must be valid JSON' };
         }
+    }
+    // R-pr370-fix-2: require parsed body to be a non-null object or array.
+    // Bare primitives are rejected — the input_schema describes body as a
+    // structured payload; paid POST endpoints expect objects.
+    if (parsed === null || typeof parsed !== 'object') {
+        return { error: 'body_not_json', reason: `body must be a JSON object or array (got ${parsed === null ? 'null' : typeof parsed})` };
     }
     let bodyJsonStr;
     try { bodyJsonStr = JSON.stringify(parsed); }

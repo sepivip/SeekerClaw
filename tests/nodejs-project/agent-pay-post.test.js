@@ -411,6 +411,97 @@ async function check(label, fn) {
         assert.strictEqual(dnsLookupCalled, 0);
     });
 
+    // ── Policy-hook body validation (R-pr370-fix-4) ─────────────────────────
+    // The confirmation policy now validates the body BEFORE returning
+    // `confirm`. Invalid POST bodies return `block` with a stable reason
+    // so the agent doesn't ask the user to confirm a call that would
+    // deterministically reject downstream.
+
+    const { getConfirmationPolicy } = require(path.join(BUNDLE, 'confirmation', 'policy'));
+
+    await check('policy: POST + valid body → confirm', () => {
+        const r = getConfirmationPolicy('agent_pay', {
+            url: 'https://api.example.com/x', max_usdc: '0.10',
+            method: 'POST', body: { phone: '+15555550000', message: 'hi' },
+        }, { burnerConfigured: true });
+        assert.strictEqual(r.policy, 'confirm');
+        assert.ok(typeof r.message === 'string' && r.message.includes('POST'));
+        assert.ok(r.message.includes('https://api.example.com/x'));
+        assert.ok(r.message.includes('0.10'));
+    });
+
+    await check('policy: POST + no body → block (body_required_for_post)', () => {
+        const r = getConfirmationPolicy('agent_pay', {
+            url: 'https://api.example.com/x', max_usdc: '0.10',
+            method: 'POST', // no body
+        }, { burnerConfigured: true });
+        assert.strictEqual(r.policy, 'block');
+        assert.strictEqual(r.reason, 'body_required_for_post');
+    });
+
+    await check('policy: POST + invalid JSON string → block (body_not_json)', () => {
+        const r = getConfirmationPolicy('agent_pay', {
+            url: 'https://api.example.com/x', max_usdc: '0.10',
+            method: 'POST', body: 'not actually json',
+        }, { burnerConfigured: true });
+        assert.strictEqual(r.policy, 'block');
+        assert.strictEqual(r.reason, 'body_not_json');
+    });
+
+    await check('policy: POST + primitive body → block (body_not_json — object/array required)', () => {
+        const r = getConfirmationPolicy('agent_pay', {
+            url: 'https://api.example.com/x', max_usdc: '0.10',
+            method: 'POST', body: 42,
+        }, { burnerConfigured: true });
+        assert.strictEqual(r.policy, 'block');
+        assert.strictEqual(r.reason, 'body_not_json');
+    });
+
+    await check('policy: POST + oversized body → block (body_too_large)', () => {
+        const r = getConfirmationPolicy('agent_pay', {
+            url: 'https://api.example.com/x', max_usdc: '0.10',
+            method: 'POST', body: { k: 'A'.repeat(10_000) },
+        }, { burnerConfigured: true });
+        assert.strictEqual(r.policy, 'block');
+        assert.strictEqual(r.reason, 'body_too_large');
+    });
+
+    await check('policy: GET unchanged (no body validation needed)', () => {
+        const r = getConfirmationPolicy('agent_pay', {
+            url: 'https://api.example.com/x', max_usdc: '0.10',
+        }, { burnerConfigured: true });
+        assert.strictEqual(r, 'none');
+    });
+
+    // Cross-check: policy duplicates the body rules from agent_pay's
+    // validateAndSerializeBody. Same inputs must produce same outcomes so
+    // a future refactor that moves the validation can't drift.
+    await check('policy + agent_pay body rules stay in lock-step (R-pr370-fix-4 cross-check)', () => {
+        const cases = [
+            [undefined,                     'body_required_for_post'],
+            [null,                          'body_required_for_post'],
+            ['not-json',                    'body_not_json'],
+            [42,                            'body_not_json'],
+            [true,                          'body_not_json'],
+            ['"a-json-string"',             'body_not_json'],
+            [{ a: 1 },                      'ok'],
+            [['a', 'b'],                    'ok'],
+            [{ k: 'X'.repeat(10_000) },     'body_too_large'],
+        ];
+        for (const [body, expectedError] of cases) {
+            const fromValidator = validateAndSerializeBody('POST', body);
+            const validatorErr = fromValidator.error || 'ok';
+            const fromPolicy = getConfirmationPolicy('agent_pay', {
+                url: 'https://example.com', max_usdc: '0.10', method: 'POST', body,
+            }, { burnerConfigured: true });
+            const policyErr = (fromPolicy && fromPolicy.policy === 'block') ? fromPolicy.reason : 'ok';
+            assert.strictEqual(validatorErr, expectedError,
+                `validator: body=${JSON.stringify(body)} expected ${expectedError}, got ${validatorErr}`);
+            assert.strictEqual(policyErr, expectedError,
+                `policy: body=${JSON.stringify(body)} expected ${expectedError}, got ${policyErr}`);
+        }
+    });
+
     if (failures === 0) {
         console.log('\n✓ All agent-pay-post.test.js cases passed');
         process.exit(0);

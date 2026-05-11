@@ -204,9 +204,22 @@ function formatConfirmationMessage(toolName, input, policyMessage) {
         if (v.length > 200) v = v.slice(0, 197) + '...';
         return v;
     };
+    // R-pr370-fix-3 (BAT-664): policy hooks construct their own preview
+    // strings (agent_pay POST: method + URL + max_usdc + 200-char body
+    // preview; wallet_set_caps: old→new cap diffs). These messages are
+    // intentionally multi-line and can exceed the 200-char per-field cap.
+    // Use a more generous limit for explicit policyMessage so URLs +
+    // body previews aren't decapitated. 1024 chars covers a long URL +
+    // a 200-char body preview + framing comfortably; still bounded so
+    // a buggy hook can't blow up the confirmation card.
+    const escPolicy = (s) => {
+        let v = String(s ?? '');
+        if (v.length > 1024) v = v.slice(0, 1021) + '...';
+        return v;
+    };
     let details;
     if (typeof policyMessage === 'string' && policyMessage.length > 0) {
-        details = `**${esc(toolName)}** — ${esc(policyMessage)}`;
+        details = `**${esc(toolName)}** — ${escPolicy(policyMessage)}`;
     } else {
         switch (toolName) {
             case 'android_sms':

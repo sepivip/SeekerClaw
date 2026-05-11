@@ -104,6 +104,42 @@ function _decimalToAtomic(decimal, decimals) {
     return full;
 }
 
+// BAT-664 (R-pr370-fix-4): early body validation in the policy hook so
+// invalid POST calls fail fast WITHOUT prompting the user to confirm an
+// action that would deterministically reject downstream. Mirrors the
+// rules in tools/agent_pay.js::validateAndSerializeBody — duplicated
+// here rather than imported to avoid a confirmation→tools require cycle.
+// The two MUST stay in sync (regression test in agent-pay-post.test.js
+// pins the rules cross-check).
+const _POLICY_MAX_POST_BODY_BYTES = 8 * 1024;
+function _validateAgentPayPostBody(body) {
+    if (body === undefined || body === null) {
+        return { error: 'body_required_for_post', reason: 'POST requires a JSON body' };
+    }
+    let parsed = body;
+    if (typeof body === 'string') {
+        try { parsed = JSON.parse(body); }
+        catch (_) {
+            return { error: 'body_not_json', reason: 'string body must be valid JSON' };
+        }
+    }
+    if (parsed === null || typeof parsed !== 'object') {
+        return { error: 'body_not_json', reason: `body must be a JSON object or array (got ${parsed === null ? 'null' : typeof parsed})` };
+    }
+    let s;
+    try { s = JSON.stringify(parsed); }
+    catch (e) {
+        return { error: 'body_not_json', reason: `body could not be serialized: ${e.message}` };
+    }
+    if (typeof s !== 'string') {
+        return { error: 'body_not_json', reason: 'body did not produce a JSON value' };
+    }
+    if (Buffer.byteLength(s, 'utf8') > _POLICY_MAX_POST_BODY_BYTES) {
+        return { error: 'body_too_large', reason: `POST body exceeds ${_POLICY_MAX_POST_BODY_BYTES} UTF-8 bytes` };
+    }
+    return { ok: true };
+}
+
 // BAT-664: confirmation message for agent_pay POST. Shows method + URL +
 // max_usdc + a 200-char body PREVIEW that the UI can render. Per Codex v2
 // note 2: the preview is for HUMAN display only — it must not be persisted
@@ -210,6 +246,20 @@ function getConfirmationPolicy(toolName, args, walletState) {
         }
         const method = (typeof a.method === 'string' ? a.method : 'GET').toUpperCase();
         if (method === 'POST') {
+            // R-pr370-fix-4: validate the body here BEFORE asking the user
+            // to confirm. Pre-fix the user could confirm a POST that the
+            // tool then deterministically rejects with body_required_for_post
+            // / body_not_json / body_too_large — wasted UX. Block at the
+            // policy gate with a clear reason so the agent fixes the call
+            // without involving the user.
+            const v = _validateAgentPayPostBody(a.body);
+            if (v.error) {
+                return {
+                    policy: 'block',
+                    reason: v.error,
+                    message: `agent_pay POST rejected: ${v.reason}`,
+                };
+            }
             return {
                 policy: 'confirm',
                 message: _agentPayPostConfirmMessage(a),
