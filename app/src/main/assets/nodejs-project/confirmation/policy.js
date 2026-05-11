@@ -190,10 +190,15 @@ function _agentPayPostConfirmMessage(args) {
         let s;
         try { s = typeof args.body === 'string' ? args.body : JSON.stringify(args.body); }
         catch (_) { s = '<unserializable body>'; }
+        // R-pr370-fix-33: literalize BEFORE truncating. Newline → "\n"
+        // is a 2-char expansion; truncating before literalization could
+        // produce a post-literalize string that exceeds _BODY_PREVIEW_MAX.
+        // Now the truncation bound holds on the final user-visible content.
+        s = _literalizeNewlines(s);
         if (s.length > _BODY_PREVIEW_MAX) {
             s = s.slice(0, _BODY_PREVIEW_MAX - _BODY_PREVIEW_SUFFIX.length) + _BODY_PREVIEW_SUFFIX;
         }
-        bodyPreview = `body: ${_literalizeNewlines(s)}`;
+        bodyPreview = `body: ${s}`;
     } else {
         bodyPreview = 'body: <empty>';
     }

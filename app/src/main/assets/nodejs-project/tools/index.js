@@ -245,14 +245,24 @@ function formatConfirmationMessage(toolName, input, policyMessage) {
         // (the ZWSP renders as nothing) but copy/paste users get a tiny
         // anomaly they can clean up — preferable to a one-click phish.
         // R-pr370-fix-19/23/26/28: declare ZWSP via String.fromCharCode so
-        // the literal U+200B character never appears in source. A literal
-        // would be invisible to most editors / diffs / reviews and
-        // silently removable by formatters / copy-paste / Unicode
-        // normalization. String.fromCharCode(0x200B) makes the intent
-        // unambiguous in source while producing the identical runtime
-        // character.
+        // the literal U+200B character never appears in source.
         const ZWSP = String.fromCharCode(0x200B);
+        // Break schemed URLs (http://, https://, ftp://, ws://, wss://,
+        // file://, data://).
         v = v.replace(/(https?|ftp|ws|wss|file|data):\/\//gi, `$1:${ZWSP}//`);
+        // R-pr370-fix-32/34: break BARE DOMAINS (no scheme). markdown-it
+        // linkify defaults to `fuzzyLink: true`, which auto-detects
+        // patterns like "attacker.evil.com" or "www.example.org" and
+        // renders them as clickable links without any explicit scheme.
+        // Match every `.` that's preceded by an alpha-led label and
+        // followed by 2+ alphabetic chars — via lookbehind + lookahead
+        // so consecutive dots in `api.example.com` ALL get broken
+        // (regex backtracking under /g advances past the match group,
+        // missing the second dot if it's part of an alpha-led label
+        // pattern). Numeric values like "0.10" are not mangled because
+        // the lookbehind requires the previous label to start with a
+        // letter.
+        v = v.replace(/(?<=[a-z][a-z0-9-]*)\.(?=[a-z]{2,})/gi, `${ZWSP}.`);
         // R-pr370-fix-15: cap AFTER escaping + de-linkify so the rendered
         // message is actually bounded. Escaping can roughly double the
         // byte count (every `*` becomes `\*`); de-linkify adds ~1 char

@@ -625,6 +625,54 @@ async function check(label, fn) {
         assert.ok(lines.length >= 3, `expected ≥3 structural lines, got ${lines.length}`);
     });
 
+    await check('render: formatConfirmationMessage de-linkifies BARE DOMAINS (R-pr370-fix-32/34, fuzzyLink defense)', () => {
+        // markdown-it linkify with fuzzyLink: true (default) auto-detects
+        // patterns like "attacker.evil.com" without any scheme. We use a
+        // lookbehind/lookahead regex to insert ZWSP before EVERY dot in a
+        // multi-label domain (api.example.com → api[ZWSP].example[ZWSP].com).
+        const { formatConfirmationMessage } = require(path.join(BUNDLE, 'tools', 'index'));
+        const policy = getConfirmationPolicy('agent_pay', {
+            url: 'https://api.example.com/x', max_usdc: '0.10',
+            method: 'POST',
+            // Body contains a bare-domain phishing target.
+            body: { phish: 'visit attacker.evil.com today' },
+        }, { burnerConfigured: true });
+        const rendered = formatConfirmationMessage('agent_pay', {}, policy.message);
+        const ZWSP = String.fromCharCode(0x200B);
+        // EVERY dot in a multi-label domain gets a ZWSP. The bare-domain
+        // "attacker.evil.com" → "attacker[ZWSP].evil[ZWSP].com".
+        assert.ok(rendered.includes(`attacker${ZWSP}.evil${ZWSP}.com`),
+            `bare domain should be fully de-linkified (got: ${JSON.stringify(rendered)})`);
+        // Numeric "0.10" (USDC amount) MUST NOT be mangled — the lookbehind
+        // requires alpha-led label.
+        assert.ok(rendered.includes('0.10'),
+            'numeric decimals like 0.10 must not have ZWSP injected');
+    });
+
+    await check('policy: body preview truncation respects post-literalize length (R-pr370-fix-33)', () => {
+        // Literalizing newlines is a 2-char expansion (\\n). Truncating
+        // BEFORE literalization could produce a string longer than the
+        // 200-char budget after literalization. The fix truncates AFTER
+        // literalize so the bound holds on the rendered content.
+        const manyNewlines = 'a\n'.repeat(150);  // 300 chars, 150 newlines
+        const r = getConfirmationPolicy('agent_pay', {
+            url: 'https://api.example.com/x', max_usdc: '0.10',
+            method: 'POST', body: manyNewlines,
+        }, { burnerConfigured: true });
+        // The body might block (string body must JSON.parse), so verify
+        // through the policy + render with a valid body that has newlines.
+        const r2 = getConfirmationPolicy('agent_pay', {
+            url: 'https://api.example.com/x', max_usdc: '0.10',
+            method: 'POST', body: { k: 'long\n'.repeat(100) },  // many real \n inside JSON
+        }, { burnerConfigured: true });
+        assert.strictEqual(r2.policy, 'confirm');
+        const bodyLine = r2.message.split('\n').find(l => l.startsWith('body:')) || '';
+        // The body LINE (post-literalize) is bounded at body: + 200 chars.
+        // The "body: " prefix is 6 chars; the rest is the preview, max 200.
+        assert.ok(bodyLine.length <= 6 + 200,
+            `body line length ${bodyLine.length} exceeds 6+200 cap (truncation order bug)`);
+    });
+
     await check('render: formatConfirmationMessage de-linkifies URLs in policyMessage (R-pr370-fix-18)', () => {
         // markdown-it linkify auto-converts raw URLs to clickable links.
         // Even after metachar escaping, a body preview with a URL would
@@ -650,9 +698,13 @@ async function check(label, fn) {
         assert.ok(rendered.includes(`http:${ZWSP}//`),
             'URL should have zero-width-space inserted between scheme and //');
         // The agent_pay URL (also in the rendered message) gets the same
-        // treatment — it's part of the policyMessage too.
-        assert.ok(rendered.includes(`https:${ZWSP}//api.example.com`),
-            'agent_pay URL should also be de-linkified');
+        // treatment — it's part of the policyMessage too. With the
+        // bare-domain ZWSP fix, the domain part also has ZWSPs in every
+        // dot, so the assertion checks both layers of defense.
+        assert.ok(rendered.includes(`https:${ZWSP}//`),
+            'agent_pay URL should have schemed-URL de-linkify applied');
+        assert.ok(rendered.includes(`api${ZWSP}.example${ZWSP}.com`),
+            'agent_pay URL domain should also have bare-domain de-linkify applied');
     });
 
     await check('render: formatConfirmationMessage escapes wallet_set_caps diff content (defense-in-depth)', () => {
