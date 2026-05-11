@@ -232,10 +232,20 @@ function formatConfirmationMessage(toolName, input, policyMessage) {
         // structural separator for multi-line cards and must survive).
         // eslint-disable-next-line no-control-regex
         v = v.replace(/[\x00-\x09\x0B-\x1F\x7F]/g, ' ');
-        // R-pr370-fix-15: cap AFTER escaping so the rendered message is
-        // actually bounded. Escaping can roughly double the byte count
-        // (every `*` becomes `\*`), so a pre-escape cap of 1024 could
-        // produce a ~2 KB rendered card. Cap the final escaped output.
+        // R-pr370-fix-18 (security): markdown-it's `linkify: true` auto-
+        // detects raw URLs (http:// / https:// / ftp:// etc.) and renders
+        // them as clickable links — even after Markdown char escaping.
+        // An attacker-controlled body preview containing a URL would
+        // render as a clickable phishing link in the confirmation card.
+        // Insert a zero-width space (U+200B) between the scheme and `//`
+        // to break linkify's detection. URLs remain visually readable
+        // (the ZWSP renders as nothing) but copy/paste users get a tiny
+        // anomaly they can clean up — preferable to a one-click phish.
+        v = v.replace(/(https?|ftp|ws|wss|file|data):\/\//gi, '$1:​//');
+        // R-pr370-fix-15: cap AFTER escaping + de-linkify so the rendered
+        // message is actually bounded. Escaping can roughly double the
+        // byte count (every `*` becomes `\*`); de-linkify adds ~1 char
+        // per URL. Cap the final output, not the input.
         if (v.length > 1024) v = v.slice(0, 1021) + '...';
         return v;
     };

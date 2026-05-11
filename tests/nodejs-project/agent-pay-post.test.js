@@ -625,6 +625,32 @@ async function check(label, fn) {
         assert.ok(lines.length >= 3, `expected ≥3 structural lines, got ${lines.length}`);
     });
 
+    await check('render: formatConfirmationMessage de-linkifies URLs in policyMessage (R-pr370-fix-18)', () => {
+        // markdown-it linkify auto-converts raw URLs to clickable links.
+        // Even after metachar escaping, a body preview with a URL would
+        // render as a one-click phishing link. The render boundary
+        // inserts a zero-width space between scheme and "//" to break
+        // linkify detection.
+        const { formatConfirmationMessage } = require(path.join(BUNDLE, 'tools', 'index'));
+        const policy = getConfirmationPolicy('agent_pay', {
+            url: 'https://api.example.com/x',
+            max_usdc: '0.10',
+            method: 'POST',
+            body: { phish: 'http://attacker.evil.com/take-money' },
+        }, { burnerConfigured: true });
+        const rendered = formatConfirmationMessage('agent_pay', {}, policy.message);
+        // Raw `http://...` would be linkified. After the fix, the scheme
+        // has a zero-width space (​) inserted before //.
+        assert.ok(!/(?<![:​])http:\/\//.test(rendered),
+            `attacker URL should be de-linkified (no raw http:// substring left); rendered: ${JSON.stringify(rendered)}`);
+        assert.ok(rendered.includes('http:​//'),
+            'URL should have zero-width-space inserted between scheme and //');
+        // The agent_pay URL (also in the rendered message) gets the same
+        // treatment — it's part of the policyMessage too.
+        assert.ok(rendered.includes('https:​//api.example.com'),
+            'agent_pay URL should also be de-linkified');
+    });
+
     await check('render: formatConfirmationMessage escapes wallet_set_caps diff content (defense-in-depth)', () => {
         // Even other policy hooks benefit from the render-boundary escape.
         // wallet_set_caps's diff message embeds raw arg values; a malicious
