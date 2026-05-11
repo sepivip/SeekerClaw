@@ -226,8 +226,11 @@ function formatConfirmationMessage(toolName, input, policyMessage) {
         let v = String(s ?? '');
         // Escape backslash first (so we don't double-escape markers below).
         v = v.replace(/\\/g, '\\\\');
-        // Markdown structure characters + HTML angle brackets.
-        v = v.replace(/[`*_~[\](){}#>|!<>]/g, (c) => '\\' + c);
+        // Markdown structure characters + HTML angle brackets. Use explicit
+        // \[ and \] inside the character class so the regex is unambiguous
+        // to future readers (the parser handles `[\]]` correctly but mixed
+        // escaping inside a class is a recurring source of confusion).
+        v = v.replace(/[`*_~\[\](){}#>|!<>]/g, (c) => '\\' + c);
         // Strip control chars OTHER than newlines (newlines are the
         // structural separator for multi-line cards and must survive).
         // eslint-disable-next-line no-control-regex
@@ -241,10 +244,10 @@ function formatConfirmationMessage(toolName, input, policyMessage) {
         // to break linkify's detection. URLs remain visually readable
         // (the ZWSP renders as nothing) but copy/paste users get a tiny
         // anomaly they can clean up — preferable to a one-click phish.
-        // R-pr370-fix-19: use the explicit `​` escape so the
-        // zero-width-space is visible in diffs/reviews; a literal
-        // invisible character would silently change behavior under a
-        // copy-paste or unicode-aware editor.
+        // R-pr370-fix-19/23: declare the ZWSP via the explicit ​
+        // escape so it's visible in source/diffs. A literal U+200B in
+        // source code is invisible to most editors and can be silently
+        // removed by formatters or copy-paste.
         const ZWSP = '​';
         v = v.replace(/(https?|ftp|ws|wss|file|data):\/\//gi, `$1:${ZWSP}//`);
         // R-pr370-fix-15: cap AFTER escaping + de-linkify so the rendered

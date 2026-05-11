@@ -517,6 +517,13 @@ const tools = [
                     description: 'HTTP method. Defaults to "GET". POST always requires user confirmation regardless of cap.',
                 },
                 body: {
+                    // R-pr370-fix-25: validator accepts both an object/array
+                    // directly AND a JSON-string that PARSES to an object/array.
+                    // Express that as a union type in the schema so model
+                    // guidance + downstream schema-driven validators see the
+                    // full surface. Bare primitives rejected at validate
+                    // time (see validateAndSerializeBody).
+                    type: ['object', 'array', 'string'],
                     description: 'Request body for POST. JSON object or array (or a JSON string that parses to an object/array). Bare primitives (numbers, booleans, plain strings) are rejected. Max 8 KB UTF-8 compact-serialized. Required when method=POST.',
                 },
             },

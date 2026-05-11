@@ -639,9 +639,9 @@ async function check(label, fn) {
             body: { phish: 'http://attacker.evil.com/take-money' },
         }, { burnerConfigured: true });
         const rendered = formatConfirmationMessage('agent_pay', {}, policy.message);
-        // R-pr370-fix-19: use ​ explicit escape so the test is
-        // readable in diffs (a literal invisible char would silently
-        // alter behavior under copy/paste or editor configs).
+        // R-pr370-fix-19/24: ZWSP as the explicit ​ escape — a
+        // literal U+200B in the test source would be invisible and
+        // could silently break under copy/paste or formatter passes.
         const ZWSP = '​';
         // Raw `http://...` would be linkified. After the fix, the scheme
         // has a zero-width space inserted before //.
