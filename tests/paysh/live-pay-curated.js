@@ -213,13 +213,21 @@ async function main() {
         console.error(`Available: ${SERVICES.map(s => s.label).join(', ')}`);
         process.exit(1);
     }
-    if (!args.includeSideEffecting && !args.service) {
+    // Side-effecting opt-in: enforce ALWAYS, not just when --service is
+    // unset (R-pr369-fix-3). Pre-fix `--service textbelt-text --live`
+    // would bypass the gate and send a real SMS without the explicit
+    // --include-side-effecting opt-in.
+    if (!args.includeSideEffecting) {
         const skipped = services.filter(s => s.sideEffecting);
         services = services.filter(s => !s.sideEffecting);
         if (skipped.length > 0) {
             console.log(`Note: skipping ${skipped.length} side-effecting service(s) (pass --include-side-effecting to capture):`);
             for (const s of skipped) console.log(`  • ${s.label}: ${s.description}`);
             console.log('');
+        }
+        if (services.length === 0) {
+            console.error(`✗ No services remain after side-effecting filter. Pass --include-side-effecting if you intentionally want to exercise side-effecting services.`);
+            process.exit(1);
         }
     }
 
@@ -388,10 +396,18 @@ async function main() {
         totalSpentAtomic += amt;
 
         // 5. Capture the success response shape for future regression pinning.
-        // Sanitize the response — strips phone numbers / secrets if any leak
-        // from the service into its response body (defense-in-depth; the
-        // commits should NEVER contain personal info per BAT-582 contract
-        // amendment 6 — see tests/paysh/lib/sanitize.js).
+        // R-pr369-fix-4: pass `paidSummary: true` so the response body is
+        // replaced with a one-line summary string — we PAID for that content
+        // and committing it would leak paid API data. The fixture captures
+        // the PAYMENT-RESPONSE header shape + status (what we need for
+        // regression pinning), not the paid body content.
+        //
+        // The `_meta` block is hand-built here from explicitly-safe fields
+        // only (label + description + ISO timestamp + on-chain sig + atomic
+        // demand + a fixed note string). No user input flows into _meta,
+        // so passing it through sanitize unchanged is safe. The on-chain
+        // signature IS public (it's broadcast to the Solana network) so
+        // committing it is fine.
         const fixtureFile = path.join(CAPTURES_DIR, `${svc.label}-v2-success.json`);
         const fixture = sanitize({
             _meta: {
@@ -400,14 +416,14 @@ async function main() {
                 capturedAt: new Date().toISOString(),
                 onChainSignature: settleResult.signature,
                 demandAtomic: amt.toString(),
-                note: 'Spent real USDC. Captured for regression pinning of v2 settle path.',
+                note: 'Spent real USDC. Body redacted via paidSummary=true (we paid for that content). Captured for regression pinning of v2 settle path.',
             },
             url: settleTarget,
             method: svc.method,
             status: capturedRespStatus,
             headers: capturedRespHeaders,
             body: capturedRespBody,
-        });
+        }, { paidSummary: true });
         fs.writeFileSync(fixtureFile, JSON.stringify(fixture, null, 2) + '\n', 'utf8');
         console.log(`  ✓ wrote ${path.relative(process.cwd(), fixtureFile)}`);
 

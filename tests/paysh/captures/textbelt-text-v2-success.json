@@ -5,7 +5,7 @@
     "capturedAt": "2026-05-11T16:54:50.173Z",
     "onChainSignature": "3v1psLcQaKcfC7dwt7h4ybtwvPuzrShsYN8wZ1K41GFAK2ejHHPz9F5sbtqX7hzazW6LAXxtrveCR3LQYPMDY3Mb",
     "demandAtomic": "20000",
-    "note": "Spent real USDC. Captured for regression pinning of v2 settle path."
+    "note": "Spent real USDC. Body redacted via paidSummary=true (we paid for that content). Captured for regression pinning of v2 settle path."
   },
   "url": "https://api.paysponge.com/x402/purchase/svc_d6kszbre4qwg5n4n4/text",
   "method": "POST",
@@ -27,8 +27,5 @@
     "cf-ray": "9fa2b5278cefd0e4-SOF",
     "alt-svc": "h3=\":443\"; ma=86400"
   },
-  "body": {
-    "success": false,
-    "error": "You are trying to use US/Canada SMS credits outside of US/Canada."
-  }
+  "body": "[REDACTED — paid response body summarized; ? bytes original]"
 }
