@@ -85,6 +85,19 @@ const LOAD_TARGETS = [
     // No top-level IO; read calls happen only when `open(workDir)` is
     // invoked by config.js with a real workDir.
     'agent-preferences.js',
+    // BAT-582 (burner wallet): pure interface modules + the registries that
+    // only depend on those interfaces. Anything that requires bridge.js is
+    // listed under SKIP_REASONS instead — bridge.js is itself skipped because
+    // it depends on config.js at module load (which expects workspace files
+    // / fixture state the smoke harness doesn't provide). The actual HTTP
+    // calls to localhost:8765 happen later when androidBridgeCall() runs.
+    'wallet/signer.js',
+    'wallet/wallet.js',
+    'payment/protocol.js',
+    'payment/x402.js',
+    'payment/index.js',
+    'confirmation/policy.js',
+    'confirmation/index.js',
 ];
 
 // Files skipped intentionally. Most modules depend on config.js (which
@@ -134,10 +147,22 @@ const SKIP_REASONS = {
     'tools/system.js': 'runs shell commands',
     'tools/telegram.js': 'requires telegram.js',
     'tools/web.js': 'requires web.js caches',
+    'tools/wallet.js': 'requires bridge.js (BAT-582 burner wallet bridge calls)',
+    'tools/agent_pay.js': 'requires bridge.js + wallet/index (BAT-582 Phase 6 x402 client)',
     'sql-wasm.js': 'third-party bundle (sql.js)',
     'markdown-it.min.js': 'third-party bundle (markdown-it)',
     'cross-process-store.js': 'requires config-aware filesystem path (BAT-512 store helper, fixture-only)',
     'runtime-state.js': 'requires workDir to derive filesDir (BAT-513 helper, fixture-only)',
+    // BAT-582 burner wallet — modules that transitively require bridge.js
+    // (which targets localhost:8765) or that hold runtime singletons that
+    // shouldn't be eagerly constructed during smoke.
+    'wallet/burner-signer.js': 'requires bridge.js (Android Bridge HTTP client)',
+    'wallet/mwa-signer.js': 'requires bridge.js (existing /solana/sign endpoint)',
+    'wallet/burner-wallet.js': 'requires burner-signer.js → bridge.js',
+    'wallet/main-wallet.js': 'requires mwa-signer.js → bridge.js',
+    'wallet/index.js': 'singleton registry; requires burner-wallet.js + main-wallet.js',
+    'wallet/dispatch.js': 'requires bridge.js + caps/preflight (BAT-582 Phase 5 routing helper)',
+    'caps/preflight.js': 'requires bridge.js for /burner/status reads',
 };
 
 const GREEN = '\x1b[32m';

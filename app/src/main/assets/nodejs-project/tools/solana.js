@@ -24,6 +24,19 @@ const {
     httpRequest,
 } = require('../http');
 
+// BAT-582 Phase 5: wallet dispatch helper. Tool handlers compute their
+// unsigned tx + a per-tool broadcast callback, then delegate routing
+// (burner-vs-main, reservation, sign, broadcast, commit/release) to
+// routeAndSign. Cancels go through signCancelViaBurner. Jupiter create
+// tools record ownership via recordJupiterOwnership after a successful
+// broadcast. The tool handler stays focused on tx construction +
+// post-broadcast bookkeeping; the routing dance lives in wallet/dispatch.
+const {
+    routeAndSign,
+    signCancelViaBurner,
+    recordJupiterOwnership,
+} = require('../wallet/dispatch');
+
 // BAT-255: Safe number-to-decimal-string conversion (imported from index.js shared state)
 let numberToDecimalString;
 function _setNumberToDecimalString(fn) { numberToDecimalString = fn; }
@@ -60,7 +73,7 @@ const tools = [
     },
     {
         name: 'solana_send',
-        description: 'Send SOL to a Solana address. IMPORTANT: This prompts the user to approve the transaction in their wallet app on the phone. ALWAYS confirm with the user in chat before calling this tool.',
+        description: 'Send SOL to a Solana address. **Routing (BAT-582)**: under burner per-tx + daily SOL caps -> signs silently from the **Burner wallet** (no popup); over cap or burner not configured -> prompts the **Main wallet** for approval (MWA popup). ALWAYS confirm with the user in chat before calling this tool.',
         input_schema: {
             type: 'object',
             properties: {
@@ -101,7 +114,7 @@ const tools = [
     },
     {
         name: 'solana_swap',
-        description: 'Swap tokens using Jupiter Ultra (gasless, no SOL needed for fees). IMPORTANT: This prompts the user to approve the transaction in their wallet app on the phone. ALWAYS confirm with the user and show the quote first before calling this tool.',
+        description: 'Swap tokens using Jupiter Ultra (gasless, no SOL needed for fees). **Routing (BAT-582)**: under burner per-tx + daily caps for the input asset -> silent burner sign; over cap or burner not configured -> Main wallet popup. ALWAYS confirm with the user and show the quote first before calling this tool.',
         input_schema: {
             type: 'object',
             properties: {
@@ -114,7 +127,7 @@ const tools = [
     },
     {
         name: 'jupiter_trigger_create',
-        description: 'Create a trigger (limit) order on Jupiter. Requires Jupiter API key (get free at portal.jup.ag). Order executes automatically when price condition is met. Use for: buy at lower price (limit buy) or sell at higher price (limit sell).',
+        description: 'Create a trigger (limit) order on Jupiter. Requires Jupiter API key (get free at portal.jup.ag). Order executes automatically when price condition is met. Use for: buy at lower price (limit buy) or sell at higher price (limit sell). **Routing (BAT-582)**: under burner caps -> silent burner sign; over cap or burner not configured -> Main wallet popup.',
         input_schema: {
             type: 'object',
             properties: {
@@ -141,7 +154,7 @@ const tools = [
     },
     {
         name: 'jupiter_trigger_cancel',
-        description: 'Cancel an active limit or stop order on Jupiter. Requires the order ID from jupiter_trigger_list. Requires Jupiter API key.',
+        description: 'Cancel an active limit or stop order on Jupiter. Requires the order ID from jupiter_trigger_list. Requires Jupiter API key. **Routing (BAT-582)**: cancels for orders the burner created -> silent burner sign; cancels for main-wallet orders (or unknown ownership) -> Main wallet popup. Cancels do not consume cap principal.',
         input_schema: {
             type: 'object',
             properties: {
@@ -152,7 +165,7 @@ const tools = [
     },
     {
         name: 'jupiter_dca_create',
-        description: 'Create a recurring DCA (Dollar Cost Averaging) order on Jupiter. Automatically buys tokens on a schedule to average out price. Perfect for building positions over time. Requires Jupiter API key.',
+        description: 'Create a recurring DCA (Dollar Cost Averaging) order on Jupiter. Automatically buys tokens on a schedule to average out price. Perfect for building positions over time. Requires Jupiter API key. **Routing (BAT-582)**: total committed amount (amountPerCycle x cycles) is checked against burner caps; under cap -> silent burner sign; over cap or burner not configured -> Main wallet popup.',
         input_schema: {
             type: 'object',
             properties: {
@@ -179,7 +192,7 @@ const tools = [
     },
     {
         name: 'jupiter_dca_cancel',
-        description: 'Cancel an active DCA (recurring) order on Jupiter. Stops all future executions. Requires the order ID from jupiter_dca_list. Requires Jupiter API key.',
+        description: 'Cancel an active DCA (recurring) order on Jupiter. Stops all future executions. Requires the order ID from jupiter_dca_list. Requires Jupiter API key. **Routing (BAT-582)**: cancels for orders the burner created -> silent burner sign; cancels for main-wallet orders (or unknown ownership) -> Main wallet popup. Cancels do not consume cap principal.',
         input_schema: {
             type: 'object',
             properties: {
@@ -320,12 +333,27 @@ const handlers = {
     },
 
     async solana_send(input, chatId) {
-        // Build tx in JS, wallet signs AND broadcasts via signAndSendTransactions
+        // BAT-582 Phase 5: route through wallet dispatch so a configured
+        // burner wallet can sign autonomously when under cap, and the
+        // main MWA flow stays the fallback for over-cap or uncapped assets.
+        // Behavior when burner is unconfigured matches v1.0 exactly: MWA
+        // popup via /solana/sign.
         let from;
         try {
             from = getConnectedWalletAddress();
         } catch (e) {
-            return { error: e.message };
+            // Main wallet not connected — burner can still sign on its own
+            // pubkey if configured, but the existing tool semantics are
+            // "send FROM the connected wallet". Burner-as-source is a
+            // future-Phase change (Phase 5 keeps the MWA-from semantics
+            // even on the burner path: agent signs as the burner, but the
+            // tx pays from the burner's address — the burner pubkey IS
+            // the from address in that case).
+            //
+            // For Phase 5: if main wallet isn't connected and burner is
+            // configured, surface the clearer error from the bridge after
+            // routeAndSign returns. Don't pre-fail here.
+            from = null;
         }
         const to = input.to;
         const amount = input.amount;
@@ -334,36 +362,94 @@ const handlers = {
             return { error: 'Both "to" address and a positive "amount" are required.' };
         }
 
-        // Step 1: Get latest blockhash
+        // Step 1: Get latest blockhash (shared by both wallets — RPC call,
+        // no signer required).
         const blockhashResult = await solanaRpc('getLatestBlockhash', [{ commitment: 'finalized' }]);
         if (blockhashResult.error) return { error: 'Failed to get blockhash: ' + blockhashResult.error };
         const recentBlockhash = blockhashResult.blockhash || (blockhashResult.value && blockhashResult.value.blockhash);
         if (!recentBlockhash) return { error: 'No blockhash returned from RPC' };
 
-        // Step 2: Build unsigned transaction
-        // BAT-255: use BigInt-safe parsing to avoid floating-point precision loss
+        // Step 2: Determine the source address. Burner pubkey if routing
+        // says burner; otherwise the connected MWA wallet.
+        // We need the source BEFORE building the tx because Solana
+        // transactions encode the fee payer in the message.
+        // routeFor decides routing based on amount + caps; we read it once
+        // here and reuse the decision for the broadcast path so the source
+        // matches the signer.
+        const { routeFor } = require('../caps/preflight');
+        const routingHint = await routeFor('solana_send', input);
+        let sourceAddress = from;
+        if (routingHint.routingDecision === 'burner') {
+            // Pull the burner pubkey from /burner/status. If burner is
+            // configured but somehow has no pubkey, fall back to main.
+            try {
+                const burnerStatus = await androidBridgeCall('/burner/status', {}, 5000);
+                if (burnerStatus && !burnerStatus.error && burnerStatus.configured && burnerStatus.pubkey) {
+                    sourceAddress = burnerStatus.pubkey;
+                }
+            } catch (_) { /* fall back to main */ }
+        }
+        if (!sourceAddress) {
+            return { error: 'No source wallet available — connect a wallet (Settings > Solana Wallet) or configure a burner (Settings > Burner Wallet).' };
+        }
+
+        // Step 3: Build unsigned transaction.
+        // BAT-255: BigInt-safe parsing avoids floating-point precision loss.
         const lamports = parseInputAmountToLamports(numberToDecimalString(amount), 9); // SOL has 9 decimals
         let unsignedTx;
         try {
-            unsignedTx = buildSolTransferTx(from, to, lamports, recentBlockhash);
+            unsignedTx = buildSolTransferTx(sourceAddress, to, lamports, recentBlockhash);
         } catch (e) {
             return { error: 'Failed to build transaction: ' + e.message };
         }
         const txBase64 = unsignedTx.toString('base64');
 
-        // Step 3: Send to wallet — wallet signs AND broadcasts (signAndSendTransactions)
-        // Pre-authorize to ensure wallet is warm (cold-start protection)
-        await ensureWalletAuthorized();
-        // 120s timeout: user needs time to open wallet app and approve
-        const result = await androidBridgeCall('/solana/sign', { transaction: txBase64 }, 120000);
-        if (result.error) return { error: result.error };
-        if (!result.signature) return { error: 'No signature returned from wallet' };
+        // Step 4: Route + sign + broadcast via the wallet dispatch helper.
+        // Broadcast callback differs by signer — main signs+broadcasts
+        // atomically via /solana/sign (existing MWA behavior); burner
+        // signs only, then we broadcast the signed bytes via RPC
+        // sendTransaction.
+        const result = await routeAndSign({
+            toolName: 'solana_send',
+            toolArgs: input,
+            unsignedTxBase64: txBase64,
+            broadcastVia: 'rpc',
+            flowName: 'solana_send',
+            broadcast: async (txBase64, _signer, ctx) => {
+                // ctx.signed === false for main path (unsigned tx → sign+broadcast via MWA)
+                // ctx.signed === true  for burner path (signed bytes → RPC sendTransaction)
+                if (!ctx || !ctx.signed) {
+                    // Main path: existing /solana/sign sign-and-broadcast flow.
+                    await ensureWalletAuthorized();
+                    const r = await androidBridgeCall(
+                        '/solana/sign',
+                        { transaction: txBase64 },
+                        120000,
+                    );
+                    if (!r || r.error) return { error: r && r.error ? r.error : 'sign_failed' };
+                    if (!r.signature) return { error: 'No signature returned from wallet' };
+                    const sigBytes = Buffer.from(r.signature, 'base64');
+                    return { signature: base58Encode(sigBytes) };
+                }
+                // Burner path: signer already signed; broadcast via RPC.
+                const sendResult = await solanaRpc('sendTransaction', [
+                    txBase64,
+                    { encoding: 'base64', skipPreflight: false, preflightCommitment: 'confirmed' },
+                ]);
+                if (sendResult && sendResult.error) {
+                    return { error: 'rpc_send_failed', reason: typeof sendResult.error === 'string' ? sendResult.error : JSON.stringify(sendResult.error) };
+                }
+                // sendTransaction returns a base58 signature string directly.
+                if (typeof sendResult === 'string') return { signature: sendResult };
+                if (sendResult && sendResult.value) return { signature: sendResult.value };
+                return { error: 'rpc_send_failed', reason: 'no signature in RPC response' };
+            },
+        });
 
-        // Convert base64 signature to base58 for display
-        const sigBytes = Buffer.from(result.signature, 'base64');
-        const sigBase58 = base58Encode(sigBytes);
-
-        return { signature: sigBase58, success: true };
+        if (!result.ok) {
+            return { error: result.error, reason: result.reason };
+        }
+        return { signature: result.signature, success: true, wallet: result.wallet };
     },
 
     async solana_price(input, chatId) {
@@ -494,12 +580,30 @@ const handlers = {
     },
 
     async solana_swap(input, chatId) {
-        // Requires connected wallet
+        // BAT-582 Phase 5: route swaps through wallet dispatch. Burner
+        // pubkey is the swap taker when routing=burner; main wallet's
+        // pubkey is the taker for the v1.0 path. Jupiter Ultra signs the
+        // tx for execution against the taker — sourcing the right pubkey
+        // is the only routing-aware step before sign + execute.
+        const { routeFor } = require('../caps/preflight');
+        const routingHint = await routeFor('solana_swap', input);
+
         let userPublicKey;
         try {
             userPublicKey = getConnectedWalletAddress();
-        } catch (e) {
-            return { error: e.message };
+        } catch (_) {
+            userPublicKey = null;
+        }
+        if (routingHint.routingDecision === 'burner') {
+            try {
+                const burnerStatus = await androidBridgeCall('/burner/status', {}, 5000);
+                if (burnerStatus && !burnerStatus.error && burnerStatus.configured && burnerStatus.pubkey) {
+                    userPublicKey = burnerStatus.pubkey;
+                }
+            } catch (_) { /* fall back to main */ }
+        }
+        if (!userPublicKey) {
+            return { error: 'No source wallet available — connect a wallet or configure a burner.' };
         }
 
         try {
@@ -518,6 +622,20 @@ const handlers = {
             // BAT-255: Pre-swap balance check — fail fast before wallet popup / Jupiter order
             const SOL_NATIVE_MINT = 'So11111111111111111111111111111111111111112';
             const isNativeSOL = inputToken.address === SOL_NATIVE_MINT;
+            // BAT-582 follow-up: native SOL swaps need headroom for tx fees +
+            // ATA rent on top of the swap amount. Pre-fix the check passed
+            // when amount exactly equalled balance — Ultra then rejected with
+            // "Insufficient funds" because there was nothing left for fees.
+            // Reserve a small buffer so the error happens here (with a clear
+            // message) instead of after a round-trip to Ultra.
+            //
+            // 0.005 SOL covers: ~5000 lamports per signature × up to ~3 sigs
+            // (Ultra route may chain 2-3 hops), plus ~2,039,280 lamports for
+            // a fresh USDC ATA if the destination doesn't have one yet, plus
+            // a small priority-fee margin. Tuned conservatively — the user
+            // can always retry with `amount - 0.005` if they want to swap
+            // closer to the limit.
+            const NATIVE_SOL_FEE_BUFFER = 0.005;
             try {
                 if (isNativeSOL) {
                     const bal = await solanaRpc('getBalance', [userPublicKey]);
@@ -525,6 +643,11 @@ const handlers = {
                         const solBalance = (bal.value || 0) / 1e9;
                         if (input.amount > solBalance) {
                             return { error: `Insufficient SOL balance: you have ${solBalance} SOL but tried to swap ${input.amount} SOL.` };
+                        }
+                        if (input.amount + NATIVE_SOL_FEE_BUFFER > solBalance) {
+                            return {
+                                error: `SOL balance too tight: you have ${solBalance} SOL and tried to swap ${input.amount} SOL, but Jupiter also needs ~${NATIVE_SOL_FEE_BUFFER} SOL for tx fees + ATA rent. Try swapping at most ${(solBalance - NATIVE_SOL_FEE_BUFFER).toFixed(6)} SOL or fund the wallet with a bit more SOL.`,
+                            };
                         }
                     }
                 } else {
@@ -576,7 +699,30 @@ const handlers = {
             const fetchAndVerifyOrder = async () => {
                 log(`[Jupiter Ultra] Getting order: ${input.amount} ${inputToken.symbol} → ${outputToken.symbol}`, 'INFO');
                 const o = await jupiterUltraOrder(inputToken.address, outputToken.address, amountRaw, userPublicKey);
-                if (!o.transaction) throw new Error('Jupiter Ultra did not return a transaction.');
+                if (!o.transaction) {
+                    // BAT-582 follow-up (local Jupiter test layer 1): Ultra returns
+                    // 200 OK with a structured `errorMessage`/`errorCode` when it
+                    // can route on paper but won't build a tx (sponsored-mode
+                    // floor exceeded → gasless mode → output value < $5 →
+                    // "Minimum $5 for gasless"; or balance < amount + fees →
+                    // "Insufficient funds"). Pre-fix this threw a generic
+                    // "did not return a transaction" message and dropped the
+                    // diagnostic — surface Ultra's own explanation, then add an
+                    // actionable hint for the gasless dead zone (the band where
+                    // sponsored-mode rejected the size but the swap value is
+                    // still below $5 so gasless rejects too — Jupiter's
+                    // routing engine; nothing we can route around).
+                    const detail = o.errorMessage || o.error || 'no detail returned';
+                    const code = (o.errorCode != null) ? ` [code=${o.errorCode}]` : '';
+                    let hint = '';
+                    const detailLower = String(detail).toLowerCase();
+                    if (detailLower.includes('gasless')) {
+                        hint = ' — Jupiter\'s gasless mode requires output ≥ $5 for this route. Try a smaller swap (~$1 or less, sponsored mode) or a larger one (~$5+ output, gasless mode).';
+                    } else if (detailLower.includes('insufficient')) {
+                        hint = ' — wallet may not have enough SOL to cover the swap amount + tx fees. Fund the wallet with a bit more SOL and retry.';
+                    }
+                    throw new Error(`Jupiter Ultra did not return a transaction: ${detail}${code}${hint}`);
+                }
                 if (!o.requestId) throw new Error('Jupiter Ultra did not return a requestId.');
 
                 // Verify transaction before sending to wallet
@@ -593,57 +739,91 @@ const handlers = {
                 return { error: e.message };
             }
 
-            // Step 2: Send to wallet for sign-only (120s timeout for user approval)
-            // Pre-authorize to ensure wallet is warm (cold-start protection)
-            await ensureWalletAuthorized();
-            // Ultra flow: wallet signs but does NOT broadcast
-            log('[Jupiter Ultra] Sending to wallet for approval (sign-only)...', 'INFO');
-            const signResult = await androidBridgeCall('/solana/sign-only', {
-                transaction: order.transaction
-            }, 120000);
+            // BAT-582 Phase 5: route through wallet dispatch. The broadcast
+            // callback handles the Jupiter Ultra TTL re-quote dance — for
+            // burner the sign step is fast (no popup) so re-quote is
+            // basically never needed; for main, MWA approval can take
+            // longer than the Ultra signed-payload TTL (~2 min) so we
+            // detect that and re-quote inside the broadcast callback.
+            //
+            // routeAndSign passes UNSIGNED tx to broadcast() for the main
+            // path (signer.signAndSend signs+broadcasts atomically via MWA)
+            // and SIGNED tx for the burner path (sign-only happened before
+            // broadcast()). We branch on which we got and handle TTL
+            // accordingly. For Phase 5 we keep the existing TTL safe-guard
+            // wired only on the main path — the burner path's reservation
+            // already enforces a 60s TTL upstream and Ultra's 2-min limit
+            // is comfortably wider.
+            const ULTRA_RPC_HINT = 'jupiter';
 
-            if (signResult.error) return { error: signResult.error };
-            if (!signResult.signedTransaction) return { error: 'No signed transaction returned from wallet.' };
+            const result = await routeAndSign({
+                toolName: 'solana_swap',
+                toolArgs: input,
+                unsignedTxBase64: order.transaction,
+                broadcastVia: ULTRA_RPC_HINT,
+                flowName: 'solana_swap',
+                broadcast: async (txOrUnsigned, _signer, ctx) => {
+                    // ctx.signed === true  → burner path (txOrUnsigned is already signed by burner)
+                    // ctx.signed === false → main path  (txOrUnsigned is unsigned, sign via MWA)
+                    if (ctx && ctx.signed) {
+                        log('[Jupiter Ultra] Executing burner-signed tx...', 'INFO');
+                        const ex = await jupiterUltraExecute(txOrUnsigned, order.requestId);
+                        if (ex.status === 'Failed') {
+                            return { error: 'execute_failed', reason: ex.error || 'Jupiter Ultra rejected' };
+                        }
+                        if (!ex.signature) {
+                            return { error: 'execute_failed', reason: 'no signature in Ultra response' };
+                        }
+                        return { signature: ex.signature, ultra: ex };
+                    }
+                    // Main path: txOrUnsigned IS the unsigned tx. Sign via MWA + execute.
+                    await ensureWalletAuthorized();
+                    log('[Jupiter Ultra] Sending to wallet for approval (sign-only)...', 'INFO');
+                    let signResult = await androidBridgeCall('/solana/sign-only', {
+                        transaction: txOrUnsigned,
+                    }, 120000);
+                    if (signResult.error) return { error: 'sign_failed', reason: signResult.error };
+                    if (!signResult.signedTransaction) return { error: 'sign_failed', reason: 'no signed tx returned from wallet' };
 
-            // Step 3: Check TTL — if MWA approval took >90s, re-quote to avoid expired tx
-            const elapsed = Date.now() - orderTimestamp;
-            let finalSignedTx = signResult.signedTransaction;
-            let finalRequestId = order.requestId;
+                    // TTL re-quote check — MWA can hold the popup for a long
+                    // time; if approval took >90s we re-quote to stay
+                    // within Ultra's 2-min signed-payload TTL.
+                    const elapsed = Date.now() - orderTimestamp;
+                    let finalSignedTx = signResult.signedTransaction;
+                    let finalRequestId = order.requestId;
+                    if (elapsed > ULTRA_TTL_SAFE_MS) {
+                        log(`[Jupiter Ultra] MWA approval took ${Math.round(elapsed / 1000)}s (>90s) — re-quoting...`, 'WARN');
+                        try {
+                            order = await fetchAndVerifyOrder();
+                            orderTimestamp = Date.now();
+                            const reSignResult = await androidBridgeCall('/solana/sign-only', {
+                                transaction: order.transaction,
+                            }, 60000);
+                            if (reSignResult.error) return { error: 'sign_failed', reason: `re-quote sign failed: ${reSignResult.error}` };
+                            if (!reSignResult.signedTransaction) return { error: 'sign_failed', reason: 'no signed tx from re-quote' };
+                            finalSignedTx = reSignResult.signedTransaction;
+                            finalRequestId = order.requestId;
+                        } catch (reQuoteErr) {
+                            log(`[Jupiter Ultra] Re-quote failed, attempting original: ${reQuoteErr.message}`, 'WARN');
+                        }
+                    }
 
-            if (elapsed > ULTRA_TTL_SAFE_MS) {
-                log(`[Jupiter Ultra] MWA approval took ${Math.round(elapsed / 1000)}s (>90s) — re-quoting to avoid TTL expiry...`, 'WARN');
-                try {
-                    order = await fetchAndVerifyOrder();
-                    orderTimestamp = Date.now();
+                    log('[Jupiter Ultra] Executing signed transaction...', 'INFO');
+                    const execResult = await jupiterUltraExecute(finalSignedTx, finalRequestId);
+                    if (execResult.status === 'Failed') {
+                        return { error: 'execute_failed', reason: execResult.error || 'Jupiter Ultra rejected' };
+                    }
+                    if (!execResult.signature) {
+                        return { error: 'execute_failed', reason: 'no signature in Ultra response' };
+                    }
+                    return { signature: execResult.signature, ultra: execResult };
+                },
+            });
 
-                    // Need wallet to sign the new transaction
-                    log('[Jupiter Ultra] Re-signing with fresh order...', 'INFO');
-                    const reSignResult = await androidBridgeCall('/solana/sign-only', {
-                        transaction: order.transaction
-                    }, 60000); // Shorter timeout for re-sign
-
-                    if (reSignResult.error) return { error: `Re-quote sign failed: ${reSignResult.error}` };
-                    if (!reSignResult.signedTransaction) return { error: 'No signed transaction from re-quote.' };
-
-                    finalSignedTx = reSignResult.signedTransaction;
-                    finalRequestId = order.requestId;
-                    log('[Jupiter Ultra] Re-quote successful, executing fresh order', 'DEBUG');
-                } catch (reQuoteErr) {
-                    log(`[Jupiter Ultra] Re-quote failed, attempting original: ${reQuoteErr.message}`, 'WARN');
-                    // Fall through to try original — it might still be within 2-min TTL
-                }
+            if (!result.ok) {
+                return { error: result.error, reason: result.reason };
             }
-
-            // Step 4: Execute via Jupiter Ultra (Jupiter broadcasts the tx)
-            log('[Jupiter Ultra] Executing signed transaction...', 'INFO');
-            const execResult = await jupiterUltraExecute(finalSignedTx, finalRequestId);
-
-            if (execResult.status === 'Failed') {
-                return { error: `Swap failed: ${execResult.error || 'Transaction execution failed'}` };
-            }
-            if (!execResult.signature) {
-                return { error: 'Jupiter Ultra execute returned no signature.' };
-            }
+            const execResult = (result.broadcastResult && result.broadcastResult.ultra) || { signature: result.signature };
 
             const outDecimals = outputToken.decimals || 6;
             const inDecimals = inputToken.decimals || 9;
@@ -661,6 +841,8 @@ const handlers = {
                     : null,
                 gasless: true,
             };
+            // BAT-582 Phase 5: surface which wallet signed.
+            response.wallet = result.wallet;
             const warnings = [];
             if (inputToken.warning) warnings.push(inputToken.warning);
             if (outputToken.warning) warnings.push(outputToken.warning);
@@ -741,12 +923,27 @@ const handlers = {
                 log(`[Jupiter Trigger] Token-2022 check skipped: ${shieldErr.message}`, 'DEBUG');
             }
 
-            // 2. Get wallet address
+            // BAT-582 Phase 5: routing decision determines maker/payer.
+            // Burner-routed → burner pubkey (autonomous). Main-routed → MWA wallet.
+            const { routeFor: _routeForTrigger } = require('../caps/preflight');
+            const routingHint = await _routeForTrigger('jupiter_trigger_create', input);
+
+            // 2. Get wallet address — burner pubkey if routing=burner, MWA pubkey otherwise.
             let walletAddress;
-            try {
-                walletAddress = getConnectedWalletAddress();
-            } catch (e) {
-                return { error: e.message };
+            if (routingHint.routingDecision === 'burner') {
+                try {
+                    const burnerStatus = await androidBridgeCall('/burner/status', {}, 5000);
+                    if (burnerStatus && !burnerStatus.error && burnerStatus.configured && burnerStatus.pubkey) {
+                        walletAddress = burnerStatus.pubkey;
+                    }
+                } catch (_) { /* fall through to MWA */ }
+            }
+            if (!walletAddress) {
+                try {
+                    walletAddress = getConnectedWalletAddress();
+                } catch (e) {
+                    return { error: e.message };
+                }
             }
 
             // 3. Validate and convert input amount (makingAmount in raw units)
@@ -853,22 +1050,54 @@ const handlers = {
                 return { error: `Could not verify transaction: ${verifyErr.message}` };
             }
 
-            // 8. Sign via MWA (120s timeout for user approval)
-            await ensureWalletAuthorized();
-            log('[Jupiter Trigger] Sending to wallet for approval (sign-only)...', 'INFO');
-            const signResult = await androidBridgeCall('/solana/sign-only', {
-                transaction: data.transaction
-            }, 120000);
-            if (signResult.error) return { error: signResult.error };
-            if (!signResult.signedTransaction) return { error: 'No signed transaction returned from wallet' };
+            // 8 + 9. Sign + execute via wallet dispatch. Jupiter Trigger
+            // broadcasts the tx itself (we never hit RPC sendTransaction);
+            // the broadcast callback always calls jupiterTriggerExecute on
+            // a signed tx, regardless of wallet.
+            const dispatchResult = await routeAndSign({
+                toolName: 'jupiter_trigger_create',
+                toolArgs: input,
+                unsignedTxBase64: data.transaction,
+                broadcastVia: 'jupiter',
+                flowName: 'jupiter_trigger_create',
+                broadcast: async (txOrUnsigned, _signer, ctx) => {
+                    let signedTx;
+                    if (ctx && ctx.signed) {
+                        signedTx = txOrUnsigned;
+                    } else {
+                        await ensureWalletAuthorized();
+                        log('[Jupiter Trigger] Sending to wallet for approval (sign-only)...', 'INFO');
+                        const signResult = await androidBridgeCall('/solana/sign-only', { transaction: txOrUnsigned }, 120000);
+                        if (signResult.error) return { error: 'sign_failed', reason: signResult.error };
+                        if (!signResult.signedTransaction) return { error: 'sign_failed', reason: 'no signed tx returned from wallet' };
+                        signedTx = signResult.signedTransaction;
+                    }
+                    log('[Jupiter Trigger] Executing signed transaction...', 'INFO');
+                    const ex = await jupiterTriggerExecute(signedTx, data.requestId);
+                    if (ex.status === 'Failed') {
+                        return { error: 'execute_failed', reason: ex.error || 'Jupiter Trigger rejected' };
+                    }
+                    if (!ex.signature) return { error: 'execute_failed', reason: 'no signature in Trigger response' };
+                    return { signature: ex.signature, trigger: ex };
+                },
+            });
 
-            // 9. Execute (Jupiter broadcasts)
-            log('[Jupiter Trigger] Executing signed transaction...', 'INFO');
-            const execResult = await jupiterTriggerExecute(signResult.signedTransaction, data.requestId);
-            if (execResult.status === 'Failed') {
-                return { error: `Order failed: ${execResult.error || 'Transaction execution failed'}` };
+            if (!dispatchResult.ok) {
+                return { error: dispatchResult.error, reason: dispatchResult.reason };
             }
-            if (!execResult.signature) return { error: 'Jupiter execute returned no signature' };
+            const execResult = (dispatchResult.broadcastResult && dispatchResult.broadcastResult.trigger) || { signature: dispatchResult.signature };
+
+            // BAT-582 Phase 5: record ownership AFTER successful broadcast.
+            // Failure here is logged but does NOT unwind the create \u2014 per
+            // contract v1.4, the order is real on-chain; the cancel will
+            // fall back to "unknown \u2192 main + confirm + diagnostic" if the
+            // ownership write missed.
+            const orderId = execResult.order || execResult.orderId || data.order || null;
+            if (orderId) {
+                await recordJupiterOwnership(orderId, dispatchResult.wallet, 'jupiter_trigger_create');
+            } else {
+                log('[Jupiter Trigger] No orderId in execute response \u2014 ownership not recorded', 'WARN');
+            }
 
             const warnings = [];
             if (inputToken.warning) warnings.push(`\u26A0\uFE0F ${inputToken.symbol}: ${inputToken.warning}`);
@@ -876,13 +1105,14 @@ const handlers = {
 
             return {
                 success: true,
-                orderId: execResult.order || execResult.orderId || data.order || null,
+                orderId,
                 signature: execResult.signature,
                 inputToken: `${inputToken.symbol} (${inputToken.address})`,
                 outputToken: `${outputToken.symbol} (${outputToken.address})`,
                 inputAmount: input.inputAmount,
                 triggerPrice: input.triggerPrice,
                 expiryTime: expiryTime,
+                wallet: dispatchResult.wallet,
                 warnings: warnings.length > 0 ? warnings : undefined
             };
         } catch (e) {
@@ -987,16 +1217,48 @@ const handlers = {
                 return { error: 'orderId is required' };
             }
 
-            // 2. Get wallet address
-            let walletAddress;
+            // BAT-582 Phase 5: cancel routes to the wallet that CREATED
+            // the order. Look up ownership from the bridge map. burner →
+            // sign via burner (silent). main / unknown → sign via MWA
+            // (existing flow). The confirmation gate in ai.js already
+            // enforced "none" for burner-owned and "confirm" for main/unknown,
+            // so by the time this handler runs the routing decision is set.
+            let creatorRole = 'unknown';
             try {
-                walletAddress = getConnectedWalletAddress();
-            } catch (e) {
-                return { error: e.message };
+                const lookup = await androidBridgeCall(
+                    '/jupiter/order-owner/get',
+                    { orderId: input.orderId },
+                    5000,
+                );
+                if (lookup && !lookup.error && (lookup.creatorWalletRole === 'burner' || lookup.creatorWalletRole === 'main')) {
+                    creatorRole = lookup.creatorWalletRole;
+                }
+            } catch (_) { /* fall back to unknown → MWA path */ }
+
+            // 2. Get wallet address — burner pubkey (creator was burner) or MWA pubkey.
+            let walletAddress;
+            if (creatorRole === 'burner') {
+                try {
+                    const burnerStatus = await androidBridgeCall('/burner/status', {}, 5000);
+                    if (burnerStatus && !burnerStatus.error && burnerStatus.configured && burnerStatus.pubkey) {
+                        walletAddress = burnerStatus.pubkey;
+                    }
+                } catch (_) { /* fall through to MWA path */ }
+                if (!walletAddress) {
+                    log('[Jupiter Trigger] burner-owned cancel but burner pubkey unavailable — falling back to MWA path', 'WARN');
+                    creatorRole = 'main';
+                }
+            }
+            if (!walletAddress) {
+                try {
+                    walletAddress = getConnectedWalletAddress();
+                } catch (e) {
+                    return { error: e.message };
+                }
             }
 
             // 3. Call Jupiter Trigger API — cancelOrder (no retry — non-idempotent POST)
-            log(`[Jupiter Trigger] Cancelling order: ${input.orderId}`, 'INFO');
+            log(`[Jupiter Trigger] Cancelling order: ${input.orderId} (creator=${creatorRole})`, 'INFO');
             const res = await httpRequest({
                 hostname: 'api.jup.ag',
                 path: '/trigger/v1/cancelOrder',
@@ -1027,28 +1289,58 @@ const handlers = {
                 return { error: `Could not verify transaction: ${e.message}` };
             }
 
-            // 5. Sign via MWA
-            await ensureWalletAuthorized();
-            log('[Jupiter Trigger] Sending cancel tx to wallet for approval...', 'INFO');
-            const signResult = await androidBridgeCall('/solana/sign-only', {
-                transaction: data.transaction
-            }, 120000);
-            if (signResult.error) return { error: signResult.error };
-            if (!signResult.signedTransaction) return { error: 'No signed transaction returned from wallet' };
+            // 5 + 6. Sign + execute. Burner-owned → signCancelViaBurner
+            // (silent, ownership-gated, reserves 0 to enforce burner is
+            // configured). Main/unknown-owned → existing MWA sign-only +
+            // execute path.
+            const broadcastFn = async (signedTx) => {
+                log('[Jupiter Trigger] Executing cancel transaction...', 'INFO');
+                const ex = await jupiterTriggerExecute(signedTx, data.requestId);
+                if (ex.status === 'Failed') {
+                    return { error: 'execute_failed', reason: ex.error || 'Jupiter Trigger rejected' };
+                }
+                if (!ex.signature) return { error: 'execute_failed', reason: 'no signature in Trigger response' };
+                return { signature: ex.signature };
+            };
 
-            // 6. Execute
-            log('[Jupiter Trigger] Executing cancel transaction...', 'INFO');
-            const execResult = await jupiterTriggerExecute(signResult.signedTransaction, data.requestId);
-            if (execResult.status === 'Failed') {
-                return { error: `Cancel failed: ${execResult.error || 'Transaction execution failed'}` };
+            let dispatchResult;
+            if (creatorRole === 'burner') {
+                dispatchResult = await signCancelViaBurner({
+                    unsignedTxBase64: data.transaction,
+                    flowName: 'jupiter_trigger_cancel',
+                    broadcast: async (signedTx) => broadcastFn(signedTx),
+                });
+            } else {
+                // Main / unknown path — existing MWA flow.
+                await ensureWalletAuthorized();
+                log('[Jupiter Trigger] Sending cancel tx to wallet for approval...', 'INFO');
+                const signResult = await androidBridgeCall('/solana/sign-only', {
+                    transaction: data.transaction,
+                }, 120000);
+                if (signResult.error) {
+                    return { error: signResult.error };
+                }
+                if (!signResult.signedTransaction) {
+                    return { error: 'No signed transaction returned from wallet' };
+                }
+                const broadcast = await broadcastFn(signResult.signedTransaction);
+                if (broadcast.error) {
+                    return { error: broadcast.reason || broadcast.error };
+                }
+                dispatchResult = { ok: true, wallet: 'main', signature: broadcast.signature };
             }
-            if (!execResult.signature) return { error: 'Jupiter did not return a transaction signature' };
+
+            if (!dispatchResult.ok) {
+                return { error: dispatchResult.error || 'cancel_failed', reason: dispatchResult.reason };
+            }
 
             return {
                 success: true,
                 orderId: input.orderId,
-                signature: execResult.signature,
+                signature: dispatchResult.signature,
                 status: 'cancelled',
+                wallet: dispatchResult.wallet,
+                creatorRole,
             };
         } catch (e) {
             return { error: e.message };
@@ -1123,12 +1415,26 @@ const handlers = {
                 log(`[Jupiter DCA] Token-2022 check skipped: ${shieldErr.message}`, 'DEBUG');
             }
 
-            // 2. Get wallet address
+            // BAT-582 Phase 5: routing decision determines maker/payer.
+            const { routeFor: _routeForDca } = require('../caps/preflight');
+            const dcaRoutingHint = await _routeForDca('jupiter_dca_create', input);
+
+            // 2. Get wallet address — burner pubkey if routing=burner, MWA pubkey otherwise.
             let walletAddress;
-            try {
-                walletAddress = getConnectedWalletAddress();
-            } catch (e) {
-                return { error: e.message };
+            if (dcaRoutingHint.routingDecision === 'burner') {
+                try {
+                    const burnerStatus = await androidBridgeCall('/burner/status', {}, 5000);
+                    if (burnerStatus && !burnerStatus.error && burnerStatus.configured && burnerStatus.pubkey) {
+                        walletAddress = burnerStatus.pubkey;
+                    }
+                } catch (_) { /* fall through to MWA */ }
+            }
+            if (!walletAddress) {
+                try {
+                    walletAddress = getConnectedWalletAddress();
+                } catch (e) {
+                    return { error: e.message };
+                }
             }
 
             // 3. Map cycleInterval and validate totalCycles
@@ -1241,22 +1547,47 @@ const handlers = {
                 return { error: `Could not verify transaction: ${verifyErr.message}` };
             }
 
-            // 7. Sign via MWA
-            await ensureWalletAuthorized();
-            log('[Jupiter DCA] Sending to wallet for approval (sign-only)...', 'INFO');
-            const signResult = await androidBridgeCall('/solana/sign-only', {
-                transaction: data.transaction
-            }, 120000);
-            if (signResult.error) return { error: signResult.error };
-            if (!signResult.signedTransaction) return { error: 'No signed transaction returned from wallet' };
+            // 7 + 8. Sign + execute via wallet dispatch.
+            const dispatchResult = await routeAndSign({
+                toolName: 'jupiter_dca_create',
+                toolArgs: input,
+                unsignedTxBase64: data.transaction,
+                broadcastVia: 'jupiter',
+                flowName: 'jupiter_dca_create',
+                broadcast: async (txOrUnsigned, _signer, ctx) => {
+                    let signedTx;
+                    if (ctx && ctx.signed) {
+                        signedTx = txOrUnsigned;
+                    } else {
+                        await ensureWalletAuthorized();
+                        log('[Jupiter DCA] Sending to wallet for approval (sign-only)...', 'INFO');
+                        const signResult = await androidBridgeCall('/solana/sign-only', { transaction: txOrUnsigned }, 120000);
+                        if (signResult.error) return { error: 'sign_failed', reason: signResult.error };
+                        if (!signResult.signedTransaction) return { error: 'sign_failed', reason: 'no signed tx returned from wallet' };
+                        signedTx = signResult.signedTransaction;
+                    }
+                    log('[Jupiter DCA] Executing signed transaction...', 'INFO');
+                    const ex = await jupiterRecurringExecute(signedTx, data.requestId);
+                    if (ex.status === 'Failed') {
+                        return { error: 'execute_failed', reason: ex.error || 'Jupiter Recurring rejected' };
+                    }
+                    if (!ex.signature) return { error: 'execute_failed', reason: 'no signature in Recurring response' };
+                    return { signature: ex.signature, recurring: ex };
+                },
+            });
 
-            // 8. Execute (Jupiter broadcasts)
-            log('[Jupiter DCA] Executing signed transaction...', 'INFO');
-            const execResult = await jupiterRecurringExecute(signResult.signedTransaction, data.requestId);
-            if (execResult.status === 'Failed') {
-                return { error: `DCA order failed: ${execResult.error || 'Transaction execution failed'}` };
+            if (!dispatchResult.ok) {
+                return { error: dispatchResult.error, reason: dispatchResult.reason };
             }
-            if (!execResult.signature) return { error: 'Jupiter execute returned no signature' };
+            const execResult = (dispatchResult.broadcastResult && dispatchResult.broadcastResult.recurring) || { signature: dispatchResult.signature };
+
+            // BAT-582 Phase 5: record ownership AFTER successful broadcast.
+            const orderId = execResult.order || execResult.orderId || null;
+            if (orderId) {
+                await recordJupiterOwnership(orderId, dispatchResult.wallet, 'jupiter_dca_create');
+            } else {
+                log('[Jupiter DCA] No orderId in execute response \u2014 ownership not recorded', 'WARN');
+            }
 
             const warnings = [];
             if (inputToken.warning) warnings.push(`\u26A0\uFE0F ${inputToken.symbol}: ${inputToken.warning}`);
@@ -1264,13 +1595,14 @@ const handlers = {
 
             return {
                 success: true,
-                orderId: execResult.order || (execResult.orderId) || null,
+                orderId,
                 signature: execResult.signature,
                 inputToken: `${inputToken.symbol} (${inputToken.address})`,
                 outputToken: `${outputToken.symbol} (${outputToken.address})`,
                 amountPerCycle: input.amountPerCycle,
                 cycleInterval: input.cycleInterval,
                 totalCycles: numberOfOrders,
+                wallet: dispatchResult.wallet,
                 warnings: warnings.length > 0 ? warnings : undefined
             };
         } catch (e) {
@@ -1387,16 +1719,46 @@ const handlers = {
                 return { error: 'orderId is required' };
             }
 
-            // 2. Get wallet address
-            let walletAddress;
+            // BAT-582 Phase 5: route by creator role (same pattern as
+            // jupiter_trigger_cancel — see that handler for full
+            // discussion). Cancels are ownership-gated: burner-owned
+            // signs silently via burner; main/unknown-owned uses MWA.
+            let creatorRole = 'unknown';
             try {
-                walletAddress = getConnectedWalletAddress();
-            } catch (e) {
-                return { error: e.message };
+                const lookup = await androidBridgeCall(
+                    '/jupiter/order-owner/get',
+                    { orderId: input.orderId },
+                    5000,
+                );
+                if (lookup && !lookup.error && (lookup.creatorWalletRole === 'burner' || lookup.creatorWalletRole === 'main')) {
+                    creatorRole = lookup.creatorWalletRole;
+                }
+            } catch (_) { /* fall back to unknown → MWA path */ }
+
+            // 2. Get wallet address — burner pubkey if creator was burner.
+            let walletAddress;
+            if (creatorRole === 'burner') {
+                try {
+                    const burnerStatus = await androidBridgeCall('/burner/status', {}, 5000);
+                    if (burnerStatus && !burnerStatus.error && burnerStatus.configured && burnerStatus.pubkey) {
+                        walletAddress = burnerStatus.pubkey;
+                    }
+                } catch (_) { /* fall through to MWA path */ }
+                if (!walletAddress) {
+                    log('[Jupiter DCA] burner-owned cancel but burner pubkey unavailable — falling back to MWA path', 'WARN');
+                    creatorRole = 'main';
+                }
+            }
+            if (!walletAddress) {
+                try {
+                    walletAddress = getConnectedWalletAddress();
+                } catch (e) {
+                    return { error: e.message };
+                }
             }
 
             // 3. Call Jupiter Recurring API — cancelOrder (no retry — non-idempotent POST)
-            log(`[Jupiter DCA] Cancelling order: ${input.orderId}`, 'INFO');
+            log(`[Jupiter DCA] Cancelling order: ${input.orderId} (creator=${creatorRole})`, 'INFO');
             const res = await httpRequest({
                 hostname: 'api.jup.ag',
                 path: '/recurring/v1/cancelOrder',
@@ -1427,28 +1789,54 @@ const handlers = {
                 return { error: `Could not verify transaction: ${e.message}` };
             }
 
-            // 5. Sign via MWA
-            await ensureWalletAuthorized();
-            log('[Jupiter DCA] Sending cancel tx to wallet for approval...', 'INFO');
-            const signResult = await androidBridgeCall('/solana/sign-only', {
-                transaction: data.transaction
-            }, 120000);
-            if (signResult.error) return { error: signResult.error };
-            if (!signResult.signedTransaction) return { error: 'No signed transaction returned from wallet' };
+            // 5 + 6. Sign + execute. Burner → silent. Main/unknown → MWA.
+            const broadcastFn = async (signedTx) => {
+                log('[Jupiter DCA] Executing cancel transaction...', 'INFO');
+                const ex = await jupiterRecurringExecute(signedTx, data.requestId);
+                if (ex.status === 'Failed') {
+                    return { error: 'execute_failed', reason: ex.error || 'Jupiter Recurring rejected' };
+                }
+                if (!ex.signature) return { error: 'execute_failed', reason: 'no signature in Recurring response' };
+                return { signature: ex.signature };
+            };
 
-            // 6. Execute
-            log('[Jupiter DCA] Executing cancel transaction...', 'INFO');
-            const execResult = await jupiterRecurringExecute(signResult.signedTransaction, data.requestId);
-            if (execResult.status === 'Failed') {
-                return { error: `Cancel failed: ${execResult.error || 'Transaction execution failed'}` };
+            let dispatchResult;
+            if (creatorRole === 'burner') {
+                dispatchResult = await signCancelViaBurner({
+                    unsignedTxBase64: data.transaction,
+                    flowName: 'jupiter_dca_cancel',
+                    broadcast: async (signedTx) => broadcastFn(signedTx),
+                });
+            } else {
+                await ensureWalletAuthorized();
+                log('[Jupiter DCA] Sending cancel tx to wallet for approval...', 'INFO');
+                const signResult = await androidBridgeCall('/solana/sign-only', {
+                    transaction: data.transaction,
+                }, 120000);
+                if (signResult.error) {
+                    return { error: signResult.error };
+                }
+                if (!signResult.signedTransaction) {
+                    return { error: 'No signed transaction returned from wallet' };
+                }
+                const broadcast = await broadcastFn(signResult.signedTransaction);
+                if (broadcast.error) {
+                    return { error: broadcast.reason || broadcast.error };
+                }
+                dispatchResult = { ok: true, wallet: 'main', signature: broadcast.signature };
             }
-            if (!execResult.signature) return { error: 'Jupiter did not return a transaction signature' };
+
+            if (!dispatchResult.ok) {
+                return { error: dispatchResult.error || 'cancel_failed', reason: dispatchResult.reason };
+            }
 
             return {
                 success: true,
                 orderId: input.orderId,
-                signature: execResult.signature,
+                signature: dispatchResult.signature,
                 status: 'cancelled',
+                wallet: dispatchResult.wallet,
+                creatorRole,
             };
         } catch (e) {
             return { error: e.message };

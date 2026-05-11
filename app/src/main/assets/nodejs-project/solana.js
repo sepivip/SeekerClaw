@@ -104,9 +104,14 @@ function base58Decode(str) {
         if (idx < 0) throw new Error('Invalid base58 character: ' + str[i]);
         value = value * 58n + BigInt(idx);
     }
+    // BAT-582 R5 fix: when value === 0n, value.toString(16) returns "0",
+    // which pads to "00" and produces a 1-byte Buffer([0]) — adding a
+    // spurious trailing zero byte. The correct payload for a zero-value
+    // bigint is an empty buffer; the leading-zero count alone populates
+    // the result. Same fix mirrored in payment/x402.js's identical helper.
     const hex = value.toString(16);
     const hexPadded = hex.length % 2 ? '0' + hex : hex;
-    const decoded = Buffer.from(hexPadded, 'hex');
+    const decoded = value === 0n ? Buffer.alloc(0) : Buffer.from(hexPadded, 'hex');
     const result = Buffer.alloc(zeros + decoded.length);
     decoded.copy(result, zeros);
     return result;

@@ -477,3 +477,154 @@ grep -i "MCP.*reconcile\|MCP.*Failed to" node_debug.log | tail -20
 1. The cleartext loopback fix (`ee29727`) repaired this path — pre-fix, `[NodeControlClient] reconcile failed: Cleartext HTTP not permitted` was silent and fell through to "next service start picks up the change."
 2. If reconcile is still failing post-`ee29727`: stop and restart the agent — the next service start reads `mcp_servers.json` fresh and connects all enabled servers via the normal startup path.
 3. If a specific server keeps failing in `[MCP] Failed to (re)connect`: verify the URL and auth in Settings → MCP Servers. Test reachability with `curl -I <server-url>` if it has a public health endpoint.
+
+---
+
+## Burner Wallet (BAT-582)
+
+### `burner: invalid key format`
+**Symptoms:** Burner setup screen rejects the pasted key with "invalid key format."
+**Diagnosis:** `KeyImporter` could not parse the input as base58 OR a JSON byte array of length 32 or 64 bytes. Common causes: trailing whitespace, extra characters, wrong format (e.g., a hex string), wrong length (the wallet exported a 33-byte compressed key instead of a 32-byte seed).
+**Fix:**
+1. Re-export the key from the source wallet (Phantom: Settings → Security → Reveal Secret Recovery Phrase → derive specific account).
+2. Strip whitespace; ensure the value is base58 OR a `[1, 2, …, 64]` JSON array.
+3. If the source provides only a seed phrase (12/24 words), use a wallet's "export private key" feature — SeekerClaw does not derive from mnemonics in V1.
+
+### `burner: invalid keypair (pubkey/seed mismatch)`
+**Symptoms:** Burner setup rejects a 64-byte expanded key with "pubkey mismatch."
+**Diagnosis:** The trailing 32 bytes of the expanded key don't match the public key derived from the leading 32-byte seed. The key is corrupted or was assembled incorrectly.
+**Fix:** Re-export from the source wallet. If the issue persists, switch to importing only the 32-byte seed (SeekerClaw will derive the public half itself).
+
+### `burner: storage_failure (Failed to persist key)`
+**Symptoms:** Burner setup parses + validates the key, but the Save step returns `storage_failure`. Bridge endpoints / Settings UI report "Failed to persist key" or `error: "storage_failure"`.
+**Diagnosis:** `KeyImporter` accepted the bytes (format + pubkey check passed), but writing to encrypted storage failed AFTER validation. This is NOT an invalid-key error — the key itself is fine. Likely causes:
+- Device storage is full or near full (atomic move + ciphertext write fails on ENOSPC).
+- Android Keystore initialization failure (rare on Solana Seeker, more common on heavily customized OEM ROMs).
+- Filesystem permissions / SELinux denial under `filesDir/burner_keys/` (also rare).
+**Fix:**
+1. Tell the user: "The burner key looked valid but couldn't be saved to encrypted storage." Do NOT tell them to re-paste — the key wasn't the problem.
+2. Check device storage: `android_storage` tool or Settings → Storage. Free space if under ~100 MB.
+3. Restart the app — Keystore alias may re-initialize cleanly on next start.
+4. If persistent across restarts: collect logcat (`adb logcat | grep KeystoreHelper\|EncryptedPrefsKeyVault`) and file a bug.
+
+### `burner: cap exceeded (per-tx)`
+**Symptoms:** Tool result includes `error: "burner_cap_exceeded"` or `over_per_tx_cap`. Agent tells the user "this is over your burner per-tx cap."
+**Diagnosis:** The principal (lamports for SOL, microunits for USDC) of the tx exceeds the configured `capPerTxSol` / `capPerTxUsdc`.
+**Fix:**
+1. Use `wallet_set_caps` to raise the per-tx cap (confirmation popup shows old → new diff).
+2. Or pass `_allowMainFallback: true` in the tool args to retry through the main MWA wallet (popup required).
+3. Or split the spend into smaller chunks if appropriate.
+
+### `burner: cap exceeded (daily, X remaining, resets at HH:MM UTC)`
+**Symptoms:** Tool result includes `over_daily_cap`. Agent should report remaining daily allowance.
+**Diagnosis:** `spentTodaySol + atomicAmount > capDailySol` (or USDC equivalent). The 24-hour window resets at 00:00 UTC.
+**Fix:**
+1. Wait for the daily reset (00:00 UTC).
+2. Raise the daily cap via `wallet_set_caps`.
+3. Use the main wallet (popup) for the over-cap portion.
+
+### `burner: no burner configured`
+**Symptoms:** `wallet_status` returns `burner: null`. Tools route to main MWA path with confirmation popup. Bridge calls return `burner_not_configured`.
+**Diagnosis:** No private key has been imported yet; the burner is in the "single-wallet" baseline mode.
+**Fix:** Open SeekerClaw → Settings → Burner Wallet → import a key. Until then, every tool routes through MWA exactly like v1.0.
+
+### `burner: tx unsupported`
+**Symptoms:** `/burner/sign-transaction` returns one of:
+- `unsupported_tx_format` — the bytes aren't a recognizable Solana legacy or v0 tx
+- `burner_not_required_signer` — the burner pubkey is not in the required-signers list
+- `additional_signers_required` — there are other required signers who haven't signed yet (V1 only supports single-signer or pre-signed-by-others)
+- `bogus_shortvec` — compact-u16 length encoding is malformed
+**Diagnosis:** The Jupiter Ultra / Trigger / Recurring API returned an unexpected tx shape, OR the tool built a tx with the wrong signer. Most common in development when adding a new flow.
+**Fix:**
+1. Check `node_debug.log` for `[Jupiter ...] Tx verified` lines preceding the failure.
+2. Verify the tool is passing the correct signer pubkey to the Jupiter API (`maker` / `payer` / `user` field).
+3. Re-fetch the order — Jupiter Ultra payloads have ~2 min TTL; an expired payload re-served from cache could mismatch.
+
+### `burner: reservation expired (tx took longer than 60s)`
+**Symptoms:** `/burner/sign-transaction` returns `reservation_expired`. The reservation TTL elapsed before signing happened.
+**Diagnosis:** Default reservation TTL is 60s. Signing should be near-instant; if it took longer, something blocked the sign path (heavy GC, bridge stall).
+**Fix:**
+1. Retry the operation — the agent's tool-use loop will request a fresh reservation.
+2. If recurrent, check device load — is another foreground app starving the :node process?
+3. Android's periodic sweep auto-releases stale reservations every 30s, so daily spend isn't burned.
+
+### `burner: reservation not found`
+**Symptoms:** `/burner/sign-transaction` or `/burner/commit` returns `reservation_not_found`. Caller passed a reservationId that the cap state machine has never seen (or that aged out of the in-memory disposed-id ring).
+**Diagnosis:** Most common cause is a code bug: a caller forged a reservationId or held one across a process restart (the disposed-id ring is process-local). Could also happen if a very old id was retried after the ring evicted it (bound: 1024 most recent ids).
+**Fix:**
+1. Always go through `/burner/reserve` to mint an id, then immediately use it for sign + commit/release. Never reuse ids across operations.
+2. If the bug is in a tool: trace the lifecycle of the reservationId through your code path. Per contract, the issuer of `/burner/reserve` is the same caller that does `/burner/sign-transaction` + commit/release.
+3. BAT-582 R2 added this validation. Pre-R2, sign-transaction would silently sign without verifying the id — that was a security gap, not a feature.
+
+### `burner: reservation not pending`
+**Symptoms:** `/burner/sign-transaction` returns `reservation_not_pending`. The reservationId was previously committed or released; re-using a finalized id is a state-machine violation.
+**Diagnosis:** Caller is double-spending a reservation OR retrying after a transient error without re-reserving. The cap state machine refuses because either:
+- the id was already committed (the reservation already counted toward daily spend), or
+- the id was already released (the caller already abandoned it).
+**Fix:**
+1. Don't retry sign-transaction with the same id after a successful commit. Reserve a new one.
+2. If you need to retry after a transient error: `/burner/release` the old id (idempotent), then `/burner/reserve` for a fresh attempt.
+3. `/burner/commit` is idempotent in the OTHER direction: a second commit with the same id returns ok=true (no-op). Sign-transaction is intentionally stricter.
+
+### `burner: bridge unreachable (Node ↔ Android)`
+**Symptoms:** Tool result `error: "bridge_unreachable"` or `Android Bridge unavailable`. /burner/* calls fail at the HTTP transport.
+**Diagnosis:** AndroidBridge HTTP server (localhost:8765) isn't responding. Either the foreground service isn't running, the bridge port is blocked, or the auth token is wrong.
+**Fix:**
+1. Check `grep -i "Android Bridge" node_debug.log | tail -20`.
+2. Open the Dashboard in SeekerClaw — is the agent showing GREEN? If RED/yellow, restart the agent from Settings → Service Control.
+3. If persistent: stop and start the SeekerClawService. The bridge initializes on service start.
+
+### Jupiter ownership map missed a write
+**Symptoms:** Cancel-tool returns `creatorRole: "unknown"` for an order created via SeekerClaw on this device.
+**Diagnosis:** `/jupiter/order-owner/set` failed AFTER the create succeeded. Per contract, the create is not unwound — the order is real on-chain — but the cancel falls back to the "unknown → main + confirm + diagnostic" path.
+**Fix:**
+1. Confirm the user wants to cancel via main wallet (MWA popup).
+2. If the order was actually created from the burner: the cancel still works through main if the main wallet is the same authority (it isn't, in V1 — burner ≠ main pubkey). For now, this means the cancel will fail to authorize at Jupiter; the user must wait for the order to expire OR contact Jupiter support.
+3. Long-term fix: enable the Jupiter ownership write retry queue (Phase 6+ scope).
+
+---
+
+## agent_pay (BAT-582 — x402 client)
+
+### `agent_pay: rejected (non-HTTPS / private IP / non-Solana / non-USDC / demand > max_usdc)`
+**Symptoms:** Tool result `error: "non_https" | "private_ip" | "non_solana_network" | "non_usdc_asset" | "demand_exceeds_max_usdc" | "method_not_get"`.
+**Diagnosis:** Pre-flight or 402-body validation refused the call before any payment was attempted. Each error is a hard V1 boundary:
+- `non_https` — URL must be `https://` (debug builds also accept `http://localhost`)
+- `private_ip` — DNS resolved to a private/loopback IP (10/8, 172.16/12, 192.168/16, 127/8, 169.254/16, ::1, fc00::/7, fe80::/10) — SSRF defense
+- `non_solana_network` — pay.sh requirement `network` field was not `solana`
+- `non_usdc_asset` — pay.sh requirement `asset` was not USDC (mint `EPjFWdd5...`)
+- `demand_exceeds_max_usdc` — server demanded more than the agent's `max_usdc` cap
+- `method_not_get` — V1 only supports GET (no POST/PUT)
+
+**Fix:**
+1. For `demand_exceeds_max_usdc`: re-invoke with a higher `max_usdc` if the user agrees, OR accept the rejection (this is the cap working as designed).
+2. For `non_https` / `private_ip`: this is a security boundary — do not bypass. If the user genuinely wants to call a localhost service from a debug build, ensure NODE_ENV=development is set.
+3. For `non_solana_network` / `non_usdc_asset`: the endpoint isn't compatible with V1. Tell the user "this endpoint requires <network>/<asset>, which agent_pay doesn't support yet (V1 = Solana mainnet USDC only)."
+
+### `agent_pay: response too large` / `agent_pay: timeout`
+**Symptoms:** Tool result `error: "response_too_large"` or `error: "timeout"`.
+**Diagnosis:** V1 caps response body at 1 MB and total request time at 30 s. Either the endpoint streams more than 1 MB or it's slow.
+**Fix:**
+1. For large responses: the endpoint isn't a fit for agent_pay V1. Suggest the user fetch directly via web browser, or escalate to a follow-up ticket if the use case is common.
+2. For timeouts: retry once. If persistent, the endpoint is degraded — wait, OR check connectivity (`grep -i ENOTFOUND node_debug.log | tail -5`).
+
+### `agent_pay: burner not configured`
+**Symptoms:** Tool result `error: "burner_not_configured"`. NO HTTP request to the URL was made.
+**Diagnosis:** agent_pay refuses to fetch when there's no burner wallet; it would have nothing to pay with. /burner/status returned `configured: false`.
+**Fix:** Open SeekerClaw → Settings → Burner Wallet → import a key. Fund the burner with USDC (mainnet). Re-invoke agent_pay.
+
+### `agent_pay: no x402 protocol detected for this response`
+**Symptoms:** Tool result `error: "no_protocol_match"` after a 402 response.
+**Diagnosis:** The endpoint returned 402 but the JSON body didn't match any registered payment-protocol shape (V1 supports pay.sh-style x402 only). Possibilities: a non-x402 paywall (Stripe, custom), an unknown x402 dialect, or a malformed body.
+**Fix:**
+1. Check the response body shape — does it have `accepts: [...]` or `paymentRequirements: [...]` with `scheme: "exact"` and `network: "solana"`?
+2. If it's a different x402 dialect (e.g., Coinbase's variant), V1 doesn't support it — track as a follow-up to commit a fixture for that variant.
+3. If it's a non-x402 paywall, agent_pay can't handle it. Tell the user "this endpoint uses a paywall format I don't support."
+
+### `agent_pay: cap exceeded` (per-tx or daily USDC)
+**Symptoms:** Tool result `error: "burner_cap_exceeded"` mentioning USDC. The 402 demand was within `max_usdc` but exceeded the burner's per-tx or daily USDC cap.
+**Diagnosis:** Two different ceilings: `max_usdc` is the agent-side cap (per-call), `burner.pertx.usdc` and `burner.daily.usdc` are user-controlled caps (per-burner). Both must allow the demand.
+**Fix:**
+1. Run `wallet_status` to show the current caps + remaining daily.
+2. Suggest `wallet_set_caps({per_tx_usdc: "..."})` (always with user confirmation) OR wait for daily reset at 00:00 UTC.
+

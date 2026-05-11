@@ -10,7 +10,7 @@ const crypto = require('crypto');
 const {
     workDir, MODEL, resolveActiveModel, PROVIDER, CHANNEL, ANTHROPIC_KEY, OPENAI_KEY, OPENROUTER_KEY, CUSTOM_KEY, CUSTOM_BASE_URL, CUSTOM_FORMAT, OPENROUTER_FALLBACK_MODEL, OPENROUTER_MODEL_CONTEXT, OPENROUTER_FALLBACK_CONTEXT, AUTH_TYPE, OPENAI_AUTH_TYPE,
     REACTION_GUIDANCE, REACTION_NOTIFICATIONS, MEMORY_DIR,
-    CONFIRM_REQUIRED, TOOL_RATE_LIMITS, TOOL_STATUS_MAP,
+    TOOL_RATE_LIMITS, TOOL_STATUS_MAP,
     API_TIMEOUT_RETRIES, API_TIMEOUT_BACKOFF_MS, API_TIMEOUT_MAX_BACKOFF_MS,
     truncateToolResult,
     localTimestamp, localDateStr, log,
@@ -52,6 +52,16 @@ const loopDetector = require('./loop-detector');
 const _reasoningRecovery = require('./reasoning-recovery');
 // BAT-549 R3: fingerprint for sanitized error logging (no raw payloads)
 const { fingerprint: _reasoningFingerprint } = require('./reasoning-redact');
+// BAT-582 Phase 4: dynamic confirmation hook + wallet state collector.
+// Replaces the static CONFIRM_REQUIRED set in config.js.
+const { getConfirmationPolicy, normalizePolicy } = require('./confirmation');
+const { getWalletState } = require('./wallet');
+// BAT-582 Phase 5: bridge.js for the burner status read used by the system
+// prompt's Wallets section. Cached in _walletPromptSnapshot below — refreshed
+// asynchronously by a kick-off at every buildSystemBlocks call so subsequent
+// turns see live data, while the call itself stays sync (the prompt builder
+// runs on every API call and must not introduce extra round-trips per turn).
+const { androidBridgeCall: _bridgeForWalletSnapshot } = require('./bridge');
 
 // ── Injected dependencies (set from main.js at startup) ───────────────────
 // These break circular deps and reference things that still live in main.js
@@ -71,6 +81,68 @@ function setChatDeps(deps) {
         if (key in _deps) _deps[key] = deps[key];
         else log(`[claude] setChatDeps: unknown key "${key}"`, 'WARN');
     }
+}
+
+// ── BAT-582 Phase 5: burner snapshot cache for system prompt ─────────────
+//
+// buildSystemBlocks() runs synchronously on every API call, so it can't
+// await /burner/status. We cache the last-known status here and trigger
+// an async refresh on every buildSystemBlocks invocation. First-call
+// behavior: snapshot is null → prompt shows "no burner configured" copy.
+// Once a refresh lands (typically <100ms), subsequent prompts include the
+// live pubkey + cap values.
+//
+// Cache lifetime: until the next refresh. Caps + pubkey rarely change
+// (Settings UI edit triggers a /burner/status read elsewhere) so a TTL
+// isn't needed beyond the per-turn refresh.
+let _walletPromptSnapshot = null;     // null until first refresh; { configured, pubkey?, capPerTxSol, ... }
+let _walletPromptRefreshing = false;  // single-flight guard
+
+function _refreshWalletPromptSnapshot() {
+    if (_walletPromptRefreshing) return;
+    _walletPromptRefreshing = true;
+    // Fire-and-forget: bridge call resolves on its own; we just update
+    // the cache and clear the flag.
+    //
+    // BAT-582 R6: distinguish between "explicit non-configured" (the
+    // bridge replies cleanly that no burner exists — overwrite the
+    // cache to {configured: false}) and "transient bridge failure"
+    // (network blip, bridge not running yet, exception — leave the
+    // existing cache alone so a previously-good snapshot survives).
+    // Blanking the cache on every error caused two bugs:
+    //   1) tests could not seed a stable snapshot — the next async
+    //      refresh would erase _setWalletPromptSnapshotForTests output
+    //   2) production agents would briefly forget about a configured
+    //      burner during a bridge restart, emitting the single-wallet
+    //      copy mid-conversation
+    _bridgeForWalletSnapshot('/burner/status', {}, 5000)
+        .then((status) => {
+            if (status && !status.error) {
+                _walletPromptSnapshot = status;
+            } else if (status && status.error) {
+                // Bridge replied with an error envelope — treat as transient,
+                // keep the existing cache. Log so we can see if it's chronic.
+                log(`[buildSystemBlocks] burner snapshot bridge error: ${status.error} — keeping cached snapshot`, 'WARN');
+            } else {
+                // status is null/undefined — same transient-failure handling.
+                log(`[buildSystemBlocks] burner snapshot returned empty — keeping cached snapshot`, 'WARN');
+            }
+        })
+        .catch((e) => {
+            log(`[buildSystemBlocks] burner snapshot refresh failed: ${e.message} — keeping cached snapshot`, 'WARN');
+            // Don't overwrite — keep whatever's cached. A transient bridge
+            // failure shouldn't blank our snapshot. The next successful
+            // refresh restores it.
+        })
+        .finally(() => {
+            _walletPromptRefreshing = false;
+        });
+}
+
+// Test hook — lets unit tests pre-seed the snapshot without spinning up
+// the bridge. Production code never calls this.
+function _setWalletPromptSnapshotForTests(snapshot) {
+    _walletPromptSnapshot = snapshot;
 }
 
 function getProviderApiKey() {
@@ -588,6 +660,57 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
     lines.push('- For simple queries, respond directly without preamble.');
     lines.push('- When uncertain, state your confidence level.');
     lines.push('');
+
+    // BAT-582 Phase 5: Wallets section — agent self-awareness for the
+    // burner + main wallet pair. Reads cached snapshot from
+    // _walletPromptSnapshot (refreshed asynchronously below). When the
+    // snapshot says burner is unconfigured (or hasn't refreshed yet), we
+    // emit the single-wallet copy with a hint about Settings → Burner Wallet.
+    // SAB probe: "what wallets do you have?" should produce both names
+    // with caps + network from this section.
+    _refreshWalletPromptSnapshot();
+    {
+        const snap = _walletPromptSnapshot;
+        const burnerOn = !!(snap && snap.configured);
+
+        // Cap helpers — atomic-string → decimal display ("50000000" → "0.05").
+        const _atomicToDecimal = (atomic, decimals) => {
+            if (atomic == null) return '0';
+            let s;
+            try { s = BigInt(String(atomic)).toString(); } catch (_) { return String(atomic); }
+            if (s === '0') return '0';
+            const pad = s.padStart(decimals + 1, '0');
+            const head = pad.slice(0, pad.length - decimals);
+            const tail = pad.slice(pad.length - decimals).replace(/0+$/, '');
+            return tail.length ? `${head}.${tail}` : head;
+        };
+
+        lines.push('## Wallets');
+        if (burnerOn) {
+            const burnerPub = snap.pubkey || 'pending refresh';
+            const perTxSol = _atomicToDecimal(snap.capPerTxSol, 9);
+            const perTxUsdc = _atomicToDecimal(snap.capPerTxUsdc, 6);
+            const dailySol = _atomicToDecimal(snap.capDailySol, 9);
+            const dailyUsdc = _atomicToDecimal(snap.capDailyUsdc, 6);
+            lines.push('You have two wallets:');
+            lines.push(`- **Burner** (\`${burnerPub}\`, autonomous, capped at ${perTxSol} SOL / ${perTxUsdc} USDC per tx, ${dailySol} SOL / ${dailyUsdc} USDC daily) — yours to spend within caps. No popup.`);
+            lines.push('  Use for small autonomous actions, x402 payments, micro-swaps, price-triggered orders.');
+            lines.push('- **Main** (via MWA) — user\'s wallet. Every action requires their approval popup. Use for large or user-explicit transfers.');
+            lines.push('Always name them by role, never paraphrase as "your wallet." Confirmation surfaces explicitly say "Burner wallet" or "Main wallet" — never "your wallet."');
+            lines.push('Use `wallet_status` for caps + today\'s spend + remaining daily on the burner. The burner BALANCE field is currently `null` / "unavailable" (RPC balance fetch is a known follow-up — do not report it as "0"). Main-wallet balance is fetched live via RPC, but it can ALSO be `null` / "unavailable" on a transient RPC failure — when `balanceAvailable: false` or display fields read "unavailable", say "balance temporarily unavailable" rather than reporting a possibly-stale number. Use `wallet_set_caps` to raise/lower caps (always confirms, shows old → new diff).');
+            // BAT-582 Phase 6: agent_pay capability — only mentioned when the burner
+            // is configured (the tool refuses without one, so no point advertising it
+            // when it would just refuse). The user controls max_usdc per call.
+            lines.push('**Paid APIs (x402)**: Use `agent_pay(url, max_usdc)` to fetch x402-protected endpoints (e.g., pay.sh catalog services). Settles in USDC from the **Burner wallet**. Mainnet only, HTTPS GET only. The user controls `max_usdc` per call; the tool rejects if the 402 demand exceeds it.');
+        } else {
+            lines.push('You have one wallet:');
+            lines.push('- **Main** (via MWA) — user\'s wallet. Approval popup required for every action.');
+            lines.push('A "burner wallet" — small, app-managed, autonomous within caps — can be configured in Settings → Burner Wallet to enable price-triggered swaps, x402 payments, and recurring DCA without per-tx confirmation popups.');
+            lines.push('Read the burner-wallet skill for details if the user asks. Never claim a burner exists when one isn\'t configured.');
+        }
+        lines.push('Network: Solana mainnet only.');
+        lines.push('');
+    }
 
     // Tooling section - tool schemas are provided via the tools API array;
     // only behavioral guidance here to avoid duplicating ~1,500 tokens of tool descriptions
@@ -2737,9 +2860,46 @@ async function chat(chatId, userMessage, options = {}) {
                 let result;
 
                 try {
-                    // Confirmation gate: high-impact tools require explicit user YES
-                    if (CONFIRM_REQUIRED.has(toolUse.name)) {
-                        // Rate limit check first
+                    // ────────────────────────────────────────────────────────────────────
+                    // BAT-582 Phase 4: Dynamic confirmation policy hook.
+                    //
+                    // Replaces the v1.0 static CONFIRM_REQUIRED.has(name) check. The
+                    // hook reads wallet state (burner configured? cap fitness? Jupiter
+                    // order ownership?) and returns one of:
+                    //   "none"                                 → dispatch directly
+                    //   { policy: "confirm", message? }        → existing confirmation flow
+                    //   { policy: "block", reason, message }   → return tool error, no dispatch
+                    //
+                    // Regression safety: when burner is unconfigured, the hook returns
+                    // exactly the v1.0 static set's behavior. See BAT-582 v1.4 spec
+                    // "Confirmation policy" + tests/nodejs-project/confirmation-policy.test.js.
+                    // ────────────────────────────────────────────────────────────────────
+                    let walletState;
+                    try {
+                        walletState = await getWalletState(toolUse.name, toolUse.input);
+                    } catch (e) {
+                        // Defensive: degrade to v1.0 baseline on any failure.
+                        walletState = { burnerConfigured: false };
+                        log(`[Confirm] getWalletState failed for ${toolUse.name}: ${e.message}`, 'WARN');
+                    }
+                    const policy = normalizePolicy(getConfirmationPolicy(toolUse.name, toolUse.input, walletState));
+
+                    if (policy.policy === 'block') {
+                        // BAT-582 R2: Preserve the structured {reason, message} shape from
+                        // confirmation/policy.js so the stable error CODE (e.g.
+                        // "burner_cap_exceeded", "agent_pay_missing_max_usdc") flows
+                        // through to the tool result `error` field unchanged. Diagnostics
+                        // and the model see the code in `error` and the human-readable
+                        // explanation in `message` — collapsing them into a single string
+                        // (the v1 shape) loses the stable code.
+                        result = {
+                            error: policy.reason || 'tool_blocked',
+                            message: policy.message || 'Tool blocked by policy.',
+                        };
+                        log(`[Confirm] ${toolUse.name} blocked: ${policy.reason || 'unspecified'}`, 'WARN');
+                    } else if (policy.policy === 'confirm') {
+                        // Rate limit check first (matches v1.0 behavior — confirmable tools
+                        // are also the ones we rate-limit against rapid-fire abuse).
                         const rateLimit = TOOL_RATE_LIMITS[toolUse.name];
                         const lastUse = _deps.lastToolUseTime ? _deps.lastToolUseTime.get(toolUse.name) : undefined;
                         if (rateLimit && lastUse && (Date.now() - lastUse) < rateLimit) {
@@ -2747,8 +2907,10 @@ async function chat(chatId, userMessage, options = {}) {
                             result = { error: `Rate limited: ${toolUse.name} can only be used once per ${rateLimit / 1000}s. Try again in ${waitSec}s.` };
                             log(`[RateLimit] ${toolUse.name} blocked — ${waitSec}s remaining`, 'WARN');
                         } else {
-                            // Ask user for confirmation
-                            const confirmed = await _deps.requestConfirmation(chatId, toolUse.name, toolUse.input);
+                            // Ask user for confirmation. Pass policy.message so dynamic
+                            // surfaces (e.g. wallet_set_caps old → new diff) appear in
+                            // the confirmation card.
+                            const confirmed = await _deps.requestConfirmation(chatId, toolUse.name, toolUse.input, policy.message);
                             if (confirmed) {
                                 const status = deferStatus(chatId, TOOL_STATUS_MAP[toolUse.name]);
                                 try {
@@ -2763,7 +2925,7 @@ async function chat(chatId, userMessage, options = {}) {
                             }
                         }
                     } else {
-                        // Normal tool execution (no confirmation needed)
+                        // policy === "none" — normal tool execution (no confirmation needed).
                         const status = deferStatus(chatId, TOOL_STATUS_MAP[toolUse.name]);
                         try {
                             result = await _deps.executeTool(toolUse.name, toolUse.input, chatId);
@@ -3116,4 +3278,8 @@ module.exports = {
     getActiveTask, clearActiveTask,
     // Injection
     setChatDeps,
+    // BAT-582 Phase 5: exposed for tests + parent helpers (buildSystemBlocks
+    // reads cached burner state). Production code never calls these.
+    buildSystemBlocks,
+    _setWalletPromptSnapshotForTests,
 };

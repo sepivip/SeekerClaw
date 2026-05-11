@@ -108,6 +108,19 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 - **Token security** — Check token security/legitimacy before trading
 - **Wallet holdings** — Full portfolio view with USD values via Jupiter
 
+### Burner Wallet — Autonomous Solana Signing + x402 Payments (BAT-582, 3 tools)
+- **App-managed Solana keypair** — private key encrypted in Android KeyVault (BouncyCastle Ed25519, KeystoreHelper-backed AES-256-GCM, Base64 boundary). **Key never crosses the bridge into Node** — Android signs, Node calls bridge endpoints.
+- **Per-tx + daily caps** for SOL and USDC (atomic units, BigInteger throughout, UTC midnight rollover). Defaults: 0.05 / 0.5 SOL, 5 / 50 USDC.
+- **Reserve / commit / release** state machine with stale-reservation sweep (60s TTL, 30s sweep). Mutex-guarded. Android is the SOLE writer of cap state.
+- **Wallet routing** in `caps/preflight.js` decides burner vs main on every spending tool. Under-cap burner → silent (`policy: "none"`); main wallet → MWA popup (`policy: "confirm"`); over-cap with no fallback → blocked. `solana_send`, `solana_swap`, `jupiter_trigger_create`, `jupiter_dca_create`, `jupiter_trigger_cancel`, `jupiter_dca_cancel` all participate.
+- **`wallet_status`** — read both wallets' state (configured, pubkey, caps, today's spend, remaining daily).
+- **`wallet_set_caps`** — update burner caps (per-tx and daily, SOL + USDC). Always confirms; surface shows old → new diff.
+- **`agent_pay(url, max_usdc)`** — pay an x402-protected HTTP endpoint and fetch its response.
+  - **Security envelope (the SeekerClaw V1 boundary, unrelated to the x402 protocol version):** HTTPS GET only, Solana mainnet only, USDC only, private-IP rejection, DNS rebinding defense, max 1 MB response, 30s timeout. pay.sh-compatible.
+  - **x402 protocol version support:** detect + build accept both **x402 v1** (`maxAmountRequired`, bare `network: "solana"`) and **x402 v2** (`amount`, CAIP-2 `network: "solana:<genesis>"`, `payment-required` header delivery, multi-chain pick-Solana). **Settle is v1-only currently** — v2 challenges are detected and built but settlement rejects with `v2_settle_not_implemented` until a real-wire v2 success-response capture pins the v2 proof-header path (BAT-582 Phase 5 follow-up). v3+ rejected as `unsupported_version`.
+- **Settings → Burner Wallet** — paste private key (base58 or JSON byte array, 32-byte seed or 64-byte expanded), Test, Save, Wipe, Rotate, edit caps. FLAG_SECURE while screen visible. Address shown post-save with tap-to-copy on both truncated (status card header) and full (funding card) forms. **Live SOL + USDC balance** fetched directly from Solana RPC in the UI process via `SolanaBalanceFetcher` (auto-fetch on screen open + manual refresh button). Returns null/`unavailable` on transient RPC outage rather than misleading "0". QR deferred to follow-up.
+- **Dynamic confirmation hook** in `ai.js` replaces the v1.0 static `CONFIRM_REQUIRED` set in `config.js`. Regression-safe: when burner is unconfigured the hook returns identical v1.0 behavior for every existing tool — pinned by `tests/nodejs-project/confirmation-policy.test.js`.
+
 ### Execution
 - **Shell exec** — 33 sandboxed commands including Android tools (cat, ls, curl, grep, find, sed, diff, screencap, getprop, etc.), workspace-restricted
 - **JS eval** — Run JavaScript inside Node.js process, async/await, require() for builtins
@@ -237,9 +250,9 @@ User (Telegram/Discord) <--HTTPS/WSS--> Channel API <--polling/WS--> Node.js Gat
 
 | Metric | Count |
 |--------|-------|
-| Total commits | 548+ |
-| PRs merged | 361+ |
-| Tools | 60 (17 Solana/Jupiter, 13 Android bridge, 6 memory, 6 file, 5 cron, 4 telegram, 3 system, 2 web, 2 skill, 1 session, 1 env) + MCP dynamic |
+| Total commits | 558+ |
+| PRs merged | 363+ |
+| Tools | 63 (17 Solana/Jupiter, 13 Android bridge, 6 memory, 6 file, 5 cron, 4 telegram, 3 system, 2 web, 2 skill, 2 wallet [wallet_status, wallet_set_caps], 1 session, 1 env, 1 agent_pay [x402]) + MCP dynamic |
 | Skills | 35 (20 bundled + 13 workspace + 2 user-created) |
 | Android Bridge endpoints | 18+ |
 | Telegram commands | 12 |

@@ -1,0 +1,45 @@
+{
+  "_meta": {
+    "label": "synthetic-no-solana-multichain-402",
+    "description": "Synthetic fail-closed fixture: x402 v2 multi-chain 402 offering ONLY EVM networks (Base, Ethereum) with NO Solana entry. Parser must reject with no_solana_offer.",
+    "kind": "synthetic",
+    "purpose": "Per BAT-582 v1.6 contract amendment 2 — proves we don't fall back to first-listed network when Solana is absent.",
+    "expectedRejection": "no_solana_offer"
+  },
+  "url": "https://example.invalid/api/no-solana",
+  "method": "GET",
+  "status": 402,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "x402Version": 2,
+    "error": "Payment required",
+    "resource": {
+      "url": "https://example.invalid/api/no-solana",
+      "description": "Synthetic EVM-only endpoint",
+      "mimeType": "application/json"
+    },
+    "accepts": [
+      {
+        "scheme": "exact",
+        "network": "eip155:8453",
+        "amount": "10000",
+        "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "payTo": "0xD73912BA0000000000000000000000000000DEAD",
+        "maxTimeoutSeconds": 300,
+        "extra": { "name": "USD Coin", "version": "2" }
+      },
+      {
+        "scheme": "exact",
+        "network": "eip155:1",
+        "amount": "10000",
+        "asset": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+        "payTo": "0xD73912BA0000000000000000000000000000DEAD",
+        "maxTimeoutSeconds": 300,
+        "extra": { "name": "USD Coin", "version": "2" }
+      }
+    ],
+    "extensions": {}
+  }
+}

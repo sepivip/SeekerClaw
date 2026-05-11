@@ -676,18 +676,13 @@ const SHELL_ALLOWLIST = new Set([
 // TOOL CONFIRMATION GATES
 // ============================================================================
 
-// Tools that require explicit user confirmation before execution.
-// These are high-impact actions that a prompt-injected agent could abuse.
-const CONFIRM_REQUIRED = new Set([
-    'android_sms',
-    'android_call',
-    'android_camera_capture', // #207: silent photo risk from prompt injection
-    'android_location',       // #207: silent location tracking risk
-    'solana_send',           // BAT-255: P0 — wallet-draining risk from prompt injection
-    'solana_swap',           // BAT-255: P0 — wallet-draining risk from prompt injection
-    'jupiter_trigger_create',
-    'jupiter_dca_create',
-]);
+// BAT-582 Phase 4: the static CONFIRM_REQUIRED set was removed in favor of
+// the dynamic confirmation hook in confirmation/policy.js. The v1.0 set is
+// preserved verbatim there as `V1_STATIC_CONFIRM`, and the hook returns the
+// same policy as the v1.0 set when burner is unconfigured. ai.js now calls
+// getConfirmationPolicy(toolName, args, walletState) before every tool
+// dispatch and branches on the result (none | confirm | block). See
+// BAT-582 v1.4 contract — "Confirmation policy".
 
 // Rate limits (ms) — even with confirmation, prevent rapid-fire abuse
 const TOOL_RATE_LIMITS = {
@@ -878,7 +873,7 @@ module.exports = {
     // Security/tool constants
     SHELL_ALLOWLIST,
     SECRETS_BLOCKED,
-    CONFIRM_REQUIRED,
+    // CONFIRM_REQUIRED removed in BAT-582 Phase 4 — see confirmation/policy.js
     TOOL_RATE_LIMITS,
     TOOL_STATUS_MAP,
 
