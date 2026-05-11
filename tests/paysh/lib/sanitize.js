@@ -12,9 +12,11 @@
 //   - .env-shaped values (KEY=VALUE lines with ALL-CAPS keys)
 //   - obvious secret-shaped tokens (sk-..., key-..., bearer-..., long hex/base64)
 //   - email addresses (foo@bar.tld)
-//   - paid-response private payloads — caller decides via `body: 'truncate'` to
-//     replace 200-after-settle bodies with a summary placeholder; we never
-//     want to commit Tripadvisor's actual photo URLs or Textbelt's textIds.
+//   - paid-response private payloads — caller passes `{ paidSummary: true }`
+//     as the second arg to `sanitize(capture, opts)` to replace
+//     200-after-settle bodies with a one-line summary placeholder; we
+//     never want to commit Tripadvisor's actual photo URLs or Textbelt's
+//     textIds. (See the JSDoc on `sanitize()` below for the exact API.)
 //
 // What we PRESERVE:
 //   - x402 protocol fields (x402Version, accepts, amount, payTo, asset,
@@ -52,10 +54,22 @@ const ENV_LINE_RE = /^[A-Z][A-Z0-9_]*=.+$/m;
 const SECRET_PREFIX_RE = /\b(sk|key|bearer|token|secret|api|priv|prv|seed)[-_][A-Za-z0-9_-]{16,}/gi;
 const LONG_HEX_RE = /\b[a-fA-F0-9]{32,}\b/g;
 // base64 (URL-safe and standard) — flag any 40+ char token that looks
-// base64-ish. The 40-char threshold is intentionally aggressive: real
-// base58-encoded Solana pubkeys are 43-44 chars, base64-encoded signed
-// transactions are 200+ chars, and base64 payment-required headers are
-// hundreds-to-thousands. Both legitimately match this regex.
+// base64-ish, with optional `=` padding. The 40-char threshold is
+// intentionally aggressive: real base58-encoded Solana pubkeys are
+// 43-44 chars, base64-encoded signed transactions are 200+ chars,
+// and base64 payment-required headers are hundreds-to-thousands.
+//
+// BAT-582 R25: pre-fix used `\b...\b` framing, but `\b` is a word
+// boundary that triggers between \w ([A-Za-z0-9_]) and \W. Base64
+// padding `=` is \W, and tokens often appear inside JSON strings
+// followed by another \W (`"`, `,`, `}`). The trailing `\b` then
+// FAILED to match (\W → \W is not a boundary) and the redactor
+// silently dropped the token. Real captures with `=`-padded base64
+// would slip through unredacted.
+//
+// Use explicit char-class lookarounds instead so the boundaries are
+// "anything-not-in-the-alphabet" on either side. This correctly
+// captures padded tokens inside JSON strings.
 //
 // Preservation of x402 protocol values does NOT happen via length —
 // it happens via the X402_PUBLIC_FIELDS allowlist in the recursive
@@ -63,11 +77,7 @@ const LONG_HEX_RE = /\b[a-fA-F0-9]{32,}\b/g;
 // `asset`, `network`, `extra.feePayer`, etc., we skip this redactor
 // entirely (preserveBase64Hex=true). Anywhere else in the body, a
 // long-base64 token is treated as suspicious and redacted.
-//
-// This means a Solana pubkey that appears outside the protocol fields
-// (e.g. inside a free-form `description` string) WILL get redacted —
-// which is the correct default for committed fixtures.
-const LONG_BASE64_RE = /\b[A-Za-z0-9+/_-]{40,}={0,2}\b/g;
+const LONG_BASE64_RE = /(?<![A-Za-z0-9+/=_-])[A-Za-z0-9+/_-]{40,}={0,2}(?![A-Za-z0-9+/=_-])/g;
 
 const REDACTED = '[REDACTED]';
 
@@ -95,8 +105,15 @@ function sanitizeString(s, opts = {}) {
     }
     out = out.replace(SECRET_PREFIX_RE, REDACTED);
     if (!opts.preserveBase64Hex) {
-        out = out.replace(LONG_HEX_RE, REDACTED);
+        // BAT-582 R25 (order matters): apply LONG_BASE64_RE FIRST so a
+        // base64 token like "AAAA...AAAA==" (which is also valid hex up
+        // to the padding) is captured WITH its `=` padding in one
+        // match. If LONG_HEX_RE ran first, it would greedily match the
+        // hex-valid prefix and leave the `==` orphaned in the output —
+        // partial redaction. Base64 first means the entire token gets
+        // redacted as a single unit.
         out = out.replace(LONG_BASE64_RE, REDACTED);
+        out = out.replace(LONG_HEX_RE, REDACTED);
     }
     return out;
 }
