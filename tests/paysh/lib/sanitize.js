@@ -51,11 +51,22 @@ const ENV_LINE_RE = /^[A-Z][A-Z0-9_]*=.+$/m;
 // chars), explicit prefixes like sk-/key-/bearer-/token-/secret-/api-.
 const SECRET_PREFIX_RE = /\b(sk|key|bearer|token|secret|api|priv|prv|seed)[-_][A-Za-z0-9_-]{16,}/gi;
 const LONG_HEX_RE = /\b[a-fA-F0-9]{32,}\b/g;
-// base64 (URL-safe and standard) — avoid being too aggressive: only flag
-// when 40+ chars AND not part of a structured field we want to keep
-// (handled by recursive walk, this regex is conservative). We still keep
-// short base58 pubkeys and base64-encoded tx fragments under the 40-char
-// threshold by design — those are part of the fixture's value.
+// base64 (URL-safe and standard) — flag any 40+ char token that looks
+// base64-ish. The 40-char threshold is intentionally aggressive: real
+// base58-encoded Solana pubkeys are 43-44 chars, base64-encoded signed
+// transactions are 200+ chars, and base64 payment-required headers are
+// hundreds-to-thousands. Both legitimately match this regex.
+//
+// Preservation of x402 protocol values does NOT happen via length —
+// it happens via the X402_PUBLIC_FIELDS allowlist in the recursive
+// walk below. When a value is the direct child of a key like `payTo`,
+// `asset`, `network`, `extra.feePayer`, etc., we skip this redactor
+// entirely (preserveBase64Hex=true). Anywhere else in the body, a
+// long-base64 token is treated as suspicious and redacted.
+//
+// This means a Solana pubkey that appears outside the protocol fields
+// (e.g. inside a free-form `description` string) WILL get redacted —
+// which is the correct default for committed fixtures.
 const LONG_BASE64_RE = /\b[A-Za-z0-9+/_-]{40,}={0,2}\b/g;
 
 const REDACTED = '[REDACTED]';
