@@ -80,7 +80,14 @@ async function main() {
         const capture = JSON.parse(fs.readFileSync(file, 'utf8'));
         const expected = EXPECTATIONS[fname];
         if (!expected) {
-            console.log(`  ⚠ ${fname} — NO EXPECTATION DEFINED (add to EXPECTATIONS map)`);
+            // BAT-582 v1.6 R19: fail loud rather than warn-and-continue.
+            // Pre-fix, a new capture committed without an entry in
+            // EXPECTATIONS could pass validate-detect with a warning the
+            // CI / review reader might miss — the regression gate would
+            // be silently uncovered. Treat as a hard fail so adding a
+            // capture forces adding the expectation in the same commit.
+            console.log(`  ✗ ${fname.padEnd(48)} NO EXPECTATION DEFINED — add an entry to EXPECTATIONS map in this file`);
+            fail++;
             continue;
         }
 

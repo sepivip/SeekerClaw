@@ -17,13 +17,15 @@ multi-chain offers (Base + Solana side-by-side).
 
 This directory holds the regression net for **x402 v2 protocol support** —
 real-wire captures, synthetic edge-case fixtures, and dry-run validators.
+Both the captures (Phase 0+1+2) and the parser that consumes them
+(Phase 3, in `app/src/main/assets/nodejs-project/payment/x402.js`) ship
+together in PR #364. Run `node tests/paysh/validate-detect.js` to
+confirm: 8/8 captures pass (4 real ones build to valid USDC transfer
+txs, 4 synthetic edge cases reject with their documented codes).
 
-> **Status:** committed in stages within PR #364. The captures (Phase 0+1+2)
-> ship first; the parser code that consumes them (Phase 3, `payment/x402.js`)
-> lands as a follow-up commit on the same PR. Validate via
-> `node tests/paysh/validate-detect.js` to check current state — until the
-> parser commit lands, real v2 captures fail detect (which is expected at
-> that point in time).
+Subsequent phases (settle path proof header, POST support, live-pay
+script) land as additional commits on the same PR — see the
+"Layers" section below for current vs planned scope per file.
 
 ## Layout
 
@@ -68,15 +70,27 @@ Re-run when:
 - A service's protocol shape may have changed (capture diff in PR review)
 - Adding a new service to the regression set (edit `PROBE_LIST` in `probe-all.js`)
 
-### Layer 2 — Detect/build/settle dry-run (`validate-detect.js`)
+### Layer 2 — Detect/build dry-run (`validate-detect.js`) — SHIPPED
 
-(Coming in Phase 7 of the v1.6 implementation.) Runs every committed
-capture through `X402Protocol.detect()` + `build()` + `settle()` (with
-mocked HTTP for settle). Validates:
-- Real captures → detect=true, build=ok, settle uses correct proof header per version
-- Synthetic captures → detect/build/settle reject with the documented `expectedRejection` code
+Runs every committed capture through `X402Protocol.detect()` +
+`build()`. **No `settle()` yet** — that gate opens in Phase 5 once we've
+captured a real v2 success fixture proving the proof-header path (v1
+uses `X-PAYMENT`, v2 may use `X-PAYMENT` or `PAYMENT-SIGNATURE`; we
+won't ship the settle code until a real wire capture pins it).
+
+Current behavior (this commit):
+- Real captures (tripadvisor, coingecko, textbelt-text, textbelt-status) →
+  detect/build matches their `EXPECTATIONS` entry.
+- Synthetic captures → detect/build reject with the documented
+  `expectedRejection` code.
+- A capture file with no `EXPECTATIONS` entry fails loud (exit 1) so
+  new captures can't slip past the regression gate uncovered.
 
 **Cost: $0.** No live network, no signing, no broadcast.
+
+```bash
+node tests/paysh/validate-detect.js
+```
 
 ### Layer 3 — Curated live-pay (`live-pay-curated.js`)
 
