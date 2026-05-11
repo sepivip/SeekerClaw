@@ -250,19 +250,22 @@ function formatConfirmationMessage(toolName, input, policyMessage) {
         // Break schemed URLs (http://, https://, ftp://, ws://, wss://,
         // file://, data://).
         v = v.replace(/(https?|ftp|ws|wss|file|data):\/\//gi, `$1:${ZWSP}//`);
-        // R-pr370-fix-32/34: break BARE DOMAINS (no scheme). markdown-it
+        // R-pr370-fix-32/34/38: break BARE DOMAINS (no scheme). markdown-it
         // linkify defaults to `fuzzyLink: true`, which auto-detects
         // patterns like "attacker.evil.com" or "www.example.org" and
         // renders them as clickable links without any explicit scheme.
-        // Match every `.` that's preceded by an alpha-led label and
-        // followed by 2+ alphabetic chars — via lookbehind + lookahead
-        // so consecutive dots in `api.example.com` ALL get broken
-        // (regex backtracking under /g advances past the match group,
-        // missing the second dot if it's part of an alpha-led label
-        // pattern). Numeric values like "0.10" are not mangled because
-        // the lookbehind requires the previous label to start with a
-        // letter.
-        v = v.replace(/(?<=[a-z][a-z0-9-]*)\.(?=[a-z]{2,})/gi, `${ZWSP}.`);
+        //
+        // Match an alpha-led label as a capture group + `.` + lookahead
+        // for 2+ alphabetic chars, then re-insert the captured label
+        // before the ZWSP. The capture-group approach avoids a
+        // variable-length lookbehind (which some JS engines don't
+        // support — V8 does, but explicit capture is portable). For
+        // consecutive dots in `api.example.com`, /g advances past each
+        // match (past the consumed label + dot), then the next
+        // iteration starts on `example` and matches its trailing dot
+        // too — both dots get a ZWSP. Numeric values like "0.10" are
+        // not mangled because the capture group requires alpha-led.
+        v = v.replace(/([a-z][a-z0-9-]*)\.(?=[a-z]{2,})/gi, `$1${ZWSP}.`);
         // R-pr370-fix-15: cap AFTER escaping + de-linkify so the rendered
         // message is actually bounded. Escaping can roughly double the
         // byte count (every `*` becomes `\*`); de-linkify adds ~1 char
