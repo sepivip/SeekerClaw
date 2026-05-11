@@ -3,10 +3,17 @@
 //
 // Verifies MainWallet.balance() uses the {mint: USDC_MINT} filter when
 // querying getTokenAccountsByOwner, NOT the broader {programId: TOKEN_PROGRAM}
-// filter. The mint filter returns at most one account (the user's USDC ATA);
-// the programId filter returns ALL token accounts the wallet owns — for
-// NFT collectors and memecoin holders that's a heavy RPC payload we never
-// needed.
+// filter. The mint filter returns ONLY token accounts whose mint matches
+// USDC — typically the wallet's ATA but NOT guaranteed to be a single
+// account (a wallet can legitimately hold USDC across multiple token
+// accounts: one ATA + auxiliary accounts created manually or by a dApp).
+// BAT-582 R21: MainWallet.balance() now sums across ALL returned accounts
+// to handle the multi-account case correctly. Pre-fix it took the first
+// account only and under-reported in that scenario.
+//
+// The programId filter is the old broad filter we left behind: it returns
+// ALL token accounts the wallet owns — for NFT collectors and memecoin
+// holders that's a heavy RPC payload we never needed.
 //
 // tools/solana.js:635 (Jupiter swap balance check) already uses {mint:...};
 // MainWallet now matches that pattern. tools/solana.js:283 (the listing-style
@@ -117,6 +124,83 @@ async function check(label, fn) {
             assert.deepStrictEqual(bal, { sol: '0', usdc: '0' });
         } finally {
             require.cache[solanaPath].exports.getConnectedWalletAddress = prev;
+        }
+    });
+
+    await check('MainWallet.balance() SUMS across multiple USDC token accounts (BAT-582 R21)', async () => {
+        // Stub a response with two USDC accounts (ATA + auxiliary). Pre-R21,
+        // the function took only the first; post-R21 it sums them.
+        rpcCalls.length = 0;
+        const prev = require.cache[solanaPath].exports.solanaRpc;
+        require.cache[solanaPath].exports.solanaRpc = async (method) => {
+            if (method === 'getBalance') return { value: 1_000_000_000 };
+            if (method === 'getTokenAccountsByOwner') {
+                return {
+                    value: [
+                        { account: { data: { parsed: { info: {
+                            mint: USDC_MINT,
+                            tokenAmount: { amount: '3000000', decimals: 6 },
+                        } } } } },
+                        { account: { data: { parsed: { info: {
+                            mint: USDC_MINT,
+                            tokenAmount: { amount: '2500000', decimals: 6 },
+                        } } } } },
+                    ],
+                };
+            }
+            return { error: 'unmocked' };
+        };
+        try {
+            const wallet = new MainWallet();
+            const bal = await wallet.balance();
+            assert.strictEqual(bal.usdc, '5500000',
+                `expected summed balance "5500000" (3000000 + 2500000), got "${bal.usdc}"`);
+        } finally {
+            require.cache[solanaPath].exports.solanaRpc = prev;
+        }
+    });
+
+    await check('MainWallet.balance() ignores malformed account entries during sum', async () => {
+        rpcCalls.length = 0;
+        const prev = require.cache[solanaPath].exports.solanaRpc;
+        require.cache[solanaPath].exports.solanaRpc = async (method) => {
+            if (method === 'getBalance') return { value: 1_000_000_000 };
+            if (method === 'getTokenAccountsByOwner') {
+                return {
+                    value: [
+                        { account: { data: { parsed: { info: {
+                            mint: USDC_MINT,
+                            tokenAmount: { amount: '1000000', decimals: 6 },
+                        } } } } },
+                        // Malformed: missing info entirely
+                        { account: { data: { parsed: {} } } },
+                        // Malformed: tokenAmount.amount is not a digit string
+                        { account: { data: { parsed: { info: {
+                            mint: USDC_MINT,
+                            tokenAmount: { amount: 'not-a-number', decimals: 6 },
+                        } } } } },
+                        // Wrong mint (defense — should never happen with mint
+                        // filter, but defensive code shouldn't include it)
+                        { account: { data: { parsed: { info: {
+                            mint: 'OtherMint11111111111111111111111111111111111',
+                            tokenAmount: { amount: '9999999', decimals: 6 },
+                        } } } } },
+                        { account: { data: { parsed: { info: {
+                            mint: USDC_MINT,
+                            tokenAmount: { amount: '500000', decimals: 6 },
+                        } } } } },
+                    ],
+                };
+            }
+            return { error: 'unmocked' };
+        };
+        try {
+            const wallet = new MainWallet();
+            const bal = await wallet.balance();
+            assert.strictEqual(bal.usdc, '1500000',
+                `expected only valid USDC accounts summed (1000000 + 500000), got "${bal.usdc}"`);
+        } finally {
+            require.cache[solanaPath].exports.solanaRpc = prev;
         }
     });
 

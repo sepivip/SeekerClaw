@@ -1,6 +1,8 @@
 package com.seekerclaw.app.data.wallet
 
 import android.util.Log
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.math.BigInteger
 import java.net.HttpURLConnection
@@ -41,8 +43,16 @@ class SolanaBalanceFetcher(
      * (network failure, RPC error, malformed response) — UI treats null as
      * "balance unavailable".
      */
-    suspend fun fetch(pubkey: String): Balances? {
-        val sol = getSolBalance(pubkey) ?: return null
+    suspend fun fetch(pubkey: String): Balances? = withContext(Dispatchers.IO) {
+        // BAT-582 R21: enforce IO dispatcher INTERNALLY rather than relying
+        // on every caller to wrap with withContext(Dispatchers.IO) before
+        // invoking. Pre-fix the suspend signature implied "safe to await
+        // from any context" but the underlying jsonRpc() does blocking
+        // HttpURLConnection I/O — a Main-dispatcher caller would block
+        // the UI thread. The current single caller (BurnerWalletScreen)
+        // DID wrap correctly, but reusable class APIs shouldn't depend
+        // on callers getting this right.
+        val sol = getSolBalance(pubkey) ?: return@withContext null
         // getUsdcBalance() already differentiates two cases internally:
         //   - returns ZERO when getTokenAccountsByOwner returned 200 with
         //     an empty value array (wallet has never held USDC — no ATA
@@ -53,8 +63,8 @@ class SolanaBalanceFetcher(
         // Pre-fix the UI showed "0 USDC" on a transient RPC blip even when
         // the wallet held real USDC, which read like funds vanished —
         // misleading the user is the worst possible failure mode here.
-        val usdc = getUsdcBalance(pubkey) ?: return null
-        return Balances(sol, usdc)
+        val usdc = getUsdcBalance(pubkey) ?: return@withContext null
+        Balances(sol, usdc)
     }
 
     /** SOL balance via getBalance RPC. */

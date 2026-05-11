@@ -5,27 +5,23 @@ per BAT-582 contract addendum v1.6 (Codex sign-off 2026-05-10).
 
 ## Why this exists
 
-Mid-PR-364 device test, we discovered the agent's `agent_pay` tool
-silently rejected real pay.sh endpoints (Tripadvisor, CoinGecko, Textbelt)
-as `no_protocol_match`. Root cause: our v1.4 fixture
-(`tests/payment/fixtures/paysh-sandbox-402.json`) was synthetic and based
-on the canonical x402 v1 draft, while pay.sh has moved to **x402 v2** —
-different field names (`amount` vs `maxAmountRequired`), different
-network format (CAIP-2 `solana:<genesis>` vs bare `"solana"`), different
-proof-header path (`payment-required` header vs body-only), and
-multi-chain offers (Base + Solana side-by-side).
+During BAT-582 device testing we discovered that `agent_pay` silently
+rejected real pay.sh endpoints (Tripadvisor, CoinGecko, Textbelt) as
+`no_protocol_match`. Root cause: the committed fixture
+(`tests/payment/fixtures/paysh-sandbox-402.json`) was synthetic, based
+on the canonical x402 v1 draft, while pay.sh has moved to **x402 v2**.
+v2 changes vs v1:
+- Field names: `amount` vs `maxAmountRequired`
+- Network format: CAIP-2 `solana:<genesis>` vs bare `"solana"`
+- Requirements delivery: `payment-required` header (base64) on some
+  services (CoinGecko) vs body-only (Tripadvisor, Textbelt)
+- Multi-chain offers: Base + Solana side-by-side in a single 402
 
 This directory holds the regression net for **x402 v2 protocol support** —
 real-wire captures, synthetic edge-case fixtures, and dry-run validators.
-Both the captures (Phase 0+1+2) and the parser that consumes them
-(Phase 3, in `app/src/main/assets/nodejs-project/payment/x402.js`) ship
-together in PR #364. Run `node tests/paysh/validate-detect.js` to
-confirm: 8/8 captures pass (4 real ones build to valid USDC transfer
-txs, 4 synthetic edge cases reject with their documented codes).
-
-Subsequent phases (settle path proof header, POST support, live-pay
-script) land as additional commits on the same PR — see the
-"Layers" section below for current vs planned scope per file.
+Run `node tests/paysh/validate-detect.js` to confirm coverage. As of
+this change, 8/8 captures pass: 4 real captures build to valid USDC
+transfer txs, 4 synthetic edge cases reject with their documented codes.
 
 ## Layout
 
@@ -124,8 +120,11 @@ HTTP status, and structural shape.
    `description`, `url`, `method`, optional `body`, `expect`.
 2. Run `node tests/paysh/probe-all.js --service <new-label>` to capture.
 3. Inspect the new capture in `captures/` — check sanitization is clean.
-4. Commit both `probe-all.js` change and the new capture together.
-5. Once `validate-detect.js` exists, ensure it covers the new shape.
+4. **Add an `EXPECTATIONS` entry in `validate-detect.js` covering the new
+   capture file.** The regression gate fails loud on captures with no
+   expectation defined, so the build forces this step.
+5. Commit `probe-all.js`, the new capture, and the `EXPECTATIONS`
+   update together.
 
 ## Adding a new synthetic edge-case fixture
 
@@ -133,12 +132,15 @@ For fail-closed proofs that don't have a real-wire equivalent:
 1. Author the JSON file directly under `captures/synthetic-<name>.json`.
 2. Include the full `_meta` block: `kind: synthetic`, `purpose`,
    `expectedRejection`.
-3. Add a corresponding test case in `validate-detect.js` (Phase 7).
+3. **Add an `EXPECTATIONS` entry in `validate-detect.js`** with the
+   `expectedBuildError` matching `_meta.expectedRejection`.
 
 ## Security notes
 
 - Never commit `.env`, API keys, burner secrets, phone numbers, or
   paid-response bodies with private data. The sanitizer is the gate;
   manually inspect every new capture in `git diff` before push.
-- `--live` payment scripts (Phase 7) MUST default to off and require
-  explicit opt-in, even when secrets are present in the environment.
+- Live payment scripts MUST default to off and require explicit
+  `--live` opt-in, even when secrets are present in the environment.
+  Currently the only such script is planned (`live-pay-curated.js`);
+  none exists yet at the time of this change.

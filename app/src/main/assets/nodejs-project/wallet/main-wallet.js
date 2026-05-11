@@ -66,27 +66,41 @@ class MainWallet extends Wallet {
 
         try {
             // BAT-582 R6: filter directly by the USDC mint instead of fetching
-            // every SPL token account. This returns 1 row (or none) instead of
-            // N — for NFT collectors / memecoin holders the previous programId
-            // filter could pull dozens of accounts and parse the heaviest RPC
-            // response in this file. tools/solana.js:635 already uses this
-            // pattern for swap balance checks; main wallet now matches.
+            // every SPL token account. The previous programId filter could
+            // pull dozens of accounts for NFT collectors / memecoin holders.
+            //
+            // BAT-582 R21 (correctness fix): SUM across all matching token
+            // accounts, not just the first. getTokenAccountsByOwner with a
+            // mint filter typically returns 1 row (the ATA) but is NOT
+            // guaranteed to — a wallet can legitimately hold USDC across
+            // multiple token accounts (e.g. one ATA + one auxiliary account
+            // created manually or by a dApp). Pre-fix the function returned
+            // only the first account's balance, under-reporting in those
+            // cases. Sum with BigInt to avoid precision loss for amounts
+            // larger than Number.MAX_SAFE_INTEGER microunits (≈ 9 trillion
+            // USDC; very unlikely but defensive).
             const tokenResult = await _solanaMod().solanaRpc('getTokenAccountsByOwner', [
                 address,
                 { mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v' },
                 { encoding: 'jsonParsed' },
             ]);
             if (tokenResult && tokenResult.value) {
+                let total = 0n;
                 for (const acc of tokenResult.value) {
                     try {
                         const info = acc.account.data.parsed.info;
                         if (info && info.mint === 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v') {
-                            // USDC. info.tokenAmount.amount is the atomic-unit string.
-                            usdcAtomic = String(info.tokenAmount.amount || '0');
-                            break;
+                            const raw = String(info.tokenAmount.amount || '0').trim();
+                            // Defensive parse: only accept digit strings (no
+                            // signs, no decimals); silently skip malformed
+                            // entries — we already wrap a try/catch around
+                            // each account so malformed shapes don't poison
+                            // the whole sum.
+                            if (/^[0-9]+$/.test(raw)) total += BigInt(raw);
                         }
                     } catch (_) { /* skip malformed accounts */ }
                 }
+                usdcAtomic = total.toString();
             }
         } catch (_) { /* ignore — keep "0" */ }
 
