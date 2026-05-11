@@ -25,15 +25,32 @@ const base58 = require('./lib/base58');
 const SOL_MINT  = 'So11111111111111111111111111111111111111112';
 const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 
-function solToLamports(sol) {
-    const [whole, frac = ''] = String(sol).split('.');
+function solToLamports(solStr) {
+    // BAT-582 R20: parse from the ORIGINAL CLI argv string, never from
+    // parseFloat'd Number. `parseFloat("0.0000001")` yields 1e-7, whose
+    // `String(...)` representation is "1e-7" — split('.') then gives
+    // `whole="1e-7"` and BigInt(whole) throws. Since this is the
+    // tiny-amount diagnostic script, reject scientific notation
+    // explicitly with a clear error.
+    if (typeof solStr !== 'string') {
+        throw new Error('solToLamports: pass the original argv string, not a Number');
+    }
+    const s = solStr.trim();
+    if (!/^[0-9]+(\.[0-9]+)?$/.test(s)) {
+        throw new Error(`solToLamports: "${solStr}" must be a positive decimal (no signs, no scientific notation)`);
+    }
+    const [whole, frac = ''] = s.split('.');
     const padded = (frac + '000000000').slice(0, 9);
     return BigInt(whole) * 1_000_000_000n + BigInt(padded || '0');
 }
 
 async function main() {
     const env = requireKeys(load(), 'signExecute');
-    const amountSol = parseFloat(process.argv[2] || '0.01');
+    // Keep the raw argv string for lamport conversion (avoids parseFloat
+    // precision loss on tiny amounts). parseFloat is fine for the
+    // display-only `amountSol` Number used in log output.
+    const amountSolStr = (process.argv[2] || '0.01').trim();
+    const amountSol = parseFloat(amountSolStr);
     if (!Number.isFinite(amountSol) || amountSol <= 0) {
         console.error('✗ amountSol must be a positive number'); process.exit(1);
     }
@@ -48,7 +65,7 @@ async function main() {
         process.exit(1);
     }
 
-    const lamports = solToLamports(amountSol);
+    const lamports = solToLamports(amountSolStr);
     console.log('═══ Layer 3 — Sign + Execute ═══');
     console.log(`Wallet:  ${derivedPubkey}`);
     console.log(`Swap:    ${amountSol} SOL (${lamports} lamports) → USDC`);

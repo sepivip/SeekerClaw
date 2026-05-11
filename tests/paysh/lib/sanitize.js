@@ -41,7 +41,12 @@ const HEADER_DENYLIST = new Set([
 
 const PHONE_RE = /\+\d{6,}/g;
 const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
-const ENV_LINE_RE = /^[A-Z][A-Z0-9_]{3,}=.+$/m;
+// BAT-582 R20: matches any ALL-CAPS env-style line at line start. Pre-fix
+// required key length ≥4 chars, which let short secrets through
+// (KEY=foo, AWS=secret, DB=pwd). Broaden to ≥1 char while keeping
+// uppercase-first-letter constraint so common JSON / config values like
+// "a: 1" aren't false-positive matched.
+const ENV_LINE_RE = /^[A-Z][A-Z0-9_]*=.+$/m;
 // Generic "secret-shaped" patterns: long hex (>=32 chars), long base64 (>=40
 // chars), explicit prefixes like sk-/key-/bearer-/token-/secret-/api-.
 const SECRET_PREFIX_RE = /\b(sk|key|bearer|token|secret|api|priv|prv|seed)[-_][A-Za-z0-9_-]{16,}/gi;

@@ -127,7 +127,12 @@ class SolanaBalanceFetcher(
                 Log.w(TAG, "RPC $method HTTP $code")
                 return null
             }
-            val raw = conn.inputStream.bufferedReader().use { it.readText() }
+            // BAT-582 R20: explicit UTF-8 on read side too. JSON-RPC is
+            // UTF-8 per spec; matching the explicit charset=utf-8 we set
+            // on the request keeps wire decoding deterministic across
+            // devices/locales (some Android devices have non-UTF-8
+            // default charset, rare but technically possible).
+            val raw = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
             val obj = JSONObject(raw)
             if (obj.has("error")) {
                 Log.w(TAG, "RPC $method returned error: ${obj.getJSONObject("error").optString("message")}")
