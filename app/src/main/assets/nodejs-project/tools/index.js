@@ -235,6 +235,15 @@ function formatConfirmationMessage(toolName, input, policyMessage) {
         // structural separator for multi-line cards and must survive).
         // eslint-disable-next-line no-control-regex
         v = v.replace(/[\x00-\x09\x0B-\x1F\x7F]/g, ' ');
+        // R-pr370-fix-40: neutralize Markdown list markers at start of line.
+        // markdown-it auto-renders `- foo`, `+ foo`, `1. foo` (and `2. ` etc)
+        // at the beginning of any line into list items. Because we
+        // intentionally preserve newlines for multi-line cards, a model-
+        // controlled value containing `\n- malicious-item` would render
+        // as a fake bullet list. Escape the list marker so the line
+        // shows literally as `- foo` text instead.
+        v = v.replace(/(^|\n)([-+])(\s)/g, '$1\\$2$3');
+        v = v.replace(/(^|\n)(\d+)(\.)(\s)/g, '$1$2\\$3$4');
         // R-pr370-fix-18 (security): markdown-it's `linkify: true` auto-
         // detects raw URLs (http:// / https:// / ftp:// etc.) and renders
         // them as clickable links — even after Markdown char escaping.

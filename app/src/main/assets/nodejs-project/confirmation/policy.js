@@ -312,6 +312,16 @@ function getConfirmationPolicy(toolName, args, walletState) {
             };
         }
         if (method === 'POST') {
+            // R-pr370-fix-39: validate url here too — if missing/non-string,
+            // the tool deterministically rejects with invalid_input. Don't
+            // prompt the user to confirm an action that can't succeed.
+            if (typeof a.url !== 'string' || a.url.length === 0) {
+                return {
+                    policy: 'block',
+                    reason: 'invalid_input',
+                    message: 'agent_pay POST requires a non-empty url string.',
+                };
+            }
             // R-pr370-fix-20: fail-fast at gate when no burner. POST
             // deterministically rejects with burner_not_configured at the
             // handler — prompting the user to confirm an action that

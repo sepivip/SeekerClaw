@@ -707,6 +707,26 @@ async function check(label, fn) {
             'agent_pay URL domain should also have bare-domain de-linkify applied');
     });
 
+    await check('render: formatConfirmationMessage escapes line-start list markers (R-pr370-fix-40)', () => {
+        // markdown-it renders `- foo`, `+ foo`, `1. foo` at start of line
+        // as list items. Body preview newlines are intentionally preserved
+        // for structural lines, so a model-controlled value containing
+        // `\n- malicious-item` would render as a fake bullet list.
+        const { formatConfirmationMessage } = require(path.join(BUNDLE, 'tools', 'index'));
+        const policyMessage = 'POST /endpoint\n- bullet item\n+ plus item\n1. numbered item\n2. another\nbody: ok';
+        const rendered = formatConfirmationMessage('agent_pay', {}, policyMessage);
+        // Each list marker at start of line must be backslash-escaped.
+        // Note: '- ' becomes '\\- ', '1. ' becomes '1\\. '.
+        assert.ok(rendered.includes('\\- bullet'),
+            `dash list marker should be escaped (got: ${JSON.stringify(rendered)})`);
+        assert.ok(rendered.includes('\\+ plus'),
+            'plus list marker should be escaped');
+        assert.ok(rendered.includes('1\\. numbered'),
+            'numbered list marker should be escaped (1.)');
+        assert.ok(rendered.includes('2\\. another'),
+            'numbered list marker should be escaped (2.)');
+    });
+
     await check('render: formatConfirmationMessage escapes wallet_set_caps diff content (defense-in-depth)', () => {
         // Even other policy hooks benefit from the render-boundary escape.
         // wallet_set_caps's diff message embeds raw arg values; a malicious
@@ -757,6 +777,20 @@ async function check(label, fn) {
         }, { burnerConfigured: true });
         assert.strictEqual(r.policy, 'block');
         assert.strictEqual(r.reason, 'body_too_large');
+    });
+
+    await check('policy: POST + missing/invalid url → block (invalid_input, R-pr370-fix-39)', () => {
+        // Tool inputs aren't runtime schema-validated, so a malformed call
+        // could pass an empty/missing/non-string url. Block at the gate
+        // so the agent doesn't prompt the user to confirm an action that
+        // will deterministically fail.
+        for (const url of [undefined, null, '', 42, {}, []]) {
+            const r = getConfirmationPolicy('agent_pay', {
+                url, max_usdc: '0.10', method: 'POST', body: { ok: true },
+            }, { burnerConfigured: true });
+            assert.strictEqual(r.policy, 'block', `${typeof url}: expected block, got ${JSON.stringify(r)}`);
+            assert.strictEqual(r.reason, 'invalid_input');
+        }
     });
 
     await check('policy: POST + no burner → block (burner_not_configured, R-pr370-fix-20)', () => {
