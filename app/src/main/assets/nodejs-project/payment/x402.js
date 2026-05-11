@@ -4,9 +4,11 @@
 //
 // CONTRACT (per BAT-582 v1.6 — Codex sign-off 2026-05-10)
 // -------------------------------------------------------
-// Detect + build support BOTH x402 v1 AND v2. Settle currently
-// implements ONLY v1; v2 settle is gated on a real-wire success
-// capture (Phase 5).
+// detect + build + settle all support BOTH x402 v1 AND v2.
+// Per-version mechanics in the settle() docs below. The bridge
+// multi-sig piece (Android-side signing of partially-signed v2 txs)
+// lives in SolanaTxSigner + the /burner/sign-transaction endpoint
+// with allowPartiallySigned=true.
 //
 // detect(response):
 //   - true when response.status === 402 AND a usable Solana mainnet
