@@ -32,6 +32,8 @@ object SolanaTxSigner {
         val signaturesStartOffset: Int = 0,
         /** Where each individual signature byte-slot begins, inside the signature array. */
         val signatureSlotOffsets: List<Int>,
+        /** true if the tx is a v0 versioned tx (message starts with 0x80); false for legacy. */
+        val isV0: Boolean,
     )
 
     /**
@@ -139,6 +141,7 @@ object SolanaTxSigner {
             messageStartOffset = messageStart,
             signaturesStartOffset = 0,
             signatureSlotOffsets = sigSlotOffsets,
+            isV0 = isV0,
         )
     }
 
@@ -214,6 +217,20 @@ object SolanaTxSigner {
                 }
             } else {
                 // Partial-sign mode: enforce the x402 v2 invariants.
+                //
+                // BAT-582 v1.6 R-pr367-fix-6: x402 v2 uses ONLY v0 versioned
+                // txs (per Coinbase spec scheme_exact_svm.md). Reject legacy
+                // txs even if the 2-signer slot layout coincidentally
+                // matches — there is no legitimate v1 caller that should
+                // ever set allowPartiallySigned=true. This narrows the
+                // attack surface so an attacker can't smuggle a legacy
+                // multisig tx through the v2-only path.
+                if (!parsed.isV0) {
+                    throw SigningException(
+                        "unexpected_partial_sign_layout",
+                        "allowPartiallySigned requires a v0 versioned tx (x402 v2); got legacy tx",
+                    )
+                }
                 if (parsed.numRequiredSignatures != 2) {
                     throw SigningException(
                         "unexpected_partial_sign_layout",
