@@ -31,6 +31,7 @@ const {
     _buildCuPriceData,
     _buildMemoData,
     _generateRandomMemoNonce,
+    _buildV2PaymentSignatureHeader,
     _decodeSolanaPubkey,
     USDC_MINT,
     COMPUTE_BUDGET_PROGRAM_ID,
@@ -96,6 +97,79 @@ check('_generateRandomMemoNonce returns 32 hex chars (16 bytes entropy)', () => 
     // Two calls must differ (cryptographic randomness).
     const n2 = _generateRandomMemoNonce();
     assert.notStrictEqual(n, n2);
+});
+
+// ── Input validation (BAT-582 v1.6 R-pr367-fix-5) ───────────────────────
+
+check('_buildCuLimitData rejects negative limits (no bitwise wrap)', () => {
+    assert.throws(() => _buildCuLimitData(-1), /positive integer in u32 range/);
+});
+
+check('_buildCuLimitData rejects zero', () => {
+    assert.throws(() => _buildCuLimitData(0), /positive integer in u32 range/);
+});
+
+check('_buildCuLimitData rejects non-integer (float)', () => {
+    assert.throws(() => _buildCuLimitData(3.7), /positive integer in u32 range/);
+});
+
+check('_buildCuLimitData rejects NaN and non-numeric', () => {
+    assert.throws(() => _buildCuLimitData(NaN), /positive integer in u32 range/);
+    assert.throws(() => _buildCuLimitData('abc'), /positive integer in u32 range/);
+});
+
+check('_buildCuLimitData rejects values above u32 max', () => {
+    assert.throws(() => _buildCuLimitData(0x100000000), /positive integer in u32 range/);
+});
+
+check('_buildV2UsdcTransferTx rejects negative opts.cuLimit', () => {
+    assert.throws(
+        () => _buildV2UsdcTransferTx(BURNER, RECIPIENT, FACILITATOR, AMOUNT_USDC, BLOCKHASH, MEMO_FIXED, { cuLimit: -1 }),
+        /opts\.cuLimit must be a positive integer/,
+    );
+});
+
+check('_buildV2UsdcTransferTx rejects float opts.cuLimit (no silent truncation)', () => {
+    assert.throws(
+        () => _buildV2UsdcTransferTx(BURNER, RECIPIENT, FACILITATOR, AMOUNT_USDC, BLOCKHASH, MEMO_FIXED, { cuLimit: 3.7 }),
+        /opts\.cuLimit must be a positive integer/,
+    );
+});
+
+check('_buildV2UsdcTransferTx defaults cuLimit when undefined (existing behavior preserved)', () => {
+    const { paymentMeta: m } = _buildV2UsdcTransferTx(
+        BURNER, RECIPIENT, FACILITATOR, AMOUNT_USDC, BLOCKHASH, MEMO_FIXED
+    );
+    assert.strictEqual(m.cuLimit, 50_000);
+});
+
+check('_buildV2PaymentSignatureHeader rejects missing signedTxBase64', () => {
+    const meta = {
+        requirement: { extra: { feePayer: FACILITATOR }, resource: { url: 'https://x' }, payTo: RECIPIENT },
+        memo: MEMO_FIXED,
+        amountAtomic: AMOUNT_USDC,
+        negotiatedNetwork: 'solana',
+    };
+    const r1 = _buildV2PaymentSignatureHeader(meta, undefined);
+    assert.strictEqual(r1.error, 'v2_settle_missing_signed_tx');
+    const r2 = _buildV2PaymentSignatureHeader(meta, '');
+    assert.strictEqual(r2.error, 'v2_settle_missing_signed_tx');
+    const r3 = _buildV2PaymentSignatureHeader(meta, null);
+    assert.strictEqual(r3.error, 'v2_settle_missing_signed_tx');
+    const r4 = _buildV2PaymentSignatureHeader(meta, 42);
+    assert.strictEqual(r4.error, 'v2_settle_missing_signed_tx');
+});
+
+check('_buildV2PaymentSignatureHeader accepts valid non-empty signedTxBase64', () => {
+    const meta = {
+        requirement: { extra: { feePayer: FACILITATOR }, resource: { url: 'https://x' }, payTo: RECIPIENT },
+        memo: MEMO_FIXED,
+        amountAtomic: AMOUNT_USDC,
+        negotiatedNetwork: 'solana',
+    };
+    const r = _buildV2PaymentSignatureHeader(meta, 'AQABBA==');
+    assert.ok(r.value, 'must return a base64 header value');
+    assert.ok(!r.error, 'must not error on valid input');
 });
 
 // ── Full v2 tx structure ────────────────────────────────────────────────

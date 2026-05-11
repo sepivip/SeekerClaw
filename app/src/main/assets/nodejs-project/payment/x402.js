@@ -326,10 +326,18 @@ const _MEMO_PROGRAM_ID_BYTES           = _base58Decode(MEMO_PROGRAM_ID);
 //   tag (1 byte) = 0x02
 //   units (u32 LE) = 4 bytes
 // Total: 5 bytes.
+//
+// BAT-582 v1.6 R-pr367-fix-5: validate `limit` is a positive u32 integer.
+// Pre-fix used `limit >>> 0` which silently coerces negatives (-1 → 0xFFFFFFFF)
+// and non-integers, producing unintended compute-unit limits. Throw a clear
+// error instead so misuse fails loudly at build time.
 function _buildCuLimitData(limit) {
+    if (!Number.isInteger(limit) || limit <= 0 || limit > 0xFFFFFFFF) {
+        throw new Error(`_buildCuLimitData: limit must be a positive integer in u32 range, got ${String(limit)}`);
+    }
     const data = Buffer.alloc(5);
     data.writeUInt8(0x02, 0);
-    data.writeUInt32LE(limit >>> 0, 1);
+    data.writeUInt32LE(limit, 1);
     return data;
 }
 
@@ -522,7 +530,20 @@ function _buildV2UsdcTransferTx(burnerPubkey58, recipientPubkey58, facilitatorPu
     // modest priority fee that helps with mainnet congestion without
     // burning much fee. Override via opts only if a specific facilitator
     // requires higher.
-    const cuLimit         = (opts.cuLimit | 0) || 50_000;
+    //
+    // BAT-582 v1.6 R-pr367-fix-5: validate opts.cuLimit explicitly rather
+    // than bitwise-coercing. Pre-fix `(opts.cuLimit | 0) || 50_000` allowed
+    // negative values (truthy after | 0) and silently truncated non-integers
+    // to i32. Throw on anything outside positive u32 range so a buggy
+    // caller fails loudly instead of producing nonsense limits.
+    let cuLimit = 50_000;
+    if (opts.cuLimit !== undefined && opts.cuLimit !== null) {
+        const parsed = Number(opts.cuLimit);
+        if (!Number.isInteger(parsed) || parsed <= 0 || parsed > 0xFFFFFFFF) {
+            throw new Error(`v2: opts.cuLimit must be a positive integer in u32 range, got ${String(opts.cuLimit)}`);
+        }
+        cuLimit = parsed;
+    }
     const cuPriceMicroLam = (opts.cuPriceMicroLamports != null) ? BigInt(opts.cuPriceMicroLamports) : 1000n;
 
     // Account-keys layout (see header comment).
@@ -678,6 +699,14 @@ function _buildV2UsdcTransferTx(burnerPubkey58, recipientPubkey58, facilitatorPu
 function _buildV2PaymentSignatureHeader(paymentMeta, signedTxBase64) {
     if (!paymentMeta || typeof paymentMeta !== 'object') {
         return { error: 'v2_settle_missing_meta', reason: 'paymentMeta is null or not an object' };
+    }
+    // BAT-582 v1.6 R-pr367-fix-5: fail-closed when signedTxBase64 is not a
+    // usable string. Pre-fix we'd happily emit PAYMENT-SIGNATURE with
+    // `payload.transaction: undefined/null/''`, producing a spec-invalid
+    // proof that's hard to diagnose downstream (facilitator just returns a
+    // generic "invalid tx"). Surface a stable error code instead.
+    if (typeof signedTxBase64 !== 'string' || signedTxBase64.length === 0) {
+        return { error: 'v2_settle_missing_signed_tx', reason: 'signedTxBase64 must be a non-empty string' };
     }
     const req = paymentMeta.requirement || {};
     const extra = req.extra || {};
