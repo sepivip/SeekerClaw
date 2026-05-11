@@ -312,9 +312,12 @@ function getConfirmationPolicy(toolName, args, walletState) {
             };
         }
         if (method === 'POST') {
-            // R-pr370-fix-39: validate url here too — if missing/non-string,
-            // the tool deterministically rejects with invalid_input. Don't
-            // prompt the user to confirm an action that can't succeed.
+            // R-pr370-fix-39/43: validate url here — if missing/non-string,
+            // unparseable, or non-HTTPS, the tool deterministically rejects
+            // downstream. Don't prompt the user to confirm an action that
+            // can't succeed. We don't replicate the FULL preflight here
+            // (private IP / debug-localhost) since those need DNS — just
+            // the cheap pre-DNS checks.
             if (typeof a.url !== 'string' || a.url.length === 0) {
                 return {
                     policy: 'block',
@@ -322,6 +325,27 @@ function getConfirmationPolicy(toolName, args, walletState) {
                     message: 'agent_pay POST requires a non-empty url string.',
                 };
             }
+            let parsedUrl;
+            try { parsedUrl = new URL(a.url); }
+            catch (_) {
+                return {
+                    policy: 'block',
+                    reason: 'invalid_url',
+                    message: 'agent_pay POST: url failed to parse as a URL.',
+                };
+            }
+            if (parsedUrl.protocol !== 'https:' && parsedUrl.protocol !== 'http:') {
+                return {
+                    policy: 'block',
+                    reason: 'non_https',
+                    message: `agent_pay POST: url scheme must be https (got ${parsedUrl.protocol}).`,
+                };
+            }
+            // http:// only allowed for localhost in debug builds; the
+            // handler enforces the localhost+debug rule via the
+            // shared preflightUrlSync, so we approximate at the gate
+            // with the scheme-only check (cheap pre-DNS). The handler
+            // will block again for http://attacker.com in production.
             // R-pr370-fix-20: fail-fast at gate when no burner. POST
             // deterministically rejects with burner_not_configured at the
             // handler — prompting the user to confirm an action that

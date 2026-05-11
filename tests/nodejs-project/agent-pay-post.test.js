@@ -727,6 +727,21 @@ async function check(label, fn) {
             'numbered list marker should be escaped (2.)');
     });
 
+    await check('render: formatConfirmationMessage escapes horizontal-rule patterns (R-pr370-fix-42)', () => {
+        // markdown-it renders `---` / `===` at line start as horizontal
+        // rules or setext heading underlines. Escape the first char so
+        // they render as literal text.
+        const { formatConfirmationMessage } = require(path.join(BUNDLE, 'tools', 'index'));
+        const policyMessage = 'POST /endpoint\n---\nfake heading\n===\nbody: ok';
+        const rendered = formatConfirmationMessage('agent_pay', {}, policyMessage);
+        // `---` becomes `\---` (first dash escaped).
+        assert.ok(rendered.includes('\\---'),
+            `horizontal-rule dashes should be escaped (got: ${JSON.stringify(rendered)})`);
+        // `===` becomes `\===`.
+        assert.ok(rendered.includes('\\==='),
+            'setext H1 equals should be escaped');
+    });
+
     await check('render: formatConfirmationMessage escapes wallet_set_caps diff content (defense-in-depth)', () => {
         // Even other policy hooks benefit from the render-boundary escape.
         // wallet_set_caps's diff message embeds raw arg values; a malicious
@@ -790,6 +805,25 @@ async function check(label, fn) {
             }, { burnerConfigured: true });
             assert.strictEqual(r.policy, 'block', `${typeof url}: expected block, got ${JSON.stringify(r)}`);
             assert.strictEqual(r.reason, 'invalid_input');
+        }
+    });
+
+    await check('policy: POST + unparseable url → block (invalid_url, R-pr370-fix-43)', () => {
+        const r = getConfirmationPolicy('agent_pay', {
+            url: 'not a url at all', max_usdc: '0.10',
+            method: 'POST', body: { ok: true },
+        }, { burnerConfigured: true });
+        assert.strictEqual(r.policy, 'block');
+        assert.strictEqual(r.reason, 'invalid_url');
+    });
+
+    await check('policy: POST + non-http(s) scheme → block (non_https, R-pr370-fix-43)', () => {
+        for (const url of ['ftp://example.com/file', 'data:text/plain,foo', 'javascript:alert(1)']) {
+            const r = getConfirmationPolicy('agent_pay', {
+                url, max_usdc: '0.10', method: 'POST', body: { ok: true },
+            }, { burnerConfigured: true });
+            assert.strictEqual(r.policy, 'block', `${url}: expected block, got ${JSON.stringify(r)}`);
+            assert.strictEqual(r.reason, 'non_https');
         }
     });
 
