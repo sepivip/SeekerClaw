@@ -168,8 +168,32 @@ async function main() {
         }
     }
 
-    const maxUsdcAtomic = args.live ? BigInt(env.MAX_USDC_ATOMIC) : 100_000_000n;
+    // R-pr369-fix-5: friendly errors for malformed env vars instead of
+    // raw TypeError stack traces. Operator mistakes (typos, trailing
+    // whitespace, hex-instead-of-decimal) get diagnosed cleanly.
+    let maxUsdcAtomic;
+    if (args.live) {
+        try { maxUsdcAtomic = BigInt(env.MAX_USDC_ATOMIC); }
+        catch (_) {
+            console.error('');
+            console.error(`✗ MAX_USDC_ATOMIC must be an integer decimal string (got: "${env.MAX_USDC_ATOMIC}")`);
+            console.error('  Example: MAX_USDC_ATOMIC=1000000 (= 1 USDC, since USDC has 6 decimals)');
+            process.exit(1);
+        }
+        if (maxUsdcAtomic <= 0n) {
+            console.error(`✗ MAX_USDC_ATOMIC must be positive, got ${maxUsdcAtomic.toString()}`);
+            process.exit(1);
+        }
+    } else {
+        maxUsdcAtomic = 100_000_000n;
+    }
     const rpcUrl = env.SOLANA_RPC;
+    try { new URL(rpcUrl); }
+    catch (_) {
+        console.error(`✗ SOLANA_RPC must be a valid URL (got: "${rpcUrl}")`);
+        console.error('  Example: SOLANA_RPC=https://api.mainnet-beta.solana.com');
+        process.exit(1);
+    }
     console.log(`Burner: ${burnerPub58}`);
     console.log(`Cap:    ${maxUsdcAtomic.toString()} atomic ($${Number(maxUsdcAtomic) / 1e6} USDC) per call`);
     console.log(`RPC:    ${rpcUrl}`);
