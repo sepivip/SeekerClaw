@@ -15,7 +15,12 @@ import java.math.BigInteger
  * (port 8765, X-Bridge-Token auth) for burner wallet operations (BAT-582).
  *
  * **Endpoints (all POST, all return JSON):**
- *   - /burner/status          → wallet pubkey + balances + cap state + spend ledger
+ *   - /burner/status          → wallet pubkey + cap state + spend ledger
+ *                                (balanceSol/balanceUsdc intentionally OMITTED
+ *                                until Node-side RPC fetch lands; UI fetches
+ *                                balances directly via SolanaBalanceFetcher,
+ *                                wallet_status surfaces "unavailable" for the
+ *                                agent until a separate BAT wires this here)
  *   - /burner/reserve         → atomic check+reserve a slot, returns reservationId
  *   - /burner/sign-transaction → sign-only (caller broadcasts), needs reservationId
  *   - /burner/sign-and-send   → atomic reserve+sign+broadcast+commit (or release)
