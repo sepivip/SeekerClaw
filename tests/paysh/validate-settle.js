@@ -36,6 +36,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const assert = require('assert');
 
 const X402_PATH = require.resolve('../../app/src/main/assets/nodejs-project/payment/x402.js');
 const { X402Protocol, _setBlockhashFetcher, _extractPayload } = require(X402_PATH);
@@ -250,23 +251,27 @@ async function runSettleForCapture(captureEntry) {
         if (captureEntry.expectFeePayer && decoded.accepted.extra.feePayer !== captureEntry.expectFeePayer) {
             throw new Error(`extra.feePayer expected "${captureEntry.expectFeePayer}", got "${decoded.accepted.extra.feePayer}"`);
         }
-        // R-pr368-live-fix-1 / R-pr369-fix-1: assert the real invariant —
-        // `accepted.extra` must equal the challenge's `accepts[i].extra`
-        // EXACTLY (deep strict equality). Pre-fix this hard-coded
-        // `!('memo' in ...)`, which only worked for captures that didn't
-        // have memo and would fire false alarms on any future capture
-        // with a server-provided memo (or any new extension key).
+        // R-pr368-live-fix-1 / R-pr369-fix-1 / R-pr369-fix-4: assert the
+        // real invariant — `accepted.extra` must equal the challenge's
+        // `accepts[i].extra` EXACTLY (deep strict equality). Pre-fix this
+        // hard-coded `!('memo' in ...)` (false alarms on future captures
+        // with extra.memo); intermediate fix used per-key `!==` (would
+        // false-fail on any nested object/array because JSON.parse creates
+        // a new identity). Now uses assert.deepStrictEqual which handles
+        // nested structures correctly. The key-mismatch error message is
+        // kept for diagnostic clarity since deepStrictEqual's default
+        // message can be hard to read for object diffs.
         const challengeExtra = built.paymentMeta.requirement.extra || {};
         const proofExtraKeys = Object.keys(decoded.accepted.extra).sort();
         const challengeExtraKeys = Object.keys(challengeExtra).sort();
         if (proofExtraKeys.join(',') !== challengeExtraKeys.join(',')) {
             throw new Error(`PAYMENT-SIGNATURE.accepted.extra keys mismatch challenge.accepts[i].extra: proof=[${proofExtraKeys.join(',')}] challenge=[${challengeExtraKeys.join(',')}] — strict facilitators (paysponge) reject "No matching payment requirements"`);
         }
-        for (const k of proofExtraKeys) {
-            if (decoded.accepted.extra[k] !== challengeExtra[k]) {
-                throw new Error(`PAYMENT-SIGNATURE.accepted.extra.${k}="${decoded.accepted.extra[k]}" does not equal challenge value "${challengeExtra[k]}"`);
-            }
-        }
+        assert.deepStrictEqual(
+            decoded.accepted.extra,
+            challengeExtra,
+            `PAYMENT-SIGNATURE.accepted.extra does not deep-equal challenge.accepts[i].extra`,
+        );
         if (!decoded.payload || !decoded.payload.transaction) {
             throw new Error(`PAYMENT-SIGNATURE.payload.transaction missing`);
         }
@@ -368,12 +373,12 @@ async function main() {
         }
     });
 
-    await check('all v2 captures: accepted.extra === challenge accepts[i].extra (R-pr368-live-fix-1 / R-pr369-fix-1)', () => {
+    await check('all v2 captures: accepted.extra deep-equals challenge accepts[i].extra (R-pr368-live-fix-1 / R-pr369-fix-4)', () => {
         // Strict facilitators (paysponge) reject "No matching payment
-        // requirements" when accepted.extra contains keys the challenge
-        // didn't send (or omits keys the challenge had). Assert the
-        // strict equality directly — the per-capture check above does
-        // it too, this is the cross-capture summary.
+        // requirements" when accepted.extra differs from the challenge.
+        // Use deepStrictEqual so nested objects/arrays compare correctly
+        // (per-key `!==` would false-fail because JSON.parse creates new
+        // object identities even for equivalent values).
         for (const entry of SETTLE_CAPTURES.filter(e => e.expectV2)) {
             const artifacts = runCache.get(entry.file);
             if (!artifacts) continue;
@@ -384,11 +389,11 @@ async function main() {
             if (proofKeys.join(',') !== chKeys.join(',')) {
                 throw new Error(`${entry.file}: accepted.extra keys [${proofKeys.join(',')}] != challenge.extra keys [${chKeys.join(',')}]`);
             }
-            for (const k of proofKeys) {
-                if (decoded.accepted.extra[k] !== challengeExtra[k]) {
-                    throw new Error(`${entry.file}: accepted.extra.${k} != challenge value`);
-                }
-            }
+            assert.deepStrictEqual(
+                decoded.accepted.extra,
+                challengeExtra,
+                `${entry.file}: accepted.extra does not deep-equal challenge.extra`,
+            );
         }
     });
 
