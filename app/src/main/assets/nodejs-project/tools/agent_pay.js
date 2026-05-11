@@ -158,6 +158,15 @@ function isPrivateIp(ip) {
 let _dnsLookupOverride = null;
 function _setDnsLookup(fn) { _dnsLookupOverride = fn; }
 
+// R-pr370-fix-7 (BAT-664): test hook to intercept the internal
+// `_fetchWithLimits` call. Production code calls the function by its
+// closure-captured reference, NOT via module.exports — so replacing the
+// export doesn't affect runtime behavior. This hook gives tests a way to
+// capture the probe + settle requests and assert byte-identity of
+// Idempotency-Key, body, etc.
+let _fetchOverride = null;
+function _setFetchOverride(fn) { _fetchOverride = fn; }
+
 const DNS_DEFAULT_TIMEOUT_MS = TOTAL_TIMEOUT_MS;
 
 function _lookupHost(hostname, deadlineMs) {
@@ -374,6 +383,9 @@ async function preflightUrl(url, method, deadlineMs) {
 // responsible for sourcing both from one cached pair (no per-call
 // re-serialization).
 function _fetchWithLimits(parsed, pinnedIp, pinnedFamily, extraHeaders = {}, signalTimeoutLeftMs = TOTAL_TIMEOUT_MS, opts = {}) {
+    if (_fetchOverride) {
+        return _fetchOverride(parsed, pinnedIp, pinnedFamily, extraHeaders, signalTimeoutLeftMs, opts);
+    }
     return new Promise((resolve) => {
         const method = (opts.method || 'GET').toUpperCase();
         const bodyJsonStr = (method === 'POST' && typeof opts.bodyJsonStr === 'string')
@@ -822,5 +834,6 @@ module.exports = {
     validateAndSerializeBody,   // BAT-664
     MAX_POST_BODY_BYTES,        // BAT-664
     _setDnsLookup,
+    _setFetchOverride,          // BAT-664 (R-pr370-fix-7)
     _fetchWithLimits,
 };

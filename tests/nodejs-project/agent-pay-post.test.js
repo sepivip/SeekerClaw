@@ -29,15 +29,22 @@ require.cache[configPath] = {
 };
 
 // Stub bridge.js so the handler-level tests don't need a live bridge.
+// Use a mutable handler reference so tests can swap behavior between
+// "no burner" (default) and "configured burner" — the agent_pay module
+// captures `androidBridgeCall` at require time, so we need the wrapper
+// to delegate through a mutable function ref.
 const bridgeCalls = [];
+let _bridgeHandler = async (endpoint /* , body */) => {
+    if (endpoint === '/burner/status') return { configured: false };
+    return {};
+};
 const bridgePath = require.resolve(path.join(BUNDLE, 'bridge.js'));
 require.cache[bridgePath] = {
     id: bridgePath, filename: bridgePath, loaded: true,
     exports: {
         androidBridgeCall: async (endpoint, body) => {
             bridgeCalls.push({ endpoint, body });
-            if (endpoint === '/burner/status') return { configured: false };
-            return {};
+            return _bridgeHandler(endpoint, body);
         },
     },
 };
@@ -160,12 +167,28 @@ async function check(label, fn) {
         assert.strictEqual(r.error, 'body_not_json');
     });
 
-    await check('validateAndSerializeBody: POST + 8 KB body accepted', () => {
-        // 8192 bytes UTF-8 exactly. Build a key:value pair whose JSON length lands at 8192.
-        const filler = 'A'.repeat(8192 - 14);  // 14 = '{"k":"' + '"}' + a few padding bytes
+    await check('validateAndSerializeBody: POST + body sized at exactly MAX_POST_BODY_BYTES is accepted', () => {
+        // R-pr370-fix-8: compute filler from actual JSON overhead so the
+        // resulting serialized size is exactly MAX_POST_BODY_BYTES, not
+        // "approximately 8 KB". The overhead for {"k":"…"} is 8 bytes
+        // (`{"k":""}`) in ASCII; filler needs to fill the remaining
+        // MAX_POST_BODY_BYTES - 8 bytes.
+        const JSON_OVERHEAD = JSON.stringify({ k: '' }).length;  // 8
+        const filler = 'A'.repeat(MAX_POST_BODY_BYTES - JSON_OVERHEAD);
         const r = validateAndSerializeBody('POST', { k: filler });
         assert.ok(r.bodyJsonStr, `expected accept, got ${JSON.stringify(r)}`);
-        assert.ok(Buffer.byteLength(r.bodyJsonStr, 'utf8') <= MAX_POST_BODY_BYTES);
+        // Tight boundary: exactly equal to the cap, not "≤".
+        assert.strictEqual(Buffer.byteLength(r.bodyJsonStr, 'utf8'), MAX_POST_BODY_BYTES,
+            `serialized body should be exactly MAX_POST_BODY_BYTES (${MAX_POST_BODY_BYTES}) bytes`);
+    });
+
+    await check('validateAndSerializeBody: POST + body 1 byte over the cap is rejected', () => {
+        // Pair with the exact-cap test above — together they pin the
+        // boundary at MAX_POST_BODY_BYTES inclusive.
+        const JSON_OVERHEAD = JSON.stringify({ k: '' }).length;
+        const filler = 'A'.repeat(MAX_POST_BODY_BYTES - JSON_OVERHEAD + 1);  // 1 byte over
+        const r = validateAndSerializeBody('POST', { k: filler });
+        assert.strictEqual(r.error, 'body_too_large');
     });
 
     await check('validateAndSerializeBody: POST + >8 KB body → body_too_large', () => {
@@ -383,6 +406,113 @@ async function check(label, fn) {
         const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
         assert.ok(uuidRe.test(a));
         assert.ok(uuidRe.test(b));
+    });
+
+    // ── Deep integration: handler-level Idempotency-Key generation ──────────
+    // R-pr370-fix-7 (BAT-664): proves the FULL contract — agent_pay
+    // generates a UUID at the handler level, attaches it to the probe
+    // request, and reuses the same value on settle replay. Two distinct
+    // tool invocations get distinct keys. Pre-fix the suite only checked
+    // settle forwarding from a hand-set key; this exercises generation.
+
+    await check('handler: agent_pay POST attaches Idempotency-Key to probe; distinct invocations get distinct keys', async () => {
+        // Swap the no-burner bridge stub for a configured-burner one,
+        // and inject DNS + fetch overrides that bypass the network.
+        // Returning a synthetic 200 from the probe means agent_pay
+        // returns after probe without going through settle — we cover
+        // settle byte-identity in the X402Protocol.settle test above.
+        const oldHandler = _bridgeHandler;
+        _bridgeHandler = async (endpoint) => {
+            if (endpoint === '/burner/status') return { configured: true, pubkey: '7xKXTg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU' };
+            return {};
+        };
+        // Restore a passing DNS so the probe is reached (the suite-level
+        // override throws to enforce zero-network on pre-flight rejections).
+        agentPay._setDnsLookup(async () => ({ address: '1.2.3.4', family: 4 }));
+
+        const probeCalls = [];
+        agentPay._setFetchOverride(async (parsed, ip, fam, headers, timeout, opts) => {
+            probeCalls.push({ url: parsed.toString(), headers: { ...headers }, opts: { ...opts } });
+            // Return non-402 so the handler returns after probe.
+            return { status: 200, headers: {}, bodyJson: { ok: true } };
+        });
+
+        try {
+            const r1 = await handlers.agent_pay({
+                url: 'https://api.example.com/text',
+                max_usdc: '0.10',
+                method: 'POST',
+                body: { phone: '+15555550000', message: 'hi' },
+            });
+            const r2 = await handlers.agent_pay({
+                url: 'https://api.example.com/text',
+                max_usdc: '0.10',
+                method: 'POST',
+                body: { phone: '+15555550000', message: 'hi' },
+            });
+            assert.ok(!r1.error, `r1 should succeed (non-402 path): ${JSON.stringify(r1)}`);
+            assert.ok(!r2.error, `r2 should succeed: ${JSON.stringify(r2)}`);
+            assert.strictEqual(probeCalls.length, 2, 'should have probed twice');
+
+            // (a) Each probe has an Idempotency-Key header.
+            const key1 = probeCalls[0].headers['idempotency-key'];
+            const key2 = probeCalls[1].headers['idempotency-key'];
+            assert.ok(typeof key1 === 'string' && key1.length > 0, 'probe 1 must attach Idempotency-Key');
+            assert.ok(typeof key2 === 'string' && key2.length > 0, 'probe 2 must attach Idempotency-Key');
+
+            // (b) Distinct invocations get DISTINCT keys.
+            assert.notStrictEqual(key1, key2, 'distinct agent_pay invocations must have distinct Idempotency-Keys');
+
+            // (c) Each key is RFC 4122 UUID-shaped.
+            const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+            assert.ok(uuidRe.test(key1));
+            assert.ok(uuidRe.test(key2));
+
+            // (d) POST method propagates to the fetch opts; same byte body.
+            assert.strictEqual(probeCalls[0].opts.method, 'POST');
+            assert.strictEqual(probeCalls[0].opts.bodyJsonStr, JSON.stringify({ phone: '+15555550000', message: 'hi' }));
+        } finally {
+            agentPay._setFetchOverride(null);
+            // Re-arm the throwing DNS override so subsequent pre-flight tests
+            // still enforce zero-network.
+            agentPay._setDnsLookup(async () => {
+                dnsLookupCalled++;
+                throw new Error('dns lookup should not have been called');
+            });
+            _bridgeHandler = oldHandler;
+        }
+    });
+
+    await check('handler: agent_pay GET does NOT attach Idempotency-Key (regression)', async () => {
+        const oldHandler = _bridgeHandler;
+        _bridgeHandler = async (endpoint) => {
+            if (endpoint === '/burner/status') return { configured: true, pubkey: '7xKXTg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU' };
+            return {};
+        };
+        agentPay._setDnsLookup(async () => ({ address: '1.2.3.4', family: 4 }));
+        const probeCalls = [];
+        agentPay._setFetchOverride(async (parsed, ip, fam, headers, timeout, opts) => {
+            probeCalls.push({ headers: { ...headers }, opts: { ...opts } });
+            return { status: 200, headers: {}, bodyJson: { ok: true } };
+        });
+        try {
+            await handlers.agent_pay({
+                url: 'https://api.example.com/x',
+                max_usdc: '0.10',
+                // No method (defaults to GET), no body
+            });
+            assert.strictEqual(probeCalls.length, 1);
+            assert.ok(!probeCalls[0].headers['idempotency-key'],
+                'GET probe must NOT have Idempotency-Key header');
+            assert.ok(!probeCalls[0].opts.bodyJsonStr, 'GET probe must not have a serialized body');
+        } finally {
+            agentPay._setFetchOverride(null);
+            agentPay._setDnsLookup(async () => {
+                dnsLookupCalled++;
+                throw new Error('dns lookup should not have been called');
+            });
+            _bridgeHandler = oldHandler;
+        }
     });
 
     // ── GET regression: pre-existing behavior preserved ─────────────────────
