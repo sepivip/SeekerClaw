@@ -334,6 +334,12 @@ function getConfirmationPolicy(toolName, args, walletState) {
                     message: 'agent_pay POST: url failed to parse as a URL.',
                 };
             }
+            // R-pr370-fix-44: mirror tools/agent_pay.js::preflightUrlSync.
+            // https:// always OK. http:// only OK for localhost AND debug
+            // build — otherwise non_https. Any other scheme → non_https.
+            // Pre-fix the gate only blocked non-http(s); plain `http://x`
+            // would reach 'confirm' even though the tool deterministically
+            // rejects it as non_https.
             if (parsedUrl.protocol !== 'https:' && parsedUrl.protocol !== 'http:') {
                 return {
                     policy: 'block',
@@ -341,11 +347,18 @@ function getConfirmationPolicy(toolName, args, walletState) {
                     message: `agent_pay POST: url scheme must be https (got ${parsedUrl.protocol}).`,
                 };
             }
-            // http:// only allowed for localhost in debug builds; the
-            // handler enforces the localhost+debug rule via the
-            // shared preflightUrlSync, so we approximate at the gate
-            // with the scheme-only check (cheap pre-DNS). The handler
-            // will block again for http://attacker.com in production.
+            if (parsedUrl.protocol === 'http:') {
+                const host = (parsedUrl.hostname || '').toLowerCase();
+                const isLocal = host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]';
+                const isDebug = process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test';
+                if (!isLocal || !isDebug) {
+                    return {
+                        policy: 'block',
+                        reason: 'non_https',
+                        message: 'agent_pay POST: http:// only allowed for localhost in debug builds.',
+                    };
+                }
+            }
             // R-pr370-fix-20: fail-fast at gate when no burner. POST
             // deterministically rejects with burner_not_configured at the
             // handler — prompting the user to confirm an action that

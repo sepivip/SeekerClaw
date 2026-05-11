@@ -827,6 +827,38 @@ async function check(label, fn) {
         }
     });
 
+    await check('policy: POST + http://non-localhost → block (non_https, R-pr370-fix-44)', () => {
+        // http:// is only allowed for localhost in debug builds; mirror
+        // agent_pay's preflightUrlSync at the policy gate.
+        const oldEnv = process.env.NODE_ENV;
+        delete process.env.NODE_ENV;
+        try {
+            const r = getConfirmationPolicy('agent_pay', {
+                url: 'http://attacker.com/x', max_usdc: '0.10',
+                method: 'POST', body: { ok: true },
+            }, { burnerConfigured: true });
+            assert.strictEqual(r.policy, 'block');
+            assert.strictEqual(r.reason, 'non_https');
+        } finally {
+            if (oldEnv) process.env.NODE_ENV = oldEnv;
+        }
+    });
+
+    await check('policy: POST + http://localhost in debug → confirm (R-pr370-fix-44)', () => {
+        const oldEnv = process.env.NODE_ENV;
+        process.env.NODE_ENV = 'development';
+        try {
+            const r = getConfirmationPolicy('agent_pay', {
+                url: 'http://localhost:3000/x', max_usdc: '0.10',
+                method: 'POST', body: { ok: true },
+            }, { burnerConfigured: true });
+            assert.strictEqual(r.policy, 'confirm');
+        } finally {
+            if (oldEnv !== undefined) process.env.NODE_ENV = oldEnv;
+            else delete process.env.NODE_ENV;
+        }
+    });
+
     await check('policy: POST + no burner → block (burner_not_configured, R-pr370-fix-20)', () => {
         // Fail-fast at gate when no burner. POST without a burner deterministically
         // rejects at the handler; the policy gate should block early instead of
