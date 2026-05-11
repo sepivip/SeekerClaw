@@ -244,11 +244,14 @@ function formatConfirmationMessage(toolName, input, policyMessage) {
         // to break linkify's detection. URLs remain visually readable
         // (the ZWSP renders as nothing) but copy/paste users get a tiny
         // anomaly they can clean up — preferable to a one-click phish.
-        // R-pr370-fix-19/23/26: declare ZWSP via the explicit ​ escape
-        // so the character is VISIBLE in source/diffs/reviews. Pre-fix the
-        // const value was a literal U+200B — invisible in most editors and
-        // silently removed by formatters / copy-paste / unicode normalization.
-        const ZWSP = '​';
+        // R-pr370-fix-19/23/26/28: declare ZWSP via String.fromCharCode so
+        // the literal U+200B character never appears in source. A literal
+        // would be invisible to most editors / diffs / reviews and
+        // silently removable by formatters / copy-paste / Unicode
+        // normalization. String.fromCharCode(0x200B) makes the intent
+        // unambiguous in source while producing the identical runtime
+        // character.
+        const ZWSP = String.fromCharCode(0x200B);
         v = v.replace(/(https?|ftp|ws|wss|file|data):\/\//gi, `$1:${ZWSP}//`);
         // R-pr370-fix-15: cap AFTER escaping + de-linkify so the rendered
         // message is actually bounded. Escaping can roughly double the

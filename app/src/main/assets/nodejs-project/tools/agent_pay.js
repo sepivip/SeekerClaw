@@ -389,7 +389,12 @@ function _fetchWithLimits(parsed, pinnedIp, pinnedFamily, extraHeaders = {}, sig
         return _fetchOverride(parsed, pinnedIp, pinnedFamily, extraHeaders, signalTimeoutLeftMs, opts);
     }
     return new Promise((resolve) => {
-        const method = (opts.method || 'GET').toUpperCase();
+        // R-pr370-fix-29: defensive method type check. settle() now passes
+        // method via originalRequest; a future caller / test override that
+        // sets opts.method to a non-string would crash here with an
+        // uninformative TypeError. Treat non-strings as missing → GET.
+        let method = 'GET';
+        if (typeof opts.method === 'string') method = opts.method.toUpperCase();
         const bodyJsonStr = (method === 'POST' && typeof opts.bodyJsonStr === 'string')
             ? opts.bodyJsonStr
             : null;
@@ -402,7 +407,11 @@ function _fetchWithLimits(parsed, pinnedIp, pinnedFamily, extraHeaders = {}, sig
         }, extraHeaders);
         if (bodyJsonStr !== null) {
             headers['content-type'] = 'application/json';
-            headers['content-length'] = Buffer.byteLength(bodyJsonStr, 'utf8');
+            // R-pr370-fix-28: Content-Length MUST be a string. Node's HTTP
+            // client throws ERR_HTTP_INVALID_HEADER_VALUE for numeric
+            // header values in strict modes; even when it works, normalized
+            // header transport (HTTP/2) expects strings.
+            headers['content-length'] = String(Buffer.byteLength(bodyJsonStr, 'utf8'));
         }
 
         const reqOptions = {

@@ -639,10 +639,10 @@ async function check(label, fn) {
             body: { phish: 'http://attacker.evil.com/take-money' },
         }, { burnerConfigured: true });
         const rendered = formatConfirmationMessage('agent_pay', {}, policy.message);
-        // R-pr370-fix-19/24/26: ZWSP via the explicit ​ escape —
-        // a literal U+200B in test source is invisible and silently
-        // removable by formatters / copy-paste / unicode normalization.
-        const ZWSP = '​';
+        // R-pr370-fix-19/24/26/28: ZWSP via String.fromCharCode so the
+        // literal U+200B never appears in source (matches the production
+        // impl in tools/index.js).
+        const ZWSP = String.fromCharCode(0x200B);
         // Raw `http://...` would be linkified. After the fix, the scheme
         // has a zero-width space inserted before //.
         assert.ok(!new RegExp(`(?<!:${ZWSP})http:\\/\\/`).test(rendered),
