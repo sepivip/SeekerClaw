@@ -62,11 +62,15 @@ function _buildFakeV2SuccessHeader() {
 //   - textbelt-status-free → pay.sh returns amount=0 which build()
 //     correctly rejects as invalid_demand, so settle is never invoked
 //     in production for that shape.
+// expectDelivery values: 'body' (challenge in JSON body, accepts[]) or
+// 'header' (challenge in the `payment-required` response header, base64).
+// Asserted at run time so the field actually means something.
 const SETTLE_CAPTURES = [
     {
         file: 'tripadvisor-search-402.json',
         // v2 multi-chain (Base + Solana). Body-delivered.
         expectV2: true,
+        expectDelivery: 'body',
         expectResourceUrlPrefix: 'https://tripadvisor.x402.paysponge.com',
         expectAmount: '10000',
         expectPayTo: '9hw9Py9uMGtXRNpABZjifcK1t3suwzjyri9L9QYKg6zZ',
@@ -76,17 +80,34 @@ const SETTLE_CAPTURES = [
         file: 'coingecko-trending-pools.json',
         // v2 multi-chain. Header-delivered (payment-required base64).
         expectV2: true,
+        expectDelivery: 'header',
         // CoinGecko's resource URL — verified from the live capture.
         expectResourceUrlPrefix: 'https://pro-api.coingecko.com',
-        expectDelivery: 'header',
     },
     {
         file: 'textbelt-text-402.json',
         // v2 single-chain Solana. POST endpoint.
         expectV2: true,
+        expectDelivery: 'body',
         expectResourceUrlPrefix: 'https://api.paysponge.com',
     },
 ];
+
+// Detect which delivery mode a capture uses. Mirrors the parser's logic:
+// challenges arrive either inline in JSON body (`accepts` / `paymentRequirements`)
+// or via the `payment-required` response header (base64-encoded JSON). We
+// assert the captured delivery matches what each fixture's entry declares —
+// pinning that the parser handles BOTH paths.
+function detectDelivery(capture) {
+    const body = capture.body;
+    if (body && typeof body === 'object' && (body.accepts || body.paymentRequirements)) {
+        return 'body';
+    }
+    if (capture.headers && capture.headers['payment-required']) {
+        return 'header';
+    }
+    return 'none';
+}
 
 let pass = 0, fail = 0;
 
@@ -101,11 +122,21 @@ async function check(label, fn) {
     }
 }
 
+// Run detect → build → settle once for a capture and return the
+// captured artifacts. Cached per-capture in `runCache` below so the
+// per-capture assertions and the cross-cutting invariants don't redo
+// the same work (was R1 finding 2 on PR #368).
 async function runSettleForCapture(captureEntry) {
     const proto = new X402Protocol();
     const file = path.join(CAPTURES_DIR, captureEntry.file);
     const capture = JSON.parse(fs.readFileSync(file, 'utf8'));
     const response = { status: capture.status, bodyJson: capture.body, headers: capture.headers };
+
+    // ── delivery mode ──
+    const actualDelivery = detectDelivery(capture);
+    if (captureEntry.expectDelivery && captureEntry.expectDelivery !== actualDelivery) {
+        throw new Error(`delivery mismatch: capture is ${actualDelivery}, expected ${captureEntry.expectDelivery}`);
+    }
 
     // ── detect ──
     const detected = proto.detect(response);
@@ -231,19 +262,31 @@ async function main() {
     console.log(`═══ Layer 2.5 — validate-settle (${SETTLE_CAPTURES.length} real captures, mocked network) ═══`);
     console.log('');
 
+    // Run each capture once, cache the artifacts, and reuse them in the
+    // cross-cutting invariants below. Pre-fix the invariants re-ran
+    // detect/build/settle per capture which scaled O(captures × invariants).
+    const runCache = new Map();
     for (const entry of SETTLE_CAPTURES) {
         await check(`${entry.file.padEnd(40)} detect→build→settle (v2 PAYMENT-SIGNATURE shape)`,
-            () => runSettleForCapture(entry));
+            async () => {
+                const artifacts = await runSettleForCapture(entry);
+                runCache.set(entry.file, artifacts);
+            });
     }
 
     // ── Cross-cutting invariants ──
+    // All invariants iterate the cached artifacts produced above — no
+    // re-running of detect/build/settle. Entries that failed their
+    // per-capture check are absent from the cache; we skip those so an
+    // unrelated failure doesn't cascade into invariant noise.
     console.log('');
     console.log('── Cross-cutting invariants ──');
 
-    await check('all v2 captures negotiate to network=solana:* (not normalized to bare "solana")', async () => {
+    await check('all v2 captures negotiate to network=solana:* (not normalized to bare "solana")', () => {
         for (const entry of SETTLE_CAPTURES) {
-            const { capturedHeaders } = await runSettleForCapture(entry);
-            const decoded = JSON.parse(Buffer.from(capturedHeaders['payment-signature'], 'base64').toString('utf8'));
+            const artifacts = runCache.get(entry.file);
+            if (!artifacts) continue;
+            const decoded = JSON.parse(Buffer.from(artifacts.capturedHeaders['payment-signature'], 'base64').toString('utf8'));
             // Real pay.sh services send "solana:<genesis>" — we must echo back verbatim.
             if (!decoded.accepted.network.startsWith('solana:')) {
                 throw new Error(`${entry.file}: accepted.network="${decoded.accepted.network}" — expected CAIP-2 form "solana:<genesis>"`);
@@ -251,20 +294,22 @@ async function main() {
         }
     });
 
-    await check('all v2 captures emit a non-empty memo in PAYMENT-SIGNATURE (challenge or random nonce)', async () => {
+    await check('all v2 captures emit a non-empty memo in PAYMENT-SIGNATURE (challenge or random nonce)', () => {
         for (const entry of SETTLE_CAPTURES) {
-            const { capturedHeaders } = await runSettleForCapture(entry);
-            const decoded = JSON.parse(Buffer.from(capturedHeaders['payment-signature'], 'base64').toString('utf8'));
+            const artifacts = runCache.get(entry.file);
+            if (!artifacts) continue;
+            const decoded = JSON.parse(Buffer.from(artifacts.capturedHeaders['payment-signature'], 'base64').toString('utf8'));
             if (!decoded.accepted.extra.memo || decoded.accepted.extra.memo.length === 0) {
                 throw new Error(`${entry.file}: extra.memo empty`);
             }
         }
     });
 
-    await check('all v2 captures produce wire-valid transactions (non-empty base64, decodable)', async () => {
+    await check('all v2 captures produce wire-valid transactions (non-empty base64, decodable)', () => {
         for (const entry of SETTLE_CAPTURES) {
-            const { built } = await runSettleForCapture(entry);
-            const buf = Buffer.from(built.txBase64, 'base64');
+            const artifacts = runCache.get(entry.file);
+            if (!artifacts) continue;
+            const buf = Buffer.from(artifacts.built.txBase64, 'base64');
             if (buf.length === 0) throw new Error(`${entry.file}: tx is zero bytes`);
             // First byte: shortvec(sigCount). For v2 layouts (2 sigs) this is byte 2.
             if (buf[0] !== 2) {
