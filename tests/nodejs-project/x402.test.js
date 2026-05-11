@@ -681,6 +681,64 @@ function _safeStringify(v) {
         assert.ok(!fetchCalled, 'settle must NOT touch network when version is missing');
     });
 
+    // BAT-582 v1.6 R-pr367-fix-4: end-to-end build→settle against a real
+    // v2 fixture. Pre-fix, build() read `resource` from `accepts[i].resource`
+    // which is always null in real captures — settle then emitted
+    // PAYMENT-SIGNATURE with `resource.url: ''`. The inline-paymentMeta
+    // settle tests above can't catch that propagation bug because they
+    // hand-roll `requirement.resource`. This case pipes a real Tripadvisor
+    // capture through build() and then settle() so the resource has to
+    // flow correctly end-to-end.
+    await check('settle (integration): build→settle from real Tripadvisor v2 fixture propagates resource correctly', async () => {
+        const path = require('path');
+        const fs = require('fs');
+        const capPath = path.resolve(__dirname, '..', 'paysh', 'captures', 'tripadvisor-search-402.json');
+        if (!fs.existsSync(capPath)) {
+            // Capture not committed yet (e.g. running on a branch that
+            // doesn't include tests/paysh/) — skip rather than fail.
+            console.log('    (skipped — Tripadvisor capture not in this branch)');
+            return;
+        }
+        const capture = JSON.parse(fs.readFileSync(capPath, 'utf8'));
+        const response = { status: capture.status, bodyJson: capture.body, headers: capture.headers };
+        // Stub blockhash so build() doesn't hit RPC
+        x402Mod._setBlockhashFetcher(async () => '2tLBHqeQdeq4Pzioote4ueMkQjrpdnNLBTuDtyKo4ds9');
+
+        const built = await proto.build(response, {
+            maxUsdcAtomic: 100_000n,
+            burnerPubkey: VALID_BURNER_PUBKEY,
+        });
+        assert.ok(!built.error, `build should succeed on real v2 fixture: ${_safeStringify(built)}`);
+        // The resource MUST have flowed in from the top-level body.resource,
+        // not the (null) accepts[i].resource. If build() reads from the
+        // wrong place this propagation breaks and settle() fails.
+        assert.ok(built.paymentMeta.requirement.resource, 'paymentMeta.requirement.resource must be set');
+        assert.strictEqual(built.paymentMeta.requirement.resource.url,
+            'https://tripadvisor.x402.paysponge.com/api/v1/location/search',
+            'resource.url must come from top-level body.resource, not accepts[i].resource (which is null)');
+
+        // Now settle the built tx — verify the PAYMENT-SIGNATURE header
+        // contains the resource URL exactly (no empty string fallback).
+        let capturedHeaders = null;
+        const fetchFn = async (parsed, ip, fam, headers) => {
+            capturedHeaders = headers;
+            return { status: 200, headers: {}, bodyJson: {} };
+        };
+        await proto.settle(
+            { parsed: new URL('https://tripadvisor.x402.paysponge.com/api/v1/location/search'),
+              pinnedIp: '1.2.3.4', pinnedFamily: 4, timeoutLeftMs: 30000 },
+            'V2-SIGNED-TX-INTEGRATION',
+            built.paymentMeta,
+            { _fetchWithLimits: fetchFn }
+        );
+        assert.ok(capturedHeaders['payment-signature'], 'v2 PAYMENT-SIGNATURE must be emitted');
+        const decoded = JSON.parse(Buffer.from(capturedHeaders['payment-signature'], 'base64').toString('utf8'));
+        assert.strictEqual(decoded.resource.url,
+            'https://tripadvisor.x402.paysponge.com/api/v1/location/search',
+            'PAYMENT-SIGNATURE resource.url must be propagated end-to-end (this is the R-pr367-fix-4 regression guard)');
+        assert.notStrictEqual(decoded.resource.url, '', 'resource.url must not be empty (pre-fix bug)');
+    });
+
     // ── Boundary rejection: response_too_large + timeout via fetch mock ─────
     // These tests target the protocol/handler pair using a controlled mock.
     // Since agent_pay's _handle calls `_fetchWithLimits` via closure (not via

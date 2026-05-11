@@ -248,31 +248,32 @@ class SolanaTxSignerTest {
 
     @Test
     fun `BAT-582 v1_6 Phase 5d - multi-signer tx with allowPartiallySigned=true is accepted`() {
-        // x402 v2 case: burner signs slot 1 first (or any slot they
-        // occupy), facilitator co-signs slot 0 server-side after
-        // receiving PAYMENT-SIGNATURE. The wire tx that leaves the
-        // device is intentionally partial; only the burner's slot
-        // gets filled.
-        val cosigner = KeyImporter.derivePubkey(ByteArray(32) { (it + 7).toByte() })
+        // x402 v2 case: facilitator is fee-payer at slot 0 (server
+        // co-signs after receiving PAYMENT-SIGNATURE), burner is the
+        // SECOND signer at slot 1 (we fill it on-device). Order matters:
+        // R-pr367-fix-3 — the previous version put burner at slot 0
+        // which failed to exercise the actual v2 slot layout.
+        val facilitator = KeyImporter.derivePubkey(ByteArray(32) { (it + 7).toByte() })
         val tx = buildLegacyTxMultiSigner(
-            signerPubkeys = listOf(burnerPubkey, cosigner),
-            preSignedSignatures = listOf(null, null),  // both empty — partial sign scenario
+            signerPubkeys = listOf(facilitator, burnerPubkey),  // facilitator FIRST (slot 0)
+            preSignedSignatures = listOf(null, null),           // both empty — partial sign scenario
             blockhash = ByteArray(32),
         )
         val parsed = SolanaTxSigner.parse(tx)
         assertEquals(2, parsed.numRequiredSignatures)
+        // Sanity: facilitator is slot 0, burner is slot 1.
+        assertEquals("facilitator must be slot 0", facilitator.toList(), parsed.accountKeys[0].toList())
+        assertEquals("burner must be slot 1",      burnerPubkey.toList(), parsed.accountKeys[1].toList())
+
         val burnerSig = ByteArray(64) { ((it + 0x42) and 0xFF).toByte() }
         val signed = SolanaTxSigner.insertSignature(
             tx, parsed, burnerPubkey, burnerSig, allowPartiallySigned = true
         )
-        // Burner's slot got filled at the correct offset; cosigner's slot
-        // remains zero (facilitator will fill it server-side).
+        // Burner's signature lands at slot 1; facilitator's slot 0 stays
+        // ALL-ZERO (server fills it after receiving PAYMENT-SIGNATURE).
         val signedParsed = SolanaTxSigner.parse(signed)
-        val burnerIdx = signedParsed.accountKeys.indexOfFirst { it.contentEquals(burnerPubkey) }
-        assertEquals(burnerSig.toList(), signedParsed.signatures[burnerIdx].toList())
-        val cosignerIdx = signedParsed.accountKeys.indexOfFirst { it.contentEquals(cosigner) }
-        // Cosigner slot must remain ALL-ZERO (waiting for facilitator).
-        assertTrue("cosigner slot must remain zero", signedParsed.signatures[cosignerIdx].all { it == 0.toByte() })
+        assertTrue("facilitator slot 0 must remain zero", signedParsed.signatures[0].all { it == 0.toByte() })
+        assertEquals("burner slot 1 must hold signature", burnerSig.toList(), signedParsed.signatures[1].toList())
     }
 
     @Test

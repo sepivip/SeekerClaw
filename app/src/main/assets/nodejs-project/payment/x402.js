@@ -687,11 +687,24 @@ function _buildV2PaymentSignatureHeader(paymentMeta, signedTxBase64) {
     // captures). Normalize to the v2 object shape — facilitators require
     // it. If only a string is present, treat it as `url` with sensible
     // empty defaults for description + mimeType.
+    //
+    // BAT-582 v1.6 R-pr367-fix-1: fail closed when the resource URL is
+    // missing/empty. Pre-fix we emitted PAYMENT-SIGNATURE with
+    // `resource.url: ''` which is spec-invalid (and would let a server
+    // accept an ambiguous proof). Returning a stable error code lets
+    // agent_pay surface "v2 challenge missing required resource" instead
+    // of sending a malformed header.
     let resource = req.resource;
     if (typeof resource === 'string') {
         resource = { url: resource, description: req.description || '', mimeType: 'application/json' };
     } else if (!resource || typeof resource !== 'object') {
-        resource = { url: '', description: req.description || '', mimeType: 'application/json' };
+        resource = null; // signal below
+    }
+    if (!resource || typeof resource.url !== 'string' || resource.url.length === 0) {
+        return {
+            error: 'v2_settle_missing_resource',
+            reason: 'paymentMeta.requirement.resource.url not present — required for v2 PAYMENT-SIGNATURE proof per spec',
+        };
     }
 
     const payload = {
@@ -1129,9 +1142,31 @@ class X402Protocol extends PaymentProtocol {
                     reason: 'v2 challenge has no extra.feePayer — required for the partially-signed flow',
                 };
             }
-            const memoString = (typeof extra.memo === 'string' && extra.memo.length > 0)
-                ? extra.memo
-                : _generateRandomMemoNonce();
+            // BAT-582 v1.6 R-pr367-fix-2: bound server-controlled memo
+            // length. `extra.memo` flows verbatim into both the Memo
+            // instruction (Solana tx size cap is 1232 bytes) and the
+            // base64-encoded PAYMENT-SIGNATURE header (HTTP header cap
+            // varies, typically 8K). Without a length bound, a buggy or
+            // malicious server could force oversize allocations or
+            // exceed Solana's per-tx byte cap (which would just reject
+            // the tx, but waste a sign call). 256 bytes is generous for
+            // any plausible memo (payment ID, order ref, etc.) while
+            // far below any wire-format limit. Reject loud if exceeded
+            // so the agent surfaces a clear error.
+            const MAX_MEMO_BYTES = 256;
+            let memoString;
+            if (typeof extra.memo === 'string' && extra.memo.length > 0) {
+                const memoBytes = Buffer.byteLength(extra.memo, 'utf8');
+                if (memoBytes > MAX_MEMO_BYTES) {
+                    return {
+                        error: 'memo_too_large',
+                        reason: `challenge extra.memo is ${memoBytes} bytes (UTF-8); max ${MAX_MEMO_BYTES}`,
+                    };
+                }
+                memoString = extra.memo;
+            } else {
+                memoString = _generateRandomMemoNonce();
+            }
             try {
                 built = _buildV2UsdcTransferTx(
                     burnerPubkey58, recipient, facilitatorPubkey58,
@@ -1165,11 +1200,22 @@ class X402Protocol extends PaymentProtocol {
             x402Version: negotiatedVersion,
             // Store a short-lived ref to the original requirement so settle()
             // can echo back any extension fields if the server requires them.
+            //
+            // BAT-582 v1.6 R-pr367-fix: `resource` lives at the TOP LEVEL
+            // of the v2 challenge payload (per the Coinbase spec and
+            // confirmed against the real Tripadvisor/Textbelt/CoinGecko
+            // captures), NOT inside the chosen `accepts[]` entry. Pre-fix
+            // we read it as `r.resource` which is always `null` for real
+            // v2 challenges — the v2 PAYMENT-SIGNATURE header then went
+            // out with `resource.url: ''` (spec-invalid). Read from the
+            // extracted payload instead, fall back to the requirement
+            // entry only for v1-shaped challenges where it might legacily
+            // live there.
             requirement: {
                 scheme: r.scheme || 'exact',
                 network: r.network || 'solana',
                 payTo: r.payTo,
-                resource: r.resource,
+                resource: extracted.payload.resource || r.resource,
                 description: r.description,
                 maxTimeoutSeconds: r.maxTimeoutSeconds,
                 extra: r.extra,                   // v2 settle needs `extra.feePayer`
