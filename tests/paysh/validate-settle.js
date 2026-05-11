@@ -21,8 +21,10 @@
 //     R-pr367-fix-1 regression — pre-fix this was empty).
 //   - accepted.network is the CAIP-2 wire-form the challenge sent, not
 //     normalized to "solana" (R20+ negotiation invariant).
-//   - extra.feePayer + extra.memo present; other server extension fields
-//     preserved by shallow-clone (R-pr367-fix-7).
+//   - extra.feePayer present; other server extension fields preserved by
+//     shallow-clone (R-pr367-fix-7). Memo is NOT in accepted.extra unless
+//     the challenge included it (R-pr368-live-fix-1) — it lives in the
+//     tx as a Memo instruction (on-chain commitment).
 //   - payload.transaction round-trips the built tx base64 (Layer 2.5
 //     passes the unsigned/placeholder tx straight into settle — actual
 //     signing happens in agent_pay between build() and settle() via the
@@ -248,8 +250,11 @@ async function runSettleForCapture(captureEntry) {
         if (captureEntry.expectFeePayer && decoded.accepted.extra.feePayer !== captureEntry.expectFeePayer) {
             throw new Error(`extra.feePayer expected "${captureEntry.expectFeePayer}", got "${decoded.accepted.extra.feePayer}"`);
         }
-        if (typeof decoded.accepted.extra.memo !== 'string' || decoded.accepted.extra.memo.length === 0) {
-            throw new Error(`PAYMENT-SIGNATURE.accepted.extra.memo missing or empty`);
+        // R-pr368-live-fix-1: memo is NOT in accepted.extra unless the
+        // challenge included it. Verify the OPPOSITE for our captures
+        // (all 3 challenges have only feePayer in extra, no memo).
+        if ('memo' in decoded.accepted.extra) {
+            throw new Error(`PAYMENT-SIGNATURE.accepted.extra.memo present but challenge had no memo — would cause "No matching payment requirements" from strict facilitators`);
         }
         if (!decoded.payload || !decoded.payload.transaction) {
             throw new Error(`PAYMENT-SIGNATURE.payload.transaction missing`);
@@ -288,6 +293,11 @@ async function runSettleForCapture(captureEntry) {
 function _isExcludedFromSettleCoverage(fname) {
     if (fname.startsWith('synthetic-')) return true;
     if (fname === 'textbelt-status-free.json') return true;
+    // Layer 3 live-pay captures the success response (status 200 + a
+    // PAYMENT-RESPONSE header) as `<service>-v2-success.json`. These
+    // are NOT 402 challenges — Layer 2.5 only validates the
+    // detect/build/settle path against challenge captures.
+    if (fname.endsWith('-v2-success.json')) return true;
     return false;
 }
 
@@ -347,13 +357,17 @@ async function main() {
         }
     });
 
-    await check('all v2 captures emit a non-empty memo in PAYMENT-SIGNATURE (challenge or random nonce)', () => {
+    await check('all v2 captures DO NOT add memo to accepted.extra (R-pr368-live-fix-1 invariant)', () => {
+        // Strict facilitators (paysponge) reject "No matching payment
+        // requirements" when accepted.extra contains keys the challenge
+        // didn't have. None of our committed real captures has memo in
+        // their accepts[i].extra — assert the proof reflects that.
         for (const entry of SETTLE_CAPTURES.filter(e => e.expectV2)) {
             const artifacts = runCache.get(entry.file);
             if (!artifacts) continue;
             const decoded = JSON.parse(Buffer.from(artifacts.capturedHeaders['payment-signature'], 'base64').toString('utf8'));
-            if (!decoded.accepted.extra.memo || decoded.accepted.extra.memo.length === 0) {
-                throw new Error(`${entry.file}: extra.memo empty`);
+            if ('memo' in decoded.accepted.extra) {
+                throw new Error(`${entry.file}: memo in accepted.extra — would cause strict-facilitator rejection`);
             }
         }
     });

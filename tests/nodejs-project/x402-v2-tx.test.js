@@ -173,10 +173,9 @@ check('_buildV2PaymentSignatureHeader accepts valid non-empty signedTxBase64', (
 });
 
 check('_buildV2PaymentSignatureHeader preserves server-provided extra fields (R-pr367-fix-7)', () => {
-    // Future facilitators may add fields beyond feePayer + memo (e.g.,
-    // signing nonces, fee tiers, expiration hints). Pre-fix dropped them
-    // by rebuilding `extra` as `{ feePayer, memo }`. Now we shallow-clone
-    // so unknown fields round-trip back in the PAYMENT-SIGNATURE proof.
+    // accepted.extra must echo the challenge's accepts[i].extra exactly.
+    // Future facilitators may add fields beyond feePayer (e.g., signing
+    // nonces, fee tiers, expiration hints) — those must round-trip.
     const meta = {
         requirement: {
             extra: {
@@ -196,10 +195,57 @@ check('_buildV2PaymentSignatureHeader preserves server-provided extra fields (R-
     assert.ok(r.value);
     const decoded = JSON.parse(Buffer.from(r.value, 'base64').toString('utf8'));
     assert.strictEqual(decoded.accepted.extra.feePayer, FACILITATOR);
-    assert.strictEqual(decoded.accepted.extra.memo, MEMO_FIXED, 'memo must be the one used in tx (overrides server value)');
     assert.strictEqual(decoded.accepted.extra.signingNonce, 'abc123', 'extension field must be preserved');
     assert.strictEqual(decoded.accepted.extra.feeTier, 'priority', 'extension field must be preserved');
     assert.strictEqual(decoded.accepted.extra.expiresAt, 1234567890, 'extension field must be preserved');
+});
+
+check('_buildV2PaymentSignatureHeader does NOT add memo to extra when challenge omitted it (R-pr368-live-fix-1)', () => {
+    // Strict-matching facilitators (paysponge.com) reject with
+    // "No matching payment requirements" when accepted.extra contains
+    // keys the challenge's accepts[i].extra didn't have. The memo lives
+    // in the tx as a Memo instruction — it does NOT belong in the
+    // header echo unless the challenge included it in extra.
+    //
+    // Caught by live-pay-curated.js: paysponge facilitator (used by
+    // tripadvisor + textbelt) returned 402 again with the old behavior;
+    // CoinGecko's facilitator was lenient and accepted but the strict
+    // interpretation is correct per the spec.
+    const meta = {
+        requirement: {
+            extra: { feePayer: FACILITATOR },  // NO memo in challenge
+            resource: { url: 'https://x' },
+            payTo: RECIPIENT,
+        },
+        memo: MEMO_FIXED,  // built tx still has a memo (on-chain commitment)
+        amountAtomic: AMOUNT_USDC,
+        negotiatedNetwork: 'solana',
+    };
+    const r = _buildV2PaymentSignatureHeader(meta, 'AQABBA==');
+    const decoded = JSON.parse(Buffer.from(r.value, 'base64').toString('utf8'));
+    assert.strictEqual(decoded.accepted.extra.feePayer, FACILITATOR);
+    assert.ok(!('memo' in decoded.accepted.extra),
+        'memo must NOT appear in accepted.extra when challenge omitted it; the tx Memo instruction carries the commitment');
+});
+
+check('_buildV2PaymentSignatureHeader echoes challenge memo when present in extra', () => {
+    // If the challenge's accepts[i].extra includes a memo (some
+    // facilitators may require client to use a server-chosen nonce),
+    // it must round-trip in accepted.extra.memo. Same shallow-clone
+    // path — no special memo handling.
+    const meta = {
+        requirement: {
+            extra: { feePayer: FACILITATOR, memo: 'server-chose-this-memo' },
+            resource: { url: 'https://x' },
+            payTo: RECIPIENT,
+        },
+        memo: 'server-chose-this-memo',  // build() uses challenge memo when present
+        amountAtomic: AMOUNT_USDC,
+        negotiatedNetwork: 'solana',
+    };
+    const r = _buildV2PaymentSignatureHeader(meta, 'AQABBA==');
+    const decoded = JSON.parse(Buffer.from(r.value, 'base64').toString('utf8'));
+    assert.strictEqual(decoded.accepted.extra.memo, 'server-chose-this-memo');
 });
 
 check('_buildV2PaymentSignatureHeader rejects oversized proofs (R-pr367-fix-8 DoS guard)', () => {
@@ -240,24 +286,11 @@ check('_buildV2PaymentSignatureHeader accepts normal-sized proofs (under 8KB cap
     assert.ok(r.value.length <= 8192);
 });
 
-check('_buildV2PaymentSignatureHeader overrides server-provided memo with paymentMeta.memo', () => {
-    // build() may have generated a random nonce if challenge had no
-    // extra.memo; the proof must reflect what's actually IN the signed tx,
-    // not what the server originally sent.
-    const meta = {
-        requirement: {
-            extra: { feePayer: FACILITATOR, memo: 'stale-server-memo' },
-            resource: { url: 'https://x' },
-            payTo: RECIPIENT,
-        },
-        memo: MEMO_FIXED,  // what we actually used in the tx
-        amountAtomic: AMOUNT_USDC,
-        negotiatedNetwork: 'solana',
-    };
-    const r = _buildV2PaymentSignatureHeader(meta, 'AQABBA==');
-    const decoded = JSON.parse(Buffer.from(r.value, 'base64').toString('utf8'));
-    assert.strictEqual(decoded.accepted.extra.memo, MEMO_FIXED);
-});
+// Removed in R-pr368-live-fix-1: the previous behavior (override
+// server's memo with paymentMeta.memo) caused "No matching payment
+// requirements" rejection from strict facilitators. accepted.extra
+// must be an exact echo of the challenge — see the test above
+// "does NOT add memo to extra when challenge omitted it".
 
 // ── Full v2 tx structure ────────────────────────────────────────────────
 

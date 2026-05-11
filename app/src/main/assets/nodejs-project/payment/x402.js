@@ -756,18 +756,29 @@ function _buildV2PaymentSignatureHeader(paymentMeta, signedTxBase64) {
             asset: paymentMeta.asset || USDC_MINT,
             payTo: req.payTo || paymentMeta.recipient,
             maxTimeoutSeconds: typeof req.maxTimeoutSeconds === 'number' ? req.maxTimeoutSeconds : 300,
-            // BAT-582 v1.6 R-pr367-fix-7: preserve all server-provided
-            // extension fields by shallow-cloning `extra`, then override
-            // `memo` with the value actually used in the tx (build() may
-            // have generated a random nonce if none was supplied).
-            // feePayer is part of `extra` already and is preserved by the
-            // spread. Future-proofs against facilitators adding new fields
-            // (signing nonces, fee tiers, expiration hints, etc.) without
-            // requiring a client change.
-            extra: {
-                ...extra,
-                memo: paymentMeta.memo,
-            },
+            // BAT-582 v1.6 R-pr368-live-fix-1: `accepted.extra` must be
+            // an exact echo of the chosen accepts[i].extra from the
+            // challenge. Some facilitators (e.g. paysponge.com,
+            // 2wKupLR9...) strict-match this field and reject with
+            // "No matching payment requirements" when client adds keys
+            // the challenge didn't have. The MEMO lives in the tx as a
+            // Memo instruction (on-chain commitment) — it does NOT
+            // belong in the header echo unless the challenge itself
+            // included it in extra (in which case the shallow-clone
+            // already preserves it).
+            //
+            // Pre-fix we added `memo: paymentMeta.memo` unconditionally,
+            // which produced a working header against lenient
+            // facilitators (CoinGecko) but a "No matching payment
+            // requirements" rejection against strict ones (paysponge).
+            // Caught by tests/paysh/live-pay-curated.js — three
+            // services tested, one succeeded, two rejected with
+            // identical error.
+            //
+            // R-pr367-fix-7 preservation intent (extension fields like
+            // signingNonce, feeTier, expiresAt) still works: the spread
+            // echoes back whatever the challenge sent.
+            extra: { ...extra },
         },
         payload: {
             transaction: signedTxBase64,

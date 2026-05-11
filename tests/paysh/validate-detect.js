@@ -75,9 +75,20 @@ function fromCapture(capture) {
     };
 }
 
+// Layer 3 live-pay captures the success response (status 200 + a
+// PAYMENT-RESPONSE header) as `<service>-v2-success.json`. Those are NOT
+// 402 challenges — Layer 2 only validates the detect/build path against
+// challenges. Filter them out (same convention as validate-settle.js).
+function _isV2SuccessFixture(fname) {
+    return fname.endsWith('-v2-success.json');
+}
+
 async function main() {
     const proto = new X402Protocol();
-    const files = fs.readdirSync(CAPTURES_DIR).filter(f => f.endsWith('.json')).sort();
+    const files = fs.readdirSync(CAPTURES_DIR)
+        .filter(f => f.endsWith('.json'))
+        .filter(f => !_isV2SuccessFixture(f))
+        .sort();
     console.log(`═══ Layer 2 — validate-detect (${files.length} captures) ═══`);
     console.log('');
 

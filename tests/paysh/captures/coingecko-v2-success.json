@@ -1,0 +1,1885 @@
+{
+  "_meta": {
+    "label": "coingecko-v2-success",
+    "description": "v2 PAYMENT-RESPONSE captured during Layer 3 live-pay (coingecko)",
+    "capturedAt": "2026-05-11T16:42:14.586Z",
+    "onChainSignature": "2wDgn22H1btExH5wCt8Kt2CL8NaE8ErBATShqQw7RP4ZpGpD1D4Wbaz5hi33fTs3wPLighMwcTASmfoMD3dXgPux",
+    "demandAtomic": "10000",
+    "note": "Spent real USDC. Captured for regression pinning of v2 settle path."
+  },
+  "url": "https://pro-api.coingecko.com/api/v3/x402/onchain/networks/solana/trending_pools",
+  "method": "GET",
+  "status": 200,
+  "headers": {
+    "date": "Mon, 11 May 2026 16:42:14 GMT",
+    "content-type": "application/json; charset=utf-8",
+    "transfer-encoding": "chunked",
+    "connection": "keep-alive",
+    "server": "cloudflare",
+    "x-frame-options": "SAMEORIGIN",
+    "x-xss-protection": "0",
+    "x-content-type-options": "nosniff",
+    "x-permitted-cross-domain-policies": "none",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "cache-control": "max-age=30, public, must-revalidate, s-maxage=30",
+    "access-control-allow-origin": "*",
+    "access-control-allow-methods": "POST, PUT, DELETE, GET, OPTIONS",
+    "access-control-request-method": "*",
+    "access-control-allow-headers": "Origin, X-Requested-With, Content-Type, Accept, Authorization",
+    "access-control-expose-headers": "link, per-page, total",
+    "payment-response": "[REDACTED]",
+    "vary": "Accept-Encoding, Origin",
+    "etag": "W/\"[REDACTED]\"",
+    "x-request-id": "9d8f638d-f346-4816-833b-5b39b0134083",
+    "x-runtime": "6.119449",
+    "alternate-protocol": "443:npn-spdy/2",
+    "content-security-policy-report-only": "script-src https://accounts.google.com/gsi/client; frame-src https://accounts.google.com/gsi/; connect-src https://accounts.google.com/gsi/;",
+    "strict-transport-security": "max-age=15724800; includeSubdomains",
+    "cf-cache-status": "MISS",
+    "cf-ray": "9fa2a29aebfbd0df-SOF"
+  },
+  "body": {
+    "data": [
+      {
+        "id": "[REDACTED]",
+        "type": "pool",
+        "attributes": {
+          "base_token_price_usd": "0.[REDACTED]",
+          "base_token_price_native_currency": "0.00137583590715045",
+          "quote_token_price_usd": "97.[REDACTED]",
+          "quote_token_price_native_currency": "1.0",
+          "base_token_price_quote_token": "0.001375835907",
+          "quote_token_price_base_token": "726.830863189",
+          "address": "[REDACTED]",
+          "name": "TROLL / SOL",
+          "pool_created_at": "2025-04-20T18:30:26Z",
+          "fdv_usd": "133489675.669779",
+          "market_cap_usd": "133489675.67162",
+          "price_change_percentage": {
+            "m5": "-0.757",
+            "m15": "-1.998",
+            "m30": "-1.808",
+            "h1": "-1.256",
+            "h6": "23.122",
+            "h24": "40.295"
+          },
+          "transactions": {
+            "m5": {
+              "buys": 12,
+              "sells": 10,
+              "buyers": 12,
+              "sellers": 9
+            },
+            "m15": {
+              "buys": 54,
+              "sells": 70,
+              "buyers": 37,
+              "sellers": 54
+            },
+            "m30": {
+              "buys": 119,
+              "sells": 157,
+              "buyers": 71,
+              "sellers": 114
+            },
+            "h1": {
+              "buys": 455,
+              "sells": 389,
+              "buyers": 243,
+              "sellers": 231
+            },
+            "h6": {
+              "buys": 4570,
+              "sells": 4324,
+              "buyers": 1324,
+              "sellers": 1218
+            },
+            "h24": {
+              "buys": 17990,
+              "sells": 14785,
+              "buyers": 3938,
+              "sellers": 3322
+            }
+          },
+          "volume_usd": {
+            "m5": "14587.9988221365",
+            "m15": "61003.6151198731",
+            "m30": "161991.674017664",
+            "h1": "568518.190168336",
+            "h6": "5622246.94183549",
+            "h24": "18001390.7245349"
+          },
+          "reserve_in_usd": "4579450.1941"
+        },
+        "relationships": {
+          "base_token": {
+            "data": {
+              "id": "[REDACTED]",
+              "type": "token"
+            }
+          },
+          "quote_token": {
+            "data": {
+              "id": "[REDACTED]",
+              "type": "token"
+            }
+          },
+          "dex": {
+            "data": {
+              "id": "pumpswap",
+              "type": "dex"
+            }
+          }
+        }
+      },
+      {
+        "id": "[REDACTED]",
+        "type": "pool",
+        "attributes": {
+          "base_token_price_usd": "0.[REDACTED]",
+          "base_token_price_native_currency": "0.0000121028402184887",
+          "quote_token_price_usd": "97.[REDACTED]",
+          "quote_token_price_native_currency": "1.0",
+          "base_token_price_quote_token": "0.00001210284022",
+          "quote_token_price_base_token": "82625.2335771869",
+          "address": "[REDACTED]",
+          "name": "BABYTROLL / SOL",
+          "pool_created_at": "2026-05-10T19:34:49Z",
+          "fdv_usd": "1159362.03008765",
+          "market_cap_usd": "1181695.753",
+          "price_change_percentage": {
+            "m5": "4.784",
+            "m15": "4.66",
+            "m30": "32.398",
+            "h1": "65.075",
+            "h6": "159.764",
+            "h24": "2732.502"
+          },
+          "transactions": {
+            "m5": {
+              "buys": 49,
+              "sells": 39,
+              "buyers": 37,
+              "sellers": 36
+            },
+            "m15": {
+              "buys": 378,
+              "sells": 247,
+              "buyers": 256,
+              "sellers": 194
+            },
+            "m30": {
+              "buys": 879,
+              "sells": 621,
+              "buyers": 523,
+              "sellers": 432
+            },
+            "h1": {
+              "buys": 1632,
+              "sells": 1235,
+              "buyers": 874,
+              "sellers": 738
+            },
+            "h6": {
+              "buys": 6434,
+              "sells": 4761,
+              "buyers": 2524,
+              "sellers": 2011
+            },
+            "h24": {
+              "buys": 25780,
+              "sells": 17791,
+              "buyers": 7535,
+              "sellers": 5115
+            }
+          },
+          "volume_usd": {
+            "m5": "8201.69206162",
+            "m15": "68979.8012394902",
+            "m30": "144796.193800667",
+            "h1": "258431.698257005",
+            "h6": "863792.191619567",
+            "h24": "2753004.57303663"
+          },
+          "reserve_in_usd": "100106.7015"
+        },
+        "relationships": {
+          "base_token": {
+            "data": {
+              "id": "[REDACTED]",
+              "type": "token"
+            }
+          },
+          "quote_token": {
+            "data": {
+              "id": "[REDACTED]",
+              "type": "token"
+            }
+          },
+          "dex": {
+            "data": {
+              "id": "pumpswap",
+              "type": "dex"
+            }
+          }
+        }
+      },
+      {
+        "id": "[REDACTED]",
+        "type": "pool",
+        "attributes": {
+          "base_token_price_usd": "0.[REDACTED]",
+          "base_token_price_native_currency": "0.0000410634638175795",
+          "quote_token_price_usd": "97.[REDACTED]",
+          "quote_token_price_native_currency": "1.0",
+          "base_token_price_quote_token": "0.00004106346382",
+          "quote_token_price_base_token": "24352.5486413519",
+          "address": "[REDACTED]",
+          "name": "HANTA / SOL",
+          "pool_created_at": "2026-05-03T21:27:40Z",
+          "fdv_usd": "4008486.08493202",
+          "market_cap_usd": "4008486.08493202",
+          "price_change_percentage": {
+            "m5": "-0.405",
+            "m15": "-0.522",
+            "m30": "-8.43",
+            "h1": "-3.532",
+            "h6": "4.832",
+            "h24": "17.027"
+          },
+          "transactions": {
+            "m5": {
+              "buys": 8,
+              "sells": 7,
+              "buyers": 8,
+              "sellers": 7
+            },
+            "m15": {
+              "buys": 50,
+              "sells": 42,
+              "buyers": 44,
+              "sellers": 38
+            },
+            "m30": {
+              "buys": 153,
+              "sells": 129,
+              "buyers": 101,
+              "sellers": 104
+            },
+            "h1": {
+              "buys": 274,
+              "sells": 263,
+              "buyers": 173,
+              "sellers": 183
+            },
+            "h6": {
+              "buys": 5927,
+              "sells": 5370,
+              "buyers": 2098,
+              "sellers": 1990
+            },
+            "h24": {
+              "buys": 12830,
+              "sells": 11909,
+              "buyers": 3912,
+              "sellers": 3927
+            }
+          },
+          "volume_usd": {
+            "m5": "1661.0684534735",
+            "m15": "11364.8317544118",
+            "m30": "36283.6984612208",
+            "h1": "62720.7405301235",
+            "h6": "1547697.90598144",
+            "h24": "3378900.04373021"
+          },
+          "reserve_in_usd": "282023.1152"
+        },
+        "relationships": {
+          "base_token": {
+            "data": {
+              "id": "[REDACTED]",
+              "type": "token"
+            }
+          },
+          "quote_token": {
+            "data": {
+              "id": "[REDACTED]",
+              "type": "token"
+            }
+          },
+          "dex": {
+            "data": {
+              "id": "pumpswap",
+              "type": "dex"
+            }
+          }
+        }
+      },
+      {
+        "id": "[REDACTED]",
+        "type": "pool",
+        "attributes": {
+          "base_token_price_usd": "0.[REDACTED]",
+          "base_token_price_native_currency": "0.000192347629530614",
+          "quote_token_price_usd": "97.[REDACTED]",
+          "quote_token_price_native_currency": "1.0",
+          "base_token_price_quote_token": "0.0001923476295",
+          "quote_token_price_base_token": "5198.920321713",
+          "address": "[REDACTED]",
+          "name": "Goblin / SOL",
+          "pool_created_at": "2026-04-25T15:37:06Z",
+          "fdv_usd": "13322784.9971775",
+          "market_cap_usd": "13322869.6158315",
+          "price_change_percentage": {
+            "m5": "0.035",
+            "m15": "1.391",
+            "m30": "-3.311",
+            "h1": "-1.908",
+            "h6": "3.546",
+            "h24": "127.623"
+          },
+          "transactions": {
+            "m5": {
+              "buys": 10,
+              "sells": 5,
+              "buyers": 10,
+              "sellers": 5
+            },
+            "m15": {
+              "buys": 67,
+              "sells": 65,
+              "buyers": 56,
+              "sellers": 54
+            },
+            "m30": {
+              "buys": 232,
+              "sells": 186,
+              "buyers": 126,
+              "sellers": 118
+            },
+            "h1": {
+              "buys": 509,
+              "sells": 489,
+              "buyers": 272,
+              "sellers": 286
+            },
+            "h6": {
+              "buys": 2903,
+              "sells": 2683,
+              "buyers": 1124,
+              "sellers": 1207
+            },
+            "h24": {
+              "buys": 26653,
+              "sells": 22426,
+              "buyers": 5708,
+              "sellers": 5700
+            }
+          },
+          "volume_usd": {
+            "m5": "1770.2390985472",
+            "m15": "18701.9164883458",
+            "m30": "70089.4086659842",
+            "h1": "170507.838715068",
+            "h6": "995260.715052361",
+            "h24": "12686681.911449"
+          },
+          "reserve_in_usd": "635423.6022"
+        },
+        "relationships": {
+          "base_token": {
+            "data": {
+              "id": "[REDACTED]",
+              "type": "token"
+            }
+          },
+          "quote_token": {
+            "data": {
+              "id": "[REDACTED]",
+              "type": "token"
+            }
+          },
+          "dex": {
+            "data": {
+              "id": "pumpswap",
+              "type": "dex"
+            }
+          }
+        }
+      },
+      {
+        "id": "[REDACTED]",
+        "type": "pool",
+        "attributes": {
+          "base_token_price_usd": "0.[REDACTED]",
+          "base_token_price_native_currency": "0.00000794166464785425",
+          "quote_token_price_usd": "97.[REDACTED]",
+          "quote_token_price_native_currency": "1.0",
+          "base_token_price_quote_token": "0.000007941664648",
+          "quote_token_price_base_token": "125918.185209469",
+          "address": "[REDACTED]",
+          "name": "GAYTES / SOL",
+          "pool_created_at": "2026-05-08T12:02:11Z",
+          "fdv_usd": "776824.72664111",
+          "market_cap_usd": "776824.72664111",
+          "price_change_percentage": {
+            "m5": "-5.084",
+            "m15": "-32.965",
+            "m30": "-38.579",
+            "h1": "-40.558",
+            "h6": "-60.797",
+            "h24": "-11.565"
+          },
+          "transactions": {
+            "m5": {
+              "buys": 173,
+              "sells": 113,
+              "buyers": 142,
+              "sellers": 100
+            },
+            "m15": {
+              "buys": 868,
+              "sells": 375,
+              "buyers": 598,
+              "sellers": 297
+            },
+            "m30": {
+              "buys": 1435,
+              "sells": 508,
+              "buyers": 1023,
+              "sellers": 397
+            },
+            "h1": {
+              "buys": 2541,
+              "sells": 889,
+              "buyers": 1583,
+              "sellers": 634
+            },
+            "h6": {
+              "buys": 12514,
+              "sells": 6488,
+              "buyers": 3337,
+              "sellers": 2656
+            },
+            "h24": {
+              "buys": 40377,
+              "sells": 23487,
+              "buyers": 5183,
+              "sellers": 5043
+            }
+          },
+          "volume_usd": {
+            "m5": "39732.9023095908",
+            "m15": "122717.687795405",
+            "m30": "139658.753587092",
+            "h1": "235907.764221126",
+            "h6": "1488673.37515021",
+            "h24": "4558767.78750878"
+          },
+          "reserve_in_usd": "104006.7472"
+        },
+        "relationships": {
+          "base_token": {
+            "data": {
+              "id": "[REDACTED]",
+              "type": "token"
+            }
+          },
+          "quote_token": {
+            "data": {
+              "id": "[REDACTED]",
+              "type": "token"
+            }
+          },
+          "dex": {
+            "data": {
+              "id": "pumpswap",
+              "type": "dex"
+            }
+          }
+        }
+      },
+      {
+        "id": "[REDACTED]",
+        "type": "pool",
+        "attributes": {
+          "base_token_price_usd": "0.[REDACTED]",
+          "base_token_price_native_currency": "0.0000975347089126808",
+          "quote_token_price_usd": "97.[REDACTED]",
+          "quote_token_price_native_currency": "1.0",
+          "base_token_price_quote_token": "0.00009753470891",
+          "quote_token_price_base_token": "10252.7603880508",
+          "address": "[REDACTED]",
+          "name": "WOJAK / SOL",
+          "pool_created_at": "2025-11-03T20:41:29Z",
+          "fdv_usd": "9512938.49799762",
+          "market_cap_usd": "9512938.50018057",
+          "price_change_percentage": {
+            "m5": "-0.205",
+            "m15": "-1.183",
+            "m30": "-5.704",
+            "h1": "-7.808",
+            "h6": "30.833",
+            "h24": "72.306"
+          },
+          "transactions": {
+            "m5": {
+              "buys": 1,
+              "sells": 5,
+              "buyers": 1,
+              "sellers": 5
+            },
+            "m15": {
+              "buys": 192,
+              "sells": 65,
+              "buyers": 129,
+              "sellers": 49
+            },
+            "m30": {
+              "buys": 263,
+              "sells": 142,
+              "buyers": 166,
+              "sellers": 113
+            },
+            "h1": {
+              "buys": 702,
+              "sells": 529,
+              "buyers": 322,
+              "sellers": 324
+            },
+            "h6": {
+              "buys": 2971,
+              "sells": 2972,
+              "buyers": 1033,
+              "sellers": 1181
+            },
+            "h24": {
+              "buys": 6455,
+              "sells": 6428,
+              "buyers": 2032,
+              "sellers": 2243
+            }
+          },
+          "volume_usd": {
+            "m5": "679.0162435363",
+            "m15": "32015.5481259296",
+            "m30": "56508.2523876597",
+            "h1": "208593.242407822",
+            "h6": "1339785.34059761",
+            "h24": "2741454.50248329"
+          },
+          "reserve_in_usd": "618960.3997"
+        },
+        "relationships": {
+          "base_token": {
+            "data": {
+              "id": "[REDACTED]",
+              "type": "token"
+            }
+          },
+          "quote_token": {
+            "data": {
+              "id": "[REDACTED]",
+              "type": "token"
+            }
+          },
+          "dex": {
+            "data": {
+              "id": "pumpswap",
+              "type": "dex"
+            }
+          }
+        }
+      },
+      {
+        "id": "[REDACTED]",
+        "type": "pool",
+        "attributes": {
+          "base_token_price_usd": "0.[REDACTED]",
+          "base_token_price_native_currency": "0.000266757897726221",
+          "quote_token_price_usd": "97.685372808995598494870512702",
+          "quote_token_price_native_currency": "1.0",
+          "base_token_price_quote_token": "0.0002667578977",
+          "quote_token_price_base_token": "3748.717501989",
+          "address": "[REDACTED]",
+          "name": "aura / SOL",
+          "pool_created_at": "2024-05-30T20:01:08Z",
+          "fdv_usd": "24989029.7218966",
+          "market_cap_usd": "24989029.7218966",
+          "price_change_percentage": {
+            "m5": "-0.002",
+            "m15": "-2.163",
+            "m30": "-1.285",
+            "h1": "3.137",
+            "h6": "-2.779",
+            "h24": "-22.655"
+          },
+          "transactions": {
+            "m5": {
+              "buys": 3,
+              "sells": 3,
+              "buyers": 3,
+              "sellers": 3
+            },
+            "m15": {
+              "buys": 19,
+              "sells": 38,
+              "buyers": 17,
+              "sellers": 26
+            },
+            "m30": {
+              "buys": 48,
+              "sells": 107,
+              "buyers": 29,
+              "sellers": 61
+            },
+            "h1": {
+              "buys": 142,
+              "sells": 251,
+              "buyers": 84,
+              "sellers": 112
+            },
+            "h6": {
+              "buys": 1516,
+              "sells": 1260,
+              "buyers": 464,
+              "sellers": 475
+            },
+            "h24": {
+              "buys": 6443,
+              "sells": 5543,
+              "buyers": 1288,
+              "sellers": 1474
+            }
+          },
+          "volume_usd": {
+            "m5": "2008.0999454536",
+            "m15": "19131.5158161129",
+            "m30": "45415.6089648445",
+            "h1": "90877.5743547423",
+            "h6": "646591.382122856",
+            "h24": "2958711.3224022"
+          },
+          "reserve_in_usd": "2234989.1952"
+        },
+        "relationships": {
+          "base_token": {
+            "data": {
+              "id": "[REDACTED]",
+              "type": "token"
+            }
+          },
+          "quote_token": {
+            "data": {
+              "id": "[REDACTED]",
+              "type": "token"
+            }
+          },
+          "dex": {
+            "data": {
+              "id": "raydium",
+              "type": "dex"
+            }
+          }
+        }
+      },
+      {
+        "id": "[REDACTED]",
+        "type": "pool",
+        "attributes": {
+          "base_token_price_usd": "0.[REDACTED]",
+          "base_token_price_native_currency": "0.0000303831343043815",
+          "quote_token_price_usd": "97.[REDACTED]",
+          "quote_token_price_native_currency": "1.0",
+          "base_token_price_quote_token": "0.0000303831343",
+          "quote_token_price_base_token": "32912.9967297611",
+          "address": "[REDACTED]",
+          "name": "RAGEGUY / SOL",
+          "pool_created_at": "2025-09-02T04:26:35Z",
+          "fdv_usd": "2958250.20466469",
+          "market_cap_usd": "2958250.20466469",
+          "price_change_percentage": {
+            "m5": "-0.559",
+            "m15": "0.234",
+            "m30": "3.923",
+            "h1": "13.149",
+            "h6": "0.75",
+            "h24": "1662.987"
+          },
+          "transactions": {
+            "m5": {
+              "buys": 0,
+              "sells": 3,
+              "buyers": 0,
+              "sellers": 3
+            },
+            "m15": {
+              "buys": 26,
+              "sells": 31,
+              "buyers": 19,
+              "sellers": 23
+            },
+            "m30": {
+              "buys": 64,
+              "sells": 71,
+              "buyers": 43,
+              "sellers": 47
+            },
+            "h1": {
+              "buys": 164,
+              "sells": 140,
+              "buyers": 104,
+              "sellers": 91
+            },
+            "h6": {
+              "buys": 1354,
+              "sells": 1162,
+              "buyers": 539,
+              "sellers": 502
+            },
+            "h24": {
+              "buys": 6904,
+              "sells": 5825,
+              "buyers": 1766,
+              "sellers": 1546
+            }
+          },
+          "volume_usd": {
+            "m5": "297.0946454461",
+            "m15": "8436.79783855",
+            "m30": "20526.7528720562",
+            "h1": "38284.9573264402",
+            "h6": "322846.402627757",
+            "h24": "2050347.95318441"
+          },
+          "reserve_in_usd": "198521.3812"
+        },
+        "relationships": {
+          "base_token": {
+            "data": {
+              "id": "[REDACTED]",
+              "type": "token"
+            }
+          },
+          "quote_token": {
+            "data": {
+              "id": "[REDACTED]",
+              "type": "token"
+            }
+          },
+          "dex": {
+            "data": {
+              "id": "pumpswap",
+              "type": "dex"
+            }
+          }
+        }
+      },
+      {
+        "id": "[REDACTED]",
+        "type": "pool",
+        "attributes": {
+          "base_token_price_usd": "0.[REDACTED]",
+          "base_token_price_native_currency": "0.00000233497587397795",
+          "quote_token_price_usd": "97.[REDACTED]",
+          "quote_token_price_native_currency": "1.0",
+          "base_token_price_quote_token": "0.000002334975874",
+          "quote_token_price_base_token": "428269.949657494",
+          "address": "[REDACTED]",
+          "name": "AGI / SOL",
+          "pool_created_at": "2026-05-09T19:18:35Z",
+          "fdv_usd": "231328.9954",
+          "market_cap_usd": null,
+          "price_change_percentage": {
+            "m5": "-0.882",
+            "m15": "-8.192",
+            "m30": "-17.903",
+            "h1": "-18.195",
+            "h6": "-53.928",
+            "h24": "-72.452"
+          },
+          "transactions": {
+            "m5": {
+              "buys": 10,
+              "sells": 7,
+              "buyers": 9,
+              "sellers": 7
+            },
+            "m15": {
+              "buys": 135,
+              "sells": 77,
+              "buyers": 105,
+              "sellers": 68
+            },
+            "m30": {
+              "buys": 201,
+              "sells": 149,
+              "buyers": 138,
+              "sellers": 129
+            },
+            "h1": {
+              "buys": 493,
+              "sells": 439,
+              "buyers": 277,
+              "sellers": 324
+            },
+            "h6": {
+              "buys": 1990,
+              "sells": 1699,
+              "buyers": 833,
+              "sellers": 980
+            },
+            "h24": {
+              "buys": 9133,
+              "sells": 8569,
+              "buyers": 2851,
+              "sellers": 3370
+            }
+          },
+          "volume_usd": {
+            "m5": "1028.0380540753",
+            "m15": "16861.9357893042",
+            "m30": "32232.7241667388",
+            "h1": "89161.678669291",
+            "h6": "342833.292743175",
+            "h24": "1956773.11239717"
+          },
+          "reserve_in_usd": "51968.0499"
+        },
+        "relationships": {
+          "base_token": {
+            "data": {
+              "id": "[REDACTED]",
+              "type": "token"
+            }
+          },
+          "quote_token": {
+            "data": {
+              "id": "[REDACTED]",
+              "type": "token"
+            }
+          },
+          "dex": {
+            "data": {
+              "id": "pumpswap",
+              "type": "dex"
+            }
+          }
+        }
+      },
+      {
+        "id": "[REDACTED]",
+        "type": "pool",
+        "attributes": {
+          "base_token_price_usd": "0.[REDACTED]",
+          "base_token_price_native_currency": "0.000003488450672476",
+          "quote_token_price_usd": "97.[REDACTED]",
+          "quote_token_price_native_currency": "1.0",
+          "base_token_price_quote_token": "0.000003488450672",
+          "quote_token_price_base_token": "286660.20932732",
+          "address": "[REDACTED]",
+          "name": "LOBSTER / SOL",
+          "pool_created_at": "2026-05-11T07:57:24Z",
+          "fdv_usd": "337684.5182",
+          "market_cap_usd": null,
+          "price_change_percentage": {
+            "m5": "-1.74",
+            "m15": "8.549",
+            "m30": "-21.126",
+            "h1": "-24.981",
+            "h6": "-33.474",
+            "h24": "717.537"
+          },
+          "transactions": {
+            "m5": {
+              "buys": 19,
+              "sells": 17,
+              "buyers": 17,
+              "sellers": 17
+            },
+            "m15": {
+              "buys": 131,
+              "sells": 121,
+              "buyers": 101,
+              "sellers": 110
+            },
+            "m30": {
+              "buys": 385,
+              "sells": 318,
+              "buyers": 244,
+              "sellers": 275
+            },
+            "h1": {
+              "buys": 641,
+              "sells": 533,
+              "buyers": 350,
+              "sellers": 410
+            },
+            "h6": {
+              "buys": 7647,
+              "sells": 7045,
+              "buyers": 2632,
+              "sellers": 3030
+            },
+            "h24": {
+              "buys": 27429,
+              "sells": 24976,
+              "buyers": 10159,
+              "sellers": 9824
+            }
+          },
+          "volume_usd": {
+            "m5": "1885.9698213945",
+            "m15": "16704.7663100291",
+            "m30": "46719.348669338",
+            "h1": "82435.6260902249",
+            "h6": "1182738.29605843",
+            "h24": "3011220.04887179"
+          },
+          "reserve_in_usd": "54183.9494"
+        },
+        "relationships": {
+          "base_token": {
+            "data": {
+              "id": "[REDACTED]",
+              "type": "token"
+            }
+          },
+          "quote_token": {
+            "data": {
+              "id": "[REDACTED]",
+              "type": "token"
+            }
+          },
+          "dex": {
+            "data": {
+              "id": "pumpswap",
+              "type": "dex"
+            }
+          }
+        }
+      },
+      {
+        "id": "[REDACTED]",
+        "type": "pool",
+        "attributes": {
+          "base_token_price_usd": "0.[REDACTED]",
+          "base_token_price_native_currency": "0.00136351317953516",
+          "quote_token_price_usd": "1.[REDACTED]",
+          "quote_token_price_native_currency": "0.0102456319823605",
+          "base_token_price_quote_token": "0.1330823889",
+          "quote_token_price_base_token": "7.5141422438",
+          "address": "[REDACTED]",
+          "name": "CARDS / USDC",
+          "pool_created_at": "2025-08-29T18:54:46Z",
+          "fdv_usd": "264343052.502043",
+          "market_cap_usd": "34046073.472252",
+          "price_change_percentage": {
+            "m5": "-0.754",
+            "m15": "-0.65",
+            "m30": "-3.513",
+            "h1": "-4.14",
+            "h6": "1.514",
+            "h24": "8.077"
+          },
+          "transactions": {
+            "m5": {
+              "buys": 1,
+              "sells": 1,
+              "buyers": 1,
+              "sellers": 1
+            },
+            "m15": {
+              "buys": 5,
+              "sells": 4,
+              "buyers": 4,
+              "sellers": 2
+            },
+            "m30": {
+              "buys": 61,
+              "sells": 42,
+              "buyers": 31,
+              "sellers": 17
+            },
+            "h1": {
+              "buys": 139,
+              "sells": 73,
+              "buyers": 54,
+              "sellers": 19
+            },
+            "h6": {
+              "buys": 441,
+              "sells": 424,
+              "buyers": 148,
+              "sellers": 119
+            },
+            "h24": {
+              "buys": 2096,
+              "sells": 2148,
+              "buyers": 432,
+              "sellers": 409
+            }
+          },
+          "volume_usd": {
+            "m5": "472.2826517885",
+            "m15": "8968.8199190784",
+            "m30": "102143.6447691",
+            "h1": "130497.968708229",
+            "h6": "661586.132287034",
+            "h24": "2785403.86872763"
+          },
+          "reserve_in_usd": "2778336.4781"
+        },
+        "relationships": {
+          "base_token": {
+            "data": {
+              "id": "[REDACTED]",
+              "type": "token"
+            }
+          },
+          "quote_token": {
+            "data": {
+              "id": "[REDACTED]",
+              "type": "token"
+            }
+          },
+          "dex": {
+            "data": {
+              "id": "raydium-clmm",
+              "type": "dex"
+            }
+          }
+        }
+      },
+      {
+        "id": "[REDACTED]",
+        "type": "pool",
+        "attributes": {
+          "base_token_price_usd": "0.[REDACTED]",
+          "base_token_price_native_currency": "0.000128987757537103",
+          "quote_token_price_usd": "97.[REDACTED]",
+          "quote_token_price_native_currency": "1.0",
+          "base_token_price_quote_token": "0.0001289877575",
+          "quote_token_price_base_token": "7752.673735043",
+          "address": "[REDACTED]",
+          "name": "TripleT / SOL",
+          "pool_created_at": "2026-02-24T08:43:46Z",
+          "fdv_usd": "12593590.4920323",
+          "market_cap_usd": "12593590.4920323",
+          "price_change_percentage": {
+            "m5": "0.159",
+            "m15": "-0.75",
+            "m30": "-1.126",
+            "h1": "0.344",
+            "h6": "2.368",
+            "h24": "6.297"
+          },
+          "transactions": {
+            "m5": {
+              "buys": 5,
+              "sells": 5,
+              "buyers": 5,
+              "sellers": 5
+            },
+            "m15": {
+              "buys": 31,
+              "sells": 30,
+              "buyers": 26,
+              "sellers": 23
+            },
+            "m30": {
+              "buys": 45,
+              "sells": 57,
+              "buyers": 37,
+              "sellers": 43
+            },
+            "h1": {
+              "buys": 117,
+              "sells": 127,
+              "buyers": 83,
+              "sellers": 83
+            },
+            "h6": {
+              "buys": 660,
+              "sells": 652,
+              "buyers": 343,
+              "sellers": 367
+            },
+            "h24": {
+              "buys": 3060,
+              "sells": 2973,
+              "buyers": 1140,
+              "sellers": 1178
+            }
+          },
+          "volume_usd": {
+            "m5": "795.7924095966",
+            "m15": "11858.4639719288",
+            "m30": "20112.8609269669",
+            "h1": "46885.615582435",
+            "h6": "227533.495378179",
+            "h24": "1030308.00933109"
+          },
+          "reserve_in_usd": "551465.3569"
+        },
+        "relationships": {
+          "base_token": {
+            "data": {
+              "id": "[REDACTED]",
+              "type": "token"
+            }
+          },
+          "quote_token": {
+            "data": {
+              "id": "[REDACTED]",
+              "type": "token"
+            }
+          },
+          "dex": {
+            "data": {
+              "id": "pumpswap",
+              "type": "dex"
+            }
+          }
+        }
+      },
+      {
+        "id": "[REDACTED]",
+        "type": "pool",
+        "attributes": {
+          "base_token_price_usd": "0.[REDACTED]",
+          "base_token_price_native_currency": "0.0000682434264028192",
+          "quote_token_price_usd": "97.[REDACTED]",
+          "quote_token_price_native_currency": "1.0",
+          "base_token_price_quote_token": "0.0000682434264",
+          "quote_token_price_base_token": "14653.4260178749",
+          "address": "[REDACTED]",
+          "name": "MAGA / SOL",
+          "pool_created_at": "2026-02-20T22:02:46Z",
+          "fdv_usd": "6512812.76061351",
+          "market_cap_usd": "6512812.81214807",
+          "price_change_percentage": {
+            "m5": "0.375",
+            "m15": "1.656",
+            "m30": "-1.4",
+            "h1": "-6.403",
+            "h6": "9.869",
+            "h24": "-11.146"
+          },
+          "transactions": {
+            "m5": {
+              "buys": 2,
+              "sells": 42,
+              "buyers": 2,
+              "sellers": 6
+            },
+            "m15": {
+              "buys": 46,
+              "sells": 236,
+              "buyers": 44,
+              "sellers": 26
+            },
+            "m30": {
+              "buys": 79,
+              "sells": 545,
+              "buyers": 63,
+              "sellers": 45
+            },
+            "h1": {
+              "buys": 585,
+              "sells": 1096,
+              "buyers": 526,
+              "sellers": 80
+            },
+            "h6": {
+              "buys": 20670,
+              "sells": 3814,
+              "buyers": 20215,
+              "sellers": 383
+            },
+            "h24": {
+              "buys": 47862,
+              "sells": 16030,
+              "buyers": 45718,
+              "sellers": 1121
+            }
+          },
+          "volume_usd": {
+            "m5": "871.9438328667",
+            "m15": "14408.1828389756",
+            "m30": "22798.3410053501",
+            "h1": "47722.0622205956",
+            "h6": "264207.253993566",
+            "h24": "882722.640164485"
+          },
+          "reserve_in_usd": "310972.5062"
+        },
+        "relationships": {
+          "base_token": {
+            "data": {
+              "id": "[REDACTED]",
+              "type": "token"
+            }
+          },
+          "quote_token": {
+            "data": {
+              "id": "[REDACTED]",
+              "type": "token"
+            }
+          },
+          "dex": {
+            "data": {
+              "id": "pumpswap",
+              "type": "dex"
+            }
+          }
+        }
+      },
+      {
+        "id": "[REDACTED]",
+        "type": "pool",
+        "attributes": {
+          "base_token_price_usd": "0.[REDACTED]",
+          "base_token_price_native_currency": "0.0000494789590273001",
+          "quote_token_price_usd": "97.[REDACTED]",
+          "quote_token_price_native_currency": "1.0",
+          "base_token_price_quote_token": "0.00004947895903",
+          "quote_token_price_base_token": "20210.6111296369",
+          "address": "[REDACTED]",
+          "name": "PENGUIN / SOL",
+          "pool_created_at": "2026-01-16T19:29:12Z",
+          "fdv_usd": "4827552.15290722",
+          "market_cap_usd": "4827552.15290722",
+          "price_change_percentage": {
+            "m5": "0.053",
+            "m15": "-0.367",
+            "m30": "-3.063",
+            "h1": "0.011",
+            "h6": "-1.949",
+            "h24": "26.652"
+          },
+          "transactions": {
+            "m5": {
+              "buys": 4,
+              "sells": 3,
+              "buyers": 3,
+              "sellers": 3
+            },
+            "m15": {
+              "buys": 38,
+              "sells": 20,
+              "buyers": 19,
+              "sellers": 12
+            },
+            "m30": {
+              "buys": 55,
+              "sells": 43,
+              "buyers": 30,
+              "sellers": 23
+            },
+            "h1": {
+              "buys": 190,
+              "sells": 140,
+              "buyers": 110,
+              "sellers": 57
+            },
+            "h6": {
+              "buys": 1248,
+              "sells": 1394,
+              "buyers": 356,
+              "sellers": 297
+            },
+            "h24": {
+              "buys": 1857,
+              "sells": 1995,
+              "buyers": 486,
+              "sellers": 415
+            }
+          },
+          "volume_usd": {
+            "m5": "1529.2470060857",
+            "m15": "10470.39441617",
+            "m30": "18481.2390268846",
+            "h1": "74659.1075790798",
+            "h6": "604382.738783371",
+            "h24": "858981.889190394"
+          },
+          "reserve_in_usd": "440027.8026"
+        },
+        "relationships": {
+          "base_token": {
+            "data": {
+              "id": "[REDACTED]",
+              "type": "token"
+            }
+          },
+          "quote_token": {
+            "data": {
+              "id": "[REDACTED]",
+              "type": "token"
+            }
+          },
+          "dex": {
+            "data": {
+              "id": "pumpswap",
+              "type": "dex"
+            }
+          }
+        }
+      },
+      {
+        "id": "[REDACTED]",
+        "type": "pool",
+        "attributes": {
+          "base_token_price_usd": "0.[REDACTED]",
+          "base_token_price_native_currency": "0.0000402571635389929",
+          "quote_token_price_usd": "97.685372808995598494870512702",
+          "quote_token_price_native_currency": "1.0",
+          "base_token_price_quote_token": "0.00004025716354",
+          "quote_token_price_base_token": "24840.2995166663",
+          "address": "[REDACTED]",
+          "name": "GIGA / SOL",
+          "pool_created_at": "2024-01-04T22:40:41Z",
+          "fdv_usd": "37767611.3323038",
+          "market_cap_usd": "37768876.9730427",
+          "price_change_percentage": {
+            "m5": "0.139",
+            "m15": "-0.168",
+            "m30": "-1.201",
+            "h1": "0.872",
+            "h6": "6.365",
+            "h24": "9.708"
+          },
+          "transactions": {
+            "m5": {
+              "buys": 11,
+              "sells": 6,
+              "buyers": 7,
+              "sellers": 3
+            },
+            "m15": {
+              "buys": 41,
+              "sells": 31,
+              "buyers": 30,
+              "sellers": 18
+            },
+            "m30": {
+              "buys": 128,
+              "sells": 144,
+              "buyers": 71,
+              "sellers": 61
+            },
+            "h1": {
+              "buys": 231,
+              "sells": 293,
+              "buyers": 116,
+              "sellers": 99
+            },
+            "h6": {
+              "buys": 1596,
+              "sells": 1609,
+              "buyers": 346,
+              "sellers": 259
+            },
+            "h24": {
+              "buys": 7940,
+              "sells": 8012,
+              "buyers": 1114,
+              "sellers": 800
+            }
+          },
+          "volume_usd": {
+            "m5": "2250.2622113017",
+            "m15": "14958.1651575374",
+            "m30": "69520.1431543991",
+            "h1": "133917.155754594",
+            "h6": "520276.201780227",
+            "h24": "2397883.80775861"
+          },
+          "reserve_in_usd": "2007425.3363"
+        },
+        "relationships": {
+          "base_token": {
+            "data": {
+              "id": "[REDACTED]",
+              "type": "token"
+            }
+          },
+          "quote_token": {
+            "data": {
+              "id": "[REDACTED]",
+              "type": "token"
+            }
+          },
+          "dex": {
+            "data": {
+              "id": "raydium",
+              "type": "dex"
+            }
+          }
+        }
+      },
+      {
+        "id": "[REDACTED]",
+        "type": "pool",
+        "attributes": {
+          "base_token_price_usd": "0.[REDACTED]",
+          "base_token_price_native_currency": "0.0000463826376783137",
+          "quote_token_price_usd": "97.[REDACTED]",
+          "quote_token_price_native_currency": "1.0",
+          "base_token_price_quote_token": "0.00004638263768",
+          "quote_token_price_base_token": "21559.7915525091",
+          "address": "[REDACTED]",
+          "name": "unc / SOL",
+          "pool_created_at": "2026-04-11T08:01:55Z",
+          "fdv_usd": "4534906.88596254",
+          "market_cap_usd": "4534906.88596254",
+          "price_change_percentage": {
+            "m5": "-1.433",
+            "m15": "-2.394",
+            "m30": "-8.98",
+            "h1": "-16.206",
+            "h6": "-4.825",
+            "h24": "6.104"
+          },
+          "transactions": {
+            "m5": {
+              "buys": 3,
+              "sells": 6,
+              "buyers": 3,
+              "sellers": 6
+            },
+            "m15": {
+              "buys": 34,
+              "sells": 28,
+              "buyers": 30,
+              "sellers": 26
+            },
+            "m30": {
+              "buys": 189,
+              "sells": 108,
+              "buyers": 133,
+              "sellers": 91
+            },
+            "h1": {
+              "buys": 317,
+              "sells": 185,
+              "buyers": 200,
+              "sellers": 152
+            },
+            "h6": {
+              "buys": 1249,
+              "sells": 1346,
+              "buyers": 643,
+              "sellers": 628
+            },
+            "h24": {
+              "buys": 3238,
+              "sells": 3444,
+              "buyers": 1268,
+              "sellers": 1315
+            }
+          },
+          "volume_usd": {
+            "m5": "687.7855044768",
+            "m15": "12399.3348455823",
+            "m30": "50075.4261898063",
+            "h1": "87213.0013860115",
+            "h6": "486203.153363715",
+            "h24": "1084708.02724825"
+          },
+          "reserve_in_usd": "286188.4128"
+        },
+        "relationships": {
+          "base_token": {
+            "data": {
+              "id": "[REDACTED]",
+              "type": "token"
+            }
+          },
+          "quote_token": {
+            "data": {
+              "id": "[REDACTED]",
+              "type": "token"
+            }
+          },
+          "dex": {
+            "data": {
+              "id": "pumpswap",
+              "type": "dex"
+            }
+          }
+        }
+      },
+      {
+        "id": "[REDACTED]",
+        "type": "pool",
+        "attributes": {
+          "base_token_price_usd": "0.[REDACTED]",
+          "base_token_price_native_currency": "0.0000000000189644795641861",
+          "quote_token_price_usd": "94.[REDACTED]",
+          "quote_token_price_native_currency": "1.0",
+          "base_token_price_quote_token": "0.00000000001896447956",
+          "quote_token_price_base_token": "52730157799.2402",
+          "address": "[REDACTED]",
+          "name": "$ELN / SOL",
+          "pool_created_at": "2026-05-07T12:13:32Z",
+          "fdv_usd": "900.3653477287",
+          "market_cap_usd": null,
+          "price_change_percentage": {
+            "m5": "0",
+            "m15": "0",
+            "m30": "0",
+            "h1": "0",
+            "h6": "8.878",
+            "h24": "0.394"
+          },
+          "transactions": {
+            "m5": {
+              "buys": 0,
+              "sells": 0,
+              "buyers": 0,
+              "sellers": 0
+            },
+            "m15": {
+              "buys": 0,
+              "sells": 0,
+              "buyers": 0,
+              "sellers": 0
+            },
+            "m30": {
+              "buys": 0,
+              "sells": 0,
+              "buyers": 0,
+              "sellers": 0
+            },
+            "h1": {
+              "buys": 0,
+              "sells": 0,
+              "buyers": 0,
+              "sellers": 0
+            },
+            "h6": {
+              "buys": 1,
+              "sells": 1,
+              "buyers": 1,
+              "sellers": 1
+            },
+            "h24": {
+              "buys": 9,
+              "sells": 7,
+              "buyers": 5,
+              "sellers": 7
+            }
+          },
+          "volume_usd": {
+            "m5": "0.0",
+            "m15": "0.0",
+            "m30": "0.0",
+            "h1": "0.0",
+            "h6": "10.441589142",
+            "h24": "84.8817583217"
+          },
+          "reserve_in_usd": "193.8941"
+        },
+        "relationships": {
+          "base_token": {
+            "data": {
+              "id": "[REDACTED]",
+              "type": "token"
+            }
+          },
+          "quote_token": {
+            "data": {
+              "id": "[REDACTED]",
+              "type": "token"
+            }
+          },
+          "dex": {
+            "data": {
+              "id": "raydium",
+              "type": "dex"
+            }
+          }
+        }
+      },
+      {
+        "id": "[REDACTED]",
+        "type": "pool",
+        "attributes": {
+          "base_token_price_usd": "0.[REDACTED]",
+          "base_token_price_native_currency": "0.0000141746498494548",
+          "quote_token_price_usd": "97.[REDACTED]",
+          "quote_token_price_native_currency": "1.0",
+          "base_token_price_quote_token": "0.00001417464985",
+          "quote_token_price_base_token": "70548.4799004374",
+          "address": "[REDACTED]",
+          "name": "RAGE / SOL",
+          "pool_created_at": "2025-09-05T02:14:57Z",
+          "fdv_usd": "1376949.05712833",
+          "market_cap_usd": "1376949.05712833",
+          "price_change_percentage": {
+            "m5": "0.608",
+            "m15": "8.464",
+            "m30": "-4.46",
+            "h1": "-8.01",
+            "h6": "3.646",
+            "h24": "-4.502"
+          },
+          "transactions": {
+            "m5": {
+              "buys": 1,
+              "sells": 2,
+              "buyers": 1,
+              "sellers": 2
+            },
+            "m15": {
+              "buys": 35,
+              "sells": 24,
+              "buyers": 27,
+              "sellers": 20
+            },
+            "m30": {
+              "buys": 54,
+              "sells": 41,
+              "buyers": 38,
+              "sellers": 33
+            },
+            "h1": {
+              "buys": 106,
+              "sells": 90,
+              "buyers": 76,
+              "sellers": 62
+            },
+            "h6": {
+              "buys": 437,
+              "sells": 450,
+              "buyers": 232,
+              "sellers": 273
+            },
+            "h24": {
+              "buys": 3364,
+              "sells": 2719,
+              "buyers": 1096,
+              "sellers": 1034
+            }
+          },
+          "volume_usd": {
+            "m5": "299.2742578196",
+            "m15": "7609.7537699939",
+            "m30": "11425.8960928708",
+            "h1": "25033.9823640954",
+            "h6": "118880.685710796",
+            "h24": "884158.688328833"
+          },
+          "reserve_in_usd": "122916.0588"
+        },
+        "relationships": {
+          "base_token": {
+            "data": {
+              "id": "[REDACTED]",
+              "type": "token"
+            }
+          },
+          "quote_token": {
+            "data": {
+              "id": "[REDACTED]",
+              "type": "token"
+            }
+          },
+          "dex": {
+            "data": {
+              "id": "pumpswap",
+              "type": "dex"
+            }
+          }
+        }
+      },
+      {
+        "id": "[REDACTED]",
+        "type": "pool",
+        "attributes": {
+          "base_token_price_usd": "0.[REDACTED]",
+          "base_token_price_native_currency": "0.0000630662500045594",
+          "quote_token_price_usd": "97.[REDACTED]",
+          "quote_token_price_native_currency": "1.0",
+          "base_token_price_quote_token": "0.00006306625",
+          "quote_token_price_base_token": "15856.3415444506",
+          "address": "[REDACTED]",
+          "name": "67 / SOL",
+          "pool_created_at": "2025-09-19T09:31:39Z",
+          "fdv_usd": "6148190.75871054",
+          "market_cap_usd": "6148190.75871054",
+          "price_change_percentage": {
+            "m5": "-1.862",
+            "m15": "-4.289",
+            "m30": "0.328",
+            "h1": "11.462",
+            "h6": "6.596",
+            "h24": "53.867"
+          },
+          "transactions": {
+            "m5": {
+              "buys": 11,
+              "sells": 7,
+              "buyers": 9,
+              "sellers": 6
+            },
+            "m15": {
+              "buys": 56,
+              "sells": 53,
+              "buyers": 42,
+              "sellers": 34
+            },
+            "m30": {
+              "buys": 171,
+              "sells": 211,
+              "buyers": 117,
+              "sellers": 116
+            },
+            "h1": {
+              "buys": 239,
+              "sells": 359,
+              "buyers": 156,
+              "sellers": 158
+            },
+            "h6": {
+              "buys": 920,
+              "sells": 856,
+              "buyers": 448,
+              "sellers": 419
+            },
+            "h24": {
+              "buys": 2587,
+              "sells": 2705,
+              "buyers": 988,
+              "sellers": 927
+            }
+          },
+          "volume_usd": {
+            "m5": "5736.5585142097",
+            "m15": "25121.0358830897",
+            "m30": "70150.9205661368",
+            "h1": "111368.472803687",
+            "h6": "306387.418462826",
+            "h24": "1011964.59913707"
+          },
+          "reserve_in_usd": "527181.7228"
+        },
+        "relationships": {
+          "base_token": {
+            "data": {
+              "id": "[REDACTED]",
+              "type": "token"
+            }
+          },
+          "quote_token": {
+            "data": {
+              "id": "[REDACTED]",
+              "type": "token"
+            }
+          },
+          "dex": {
+            "data": {
+              "id": "pumpswap",
+              "type": "dex"
+            }
+          }
+        }
+      },
+      {
+        "id": "[REDACTED]",
+        "type": "pool",
+        "attributes": {
+          "base_token_price_usd": "0.[REDACTED]",
+          "base_token_price_native_currency": "0.000111056318961359",
+          "quote_token_price_usd": "97.685372808995598494870512702",
+          "quote_token_price_native_currency": "1.0",
+          "base_token_price_quote_token": "0.000111056319",
+          "quote_token_price_base_token": "9004.440353799",
+          "address": "[REDACTED]",
+          "name": "PAYAI / SOL",
+          "pool_created_at": "2025-11-18T18:50:41Z",
+          "fdv_usd": "10854821.5838694",
+          "market_cap_usd": "10854821.5838694",
+          "price_change_percentage": {
+            "m5": "2.337",
+            "m15": "2.584",
+            "m30": "-0.367",
+            "h1": "10.018",
+            "h6": "6.208",
+            "h24": "39.403"
+          },
+          "transactions": {
+            "m5": {
+              "buys": 8,
+              "sells": 3,
+              "buyers": 3,
+              "sellers": 2
+            },
+            "m15": {
+              "buys": 12,
+              "sells": 6,
+              "buyers": 7,
+              "sellers": 5
+            },
+            "m30": {
+              "buys": 33,
+              "sells": 18,
+              "buyers": 16,
+              "sellers": 12
+            },
+            "h1": {
+              "buys": 74,
+              "sells": 55,
+              "buyers": 42,
+              "sellers": 35
+            },
+            "h6": {
+              "buys": 567,
+              "sells": 243,
+              "buyers": 211,
+              "sellers": 134
+            },
+            "h24": {
+              "buys": 1825,
+              "sells": 1055,
+              "buyers": 524,
+              "sellers": 442
+            }
+          },
+          "volume_usd": {
+            "m5": "1215.0978298023",
+            "m15": "1745.2836273383",
+            "m30": "17424.3341520324",
+            "h1": "45272.5456728742",
+            "h6": "214605.840290154",
+            "h24": "1054035.85008621"
+          },
+          "reserve_in_usd": "978009.1544"
+        },
+        "relationships": {
+          "base_token": {
+            "data": {
+              "id": "[REDACTED]",
+              "type": "token"
+            }
+          },
+          "quote_token": {
+            "data": {
+              "id": "[REDACTED]",
+              "type": "token"
+            }
+          },
+          "dex": {
+            "data": {
+              "id": "raydium-clmm",
+              "type": "dex"
+            }
+          }
+        }
+      }
+    ]
+  }
+}

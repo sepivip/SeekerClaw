@@ -1,0 +1,148 @@
+{
+  "_meta": {
+    "label": "tripadvisor-v2-success",
+    "description": "v2 PAYMENT-RESPONSE captured during Layer 3 live-pay (tripadvisor)",
+    "capturedAt": "2026-05-11T16:43:51.964Z",
+    "onChainSignature": "5CjKJQ5m2quXi6xPckYEog73uyRgmpd3uVV2G5e8wQaYk8p4wv6vGew9j1bNyVTgTrqFv56zuHDazz2DuPRgoETj",
+    "demandAtomic": "10000",
+    "note": "Spent real USDC. Captured for regression pinning of v2 settle path."
+  },
+  "url": "https://tripadvisor.x402.paysponge.com/api/v1/location/search?searchQuery=Tbilisi&category=restaurants",
+  "method": "GET",
+  "status": 200,
+  "headers": {
+    "date": "Mon, 11 May 2026 16:43:52 GMT",
+    "content-type": "application/json",
+    "transfer-encoding": "chunked",
+    "connection": "keep-alive",
+    "access-control-allow-credentials": "true",
+    "cf-cache-status": "DYNAMIC",
+    "payment-response": "[REDACTED]",
+    "rndr-id": "2d4a364c-68b2-4fde",
+    "server": "cloudflare",
+    "vary": "Origin, Accept-Encoding",
+    "x-render-origin-server": "Render",
+    "report-to": "{\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=maFvpxBRm4cMiiDeNU1bKiFiD4z1L5jJrt650p%[REDACTED]%2B3E%3D\"}]}",
+    "nel": "{\"report_to\":\"cf-nel\",\"success_fraction\":0.0,\"max_age\":604800}",
+    "cf-ray": "9fa2a50e1f28d0fd-SOF",
+    "alt-svc": "h3=\":443\"; ma=86400"
+  },
+  "body": {
+    "data": [
+      {
+        "location_id": "14204184",
+        "name": "Coffeeshop Company Tbilisi",
+        "address_obj": {
+          "street1": "11 Ilo Mosashvili St",
+          "city": "Tbilisi",
+          "country": "Georgia",
+          "postalcode": "0162",
+          "address_string": "11 Ilo Mosashvili St, Tbilisi 0162 Georgia"
+        }
+      },
+      {
+        "location_id": "4544141",
+        "name": "Tbilisi",
+        "address_obj": {
+          "street1": "Bd. Stefan cel Mare si Sfant, 69",
+          "city": "Chisinau",
+          "country": "Moldova",
+          "postalcode": "2001",
+          "address_string": "Bd. Stefan cel Mare si Sfant, 69, Chisinau 2001 Moldova"
+        }
+      },
+      {
+        "location_id": "8847876",
+        "name": "Tbilisi",
+        "address_obj": {
+          "street1": "Schoenfliesser Str. 15",
+          "city": "Berlin",
+          "country": "Germany",
+          "postalcode": "10439",
+          "address_string": "Schoenfliesser Str. 15, 10439 Berlin Germany"
+        }
+      },
+      {
+        "location_id": "10811383",
+        "name": "Hummusbar@Tbilisi",
+        "address_obj": {
+          "street1": "Merab Kostava 3",
+          "street2": "In the internal yard",
+          "city": "Tbilisi",
+          "country": "Georgia",
+          "postalcode": "0810",
+          "address_string": "Merab Kostava 3 In the internal yard, Tbilisi 0810 Georgia"
+        }
+      },
+      {
+        "location_id": "24023212",
+        "name": "Old Tbilisi",
+        "address_obj": {
+          "street1": "Jbr Walk Rimal Gm-05",
+          "street2": "Rimal Avenue - 330 - 2 King Salman Bin Abdulaziz Al Saud St - Jumairah Beach Residence - Dubai",
+          "city": "Dubai",
+          "state": "Emirate of Dubai",
+          "country": "United Arab Emirates",
+          "postalcode": "00000",
+          "address_string": "Jbr Walk Rimal Gm-05 Rimal Avenue - 330 - 2 King Salman Bin Abdulaziz Al Saud St - Jumairah Beach Residence - Dubai, Dubai 00000 United Arab Emirates"
+        }
+      },
+      {
+        "location_id": "7185245",
+        "name": "Tiffany Bar And Terrace Tbilisi",
+        "address_obj": {
+          "street1": "Right bank of Mtkvari , Brosse Street Turn",
+          "street2": "Hotel River Side",
+          "city": "Tbilisi",
+          "country": "Georgia",
+          "address_string": "Right bank of Mtkvari , Brosse Street Turn Hotel River Side, Tbilisi Georgia"
+        }
+      },
+      {
+        "location_id": "7221937",
+        "name": "Restauracja Tbilisi",
+        "address_obj": {
+          "street1": "ul. Pulawska 24",
+          "city": "Warsaw",
+          "state": "Mazovia Province",
+          "country": "Poland",
+          "postalcode": "02-512",
+          "address_string": "ul. Pulawska 24, Warsaw 02-512 Poland"
+        }
+      },
+      {
+        "location_id": "3802486",
+        "name": "Georgia Tavern Tbilisi",
+        "address_obj": {
+          "street1": "Pikk 43",
+          "city": "Tallinn",
+          "country": "Estonia",
+          "postalcode": "10130",
+          "address_string": "Pikk 43, Tallinn 10130 Estonia"
+        }
+      },
+      {
+        "location_id": "8122515",
+        "name": "Stella Artois Tbilisi",
+        "address_obj": {
+          "street1": "Rkinis Rigi _7",
+          "city": "Tbilisi",
+          "country": "Georgia",
+          "address_string": "Rkinis Rigi _7, Tbilisi Georgia"
+        }
+      },
+      {
+        "location_id": "23460877",
+        "name": "Barmaglot Tbilisi",
+        "address_obj": {
+          "street1": "Galaqtion Tabidze st. 1",
+          "street2": "Freedom Square",
+          "city": "Tbilisi",
+          "country": "Georgia",
+          "postalcode": "0105",
+          "address_string": "Galaqtion Tabidze st. 1 Freedom Square, Tbilisi 0105 Georgia"
+        }
+      }
+    ]
+  }
+}

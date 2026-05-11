@@ -572,7 +572,10 @@ function _safeStringify(v) {
         assert.strictEqual(decoded.accepted.amount, '10000', 'amount as decimal string');
         assert.strictEqual(decoded.accepted.payTo, '9hw9Py9uMGtXRNpABZjifcK1t3suwzjyri9L9QYKg6zZ');
         assert.strictEqual(decoded.accepted.extra.feePayer, '2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4');
-        assert.strictEqual(decoded.accepted.extra.memo, 'abcdef0123456789abcdef0123456789');
+        // R-pr368-live-fix-1: memo is NOT echoed in accepted.extra when
+        // the challenge's accepts[i].extra didn't include it. The Memo
+        // instruction inside the tx is the on-chain commitment.
+        assert.ok(!('memo' in decoded.accepted.extra), 'memo must not appear in extra when challenge omitted it');
         assert.strictEqual(decoded.payload.transaction, 'V2-SIGNED-TX-FIXTURE');
     });
 
