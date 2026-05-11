@@ -615,7 +615,7 @@ All errors below:
 - `method_not_allowed` — BAT-664 supports GET and POST only (no PUT/PATCH/DELETE)
 - `body_required_for_post` — `method: "POST"` requires a `body` parameter — BAT-664
 - `body_not_json` — `body` must be a JSON-serializable object/array (or a string that parses as JSON). No `text/plain` — BAT-664
-- `body_too_large` — `body` exceeded 8 KB UTF-8 bytes after compact serialization — BAT-664
+- `body_too_large` — `body` exceeded the 8 KB UTF-8 cap (after compact serialization) OR, for string inputs, the 16 KB pre-parse DoS cap. BOTH caps apply: a multi-MB JSON string with extreme whitespace padding is rejected even if its compact form would fit — BAT-664
 
 **Fix:**
 1. For `demand_exceeds_max_usdc`: re-invoke with a higher `max_usdc` if the user agrees, OR accept the rejection (this is the cap working as designed).

@@ -59,7 +59,14 @@ const { wouldReserve } = require('../caps/preflight');
 
 const USDC_DECIMALS = 6;
 const MAX_BODY_BYTES = 1024 * 1024;        // 1 MB response cap
-const MAX_POST_BODY_BYTES = 8 * 1024;      // 8 KB request-body cap (BAT-664, per v1.6 contract)
+const MAX_POST_BODY_BYTES = 8 * 1024;      // 8 KB compact-serialized body cap (BAT-664, per v1.6 contract)
+// R-pr370-fix-35: separate DoS guard on raw string input BEFORE
+// JSON.parse. Without this, a model-supplied multi-MB JSON string
+// would burn CPU/memory in the parser even though the post-serialize
+// 8 KB cap would eventually reject it. 2× MAX_POST_BODY_BYTES gives
+// callers slack for whitespace/formatting in their JSON string while
+// keeping the worst-case parse cost bounded.
+const MAX_RAW_STRING_BYTES = MAX_POST_BODY_BYTES * 2;
 const TOTAL_TIMEOUT_MS = 30 * 1000;        // 30 s
 const RESERVE_TTL_MS = 60 * 1000;          // 60 s (matches dispatch.js)
 const ALLOWED_METHODS = new Set(['GET', 'POST']);
@@ -297,13 +304,16 @@ function validateAndSerializeBody(method, body) {
         // R-pr370-fix-4: bound raw string length BEFORE JSON.parse. A
         // model-controlled multi-MB string would burn CPU/memory in the
         // parser before being rejected by the post-serialize 8 KB cap.
-        // Cap raw input at 2× the compact-serialized cap (room for
-        // whitespace + minor formatting); strictly checked again after
-        // parse via the existing size check below.
-        if (Buffer.byteLength(body, 'utf8') > MAX_POST_BODY_BYTES * 2) {
+        // 2× MAX_POST_BODY_BYTES is documented as a pre-parse DoS guard
+        // (see MAX_RAW_STRING_BYTES); a JSON string with extreme
+        // whitespace padding could exceed this even if its
+        // post-compact-serialize form would fit. That's the documented
+        // contract: BOTH caps apply (pre-parse + post-serialize).
+        const rawLen = Buffer.byteLength(body, 'utf8');
+        if (rawLen > MAX_RAW_STRING_BYTES) {
             return {
                 error: 'body_too_large',
-                reason: `raw POST body string is ${Buffer.byteLength(body, 'utf8')} bytes (max ${MAX_POST_BODY_BYTES * 2} pre-parse)`,
+                reason: `raw POST body string is ${rawLen} bytes (pre-parse cap ${MAX_RAW_STRING_BYTES} = 2× compact-serialize cap, DoS guard)`,
             };
         }
         try { parsed = JSON.parse(body); }
@@ -533,7 +543,7 @@ const tools = [
                     // full surface. Bare primitives rejected at validate
                     // time (see validateAndSerializeBody).
                     type: ['object', 'array', 'string'],
-                    description: 'Request body for POST. JSON object or array (or a JSON string that parses to an object/array). Bare primitives (numbers, booleans, plain strings) are rejected. Max 8 KB UTF-8 compact-serialized. Required when method=POST.',
+                    description: 'Request body for POST. JSON object or array (or a JSON string that parses to an object/array). Bare primitives (numbers, booleans, plain strings) are rejected. Max 8 KB UTF-8 after compact serialization. String inputs are ALSO capped at 16 KB UTF-8 pre-parse (DoS guard against multi-MB strings that would compact down). Required when method=POST.',
                 },
             },
             required: ['url', 'max_usdc'],
