@@ -1031,11 +1031,40 @@ class X402Protocol extends PaymentProtocol {
         try { recentBlockhash = await _fetchRecentBlockhash(); }
         catch (e) { return { error: 'blockhash_fetch_failed', reason: e.message }; }
 
+        const negotiatedVersion = versionCheck.version;
         let built;
-        try {
-            built = _buildUsdcTransferTx(burnerPubkey58, recipient, demand, recentBlockhash);
-        } catch (e) {
-            return { error: 'tx_build_failed', reason: e.message };
+        if (negotiatedVersion === 2) {
+            // BAT-582 v1.6 Phase 5b: v2 challenges produce v2-shape txs.
+            // v2 requires the facilitator's pubkey from `extra.feePayer`
+            // (the server-side co-signer who pays gas + submits the tx)
+            // and a Memo instruction containing either the challenge's
+            // `extra.memo` or a fresh random ≥16-byte hex nonce per spec.
+            const extra = r.extra || {};
+            const facilitatorPubkey58 = extra.feePayer;
+            if (typeof facilitatorPubkey58 !== 'string' || !_decodeSolanaPubkey(facilitatorPubkey58)) {
+                return {
+                    error: 'missing_facilitator',
+                    reason: 'v2 challenge has no extra.feePayer — required for the partially-signed flow',
+                };
+            }
+            const memoString = (typeof extra.memo === 'string' && extra.memo.length > 0)
+                ? extra.memo
+                : _generateRandomMemoNonce();
+            try {
+                built = _buildV2UsdcTransferTx(
+                    burnerPubkey58, recipient, facilitatorPubkey58,
+                    demand, recentBlockhash, memoString,
+                );
+            } catch (e) {
+                return { error: 'tx_build_failed', reason: e.message };
+            }
+        } else {
+            // v1: single-signer legacy tx, burner pays gas + signs slot 0.
+            try {
+                built = _buildUsdcTransferTx(burnerPubkey58, recipient, demand, recentBlockhash);
+            } catch (e) {
+                return { error: 'tx_build_failed', reason: e.message };
+            }
         }
 
         const txBase64 = built.txBuffer.toString('base64');
@@ -1044,9 +1073,7 @@ class X402Protocol extends PaymentProtocol {
         // string from the requirement (could be bare "solana" or
         // "solana:<genesis>"). settle() uses these to decide whether to
         // emit a v1 proof header (existing path, fixture-pinned) or to
-        // reject as v2_settle_not_implemented (until Phase 5 captures a
-        // real v2 success and pins the v2 proof header).
-        const negotiatedVersion = versionCheck.version;
+        // build a v2 PAYMENT-SIGNATURE proof (Phase 5c).
         const meta = {
             ...built.paymentMeta,
             scheme: 'exact',
@@ -1063,6 +1090,7 @@ class X402Protocol extends PaymentProtocol {
                 resource: r.resource,
                 description: r.description,
                 maxTimeoutSeconds: r.maxTimeoutSeconds,
+                extra: r.extra,                   // v2 settle needs `extra.feePayer`
             },
         };
         return { txBase64, paymentMeta: meta };

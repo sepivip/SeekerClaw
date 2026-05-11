@@ -253,6 +253,91 @@ function _safeStringify(v) {
         assert.strictEqual(r.paymentMeta.scheme, 'exact');
     });
 
+    // ── X402Protocol.build — v2 dispatch (BAT-582 Phase 5b) ─────────────────
+    await check('build: v2 challenge produces v2-shape tx (2 sigs, x402Version=2)', async () => {
+        const v2Body = {
+            x402Version: 2,
+            accepts: [{
+                scheme: 'exact',
+                network: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+                amount: '10000',
+                asset: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+                payTo: '9hw9Py9uMGtXRNpABZjifcK1t3suwzjyri9L9QYKg6zZ',
+                maxTimeoutSeconds: 300,
+                extra: { feePayer: '2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4' },
+            }],
+        };
+        const r = await proto.build(
+            { status: 402, bodyJson: v2Body },
+            { maxUsdcAtomic: 200000n, burnerPubkey: VALID_BURNER_PUBKEY }
+        );
+        assert.ok(!r.error, `v2 build should not error: ${_safeStringify(r)}`);
+        assert.strictEqual(r.paymentMeta.x402Version, 2, 'paymentMeta.x402Version must be 2');
+        assert.strictEqual(r.paymentMeta.burnerSigSlot, 1, 'burner must sign slot 1 (slot 0 is facilitator)');
+        assert.strictEqual(r.paymentMeta.facilitator, '2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4');
+        assert.ok(typeof r.paymentMeta.memo === 'string' && r.paymentMeta.memo.length >= 32, 'memo must be ≥32 chars (16-byte hex nonce default)');
+        // v2 tx is ~497 bytes (2 sigs + 8 account keys + 4 instructions + ALT)
+        const txBytes = Buffer.from(r.txBase64, 'base64');
+        assert.strictEqual(txBytes[0], 0x02, 'sigCount must be 2');
+        assert.strictEqual(txBytes[1 + 64 * 2], 0x80, 'message starts with v0 version byte 0x80');
+    });
+
+    await check('build: v2 with extra.memo uses that memo (not random)', async () => {
+        const FIXED_MEMO = 'pi_test_3abc123def456';
+        const v2Body = {
+            x402Version: 2,
+            accepts: [{
+                scheme: 'exact',
+                network: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+                amount: '10000',
+                asset: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+                payTo: '9hw9Py9uMGtXRNpABZjifcK1t3suwzjyri9L9QYKg6zZ',
+                maxTimeoutSeconds: 300,
+                extra: { feePayer: '2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4', memo: FIXED_MEMO },
+            }],
+        };
+        const r = await proto.build(
+            { status: 402, bodyJson: v2Body },
+            { maxUsdcAtomic: 200000n, burnerPubkey: VALID_BURNER_PUBKEY }
+        );
+        assert.ok(!r.error);
+        assert.strictEqual(r.paymentMeta.memo, FIXED_MEMO, 'memo must match challenge extra.memo');
+    });
+
+    await check('build: v2 without extra.feePayer → missing_facilitator', async () => {
+        const v2BadBody = {
+            x402Version: 2,
+            accepts: [{
+                scheme: 'exact',
+                network: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+                amount: '10000',
+                asset: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+                payTo: '9hw9Py9uMGtXRNpABZjifcK1t3suwzjyri9L9QYKg6zZ',
+                maxTimeoutSeconds: 300,
+                extra: {},                          // no feePayer
+            }],
+        };
+        const r = await proto.build(
+            { status: 402, bodyJson: v2BadBody },
+            { maxUsdcAtomic: 200000n, burnerPubkey: VALID_BURNER_PUBKEY }
+        );
+        assert.strictEqual(r.error, 'missing_facilitator');
+    });
+
+    await check('build: v1 challenge still produces v1-shape tx (backward compat)', async () => {
+        // The original happy-path test above already covers v1 build; this case
+        // adds an EXPLICIT byte-level check that v1 has 1 sig slot (not 2).
+        const { wire } = loadFixture('paysh-sandbox-402');
+        const r = await proto.build(
+            { status: 402, bodyJson: wire.body },
+            { maxUsdcAtomic: 200000n, burnerPubkey: VALID_BURNER_PUBKEY }
+        );
+        assert.ok(!r.error);
+        assert.strictEqual(r.paymentMeta.x402Version, 1);
+        const txBytes = Buffer.from(r.txBase64, 'base64');
+        assert.strictEqual(txBytes[0], 0x01, 'v1 sigCount must be 1');
+    });
+
     // ── X402Protocol.build — boundary rejections ─────────────────────────────
     await check('build: demand > max_usdc → demand_exceeds_max_usdc', async () => {
         const { wire } = loadFixture('paysh-sandbox-402');
