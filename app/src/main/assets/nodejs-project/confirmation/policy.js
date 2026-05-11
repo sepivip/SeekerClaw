@@ -163,18 +163,50 @@ function _validateAgentPayPostBody(body) {
 // 200-char contract from BAT-664 v2.
 const _BODY_PREVIEW_MAX = 200;
 const _BODY_PREVIEW_SUFFIX = '… (truncated)';
+
+// R-pr370-fix-12 (BAT-664 security): the confirmation message is rendered
+// through markdown-it (linkify enabled) by the Telegram/Discord channel.
+// Model-controlled body content could inject:
+//   - backticks → break out into code blocks
+//   - `[text](url)` → render as a fake link
+//   - `**` / `__` → bold/italic spoofing
+//   - newlines / carriage returns → reflow the card to hide context
+//   - HTML angle brackets → with raw HTML enabled, an injection vector
+// Escape the body preview by neutralizing every Markdown metacharacter
+// and normalizing whitespace to a literal `\n` token so the rendered
+// preview is always a single-line opaque blob the user can't be tricked
+// by. URL + max_usdc come from agent args too — sanitize those as well.
+function _escapeMarkdownPreview(s) {
+    return String(s)
+        // Strip / encode newlines first so the regex below works on a single
+        // line; literal "\n" stays visible to the human reader.
+        .replace(/\r\n?/g, '\n')
+        .replace(/\n/g, '\\n')
+        // Escape backslash FIRST so we don't double-escape the markers we
+        // add below.
+        .replace(/\\/g, '\\\\')
+        // Markdown structure chars + HTML angle brackets.
+        .replace(/[`*_~[\](){}#>|!<>]/g, (c) => '\\' + c)
+        // Any leftover non-printable controls → space (defense-in-depth).
+        // eslint-disable-next-line no-control-regex
+        .replace(/[\x00-\x1F\x7F]/g, ' ');
+}
+
 function _agentPayPostConfirmMessage(args) {
-    const url = typeof args.url === 'string' ? args.url : '<missing url>';
-    const max = typeof args.max_usdc === 'string' ? args.max_usdc : String(args.max_usdc);
+    const url = typeof args.url === 'string' ? _escapeMarkdownPreview(args.url) : '<missing url>';
+    const max = _escapeMarkdownPreview(typeof args.max_usdc === 'string' ? args.max_usdc : String(args.max_usdc));
     let bodyPreview = '';
     if (args.body !== undefined && args.body !== null) {
         let s;
         try { s = typeof args.body === 'string' ? args.body : JSON.stringify(args.body); }
         catch (_) { s = '<unserializable body>'; }
+        // Truncate BEFORE escape so the 200-char limit is on the human-
+        // visible content (post-escape length may be larger due to
+        // backslash insertions, which is fine for safety).
         if (s.length > _BODY_PREVIEW_MAX) {
             s = s.slice(0, _BODY_PREVIEW_MAX - _BODY_PREVIEW_SUFFIX.length) + _BODY_PREVIEW_SUFFIX;
         }
-        bodyPreview = `body: ${s}`;
+        bodyPreview = `body: ${_escapeMarkdownPreview(s)}`;
     } else {
         bodyPreview = 'body: <empty>';
     }

@@ -560,6 +560,49 @@ async function check(label, fn) {
         assert.ok(r.message.includes('0.10'));
     });
 
+    await check('policy: POST confirm message escapes Markdown metacharacters in body (R-pr370-fix-12)', () => {
+        // Model-controlled body content could inject backticks, links, bold,
+        // newlines, HTML — all of which markdown-it renders. The escape
+        // function must neutralize each.
+        const r = getConfirmationPolicy('agent_pay', {
+            url: 'https://api.example.com/x', max_usdc: '0.10',
+            method: 'POST', body: { evil: '`code` [click](http://bad) **bold** <script>alert(1)</script>\nnewline' },
+        }, { burnerConfigured: true });
+        assert.strictEqual(r.policy, 'confirm');
+        const msg = r.message;
+        // Each Markdown metacharacter present in input should be backslash-escaped.
+        assert.ok(!/[^\\]`/.test(msg.replace(/^.+max_usdc.+\n/, '')),
+            'unescaped backtick must not appear in the body line');
+        assert.ok(msg.includes('\\['), 'left bracket must be escaped');
+        assert.ok(msg.includes('\\]'), 'right bracket must be escaped');
+        assert.ok(msg.includes('\\('), 'left paren must be escaped');
+        assert.ok(msg.includes('\\)'), 'right paren must be escaped');
+        assert.ok(msg.includes('\\*'), 'asterisk must be escaped');
+        assert.ok(msg.includes('\\<'), 'less-than must be escaped');
+        assert.ok(msg.includes('\\>'), 'greater-than must be escaped');
+        // Newlines inside the body preview become literal "\\n" so they
+        // don't reflow the card. The card's own structure newlines (between
+        // POST line / max_usdc line / body line) remain.
+        const bodyLine = msg.split('\n').find(l => l.startsWith('body:')) || '';
+        assert.ok(!bodyLine.includes('\n'), 'body line must be a single line');
+        assert.ok(bodyLine.includes('\\n'), 'embedded newline must be literalized as \\\\n');
+    });
+
+    await check('policy: POST confirm message escapes Markdown in URL too', () => {
+        // Even though URLs shouldn't contain markdown metachars, an attacker
+        // could craft a URL with backticks/etc. — sanitize defensively.
+        const r = getConfirmationPolicy('agent_pay', {
+            url: 'https://api.example.com/`evil`?q=*test*',
+            max_usdc: '0.10',
+            method: 'POST', body: { ok: true },
+        }, { burnerConfigured: true });
+        assert.strictEqual(r.policy, 'confirm');
+        // The URL backticks must be escaped, not preserved literally.
+        const urlLine = r.message.split('\n')[0];
+        assert.ok(urlLine.includes('\\`'), 'URL backticks must be escaped');
+        assert.ok(urlLine.includes('\\*'), 'URL asterisks must be escaped');
+    });
+
     await check('policy: POST + no body → block (body_required_for_post)', () => {
         const r = getConfirmationPolicy('agent_pay', {
             url: 'https://api.example.com/x', max_usdc: '0.10',
