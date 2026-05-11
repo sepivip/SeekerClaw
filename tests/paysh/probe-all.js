@@ -141,6 +141,7 @@ async function main() {
     if (!fs.existsSync(CAPTURES_DIR)) fs.mkdirSync(CAPTURES_DIR, { recursive: true });
 
     const summary = [];
+    let anyDriftDetected = false;
     for (const entry of list) {
         process.stdout.write(`[${entry.label}] ${entry.method} ${entry.url}\n`);
         const captured = await probe({
@@ -152,12 +153,37 @@ async function main() {
         if (captured.error) {
             console.log(`  ✗ ${captured.error}: ${captured.reason}`);
             summary.push({ label: entry.label, status: 'error', reason: captured.reason });
+            anyDriftDetected = true;
         } else {
             const meta = captured.status === 402 ? summarize402(captured) : null;
             console.log(`  → HTTP ${captured.status} (${captured.bodyBytes} bytes, ${captured.durationMs}ms)`);
             if (meta) {
                 console.log(`    delivery=${meta.delivery} | x402Version=${meta.x402Version} | reqs=${meta.reqsField} | amountField=${meta.amountField} | networks=${(meta.networksOffered || []).join(',') || '—'}`);
             }
+
+            // BAT-582 R23: enforce entry.expect against capture. Pre-fix
+            // the `expect` field on PROBE_LIST entries was declarative-
+            // only (read by humans), so a service flipping from 402→200
+            // (e.g. pay.sh making something free) would silently pass —
+            // the regression net we're trying to build would be blind to
+            // exactly the kind of drift it's supposed to catch.
+            const expect = entry.expect || {};
+            const driftLines = [];
+            if (expect.status && expect.status !== 'any' && expect.status !== captured.status) {
+                driftLines.push(`expected status=${expect.status}, got ${captured.status}`);
+            }
+            if (expect.version && expect.version !== 'unknown' && meta) {
+                const expectedV = expect.version.replace(/^v/, '');
+                const actualV = String(meta.x402Version ?? '?');
+                if (expectedV !== actualV) {
+                    driftLines.push(`expected x402Version=${expect.version}, got v${actualV}`);
+                }
+            }
+            if (driftLines.length > 0) {
+                console.log(`  ⚠ DRIFT: ${driftLines.join('; ')}`);
+                anyDriftDetected = true;
+            }
+
             const sanitized = sanitize({
                 _meta: {
                     label: entry.label,
@@ -189,6 +215,15 @@ async function main() {
     console.log('');
     console.log('Captures committed to tests/paysh/captures/. Review before push:');
     console.log(`  git diff tests/paysh/captures/`);
+
+    if (anyDriftDetected) {
+        console.log('');
+        console.log('⚠ Protocol drift detected — see DRIFT lines above. Either:');
+        console.log('  - Update PROBE_LIST entry.expect to match new reality, AND');
+        console.log('  - Update tests/paysh/captures/{label}.json to reflect new shape, AND');
+        console.log('  - Audit X402Protocol parser for any newly-required handling.');
+        process.exit(2);
+    }
 }
 
 main().catch((e) => { console.error('FATAL:', e); process.exit(2); });

@@ -19,9 +19,18 @@ v2 changes vs v1:
 
 This directory holds the regression net for **x402 v2 protocol support** —
 real-wire captures, synthetic edge-case fixtures, and dry-run validators.
-Run `node tests/paysh/validate-detect.js` to confirm coverage. As of
-this change, 8/8 captures pass: 4 real captures build to valid USDC
-transfer txs, 4 synthetic edge cases reject with their documented codes.
+Run `node tests/paysh/validate-detect.js` to confirm coverage.
+
+As of this change, **8/8 captures pass**:
+- **3 real captures build** to valid USDC transfer txs (Tripadvisor,
+  CoinGecko, Textbelt POST).
+- **1 real capture** (Textbelt status endpoint) correctly REJECTS with
+  `invalid_demand` — pay.sh returns 402 with `amount=0` for free
+  endpoints, which our parser rejects (zero-demand isn't a supported
+  mode). Free endpoints should be called directly, not via `agent_pay`.
+- **4 synthetic edge cases** reject with their documented codes
+  (`no_payment_requirements`, `no_solana_offer`, `unsupported_version`,
+  `non_usdc_asset`).
 
 ## Layout
 

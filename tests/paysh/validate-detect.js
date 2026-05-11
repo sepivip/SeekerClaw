@@ -35,11 +35,17 @@ const TEST_MAX_USDC_ATOMIC = 100_000_000n; // 100 USDC
 // Inject a stable blockhash so build() doesn't hit RPC.
 _setBlockhashFetcher(async () => '2tLBHqeQdeq4Pzioote4ueMkQjrpdnNLBTuDtyKo4ds9');
 
-// Map each capture file → its expected outcome at the build() level.
-// For real captures we expect detect=true and a real build success.
-// For synthetic captures we read `_meta.expectedRejection`.
-// For multi-chain real captures (Tripadvisor, Textbelt with EVM+Solana
-// offers), detect=true and build picks Solana → success.
+// EXPECTATIONS maps each capture file → its expected outcome at the
+// detect() + build() level.
+//
+// BAT-582 R23: synthetic captures ALSO must appear here (single source
+// of truth for the regression gate), but the `expectedBuildError`
+// value is cross-checked against the fixture's own `_meta.expectedRejection`
+// field at run time — if they disagree, the test fails with a clear
+// "synthetic fixture _meta disagrees with EXPECTATIONS" error. This
+// keeps the fixture self-documenting (a reviewer can read the fixture
+// alone and know what it asserts) AND ensures EXPECTATIONS isn't out
+// of step with the committed fixture.
 const EXPECTATIONS = {
     'tripadvisor-search-402.json':         { detect: true,  buildOk: true  },
     'coingecko-trending-pools.json':       { detect: true,  buildOk: true  },
@@ -51,7 +57,8 @@ const EXPECTATIONS = {
     // agent_pay. If pay.sh ecosystem standardizes amount=0 as a real
     // "free" signal, a future BAT can add zero-demand handling.
     'textbelt-status-free.json':           { detect: true,  expectedBuildError: 'invalid_demand' },
-    // Synthetic captures pull expectedRejection from _meta.
+    // Synthetic captures — expectedBuildError must match the fixture's
+    // own _meta.expectedRejection. Cross-checked at run time.
     'synthetic-malformed-402.json':            { detect: false, expectedBuildError: 'no_payment_requirements' },
     'synthetic-no-solana-multichain-402.json': { detect: false, expectedBuildError: 'no_solana_offer' },
     'synthetic-v3-402.json':                   { detect: false, expectedBuildError: 'unsupported_version' },
@@ -87,6 +94,18 @@ async function main() {
             // be silently uncovered. Treat as a hard fail so adding a
             // capture forces adding the expectation in the same commit.
             console.log(`  ✗ ${fname.padEnd(48)} NO EXPECTATION DEFINED — add an entry to EXPECTATIONS map in this file`);
+            fail++;
+            continue;
+        }
+        // BAT-582 R23: for synthetic fixtures, cross-check that
+        // _meta.expectedRejection (committed in the fixture itself)
+        // matches EXPECTATIONS.expectedBuildError. Pre-fix the fixture
+        // could claim one rejection code while the test asserted a
+        // different one — silent disagreement. Hard-fail on mismatch.
+        const fixtureExpectedRejection = capture._meta && capture._meta.expectedRejection;
+        if (fixtureExpectedRejection && expected.expectedBuildError &&
+            fixtureExpectedRejection !== expected.expectedBuildError) {
+            console.log(`  ✗ ${fname.padEnd(48)} META MISMATCH — fixture._meta.expectedRejection="${fixtureExpectedRejection}" but EXPECTATIONS.expectedBuildError="${expected.expectedBuildError}"`);
             fail++;
             continue;
         }
