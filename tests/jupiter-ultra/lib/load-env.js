@@ -35,8 +35,8 @@ function load() {
         console.error('');
         console.error(`✗ Missing ${ENV_FILE}`);
         console.error('');
-        console.error('  Copy .env.test.example to .env.test and fill in your secrets:');
-        console.error('  cp tests/jupiter-ultra/.env.test.example tests/jupiter-ultra/.env.test');
+        console.error('  Copy env.test.example to .env.test and fill in your secrets:');
+        console.error('  cp tests/jupiter-ultra/env.test.example tests/jupiter-ultra/.env.test');
         console.error('');
         process.exit(1);
     }
