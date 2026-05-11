@@ -603,6 +603,26 @@ async function check(label, fn) {
         assert.strictEqual(r, 'none');
     });
 
+    await check('policy: PUT/PATCH/DELETE blocked at gate with method_not_allowed (R-pr370-fix-9)', () => {
+        for (const m of ['PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS']) {
+            const r = getConfirmationPolicy('agent_pay', {
+                url: 'https://api.example.com/x', max_usdc: '0.10', method: m,
+            }, { burnerConfigured: true });
+            assert.strictEqual(r.policy, 'block', `${m}: expected block, got ${JSON.stringify(r)}`);
+            assert.strictEqual(r.reason, 'method_not_allowed');
+        }
+    });
+
+    await check('policy: non-string method blocked with method_not_allowed', () => {
+        for (const m of [42, true, {}, []]) {
+            const r = getConfirmationPolicy('agent_pay', {
+                url: 'https://api.example.com/x', max_usdc: '0.10', method: m,
+            }, { burnerConfigured: true });
+            assert.strictEqual(r.policy, 'block', `${typeof m}: expected block, got ${JSON.stringify(r)}`);
+            assert.strictEqual(r.reason, 'method_not_allowed');
+        }
+    });
+
     // Cross-check: policy duplicates the body rules from agent_pay's
     // validateAndSerializeBody. Same inputs must produce same outcomes so
     // a future refactor that moves the validation can't drift.

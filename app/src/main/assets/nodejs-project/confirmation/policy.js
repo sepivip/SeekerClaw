@@ -262,7 +262,31 @@ function getConfirmationPolicy(toolName, args, walletState) {
                 message: 'agent_pay requires a max_usdc cap (decimal string).',
             };
         }
-        const method = (typeof a.method === 'string' ? a.method : 'GET').toUpperCase();
+        // R-pr370-fix-9: gate-level method validation. Pre-fix any method
+        // other than POST silently fell through to GET behavior (return
+        // 'none'), so an invalid method only failed at the handler. Now
+        // block unsupported methods at the policy so the agent gets a
+        // clear, immediate reason without going through the confirmation
+        // or dispatch path.
+        let method;
+        if (a.method === undefined || a.method === null) {
+            method = 'GET';
+        } else if (typeof a.method !== 'string') {
+            return {
+                policy: 'block',
+                reason: 'method_not_allowed',
+                message: `agent_pay: method must be a string (got ${typeof a.method})`,
+            };
+        } else {
+            method = a.method.toUpperCase();
+        }
+        if (method !== 'GET' && method !== 'POST') {
+            return {
+                policy: 'block',
+                reason: 'method_not_allowed',
+                message: `agent_pay: method must be GET or POST (got ${method})`,
+            };
+        }
         if (method === 'POST') {
             // R-pr370-fix-4: validate the body here BEFORE asking the user
             // to confirm. Pre-fix the user could confirm a POST that the

@@ -515,7 +515,7 @@ const tools = [
                     description: 'HTTP method. Defaults to "GET". POST always requires user confirmation regardless of cap.',
                 },
                 body: {
-                    description: 'Request body for POST. JSON-serializable object/array. Max 8 KB UTF-8 compact-serialized. Required when method=POST.',
+                    description: 'Request body for POST. JSON object or array (or a JSON string that parses to an object/array). Bare primitives (numbers, booleans, plain strings) are rejected. Max 8 KB UTF-8 compact-serialized. Required when method=POST.',
                 },
             },
             required: ['url', 'max_usdc'],
