@@ -247,6 +247,54 @@ class SolanaTxSignerTest {
     }
 
     @Test
+    fun `BAT-582 v1_6 Phase 5d - multi-signer tx with allowPartiallySigned=true is accepted`() {
+        // x402 v2 case: burner signs slot 1 first (or any slot they
+        // occupy), facilitator co-signs slot 0 server-side after
+        // receiving PAYMENT-SIGNATURE. The wire tx that leaves the
+        // device is intentionally partial; only the burner's slot
+        // gets filled.
+        val cosigner = KeyImporter.derivePubkey(ByteArray(32) { (it + 7).toByte() })
+        val tx = buildLegacyTxMultiSigner(
+            signerPubkeys = listOf(burnerPubkey, cosigner),
+            preSignedSignatures = listOf(null, null),  // both empty — partial sign scenario
+            blockhash = ByteArray(32),
+        )
+        val parsed = SolanaTxSigner.parse(tx)
+        assertEquals(2, parsed.numRequiredSignatures)
+        val burnerSig = ByteArray(64) { ((it + 0x42) and 0xFF).toByte() }
+        val signed = SolanaTxSigner.insertSignature(
+            tx, parsed, burnerPubkey, burnerSig, allowPartiallySigned = true
+        )
+        // Burner's slot got filled at the correct offset; cosigner's slot
+        // remains zero (facilitator will fill it server-side).
+        val signedParsed = SolanaTxSigner.parse(signed)
+        val burnerIdx = signedParsed.accountKeys.indexOfFirst { it.contentEquals(burnerPubkey) }
+        assertEquals(burnerSig.toList(), signedParsed.signatures[burnerIdx].toList())
+        val cosignerIdx = signedParsed.accountKeys.indexOfFirst { it.contentEquals(cosigner) }
+        // Cosigner slot must remain ALL-ZERO (waiting for facilitator).
+        assertTrue("cosigner slot must remain zero", signedParsed.signatures[cosignerIdx].all { it == 0.toByte() })
+    }
+
+    @Test
+    fun `BAT-582 v1_6 Phase 5d - default allowPartiallySigned=false preserves v1 behavior`() {
+        // Same multi-signer tx, but without opting in — must reject as
+        // before (regression guard against accidentally weakening v1).
+        val cosigner = KeyImporter.derivePubkey(ByteArray(32) { (it + 7).toByte() })
+        val tx = buildLegacyTxMultiSigner(
+            signerPubkeys = listOf(burnerPubkey, cosigner),
+            preSignedSignatures = listOf(null, null),
+            blockhash = ByteArray(32),
+        )
+        val parsed = SolanaTxSigner.parse(tx)
+        try {
+            SolanaTxSigner.insertSignature(tx, parsed, burnerPubkey, ByteArray(64))
+            fail("Expected additional_signers_required when allowPartiallySigned defaults to false")
+        } catch (e: SigningException) {
+            assertEquals("additional_signers_required", e.code)
+        }
+    }
+
+    @Test
     fun `multi-signer tx with cosigner already signed is accepted`() {
         val cosigner = KeyImporter.derivePubkey(ByteArray(32) { (it + 7).toByte() })
         val cosignerSig = ByteArray(64) { ((it + 1) and 0xFF).toByte() }  // non-zero

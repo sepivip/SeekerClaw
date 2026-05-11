@@ -238,7 +238,7 @@ class EncryptedPrefsKeyVault(
         }
     }
 
-    override suspend fun signTransaction(id: String, txBytes: ByteArray): ByteArray {
+    override suspend fun signTransaction(id: String, txBytes: ByteArray, allowPartiallySigned: Boolean): ByteArray {
         val expanded = loadKey(id)
             ?: throw SigningException("burner_not_configured", "No burner key stored")
         if (expanded.size != 64) {
@@ -260,7 +260,7 @@ class EncryptedPrefsKeyVault(
                 Arrays.fill(seed, 0.toByte())
             }
             try {
-                return SolanaTxSigner.insertSignature(txBytes, parsed, burnerPubkey, signature)
+                return SolanaTxSigner.insertSignature(txBytes, parsed, burnerPubkey, signature, allowPartiallySigned)
             } finally {
                 // Pubkey isn't a secret; signature isn't a secret. No
                 // wipe needed for those.

@@ -28,10 +28,19 @@ class BurnerSigner extends Signer {
         if (!opts.reservationId) {
             return { error: 'missing_reservation', reason: 'reservationId required for sign-only flow' };
         }
-        const res = await androidBridgeCall('/burner/sign-transaction', {
+        const body = {
             txBase64,
             reservationId: opts.reservationId,
-        }, 15000);
+        };
+        // BAT-582 v1.6 Phase 5d: when the caller is signing a partially-
+        // signed x402 v2 tx (facilitator co-signs server-side), set the
+        // bridge flag so SolanaTxSigner skips its v1 "all other signers
+        // must be cosigned" check. Default false preserves v1 behavior
+        // for every existing caller (Jupiter Ultra swap, v1 x402, etc.).
+        if (opts.allowPartiallySigned === true) {
+            body.allowPartiallySigned = true;
+        }
+        const res = await androidBridgeCall('/burner/sign-transaction', body, 15000);
         return res;
     }
 

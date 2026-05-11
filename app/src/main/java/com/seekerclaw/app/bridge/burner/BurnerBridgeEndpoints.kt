@@ -248,7 +248,14 @@ class BurnerBridgeEndpoints internal constructor(
     private fun handleSignTransaction(params: JSONObject): EndpointResult {
         val txB64 = params.optString("txBase64", "").trim()
         val reservationId = params.optString("reservationId", "").trim()
-        return handleSignTransactionInternal(txB64, reservationId)
+        // BAT-582 v1.6 Phase 5d: optional `allowPartiallySigned` flag.
+        // x402 v2 callers (agent_pay paying a v2 endpoint) set this to
+        // true — the facilitator co-signs server-side after we send
+        // PAYMENT-SIGNATURE, so the wire tx is partially signed by
+        // design. Default false preserves v1 behavior for every
+        // existing caller (Jupiter Ultra swap, v1 x402, etc.).
+        val allowPartiallySigned = params.optBoolean("allowPartiallySigned", false)
+        return handleSignTransactionInternal(txB64, reservationId, allowPartiallySigned)
     }
 
     /**
@@ -270,7 +277,7 @@ class BurnerBridgeEndpoints internal constructor(
      * sweep auto-releases it if the caller crashes between sign and commit.
      */
     @androidx.annotation.VisibleForTesting
-    internal fun handleSignTransactionInternal(txB64: String, reservationId: String): EndpointResult {
+    internal fun handleSignTransactionInternal(txB64: String, reservationId: String, allowPartiallySigned: Boolean = false): EndpointResult {
         if (txB64.isEmpty() || reservationId.isEmpty()) {
             return invalidInput("txBase64 and reservationId required")
         }
@@ -291,7 +298,7 @@ class BurnerBridgeEndpoints internal constructor(
             return invalidInput("txBase64 is not valid base64")
         }
 
-        return signTransactionInner(reservationId, txBytes)
+        return signTransactionInner(reservationId, txBytes, allowPartiallySigned)
     }
 
     /**
@@ -308,10 +315,10 @@ class BurnerBridgeEndpoints internal constructor(
      * to this method MUST have already validated the reservation.
      */
     @androidx.annotation.VisibleForTesting
-    internal fun signTransactionInner(@Suppress("UNUSED_PARAMETER") reservationId: String, txBytes: ByteArray): EndpointResult {
+    internal fun signTransactionInner(@Suppress("UNUSED_PARAMETER") reservationId: String, txBytes: ByteArray, allowPartiallySigned: Boolean = false): EndpointResult {
         return runBlocking {
             try {
-                val signed = keyVault.signTransaction(BURNER_ID, txBytes)
+                val signed = keyVault.signTransaction(BURNER_ID, txBytes, allowPartiallySigned)
                 val signedB64 = android.util.Base64.encodeToString(signed, android.util.Base64.NO_WRAP)
                 EndpointResult(200, mapOf("signedTxBase64" to signedB64))
             } catch (e: SigningException) {
