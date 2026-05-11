@@ -59,8 +59,11 @@ function readCompactU16(buf, offset) {
 function makePrivateKey(secret32, pubkey32) {
     if (secret32.length !== 32) throw new Error(`secret must be 32 bytes, got ${secret32.length}`);
     if (pubkey32.length !== 32) throw new Error(`pubkey must be 32 bytes, got ${pubkey32.length}`);
-    // Node 22+ requires `x` in the JWK even though the spec calls it optional.
-    // The caller already has both halves of the 64-byte Solana secret_key.
+    // Build an OKP JWK per RFC 8037. `x` (public key) is REQUIRED by
+    // the spec for any OKP JWK (only `d` is optional — its presence
+    // distinguishes a private-key JWK from a public-only one). The
+    // caller already has both halves of the 64-byte Solana secret_key
+    // format, so we just pass them through.
     const jwk = {
         kty: 'OKP',
         crv: 'Ed25519',
