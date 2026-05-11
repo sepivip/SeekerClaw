@@ -16,7 +16,7 @@ away).
 
 ```
 tests/jupiter-ultra/
-├── .env.test.example       # Template — copy to .env.test (gitignored)
+├── env.test.example        # Committed template (no leading dot — gitignore's `.env.*` rule would otherwise hide it). Copy to `.env.test` and fill in.
 ├── lib/
 │   ├── load-env.js         # Reads .env.test, validates per-layer
 │   ├── base58.js           # Base58 encode/decode (matches payment/x402.js)
@@ -43,7 +43,7 @@ tests/jupiter-ultra/
 2. **Create `.env.test`:**
 
    ```bash
-   cp tests/jupiter-ultra/.env.test.example tests/jupiter-ultra/.env.test
+   cp tests/jupiter-ultra/env.test.example tests/jupiter-ultra/.env.test
    ```
 
    Open it and fill in:

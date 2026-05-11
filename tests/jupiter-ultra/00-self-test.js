@@ -64,6 +64,21 @@ try { readCompactU16(truncated, 0); }
 catch (e) { truncThrew = e.message.includes('unterminated') || e.message.includes('continuation') || e.message.includes('overflow'); }
 assert(truncThrew, 'compact-u16 truncated mid-encoding → throws');
 
+// BAT-582 R28: 3-byte encoding can produce values up to 2^21-1, exceeding
+// the u16 ceiling of 65535. Compact-u16 spec is u16-bounded. Throw on
+// out-of-range values rather than letting bogus sigCounts through.
+// 0xFF 0xFF 0x7F = (0x7F & 0x7F) << 14 | (0xFF & 0x7F) << 7 | (0xFF & 0x7F) = 0x1FFFFF (2097151)
+const overU16 = Buffer.from([0xff, 0xff, 0x7f]);
+let overU16Threw = false;
+try { readCompactU16(overU16, 0); }
+catch (e) { overU16Threw = e.message.includes('out of range') || e.message.includes('u16') || e.message.includes('65535'); }
+assert(overU16Threw, 'compact-u16 value above u16 ceiling → throws');
+
+// Boundary: exactly 65535 should be accepted (0xFF 0xFF 0x03 = 65535)
+const exactU16Max = Buffer.from([0xff, 0xff, 0x03]);
+const r = readCompactU16(exactU16Max, 0);
+assert(r.value === 65535, `compact-u16 max valid value 65535 accepted (got ${r.value})`);
+
 // 3. sign + verify round-trip on a synthetic tx
 console.log('');
 console.log('[3] Ed25519 sign + verify round-trip on synthetic tx');

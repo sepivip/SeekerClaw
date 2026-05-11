@@ -43,6 +43,16 @@ function readCompactU16(buf, offset) {
     if (!terminated) {
         throw new Error('compact-u16 unterminated: buffer ended with continuation bit still set');
     }
+    // BAT-582 R28: enforce u16 range. The overflow guard above bails at
+    // shift > 21 (3 bytes × 7 bits = 21), but a 3-byte encoding can
+    // legitimately produce values up to 2^21 - 1 = 2097151, far above the
+    // u16 ceiling of 65535. Solana's compact-u16 spec is u16-bounded;
+    // accepting larger values would let a malformed tx carry e.g. a
+    // bogus sigCount that overflows downstream slot indexing. Throw
+    // loud here so callers get a clear error code, not garbage slots.
+    if (value > 0xFFFF) {
+        throw new Error(`compact-u16 out of range: decoded value ${value} exceeds u16 max (65535)`);
+    }
     return { value, length: pos - offset };
 }
 
