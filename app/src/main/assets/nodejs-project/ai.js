@@ -697,7 +697,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
             lines.push('  Use for small autonomous actions, x402 payments, micro-swaps, price-triggered orders.');
             lines.push('- **Main** (via MWA) — user\'s wallet. Every action requires their approval popup. Use for large or user-explicit transfers.');
             lines.push('Always name them by role, never paraphrase as "your wallet." Confirmation surfaces explicitly say "Burner wallet" or "Main wallet" — never "your wallet."');
-            lines.push('Use `wallet_status` for caps + today\'s spend + remaining daily on the burner; the burner BALANCE field is currently `null` / "unavailable" (RPC balance fetch is a known follow-up — do not report it as "0"). Main-wallet balance is live. Use `wallet_set_caps` to raise/lower caps (always confirms, shows old → new diff).');
+            lines.push('Use `wallet_status` for caps + today\'s spend + remaining daily on the burner. The burner BALANCE field is currently `null` / "unavailable" (RPC balance fetch is a known follow-up — do not report it as "0"). Main-wallet balance is fetched live via RPC, but it can ALSO be `null` / "unavailable" on a transient RPC failure — when `balanceAvailable: false` or display fields read "unavailable", say "balance temporarily unavailable" rather than reporting a possibly-stale number. Use `wallet_set_caps` to raise/lower caps (always confirms, shows old → new diff).');
             // BAT-582 Phase 6: agent_pay capability — only mentioned when the burner
             // is configured (the tool refuses without one, so no point advertising it
             // when it would just refuse). The user controls max_usdc per call.

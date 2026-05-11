@@ -20,16 +20,28 @@
 const crypto = require('crypto');
 
 // compact-u16 (shortvec) decode — same as solana.js / payment/x402.js
+//
+// BAT-582 R27: track whether the encoding TERMINATED (saw a byte with
+// MSB clear) versus ran out of input. Pre-fix the function returned
+// successfully even if the buffer ended with the continuation bit
+// (0x80) still set on the last byte — silently produced a partial
+// value from a truncated/malformed shortvec. A signer downstream would
+// then read garbage for sigCount, leading to weird-looking signatures
+// against the wrong byte ranges. Fail loud on unterminated input.
 function readCompactU16(buf, offset) {
     let value = 0;
     let shift = 0;
     let pos = offset;
+    let terminated = false;
     while (pos < buf.length) {
         const byte = buf[pos]; pos++;
         value |= (byte & 0x7F) << shift;
-        if ((byte & 0x80) === 0) break;
+        if ((byte & 0x80) === 0) { terminated = true; break; }
         shift += 7;
         if (shift > 21) throw new Error('compact-u16 overflow');
+    }
+    if (!terminated) {
+        throw new Error('compact-u16 unterminated: buffer ended with continuation bit still set');
     }
     return { value, length: pos - offset };
 }

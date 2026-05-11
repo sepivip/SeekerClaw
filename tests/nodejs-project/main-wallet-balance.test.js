@@ -113,15 +113,17 @@ async function check(label, fn) {
         assert.strictEqual(bal.usdc, '5000000', 'USDC balance returned in micro-USDC');
     });
 
-    await check('MainWallet.balance() returns "0"/"0" cleanly when address resolution fails', async () => {
-        // Re-stub to throw on getConnectedWalletAddress.
+    await check('MainWallet.balance() returns null/null when address resolution fails (R27)', async () => {
+        // BAT-582 R27: null distinguishes "wallet unavailable" from real
+        // zero balance. Pre-R27 returned "0"/"0", indistinguishable from
+        // a real empty wallet — misleading users about funds vanishing.
         const prev = require.cache[solanaPath].exports.getConnectedWalletAddress;
         require.cache[solanaPath].exports.getConnectedWalletAddress = () => { throw new Error('not connected'); };
 
         try {
             const wallet = new MainWallet();
             const bal = await wallet.balance();
-            assert.deepStrictEqual(bal, { sol: '0', usdc: '0' });
+            assert.deepStrictEqual(bal, { sol: null, usdc: null });
         } finally {
             require.cache[solanaPath].exports.getConnectedWalletAddress = prev;
         }
@@ -204,17 +206,40 @@ async function check(label, fn) {
         }
     });
 
-    await check('MainWallet.balance() does not blow up on RPC error envelope', async () => {
-        // Override solanaRpc to return an error envelope.
+    await check('MainWallet.balance() returns null on RPC error envelope (R27)', async () => {
+        // BAT-582 R27: RPC error envelope ({error: ...}) is a transient
+        // outage, not a confirmed-zero balance. Caller renders
+        // "unavailable" — pre-R27 returned "0"/"0", indistinguishable
+        // from a real empty wallet.
         const prev = require.cache[solanaPath].exports.solanaRpc;
         require.cache[solanaPath].exports.solanaRpc = async () => ({ error: 'rate-limited' });
 
         try {
             const wallet = new MainWallet();
             const bal = await wallet.balance();
-            // Both fields fall back to "0" — the catch keeps things flowing.
-            assert.strictEqual(bal.sol, '0');
-            assert.strictEqual(bal.usdc, '0');
+            assert.strictEqual(bal.sol, null, 'sol must be null on RPC failure');
+            assert.strictEqual(bal.usdc, null, 'usdc must be null on RPC failure');
+        } finally {
+            require.cache[solanaPath].exports.solanaRpc = prev;
+        }
+    });
+
+    await check('MainWallet.balance() returns "0" for USDC when value array is empty (real zero, R27)', async () => {
+        // Distinguishes the SUCCESS-with-zero case from RPC failure.
+        // No USDC ATA exists yet (wallet never received USDC) — that's
+        // a REAL zero, not unavailable.
+        const prev = require.cache[solanaPath].exports.solanaRpc;
+        require.cache[solanaPath].exports.solanaRpc = async (method) => {
+            if (method === 'getBalance') return { value: 1_000_000_000 };
+            if (method === 'getTokenAccountsByOwner') return { value: [] };
+            return { error: 'unmocked' };
+        };
+
+        try {
+            const wallet = new MainWallet();
+            const bal = await wallet.balance();
+            assert.strictEqual(bal.sol, '1000000000');
+            assert.strictEqual(bal.usdc, '0', 'empty value array = real zero, NOT null');
         } finally {
             require.cache[solanaPath].exports.solanaRpc = prev;
         }

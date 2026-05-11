@@ -185,22 +185,31 @@ const handlers = {
 
         // 2) Main — pubkey + balance via the existing solana.js helpers
         //    (lazy-loaded inside MainWallet to keep this code path testable).
+        // BAT-582 R27: MainWallet.balance() now returns null on RPC
+        // failure (parallel to burner). null → "unavailable" downstream
+        // so a transient outage doesn't look like an empty wallet.
         const main = getWallet('main');
         let mainPubkey = null;
-        let mainBalance = { sol: '0', usdc: '0' };
+        let mainBalance = { sol: null, usdc: null };
         try { mainPubkey = await main.pubkey(); } catch (_) { mainPubkey = null; }
-        try { mainBalance = await main.balance(); } catch (_) { mainBalance = { sol: '0', usdc: '0' }; }
+        try { mainBalance = await main.balance(); } catch (_) { mainBalance = { sol: null, usdc: null }; }
 
+        // BAT-582 R27: render "unavailable" for main wallet balance when
+        // the underlying RPC fetch failed (null sentinel). Matches the
+        // burner-side handling above so agent + UI behave consistently.
+        const mainHasSol  = (mainBalance.sol  != null);
+        const mainHasUsdc = (mainBalance.usdc != null);
         return {
             burner: burnerOut,
             main: {
                 pubkey: mainPubkey,
                 balance: mainBalance,
+                balanceAvailable: (mainHasSol && mainHasUsdc),
                 role: 'main',
                 signsViaPopup: true,
                 display: {
-                    balanceSol:  _atomicToDecimal(mainBalance.sol,  SOL_DECIMALS),
-                    balanceUsdc: _atomicToDecimal(mainBalance.usdc, USDC_DECIMALS),
+                    balanceSol:  mainHasSol  ? _atomicToDecimal(mainBalance.sol,  SOL_DECIMALS)  : 'unavailable',
+                    balanceUsdc: mainHasUsdc ? _atomicToDecimal(mainBalance.usdc, USDC_DECIMALS) : 'unavailable',
                 },
             },
             network: 'mainnet',

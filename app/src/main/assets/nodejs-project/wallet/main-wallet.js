@@ -46,23 +46,40 @@ class MainWallet extends Wallet {
 
     /**
      * SOL + USDC balance for the connected MWA wallet, returned as
-     * atomic-unit BigInt-compatible strings. Returns "0" / "0" if the
-     * wallet isn't authorized or RPC fails — never throws.
+     * atomic-unit BigInt-compatible strings.
+     *
+     * BAT-582 R27: returns `null` for sol/usdc when the underlying RPC
+     * fetch FAILS (network error, RPC error envelope) so callers can
+     * distinguish "transient outage" from "real zero balance". Pre-fix
+     * returned "0"/"0" in both cases, making a flaky RPC look exactly
+     * like an empty wallet — the worst possible failure mode for a
+     * wallet UI (user thinks funds vanished). Matches the burner-side
+     * fix in SolanaBalanceFetcher.fetch() (R15).
+     *
+     * Returns:
+     *   - { sol: null, usdc: null } when wallet isn't authorized
+     *   - { sol: null, usdc: "<n>" } when SOL fetch fails but USDC succeeds (or vice versa)
+     *   - { sol: "<n>", usdc: "<n>" } when both succeed (n = "0" is a real zero)
+     *
+     * Never throws.
      */
     async balance() {
         let address;
-        try { address = _solanaMod().getConnectedWalletAddress(); } catch (_) { return { sol: '0', usdc: '0' }; }
-        if (!address) return { sol: '0', usdc: '0' };
+        try { address = _solanaMod().getConnectedWalletAddress(); } catch (_) { return { sol: null, usdc: null }; }
+        if (!address) return { sol: null, usdc: null };
 
-        let solAtomic = '0';
-        let usdcAtomic = '0';
+        // BAT-582 R27: null sentinels distinguish "fetch never succeeded"
+        // (transient RPC failure → show "unavailable") from "fetch succeeded
+        // with zero" (real empty wallet → show "0").
+        let solAtomic = null;
+        let usdcAtomic = null;
         try {
             const balanceResult = await _solanaMod().solanaRpc('getBalance', [address]);
             if (balanceResult && !balanceResult.error && balanceResult.value != null) {
                 // SOL RPC returns lamports (atomic) directly.
                 solAtomic = String(balanceResult.value);
             }
-        } catch (_) { /* ignore — keep "0" */ }
+        } catch (_) { /* leave null — caller renders "unavailable" */ }
 
         try {
             // BAT-582 R6: filter directly by the USDC mint instead of fetching
@@ -84,7 +101,7 @@ class MainWallet extends Wallet {
                 { mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v' },
                 { encoding: 'jsonParsed' },
             ]);
-            if (tokenResult && tokenResult.value) {
+            if (tokenResult && !tokenResult.error && tokenResult.value) {
                 let total = 0n;
                 for (const acc of tokenResult.value) {
                     try {
@@ -100,9 +117,14 @@ class MainWallet extends Wallet {
                         }
                     } catch (_) { /* skip malformed accounts */ }
                 }
+                // Empty array (no USDC ATA, wallet never held USDC) is a
+                // REAL zero balance, not an error — return "0", not null.
+                // null is reserved for "we couldn't fetch."
                 usdcAtomic = total.toString();
             }
-        } catch (_) { /* ignore — keep "0" */ }
+            // If tokenResult had an error or null value, usdcAtomic
+            // stays null → caller renders "unavailable."
+        } catch (_) { /* leave null — caller renders "unavailable" */ }
 
         return { sol: solAtomic, usdc: usdcAtomic };
     }

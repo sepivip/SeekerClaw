@@ -50,6 +50,20 @@ for (const [buf, expectedValue, expectedLen] of cases) {
         `[${buf.toString('hex')}] → value=${r.value}, length=${r.length} (expected ${expectedValue}/${expectedLen})`);
 }
 
+// BAT-582 R27: unterminated shortvec must throw. Pre-fix the parser
+// silently accepted a buffer ending with continuation-bit set.
+const unterminated = Buffer.from([0x80]); // continuation set, no follow-on
+let untThrew = false;
+try { readCompactU16(unterminated, 0); }
+catch (e) { untThrew = e.message.includes('unterminated') || e.message.includes('continuation'); }
+assert(untThrew, 'compact-u16 with continuation bit set but no follow-on byte → throws');
+
+const truncated = Buffer.from([0xff, 0x80]); // 2 bytes both with continuation set, then EOF
+let truncThrew = false;
+try { readCompactU16(truncated, 0); }
+catch (e) { truncThrew = e.message.includes('unterminated') || e.message.includes('continuation') || e.message.includes('overflow'); }
+assert(truncThrew, 'compact-u16 truncated mid-encoding → throws');
+
 // 3. sign + verify round-trip on a synthetic tx
 console.log('');
 console.log('[3] Ed25519 sign + verify round-trip on synthetic tx');
