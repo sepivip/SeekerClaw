@@ -590,13 +590,15 @@ grep -i "MCP.*reconcile\|MCP.*Failed to" node_debug.log | tail -20
 **Symptoms:** Tool result `error: "non_https" | "private_ip" | "non_solana_network" | "non_usdc_asset" | "demand_exceeds_max_usdc" | "method_not_allowed" | "body_required_for_post" | "body_not_json" | "body_too_large"`.
 **Diagnosis:** Pre-flight or 402-body validation refused the call. Two layers:
 
-**Pre-DNS/network rejections** (fire BEFORE any DNS lookup or HTTP fetch — operator typos diagnosed cleanly without touching attacker-supplied hosts):
+**Pre-DNS rejections** (fire BEFORE any DNS lookup — operator typos diagnosed cleanly without touching attacker-supplied hosts):
 - `non_https` — URL must be `https://`
 - `method_not_allowed` — only GET / POST supported (BAT-664)
 - `body_required_for_post` / `body_not_json` / `body_too_large` — POST body issues (BAT-664)
-- `private_ip` — DNS resolved to a private IP (rejection happens immediately after the resolve, before any HTTP request)
 
-**Post-fetch, pre-payment rejections** (fire AFTER fetching the 402 challenge but BEFORE attempting payment — server response failed V1 boundary checks):
+**Post-DNS, pre-HTTP rejections** (fire AFTER the DNS resolve but BEFORE any HTTP request to the URL):
+- `private_ip` — DNS resolved to a private IP (SSRF defense — rejection happens immediately after resolve, before any HTTP fetch)
+
+**Post-fetch, pre-payment rejections** (fire AFTER fetching the 402 challenge but BEFORE attempting payment — server response failed v1.6 boundary checks):
 - `non_solana_network` — pay.sh requirement `network` field was not `solana`
 - `non_usdc_asset` — pay.sh requirement `asset` was not USDC (mint `EPjFWdd5...`)
 - `demand_exceeds_max_usdc` — server demanded more than the agent's `max_usdc` cap
@@ -607,7 +609,7 @@ All errors below:
 - `non_solana_network` — pay.sh requirement `network` field was not `solana`
 - `non_usdc_asset` — pay.sh requirement `asset` was not USDC (mint `EPjFWdd5...`)
 - `demand_exceeds_max_usdc` — server demanded more than the agent's `max_usdc` cap
-- `method_not_allowed` — V1.5 supports GET and POST only (no PUT/PATCH/DELETE) — BAT-664
+- `method_not_allowed` — BAT-664 supports GET and POST only (no PUT/PATCH/DELETE)
 - `body_required_for_post` — `method: "POST"` requires a `body` parameter — BAT-664
 - `body_not_json` — `body` must be a JSON-serializable object/array (or a string that parses as JSON). No `text/plain` — BAT-664
 - `body_too_large` — `body` exceeded 8 KB UTF-8 bytes after compact serialization — BAT-664

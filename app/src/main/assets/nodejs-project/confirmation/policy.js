@@ -118,6 +118,16 @@ function _validateAgentPayPostBody(body) {
     }
     let parsed = body;
     if (typeof body === 'string') {
+        // R-pr370-fix-5: bound raw string length BEFORE JSON.parse to
+        // avoid resource exhaustion in the confirmation path. Same 2×
+        // cap as agent_pay's validator — final compact-serialized size
+        // is still checked against the strict 8 KB cap below.
+        if (Buffer.byteLength(body, 'utf8') > _POLICY_MAX_POST_BODY_BYTES * 2) {
+            return {
+                error: 'body_too_large',
+                reason: `raw POST body string exceeds ${_POLICY_MAX_POST_BODY_BYTES * 2} bytes pre-parse`,
+            };
+        }
         try { parsed = JSON.parse(body); }
         catch (_) {
             return { error: 'body_not_json', reason: 'string body must be valid JSON' };
@@ -147,6 +157,12 @@ function _validateAgentPayPostBody(body) {
 // telemetry should record `method`, `host`, `bodyByteLength`, and a
 // `bodyTruncated: true` flag instead. This helper does NOT log or emit;
 // it just returns a string for the confirmation card.
+// R-pr370-fix-3.2: budget the body preview at 200 chars TOTAL (including
+// the truncation suffix), not 200 chars + suffix. Pre-fix produced strings
+// like "<200 chars>… (truncated)" which were 213 chars long — broke the
+// 200-char contract from BAT-664 v2.
+const _BODY_PREVIEW_MAX = 200;
+const _BODY_PREVIEW_SUFFIX = '… (truncated)';
 function _agentPayPostConfirmMessage(args) {
     const url = typeof args.url === 'string' ? args.url : '<missing url>';
     const max = typeof args.max_usdc === 'string' ? args.max_usdc : String(args.max_usdc);
@@ -155,7 +171,9 @@ function _agentPayPostConfirmMessage(args) {
         let s;
         try { s = typeof args.body === 'string' ? args.body : JSON.stringify(args.body); }
         catch (_) { s = '<unserializable body>'; }
-        if (s.length > 200) s = s.slice(0, 200) + '… (truncated)';
+        if (s.length > _BODY_PREVIEW_MAX) {
+            s = s.slice(0, _BODY_PREVIEW_MAX - _BODY_PREVIEW_SUFFIX.length) + _BODY_PREVIEW_SUFFIX;
+        }
         bodyPreview = `body: ${s}`;
     } else {
         bodyPreview = 'body: <empty>';

@@ -283,6 +283,18 @@ function validateAndSerializeBody(method, body) {
     }
     let parsed = body;
     if (typeof body === 'string') {
+        // R-pr370-fix-4: bound raw string length BEFORE JSON.parse. A
+        // model-controlled multi-MB string would burn CPU/memory in the
+        // parser before being rejected by the post-serialize 8 KB cap.
+        // Cap raw input at 2× the compact-serialized cap (room for
+        // whitespace + minor formatting); strictly checked again after
+        // parse via the existing size check below.
+        if (Buffer.byteLength(body, 'utf8') > MAX_POST_BODY_BYTES * 2) {
+            return {
+                error: 'body_too_large',
+                reason: `raw POST body string is ${Buffer.byteLength(body, 'utf8')} bytes (max ${MAX_POST_BODY_BYTES * 2} pre-parse)`,
+            };
+        }
         try { parsed = JSON.parse(body); }
         catch (_) {
             return { error: 'body_not_json', reason: 'string body must be valid JSON' };
