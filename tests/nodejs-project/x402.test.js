@@ -526,20 +526,146 @@ function _safeStringify(v) {
             'AWS metadata-style link-local IP must be rejected');
     });
 
-    // BAT-582 R22: settle() rejects v2 challenges until a real-wire v2
-    // success fixture is committed. Phase 5 of v1.6 will lift this when
-    // the v2 proof-header path is pinned.
-    await check('settle: v2 paymentMeta rejects with v2_settle_not_implemented', async () => {
-        let fetchCalled = false;
-        const fetchFn = async () => { fetchCalled = true; return { status: 200, bodyJson: {} }; };
-        const out = await proto.settle(
-            { parsed: new URL('https://pay.sh/x'), pinnedIp: '1.2.3.4', pinnedFamily: 4, timeoutLeftMs: 1000 },
-            'SIGNED',
-            { amountAtomic: 100000n, recipient: VALID_BURNER_PUBKEY, x402Version: 2 },
+    // BAT-582 Phase 5c: settle() now dispatches to v2 PAYMENT-SIGNATURE path
+    // (previously refused with v2_settle_not_implemented). Tests verify
+    // the v2 proof header is emitted with the spec-required shape.
+    await check('settle: v2 paymentMeta emits PAYMENT-SIGNATURE header (not x-payment)', async () => {
+        let capturedHeaders = null;
+        const fetchFn = async (parsed, ip, fam, headers) => {
+            capturedHeaders = headers;
+            return { status: 200, headers: {}, bodyJson: {} };
+        };
+        const v2Meta = {
+            x402Version: 2,
+            amountAtomic: 10000n,
+            recipient: '9hw9Py9uMGtXRNpABZjifcK1t3suwzjyri9L9QYKg6zZ',
+            asset: x402Mod.USDC_MINT,
+            memo: 'abcdef0123456789abcdef0123456789',
+            negotiatedNetwork: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+            requirement: {
+                scheme: 'exact',
+                network: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+                payTo: '9hw9Py9uMGtXRNpABZjifcK1t3suwzjyri9L9QYKg6zZ',
+                resource: { url: 'https://api.example.com/x', description: 'test', mimeType: 'application/json' },
+                maxTimeoutSeconds: 300,
+                extra: { feePayer: '2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4' },
+            },
+        };
+        await proto.settle(
+            { parsed: new URL('https://api.example.com/x'), pinnedIp: '1.2.3.4', pinnedFamily: 4, timeoutLeftMs: 30000 },
+            'V2-SIGNED-TX-FIXTURE',
+            v2Meta,
             { _fetchWithLimits: fetchFn }
         );
-        assert.strictEqual(out.error, 'v2_settle_not_implemented');
-        assert.ok(!fetchCalled, 'settle must NOT touch network when refusing v2');
+        assert.ok(capturedHeaders, 'fetch must have been called');
+        assert.ok(capturedHeaders['payment-signature'], 'PAYMENT-SIGNATURE header must be set');
+        assert.ok(!capturedHeaders['x-payment'], 'v1 x-payment header MUST NOT be set on a v2 call');
+
+        // Decode PAYMENT-SIGNATURE and verify the spec-required shape.
+        const decoded = JSON.parse(Buffer.from(capturedHeaders['payment-signature'], 'base64').toString('utf8'));
+        assert.strictEqual(decoded.x402Version, 2);
+        assert.ok(decoded.resource && typeof decoded.resource === 'object', 'resource must be an object');
+        assert.strictEqual(decoded.resource.url, 'https://api.example.com/x');
+        assert.ok(decoded.accepted && typeof decoded.accepted === 'object', 'accepted (singular) required');
+        assert.strictEqual(decoded.accepted.scheme, 'exact');
+        assert.strictEqual(decoded.accepted.network, 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp', 'CAIP-2 network in proof');
+        assert.strictEqual(decoded.accepted.amount, '10000', 'amount as decimal string');
+        assert.strictEqual(decoded.accepted.payTo, '9hw9Py9uMGtXRNpABZjifcK1t3suwzjyri9L9QYKg6zZ');
+        assert.strictEqual(decoded.accepted.extra.feePayer, '2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4');
+        assert.strictEqual(decoded.accepted.extra.memo, 'abcdef0123456789abcdef0123456789');
+        assert.strictEqual(decoded.payload.transaction, 'V2-SIGNED-TX-FIXTURE');
+    });
+
+    await check('settle: v2 success surfaces signature from PAYMENT-RESPONSE header', async () => {
+        const successPayload = {
+            success: true,
+            transaction: '5xK8...exampleSig',
+            network: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+            payer: '2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4',
+        };
+        const respHeaderValue = Buffer.from(JSON.stringify(successPayload), 'utf8').toString('base64');
+        const fetchFn = async () => ({
+            status: 200,
+            headers: { 'payment-response': respHeaderValue },
+            bodyJson: { ok: true },
+        });
+        const v2Meta = {
+            x402Version: 2, amountAtomic: 10000n, memo: 'abcdef0123456789abcdef0123456789',
+            asset: x402Mod.USDC_MINT, negotiatedNetwork: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+            requirement: {
+                scheme: 'exact', network: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+                payTo: '9hw9Py9uMGtXRNpABZjifcK1t3suwzjyri9L9QYKg6zZ',
+                resource: { url: 'https://api.example.com/x', description: '', mimeType: 'application/json' },
+                maxTimeoutSeconds: 300,
+                extra: { feePayer: '2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4' },
+            },
+        };
+        const out = await proto.settle(
+            { parsed: new URL('https://api.example.com/x'), pinnedIp: '1.2.3.4', pinnedFamily: 4, timeoutLeftMs: 30000 },
+            'SIGNED-TX', v2Meta,
+            { _fetchWithLimits: fetchFn }
+        );
+        assert.ok(!out.error, `settle should succeed: ${JSON.stringify(out)}`);
+        assert.strictEqual(out.signature, '5xK8...exampleSig', 'signature surfaced from PAYMENT-RESPONSE.transaction');
+        assert.ok(out.settlementResponse, 'v2 settlementResponse object surfaced');
+        assert.strictEqual(out.settlementResponse.success, true);
+    });
+
+    await check('settle: v2 facilitator failure surfaces as settle_failed', async () => {
+        const failPayload = {
+            success: false,
+            transaction: '',
+            network: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+            payer: '2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4',
+            errorReason: 'simulated_failure',
+        };
+        const respHeaderValue = Buffer.from(JSON.stringify(failPayload), 'utf8').toString('base64');
+        const fetchFn = async () => ({
+            status: 200,
+            headers: { 'payment-response': respHeaderValue },
+            bodyJson: {},
+        });
+        const v2Meta = {
+            x402Version: 2, amountAtomic: 10000n, memo: 'abcdef0123456789abcdef0123456789',
+            asset: x402Mod.USDC_MINT, negotiatedNetwork: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+            requirement: {
+                scheme: 'exact', network: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+                payTo: '9hw9Py9uMGtXRNpABZjifcK1t3suwzjyri9L9QYKg6zZ',
+                resource: { url: 'https://api.example.com/x', description: '', mimeType: 'application/json' },
+                maxTimeoutSeconds: 300,
+                extra: { feePayer: '2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4' },
+            },
+        };
+        const out = await proto.settle(
+            { parsed: new URL('https://api.example.com/x'), pinnedIp: '1.2.3.4', pinnedFamily: 4, timeoutLeftMs: 30000 },
+            'SIGNED-TX', v2Meta,
+            { _fetchWithLimits: fetchFn }
+        );
+        assert.strictEqual(out.error, 'settle_failed');
+        assert.ok(out.reason && out.reason.includes('simulated_failure'));
+    });
+
+    await check('settle: v2 paymentMeta without extra.feePayer → v2_settle_missing_facilitator', async () => {
+        let fetchCalled = false;
+        const fetchFn = async () => { fetchCalled = true; return { status: 200, bodyJson: {} }; };
+        const v2Meta = {
+            x402Version: 2, amountAtomic: 10000n, memo: 'abcdef0123456789abcdef0123456789',
+            asset: x402Mod.USDC_MINT, negotiatedNetwork: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+            requirement: {
+                scheme: 'exact', network: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+                payTo: '9hw9Py9uMGtXRNpABZjifcK1t3suwzjyri9L9QYKg6zZ',
+                resource: { url: 'https://api.example.com/x', description: '', mimeType: 'application/json' },
+                maxTimeoutSeconds: 300,
+                extra: {},                          // no feePayer
+            },
+        };
+        const out = await proto.settle(
+            { parsed: new URL('https://api.example.com/x'), pinnedIp: '1.2.3.4', pinnedFamily: 4, timeoutLeftMs: 30000 },
+            'SIGNED', v2Meta,
+            { _fetchWithLimits: fetchFn }
+        );
+        assert.strictEqual(out.error, 'v2_settle_missing_facilitator');
+        assert.ok(!fetchCalled, 'must not call network when proof construction fails');
     });
 
     await check('settle: missing x402Version rejects with unsupported_settle_version', async () => {

@@ -37,12 +37,17 @@
 //   - v1 (paymentMeta.x402Version === 1): replays request with
 //     `x-payment` base64-JSON header per the canonical fixture
 //     tests/payment/fixtures/paysh-sandbox-success.json. SHIPPED.
-//   - v2 (paymentMeta.x402Version === 2): REJECTS with
-//     `v2_settle_not_implemented` until a real-wire success capture
-//     pins the v2 proof-header path (Phase 5 of v1.6 implementation).
-//     Agent_pay caller surfaces this to the user as "v2 endpoint
-//     detected but settlement not yet supported." This is the
-//     fixture-first gate Codex required.
+//   - v2 (paymentMeta.x402Version === 2): replays request with
+//     `PAYMENT-SIGNATURE` base64-JSON header carrying a structured
+//     PaymentPayload per Coinbase x402 v2 spec — outer keys:
+//     `x402Version`, `resource`, `accepted` (singular, the chosen
+//     requirement from `accepts[]`), `payload.transaction`. Parses
+//     `PAYMENT-RESPONSE` header on 200 to surface the on-chain
+//     signature (`SettlementResponse.transaction`) and explicitly
+//     fails as `settle_failed` when SettlementResponse.success=false.
+//     Successful v2 end-to-end requires Android bridge multi-sig
+//     signing (Phase 5d) so the burner signs slot 1 (facilitator
+//     signs slot 0 server-side). SHIPPED at Phase 5c.
 //
 // PRE-FLIGHT REJECTIONS (HTTPS-only, private-IP, DNS rebinding, max
 // body, etc.) happen in the agent_pay tool before detect(). This
@@ -638,6 +643,83 @@ function _buildV2UsdcTransferTx(burnerPubkey58, recipientPubkey58, facilitatorPu
     };
 }
 
+// ── x402 v2: PAYMENT-SIGNATURE header builder ────────────────────────────────
+// Per Coinbase x402 v2 spec (specs/transports-v2/http.md +
+// specs/schemes/exact/scheme_exact_svm.md): the proof header carries
+// a base64-encoded `PaymentPayload` with this exact shape (note
+// `accepted` is SINGULAR — the chosen requirement from the challenge's
+// `accepts` array):
+//
+//   {
+//     "x402Version": 2,
+//     "resource": { url, description, mimeType },
+//     "accepted": {
+//       "scheme": "exact",
+//       "network": "solana:<genesis>",
+//       "amount": "10000",
+//       "asset": "EPjFW...",
+//       "payTo": "<recipient>",
+//       "maxTimeoutSeconds": 300,
+//       "extra": { "feePayer": "<facilitator>", "memo": "..." }
+//     },
+//     "payload": { "transaction": "<base64 signed tx>" }
+//   }
+//
+// Returns { value: <base64 string> } on success or { error, reason }
+// if paymentMeta is missing required fields (defensive — build()
+// should have provided everything).
+function _buildV2PaymentSignatureHeader(paymentMeta, signedTxBase64) {
+    if (!paymentMeta || typeof paymentMeta !== 'object') {
+        return { error: 'v2_settle_missing_meta', reason: 'paymentMeta is null or not an object' };
+    }
+    const req = paymentMeta.requirement || {};
+    const extra = req.extra || {};
+    if (typeof extra.feePayer !== 'string' || !_decodeSolanaPubkey(extra.feePayer)) {
+        return { error: 'v2_settle_missing_facilitator', reason: 'paymentMeta.requirement.extra.feePayer not present' };
+    }
+    if (typeof paymentMeta.memo !== 'string' || paymentMeta.memo.length === 0) {
+        return { error: 'v2_settle_missing_memo', reason: 'paymentMeta.memo not present (build should have set it)' };
+    }
+    if (typeof paymentMeta.amountAtomic !== 'bigint') {
+        return { error: 'v2_settle_missing_amount', reason: 'paymentMeta.amountAtomic missing or not BigInt' };
+    }
+    // Resource may be an object (per spec) or a string (older v1-shaped
+    // captures). Normalize to the v2 object shape — facilitators require
+    // it. If only a string is present, treat it as `url` with sensible
+    // empty defaults for description + mimeType.
+    let resource = req.resource;
+    if (typeof resource === 'string') {
+        resource = { url: resource, description: req.description || '', mimeType: 'application/json' };
+    } else if (!resource || typeof resource !== 'object') {
+        resource = { url: '', description: req.description || '', mimeType: 'application/json' };
+    }
+
+    const payload = {
+        x402Version: 2,
+        resource,
+        accepted: {
+            scheme: req.scheme || 'exact',
+            // Use the CAIP-2 wire-form network the challenge actually sent.
+            // paymentMeta.negotiatedNetwork is the preserved wire string
+            // ("solana" or "solana:<genesis>"); we echo it back verbatim.
+            network: paymentMeta.negotiatedNetwork || req.network || 'solana',
+            amount: paymentMeta.amountAtomic.toString(),
+            asset: paymentMeta.asset || USDC_MINT,
+            payTo: req.payTo || paymentMeta.recipient,
+            maxTimeoutSeconds: typeof req.maxTimeoutSeconds === 'number' ? req.maxTimeoutSeconds : 300,
+            extra: {
+                feePayer: extra.feePayer,
+                memo: paymentMeta.memo,
+            },
+        },
+        payload: {
+            transaction: signedTxBase64,
+        },
+    };
+    const value = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64');
+    return { value };
+}
+
 // ── Payment requirement parsing per pay.sh fixture ───────────────────────────
 
 // pay.sh / x402 V1 returns a 402 with body shape (fixture-pinned):
@@ -1114,49 +1196,43 @@ class X402Protocol extends PaymentProtocol {
         const { parsed, pinnedIp, pinnedFamily, timeoutLeftMs } = originalRequest || {};
         if (!parsed) return { error: 'missing_request_context', reason: 'originalRequest.parsed missing' };
 
-        // BAT-582 R22 / v1.6 Codex clarification 1: settle() ONLY handles
-        // x402 v1's proof-header path right now. v1 emits a plaintext-ish
-        // JSON via the `x-payment` header, pinned against the existing
-        // tests/payment/fixtures/paysh-sandbox-success.json fixture.
-        //
-        // v2's proof-header path is NOT YET pinned by a real-wire
-        // success capture (Phase 4 of v1.6 implementation — requires a
-        // real $0.01 payment against Tripadvisor or similar to record
-        // the success response and determine whether v2 uses `x-payment`,
-        // `payment-signature`, or some other header form). Until that
-        // capture is committed, settle() refuses v2 explicitly with a
-        // stable error code so callers (agent_pay tool) can surface a
-        // clear "v2 settlement not yet implemented" message instead of
-        // sending a malformed v1-shaped proof to a v2 endpoint.
+        // BAT-582 v1.6 Phase 5c: settle() dispatches v1 vs v2 proof-header
+        // paths per paymentMeta.x402Version.
+        //   v1: legacy `x-payment` header carrying a flat PaymentPayload
+        //       (x402Version, scheme, network, payload.transaction).
+        //       Pinned against tests/payment/fixtures/paysh-sandbox-success.json.
+        //   v2: `PAYMENT-SIGNATURE` header carrying a structured
+        //       PaymentPayload (x402Version, resource, accepted, payload).
+        //       Per Coinbase x402 v2 spec
+        //       (specs/transports-v2/http.md +
+        //        specs/schemes/exact/scheme_exact_svm.md).
         const negotiatedVersion = paymentMeta && paymentMeta.x402Version;
-        if (negotiatedVersion === 2) {
-            return {
-                error: 'v2_settle_not_implemented',
-                reason: 'x402 v2 settlement proof-header path is gated on a real-wire success capture (BAT-582 Phase 5). detect() and build() accept v2 challenges, but the agent cannot complete payment on v2 endpoints until the success fixture is committed.',
-            };
-        }
-        if (negotiatedVersion !== 1) {
-            // Should be impossible — build() rejects unsupported versions
-            // before producing paymentMeta. Defensive fail-closed.
+        if (negotiatedVersion !== 1 && negotiatedVersion !== 2) {
             return {
                 error: 'unsupported_settle_version',
                 reason: `paymentMeta.x402Version=${negotiatedVersion} is not a settleable version`,
             };
         }
 
-        const xPaymentPayload = {
-            x402Version: 1,
-            scheme: 'exact',
-            network: 'solana',
-            payload: {
-                transaction: signedTxBase64,
-            },
-        };
-        const xPaymentHeader = Buffer.from(JSON.stringify(xPaymentPayload), 'utf8').toString('base64');
+        let proofHeaders;
+        if (negotiatedVersion === 2) {
+            const built = _buildV2PaymentSignatureHeader(paymentMeta, signedTxBase64);
+            if (built.error) return built;
+            proofHeaders = { 'payment-signature': built.value };
+        } else {
+            const xPaymentPayload = {
+                x402Version: 1,
+                scheme: 'exact',
+                network: 'solana',
+                payload: {
+                    transaction: signedTxBase64,
+                },
+            };
+            const xPaymentHeader = Buffer.from(JSON.stringify(xPaymentPayload), 'utf8').toString('base64');
+            proofHeaders = { 'x-payment': xPaymentHeader };
+        }
 
-        const resp = await fetchFn(parsed, pinnedIp, pinnedFamily, {
-            'x-payment': xPaymentHeader,
-        }, timeoutLeftMs || 30000);
+        const resp = await fetchFn(parsed, pinnedIp, pinnedFamily, proofHeaders, timeoutLeftMs || 30000);
 
         if (resp.error) return { error: resp.error, reason: resp.reason };
         if (resp.status === 402) {
@@ -1166,23 +1242,47 @@ class X402Protocol extends PaymentProtocol {
             return { error: 'settle_http_error', reason: `server returned ${resp.status} after payment` };
         }
 
-        // Settlement signature: pay.sh returns a `X-Payment-Response` header
-        // (base64-encoded JSON) on success. We surface the on-chain signature
-        // if present so the agent can show a Solscan link.
+        // Settlement signature: server returns the on-chain payment
+        // signature on a successful 200 via a base64-encoded response
+        // header. The header NAME differs by version:
+        //   v1: `X-Payment-Response` (pay.sh sandbox-success fixture)
+        //   v2: `PAYMENT-RESPONSE` (per Coinbase x402 v2 spec — a
+        //       `SettlementResponse` object: { success, transaction,
+        //       network, payer } or { success: false, errorReason, ... }).
+        // The inner JSON shape converged across versions enough that we
+        // can read `.transaction` (v1 & v2 both use that key for the
+        // signature) — fall back to `.signature` for any legacy variant.
+        // We check both header names to be liberal in what we accept.
         let signature = null;
-        const respHeader = resp.headers && (resp.headers['x-payment-response'] || resp.headers['X-Payment-Response']);
+        let v2SettlementResponse = null;
+        const respHeader = resp.headers && (
+            resp.headers['payment-response'] ||       // v2 (lowercased by Node)
+            resp.headers['PAYMENT-RESPONSE'] ||       // v2 (defensive)
+            resp.headers['x-payment-response'] ||     // v1
+            resp.headers['X-Payment-Response']        // v1 (defensive)
+        );
         if (typeof respHeader === 'string') {
             try {
                 const decoded = JSON.parse(Buffer.from(respHeader, 'base64').toString('utf8'));
                 if (decoded && typeof decoded.transaction === 'string') signature = decoded.transaction;
                 else if (decoded && typeof decoded.signature === 'string') signature = decoded.signature;
-            } catch (_) { /* leave null */ }
+                // v2 spec: SettlementResponse with explicit success boolean.
+                // When success=false the on-chain tx didn't land — surface
+                // as an error rather than a fake success.
+                if (negotiatedVersion === 2 && decoded && decoded.success === false) {
+                    return {
+                        error: 'settle_failed',
+                        reason: `facilitator reported failure: ${decoded.errorReason || 'no reason given'}`,
+                        response: resp,
+                    };
+                }
+                if (negotiatedVersion === 2) v2SettlementResponse = decoded;
+            } catch (_) { /* leave signature null */ }
         }
 
-        return {
-            response: resp,
-            signature,
-        };
+        const out = { response: resp, signature };
+        if (v2SettlementResponse) out.settlementResponse = v2SettlementResponse;
+        return out;
     }
 }
 
@@ -1198,6 +1298,7 @@ module.exports = {
     _buildCuPriceData,
     _buildMemoData,
     _generateRandomMemoNonce,
+    _buildV2PaymentSignatureHeader,
     COMPUTE_BUDGET_PROGRAM_ID,
     MEMO_PROGRAM_ID,
     _findAssociatedTokenAddress,
