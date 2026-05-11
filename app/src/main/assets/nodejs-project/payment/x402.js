@@ -756,8 +756,16 @@ function _buildV2PaymentSignatureHeader(paymentMeta, signedTxBase64) {
             asset: paymentMeta.asset || USDC_MINT,
             payTo: req.payTo || paymentMeta.recipient,
             maxTimeoutSeconds: typeof req.maxTimeoutSeconds === 'number' ? req.maxTimeoutSeconds : 300,
+            // BAT-582 v1.6 R-pr367-fix-7: preserve all server-provided
+            // extension fields by shallow-cloning `extra`, then override
+            // `memo` with the value actually used in the tx (build() may
+            // have generated a random nonce if none was supplied).
+            // feePayer is part of `extra` already and is preserved by the
+            // spread. Future-proofs against facilitators adding new fields
+            // (signing nonces, fee tiers, expiration hints, etc.) without
+            // requiring a client change.
             extra: {
-                feePayer: extra.feePayer,
+                ...extra,
                 memo: paymentMeta.memo,
             },
         },

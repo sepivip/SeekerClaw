@@ -172,6 +172,55 @@ check('_buildV2PaymentSignatureHeader accepts valid non-empty signedTxBase64', (
     assert.ok(!r.error, 'must not error on valid input');
 });
 
+check('_buildV2PaymentSignatureHeader preserves server-provided extra fields (R-pr367-fix-7)', () => {
+    // Future facilitators may add fields beyond feePayer + memo (e.g.,
+    // signing nonces, fee tiers, expiration hints). Pre-fix dropped them
+    // by rebuilding `extra` as `{ feePayer, memo }`. Now we shallow-clone
+    // so unknown fields round-trip back in the PAYMENT-SIGNATURE proof.
+    const meta = {
+        requirement: {
+            extra: {
+                feePayer: FACILITATOR,
+                signingNonce: 'abc123',
+                feeTier: 'priority',
+                expiresAt: 1234567890,
+            },
+            resource: { url: 'https://x' },
+            payTo: RECIPIENT,
+        },
+        memo: MEMO_FIXED,
+        amountAtomic: AMOUNT_USDC,
+        negotiatedNetwork: 'solana',
+    };
+    const r = _buildV2PaymentSignatureHeader(meta, 'AQABBA==');
+    assert.ok(r.value);
+    const decoded = JSON.parse(Buffer.from(r.value, 'base64').toString('utf8'));
+    assert.strictEqual(decoded.accepted.extra.feePayer, FACILITATOR);
+    assert.strictEqual(decoded.accepted.extra.memo, MEMO_FIXED, 'memo must be the one used in tx (overrides server value)');
+    assert.strictEqual(decoded.accepted.extra.signingNonce, 'abc123', 'extension field must be preserved');
+    assert.strictEqual(decoded.accepted.extra.feeTier, 'priority', 'extension field must be preserved');
+    assert.strictEqual(decoded.accepted.extra.expiresAt, 1234567890, 'extension field must be preserved');
+});
+
+check('_buildV2PaymentSignatureHeader overrides server-provided memo with paymentMeta.memo', () => {
+    // build() may have generated a random nonce if challenge had no
+    // extra.memo; the proof must reflect what's actually IN the signed tx,
+    // not what the server originally sent.
+    const meta = {
+        requirement: {
+            extra: { feePayer: FACILITATOR, memo: 'stale-server-memo' },
+            resource: { url: 'https://x' },
+            payTo: RECIPIENT,
+        },
+        memo: MEMO_FIXED,  // what we actually used in the tx
+        amountAtomic: AMOUNT_USDC,
+        negotiatedNetwork: 'solana',
+    };
+    const r = _buildV2PaymentSignatureHeader(meta, 'AQABBA==');
+    const decoded = JSON.parse(Buffer.from(r.value, 'base64').toString('utf8'));
+    assert.strictEqual(decoded.accepted.extra.memo, MEMO_FIXED);
+});
+
 // ── Full v2 tx structure ────────────────────────────────────────────────
 
 const { txBuffer, paymentMeta } = _buildV2UsdcTransferTx(
