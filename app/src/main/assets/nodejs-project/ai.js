@@ -701,7 +701,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
             // BAT-582 Phase 6: agent_pay capability — only mentioned when the burner
             // is configured (the tool refuses without one, so no point advertising it
             // when it would just refuse). The user controls max_usdc per call.
-            lines.push('**Paid APIs (x402)**: Use `agent_pay(url, max_usdc)` to fetch x402-protected endpoints (e.g., pay.sh catalog services). Settles in USDC from the **Burner wallet**. Mainnet only, HTTPS GET only. The user controls `max_usdc` per call; the tool rejects if the 402 demand exceeds it.');
+            lines.push('**Paid APIs (x402)**: Use `agent_pay(url, max_usdc, method?, body?)` to fetch x402-protected endpoints (e.g., pay.sh catalog services). Settles in USDC from the **Burner wallet**. Mainnet only, HTTPS only. Default `method` is GET; pass `method: "POST"` + `body: <JSON-serializable>` for paid POST endpoints (≤ 8 KB body). GET runs silently when under cap. **POST always asks for user confirmation** (side-effect-aware: POST can send SMS, post content, or trigger paid actions). The user controls `max_usdc` per call; the tool rejects if the 402 demand exceeds it.');
         } else {
             lines.push('You have one wallet:');
             lines.push('- **Main** (via MWA) — user\'s wallet. Approval popup required for every action.');

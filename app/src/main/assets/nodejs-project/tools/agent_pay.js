@@ -1,30 +1,41 @@
 // SeekerClaw — tools/agent_pay.js
-// BAT-582 Phase 6 — agent_pay tool: pay an x402-protected HTTP endpoint
-// and fetch its response.
+// BAT-582 Phase 6 + BAT-664 — agent_pay tool: pay an x402-protected HTTP
+// endpoint and fetch its response.
 //
 // FLOW
 // ----
-//   1. Pre-flight rejections: HTTPS-only (debug-localhost exception), GET-only,
-//      private-IP rejection, DNS rebinding defense (resolve once, pin IP).
+//   1. Pre-flight rejections: HTTPS-only (debug-localhost exception),
+//      GET/POST only, private-IP rejection, DNS rebinding defense
+//      (resolve once, pin IP), POST body validation (JSON-only, ≤ 8 KB).
 //   2. Burner-configured check via /burner/status — if no burner, refuse
 //      WITHOUT issuing any HTTP request to the URL.
-//   3. Issue HTTPS GET with size + timeout limits.
+//   3. Issue HTTPS GET or POST (same byte-identical body if POST) with
+//      size + timeout limits + per-invocation Idempotency-Key (POST only).
 //   4. If response is NOT 402, return resource directly (URL might not be
 //      x402-protected; treat as a regular successful fetch).
 //   5. If 402: detect protocol via payment/index.js → build unsigned tx via
 //      protocol.build(response, ctx) → reserve cap → sign via burner →
-//      protocol.settle() with proof header.
+//      protocol.settle() with proof header (replay sends same method +
+//      same byte-identical body + same idempotency key for POST).
 //   6. Commit on success / release on error. Return resource response.
 //
 // The dynamic confirmation hook in confirmation/policy.js authorizes
-// agent_pay only when args.max_usdc is provided (Phase 4); the demand-vs-
-// max_usdc check happens INSIDE this tool because Node only learns the
-// real demand after fetching the 402 challenge.
+// agent_pay GET silently when under cap (existing behavior). POST always
+// returns `confirm` (side-effect-aware, BAT-664). The demand-vs-max_usdc
+// check happens INSIDE this tool because Node only learns the real demand
+// after fetching the 402 challenge.
 //
-// HARD RULES (per BAT-582 contract v1.4)
-// --------------------------------------
+// HARD RULES (per BAT-582 contract v1.4 + BAT-664 contract v2)
+// ------------------------------------------------------------
 //   - HTTPS only (with localhost exception gated by NODE_ENV=development)
-//   - Method is always GET (V1 boundary; POST/PUT not supported)
+//   - Method must be GET or POST (BAT-664); other methods rejected with
+//     `method_not_allowed`
+//   - POST body: JSON-serializable, ≤ 8 KB UTF-8 bytes compact-serialized,
+//     validated BEFORE any DNS or network call
+//   - POST sends byte-identical compact JSON body on both probe and settle
+//     replay; same Content-Length and Idempotency-Key headers
+//   - Idempotency-Key: one `crypto.randomUUID()` per agent_pay invocation,
+//     attached only when method === 'POST', reused for probe + settle
 //   - Single retry only after payment (no retry chains)
 //   - Response body capped at 1 MB; total timeout 30 s
 //   - DNS rebinding defense: resolve once, pin IP for the request
@@ -34,6 +45,7 @@
 'use strict';
 
 const { URL } = require('url');
+const crypto = require('crypto');
 const dns = require('dns');
 const https = require('https');
 const http = require('http');
@@ -45,9 +57,11 @@ const { detectProtocol } = require('../payment');
 const { wouldReserve } = require('../caps/preflight');
 
 const USDC_DECIMALS = 6;
-const MAX_BODY_BYTES = 1024 * 1024;        // 1 MB
+const MAX_BODY_BYTES = 1024 * 1024;        // 1 MB response cap
+const MAX_POST_BODY_BYTES = 8 * 1024;      // 8 KB request-body cap (BAT-664, per v1.6 contract)
 const TOTAL_TIMEOUT_MS = 30 * 1000;        // 30 s
 const RESERVE_TTL_MS = 60 * 1000;          // 60 s (matches dispatch.js)
+const ALLOWED_METHODS = new Set(['GET', 'POST']);
 
 // ── Decimal → atomic helper (USDC, 6 decimals) ───────────────────────────────
 
@@ -196,13 +210,17 @@ function _isLocalhostHostname(h) {
 
 // Validate URL + scheme + method (cheap, synchronous). Returns null on
 // success or {error, reason} on rejection. NEVER opens a network connection.
+//
+// BAT-664: `method` can be 'GET' or 'POST'. Anything else rejected with
+// `method_not_allowed` (stable code matching v1.6 contract).
 function preflightUrlSync(url, method) {
     let parsed;
     try { parsed = new URL(url); }
     catch (_) { return { error: 'invalid_url', reason: 'URL parse failed' }; }
 
-    if ((method || 'GET').toUpperCase() !== 'GET') {
-        return { error: 'method_not_get', reason: 'agent_pay only supports GET (V1)' };
+    const m = (method || 'GET').toUpperCase();
+    if (!ALLOWED_METHODS.has(m)) {
+        return { error: 'method_not_allowed', reason: `method must be GET or POST (got ${m})` };
     }
 
     const hostname = parsed.hostname;
@@ -217,7 +235,54 @@ function preflightUrlSync(url, method) {
         return { error: 'non_https', reason: 'http:// only allowed for localhost in debug builds' };
     }
 
-    return { ok: true, parsed, isLocal };
+    return { ok: true, parsed, isLocal, method: m };
+}
+
+// BAT-664: validate + serialize a POST body BEFORE DNS / network / payment.
+// Returns { bodyJsonStr } on success, or { error, reason } on rejection.
+//
+// Rules (per contract v2):
+//   - method === 'POST' ⇒ body required (else body_required_for_post)
+//   - body string ⇒ MUST parse as JSON (else body_not_json)
+//   - body object/array ⇒ pass through
+//   - other types (null, boolean, number) ⇒ accepted only if JSON.stringify
+//     produces a value (matches JSON.stringify semantics)
+//   - Final compact-serialized form ≤ 8192 UTF-8 bytes (body_too_large)
+//
+// The returned bodyJsonStr is REUSED byte-identically for probe and settle
+// replay — never re-serialized. Drift between probe and settle would cause
+// strict facilitators to reject the proof.
+function validateAndSerializeBody(method, body) {
+    if (method !== 'POST') {
+        return { bodyJsonStr: null };  // GET path: no body
+    }
+    if (body === undefined || body === null) {
+        return { error: 'body_required_for_post', reason: 'POST requires a JSON body' };
+    }
+    let parsed = body;
+    if (typeof body === 'string') {
+        try { parsed = JSON.parse(body); }
+        catch (_) {
+            return { error: 'body_not_json', reason: 'string body must be valid JSON' };
+        }
+    }
+    let bodyJsonStr;
+    try { bodyJsonStr = JSON.stringify(parsed); }
+    catch (e) {
+        return { error: 'body_not_json', reason: `body could not be serialized: ${e.message}` };
+    }
+    if (typeof bodyJsonStr !== 'string') {
+        // JSON.stringify can return undefined (functions, symbols)
+        return { error: 'body_not_json', reason: 'body did not produce a JSON value (functions/symbols not allowed)' };
+    }
+    const byteLen = Buffer.byteLength(bodyJsonStr, 'utf8');
+    if (byteLen > MAX_POST_BODY_BYTES) {
+        return {
+            error: 'body_too_large',
+            reason: `POST body is ${byteLen} bytes (max ${MAX_POST_BODY_BYTES} UTF-8 bytes per v1.6 contract)`,
+        };
+    }
+    return { bodyJsonStr };
 }
 
 // DNS resolve (and pin) to detect private-IP rebinding. Skip resolution for
@@ -261,8 +326,18 @@ async function preflightUrl(url, method, deadlineMs) {
 
 // Returns { status, headers, bodyBuffer, bodyJson?, request: {url, method, headers} } or { error, reason }.
 // `parsed` is a URL instance; `pinnedIp` is the resolved IPv4/IPv6 string (or null for localhost).
-function _fetchWithLimits(parsed, pinnedIp, pinnedFamily, extraHeaders = {}, signalTimeoutLeftMs = TOTAL_TIMEOUT_MS) {
+//
+// BAT-664: `opts.method` ('GET'|'POST') and `opts.bodyJsonStr` (cached
+// pre-serialized compact JSON, or null) thread through here so the SAME
+// byte-identical body is sent on probe and settle replay. The caller is
+// responsible for sourcing both from one cached pair (no per-call
+// re-serialization).
+function _fetchWithLimits(parsed, pinnedIp, pinnedFamily, extraHeaders = {}, signalTimeoutLeftMs = TOTAL_TIMEOUT_MS, opts = {}) {
     return new Promise((resolve) => {
+        const method = (opts.method || 'GET').toUpperCase();
+        const bodyJsonStr = (method === 'POST' && typeof opts.bodyJsonStr === 'string')
+            ? opts.bodyJsonStr
+            : null;
         const isHttps = parsed.protocol === 'https:';
         const lib = isHttps ? https : http;
         const headers = Object.assign({
@@ -270,9 +345,13 @@ function _fetchWithLimits(parsed, pinnedIp, pinnedFamily, extraHeaders = {}, sig
             'user-agent': 'SeekerClaw-agent_pay/1.0',
             accept: 'application/json,*/*;q=0.5',
         }, extraHeaders);
+        if (bodyJsonStr !== null) {
+            headers['content-type'] = 'application/json';
+            headers['content-length'] = Buffer.byteLength(bodyJsonStr, 'utf8');
+        }
 
         const reqOptions = {
-            method: 'GET',
+            method,
             // IP-pin: connect to the resolved address but send the original Host header
             // so TLS SNI and HTTP routing still work. For localhost we let Node resolve.
             host: pinnedIp || parsed.hostname,
@@ -347,6 +426,12 @@ function _fetchWithLimits(parsed, pinnedIp, pinnedFamily, extraHeaders = {}, sig
             clearTimeout(overall);
             settle({ error: 'timeout', reason: 'socket idle timeout' });
         });
+        // BAT-664: write the cached pre-serialized body for POST. We pass
+        // it as a Node Buffer so http.request doesn't re-encode it — the
+        // bytes on the wire are exactly `Buffer.from(bodyJsonStr, 'utf8')`.
+        if (bodyJsonStr !== null) {
+            req.write(Buffer.from(bodyJsonStr, 'utf8'));
+        }
         req.end();
     });
 }
@@ -357,17 +442,28 @@ const tools = [
     {
         name: 'agent_pay',
         description:
-            'Pay an x402-protected HTTP endpoint and fetch its response. Used for paid APIs ' +
+            'Pay an x402-protected HTTPS endpoint (GET or POST) and fetch its response. Used for paid APIs ' +
             '(pay.sh catalog, x402-enabled endpoints). Solana mainnet, USDC only. ' +
-            'Args: `url` (HTTPS GET only) + `max_usdc` (max amount willing to spend, decimal string, e.g. "0.10"). ' +
+            'Args: `url` (HTTPS) + `max_usdc` (max amount willing to spend, decimal string, e.g. "0.10") ' +
+            '+ optional `method` ("GET" default, or "POST") + optional `body` (JSON-serializable object, required for POST, ≤ 8 KB). ' +
             'The burner wallet signs autonomously when the 402 demand is ≤ max_usdc; the call is rejected ' +
             'if the demand exceeds max_usdc, the network is not Solana, or the asset is not USDC. ' +
+            'GET runs silently when under cap. POST always asks for user confirmation (side-effect-aware: ' +
+            'POST can send SMS, post content, or trigger other paid actions). ' +
             'Refuses if no burner is configured (Settings → Burner Wallet to set up).',
         input_schema: {
             type: 'object',
             properties: {
-                url: { type: 'string', description: 'Target URL (HTTPS GET only).' },
+                url: { type: 'string', description: 'Target URL (HTTPS).' },
                 max_usdc: { type: 'string', description: 'Maximum USDC willing to spend, decimal string (e.g. "0.10").' },
+                method: {
+                    type: 'string',
+                    enum: ['GET', 'POST'],
+                    description: 'HTTP method. Defaults to "GET". POST always requires user confirmation regardless of cap.',
+                },
+                body: {
+                    description: 'Request body for POST. JSON-serializable object/array. Max 8 KB UTF-8 compact-serialized. Required when method=POST.',
+                },
             },
             required: ['url', 'max_usdc'],
         },
@@ -380,6 +476,8 @@ async function _handle(input /* , chatId */) {
     const a = input || {};
     const url = a.url;
     const maxUsdcStr = a.max_usdc;
+    const methodRaw = a.method;
+    const bodyRaw = a.body;
 
     if (typeof url !== 'string' || !url) {
         return { error: 'invalid_input', reason: 'url is required' };
@@ -408,12 +506,29 @@ async function _handle(input /* , chatId */) {
     // 1a. Cheap pre-flight (URL parse + scheme + method). Synchronous — no
     // bridge calls, no DNS. Fails fast on the dumbest input mistakes before
     // we bother the bridge at all.
-    const sync = preflightUrlSync(url, 'GET');
+    const sync = preflightUrlSync(url, methodRaw);
     if (sync.error) {
         log(`[agent_pay] rejected: ${sync.error} — ${sync.reason}`, 'WARN');
         return { error: sync.error, reason: sync.reason };
     }
-    const { parsed, isLocal } = sync;
+    const { parsed, isLocal, method } = sync;
+
+    // 1a.5. BAT-664: validate + compact-serialize the POST body BEFORE any
+    // DNS resolve or network call. Pre-network validation is an explicit
+    // acceptance gate — operator typos must not trigger DNS lookups on
+    // attacker-supplied hosts.
+    const bodyCheck = validateAndSerializeBody(method, bodyRaw);
+    if (bodyCheck.error) {
+        log(`[agent_pay] rejected: ${bodyCheck.error} — ${bodyCheck.reason}`, 'WARN');
+        return { error: bodyCheck.error, reason: bodyCheck.reason };
+    }
+    const bodyJsonStr = bodyCheck.bodyJsonStr;  // string for POST, null for GET
+
+    // BAT-664: per-invocation idempotency key for POST. Generated ONCE here
+    // and reused for both the 402 probe and the settle replay so the
+    // facilitator + upstream see the same key on the retried request.
+    // Distinct agent_pay calls get distinct keys.
+    const idempotencyKey = method === 'POST' ? crypto.randomUUID() : null;
 
     // 1b. Burner-configured check BEFORE DNS resolution. Per BAT-582 contract
     // "agent_pay refuses cleanly when no burner is configured AND makes no
@@ -440,10 +555,18 @@ async function _handle(input /* , chatId */) {
     }
     const { pinnedIp, pinnedFamily } = dnsRes;
 
-    // 3. Initial fetch — bounded by the SHARED remaining budget so DNS +
-    // fetch can't together exceed TOTAL_TIMEOUT_MS.
+    // 3. Initial fetch (probe) — bounded by the SHARED remaining budget
+    // so DNS + fetch can't together exceed TOTAL_TIMEOUT_MS. For POST,
+    // sends the cached body + Idempotency-Key — the SAME pair will be
+    // reused on the settle replay.
     const fetchTimeoutMs = Math.max(1, deadlineMs - Date.now());
-    const firstResp = await _fetchWithLimits(parsed, pinnedIp, pinnedFamily, {}, fetchTimeoutMs);
+    const probeHeaders = idempotencyKey ? { 'idempotency-key': idempotencyKey } : {};
+    const firstResp = await _fetchWithLimits(
+        parsed, pinnedIp, pinnedFamily,
+        probeHeaders,
+        fetchTimeoutMs,
+        { method, bodyJsonStr },
+    );
     if (firstResp.error) {
         log(`[agent_pay] initial fetch failed: ${firstResp.error}`, 'WARN');
         return { error: firstResp.error, reason: firstResp.reason };
@@ -548,12 +671,24 @@ async function _handle(input /* , chatId */) {
         return { error: 'sign_failed', reason: e.message };
     }
 
-    // 10. Settle: replay GET with proof header(s). Single retry only — no
-    //     retry chains (per contract). BAT-582 R5: settle inherits the
-    //     SAME shared deadline so total wall-clock is bounded by
-    //     TOTAL_TIMEOUT_MS regardless of how DNS / fetch / sign spent it.
+    // 10. Settle: replay the same request (same method, same body for POST,
+    //     same Idempotency-Key for POST) with proof header(s) added. Single
+    //     retry only — no retry chains (per contract). BAT-582 R5: settle
+    //     inherits the SAME shared deadline so total wall-clock is bounded
+    //     by TOTAL_TIMEOUT_MS regardless of how DNS / fetch / sign spent it.
+    //
+    //     BAT-664: `originalRequest` carries `method`, `bodyJsonStr`, and
+    //     `idempotencyKey`. settle() reads those and forwards through the
+    //     fetch helper so probe + settle send byte-identical request shapes
+    //     (modulo the additional PAYMENT-SIGNATURE / x-payment proof header).
     const remaining = Math.max(1000, deadlineMs - Date.now());
-    const originalRequest = { parsed, pinnedIp, pinnedFamily, timeoutLeftMs: remaining };
+    const originalRequest = {
+        parsed, pinnedIp, pinnedFamily,
+        timeoutLeftMs: remaining,
+        method,
+        bodyJsonStr,
+        idempotencyKey,
+    };
     const settled = await protocol.settle(originalRequest, signedTxBase64, paymentMeta, { _fetchWithLimits });
     if (!settled || settled.error) {
         await _release(reservationId, settled && settled.error ? settled.error : 'settle_failed');
@@ -643,6 +778,8 @@ module.exports = {
     preflightUrl,
     preflightUrlSync,
     preflightDns,
+    validateAndSerializeBody,   // BAT-664
+    MAX_POST_BODY_BYTES,        // BAT-664
     _setDnsLookup,
     _fetchWithLimits,
 };

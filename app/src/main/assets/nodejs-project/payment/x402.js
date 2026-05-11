@@ -1318,7 +1318,15 @@ class X402Protocol extends PaymentProtocol {
         if (typeof fetchFn !== 'function') {
             return { error: 'missing_fetch_helper', reason: 'settle() requires helpers._fetchWithLimits' };
         }
-        const { parsed, pinnedIp, pinnedFamily, timeoutLeftMs } = originalRequest || {};
+        const {
+            parsed, pinnedIp, pinnedFamily, timeoutLeftMs,
+            // BAT-664: probe and settle MUST send the SAME method + body
+            // + Idempotency-Key (the SAME bytes). agent_pay caches the
+            // serialized body once at request-validation time and threads
+            // both halves through originalRequest. Defaults preserve v1
+            // GET-only behavior for callers that don't pass them.
+            method, bodyJsonStr, idempotencyKey,
+        } = originalRequest || {};
         if (!parsed) return { error: 'missing_request_context', reason: 'originalRequest.parsed missing' };
 
         // BAT-582 v1.6 Phase 5c: settle() dispatches v1 vs v2 proof-header
@@ -1357,7 +1365,19 @@ class X402Protocol extends PaymentProtocol {
             proofHeaders = { 'x-payment': xPaymentHeader };
         }
 
-        const resp = await fetchFn(parsed, pinnedIp, pinnedFamily, proofHeaders, timeoutLeftMs || 30000);
+        // BAT-664: settle replay sends the SAME method + body + idempotency
+        // key as the probe. Adding the proof header to the existing probe
+        // headers gives strict facilitators (paysponge) a byte-identical
+        // body to validate against.
+        const settleHeaders = idempotencyKey
+            ? { 'idempotency-key': idempotencyKey, ...proofHeaders }
+            : proofHeaders;
+        const resp = await fetchFn(
+            parsed, pinnedIp, pinnedFamily,
+            settleHeaders,
+            timeoutLeftMs || 30000,
+            { method, bodyJsonStr },
+        );
 
         if (resp.error) return { error: resp.error, reason: resp.reason };
         if (resp.status === 402) {

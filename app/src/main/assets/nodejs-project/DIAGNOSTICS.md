@@ -586,20 +586,27 @@ grep -i "MCP.*reconcile\|MCP.*Failed to" node_debug.log | tail -20
 
 ## agent_pay (BAT-582 — x402 client)
 
-### `agent_pay: rejected (non-HTTPS / private IP / non-Solana / non-USDC / demand > max_usdc)`
-**Symptoms:** Tool result `error: "non_https" | "private_ip" | "non_solana_network" | "non_usdc_asset" | "demand_exceeds_max_usdc" | "method_not_get"`.
-**Diagnosis:** Pre-flight or 402-body validation refused the call before any payment was attempted. Each error is a hard V1 boundary:
+### `agent_pay: rejected (non-HTTPS / private IP / non-Solana / non-USDC / demand > max_usdc / method or body invalid)`
+**Symptoms:** Tool result `error: "non_https" | "private_ip" | "non_solana_network" | "non_usdc_asset" | "demand_exceeds_max_usdc" | "method_not_allowed" | "body_required_for_post" | "body_not_json" | "body_too_large"`.
+**Diagnosis:** Pre-flight or 402-body validation refused the call BEFORE any DNS resolve or payment attempt. Each error is a hard V1/V1.5 boundary:
 - `non_https` — URL must be `https://` (debug builds also accept `http://localhost`)
 - `private_ip` — DNS resolved to a private/loopback IP (10/8, 172.16/12, 192.168/16, 127/8, 169.254/16, ::1, fc00::/7, fe80::/10) — SSRF defense
 - `non_solana_network` — pay.sh requirement `network` field was not `solana`
 - `non_usdc_asset` — pay.sh requirement `asset` was not USDC (mint `EPjFWdd5...`)
 - `demand_exceeds_max_usdc` — server demanded more than the agent's `max_usdc` cap
-- `method_not_get` — V1 only supports GET (no POST/PUT)
+- `method_not_allowed` — V1.5 supports GET and POST only (no PUT/PATCH/DELETE) — BAT-664
+- `body_required_for_post` — `method: "POST"` requires a `body` parameter — BAT-664
+- `body_not_json` — `body` must be a JSON-serializable object/array (or a string that parses as JSON). No `text/plain` — BAT-664
+- `body_too_large` — `body` exceeded 8 KB UTF-8 bytes after compact serialization — BAT-664
 
 **Fix:**
 1. For `demand_exceeds_max_usdc`: re-invoke with a higher `max_usdc` if the user agrees, OR accept the rejection (this is the cap working as designed).
 2. For `non_https` / `private_ip`: this is a security boundary — do not bypass. If the user genuinely wants to call a localhost service from a debug build, ensure NODE_ENV=development is set.
 3. For `non_solana_network` / `non_usdc_asset`: the endpoint isn't compatible with V1. Tell the user "this endpoint requires <network>/<asset>, which agent_pay doesn't support yet (V1 = Solana mainnet USDC only)."
+4. For `method_not_allowed`: only GET and POST are supported. Restructure the call to use one of them, or skip if the endpoint requires e.g. PATCH.
+5. For `body_required_for_post`: pass a `body` arg (JSON-serializable). If the endpoint genuinely has no body, switch to `method: "GET"` if appropriate.
+6. For `body_not_json`: ensure the body is a plain object/array. Functions, symbols, circular refs cause this. If passing a string, it must parse as JSON (no `text/plain`).
+7. For `body_too_large`: trim the body. 8 KB UTF-8 covers nearly every realistic SMS/API call — if you genuinely need more, that's a follow-up BAT to lift the cap.
 
 ### `agent_pay: response too large` / `agent_pay: timeout`
 **Symptoms:** Tool result `error: "response_too_large"` or `error: "timeout"`.

@@ -104,6 +104,29 @@ function _decimalToAtomic(decimal, decimals) {
     return full;
 }
 
+// BAT-664: confirmation message for agent_pay POST. Shows method + URL +
+// max_usdc + a 200-char body PREVIEW that the UI can render. Per Codex v2
+// note 2: the preview is for HUMAN display only — it must not be persisted
+// to analytics in any form that contains body content. Callers that emit
+// telemetry should record `method`, `host`, `bodyByteLength`, and a
+// `bodyTruncated: true` flag instead. This helper does NOT log or emit;
+// it just returns a string for the confirmation card.
+function _agentPayPostConfirmMessage(args) {
+    const url = typeof args.url === 'string' ? args.url : '<missing url>';
+    const max = typeof args.max_usdc === 'string' ? args.max_usdc : String(args.max_usdc);
+    let bodyPreview = '';
+    if (args.body !== undefined && args.body !== null) {
+        let s;
+        try { s = typeof args.body === 'string' ? args.body : JSON.stringify(args.body); }
+        catch (_) { s = '<unserializable body>'; }
+        if (s.length > 200) s = s.slice(0, 200) + '… (truncated)';
+        bodyPreview = `body: ${s}`;
+    } else {
+        bodyPreview = 'body: <empty>';
+    }
+    return `POST ${url}\nmax_usdc: ${max} USDC\n${bodyPreview}`;
+}
+
 function _capDiffMessage(args, walletState) {
     // wallet_set_caps args are decimal strings; current caps in walletState are atomic strings.
     const current = (walletState && walletState.burnerCaps) || {};
@@ -169,6 +192,13 @@ function getConfirmationPolicy(toolName, args, walletState) {
     // Phase 6 does the real demand-vs-max_usdc check inside the tool itself
     // (Node has no way to know the demand pre-fetch). When max_usdc is
     // missing, block at the gate to fail fast.
+    //
+    // BAT-664: POST always requires user confirmation (side-effect-aware).
+    // POST endpoints can send SMS, post content, or trigger paid actions.
+    // The confirmation preview shows method, URL, the first 200 chars of
+    // the body (sanitized — built UI-side; this hook only signals the
+    // policy), and the max_usdc cap. GET keeps its existing under-cap
+    // silent behavior.
     if (toolName === 'agent_pay') {
         if (typeof a.max_usdc !== 'string' && typeof a.max_usdc !== 'number') {
             return {
@@ -177,6 +207,14 @@ function getConfirmationPolicy(toolName, args, walletState) {
                 message: 'agent_pay requires a max_usdc cap (decimal string).',
             };
         }
+        const method = (typeof a.method === 'string' ? a.method : 'GET').toUpperCase();
+        if (method === 'POST') {
+            return {
+                policy: 'confirm',
+                message: _agentPayPostConfirmMessage(a),
+            };
+        }
+        // GET: keep the existing under-cap-silent behavior.
         return 'none';
     }
 
