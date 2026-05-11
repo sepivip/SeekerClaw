@@ -65,6 +65,14 @@ const PROBE_LIST = [
         // settle in probe mode.
         body: { phone: '+15555555555', message: 'probe' },
         expect: { status: 402, version: 'v2' },
+        // BAT-582 R34: flag side-effecting probes (POST endpoints whose
+        // action mutates external state). Skipped by default. Pass
+        // `--include-side-effecting` to capture. Reason: pay.sh could
+        // drop the payment gate (free trial, policy change, bug) and
+        // a "refresh fixtures" run would then fire a real SMS to the
+        // placeholder phone without any operator intent. Opt-in keeps
+        // the routine refresh-all workflow side-effect-free.
+        sideEffecting: true,
     },
     {
         label: 'textbelt-status-free',
@@ -76,9 +84,10 @@ const PROBE_LIST = [
 ];
 
 function parseArgs(argv) {
-    const out = { service: null };
+    const out = { service: null, includeSideEffecting: false };
     for (let i = 2; i < argv.length; i++) {
         if (argv[i] === '--service' && argv[i + 1]) { out.service = argv[i + 1]; i++; }
+        if (argv[i] === '--include-side-effecting') out.includeSideEffecting = true;
     }
     return out;
 }
@@ -125,13 +134,30 @@ function summarize402(capture) {
 
 async function main() {
     const args = parseArgs(process.argv);
-    const list = args.service
+    let list = args.service
         ? PROBE_LIST.filter(p => p.label.toLowerCase().includes(args.service.toLowerCase()))
         : PROBE_LIST;
     if (list.length === 0) {
         console.error(`No service matches "${args.service}"`);
         console.error(`Available: ${PROBE_LIST.map(p => p.label).join(', ')}`);
         process.exit(1);
+    }
+
+    // BAT-582 R34: side-effecting probes (POST endpoints whose action
+    // mutates external state) are opt-in. Default skip; require explicit
+    // `--include-side-effecting` flag to capture. Single-service runs
+    // via `--service <name>` bypass the filter — if the operator
+    // explicitly named a side-effecting probe, that IS intent.
+    let skipped = [];
+    if (!args.includeSideEffecting && !args.service) {
+        const before = list.length;
+        skipped = list.filter(p => p.sideEffecting);
+        list = list.filter(p => !p.sideEffecting);
+        if (before !== list.length) {
+            console.log(`Note: skipping ${skipped.length} side-effecting probe(s) — pass --include-side-effecting to capture them:`);
+            for (const s of skipped) console.log(`  • ${s.label}: ${s.description}`);
+            console.log('');
+        }
     }
 
     console.log('═══ pay.sh Layer 1 — probe-all ═══');
