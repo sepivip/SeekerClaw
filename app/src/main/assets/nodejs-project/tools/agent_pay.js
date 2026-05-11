@@ -218,7 +218,19 @@ function preflightUrlSync(url, method) {
     try { parsed = new URL(url); }
     catch (_) { return { error: 'invalid_url', reason: 'URL parse failed' }; }
 
-    const m = (method || 'GET').toUpperCase();
+    // R-pr370-fix-6: defensive type check. Tool inputs aren't schema-validated
+    // at runtime, so a malformed call could pass `method: 123` / `method: {}`.
+    // `(non-string).toUpperCase()` would throw an uninformative TypeError;
+    // we treat any non-string as "missing" → default GET, but reject other
+    // truthy non-strings as method_not_allowed so the operator gets a clear
+    // signal that the type was wrong.
+    let m;
+    if (method === undefined || method === null) m = 'GET';
+    else if (typeof method !== 'string') {
+        return { error: 'method_not_allowed', reason: `method must be a string (got ${typeof method})` };
+    } else {
+        m = method.toUpperCase();
+    }
     if (!ALLOWED_METHODS.has(m)) {
         return { error: 'method_not_allowed', reason: `method must be GET or POST (got ${m})` };
     }
@@ -242,11 +254,13 @@ function preflightUrlSync(url, method) {
 // Returns { bodyJsonStr } on success, or { error, reason } on rejection.
 //
 // Rules (per contract v2):
-//   - method === 'POST' ⇒ body required (else body_required_for_post)
+//   - method === 'POST' ⇒ body required; `undefined` or `null` rejected as
+//     body_required_for_post (treated as "no body supplied")
 //   - body string ⇒ MUST parse as JSON (else body_not_json)
 //   - body object/array ⇒ pass through
-//   - other types (null, boolean, number) ⇒ accepted only if JSON.stringify
-//     produces a value (matches JSON.stringify semantics)
+//   - body of other types (boolean, number) ⇒ accepted only if
+//     JSON.stringify produces a string (matches JSON.stringify semantics);
+//     functions / symbols-only / circular refs return body_not_json
 //   - Final compact-serialized form ≤ 8192 UTF-8 bytes (body_too_large)
 //
 // The returned bodyJsonStr is REUSED byte-identically for probe and settle
@@ -324,8 +338,9 @@ async function preflightUrl(url, method, deadlineMs) {
 
 // ── Fetch with timeout + size cap, using pinned IP ───────────────────────────
 
-// Returns { status, headers, bodyBuffer, bodyJson?, request: {url, method, headers} } or { error, reason }.
-// `parsed` is a URL instance; `pinnedIp` is the resolved IPv4/IPv6 string (or null for localhost).
+// Returns { status, headers, bodyBuffer, bodyJson? } or { error, reason }.
+// `parsed` is a URL instance; `pinnedIp` is the resolved IPv4/IPv6 string
+// (or null for localhost).
 //
 // BAT-664: `opts.method` ('GET'|'POST') and `opts.bodyJsonStr` (cached
 // pre-serialized compact JSON, or null) thread through here so the SAME

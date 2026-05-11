@@ -588,7 +588,20 @@ grep -i "MCP.*reconcile\|MCP.*Failed to" node_debug.log | tail -20
 
 ### `agent_pay: rejected (non-HTTPS / private IP / non-Solana / non-USDC / demand > max_usdc / method or body invalid)`
 **Symptoms:** Tool result `error: "non_https" | "private_ip" | "non_solana_network" | "non_usdc_asset" | "demand_exceeds_max_usdc" | "method_not_allowed" | "body_required_for_post" | "body_not_json" | "body_too_large"`.
-**Diagnosis:** Pre-flight or 402-body validation refused the call BEFORE any DNS resolve or payment attempt. Each error is a hard V1/V1.5 boundary:
+**Diagnosis:** Pre-flight or 402-body validation refused the call. Two layers:
+
+**Pre-DNS/network rejections** (fire BEFORE any DNS lookup or HTTP fetch — operator typos diagnosed cleanly without touching attacker-supplied hosts):
+- `non_https` — URL must be `https://`
+- `method_not_allowed` — only GET / POST supported (BAT-664)
+- `body_required_for_post` / `body_not_json` / `body_too_large` — POST body issues (BAT-664)
+- `private_ip` — DNS resolved to a private IP (rejection happens immediately after the resolve, before any HTTP request)
+
+**Post-fetch, pre-payment rejections** (fire AFTER fetching the 402 challenge but BEFORE attempting payment — server response failed V1 boundary checks):
+- `non_solana_network` — pay.sh requirement `network` field was not `solana`
+- `non_usdc_asset` — pay.sh requirement `asset` was not USDC (mint `EPjFWdd5...`)
+- `demand_exceeds_max_usdc` — server demanded more than the agent's `max_usdc` cap
+
+All errors below:
 - `non_https` — URL must be `https://` (debug builds also accept `http://localhost`)
 - `private_ip` — DNS resolved to a private/loopback IP (10/8, 172.16/12, 192.168/16, 127/8, 169.254/16, ::1, fc00::/7, fe80::/10) — SSRF defense
 - `non_solana_network` — pay.sh requirement `network` field was not `solana`

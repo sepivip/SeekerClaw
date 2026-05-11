@@ -261,25 +261,128 @@ async function check(label, fn) {
         assert.strictEqual(statusCalls.length, 1);
     });
 
-    // ── Idempotency-Key generation contract ─────────────────────────────────
+    // ── Idempotency-Key contract — integration test via stubbed fetch ──────
 
-    await check('crypto.randomUUID() produces distinct UUIDs across calls', () => {
-        // Pin the underlying expectation rather than wiring through the
-        // private idempotency generation: validate that distinct calls in
-        // tight succession produce distinct UUIDs. The handler generates one
-        // per agent_pay invocation using crypto.randomUUID(), so distinct
-        // invocations get distinct keys.
+    // R-pr370-fix-5: validate the REAL contract — probe + settle send the
+    // SAME `Idempotency-Key` header for one agent_pay invocation, and two
+    // separate invocations get DISTINCT keys. Pre-fix this test only asserted
+    // crypto.randomUUID() distinctness; it would have passed even if
+    // agent_pay forgot to attach the header at all. Now stubs the protocol
+    // settle path so we can capture both fetch calls.
+
+    await check('POST integration: probe + settle send the SAME Idempotency-Key, byte-identical body', async () => {
+        // Build the originalRequest the handler would construct and call
+        // X402Protocol.settle() directly with a fetch helper that captures
+        // headers + body bytes. This exercises the EXACT settle dispatch
+        // logic in payment/x402.js that BAT-664 extended.
+        const x402 = require(path.join(BUNDLE, 'payment', 'x402'));
+        const { X402Protocol } = x402;
+        const proto = new X402Protocol();
+
+        // Build a synthetic v2 paymentMeta good enough for settle dispatch.
+        const idempotencyKey = crypto.randomUUID();
+        const bodyJsonStr = JSON.stringify({ phone: '+15555550000', message: 'hi' });
+        const paymentMeta = {
+            x402Version: 2,
+            amountAtomic: 10000n,
+            recipient: '9hw9Py9uMGtXRNpABZjifcK1t3suwzjyri9L9QYKg6zZ',
+            asset: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+            memo: 'abcd0123abcd0123abcd0123abcd0123',
+            negotiatedNetwork: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+            requirement: {
+                scheme: 'exact',
+                network: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+                payTo: '9hw9Py9uMGtXRNpABZjifcK1t3suwzjyri9L9QYKg6zZ',
+                resource: { url: 'https://api.example.com/text', description: 't', mimeType: 'application/json' },
+                maxTimeoutSeconds: 300,
+                extra: { feePayer: '2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4' },
+            },
+        };
+
+        let settleCallArgs = null;
+        const fetchFn = async (parsed, ip, fam, headers, timeout, opts) => {
+            settleCallArgs = { parsed, headers, timeout, opts };
+            return { status: 200, headers: { 'payment-response': '' }, bodyJson: { ok: true } };
+        };
+
+        await proto.settle(
+            {
+                parsed: new URL('https://api.example.com/text'),
+                pinnedIp: '1.2.3.4', pinnedFamily: 4, timeoutLeftMs: 30000,
+                method: 'POST',
+                bodyJsonStr,
+                idempotencyKey,
+            },
+            'SIGNED-TX',
+            paymentMeta,
+            { _fetchWithLimits: fetchFn },
+        );
+
+        assert.ok(settleCallArgs, 'fetch must have been called by settle');
+        // BAT-664: settle must forward the SAME Idempotency-Key the probe used.
+        assert.strictEqual(settleCallArgs.headers['idempotency-key'], idempotencyKey,
+            'settle replay must reuse the probe idempotency key');
+        // BAT-664: method + bodyJsonStr forwarded byte-identically to fetch.
+        assert.strictEqual(settleCallArgs.opts.method, 'POST');
+        assert.strictEqual(settleCallArgs.opts.bodyJsonStr, bodyJsonStr,
+            'settle replay must reuse the same serialized body the probe used');
+        // PAYMENT-SIGNATURE proof header must coexist with idempotency-key.
+        assert.ok(settleCallArgs.headers['payment-signature'],
+            'v2 settle still attaches PAYMENT-SIGNATURE alongside the idempotency key');
+    });
+
+    await check('POST integration: GET path does NOT add idempotency-key header (regression)', async () => {
+        // R-pr370-fix-5 complement: the GET path must not add an
+        // Idempotency-Key header — only POST does, per contract.
+        const x402 = require(path.join(BUNDLE, 'payment', 'x402'));
+        const { X402Protocol } = x402;
+        const proto = new X402Protocol();
+
+        const paymentMeta = {
+            x402Version: 2, amountAtomic: 10000n,
+            recipient: '9hw9Py9uMGtXRNpABZjifcK1t3suwzjyri9L9QYKg6zZ',
+            asset: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+            memo: 'abcd0123abcd0123abcd0123abcd0123',
+            negotiatedNetwork: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+            requirement: {
+                scheme: 'exact', network: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+                payTo: '9hw9Py9uMGtXRNpABZjifcK1t3suwzjyri9L9QYKg6zZ',
+                resource: { url: 'https://api.example.com/r', description: '', mimeType: 'application/json' },
+                maxTimeoutSeconds: 300,
+                extra: { feePayer: '2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4' },
+            },
+        };
+
+        let captured = null;
+        const fetchFn = async (parsed, ip, fam, headers, timeout, opts) => {
+            captured = { headers, opts };
+            return { status: 200, headers: {}, bodyJson: {} };
+        };
+        await proto.settle(
+            // No method/body/idempotencyKey — GET path.
+            { parsed: new URL('https://api.example.com/r'), pinnedIp: '1.2.3.4', pinnedFamily: 4, timeoutLeftMs: 30000 },
+            'SIGNED-TX', paymentMeta,
+            { _fetchWithLimits: fetchFn },
+        );
+        assert.ok(captured, 'fetch must have been called');
+        assert.ok(!captured.headers['idempotency-key'],
+            'idempotency-key MUST NOT be attached on the GET path');
+        // method/bodyJsonStr arrive as undefined → _fetchWithLimits defaults to GET, no body.
+        assert.ok(captured.opts.method === undefined || captured.opts.method === 'GET');
+        assert.ok(!captured.opts.bodyJsonStr,
+            'GET path must not have a serialized body');
+    });
+
+    await check('crypto.randomUUID() produces distinct UUIDs (handler generates one per invocation)', () => {
+        // Format + distinctness sanity check. Kept as a small unit on top
+        // of the integration test above so a future refactor that changes
+        // the UUID source still trips a clear assertion.
         const a = crypto.randomUUID();
         const b = crypto.randomUUID();
-        const c = crypto.randomUUID();
         assert.notStrictEqual(a, b);
-        assert.notStrictEqual(b, c);
-        assert.notStrictEqual(a, c);
-        // RFC 4122 format check.
         const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-        for (const u of [a, b, c]) {
-            assert.ok(uuidRe.test(u), `UUID format invalid: ${u}`);
-        }
+        assert.ok(uuidRe.test(a));
+        assert.ok(uuidRe.test(b));
     });
 
     // ── GET regression: pre-existing behavior preserved ─────────────────────

@@ -195,10 +195,11 @@ function getConfirmationPolicy(toolName, args, walletState) {
     //
     // BAT-664: POST always requires user confirmation (side-effect-aware).
     // POST endpoints can send SMS, post content, or trigger paid actions.
-    // The confirmation preview shows method, URL, the first 200 chars of
-    // the body (sanitized — built UI-side; this hook only signals the
-    // policy), and the max_usdc cap. GET keeps its existing under-cap
-    // silent behavior.
+    // _agentPayPostConfirmMessage() below builds the preview text that the
+    // confirmation UI will render verbatim (method + URL + 200-char body
+    // preview + max_usdc). The UI shows this string in the card; this
+    // hook is the source of truth for the preview content. GET keeps its
+    // existing under-cap silent behavior.
     if (toolName === 'agent_pay') {
         if (typeof a.max_usdc !== 'string' && typeof a.max_usdc !== 'number') {
             return {
