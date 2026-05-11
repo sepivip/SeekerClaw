@@ -23,7 +23,10 @@
 //     normalized to "solana" (R20+ negotiation invariant).
 //   - extra.feePayer + extra.memo present; other server extension fields
 //     preserved by shallow-clone (R-pr367-fix-7).
-//   - payload.transaction is the signed tx base64.
+//   - payload.transaction round-trips the built tx base64 (Layer 2.5
+//     passes the unsigned/placeholder tx straight into settle — actual
+//     signing happens in agent_pay between build() and settle() via the
+//     Android bridge; what we're pinning here is the round-trip plumbing).
 //
 // Run: node tests/paysh/validate-settle.js
 
@@ -157,7 +160,11 @@ async function runSettleForCapture(captureEntry) {
         throw new Error(`build() returned error: ${built.error} — ${built.reason}`);
     }
     if (!built.txBase64 || !built.paymentMeta) {
-        throw new Error(`build() returned malformed: ${JSON.stringify(built).slice(0, 200)}`);
+        // R-pr368-fix-6: paymentMeta carries BigInt fields (e.g. amountAtomic);
+        // plain JSON.stringify throws on those, which would hide the underlying
+        // malformed-build error path. Log shape only (keys + types).
+        const shape = Object.entries(built || {}).map(([k, v]) => `${k}=${typeof v}`).join(',');
+        throw new Error(`build() returned malformed: {${shape}}`);
     }
     if (captureEntry.expectV2 && built.paymentMeta.x402Version !== 2) {
         throw new Error(`expected x402Version=2, got ${built.paymentMeta.x402Version}`);
@@ -248,7 +255,7 @@ async function runSettleForCapture(captureEntry) {
             throw new Error(`PAYMENT-SIGNATURE.payload.transaction missing`);
         }
         if (decoded.payload.transaction !== built.txBase64) {
-            throw new Error(`PAYMENT-SIGNATURE.payload.transaction must equal the signed tx base64`);
+            throw new Error(`PAYMENT-SIGNATURE.payload.transaction must round-trip the built tx base64 (Layer 2.5 doesn't sign — pins the build→settle plumbing, not signing)`);
         }
         // Header size sanity (under R-pr367-fix-8 cap)
         if (capturedHeaders['payment-signature'].length > 8192) {
@@ -329,7 +336,7 @@ async function main() {
     console.log('── Cross-cutting invariants ──');
 
     await check('all v2 captures negotiate to network=solana:* (not normalized to bare "solana")', () => {
-        for (const entry of SETTLE_CAPTURES) {
+        for (const entry of SETTLE_CAPTURES.filter(e => e.expectV2)) {
             const artifacts = runCache.get(entry.file);
             if (!artifacts) continue;
             const decoded = JSON.parse(Buffer.from(artifacts.capturedHeaders['payment-signature'], 'base64').toString('utf8'));
@@ -341,7 +348,7 @@ async function main() {
     });
 
     await check('all v2 captures emit a non-empty memo in PAYMENT-SIGNATURE (challenge or random nonce)', () => {
-        for (const entry of SETTLE_CAPTURES) {
+        for (const entry of SETTLE_CAPTURES.filter(e => e.expectV2)) {
             const artifacts = runCache.get(entry.file);
             if (!artifacts) continue;
             const decoded = JSON.parse(Buffer.from(artifacts.capturedHeaders['payment-signature'], 'base64').toString('utf8'));
@@ -352,7 +359,7 @@ async function main() {
     });
 
     await check('all v2 captures produce wire-valid transactions (non-empty base64, decodable)', () => {
-        for (const entry of SETTLE_CAPTURES) {
+        for (const entry of SETTLE_CAPTURES.filter(e => e.expectV2)) {
             const artifacts = runCache.get(entry.file);
             if (!artifacts) continue;
             const buf = Buffer.from(artifacts.built.txBase64, 'base64');
