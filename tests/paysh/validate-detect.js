@@ -97,12 +97,28 @@ async function main() {
             fail++;
             continue;
         }
-        // BAT-582 R23: for synthetic fixtures, cross-check that
-        // _meta.expectedRejection (committed in the fixture itself)
-        // matches EXPECTATIONS.expectedBuildError. Pre-fix the fixture
-        // could claim one rejection code while the test asserted a
-        // different one — silent disagreement. Hard-fail on mismatch.
+        // BAT-582 R23/R30: for synthetic fixtures, the fixture is the
+        // single source of truth. The fixture's _meta.expectedRejection
+        // MUST exist (R30 enforcement) and MUST match
+        // EXPECTATIONS.expectedBuildError (R23 cross-check). Pre-R30 the
+        // existence check was missing — a synthetic capture committed
+        // without _meta.expectedRejection would silently pass even
+        // though the README/comments describe it as required.
+        const isSynthetic = fname.startsWith('synthetic-') ||
+            (capture._meta && capture._meta.kind === 'synthetic');
         const fixtureExpectedRejection = capture._meta && capture._meta.expectedRejection;
+        if (isSynthetic) {
+            if (!fixtureExpectedRejection) {
+                console.log(`  ✗ ${fname.padEnd(48)} SYNTHETIC FIXTURE MISSING _meta.expectedRejection — required for synthetic captures (see README "Adding a new synthetic edge-case fixture")`);
+                fail++;
+                continue;
+            }
+            if (!expected.expectedBuildError) {
+                console.log(`  ✗ ${fname.padEnd(48)} SYNTHETIC EXPECTATIONS ENTRY MISSING expectedBuildError — must mirror _meta.expectedRejection="${fixtureExpectedRejection}"`);
+                fail++;
+                continue;
+            }
+        }
         if (fixtureExpectedRejection && expected.expectedBuildError &&
             fixtureExpectedRejection !== expected.expectedBuildError) {
             console.log(`  ✗ ${fname.padEnd(48)} META MISMATCH — fixture._meta.expectedRejection="${fixtureExpectedRejection}" but EXPECTATIONS.expectedBuildError="${expected.expectedBuildError}"`);
