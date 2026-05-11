@@ -415,28 +415,151 @@ function _buildUsdcTransferTx(burnerPubkey58, recipientPubkey58, amountAtomic, r
 //
 // Some servers may use `paymentRequirements` instead of `accepts`; we accept
 // both for forward-compat.
-function _extractRequirements(body) {
-    if (!body || typeof body !== 'object') return null;
-    if (Array.isArray(body.accepts) && body.accepts.length > 0) return body.accepts;
-    if (Array.isArray(body.paymentRequirements) && body.paymentRequirements.length > 0) return body.paymentRequirements;
+// BAT-582 v1.6: Solana mainnet genesis hash (CAIP-2 anchor for x402 v2
+// network field). Pinned per Codex sign-off — single value, no list.
+const SOLANA_MAINNET_GENESIS = '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp';
+// Supported x402 protocol versions. v1 (legacy paysh) and v2 (current
+// pay.sh ecosystem — Tripadvisor, CoinGecko, Textbelt all v2 as of
+// 2026-05-10). v3+ is rejected as unsupported_version per contract v1.6.
+const X402_VERSIONS_SUPPORTED = new Set([1, 2]);
+// Max base64 length we'll attempt to decode from a payment-required
+// header. ~16KB after decode is plenty for any reasonable payment
+// requirements payload while bounding worst-case allocation.
+const PAYMENT_REQUIRED_HEADER_MAX_B64_BYTES = 22_000;
+
+/**
+ * BAT-582 v1.6: extract payment-requirements payload from the response.
+ * x402 v2 delivers requirements via EITHER the JSON body
+ * (Tripadvisor, Textbelt) OR a base64-encoded `payment-required` header
+ * (CoinGecko). Both modes are committed real-wire captures under
+ * tests/paysh/captures/.
+ *
+ * Returns { payload, source } where payload is the parsed object that
+ * SHOULD contain `accepts`/`paymentRequirements` and `x402Version`, and
+ * `source` is 'body' or 'header'. Returns null if neither delivery mode
+ * yielded a usable shape — caller surfaces as no_payment_requirements.
+ */
+function _extractPayload(response) {
+    const body = response && response.bodyJson;
+    if (body && typeof body === 'object' && !Array.isArray(body)) {
+        if ((Array.isArray(body.accepts) && body.accepts.length > 0) ||
+            (Array.isArray(body.paymentRequirements) && body.paymentRequirements.length > 0)) {
+            return { payload: body, source: 'body' };
+        }
+    }
+    // Body lacked requirements — check `payment-required` header (v2).
+    const headers = response && response.headers;
+    if (headers && typeof headers === 'object') {
+        // Normalize: HTTP headers are case-insensitive; Node lowercases them
+        // in res.headers but we defensively also check capitalized form.
+        const headerVal = headers['payment-required'] || headers['Payment-Required'];
+        if (typeof headerVal === 'string' && headerVal.length > 0 &&
+            headerVal.length <= PAYMENT_REQUIRED_HEADER_MAX_B64_BYTES) {
+            try {
+                const decoded = Buffer.from(headerVal, 'base64').toString('utf8');
+                const parsed = JSON.parse(decoded);
+                if (parsed && typeof parsed === 'object' &&
+                    (Array.isArray(parsed.accepts) || Array.isArray(parsed.paymentRequirements))) {
+                    return { payload: parsed, source: 'header' };
+                }
+            } catch (_) { /* fall through to null */ }
+        }
+    }
     return null;
 }
 
-// Pick the first acceptable requirement: scheme=exact, network=solana, asset=USDC.
-function _pickRequirement(reqs) {
-    for (const r of reqs) {
-        const scheme = String(r.scheme || '').toLowerCase();
-        if (scheme && scheme !== 'exact') continue;
-        const network = String(r.network || '').toLowerCase();
-        if (network && network !== 'solana') continue;
-        return r;
-    }
+function _extractRequirementsArray(payload) {
+    if (!payload || typeof payload !== 'object') return null;
+    if (Array.isArray(payload.accepts) && payload.accepts.length > 0) return payload.accepts;
+    if (Array.isArray(payload.paymentRequirements) && payload.paymentRequirements.length > 0) return payload.paymentRequirements;
     return null;
+}
+
+/**
+ * BAT-582 v1.6: determine if `network` string identifies Solana mainnet.
+ * Returns { kind: 'solana-mainnet' | 'solana-other' | 'non-solana' }.
+ *
+ *   - bare `"solana"` (v1, lowercase) → solana-mainnet (backward compat)
+ *   - `"solana:<MAINNET_GENESIS>"` (v2 CAIP-2) → solana-mainnet
+ *   - `"solana:<other-genesis>"` → solana-other (devnet/testnet, reject)
+ *   - `"eip155:..."` or anything else → non-solana
+ */
+function _classifyNetwork(network) {
+    const s = String(network || '').trim().toLowerCase();
+    if (!s) return { kind: 'non-solana' };
+    if (s === 'solana') return { kind: 'solana-mainnet' };
+    if (s.startsWith('solana:')) {
+        const genesis = s.slice('solana:'.length);
+        return genesis === SOLANA_MAINNET_GENESIS.toLowerCase()
+            ? { kind: 'solana-mainnet' }
+            : { kind: 'solana-other', genesis };
+    }
+    return { kind: 'non-solana' };
+}
+
+/**
+ * BAT-582 v1.6: walk requirements array, find first Solana mainnet entry
+ * with scheme=exact. Returns:
+ *   - { requirement }                              when a Solana mainnet entry is found
+ *   - { error: 'no_solana_offer' }                 when no Solana entries exist at all
+ *   - { error: 'non_mainnet_solana', genesis }     when Solana entries exist but all are devnet/testnet
+ *   - { error: 'no_acceptable_requirement' }       when Solana entries exist but none have scheme=exact
+ *
+ * Per contract v1.6 amendment 5: we do NOT fall back to first network
+ * when Solana is absent. Multi-chain (Base + Solana) → pick Solana.
+ * EVM-only → reject as no_solana_offer.
+ */
+function _pickSolanaRequirement(reqs) {
+    let sawSolanaButNonMainnet = false;
+    let lastNonMainnetGenesis = null;
+    let sawSolanaButWrongScheme = false;
+    for (const r of reqs) {
+        const classified = _classifyNetwork(r.network);
+        if (classified.kind === 'non-solana') continue;
+        if (classified.kind === 'solana-other') {
+            sawSolanaButNonMainnet = true;
+            lastNonMainnetGenesis = classified.genesis;
+            continue;
+        }
+        // solana-mainnet — check scheme
+        const scheme = String(r.scheme || '').toLowerCase();
+        if (scheme && scheme !== 'exact') { sawSolanaButWrongScheme = true; continue; }
+        return { requirement: r };
+    }
+    if (sawSolanaButNonMainnet) {
+        return { error: 'non_mainnet_solana', genesis: lastNonMainnetGenesis };
+    }
+    if (sawSolanaButWrongScheme) {
+        return { error: 'no_acceptable_requirement' };
+    }
+    return { error: 'no_solana_offer' };
+}
+
+/**
+ * BAT-582 v1.6: validate x402Version. Per contract:
+ *   - 1 or 2 → ok
+ *   - missing → missing_x402_version (fail-closed; don't guess)
+ *   - 3+ → unsupported_version (forward-compat fail-closed)
+ */
+function _validateVersion(payload) {
+    if (!payload || typeof payload.x402Version !== 'number' || !Number.isInteger(payload.x402Version)) {
+        return { error: 'missing_x402_version' };
+    }
+    if (!X402_VERSIONS_SUPPORTED.has(payload.x402Version)) {
+        return { error: 'unsupported_version', version: payload.x402Version };
+    }
+    return { ok: true, version: payload.x402Version };
 }
 
 function _isUsdcAsset(asset) {
     if (!asset) return false;
     const s = String(asset).trim();
+    // EVM USDC contract addresses (e.g. 0x833589fCD6e... on Base) are
+    // explicitly NOT accepted — even though _pickSolanaRequirement should
+    // have already filtered them out by network, defense-in-depth here
+    // catches a buggy fixture where network claims solana but asset is
+    // an EVM address.
+    if (/^0x[a-fA-F0-9]+$/.test(s)) return false;
     return s === USDC_MINT || s.toLowerCase() === 'usdc' || s.toLowerCase() === 'usd-coin';
 }
 
@@ -455,6 +578,54 @@ function _parseAmountAtomic(s) {
     if (str.length === 0 || str.length > _MAX_ATOMIC_DIGITS_X402) return null;
     if (!/^[0-9]+$/.test(str)) return null;
     try { return BigInt(str); } catch (_) { return null; }
+}
+
+/**
+ * BAT-582 v1.6: read the demand amount from a requirement entry.
+ * v1 uses `maxAmountRequired`, v2 uses `amount`. Per Codex amendment:
+ *   - Both fields present and EQUAL → ok, use value
+ *   - Both fields present and DIFFERENT → reject as conflicting_amount_fields
+ *   - One field present → use it
+ *   - Neither → reject as missing_amount
+ *   - Value not a strict atomic-microunit integer string → reject as invalid_demand
+ *
+ * Returns { demand: BigInt, raw: string } on success, or { error, reason } on failure.
+ */
+function _readAmount(requirement) {
+    if (!requirement || typeof requirement !== 'object') {
+        return { error: 'missing_amount', reason: 'requirement entry is null or not an object' };
+    }
+    const hasAmount = Object.prototype.hasOwnProperty.call(requirement, 'amount');
+    const hasMaxAmount = Object.prototype.hasOwnProperty.call(requirement, 'maxAmountRequired');
+    if (!hasAmount && !hasMaxAmount) {
+        return { error: 'missing_amount', reason: 'requirement has neither amount nor maxAmountRequired' };
+    }
+    if (hasAmount && hasMaxAmount) {
+        // Compare as STRINGS first — both are spec'd as decimal-digit strings,
+        // so a strict equality is more honest than risking BigInt coercion
+        // hiding e.g. "0010" vs "10". If strings differ, attempt BigInt
+        // comparison; if those agree, treat as equivalent (e.g. "10" vs "10 ").
+        const a = String(requirement.amount).trim();
+        const m = String(requirement.maxAmountRequired).trim();
+        if (a !== m) {
+            const aBig = _parseAmountAtomic(a);
+            const mBig = _parseAmountAtomic(m);
+            if (aBig == null || mBig == null || aBig !== mBig) {
+                return {
+                    error: 'conflicting_amount_fields',
+                    reason: `requirement has both amount="${a}" and maxAmountRequired="${m}" which differ`,
+                };
+            }
+        }
+        // Equal — prefer the canonical v2 `amount` field.
+        const demand = _parseAmountAtomic(a);
+        if (demand == null) return { error: 'invalid_demand', reason: `amount="${a}" is not a positive integer string` };
+        return { demand, raw: a };
+    }
+    const raw = String(hasAmount ? requirement.amount : requirement.maxAmountRequired).trim();
+    const demand = _parseAmountAtomic(raw);
+    if (demand == null) return { error: 'invalid_demand', reason: `${hasAmount ? 'amount' : 'maxAmountRequired'}="${raw}" is not a positive integer string` };
+    return { demand, raw };
 }
 
 // ── Recent blockhash fetch ───────────────────────────────────────────────────
@@ -488,22 +659,39 @@ class X402Protocol extends PaymentProtocol {
     get name() { return 'x402'; }
 
     /**
-     * Detect whether a 402 response carries x402 payment requirements.
-     * Pinned against tests/payment/fixtures/paysh-sandbox-402.json.
+     * Detect whether a 402 response carries x402 payment requirements we
+     * can act on (Solana mainnet, USDC, scheme=exact, supported version).
+     *
+     * Pinned against:
+     *   - tests/payment/fixtures/paysh-sandbox-402.json (v1, body-form)
+     *   - tests/paysh/captures/tripadvisor-search-402.json (v2, body-form, multi-chain)
+     *   - tests/paysh/captures/coingecko-trending-pools.json (v2, header-form)
+     *   - tests/paysh/captures/textbelt-text-402.json (v2, body-form, POST)
+     *   - synthetic-* fixtures for fail-closed proofs
+     *
+     * Returns true ONLY when an acceptable Solana mainnet entry exists.
+     * For any rejection path (no Solana, unsupported version, malformed,
+     * non-USDC), returns false — the caller surfaces the specific error
+     * via build(), which calls the same helpers and exposes the reason.
      */
     detect(response) {
         if (!response || response.status !== 402) return false;
-        const reqs = _extractRequirements(response.bodyJson);
+        const extracted = _extractPayload(response);
+        if (!extracted) return false;
+        // Version gate before walking requirements — a v3+ response is not
+        // actionable even if it happens to advertise a Solana entry, per
+        // forward-compat fail-closed rule.
+        const versionCheck = _validateVersion(extracted.payload);
+        if (!versionCheck.ok) return false;
+        const reqs = _extractRequirementsArray(extracted.payload);
         if (!reqs) return false;
-        // At least one requirement on Solana with the exact scheme.
-        for (const r of reqs) {
-            const scheme = String(r.scheme || '').toLowerCase();
-            const network = String(r.network || '').toLowerCase();
-            if ((!scheme || scheme === 'exact') && (!network || network === 'solana')) {
-                return true;
-            }
-        }
-        return false;
+        const pick = _pickSolanaRequirement(reqs);
+        if (pick.error) return false;
+        // We have a Solana mainnet entry with scheme=exact. Build() will
+        // separately re-verify asset/amount/payTo at the construction
+        // step; detect() only needs to confirm the protocol IS x402 and
+        // there IS a usable offer.
+        return !!pick.requirement;
     }
 
     async build(response, ctx) {
@@ -525,25 +713,59 @@ class X402Protocol extends PaymentProtocol {
             return { error: 'invalid_burner_pubkey', reason: 'burner pubkey not available or invalid' };
         }
 
-        const reqs = _extractRequirements(response.bodyJson);
-        if (!reqs) return { error: 'invalid_402_body', reason: 'response body has no accepts/paymentRequirements array' };
-        const r = _pickRequirement(reqs);
-        if (!r) return { error: 'no_acceptable_requirement', reason: 'no x402 requirement matched scheme=exact + network=solana' };
-
-        // Network — tightened guard (server may omit on default).
-        if (r.network && String(r.network).toLowerCase() !== 'solana') {
-            return { error: 'non_solana_network', reason: `network=${r.network} not supported (Solana only)` };
+        // BAT-582 v1.6: extract payment requirements from body OR
+        // `payment-required` header (CoinGecko delivers via header).
+        const extracted = _extractPayload(response);
+        if (!extracted) {
+            return {
+                error: 'no_payment_requirements',
+                reason: '402 response has neither a body accepts/paymentRequirements array nor a payment-required header',
+            };
         }
 
-        // Asset — must be USDC (or its mint).
+        // Version gate — v1 or v2 only.
+        const versionCheck = _validateVersion(extracted.payload);
+        if (versionCheck.error === 'missing_x402_version') {
+            return { error: 'missing_x402_version', reason: 'response has no x402Version field' };
+        }
+        if (versionCheck.error === 'unsupported_version') {
+            return { error: 'unsupported_version', reason: `x402Version=${versionCheck.version} is not supported (only v1, v2)` };
+        }
+
+        const reqs = _extractRequirementsArray(extracted.payload);
+        if (!reqs) return { error: 'invalid_402_body', reason: 'extracted payload has empty accepts/paymentRequirements array' };
+
+        // Multi-chain handling per v1.6 amendment: walk requirements,
+        // pick first Solana mainnet entry with scheme=exact.
+        const pick = _pickSolanaRequirement(reqs);
+        if (pick.error === 'no_solana_offer') {
+            return { error: 'no_solana_offer', reason: 'response offers no Solana mainnet payment option (only EVM/other chains)' };
+        }
+        if (pick.error === 'non_mainnet_solana') {
+            return { error: 'non_mainnet_solana', reason: `Solana offer specifies non-mainnet genesis: ${pick.genesis}` };
+        }
+        if (pick.error === 'no_acceptable_requirement') {
+            return { error: 'no_acceptable_requirement', reason: 'Solana offer present but scheme is not "exact"' };
+        }
+        const r = pick.requirement;
+
+        // Asset — must be USDC (or its mint). EVM-shaped asset (0x...)
+        // explicitly rejected even if the network field accidentally
+        // claimed solana — defense-in-depth.
         if (!_isUsdcAsset(r.asset)) {
-            return { error: 'non_usdc_asset', reason: `asset=${r.asset} not supported (USDC only)` };
+            return { error: 'non_usdc_asset', reason: `asset=${r.asset} not supported (USDC only on Solana mainnet)` };
         }
 
-        // Demand amount (atomic USDC microunits, string per x402 spec).
-        const demand = _parseAmountAtomic(r.maxAmountRequired);
-        if (demand == null || demand <= 0n) {
-            return { error: 'invalid_demand', reason: `maxAmountRequired=${r.maxAmountRequired} not a positive integer string` };
+        // Demand amount — v1 uses maxAmountRequired, v2 uses amount.
+        // Read whichever is present; if BOTH present and they differ,
+        // reject as conflicting_amount_fields (Codex amendment).
+        const amountReadResult = _readAmount(r);
+        if (amountReadResult.error) {
+            return { error: amountReadResult.error, reason: amountReadResult.reason };
+        }
+        const demand = amountReadResult.demand;
+        if (demand <= 0n) {
+            return { error: 'invalid_demand', reason: `amount=${amountReadResult.raw} must be a positive integer` };
         }
         if (demand > maxUsdcAtomic) {
             return {
@@ -661,9 +883,16 @@ module.exports = {
     _findAssociatedTokenAddress,
     _isOnCurve,
     _decodeSolanaPubkey,
-    _extractRequirements,
-    _pickRequirement,
+    _extractPayload,
+    _extractRequirementsArray,
+    _classifyNetwork,
+    _pickSolanaRequirement,
+    _validateVersion,
+    _readAmount,
     _isUsdcAsset,
     _parseAmountAtomic,
     _setBlockhashFetcher,
+    // Constants for tests
+    SOLANA_MAINNET_GENESIS,
+    X402_VERSIONS_SUPPORTED,
 };

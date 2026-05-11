@@ -15,8 +15,15 @@ network format (CAIP-2 `solana:<genesis>` vs bare `"solana"`), different
 proof-header path (`payment-required` header vs body-only), and
 multi-chain offers (Base + Solana side-by-side).
 
-This directory holds the regression net for v2 protocol support:
+This directory holds the regression net for **x402 v2 protocol support** —
 real-wire captures, synthetic edge-case fixtures, and dry-run validators.
+
+> **Status:** committed in stages within PR #364. The captures (Phase 0+1+2)
+> ship first; the parser code that consumes them (Phase 3, `payment/x402.js`)
+> lands as a follow-up commit on the same PR. Validate via
+> `node tests/paysh/validate-detect.js` to check current state — until the
+> parser commit lands, real v2 captures fail detect (which is expected at
+> that point in time).
 
 ## Layout
 

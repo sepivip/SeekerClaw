@@ -88,7 +88,9 @@ const LOAD_TARGETS = [
     // BAT-582 (burner wallet): pure interface modules + the registries that
     // only depend on those interfaces. Anything that requires bridge.js is
     // listed under SKIP_REASONS instead — bridge.js is itself skipped because
-    // it targets localhost:8765 at module load time via require('./config').
+    // it depends on config.js at module load (which expects workspace files
+    // / fixture state the smoke harness doesn't provide). The actual HTTP
+    // calls to localhost:8765 happen later when androidBridgeCall() runs.
     'wallet/signer.js',
     'wallet/wallet.js',
     'payment/protocol.js',

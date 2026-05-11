@@ -280,10 +280,15 @@ function _safeStringify(v) {
             },
             { maxUsdcAtomic: 200000n, burnerPubkey: VALID_BURNER_PUBKEY }
         );
-        // Either no_acceptable_requirement (filtered out) or non_solana_network
-        // (if we squeeze through filter). Both are correct refusals.
+        // BAT-582 v1.6 (Codex sign-off 2026-05-10): multi-chain handling
+        // refactored. An "accepts" array with only EVM entries (no Solana
+        // at all) now rejects as no_solana_offer. The earlier error codes
+        // no_acceptable_requirement / non_solana_network covered the same
+        // case under the v1.4 single-network logic.
         assert.ok(
-            r.error === 'no_acceptable_requirement' || r.error === 'non_solana_network',
+            r.error === 'no_solana_offer' ||
+            r.error === 'no_acceptable_requirement' ||
+            r.error === 'non_solana_network',
             `expected refusal, got ${r.error}`
         );
     });
