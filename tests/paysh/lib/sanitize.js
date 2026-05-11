@@ -81,6 +81,40 @@ const LONG_BASE64_RE = /(?<![A-Za-z0-9+/=_-])[A-Za-z0-9+/_-]{40,}={0,2}(?![A-Za-
 
 const REDACTED = '[REDACTED]';
 
+// Header names whose VALUES carry public x402 protocol data that must be
+// preserved verbatim for the fixture to be useful. Anything outside this
+// allowlist goes through `sanitizeString()` so secret-shaped values in
+// unexpected headers can't leak into committed captures.
+//
+// BAT-582 R31: pre-fix, sanitizeHeaders() redacted ONLY by header name
+// (denylist) and passed every other header's value through unchanged.
+// A header like `X-Request-Id: sk-abc12345...` would commit verbatim
+// because `X-Request-Id` isn't in the denylist — the README promises
+// sk-/key-/bearer- token redaction throughout, but headers got a free
+// pass. Now non-denylist + non-allowlist header values run through the
+// same secret-scrub regex stack the bodies use.
+const HEADER_PROTOCOL_ALLOWLIST = new Set([
+    'payment-required',   // x402 v2: base64-encoded payment requirements payload — the data we WANT to commit
+    'content-type',
+    'content-length',
+    'transfer-encoding',
+    'connection',
+    'date',
+    'server',
+    'cache-control',
+    'access-control-allow-origin',
+    'access-control-allow-methods',
+    'access-control-request-method',
+    'x-frame-options',
+    'x-xss-protection',
+    'x-content-type-options',
+    'x-permitted-cross-domain-policies',
+    'referrer-policy',
+    'vary',
+    'cf-ray',
+    'cf-cache-status',
+]);
+
 function sanitizeHeaders(headers) {
     if (!headers || typeof headers !== 'object') return headers;
     const out = {};
@@ -88,6 +122,18 @@ function sanitizeHeaders(headers) {
         const key = String(k).toLowerCase();
         if (HEADER_DENYLIST.has(key)) {
             out[k] = REDACTED;
+        } else if (HEADER_PROTOCOL_ALLOWLIST.has(key)) {
+            // Preserve verbatim — these are public protocol/transport
+            // metadata that the fixture relies on.
+            out[k] = v;
+        } else if (typeof v === 'string') {
+            // Unknown header — scrub its value against the secret-shape
+            // regex stack so e.g. an X-Request-Id full of an sk-/key-/
+            // bearer-prefixed token doesn't leak through.
+            out[k] = sanitizeString(v);
+        } else if (Array.isArray(v)) {
+            // Multi-value headers (rare in JSON capture but possible)
+            out[k] = v.map(item => typeof item === 'string' ? sanitizeString(item) : item);
         } else {
             out[k] = v;
         }
