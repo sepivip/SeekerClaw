@@ -688,10 +688,20 @@ function _buildV2UsdcTransferTx(burnerPubkey58, recipientPubkey58, facilitatorPu
 //       "asset": "EPjFW...",
 //       "payTo": "<recipient>",
 //       "maxTimeoutSeconds": 300,
-//       "extra": { "feePayer": "<facilitator>", "memo": "..." }
+//       "extra": { "feePayer": "<facilitator>"  /* + any other fields
+//                  the challenge's accepts[i].extra had — see invariant
+//                  below; memo is NOT added unconditionally */ }
 //     },
 //     "payload": { "transaction": "<base64 signed tx>" }
 //   }
+//
+// `accepted.extra` INVARIANT (R-pr368-live-fix-1): the proof must echo
+// the challenge's accepts[i].extra exactly. Adding fields that the
+// challenge didn't send (e.g. memo when challenge only had feePayer)
+// produces "No matching payment requirements" rejection from strict
+// facilitators. The Memo instruction in the tx itself is the on-chain
+// commitment; the header echo does not include it unless the challenge
+// did.
 //
 // Returns { value: <base64 string> } on success or { error, reason }
 // if paymentMeta is missing required fields (defensive — build()

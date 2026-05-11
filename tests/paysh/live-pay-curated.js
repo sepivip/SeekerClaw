@@ -15,8 +15,9 @@
 //   5. Capture PAYMENT-RESPONSE shape as a fresh fixture
 //
 // SAFETY:
-//   - Default mode is DRY-RUN: builds and signs but stops before settle.
-//     Pass `--live` to actually broadcast.
+//   - Default mode is DRY-RUN: builds the tx but stops before signing
+//     and settle. Pass `--live` to actually sign with the test wallet
+//     and broadcast the payment.
 //   - Side-effecting probes (textbelt-text sends SMS) require explicit
 //     `--include-side-effecting` flag.
 //   - MAX_USDC_ATOMIC env var caps per-call spending (build() rejects if
@@ -320,12 +321,19 @@ async function main() {
         let capturedRespStatus = null;
         let sentProofHeaders = null;
         const fetchFn = async (parsed, ip, fam, headers, timeout) => {
-            // Re-do POST with the same runtime body the probe used (so
-            // the --phone override propagates from probe → settle).
+            // Replay the EXACT same request shape the probe used: same
+            // method, same body (when applicable). Per pay.sh protocol
+            // docs: "Preserve method, headers, body, and gateway URL."
+            // Pre-fix this branched on `runtimeBody` and hard-coded
+            // method='POST' when body was present — that would break
+            // any future curated entry that has body+non-POST (or
+            // POST+no-body).
             sentProofHeaders = headers;
-            const opts = runtimeBody
-                ? { method: 'POST', body: JSON.stringify(runtimeBody) }
-                : { method: svc.method || 'GET' };
+            const method = (svc.method || 'GET').toUpperCase();
+            const opts = { method };
+            if (runtimeBody !== undefined && runtimeBody !== null) {
+                opts.body = JSON.stringify(runtimeBody);
+            }
             const r = await fetchLive(parsed, null, null, headers, timeout, opts);
             if (!r.error) {
                 capturedRespHeaders = r.headers;
