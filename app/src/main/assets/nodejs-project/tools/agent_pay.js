@@ -1,6 +1,7 @@
 // SeekerClaw — tools/agent_pay.js
-// BAT-582 Phase 6 + BAT-664 — agent_pay tool: pay an x402-protected HTTP
-// endpoint and fetch its response.
+// BAT-582 Phase 6 + BAT-664 — agent_pay tool: pay an x402-protected HTTPS
+// endpoint and fetch its response. HTTPS-only by contract (debug builds
+// also accept http://localhost for sandbox testing).
 //
 // FLOW
 // ----
