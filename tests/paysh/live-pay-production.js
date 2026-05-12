@@ -21,9 +21,18 @@
 // same way as a real device call.
 //
 // Run:
-//   node tests/paysh/live-pay-production.js                              # dry-run all
-//   node tests/paysh/live-pay-production.js --live                       # spend real USDC (safe)
+//   node tests/paysh/live-pay-production.js                              # exercise production wires up to signing (no spend)
+//   node tests/paysh/live-pay-production.js --live                       # spend real USDC (safe services only)
 //   node tests/paysh/live-pay-production.js --live --include-side-effecting --phone +<num>
+//
+// "Dry-run" semantics (default, no --live):
+//   - Exercises preflight, burner-check, DNS pin, 402 probe (including
+//     POST body propagation + Idempotency-Key), X402 detect+build,
+//     cap preflight, and /burner/reserve.
+//   - STOPS at /burner/sign-transaction (the stub returns
+//     `dryrun_no_sign`; each service surfaces a friendly "dry-run OK —
+//     would have signed" line in the summary, not a real failure).
+//   - No on-chain transfer, no USDC spent.
 
 'use strict';
 
@@ -65,6 +74,25 @@ if (args.live) {
 }
 const maxUsdcAtomic = args.live ? BigInt(env.MAX_USDC_ATOMIC) : 100_000_000n;
 const rpcUrl = env.SOLANA_RPC;
+
+// R-pr371-fix-1: format max_usdc from BigInt EXACTLY via string math.
+// Pre-fix used `Number(maxUsdcAtomic) / 1e6` which silently loses
+// precision for atomic amounts > 2^53−1. Since this script runs real
+// payments, the cap arg passed to agent_pay must match the env value
+// exactly (no float coercion). USDC decimals = 6.
+function _atomicToDecimal(atomic, decimals) {
+    const s = atomic.toString();
+    if (atomic === 0n) return '0';
+    if (s.length <= decimals) {
+        const padded = s.padStart(decimals, '0');
+        const trimmed = padded.replace(/0+$/, '');
+        return trimmed.length === 0 ? '0' : `0.${trimmed}`;
+    }
+    const intPart = s.slice(0, s.length - decimals);
+    const fracPart = s.slice(s.length - decimals).replace(/0+$/, '');
+    return fracPart.length === 0 ? intPart : `${intPart}.${fracPart}`;
+}
+const MAX_USDC_DECIMAL = _atomicToDecimal(maxUsdcAtomic, 6);
 
 // ── Stub bridge.js BEFORE production modules require it ──────────────────────
 // Track every call for audit at the end. The handler captures
@@ -201,7 +229,7 @@ async function main() {
     console.log(`═══ pay.sh Layer 3-prod — production agent_pay path (mode=${mode.toUpperCase()}) ═══`);
     console.log(`Env: ${path.relative(process.cwd(), envFile)}`);
     console.log(`Burner: ${burnerPub58}`);
-    console.log(`Cap:    ${maxUsdcAtomic.toString()} atomic ($${Number(maxUsdcAtomic) / 1e6} USDC) per call`);
+    console.log(`Cap:    ${maxUsdcAtomic.toString()} atomic ($${MAX_USDC_DECIMAL} USDC) per call`);
     console.log(`RPC:    ${rpcUrl}`);
     console.log('');
 
@@ -244,13 +272,26 @@ async function main() {
         bridgeCalls.length = 0;  // reset per-service for audit
         const result = await agentPay.handlers.agent_pay({
             url: svc.url,
-            max_usdc: (Number(maxUsdcAtomic) / 1e6).toString(),
+            max_usdc: MAX_USDC_DECIMAL,
             method: svc.method,
             body: runtimeBody,
         });
         const dt = Date.now() - t0;
 
         if (result.error) {
+            // R-pr371-fix-2: distinguish dry-run sign rejection from real
+            // failures. In dry-run mode the bridge stub returns
+            // `dryrun_no_sign` from /burner/sign-transaction; agent_pay
+            // bubbles it up VERBATIM (the stable error code IS
+            // `dryrun_no_sign`, not wrapped as `sign_failed`). Render
+            // as a friendly "dry-run OK — would have signed" line so
+            // users don't see a misleading "✗" mark.
+            const isDryRunSign = !args.live && result.error === 'dryrun_no_sign';
+            if (isDryRunSign) {
+                console.log(`  ⏸ dry-run OK — production wires reached signing (would have signed) (${dt}ms)`);
+                summary.push({ label: svc.label, status: 'dryrun_ok' });
+                continue;
+            }
             console.log(`  ✗ ${result.error}: ${result.reason || ''} (${dt}ms)`);
             summary.push({ label: svc.label, status: 'error', error: result.error, reason: result.reason });
             continue;
@@ -295,18 +336,21 @@ async function main() {
 
     console.log('');
     console.log('═══ Summary ═══');
-    let succeeded = 0, failed = 0;
+    let succeeded = 0, failed = 0, dryRunOk = 0;
     for (const s of summary) {
         if (s.status === 'success') { succeeded++; console.log(`  ✓ ${s.label.padEnd(20)} spent=${s.spent}`); }
+        else if (s.status === 'dryrun_ok') { dryRunOk++; console.log(`  ⏸ ${s.label.padEnd(20)} dry-run OK (production wires reached signing)`); }
         else { failed++; console.log(`  ✗ ${s.label.padEnd(20)} ${s.error || 'failed'}`); }
     }
     console.log('');
     if (args.live) {
-        console.log(`Total spent: ${totalSpent.toString()} atomic ($${Number(totalSpent) / 1e6})`);
+        console.log(`Total spent: ${totalSpent.toString()} atomic ($${_atomicToDecimal(totalSpent, 6)})`);
         console.log(`Production-path verification: ${succeeded} succeeded, ${failed} failed`);
         if (failed > 0) process.exit(1);
     } else {
-        console.log('Dry-run complete. Pass --live to spend real USDC.');
+        console.log(`Dry-run complete: ${dryRunOk} services reached signing, ${failed} hit pre-sign errors.`);
+        console.log('Pass --live to spend real USDC and complete the full settle path.');
+        if (failed > 0) process.exit(1);
     }
 }
 
