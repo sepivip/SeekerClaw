@@ -299,7 +299,11 @@ async function main() {
 
         // Successful response.
         const spent = result.payment && result.payment.amount_atomic_usdc;
-        console.log(`  ✓ HTTP ${result.status} — spent ${spent} atomic ($${spent ? Number(spent) / 1e6 : '?'})`);
+        // R-pr371-fix-3: format via _atomicToDecimal (BigInt-safe string
+        // math) instead of Number(...)/1e6, which loses precision above
+        // 2^53−1. Matches the formatting used for max_usdc / totalSpent.
+        const spentDecimal = spent ? _atomicToDecimal(BigInt(spent), 6) : '?';
+        console.log(`  ✓ HTTP ${result.status} — spent ${spent} atomic ($${spentDecimal})`);
         if (result.payment && result.payment.signature) {
             console.log(`    on-chain sig: ${result.payment.signature}`);
         }
