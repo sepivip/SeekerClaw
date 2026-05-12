@@ -80,7 +80,10 @@ function fromCapture(capture) {
 // 402 challenges — Layer 2 only validates the detect/build path against
 // challenges. Filter them out (same convention as validate-settle.js).
 function _isV2SuccessFixture(fname) {
-    return fname.endsWith('-v2-success.json');
+    // Catch both Layer 3 (test-side signing → `-v2-success.json`) and
+    // Layer 3-prod (production agent_pay path → `-v2-prod-success.json`)
+    // success fixtures. Neither is a 402 challenge — Layer 2 should skip.
+    return fname.endsWith('-v2-success.json') || fname.endsWith('-v2-prod-success.json');
 }
 
 async function main() {

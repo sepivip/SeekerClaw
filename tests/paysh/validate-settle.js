@@ -313,7 +313,10 @@ function _isExcludedFromSettleCoverage(fname) {
     // PAYMENT-RESPONSE header) as `<service>-v2-success.json`. These
     // are NOT 402 challenges — Layer 2.5 only validates the
     // detect/build/settle path against challenge captures.
+    // Catch both Layer 3 and Layer 3-prod success fixtures (see
+    // validate-detect.js _isV2SuccessFixture for the matching pattern).
     if (fname.endsWith('-v2-success.json')) return true;
+    if (fname.endsWith('-v2-prod-success.json')) return true;
     return false;
 }
 

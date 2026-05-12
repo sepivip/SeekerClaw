@@ -1,0 +1,31 @@
+{
+  "_meta": {
+    "label": "textbelt-text-v2-prod-success",
+    "description": "PRODUCTION agent_pay path success — full BAT-664 wire including idempotency",
+    "capturedAt": "2026-05-12T09:19:35.534Z",
+    "onChainSignature": "4hFK3q7yiyAePTqKkJUk2z96gh8Q58qYYWKP6GNgoZXh3s1N7x7LRFc2vfJNGL3pornebSRMuWURaPvarvB98eQ8",
+    "spentAtomic": "20000",
+    "note": "Body redacted via paidSummary=true. Captured via stubbed bridge + Node-side signing."
+  },
+  "url": "https://api.paysponge.com/x402/purchase/svc_d6kszbre4qwg5n4n4/text",
+  "method": "POST",
+  "status": 200,
+  "headers": {
+    "date": "Tue, 12 May 2026 09:19:35 GMT",
+    "content-type": "application/json",
+    "transfer-encoding": "chunked",
+    "connection": "keep-alive",
+    "access-control-allow-credentials": "true",
+    "cf-cache-status": "DYNAMIC",
+    "payment-response": "[REDACTED]",
+    "rndr-id": "ebec30fe-9e2f-445c",
+    "server": "cloudflare",
+    "vary": "Origin, Accept-Encoding",
+    "x-render-origin-server": "Render",
+    "report-to": "{\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=DK2jtvh26%2FfGHEg1P%2Fdjy1%2FrJYhQ%2FXZN%2FemJAsFPkgtTKT%[REDACTED]%2BZosJhHf7T9Tk4MexKOESlSw%3D%3D\"}]}",
+    "nel": "{\"report_to\":\"cf-nel\",\"success_fraction\":0.0,\"max_age\":604800}",
+    "cf-ray": "9fa857ab2ff1bc1a-SOF",
+    "alt-svc": "h3=\":443\"; ma=86400"
+  },
+  "body": "[REDACTED — paid response body summarized; ? bytes original]"
+}

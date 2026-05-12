@@ -1,0 +1,42 @@
+{
+  "_meta": {
+    "label": "coingecko-v2-prod-success",
+    "description": "PRODUCTION agent_pay path success — full BAT-664 wire including idempotency",
+    "capturedAt": "2026-05-12T09:19:30.872Z",
+    "onChainSignature": "2mW956PfdWe1KbSwhYcEnVRzgByh3ExiDux8LbWikFzF89U2MdjtcQ9UMddaPvWX6eTGXp7QtaKMd5692s11esYx",
+    "spentAtomic": "10000",
+    "note": "Body redacted via paidSummary=true. Captured via stubbed bridge + Node-side signing."
+  },
+  "url": "https://pro-api.coingecko.com/api/v3/x402/onchain/networks/solana/trending_pools",
+  "method": "GET",
+  "status": 200,
+  "headers": {
+    "date": "Tue, 12 May 2026 09:19:30 GMT",
+    "content-type": "application/json; charset=utf-8",
+    "transfer-encoding": "chunked",
+    "connection": "keep-alive",
+    "server": "cloudflare",
+    "x-frame-options": "SAMEORIGIN",
+    "x-xss-protection": "0",
+    "x-content-type-options": "nosniff",
+    "x-permitted-cross-domain-policies": "none",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "cache-control": "max-age=30, public, must-revalidate, s-maxage=30",
+    "access-control-allow-origin": "*",
+    "access-control-allow-methods": "POST, PUT, DELETE, GET, OPTIONS",
+    "access-control-request-method": "*",
+    "access-control-allow-headers": "Origin, X-Requested-With, Content-Type, Accept, Authorization",
+    "access-control-expose-headers": "link, per-page, total",
+    "payment-response": "[REDACTED]",
+    "vary": "Accept-Encoding, Origin",
+    "etag": "W/\"[REDACTED]\"",
+    "x-request-id": "3e850cce-9d13-4e26-880f-f077c3f36978",
+    "x-runtime": "3.524249",
+    "alternate-protocol": "443:npn-spdy/2",
+    "content-security-policy-report-only": "script-src https://accounts.google.com/gsi/client; frame-src https://accounts.google.com/gsi/; connect-src https://accounts.google.com/gsi/;",
+    "strict-transport-security": "max-age=15724800; includeSubdomains",
+    "cf-cache-status": "MISS",
+    "cf-ray": "9fa85782f9c5d0e0-SOF"
+  },
+  "body": "[REDACTED — paid response body summarized; ? bytes original]"
+}
