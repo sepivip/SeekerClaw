@@ -106,19 +106,22 @@ require.cache[bridgePath] = {
         androidBridgeCall: async (endpoint, body /* , timeoutMs */) => {
             bridgeCalls.push({ endpoint, body });
             if (endpoint === '/burner/status') {
-                // Caps must be high enough to allow the test (≤ $1/call,
-                // ≤ $5/day) — these are the same conservative ceilings
-                // the unit tests use. Bridge stub returns generous values
-                // so the production cap preflight doesn't false-reject;
-                // the real on-chain check would still fail if the wallet
-                // is empty.
+                // R-pr371-fix-4: derive caps from env.MAX_USDC_ATOMIC so
+                // the bridge stub adapts to whatever the operator has
+                // configured (and a future service whose demand exceeds
+                // a hard-coded 1 USDC won't false-reject at preflight).
+                // Daily cap = 10× per-tx to allow several test runs.
+                // SOL caps stay generous and constant — agent_pay's USDC
+                // path doesn't touch them.
+                const perTxUsdc = maxUsdcAtomic.toString();
+                const dailyUsdc = (maxUsdcAtomic * 10n).toString();
                 return {
                     configured: true,
                     pubkey: burnerPub58,
-                    capPerTxSol: '1000000000',     // 1 SOL
-                    capPerTxUsdc: '1000000',       // 1 USDC
-                    capDailySol: '5000000000',     // 5 SOL
-                    capDailyUsdc: '5000000',       // 5 USDC
+                    capPerTxSol: '1000000000',     // 1 SOL (generous; USDC path only)
+                    capPerTxUsdc: perTxUsdc,
+                    capDailySol: '10000000000',    // 10 SOL
+                    capDailyUsdc: dailyUsdc,
                     spentTodaySol: '0',
                     spentTodayUsdc: '0',
                     network: 'mainnet',
