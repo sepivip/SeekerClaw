@@ -336,18 +336,38 @@ async function main() {
             continue;
         }
 
-        // Successful response.
+        // Successful response. Two sub-cases:
+        //   (a) Paid: result.payment is set with amount_atomic_usdc + signature.
+        //       agent_pay went through the full x402 flow.
+        //   (b) Unpaid: URL returned non-402 (200/4xx) on the initial fetch
+        //       — agent_pay short-circuits and returns the body unchanged.
+        //       result.payment is null. For Layer 3-prod this is unexpected:
+        //       the curated services SHOULD return 402, and a 200 means the
+        //       service flipped to free OR is misconfigured. Treat as a
+        //       diagnostic warning (not a clean success).
         const spent = result.payment && result.payment.amount_atomic_usdc;
+        const bridgeEndpoints = bridgeCalls.map(c => c.endpoint).join(' → ');
+
+        if (!result.payment) {
+            // R-pr371-fix-6: non-paid 200/4xx — treat as unexpected for the
+            // curated paid services. Print a warning, don't write a fixture,
+            // don't add to spend total.
+            console.log(`  ⚠ HTTP ${result.status} but NO PAYMENT made — service may have flipped to free or is misconfigured`);
+            console.log(`    bridge sequence: ${bridgeEndpoints}`);
+            summary.push({ label: svc.label, status: 'no_payment', httpStatus: result.status });
+            await sleep(2000);
+            continue;
+        }
+
         // R-pr371-fix-3: format via _atomicToDecimal (BigInt-safe string
         // math) instead of Number(...)/1e6, which loses precision above
         // 2^53−1. Matches the formatting used for max_usdc / totalSpent.
         const spentDecimal = spent ? _atomicToDecimal(BigInt(spent), 6) : '?';
         console.log(`  ✓ HTTP ${result.status} — spent ${spent} atomic ($${spentDecimal})`);
-        if (result.payment && result.payment.signature) {
+        if (result.payment.signature) {
             console.log(`    on-chain sig: ${result.payment.signature}`);
         }
         // Verify the bridge handshake order matches production expectations.
-        const bridgeEndpoints = bridgeCalls.map(c => c.endpoint).join(' → ');
         console.log(`    bridge sequence: ${bridgeEndpoints}`);
         if (spent) totalSpent += BigInt(spent);
 
@@ -379,19 +399,22 @@ async function main() {
 
     console.log('');
     console.log('═══ Summary ═══');
-    let succeeded = 0, failed = 0, dryRunOk = 0;
+    let succeeded = 0, failed = 0, dryRunOk = 0, noPayment = 0;
     for (const s of summary) {
         if (s.status === 'success') { succeeded++; console.log(`  ✓ ${s.label.padEnd(20)} spent=${s.spent}`); }
         else if (s.status === 'dryrun_ok') { dryRunOk++; console.log(`  ⏸ ${s.label.padEnd(20)} dry-run OK (production wires reached signing)`); }
+        else if (s.status === 'no_payment') { noPayment++; console.log(`  ⚠ ${s.label.padEnd(20)} unexpected HTTP ${s.httpStatus} without payment (service flipped to free?)`); }
         else { failed++; console.log(`  ✗ ${s.label.padEnd(20)} ${s.error || 'failed'}`); }
     }
     console.log('');
     if (args.live) {
         console.log(`Total spent: ${totalSpent.toString()} atomic ($${_atomicToDecimal(totalSpent, 6)})`);
-        console.log(`Production-path verification: ${succeeded} succeeded, ${failed} failed`);
+        console.log(`Production-path verification: ${succeeded} succeeded, ${noPayment} flipped-to-free, ${failed} failed`);
+        // Exit 1 on failed; no_payment is a warning (drift detection),
+        // not a code-correctness failure.
         if (failed > 0) process.exit(1);
     } else {
-        console.log(`Dry-run complete: ${dryRunOk} services reached signing, ${failed} hit pre-sign errors.`);
+        console.log(`Dry-run complete: ${dryRunOk} services reached signing, ${noPayment} flipped-to-free, ${failed} hit pre-sign errors.`);
         console.log('Pass --live to spend real USDC and complete the full settle path.');
         if (failed > 0) process.exit(1);
     }
