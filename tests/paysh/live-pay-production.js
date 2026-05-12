@@ -65,15 +65,51 @@ const mode = args.live ? 'live' : 'dryrun';
 const { env, file: envFile } = load();
 requireKeys(env, mode);
 
+// R-pr371-fix-5: friendly env validation mirroring live-pay-curated.js
+// so operator typos in .env.test surface as clear messages rather than
+// raw stack traces.
 const burnerPub58 = env.BURNER_PUBKEY;
+if (typeof burnerPub58 !== 'string' || burnerPub58.length === 0) {
+    console.error(`✗ BURNER_PUBKEY missing or empty`);
+    console.error(`  Set it to the base58 burner pubkey in tests/paysh/.env.test or tests/jupiter-ultra/.env.test.`);
+    process.exit(1);
+}
+
 let secret32 = null, pubkey32 = null;
 if (args.live) {
-    const parsed = parseSecretKey(env.BURNER_SECRET_KEY);
-    secret32 = parsed.secret;
-    pubkey32 = parsed.pubkey;
+    try {
+        const parsed = parseSecretKey(env.BURNER_SECRET_KEY);
+        secret32 = parsed.secret;
+        pubkey32 = parsed.pubkey;
+    } catch (e) {
+        console.error(`✗ BURNER_SECRET_KEY: ${e.message}`);
+        process.exit(1);
+    }
 }
-const maxUsdcAtomic = args.live ? BigInt(env.MAX_USDC_ATOMIC) : 100_000_000n;
+
+let maxUsdcAtomic;
+if (args.live) {
+    try { maxUsdcAtomic = BigInt(env.MAX_USDC_ATOMIC); }
+    catch (_) {
+        console.error(`✗ MAX_USDC_ATOMIC must be an integer decimal string (got: "${env.MAX_USDC_ATOMIC}")`);
+        console.error(`  Example: MAX_USDC_ATOMIC=1000000  (= 1 USDC, since USDC has 6 decimals)`);
+        process.exit(1);
+    }
+    if (maxUsdcAtomic <= 0n) {
+        console.error(`✗ MAX_USDC_ATOMIC must be positive, got ${maxUsdcAtomic.toString()}`);
+        process.exit(1);
+    }
+} else {
+    maxUsdcAtomic = 100_000_000n;
+}
+
 const rpcUrl = env.SOLANA_RPC;
+try { new URL(rpcUrl); }
+catch (_) {
+    console.error(`✗ SOLANA_RPC must be a valid URL (got: "${rpcUrl}")`);
+    console.error(`  Example: SOLANA_RPC=https://api.mainnet-beta.solana.com`);
+    process.exit(1);
+}
 
 // R-pr371-fix-1: format max_usdc from BigInt EXACTLY via string math.
 // Pre-fix used `Number(maxUsdcAtomic) / 1e6` which silently loses
