@@ -38,6 +38,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -155,7 +156,13 @@ fun SettingsScreen(
     // CancellationException. Matches the rest of SettingsScreen.kt
     // which relies on imports rather than fully-qualified inline refs.
     val burnerKeyVault = remember { EncryptedPrefsKeyVault(context.applicationContext) }
-    var burnerConfigured by remember { mutableStateOf(false) }
+    // Probe result: pubkey when burner is configured AND decryptable;
+    // null otherwise. Drives both the button state (`burnerConfigured`
+    // derived below) AND the optional Address row that mirrors the
+    // Main Wallet's. Single source of truth for the burner-configured
+    // signal.
+    var burnerPubkey by remember { mutableStateOf<String?>(null) }
+    val burnerConfigured: Boolean = burnerPubkey != null
     // Bumped from ON_RESUME below to re-probe after the user returns
     // from BurnerWalletScreen (import / wipe flow). R-pr374-r2-2:
     // primitive IntState matches `mcpServerCount` and other counters
@@ -180,7 +187,7 @@ fun SettingsScreen(
                 null
             }
         }
-        burnerConfigured = pk != null
+        burnerPubkey = pk
     }
 
     var autoStartOnBoot by remember {
@@ -669,48 +676,20 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(28.dp))
 
-        // Solana Wallet
+        // Solana Wallet (collapsible with three subsections —
+        // Main Wallet, Burner Wallet, API keys — separated by
+        // HorizontalDividers + SectionLabel headers per BAT-681 so
+        // Main and Burner read as distinct wallets rather than two
+        // variants of the same one).
         CollapsibleSection("Solana Wallet", initiallyExpanded = false) {
             CardSurface {
+                // ── Main Wallet ───────────────────────────────────────
+                SectionLabel("Main Wallet")
+                Spacer(modifier = Modifier.height(12.dp))
                 if (walletAddress != null) {
                     // Connected state — address with copy button
                     val address = walletAddress!!
-                    val hapticCopy = LocalHapticFeedback.current
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = "Address",
-                            fontFamily = RethinkSans,
-                            fontSize = 13.sp,
-                            color = SeekerClawColors.TextDim,
-                        )
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                text = "${address.take(6)}\u2026${address.takeLast(4)}",
-                                fontFamily = RethinkSans,
-                                fontSize = 13.sp,
-                                color = SeekerClawColors.TextSecondary,
-                            )
-                            TextButton(
-                                onClick = {
-                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                    clipboard.setPrimaryClip(ClipData.newPlainText("wallet address", address))
-                                    hapticCopy.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    Toast.makeText(context, "Address copied", Toast.LENGTH_SHORT).show()
-                                },
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                            ) {
-                                Text(
-                                    text = "Copy",
-                                    fontSize = 12.sp,
-                                    color = SeekerClawColors.TextInteractive,
-                                )
-                            }
-                        }
-                    }
+                    WalletAddressRow(address = address, clipboardLabel = "wallet address")
 
                 val label = ConfigManager.getWalletLabel(context)
                 if (label.isNotBlank()) {
@@ -800,6 +779,19 @@ fun SettingsScreen(
             }
 
             // ── Burner Wallet (BAT-582 / BAT-681) ─────────────────────────
+            // Divider + SectionLabel mirror the Main Wallet header above so
+            // Main and Burner read as two distinct wallets sharing the same
+            // collapsible (not two variants of the same wallet). Address
+            // row only renders when KeyVault has a pubkey for the burner.
+            Spacer(modifier = Modifier.height(20.dp))
+            HorizontalDivider(thickness = 1.dp, color = SeekerClawColors.BorderSubtle)
+            Spacer(modifier = Modifier.height(20.dp))
+            SectionLabel("Burner Wallet")
+            Spacer(modifier = Modifier.height(12.dp))
+            burnerPubkey?.let { pk ->
+                WalletAddressRow(address = pk, clipboardLabel = "burner wallet address")
+                Spacer(modifier = Modifier.height(12.dp))
+            }
             // Promoted above the API-key fields per BAT-681: this is a
             // primary capability surface (agent-controlled signer), so it
             // gets a full-width button parallel to "Connect/Disconnect
@@ -807,7 +799,6 @@ fun SettingsScreen(
             // matches the iOS Settings two-state pattern:
             //   - unconfigured → "Set Up Burner Wallet" (filled, primary CTA)
             //   - configured   → "Manage Burner Wallet" (outlined, neutral)
-            Spacer(modifier = Modifier.height(20.dp))
             if (burnerConfigured) {
                 OutlinedButton(
                     onClick = onNavigateToBurnerWallet,
@@ -866,7 +857,11 @@ fun SettingsScreen(
                 modifier = Modifier.fillMaxWidth(),
             )
 
-            // ── Jupiter API Key (Solana swaps) ────────────────────────────
+            // ── API keys ─────────────────────────────────────────────────
+            // Divider separates wallet UIs (Main + Burner) from the
+            // chain-data API keys below.
+            Spacer(modifier = Modifier.height(20.dp))
+            HorizontalDivider(thickness = 1.dp, color = SeekerClawColors.BorderSubtle)
             Spacer(modifier = Modifier.height(20.dp))
             ConfigField(
                 label = "Jupiter API Key",
@@ -1803,5 +1798,59 @@ private fun maskSensitive(value: String): String {
     if (value.isBlank()) return "Not set"
     if (value.length <= 8) return "*".repeat(value.length)
     return "${value.take(6)}${"*".repeat(8)}${value.takeLast(4)}"
+}
+
+/**
+ * BAT-681: shared "Address" row with a truncated base58 + Copy button,
+ * used by both the Main Wallet and Burner Wallet subsections of the
+ * Settings → Solana Wallet collapsible.
+ *
+ * The two subsections need to look symmetric (parallel hierarchy
+ * helps users see they're two distinct wallets, not two names for the
+ * same one), and the row markup was identical at both sites — extract
+ * once, call twice. Copy haptic + toast match the original Main Wallet
+ * row behavior; `clipboardLabel` lets callers distinguish "wallet
+ * address" vs "burner wallet address" in the system clipboard
+ * description (visible in clipboard-history UIs).
+ */
+@Composable
+private fun WalletAddressRow(address: String, clipboardLabel: String) {
+    val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = "Address",
+            fontFamily = RethinkSans,
+            fontSize = 13.sp,
+            color = SeekerClawColors.TextDim,
+        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "${address.take(6)}…${address.takeLast(4)}",
+                fontFamily = RethinkSans,
+                fontSize = 13.sp,
+                color = SeekerClawColors.TextSecondary,
+            )
+            TextButton(
+                onClick = {
+                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    clipboard.setPrimaryClip(ClipData.newPlainText(clipboardLabel, address))
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    Toast.makeText(context, "Address copied", Toast.LENGTH_SHORT).show()
+                },
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+            ) {
+                Text(
+                    text = "Copy",
+                    fontSize = 12.sp,
+                    color = SeekerClawColors.TextInteractive,
+                )
+            }
+        }
+    }
 }
 
