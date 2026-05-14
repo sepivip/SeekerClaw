@@ -824,14 +824,6 @@ fun SettingsScreen(
                         fontSize = 14.sp,
                     )
                 }
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = "Agent-controlled signer (experimental)",
-                    fontFamily = RethinkSans,
-                    fontSize = 11.sp,
-                    color = SeekerClawColors.TextDim,
-                    modifier = Modifier.fillMaxWidth(),
-                )
             } else {
                 Button(
                     onClick = onNavigateToBurnerWallet,
@@ -857,20 +849,22 @@ fun SettingsScreen(
                         fontWeight = FontWeight.Bold,
                     )
                 }
-                Spacer(modifier = Modifier.height(8.dp))
-                // R-pr374-r4-1: same caption as the configured state so
-                // the user gets consistent framing across both states.
-                // The original ConfigField used "Agent-controlled signer
-                // (experimental)"; preserve that copy in both branches
-                // (no longer-vs-shorter copy drift).
-                Text(
-                    text = "Agent-controlled signer (experimental)",
-                    fontFamily = RethinkSans,
-                    fontSize = 11.sp,
-                    color = SeekerClawColors.TextDim,
-                    modifier = Modifier.fillMaxWidth(),
-                )
             }
+            // R-pr374-r6-1: spacer + caption hoisted out of the
+            // if/else (post-R4 both branches had identical copy +
+            // layout). Single source of truth — no copy/layout drift
+            // if future changes only update one branch by mistake.
+            // R-pr374-r4-1 framing ("Agent-controlled signer
+            // (experimental)") preserved verbatim from the pre-PR
+            // ConfigField value text.
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "Agent-controlled signer (experimental)",
+                fontFamily = RethinkSans,
+                fontSize = 11.sp,
+                color = SeekerClawColors.TextDim,
+                modifier = Modifier.fillMaxWidth(),
+            )
 
             // ── Jupiter API Key (Solana swaps) ────────────────────────────
             Spacer(modifier = Modifier.height(20.dp))
