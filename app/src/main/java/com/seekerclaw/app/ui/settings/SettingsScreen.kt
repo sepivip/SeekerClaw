@@ -98,6 +98,8 @@ import com.seekerclaw.app.util.Analytics
 import com.seekerclaw.app.util.LogCollector
 import com.seekerclaw.app.util.LogLevel
 import com.seekerclaw.app.BuildConfig
+import com.seekerclaw.app.bridge.burner.BurnerBridgeEndpoints
+import com.seekerclaw.app.data.wallet.EncryptedPrefsKeyVault
 import com.seekerclaw.app.ui.components.CardSurface
 import com.seekerclaw.app.ui.components.DangerButton
 import com.seekerclaw.app.ui.components.DangerOutlineButton
@@ -110,6 +112,7 @@ import com.seekerclaw.app.ui.components.InfoRow
 import com.seekerclaw.app.ui.components.cornerGlowBorder
 import com.seekerclaw.app.ui.theme.Sizing
 import com.seekerclaw.app.ui.theme.Spacing
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -147,9 +150,11 @@ fun SettingsScreen(
     // R-pr374-r1-2: remember a single keyVault instance; reused for the
     // initial probe AND the ON_RESUME refresh below, no reallocation
     // on each lifecycle event.
-    val burnerKeyVault = remember {
-        com.seekerclaw.app.data.wallet.EncryptedPrefsKeyVault(context.applicationContext)
-    }
+    // R-pr374-r5-1: use short names via imports (added at the top of
+    // the file) for EncryptedPrefsKeyVault, BurnerBridgeEndpoints, and
+    // CancellationException. Matches the rest of SettingsScreen.kt
+    // which relies on imports rather than fully-qualified inline refs.
+    val burnerKeyVault = remember { EncryptedPrefsKeyVault(context.applicationContext) }
     var burnerConfigured by remember { mutableStateOf(false) }
     // Bumped from ON_RESUME below to re-probe after the user returns
     // from BurnerWalletScreen (import / wipe flow). R-pr374-r2-2:
@@ -160,10 +165,8 @@ fun SettingsScreen(
     LaunchedEffect(burnerProbeKey) {
         val pk = withContext(Dispatchers.IO) {
             try {
-                burnerKeyVault.getPubkey(
-                    com.seekerclaw.app.bridge.burner.BurnerBridgeEndpoints.BURNER_ID,
-                )
-            } catch (ce: kotlinx.coroutines.CancellationException) {
+                burnerKeyVault.getPubkey(BurnerBridgeEndpoints.BURNER_ID)
+            } catch (ce: CancellationException) {
                 // R-pr374-r2-1: CancellationException is how Kotlin
                 // coroutines signal cooperative cancellation. Catching
                 // it under the generic `Exception` branch below would
