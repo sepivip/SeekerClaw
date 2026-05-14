@@ -834,7 +834,13 @@ fun SettingsScreen(
                     onClick = onNavigateToBurnerWallet,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(48.dp),
+                        .height(48.dp)
+                        // R-pr374-r4-2: match the "Connect Wallet" CTA's
+                        // visual treatment — same glow modifier on the
+                        // primary onboarding button — since the PR
+                        // description claims visual analogy and the user's
+                        // design-system requirement is "consistency."
+                        .cornerGlowBorder(),
                     shape = shape,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = SeekerClawColors.ActionPrimary,
@@ -849,8 +855,13 @@ fun SettingsScreen(
                     )
                 }
                 Spacer(modifier = Modifier.height(8.dp))
+                // R-pr374-r4-1: same caption as the configured state so
+                // the user gets consistent framing across both states.
+                // The original ConfigField used "Agent-controlled signer
+                // (experimental)"; preserve that copy in both branches
+                // (no longer-vs-shorter copy drift).
                 Text(
-                    text = "Optional agent-controlled signer for autonomous Solana actions (experimental)",
+                    text = "Agent-controlled signer (experimental)",
                     fontFamily = RethinkSans,
                     fontSize = 11.sp,
                     color = SeekerClawColors.TextDim,
