@@ -134,14 +134,37 @@ fun SettingsScreen(
     // BAT-681: track whether the burner wallet is configured so the
     // Settings → Solana Wallet section can show "Set Up Burner Wallet"
     // (unconfigured) vs "Manage Burner Wallet" (configured), parallel
-    // to the state-aware iOS Settings pattern. Refreshed on lifecycle
-    // resume below so the label updates after the user navigates back
-    // from the BurnerWalletScreen (import or wipe flow).
-    var burnerConfigured by remember {
-        mutableStateOf(
-            com.seekerclaw.app.data.wallet.EncryptedPrefsKeyVault(context.applicationContext)
-                .isConfigured(com.seekerclaw.app.bridge.burner.BurnerBridgeEndpoints.BURNER_ID),
-        )
+    // to the state-aware iOS Settings pattern.
+    //
+    // R-pr374-r1-1 (Copilot review): drive the state from a successful
+    // `getPubkey()` probe, NOT `isConfigured()`. The latter only checks
+    // file existence — a key file could exist but be undecryptable
+    // (Keystore wipe, restore-from-backup, etc.) which would make
+    // Settings show "Manage" while BurnerWalletScreen renders empty.
+    // The pubkey probe matches what BurnerWalletScreen itself gates on,
+    // so the two surfaces stay in agreement.
+    //
+    // R-pr374-r1-2: remember a single keyVault instance; reused for the
+    // initial probe AND the ON_RESUME refresh below, no reallocation
+    // on each lifecycle event.
+    val burnerKeyVault = remember {
+        com.seekerclaw.app.data.wallet.EncryptedPrefsKeyVault(context.applicationContext)
+    }
+    var burnerConfigured by remember { mutableStateOf(false) }
+    // Bumped from ON_RESUME below to re-probe after the user returns
+    // from BurnerWalletScreen (import / wipe flow).
+    var burnerProbeKey by remember { mutableStateOf(0) }
+    LaunchedEffect(burnerProbeKey) {
+        val pk = withContext(Dispatchers.IO) {
+            try {
+                burnerKeyVault.getPubkey(
+                    com.seekerclaw.app.bridge.burner.BurnerBridgeEndpoints.BURNER_ID,
+                )
+            } catch (_: Exception) {
+                null
+            }
+        }
+        burnerConfigured = pk != null
     }
 
     var autoStartOnBoot by remember {
@@ -195,11 +218,12 @@ fun SettingsScreen(
                 hasContactsPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED
                 hasSmsPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED
                 hasCallPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED
-                // BAT-681: re-check burner config on resume so the Set Up /
-                // Manage label flips immediately after the user imports a
-                // key or wipes it in the BurnerWalletScreen sub-flow.
-                burnerConfigured = com.seekerclaw.app.data.wallet.EncryptedPrefsKeyVault(context.applicationContext)
-                    .isConfigured(com.seekerclaw.app.bridge.burner.BurnerBridgeEndpoints.BURNER_ID)
+                // BAT-681: re-probe the burner pubkey on resume so the
+                // Set Up / Manage label flips immediately after the user
+                // imports a key or wipes it in the BurnerWalletScreen
+                // sub-flow. Bumping the key drives the LaunchedEffect
+                // above; the IO-thread probe runs off the main thread.
+                burnerProbeKey++
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
