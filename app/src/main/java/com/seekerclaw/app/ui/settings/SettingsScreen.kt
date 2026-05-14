@@ -683,13 +683,13 @@ fun SettingsScreen(
         // variants of the same one).
         CollapsibleSection("Solana Wallet", initiallyExpanded = false) {
             CardSurface {
-                // ── Main Wallet ───────────────────────────────────────
-                SectionLabel("Main Wallet")
-                Spacer(modifier = Modifier.height(12.dp))
-                if (walletAddress != null) {
-                    // Connected state — address with copy button
-                    val address = walletAddress!!
-                    WalletAddressRow(address = address, clipboardLabel = "wallet address")
+            // ── Main Wallet ───────────────────────────────────────────
+            SectionLabel("Main Wallet")
+            Spacer(modifier = Modifier.height(12.dp))
+            if (walletAddress != null) {
+                // Connected state — address with copy button
+                val address = walletAddress!!
+                WalletAddressRow(address = address, clipboardLabel = "wallet address")
 
                 val label = ConfigManager.getWalletLabel(context)
                 if (label.isNotBlank()) {
