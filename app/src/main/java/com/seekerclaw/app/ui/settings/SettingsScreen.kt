@@ -131,6 +131,18 @@ fun SettingsScreen(
     // Observe configVersion so UI refreshes when bridge saves owner ID (auto-detect)
     val configVer by ConfigManager.configVersion
     var config by remember(configVer) { mutableStateOf(ConfigManager.loadConfig(context)) }
+    // BAT-681: track whether the burner wallet is configured so the
+    // Settings → Solana Wallet section can show "Set Up Burner Wallet"
+    // (unconfigured) vs "Manage Burner Wallet" (configured), parallel
+    // to the state-aware iOS Settings pattern. Refreshed on lifecycle
+    // resume below so the label updates after the user navigates back
+    // from the BurnerWalletScreen (import or wipe flow).
+    var burnerConfigured by remember {
+        mutableStateOf(
+            com.seekerclaw.app.data.wallet.EncryptedPrefsKeyVault(context.applicationContext)
+                .isConfigured(com.seekerclaw.app.bridge.burner.BurnerBridgeEndpoints.BURNER_ID),
+        )
+    }
 
     var autoStartOnBoot by remember {
         mutableStateOf(ConfigManager.getAutoStartOnBoot(context))
@@ -183,6 +195,11 @@ fun SettingsScreen(
                 hasContactsPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED
                 hasSmsPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED
                 hasCallPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED
+                // BAT-681: re-check burner config on resume so the Set Up /
+                // Manage label flips immediately after the user imports a
+                // key or wipes it in the BurnerWalletScreen sub-flow.
+                burnerConfigured = com.seekerclaw.app.data.wallet.EncryptedPrefsKeyVault(context.applicationContext)
+                    .isConfigured(com.seekerclaw.app.bridge.burner.BurnerBridgeEndpoints.BURNER_ID)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -742,7 +759,69 @@ fun SettingsScreen(
                 )
             }
 
-            // Jupiter API Key (Solana swaps)
+            // ── Burner Wallet (BAT-582 / BAT-681) ─────────────────────────
+            // Promoted above the API-key fields per BAT-681: this is a
+            // primary capability surface (agent-controlled signer), so it
+            // gets a full-width button parallel to "Connect/Disconnect
+            // Wallet" rather than a small Edit row. State-aware label
+            // matches the iOS Settings two-state pattern:
+            //   - unconfigured → "Set Up Burner Wallet" (filled, primary CTA)
+            //   - configured   → "Manage Burner Wallet" (outlined, neutral)
+            Spacer(modifier = Modifier.height(20.dp))
+            if (burnerConfigured) {
+                OutlinedButton(
+                    onClick = onNavigateToBurnerWallet,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = shape,
+                    border = BorderStroke(1.dp, SeekerClawColors.BorderSubtle),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = SeekerClawColors.TextPrimary,
+                    ),
+                ) {
+                    Text(
+                        "Manage Burner Wallet",
+                        fontFamily = RethinkSans,
+                        fontSize = 14.sp,
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Agent-controlled signer (experimental)",
+                    fontFamily = RethinkSans,
+                    fontSize = 11.sp,
+                    color = SeekerClawColors.TextDim,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            } else {
+                Button(
+                    onClick = onNavigateToBurnerWallet,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp),
+                    shape = shape,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = SeekerClawColors.ActionPrimary,
+                        contentColor = androidx.compose.ui.graphics.Color.White,
+                    ),
+                ) {
+                    Text(
+                        "Set Up Burner Wallet",
+                        fontFamily = RethinkSans,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Optional agent-controlled signer for autonomous Solana actions (experimental)",
+                    fontFamily = RethinkSans,
+                    fontSize = 11.sp,
+                    color = SeekerClawColors.TextDim,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+
+            // ── Jupiter API Key (Solana swaps) ────────────────────────────
             Spacer(modifier = Modifier.height(20.dp))
             ConfigField(
                 label = "Jupiter API Key",
@@ -760,7 +839,7 @@ fun SettingsScreen(
                 info = SettingsHelpTexts.JUPITER_API_KEY,
             )
 
-            // Helius API Key (NFT holdings)
+            // ── Helius API Key (NFT holdings) ─────────────────────────────
             Spacer(modifier = Modifier.height(20.dp))
             ConfigField(
                 label = "Helius API Key",
@@ -774,19 +853,8 @@ fun SettingsScreen(
                     editLabel = "Helius API Key"
                     editValue = config?.heliusApiKey ?: ""
                 },
-                showDivider = true,
-                info = SettingsHelpTexts.HELIUS_API_KEY,
-            )
-
-            // Burner wallet (BAT-582) — agent-controlled signer for
-            // autonomous Solana actions. Shows as a navigation row
-            // because the configuration surface is a full screen
-            // (key import, caps, danger zone).
-            ConfigField(
-                label = "Burner Wallet",
-                value = "Agent-controlled signer (experimental)",
-                onClick = onNavigateToBurnerWallet,
                 showDivider = false,
+                info = SettingsHelpTexts.HELIUS_API_KEY,
             )
             }
         }
