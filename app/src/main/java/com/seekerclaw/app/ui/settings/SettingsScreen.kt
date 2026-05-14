@@ -152,14 +152,27 @@ fun SettingsScreen(
     }
     var burnerConfigured by remember { mutableStateOf(false) }
     // Bumped from ON_RESUME below to re-probe after the user returns
-    // from BurnerWalletScreen (import / wipe flow).
-    var burnerProbeKey by remember { mutableStateOf(0) }
+    // from BurnerWalletScreen (import / wipe flow). R-pr374-r2-2:
+    // primitive IntState matches `mcpServerCount` and other counters
+    // in this file — avoids the boxed-Int allocation `mutableStateOf(0)`
+    // would create.
+    var burnerProbeKey by remember { mutableIntStateOf(0) }
     LaunchedEffect(burnerProbeKey) {
         val pk = withContext(Dispatchers.IO) {
             try {
                 burnerKeyVault.getPubkey(
                     com.seekerclaw.app.bridge.burner.BurnerBridgeEndpoints.BURNER_ID,
                 )
+            } catch (ce: kotlinx.coroutines.CancellationException) {
+                // R-pr374-r2-1: CancellationException is how Kotlin
+                // coroutines signal cooperative cancellation. Catching
+                // it under the generic `Exception` branch below would
+                // swallow the cancel and let this LaunchedEffect's
+                // coroutine survive past the composable's disposal
+                // (and delay any structured-concurrency parent that's
+                // waiting on this to finish). Re-throw so cancellation
+                // propagates normally.
+                throw ce
             } catch (_: Exception) {
                 null
             }
