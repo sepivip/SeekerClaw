@@ -683,219 +683,219 @@ fun SettingsScreen(
         // variants of the same one).
         CollapsibleSection("Solana Wallet", initiallyExpanded = false) {
             CardSurface {
-            // ── Main Wallet ───────────────────────────────────────────
-            SectionLabel("Main Wallet")
-            Spacer(modifier = Modifier.height(12.dp))
-            if (walletAddress != null) {
-                // Connected state — address with copy button
-                val address = walletAddress!!
-                WalletAddressRow(address = address, clipboardLabel = "wallet address")
-
-                val label = ConfigManager.getWalletLabel(context)
-                if (label.isNotBlank()) {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    InfoRow("Wallet", label, isLast = true)
-                }
-
+                // ── Main Wallet ───────────────────────────────────────────
+                SectionLabel("Main Wallet")
                 Spacer(modifier = Modifier.height(12.dp))
-                OutlinedButton(
-                    onClick = {
-                        ConfigManager.clearWalletAddress(context)
-                        walletAddress = null
-                        walletError = null
-                        Analytics.featureUsed("wallet_disconnected")
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = shape,
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        contentColor = SeekerClawColors.Error,
-                    ),
-                ) {
-                    Text("Disconnect Wallet", fontFamily = RethinkSans, fontSize = 14.sp)
-                }
-            } else {
-                // Not connected — show Connect button
-                if (walletError != null) {
-                    Text(
-                        text = walletError!!,
-                        fontFamily = RethinkSans,
-                        fontSize = 12.sp,
-                        color = SeekerClawColors.Error,
+                if (walletAddress != null) {
+                    // Connected state — address with copy button
+                    val address = walletAddress!!
+                    WalletAddressRow(address = address, clipboardLabel = "wallet address")
+
+                    val label = ConfigManager.getWalletLabel(context)
+                    if (label.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        InfoRow("Wallet", label, isLast = true)
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+                    OutlinedButton(
+                        onClick = {
+                            ConfigManager.clearWalletAddress(context)
+                            walletAddress = null
+                            walletError = null
+                            Analytics.featureUsed("wallet_disconnected")
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = shape,
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = SeekerClawColors.Error,
+                        ),
+                    ) {
+                        Text("Disconnect Wallet", fontFamily = RethinkSans, fontSize = 14.sp)
+                    }
+                } else {
+                    // Not connected — show Connect button
+                    if (walletError != null) {
+                        Text(
+                            text = walletError!!,
+                            fontFamily = RethinkSans,
+                            fontSize = 12.sp,
+                            color = SeekerClawColors.Error,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(SeekerClawColors.Error.copy(alpha = 0.1f), shape)
+                                .padding(12.dp),
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                    }
+
+                    Button(
+                        onClick = {
+                            isConnecting = true
+                            walletError = null
+                            Analytics.featureUsed("wallet_connected")
+                            val requestId = "settings_${System.currentTimeMillis()}"
+                            walletRequestId = requestId
+                            val intent = Intent(context, SolanaAuthActivity::class.java).apply {
+                                putExtra("action", "authorize")
+                                putExtra("requestId", requestId)
+                            }
+                            walletLauncher.launch(intent)
+                        },
+                        enabled = !isConnecting,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(SeekerClawColors.Error.copy(alpha = 0.1f), shape)
-                            .padding(12.dp),
+                            .height(48.dp)
+                            .cornerGlowBorder(),
+                        shape = shape,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = SeekerClawColors.ActionPrimary,
+                            contentColor = androidx.compose.ui.graphics.Color.White,
+                            disabledContainerColor = SeekerClawColors.ActionPrimary.copy(alpha = 0.4f),
+                            disabledContentColor = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.6f),
+                        ),
+                    ) {
+                        if (isConnecting) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                color = androidx.compose.ui.graphics.Color.White,
+                                strokeWidth = 2.dp,
+                            )
+                            Spacer(modifier = Modifier.padding(start = 8.dp))
+                            Text("Connecting\u2026", fontFamily = RethinkSans, fontSize = 14.sp)
+                        } else {
+                            Text("Connect Wallet", fontFamily = RethinkSans, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Opens Phantom, Solflare, or Seeker Vault",
+                        fontFamily = RethinkSans,
+                        fontSize = 11.sp,
+                        color = SeekerClawColors.TextDim,
+                        modifier = Modifier.fillMaxWidth(),
                     )
+                }
+
+                // ── Burner Wallet (BAT-582 / BAT-681) ─────────────────────────
+                // Divider + SectionLabel mirror the Main Wallet header above so
+                // Main and Burner read as two distinct wallets sharing the same
+                // collapsible (not two variants of the same wallet). Address
+                // row only renders when KeyVault has a pubkey for the burner.
+                Spacer(modifier = Modifier.height(20.dp))
+                HorizontalDivider(thickness = 1.dp, color = SeekerClawColors.BorderSubtle)
+                Spacer(modifier = Modifier.height(20.dp))
+                SectionLabel("Burner Wallet")
+                Spacer(modifier = Modifier.height(12.dp))
+                burnerPubkey?.let { pk ->
+                    WalletAddressRow(address = pk, clipboardLabel = "burner wallet address")
                     Spacer(modifier = Modifier.height(12.dp))
                 }
-
-                Button(
-                    onClick = {
-                        isConnecting = true
-                        walletError = null
-                        Analytics.featureUsed("wallet_connected")
-                        val requestId = "settings_${System.currentTimeMillis()}"
-                        walletRequestId = requestId
-                        val intent = Intent(context, SolanaAuthActivity::class.java).apply {
-                            putExtra("action", "authorize")
-                            putExtra("requestId", requestId)
-                        }
-                        walletLauncher.launch(intent)
-                    },
-                    enabled = !isConnecting,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(48.dp)
-                        .cornerGlowBorder(),
-                    shape = shape,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = SeekerClawColors.ActionPrimary,
-                        contentColor = androidx.compose.ui.graphics.Color.White,
-                        disabledContainerColor = SeekerClawColors.ActionPrimary.copy(alpha = 0.4f),
-                        disabledContentColor = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.6f),
-                    ),
-                ) {
-                    if (isConnecting) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(18.dp),
-                            color = androidx.compose.ui.graphics.Color.White,
-                            strokeWidth = 2.dp,
+                // Promoted above the API-key fields per BAT-681: this is a
+                // primary capability surface (agent-controlled signer), so it
+                // gets a full-width button parallel to "Connect/Disconnect
+                // Wallet" rather than a small Edit row. State-aware label
+                // matches the iOS Settings two-state pattern:
+                //   - unconfigured → "Set Up Burner Wallet" (filled, primary CTA)
+                //   - configured   → "Manage Burner Wallet" (outlined, neutral)
+                if (burnerConfigured) {
+                    OutlinedButton(
+                        onClick = onNavigateToBurnerWallet,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = shape,
+                        border = BorderStroke(1.dp, SeekerClawColors.BorderSubtle),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = SeekerClawColors.TextPrimary,
+                        ),
+                    ) {
+                        Text(
+                            "Manage Burner Wallet",
+                            fontFamily = RethinkSans,
+                            fontSize = 14.sp,
                         )
-                        Spacer(modifier = Modifier.padding(start = 8.dp))
-                        Text("Connecting\u2026", fontFamily = RethinkSans, fontSize = 14.sp)
-                    } else {
-                        Text("Connect Wallet", fontFamily = RethinkSans, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    }
+                } else {
+                    Button(
+                        onClick = onNavigateToBurnerWallet,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            // R-pr374-r4-2: match the "Connect Wallet" CTA's
+                            // visual treatment — same glow modifier on the
+                            // primary onboarding button — since the PR
+                            // description claims visual analogy and the user's
+                            // design-system requirement is "consistency."
+                            .cornerGlowBorder(),
+                        shape = shape,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = SeekerClawColors.ActionPrimary,
+                            contentColor = androidx.compose.ui.graphics.Color.White,
+                        ),
+                    ) {
+                        Text(
+                            "Set Up Burner Wallet",
+                            fontFamily = RethinkSans,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
                     }
                 }
-
+                // R-pr374-r6-1: spacer + caption hoisted out of the
+                // if/else (post-R4 both branches had identical copy +
+                // layout). Single source of truth — no copy/layout drift
+                // if future changes only update one branch by mistake.
+                // R-pr374-r4-1 framing ("Agent-controlled signer
+                // (experimental)") preserved verbatim from the pre-PR
+                // ConfigField value text.
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "Opens Phantom, Solflare, or Seeker Vault",
+                    text = "Agent-controlled signer (experimental)",
                     fontFamily = RethinkSans,
                     fontSize = 11.sp,
                     color = SeekerClawColors.TextDim,
                     modifier = Modifier.fillMaxWidth(),
                 )
-            }
 
-            // ── Burner Wallet (BAT-582 / BAT-681) ─────────────────────────
-            // Divider + SectionLabel mirror the Main Wallet header above so
-            // Main and Burner read as two distinct wallets sharing the same
-            // collapsible (not two variants of the same wallet). Address
-            // row only renders when KeyVault has a pubkey for the burner.
-            Spacer(modifier = Modifier.height(20.dp))
-            HorizontalDivider(thickness = 1.dp, color = SeekerClawColors.BorderSubtle)
-            Spacer(modifier = Modifier.height(20.dp))
-            SectionLabel("Burner Wallet")
-            Spacer(modifier = Modifier.height(12.dp))
-            burnerPubkey?.let { pk ->
-                WalletAddressRow(address = pk, clipboardLabel = "burner wallet address")
-                Spacer(modifier = Modifier.height(12.dp))
-            }
-            // Promoted above the API-key fields per BAT-681: this is a
-            // primary capability surface (agent-controlled signer), so it
-            // gets a full-width button parallel to "Connect/Disconnect
-            // Wallet" rather than a small Edit row. State-aware label
-            // matches the iOS Settings two-state pattern:
-            //   - unconfigured → "Set Up Burner Wallet" (filled, primary CTA)
-            //   - configured   → "Manage Burner Wallet" (outlined, neutral)
-            if (burnerConfigured) {
-                OutlinedButton(
-                    onClick = onNavigateToBurnerWallet,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = shape,
-                    border = BorderStroke(1.dp, SeekerClawColors.BorderSubtle),
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        contentColor = SeekerClawColors.TextPrimary,
-                    ),
-                ) {
-                    Text(
-                        "Manage Burner Wallet",
-                        fontFamily = RethinkSans,
-                        fontSize = 14.sp,
-                    )
-                }
-            } else {
-                Button(
-                    onClick = onNavigateToBurnerWallet,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(48.dp)
-                        // R-pr374-r4-2: match the "Connect Wallet" CTA's
-                        // visual treatment — same glow modifier on the
-                        // primary onboarding button — since the PR
-                        // description claims visual analogy and the user's
-                        // design-system requirement is "consistency."
-                        .cornerGlowBorder(),
-                    shape = shape,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = SeekerClawColors.ActionPrimary,
-                        contentColor = androidx.compose.ui.graphics.Color.White,
-                    ),
-                ) {
-                    Text(
-                        "Set Up Burner Wallet",
-                        fontFamily = RethinkSans,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold,
-                    )
-                }
-            }
-            // R-pr374-r6-1: spacer + caption hoisted out of the
-            // if/else (post-R4 both branches had identical copy +
-            // layout). Single source of truth — no copy/layout drift
-            // if future changes only update one branch by mistake.
-            // R-pr374-r4-1 framing ("Agent-controlled signer
-            // (experimental)") preserved verbatim from the pre-PR
-            // ConfigField value text.
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = "Agent-controlled signer (experimental)",
-                fontFamily = RethinkSans,
-                fontSize = 11.sp,
-                color = SeekerClawColors.TextDim,
-                modifier = Modifier.fillMaxWidth(),
-            )
+                // ── API keys ─────────────────────────────────────────────────
+                // Divider separates wallet UIs (Main + Burner) from the
+                // chain-data API keys below.
+                Spacer(modifier = Modifier.height(20.dp))
+                HorizontalDivider(thickness = 1.dp, color = SeekerClawColors.BorderSubtle)
+                Spacer(modifier = Modifier.height(20.dp))
+                ConfigField(
+                    label = "Jupiter API Key",
+                    value = config?.jupiterApiKey?.let { key ->
+                        if (key.isBlank()) "Not set — swaps disabled"
+                        else if (key.length > 12) "${key.take(8)}${"*".repeat(8)}${key.takeLast(4)}"
+                        else "*".repeat(key.length)
+                    } ?: "Not set — swaps disabled",
+                    onClick = {
+                        editField = "jupiterApiKey"
+                        editLabel = "Jupiter API Key"
+                        editValue = config?.jupiterApiKey ?: ""
+                    },
+                    showDivider = true,
+                    info = SettingsHelpTexts.JUPITER_API_KEY,
+                )
 
-            // ── API keys ─────────────────────────────────────────────────
-            // Divider separates wallet UIs (Main + Burner) from the
-            // chain-data API keys below.
-            Spacer(modifier = Modifier.height(20.dp))
-            HorizontalDivider(thickness = 1.dp, color = SeekerClawColors.BorderSubtle)
-            Spacer(modifier = Modifier.height(20.dp))
-            ConfigField(
-                label = "Jupiter API Key",
-                value = config?.jupiterApiKey?.let { key ->
-                    if (key.isBlank()) "Not set — swaps disabled"
-                    else if (key.length > 12) "${key.take(8)}${"*".repeat(8)}${key.takeLast(4)}"
-                    else "*".repeat(key.length)
-                } ?: "Not set — swaps disabled",
-                onClick = {
-                    editField = "jupiterApiKey"
-                    editLabel = "Jupiter API Key"
-                    editValue = config?.jupiterApiKey ?: ""
-                },
-                showDivider = true,
-                info = SettingsHelpTexts.JUPITER_API_KEY,
-            )
-
-            // ── Helius API Key (NFT holdings) ─────────────────────────────
-            Spacer(modifier = Modifier.height(20.dp))
-            ConfigField(
-                label = "Helius API Key",
-                value = config?.heliusApiKey?.let { key ->
-                    if (key.isBlank()) "Not set — NFT holdings disabled"
-                    else if (key.length > 12) "${key.take(8)}${"*".repeat(8)}${key.takeLast(4)}"
-                    else "*".repeat(key.length)
-                } ?: "Not set — NFT holdings disabled",
-                onClick = {
-                    editField = "heliusApiKey"
-                    editLabel = "Helius API Key"
-                    editValue = config?.heliusApiKey ?: ""
-                },
-                showDivider = false,
-                info = SettingsHelpTexts.HELIUS_API_KEY,
-            )
+                // ── Helius API Key (NFT holdings) ─────────────────────────────
+                Spacer(modifier = Modifier.height(20.dp))
+                ConfigField(
+                    label = "Helius API Key",
+                    value = config?.heliusApiKey?.let { key ->
+                        if (key.isBlank()) "Not set — NFT holdings disabled"
+                        else if (key.length > 12) "${key.take(8)}${"*".repeat(8)}${key.takeLast(4)}"
+                        else "*".repeat(key.length)
+                    } ?: "Not set — NFT holdings disabled",
+                    onClick = {
+                        editField = "heliusApiKey"
+                        editLabel = "Helius API Key"
+                        editValue = config?.heliusApiKey ?: ""
+                    },
+                    showDivider = false,
+                    info = SettingsHelpTexts.HELIUS_API_KEY,
+                )
             }
         }
 
@@ -1846,6 +1846,7 @@ private fun WalletAddressRow(address: String, clipboardLabel: String) {
             ) {
                 Text(
                     text = "Copy",
+                    fontFamily = RethinkSans,
                     fontSize = 12.sp,
                     color = SeekerClawColors.TextInteractive,
                 )
