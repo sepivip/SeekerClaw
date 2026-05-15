@@ -60,9 +60,16 @@ Why it activates: contains `pay.sh` + naming a paid lookup.
 1. Read catalog.json → 'wolfram-alpha' matches the math/facts intent.
 2. Read services/wolfram-alpha.md → URL pattern is
    https://wolframalpha.x402.paysponge.com/v1/result?i=<URL-encoded query>
-3. URL-encode the query with `encodeURIComponent` (single consistent
-   method — encodes spaces as %20 AND percent-encodes all special
-   characters like ( → %28, ) → %29, * → %2A, etc.). For this query:
+3. URL-encode the query with `encodeURIComponent`. It encodes spaces
+   as `%20` and percent-encodes most special characters (`&` → `%26`,
+   `=` → `%3D`, `+` → `%2B`, `#` → `%23`, `/` → `%2F`, etc.).
+   **NOT encoded** by `encodeURIComponent` (per the JS spec — kept
+   unchanged): A-Z a-z 0-9 `- _ . ~ ! * ' ( )`. These chars are valid
+   in HTTP query strings as-is, so leaving them unencoded is fine for
+   pay.sh's services. If a specific service requires stricter
+   RFC3986-style encoding (rare), the service's `services/<id>.md`
+   will say so.
+   Example for this query:
      encodeURIComponent("current GDP of Japan in USD")
      → "current%20GDP%20of%20Japan%20in%20USD"
    Final URL:
@@ -70,8 +77,6 @@ Why it activates: contains `pay.sh` + naming a paid lookup.
    Do NOT mix `+` for spaces with `encodeURIComponent` — `+` is form-
    encoded space, and applying encodeURIComponent over a string that
    already contains `+` would turn `+` into `%2B` (literal plus).
-   Pick one approach (use encodeURIComponent end-to-end) and stick
-   with it.
 4. Invoke agent_pay with JSON args:
    agent_pay({ url: "<constructed-url-above>", max_usdc: "0.05" })
    max_usdc MUST be a decimal STRING (not number). Burner signs

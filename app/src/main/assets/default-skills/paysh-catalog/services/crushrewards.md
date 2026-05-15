@@ -19,7 +19,7 @@ Pass the product name or query string in `q`:
 ?q=Nespresso+Vertuo+pods
 ```
 
-URL-encode the value with `encodeURIComponent` (spaces → `%20`, special chars percent-encoded). Do NOT use `+` for spaces.
+URL-encode the value with `encodeURIComponent`. Spaces become `%20`; URL-reserved chars (`&`, `=`, `?`, `+`, etc.) get percent-encoded; chars `A-Z a-z 0-9 - _ . ~ ! * ' ( )` stay unchanged (per the JS spec). Do NOT use `+` for spaces.
 
 ## When to use vs free alternatives
 
