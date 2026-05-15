@@ -1,6 +1,6 @@
 # pay.sh catalog audit — multi-endpoint probe per service
 
-Generated: 2026-05-15T18:32:11.214Z
+Generated: 2026-05-15T18:41:34.297Z
 Source: probe-catalog.js --audit --filter paysponge --audit-side-effects
 **Scope note**: this run was FILTERED to "paysponge" — aggregate counts below are for the filtered subset, NOT the full ~72-service upstream catalog. Re-run without --filter for a full-catalog audit.
 
@@ -15,7 +15,7 @@ Source: probe-catalog.js --audit --filter paysponge --audit-side-effects
 | Non-402 HTTP response (http_4xx/5xx/3xx/2xx) | 26 |
 | Skipped (non-GET, side-effect risk; opt in via --audit-side-effects) | 0 |
 | Fetch failed (DNS / TLS / timeout — no HTTP response) | 1 |
-| Audit elapsed | 41.0s |
+| Audit elapsed | 40.7s |
 
 ## All parsed_ok endpoints from this audit run
 
@@ -23,45 +23,45 @@ Every endpoint that parsed_ok with a Solana-USDC leg. This includes endpoints al
 
 | Service | Method | Path | Networks | Asset | Amount | Result |
 |---------|--------|------|----------|-------|--------|--------|
-| paysponge/2captcha | POST | `/createTask` | base+sol | EVM | $0.01 | `parsed_ok` |
-| paysponge/fal | POST | `/fal-ai/fast-sdxl` | base+sol | EVM | $0.01 | `parsed_ok` |
-| paysponge/fal | POST | `/fal-ai/flux/dev` | base+sol | EVM | $0.03 | `parsed_ok` |
-| paysponge/fal | POST | `/fal-ai/flux-pro/v1.1` | base+sol | EVM | $0.04 | `parsed_ok` |
-| paysponge/fal | POST | `/fal-ai/flux-pro/v1.1-ultra` | base+sol | EVM | $0.06 | `parsed_ok` |
-| paysponge/fal | POST | `/fal-ai/flux/schnell` | base+sol | EVM | $0.01 | `parsed_ok` |
-| paysponge/fal | POST | `/fal-ai/minimax/video-01` | base+sol | EVM | $0.07 | `parsed_ok` |
-| paysponge/fal | POST | `/fal-ai/recraft-v3` | base+sol | EVM | $0.04 | `parsed_ok` |
-| paysponge/fal | POST | `/fal-ai/stable-diffusion-v35-large` | base+sol | EVM | $0.04 | `parsed_ok` |
-| paysponge/fal | POST | `/fal-ai/stable-video` | base+sol | EVM | $0.07 | `parsed_ok` |
-| paysponge/nyne | POST | `/person/enrichment` | base+sol | EVM | $0.02 | `parsed_ok` |
-| paysponge/nyne | POST | `/person/search` | base+sol | EVM | $0.02 | `parsed_ok` |
-| paysponge/perplexity | POST | `/search` | base+sol | EVM | $0.01 | `parsed_ok` |
-| paysponge/perplexity | POST | `/v1/agent` | base+sol | EVM | $0.01 | `parsed_ok` |
-| paysponge/perplexity | POST | `/v1/async/sonar` | base+sol | EVM | $0.01 | `parsed_ok` |
-| paysponge/reducto | POST | `/extract` | base+sol | EVM | $0.05 | `parsed_ok` |
-| paysponge/reducto | POST | `/parse` | base+sol | EVM | $0.05 | `parsed_ok` |
-| paysponge/rentcast | GET | `/markets` | base+sol | EVM | $0.01 | `parsed_ok` |
-| paysponge/rentcast | GET | `/avm/value` | base+sol | EVM | $0.01 | `parsed_ok` |
-| paysponge/rentcast | GET | `/properties` | base+sol | EVM | $0.01 | `parsed_ok` |
-| paysponge/rentcast | GET | `/listings/sale` | base+sol | EVM | $0.01 | `parsed_ok` |
-| paysponge/rentcast | GET | `/properties/probe` | base+sol | EVM | $0.01 | `parsed_ok` |
-| paysponge/rentcast | GET | `/properties/random` | base+sol | EVM | $0.01 | `parsed_ok` |
-| paysponge/rentcast | GET | `/avm/rent/long-term` | base+sol | EVM | $0.01 | `parsed_ok` |
-| paysponge/rentcast | GET | `/listings/sale/probe` | base+sol | EVM | $0.01 | `parsed_ok` |
-| paysponge/rentcast | GET | `/listings/rental/long-term` | base+sol | EVM | $0.01 | `parsed_ok` |
-| paysponge/rentcast | GET | `/listings/rental/long-term/probe` | base+sol | EVM | $0.01 | `parsed_ok` |
-| paysponge/screenshotone | GET | `/animate` | base+sol | EVM | $0.02 | `parsed_ok` |
-| paysponge/screenshotone | GET | `/take` | base+sol | EVM | $0.02 | `parsed_ok` |
-| paysponge/screenshotone | POST | `/take` | base+sol | EVM | $0.02 | `parsed_ok` |
-| paysponge/textbelt | POST | `/text` | base+sol | EVM | $0.02 | `parsed_ok` |
-| paysponge/tripadvisor | GET | `/api/v1/location/probe/details` | base+sol | EVM | $0.01 | `parsed_ok` |
-| paysponge/tripadvisor | GET | `/api/v1/location/probe/photos` | base+sol | EVM | $0.01 | `parsed_ok` |
-| paysponge/tripadvisor | GET | `/api/v1/location/probe/reviews` | base+sol | EVM | $0.01 | `parsed_ok` |
-| paysponge/tripadvisor | GET | `/api/v1/location/nearby_search` | base+sol | EVM | $0.01 | `parsed_ok` |
-| paysponge/tripadvisor | GET | `/api/v1/location/search` | base+sol | EVM | $0.01 | `parsed_ok` |
-| paysponge/wolframalpha | GET | `/v1/result` | base+sol | EVM | $0.01 | `parsed_ok` |
-| paysponge/wolframalpha | GET | `/v1/simple` | base+sol | EVM | $0.01 | `parsed_ok` |
-| paysponge/wolframalpha | GET | `/v2/query` | base+sol | EVM | $0.02 | `parsed_ok` |
+| paysponge/2captcha | POST | `/createTask` | base+sol | USDC | $0.01 | `parsed_ok` |
+| paysponge/fal | POST | `/fal-ai/fast-sdxl` | base+sol | USDC | $0.01 | `parsed_ok` |
+| paysponge/fal | POST | `/fal-ai/flux/dev` | base+sol | USDC | $0.03 | `parsed_ok` |
+| paysponge/fal | POST | `/fal-ai/flux-pro/v1.1` | base+sol | USDC | $0.04 | `parsed_ok` |
+| paysponge/fal | POST | `/fal-ai/flux-pro/v1.1-ultra` | base+sol | USDC | $0.06 | `parsed_ok` |
+| paysponge/fal | POST | `/fal-ai/flux/schnell` | base+sol | USDC | $0.01 | `parsed_ok` |
+| paysponge/fal | POST | `/fal-ai/minimax/video-01` | base+sol | USDC | $0.07 | `parsed_ok` |
+| paysponge/fal | POST | `/fal-ai/recraft-v3` | base+sol | USDC | $0.04 | `parsed_ok` |
+| paysponge/fal | POST | `/fal-ai/stable-diffusion-v35-large` | base+sol | USDC | $0.04 | `parsed_ok` |
+| paysponge/fal | POST | `/fal-ai/stable-video` | base+sol | USDC | $0.07 | `parsed_ok` |
+| paysponge/nyne | POST | `/person/enrichment` | base+sol | USDC | $0.02 | `parsed_ok` |
+| paysponge/nyne | POST | `/person/search` | base+sol | USDC | $0.02 | `parsed_ok` |
+| paysponge/perplexity | POST | `/search` | base+sol | USDC | $0.01 | `parsed_ok` |
+| paysponge/perplexity | POST | `/v1/agent` | base+sol | USDC | $0.01 | `parsed_ok` |
+| paysponge/perplexity | POST | `/v1/async/sonar` | base+sol | USDC | $0.01 | `parsed_ok` |
+| paysponge/reducto | POST | `/extract` | base+sol | USDC | $0.05 | `parsed_ok` |
+| paysponge/reducto | POST | `/parse` | base+sol | USDC | $0.05 | `parsed_ok` |
+| paysponge/rentcast | GET | `/markets` | base+sol | USDC | $0.01 | `parsed_ok` |
+| paysponge/rentcast | GET | `/avm/value` | base+sol | USDC | $0.01 | `parsed_ok` |
+| paysponge/rentcast | GET | `/properties` | base+sol | USDC | $0.01 | `parsed_ok` |
+| paysponge/rentcast | GET | `/listings/sale` | base+sol | USDC | $0.01 | `parsed_ok` |
+| paysponge/rentcast | GET | `/properties/probe` | base+sol | USDC | $0.01 | `parsed_ok` |
+| paysponge/rentcast | GET | `/properties/random` | base+sol | USDC | $0.01 | `parsed_ok` |
+| paysponge/rentcast | GET | `/avm/rent/long-term` | base+sol | USDC | $0.01 | `parsed_ok` |
+| paysponge/rentcast | GET | `/listings/sale/probe` | base+sol | USDC | $0.01 | `parsed_ok` |
+| paysponge/rentcast | GET | `/listings/rental/long-term` | base+sol | USDC | $0.01 | `parsed_ok` |
+| paysponge/rentcast | GET | `/listings/rental/long-term/probe` | base+sol | USDC | $0.01 | `parsed_ok` |
+| paysponge/screenshotone | GET | `/animate` | base+sol | USDC | $0.02 | `parsed_ok` |
+| paysponge/screenshotone | GET | `/take` | base+sol | USDC | $0.02 | `parsed_ok` |
+| paysponge/screenshotone | POST | `/take` | base+sol | USDC | $0.02 | `parsed_ok` |
+| paysponge/textbelt | POST | `/text` | base+sol | USDC | $0.02 | `parsed_ok` |
+| paysponge/tripadvisor | GET | `/api/v1/location/probe/details` | base+sol | USDC | $0.01 | `parsed_ok` |
+| paysponge/tripadvisor | GET | `/api/v1/location/probe/photos` | base+sol | USDC | $0.01 | `parsed_ok` |
+| paysponge/tripadvisor | GET | `/api/v1/location/probe/reviews` | base+sol | USDC | $0.01 | `parsed_ok` |
+| paysponge/tripadvisor | GET | `/api/v1/location/nearby_search` | base+sol | USDC | $0.01 | `parsed_ok` |
+| paysponge/tripadvisor | GET | `/api/v1/location/search` | base+sol | USDC | $0.01 | `parsed_ok` |
+| paysponge/wolframalpha | GET | `/v1/result` | base+sol | USDC | $0.01 | `parsed_ok` |
+| paysponge/wolframalpha | GET | `/v1/simple` | base+sol | USDC | $0.01 | `parsed_ok` |
+| paysponge/wolframalpha | GET | `/v2/query` | base+sol | USDC | $0.02 | `parsed_ok` |
 
 ## Audit errors (services where openapi.json was unreachable or empty)
 

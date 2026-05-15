@@ -701,8 +701,18 @@ function writeAuditReport(auditResults, elapsedMs, opts = {}) {
             if (e.row.result !== 'parsed_ok') continue;
             const svc = r.disc.payMdPath ? r.disc.payMdPath.split('/').slice(1, -1).join('/') : '?';
             const nets = fmtNetworks(e.row.networks || []);
-            const asset = fmtAssetKind((e.row.assets || [])[0]);
-            const amount = fmtAmount(e.row.amounts || []);
+            // R4 #1: parsed_ok means proto.build() picked the Solana
+            // entry. Pre-fix the report rendered accepts[0] which is
+            // typically the Base/EVM offer (multi-chain pay.sh challenges
+            // list Base first), so rows tagged `parsed_ok` Solana-USDC
+            // showed Asset=EVM and could show the wrong amount when
+            // chains advertise different prices. Find the Solana index
+            // explicitly and use that for asset/amount display.
+            const networks = e.row.networks || [];
+            const solanaIdx = networks.findIndex(n => typeof n === 'string' && n.startsWith('solana:'));
+            const pickIdx = solanaIdx >= 0 ? solanaIdx : 0;
+            const asset = fmtAssetKind((e.row.assets || [])[pickIdx]);
+            const amount = fmtAmount(((e.row.amounts || [])[pickIdx]) !== undefined ? [(e.row.amounts || [])[pickIdx]] : []);
             lines.push(`| ${svc} | ${e.method} | \`${e.path}\` | ${nets} | ${asset} | ${amount} | \`${e.row.result}\` |`);
         }
     }
@@ -804,7 +814,18 @@ async function main() {
     if (args.filter) workItems = workItems.filter(p => p.toLowerCase().includes(args.filter.toLowerCase()));
     if (args.limit > 0) workItems = workItems.slice(0, args.limit);
 
-    const mode = args.audit ? 'AUDIT (probe every endpoint per service)' : 'STANDARD (probe one endpoint per service)';
+    // R4 #2: status banner now reflects the actual scope. Default
+    // audit probes GET endpoints only; non-GET are listed-but-not-probed.
+    // Surface the side-effect flag state so operators don't assume a
+    // default `--audit` run exercised every endpoint.
+    let mode;
+    if (args.audit) {
+        mode = args.auditSideEffects
+            ? 'AUDIT (probe every endpoint per service incl POST/PUT/PATCH/DELETE — side-effects opt-in)'
+            : 'AUDIT (probe every GET endpoint per service; non-GET listed-but-skipped — pass --audit-side-effects to probe them)';
+    } else {
+        mode = 'STANDARD (probe one endpoint per service)';
+    }
     console.log(`═══ pay.sh catalog probe — mode: ${mode} — ${workItems.length} services, concurrency=${args.concurrency} ═══\n`);
     console.log('Phase 1: discovering service URLs and probe endpoints from pay-skills repo…\n');
 
