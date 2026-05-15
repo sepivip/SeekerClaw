@@ -2562,11 +2562,27 @@ object ConfigManager {
      * AssetManager doesn't expose a is-file probe; we treat a successful
      * `open()` as "file" and a non-empty `list()` as "directory."
      *
-     * Returns `true` if every walked entry was successfully listed and
-     * (if a file) copied to disk. Returns `false` if ANY step failed —
-     * caller must NOT advance the manifest in that case, so the seed
-     * retries on the next launch instead of being permanently stuck in
-     * a partial state.
+     * **Stage-then-swap atomicity** (BAT-699 R6): support files are first
+     * copied into a sibling `.<name>.staging/` directory. ONLY after every
+     * file in the walk has been successfully written to staging do we
+     * promote the staging contents into the live skill directory. If ANY
+     * step in the walk fails, staging is discarded and the live directory
+     * is NEVER touched. This eliminates the mid-walk-failure mixed-state
+     * bug where partial overwrites in the live dir would have left the
+     * skill running with mixed old/new contents alongside an un-advanced
+     * manifest.
+     *
+     * The promote step itself is per-file rename, not a single atomic
+     * directory swap (Android FS doesn't support that). There is a brief
+     * window during promotion where the live dir contains a mix of new
+     * support files; this is bounded to milliseconds and only matters
+     * if the device is read concurrently mid-promotion, which doesn't
+     * happen in practice (skills are loaded once at runtime startup).
+     *
+     * Returns `true` if every walked entry was successfully listed,
+     * copied to staging, AND promoted to the live dir. Returns `false`
+     * on ANY failure — caller must NOT advance the manifest in that
+     * case, so the seed retries on the next launch from a clean state.
      */
     private fun copySkillSupportFiles(
         context: Context,
@@ -2574,6 +2590,21 @@ object ConfigManager {
         workspaceSkillDir: File,
     ): Boolean {
         val assetManager = context.assets
+        // Staging sibling — same parent as live skill dir, dot-prefixed
+        // name to keep it out of normal skill-directory enumeration.
+        val parent = workspaceSkillDir.parentFile
+            ?: run {
+                Log.e(TAG, "Cannot determine parent dir for ${workspaceSkillDir.path}")
+                return false
+            }
+        val stagingDir = File(parent, ".${workspaceSkillDir.name}.staging")
+        // Clean any orphan staging from a prior failed run before we start.
+        stagingDir.deleteRecursively()
+        if (!stagingDir.mkdirs()) {
+            Log.e(TAG, "Failed to create staging dir ${stagingDir.path}")
+            return false
+        }
+
         var allOk = true
         fun walk(assetPath: String, targetDir: File) {
             val entries = try {
@@ -2612,8 +2643,42 @@ object ConfigManager {
                 }
             }
         }
-        walk(assetSkillDir, workspaceSkillDir)
-        return allOk
+        walk(assetSkillDir, stagingDir)
+
+        if (!allOk) {
+            // Walk failed — discard staging, live dir untouched.
+            stagingDir.deleteRecursively()
+            return false
+        }
+
+        // Walk succeeded — promote staging into the live skill dir.
+        // SKILL.md is never in staging (skipped above) so the live
+        // SKILL.md is preserved untouched here. We delete the old
+        // non-SKILL.md support files first, then move staging contents
+        // into place. Per-file renames are atomic on POSIX-style FSes
+        // including the app-private storage Android uses here.
+        try {
+            workspaceSkillDir.mkdirs()
+            workspaceSkillDir.listFiles()?.forEach { f ->
+                if (f.name != "SKILL.md") f.deleteRecursively()
+            }
+            stagingDir.listFiles()?.forEach { f ->
+                val dest = File(workspaceSkillDir, f.name)
+                if (!f.renameTo(dest)) {
+                    // Cross-device rename can fail; fall back to recursive copy + delete.
+                    if (f.isDirectory) f.copyRecursively(dest, overwrite = true) else f.copyTo(dest, overwrite = true)
+                    f.deleteRecursively()
+                }
+            }
+            stagingDir.delete()
+            return true
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to promote staging into live skill dir; skill may be in mixed state", e)
+            // Best-effort cleanup; live dir is in unknown state, but the
+            // manifest won't advance so the next launch retries.
+            stagingDir.deleteRecursively()
+            return false
+        }
     }
 
     /**
