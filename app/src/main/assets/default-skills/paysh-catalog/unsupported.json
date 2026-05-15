@@ -19,9 +19,15 @@
       "explanation": "Service returns 402 with amount=0 — i.e. it's actually free. agent_pay refuses zero-demand by design. Call the endpoint directly with web_fetch instead — no payment needed.",
       "actionable": true,
       "alternative": "web_fetch on the same URL works without payment"
+    },
+    "requires_binary_response": {
+      "label": "Service returns binary content (images / files) that we can't deliver",
+      "explanation": "agent_pay parses x402 settles and returns the response body as best-effort UTF-8 text. Services that return binary content (e.g. PNG screenshots, audio, video) can be paid but the binary bytes can't currently be piped to the Telegram/Discord channel as an attachment — there's no in-memory-buffer-to-channel path. Tracked: needs a follow-up BAT to (a) save binary content to a workspace file and (b) plumb that file path to the channel sender. Until then, tell the user the service is recognized but its output format isn't supported yet.",
+      "actionable": false
     }
   },
   "services": [
+    { "name": "paysponge/screenshotone", "reason": "requires_binary_response", "note": "Animated/static screenshots return PNG/GIF bytes. Paid+detect+build works; delivery to user does not." },
     { "name": "agentmail/email", "reason": "invalid_demand" },
     { "name": "paysponge/nyne", "reason": "invalid_demand" },
     { "name": "paysponge/textbelt", "reason": "invalid_demand", "note": "Textbelt's status endpoint is free; the POST send endpoint IS paid and IS in our supported list under… (none — POST endpoint exists but isn't part of pay.sh's catalog entry, so it never appears here)" },

@@ -122,9 +122,10 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 - **Dynamic confirmation hook** in `ai.js` replaces the v1.0 static `CONFIRM_REQUIRED` set in `config.js`. Regression-safe: when burner is unconfigured the hook returns identical v1.0 behavior for every existing tool — pinned by `tests/nodejs-project/confirmation-policy.test.js`.
 
 ### pay.sh Service Catalog (BAT-699, bundled skill)
-- **`paysh-catalog` skill** — folder-shaped catalog mapping user intent → known pay.sh service URL + cost + example. Agent reads `catalog.json` to pick a service, then reads only the matching `services/<name>.md` for query construction. 10 verified-payable services to start: Wolfram Alpha, Tripadvisor, ScreenshotOne, 2Captcha, Rentcast, Reducto, Crushrewards, StableCrypto Market Data, StableEnrich, Purch.
-- **`unsupported.json`** — 41 known-but-can't-pay services with reasons (mpp_protocol, siwx_auth_required, invalid_demand). Agent can answer "I know about Google Vision but can't pay it because of mpp_protocol" honestly instead of generic "I don't have that."
-- **Static bundle** — Ships with APK. Auto-refresh from upstream pay.sh is a follow-up (BAT-?). Drift caught by `tests/paysh/probe-catalog.js` + the planned `external-api-watch` skill (BAT-698).
+- **`paysh-catalog` skill** — folder-shaped catalog mapping user intent → known pay.sh service URL + cost + example. Agent reads `catalog.json` to pick a service, then reads only the matching `services/<name>.md` for query construction. 9 verified-payable services to start: Wolfram Alpha, Tripadvisor, 2Captcha, Rentcast, Reducto, Crushrewards, StableCrypto Market Data, StableEnrich, Purch.
+- **`unsupported.json`** — 42 known-but-can't-pay services with reasons (mpp_protocol, siwx_auth_required, invalid_demand, requires_binary_response). Agent can answer "I know about Google Vision but can't pay it because of mpp_protocol" honestly instead of generic "I don't have that."
+- **Folder seeding** — Bundled skills' support files (catalog.json, unsupported.json, services/*.md) are now copied from `assets/default-skills/<name>/` to `workspace/skills/<name>/` recursively on first install and version upgrade (BAT-699 extended `ConfigManager.seedSkill()`).
+- **Static bundle** — Ships with APK. Auto-refresh from upstream pay.sh is a follow-up (BAT-700). Drift caught by `tests/paysh/probe-catalog.js` + the planned `external-api-watch` skill (BAT-698).
 
 ### Execution
 - **Shell exec** — 33 sandboxed commands including Android tools (cat, ls, curl, grep, find, sed, diff, screencap, getprop, etc.), workspace-restricted

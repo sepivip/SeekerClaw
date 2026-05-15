@@ -706,7 +706,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
             // (not a URL), the catalog skill maps it to a known-payable
             // endpoint. Also lists 41 known-but-unpayable services with
             // reasons so the agent can answer "do you know X?" honestly.
-            lines.push('**Service discovery**: When the user names an intent ("screenshot github.com", "what\'s the mass of the sun", "best price on a PS5") instead of a URL, consult the `paysh-catalog` skill BEFORE constructing a URL or falling back to `web_search`. It maps intents to the 10 verified-payable pay.sh services and also lists 41 known-but-unpayable ones in `unsupported.json` with reasons (mpp_protocol, siwx_auth_required, invalid_demand) — use that to give honest "I know about X but can\'t pay it because Y" answers instead of generic "I don\'t have that."');
+            lines.push('**Service discovery**: When the user names an intent ("what\'s the mass of the sun", "best price on a PS5", "search Tripadvisor for hotels") instead of a URL, consult the `paysh-catalog` skill BEFORE constructing a URL or falling back to `web_search`. It maps intents to the 9 verified-payable pay.sh services and also lists 42 known-but-unpayable ones in `unsupported.json` with reasons (mpp_protocol, siwx_auth_required, invalid_demand, requires_binary_response) — use that to give honest "I know about X but can\'t pay it because Y" answers instead of generic "I don\'t have that."');
         } else {
             lines.push('You have one wallet:');
             lines.push('- **Main** (via MWA) — user\'s wallet. Approval popup required for every action.');

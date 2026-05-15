@@ -23,15 +23,6 @@
       "summary": "Search nearby travel locations — hotels, restaurants, attractions — by latitude/longitude."
     },
     {
-      "id": "screenshotone",
-      "name": "ScreenshotOne",
-      "file": "services/screenshotone.md",
-      "cost_usdc": 0.02,
-      "method": "GET",
-      "intents": ["screenshot", "capture website", "render page", "preview url", "show me what site looks like"],
-      "summary": "Capture a screenshot (or animated capture) of any HTTPS URL."
-    },
-    {
       "id": "2captcha",
       "name": "2Captcha",
       "file": "services/2captcha.md",

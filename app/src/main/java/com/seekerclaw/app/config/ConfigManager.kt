@@ -2471,6 +2471,7 @@ object ConfigManager {
     // Note: `version` param must match the version in the YAML frontmatter of `content`.
     // The param drives manifest comparison; the frontmatter version is parsed at runtime by main.js.
     private fun seedSkill(
+        context: Context,
         skillsDir: File,
         manifest: MutableMap<String, SkillManifestEntry>,
         name: String,
@@ -2486,6 +2487,11 @@ object ConfigManager {
         if (!skillFile.exists()) {
             // Case 1: File doesn't exist — seed it
             skillFile.writeText(content)
+            // BAT-699: folder-shaped skills can ship support files alongside
+            // SKILL.md (paysh-catalog has catalog.json, unsupported.json,
+            // services/*.md). Copy them on first seed so skill_read /
+            // file_read find them at runtime.
+            copySkillSupportFiles(context, "default-skills/$name", skillDir)
             manifest[name] = SkillManifestEntry(version = version, hash = contentHash)
             Log.d(TAG, "Skill $name seeded at version $version")
             return
@@ -2514,6 +2520,13 @@ object ConfigManager {
         if (installedHash == currentEntry.hash) {
             // User hasn't modified — safe to overwrite
             skillFile.writeText(content)
+            // BAT-699: refresh support files alongside SKILL.md on version
+            // upgrade. NOTE: this overwrites user-modified support files
+            // (we don't yet track per-file hashes). Acceptable trade-off
+            // for V1 — folder-shaped skills are curated catalogs, not
+            // user-customized content. Track per-file hashes if/when this
+            // becomes a real concern.
+            copySkillSupportFiles(context, "default-skills/$name", skillDir)
             manifest[name] = SkillManifestEntry(version = version, hash = contentHash)
             Log.d(TAG, "Skill $name updated from ${currentEntry.version} to $version")
         } else {
@@ -2522,6 +2535,59 @@ object ConfigManager {
             manifest[name] = SkillManifestEntry(version = version, hash = installedHash)
             Log.d(TAG, "Skill $name has user modifications, preserving (bundled $version available)")
         }
+    }
+
+    /**
+     * Recursively copy non-`SKILL.md` files from a bundled skill's asset
+     * folder into the workspace skill directory. Used by [seedSkill] for
+     * folder-shaped skills like `paysh-catalog` that ship `catalog.json`,
+     * `unsupported.json`, and a `services/` subdir alongside SKILL.md.
+     *
+     * AssetManager doesn't expose a is-file probe; we treat a successful
+     * `open()` as "file" and a non-empty `list()` as "directory."
+     */
+    private fun copySkillSupportFiles(
+        context: Context,
+        assetSkillDir: String,
+        workspaceSkillDir: File,
+    ) {
+        val assetManager = context.assets
+        fun walk(assetPath: String, targetDir: File) {
+            val entries = try {
+                assetManager.list(assetPath) ?: emptyArray()
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to list assets at $assetPath", e)
+                return
+            }
+            for (entry in entries) {
+                val childAssetPath = "$assetPath/$entry"
+                // Skip SKILL.md at the top level — seeded separately by
+                // seedSkill() with version-aware logic.
+                if (assetPath == assetSkillDir && entry == "SKILL.md") continue
+                // File-vs-folder probe: open() throws on folders.
+                val isFile = try {
+                    assetManager.open(childAssetPath).close()
+                    true
+                } catch (e: Exception) {
+                    false
+                }
+                if (isFile) {
+                    val targetFile = File(targetDir, entry)
+                    try {
+                        targetFile.parentFile?.mkdirs()
+                        assetManager.open(childAssetPath).use { input ->
+                            targetFile.outputStream().use { output -> input.copyTo(output) }
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to copy support file $childAssetPath", e)
+                    }
+                } else {
+                    val childTarget = File(targetDir, entry).apply { mkdirs() }
+                    walk(childAssetPath, childTarget)
+                }
+            }
+        }
+        walk(assetSkillDir, workspaceSkillDir)
     }
 
     /**
@@ -2569,7 +2635,7 @@ object ConfigManager {
 
                 val version = extractVersionFromFrontmatter(content) ?: "1.0.0"
 
-                seedSkill(skillsDir, manifest, skillName, version, content)
+                seedSkill(context, skillsDir, manifest, skillName, version, content)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to seed skill $skillName from assets", e)
             }
