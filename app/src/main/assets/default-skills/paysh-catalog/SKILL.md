@@ -45,7 +45,7 @@ Once an opt-in keyword fires the skill, the agent's job is:
 
 1. **Match intent → service** by reading `catalog.json` (the index in this folder)
 2. **Read the matching `services/<name>.md`** for URL pattern + query construction
-3. **Call `agent_pay`** with object-shaped args: `{ url: "<constructed-url>", max_usdc: "<decimal-string-ceiling>", method?: "GET"|"POST", body?: <JSON-object-required-for-POST> }`. `max_usdc` MUST be a decimal STRING (not number) — e.g. `"0.05"`. GET calls run silently when under cap. **POST calls always prompt the user for confirmation** regardless of caps (POST can send SMS, post content, or trigger paid actions — the confirmation is by design). Check each service's `method:` field in `catalog.json` before calling.
+3. **Call `agent_pay`** with object-shaped args: `{ url: "<constructed-url>", max_usdc: "<decimal-string-ceiling>", method?: "GET"|"POST", body?: <JSON object or array, required for POST> }`. `max_usdc` MUST be a decimal STRING (not number) — e.g. `"0.05"`. `body` MUST be a JSON object or array (or a JSON string that parses to one); primitives like numbers/strings/booleans are rejected with `body_not_json`. GET calls run silently when under cap. **POST calls always prompt the user for confirmation** regardless of caps (POST can send SMS, post content, or trigger paid actions — the confirmation is by design). Check each service's `method:` field in `catalog.json` before calling.
 4. **Return the response** to the user
 
 ## Examples
