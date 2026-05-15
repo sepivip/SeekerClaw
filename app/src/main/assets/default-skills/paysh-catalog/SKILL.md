@@ -60,11 +60,18 @@ Why it activates: contains `pay.sh` + naming a paid lookup.
 1. Read catalog.json → 'wolfram-alpha' matches the math/facts intent.
 2. Read services/wolfram-alpha.md → URL pattern is
    https://wolframalpha.x402.paysponge.com/v1/result?i=<URL-encoded query>
-3. URL-encode the query (spaces → +, then encodeURIComponent any
-   special characters). For this example, no special chars to escape:
-   https://wolframalpha.x402.paysponge.com/v1/result?i=current+GDP+of+Japan+in+USD
-   (If a query DOES include characters like (, ), *, =, &, /, etc.,
-   percent-encode each one — e.g. sin(x) → sin%28x%29.)
+3. URL-encode the query with `encodeURIComponent` (single consistent
+   method — encodes spaces as %20 AND percent-encodes all special
+   characters like ( → %28, ) → %29, * → %2A, etc.). For this query:
+     encodeURIComponent("current GDP of Japan in USD")
+     → "current%20GDP%20of%20Japan%20in%20USD"
+   Final URL:
+     https://wolframalpha.x402.paysponge.com/v1/result?i=current%20GDP%20of%20Japan%20in%20USD
+   Do NOT mix `+` for spaces with `encodeURIComponent` — `+` is form-
+   encoded space, and applying encodeURIComponent over a string that
+   already contains `+` would turn `+` into `%2B` (literal plus).
+   Pick one approach (use encodeURIComponent end-to-end) and stick
+   with it.
 4. Invoke agent_pay with JSON args:
    agent_pay({ url: "<constructed-url-above>", max_usdc: "0.05" })
    max_usdc MUST be a decimal STRING (not number). Burner signs
