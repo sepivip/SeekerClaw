@@ -88,7 +88,7 @@ Why it activates: contains `pay.sh` + naming a paid lookup.
 
 User: *"What can you pay for?"*
 
-Why it activates: matches the capability-ask phrase *"what can you pay for"*. (NOT every message containing the word "pay" — only the specific capability-ask phrases listed in the opt-in section above.) Agent reads `catalog.json`, lists the 9 supported services with costs, mentions the 63 known-but-not-usable ones. No `agent_pay` call.
+Why it activates: matches the capability-ask phrase *"what can you pay for"*. (NOT every message containing the word "pay" — only the specific capability-ask phrases listed in the opt-in section above.) Agent reads `catalog.json`, lists the 10 supported services with costs, mentions the 62 known-but-not-usable ones. No `agent_pay` call.
 
 ### Does NOT activate → vanilla answer
 
@@ -106,11 +106,11 @@ Why it stays dormant: not an x402 query at all. Use `solana_balance` directly. T
 
 ## Reading the catalog efficiently
 
-`catalog.json` is small (9 services, a few KB). Always load it first to pick the service. Then `read` only the service-specific markdown — never load every services/*.md at once. That's the whole point of the per-service layout.
+`catalog.json` is small (10 services, a few KB). Always load it first to pick the service. Then `read` only the service-specific markdown — never load every services/*.md at once. That's the whole point of the per-service layout.
 
 ## The `unsupported.json` companion registry
 
-`unsupported.json` lists **63 additional services** that exist on pay.sh today but the agent cannot **end-to-end use** yet — either because `agent_pay` can't pay them (protocol/auth gap), it can pay but can't deliver the response (binary content with no channel attachment path), or the endpoint didn't return a 402 at probe time (broken / moved / re-routed). Read it when:
+`unsupported.json` lists **62 additional services** that exist on pay.sh today but the agent cannot **end-to-end use** yet — either because `agent_pay` can't pay them (protocol/auth gap), it can pay but can't deliver the response (binary content with no channel attachment path), or the endpoint didn't return a 402 at probe time (broken / moved / re-routed). Read it when:
 
 - The user asks "do you know about service X?" or "is X on pay.sh?"
 - The user asks for a capability (translation, image OCR, video analysis, screenshots, Google Vision, etc.) that the supported 9 don't cover

@@ -17,6 +17,19 @@
 //   node tests/paysh/probe-catalog.js --concurrency 8
 //   node tests/paysh/probe-catalog.js --commit-captures   # write individual files too
 //
+// BAT-706 audit mode (--audit):
+//   node tests/paysh/probe-catalog.js --audit             # probe EVERY endpoint per service
+//   node tests/paysh/probe-catalog.js --audit --filter paysponge
+//
+// Standard mode probes one endpoint per service (typically the
+// catalog-listed entry point) and writes to catalog-summary.md. Audit
+// mode probes EVERY endpoint exposed in each service's openapi.json
+// and writes to catalog-audit.md. Audit surfaces hidden paid endpoints
+// the standard probe misses — e.g. paysponge/perplexity has /search +
+// /v1/agent + /v1/sonar + /v1/async/sonar, but standard mode would
+// only capture one. Audit mode also takes longer (≈ services × avg
+// endpoints).
+//
 // Per BAT-582 v1.6 spirit: pay.sh ecosystem is moving fast; this script
 // surfaces drift across the WHOLE catalog (e.g. a new provider adopting
 // a v3 field shape) in one pass.
@@ -37,6 +50,10 @@ const { sanitize }      = require('./lib/sanitize');
 
 const CAPTURES_DIR = path.join(__dirname, 'captures', 'catalog');
 const SUMMARY_FILE = path.join(__dirname, 'catalog-summary.md');
+// BAT-706: audit mode probes every endpoint per service (vs the
+// standard mode which probes one). Writes to a separate file so we
+// don't churn the standard summary on every audit run.
+const AUDIT_FILE = path.join(__dirname, 'catalog-audit.md');
 
 // ── Static catalog (from solana-foundation/pay-skills `main` tree) ───────────
 // Each entry = one PAY.md path. service_url is fetched from the file
@@ -152,12 +169,13 @@ function _parseConcurrency(raw) {
 }
 
 function parseArgs(argv) {
-    const out = { concurrency: 5, commitCaptures: false, limit: 0, filter: null };
+    const out = { concurrency: 5, commitCaptures: false, limit: 0, filter: null, audit: false };
     for (let i = 2; i < argv.length; i++) {
         if (argv[i] === '--concurrency' && argv[i + 1]) { out.concurrency = _parseConcurrency(argv[++i]); }
         else if (argv[i] === '--commit-captures') out.commitCaptures = true;
         else if (argv[i] === '--limit' && argv[i + 1]) out.limit = parseInt(argv[++i], 10);
         else if (argv[i] === '--filter' && argv[i + 1]) out.filter = argv[++i];
+        else if (argv[i] === '--audit') out.audit = true;
     }
     return out;
 }
@@ -230,6 +248,37 @@ function _substituteParams(p) {
 }
 
 function _hasParam(p) { return /\{[^}]+\}|(^|\/):[a-zA-Z_][a-zA-Z0-9_]*/.test(p); }
+
+// BAT-706: extract ALL endpoints from an OpenAPI spec (not just one).
+// Used by audit mode (--audit) to surface hidden paid endpoints that
+// the single-endpoint probe (pickProbeEndpoint) would miss for
+// multi-endpoint providers like paysponge/perplexity (which exposes
+// /search, /v1/agent, /v1/sonar, /v1/async/sonar) or paysponge/coingecko
+// (/x402/simple/price, /x402/onchain/networks/{n}/trending_pools, etc.).
+//
+// Returns array of {method, path, hasParam} entries. Params are
+// stubbed with "probe" using the same _substituteParams helper that
+// pickProbeEndpoint uses for parametric paths.
+function extractAllEndpoints(openapi) {
+    const paths = openapi && openapi.paths;
+    if (!paths || typeof paths !== 'object') return [];
+    const out = [];
+    const seen = new Set();
+    for (const p of Object.keys(paths)) {
+        const ops = paths[p];
+        if (!ops || typeof ops !== 'object') continue;
+        for (const method of ['get', 'post', 'put', 'patch', 'delete']) {
+            if (!ops[method]) continue;
+            const hasParam = _hasParam(p);
+            const finalPath = hasParam ? _substituteParams(p) : p;
+            const key = `${method.toUpperCase()} ${finalPath}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            out.push({ method: method.toUpperCase(), path: finalPath, hasParam, rawPath: p });
+        }
+    }
+    return out;
+}
 
 function pickProbeEndpoint(openapi) {
     // Strategy: prefer parameter-free GET, then parametric GET (stub
@@ -412,6 +461,95 @@ async function probeAndParse(disc, proto) {
     };
 }
 
+// BAT-706: audit one service by probing EVERY endpoint declared in its
+// openapi.json (not just the one pickProbeEndpoint would pick). Used by
+// --audit mode to surface hidden paid endpoints that the standard probe
+// would miss.
+//
+// Returns { disc, endpoints: [{ method, path, probeUrl, row, captured }] }
+// where each `row` mirrors what probeAndParse produces for one probe.
+async function auditService(disc, proto) {
+    const result = { disc, endpoints: [] };
+    if (!disc.ok) {
+        result.error = disc.error;
+        return result;
+    }
+    // Re-fetch openapi.json so we can enumerate ALL endpoints (the
+    // discoverOne pass only kept the picked one in disc).
+    const openapiUrl = disc.serviceUrl.replace(/\/$/, '') + '/openapi.json';
+    const oa = await fetchText(openapiUrl, 15000);
+    if (oa.status !== 200) {
+        result.error = `openapi fetch failed: status ${oa.status}`;
+        return result;
+    }
+    let endpoints;
+    try {
+        const openapi = JSON.parse(oa.body);
+        endpoints = extractAllEndpoints(openapi);
+    } catch (e) {
+        result.error = `openapi parse failed: ${e.message}`;
+        return result;
+    }
+    if (!endpoints.length) {
+        result.error = 'openapi has no endpoints';
+        return result;
+    }
+    // Probe each endpoint serially within this service (avoid hammering
+    // the same host). Outer runWithConcurrency parallelizes across
+    // services, not within one.
+    for (const ep of endpoints) {
+        const probeUrl = disc.serviceUrl.replace(/\/$/, '') + ep.path;
+        const probeOpts = { url: probeUrl, method: ep.method };
+        if (ep.method !== 'GET') probeOpts.body = {};
+        const captured = await probe(probeOpts);
+        if (captured.error) {
+            result.endpoints.push({ ...ep, probeUrl, row: { result: 'fetch_failed', detail: captured.reason || captured.error } });
+            continue;
+        }
+        const reqs = extractRequirements(captured);
+        const isV402 = captured.status === 402;
+        let detected = null, builtError = null, builtOk = false;
+        if (isV402) {
+            const response = { status: captured.status, bodyJson: captured.body, headers: captured.headers };
+            detected = proto.detect(response);
+            try {
+                const built = await proto.build(response, {
+                    burnerPubkey: TEST_BURNER_PUBKEY,
+                    maxUsdcAtomic: TEST_MAX_USDC_ATOMIC,
+                });
+                if (built && built.error) builtError = built.error;
+                else if (built && built.txBase64 && built.paymentMeta) builtOk = true;
+                else builtError = 'unexpected_shape';
+            } catch (e) {
+                builtError = `threw:${e.message.slice(0, 40)}`;
+            }
+        }
+        const altProto = isV402 ? detectAltProtocol(captured) : null;
+        let outcome;
+        if (!isV402) outcome = `http_${captured.status}`;
+        else if (builtOk) outcome = 'parsed_ok';
+        else if (altProto) outcome = `reject:${altProto}`;
+        else if (builtError) outcome = `reject:${builtError}`;
+        else outcome = 'detect_false';
+        result.endpoints.push({
+            ...ep,
+            probeUrl,
+            captured,
+            row: {
+                result: outcome,
+                httpStatus: captured.status,
+                delivery: reqs.delivery,
+                x402Version: reqs.x402Version,
+                networks: reqs.networks,
+                assets: reqs.assets,
+                amounts: reqs.amounts,
+                offerCount: reqs.offerCount,
+            },
+        });
+    }
+    return result;
+}
+
 async function runWithConcurrency(items, limit, fn) {
     const out = new Array(items.length);
     let idx = 0;
@@ -428,6 +566,106 @@ async function runWithConcurrency(items, limit, fn) {
 
 function fmtNetworks(ns) {
     return ns.map(n => n.startsWith('solana:') ? 'sol' : n.includes('eip155:8453') ? 'base' : n.split(':')[0] || n).join('+') || '—';
+}
+
+// BAT-706: write per-endpoint audit report.
+function writeAuditReport(auditResults, elapsedMs) {
+    const lines = [];
+    lines.push('# pay.sh catalog audit — multi-endpoint probe per service');
+    lines.push('');
+    lines.push(`Generated: ${new Date().toISOString()}`);
+    lines.push(`Source: probe-catalog.js --audit (extracts ALL openapi endpoints per service, probes each)`);
+    lines.push('');
+
+    let totalEndpoints = 0;
+    let parsedOk = 0;
+    let rejected = 0;
+    let notV402 = 0;
+    for (const r of auditResults) {
+        if (!r.endpoints) continue;
+        for (const e of r.endpoints) {
+            totalEndpoints++;
+            if (e.row.result === 'parsed_ok') parsedOk++;
+            else if (e.row.result.startsWith('reject:')) rejected++;
+            else notV402++;
+        }
+    }
+
+    lines.push('## Aggregate');
+    lines.push('');
+    lines.push('| Metric | Count |');
+    lines.push('|--------|-------|');
+    lines.push(`| Services audited | ${auditResults.length} |`);
+    lines.push(`| Endpoints discovered (across all services) | ${totalEndpoints} |`);
+    lines.push(`| **Parsed OK** (Solana-USDC parseable 402) | ${parsedOk} |`);
+    lines.push(`| Rejected (402 but parser refused) | ${rejected} |`);
+    lines.push(`| Non-402 response | ${notV402} |`);
+    lines.push(`| Audit elapsed | ${(elapsedMs / 1000).toFixed(1)}s |`);
+    lines.push('');
+
+    // Per-service breakdown — only show services with at least one parsed_ok OR an error
+    lines.push('## New candidate endpoints (parsed_ok beyond what catalog-summary already lists)');
+    lines.push('');
+    lines.push('Endpoints that parsed_ok in this audit. Cross-reference with `catalog-summary.md` to find ones that are NOT already in our standard catalog — those are the audit\'s discoveries.');
+    lines.push('');
+    lines.push('| Service | Method | Path | Networks | Asset | Amount | Result |');
+    lines.push('|---------|--------|------|----------|-------|--------|--------|');
+    for (const r of auditResults) {
+        if (!r.endpoints) continue;
+        for (const e of r.endpoints) {
+            if (e.row.result !== 'parsed_ok') continue;
+            const svc = r.disc.payMdPath ? r.disc.payMdPath.split('/').slice(1, -1).join('/') : '?';
+            const nets = fmtNetworks(e.row.networks || []);
+            const asset = fmtAssetKind((e.row.assets || [])[0]);
+            const amount = fmtAmount(e.row.amounts || []);
+            lines.push(`| ${svc} | ${e.method} | \`${e.path}\` | ${nets} | ${asset} | ${amount} | \`${e.row.result}\` |`);
+        }
+    }
+    lines.push('');
+
+    // Per-service errors (services where audit couldn't probe anything)
+    lines.push('## Audit errors (services where openapi.json was unreachable or empty)');
+    lines.push('');
+    let anyErrors = false;
+    for (const r of auditResults) {
+        if (r.error) {
+            const svc = r.disc.payMdPath ? r.disc.payMdPath.split('/').slice(1, -1).join('/') : '?';
+            lines.push(`- **${svc}**: ${r.error}`);
+            anyErrors = true;
+        }
+    }
+    if (!anyErrors) lines.push('_(none)_');
+    lines.push('');
+
+    // Per-service full results (every endpoint, every result code)
+    lines.push('## Full per-service breakdown');
+    lines.push('');
+    for (const r of auditResults) {
+        if (!r.endpoints || r.endpoints.length === 0) continue;
+        const svc = r.disc.payMdPath ? r.disc.payMdPath.split('/').slice(1, -1).join('/') : '?';
+        lines.push(`### ${svc}`);
+        lines.push('');
+        lines.push(`Service URL: \`${r.disc.serviceUrl}\``);
+        lines.push('');
+        lines.push('| Method | Path | Result | Networks | Amount |');
+        lines.push('|--------|------|--------|----------|--------|');
+        for (const e of r.endpoints) {
+            const nets = fmtNetworks(e.row.networks || []);
+            const amount = fmtAmount(e.row.amounts || []);
+            lines.push(`| ${e.method} | \`${e.path}\` | \`${e.row.result}\` | ${nets} | ${amount} |`);
+        }
+        lines.push('');
+    }
+
+    fs.writeFileSync(AUDIT_FILE, lines.join('\n') + '\n', 'utf8');
+    console.log(`\n═══ Audit summary ═══`);
+    console.log(`  services audited:      ${auditResults.length}`);
+    console.log(`  endpoints discovered:  ${totalEndpoints}`);
+    console.log(`  parsed_ok:             ${parsedOk}`);
+    console.log(`  rejected:              ${rejected}`);
+    console.log(`  non-402:               ${notV402}`);
+    console.log(`  elapsed:               ${(elapsedMs / 1000).toFixed(1)}s`);
+    console.log(`\n  Summary written to ${path.relative(process.cwd(), AUDIT_FILE)}`);
 }
 
 function fmtAssetKind(asset) {
@@ -479,13 +717,36 @@ async function main() {
     if (args.filter) workItems = workItems.filter(p => p.toLowerCase().includes(args.filter.toLowerCase()));
     if (args.limit > 0) workItems = workItems.slice(0, args.limit);
 
-    console.log(`═══ pay.sh catalog probe (${workItems.length} services, concurrency=${args.concurrency}) ═══\n`);
+    const mode = args.audit ? 'AUDIT (probe every endpoint per service)' : 'STANDARD (probe one endpoint per service)';
+    console.log(`═══ pay.sh catalog probe — mode: ${mode} — ${workItems.length} services, concurrency=${args.concurrency} ═══\n`);
     console.log('Phase 1: discovering service URLs and probe endpoints from pay-skills repo…\n');
 
     const proto = new X402Protocol();
     const t0 = Date.now();
 
     const discoveries = await runWithConcurrency(workItems, args.concurrency, discoverOne);
+
+    if (args.audit) {
+        // BAT-706: audit mode. Probe every endpoint per service and
+        // write the full breakdown to catalog-audit.md. Does NOT
+        // touch catalog-summary.md (use STANDARD mode for that).
+        console.log('Phase 2 (audit): probing EVERY endpoint per service (no payment)…\n');
+        const auditResults = [];
+        let svcDone = 0;
+        await runWithConcurrency(discoveries, args.concurrency, async (disc) => {
+            const r = await auditService(disc, proto);
+            auditResults.push(r);
+            svcDone++;
+            const epCount = r.endpoints ? r.endpoints.length : 0;
+            const ok = r.endpoints ? r.endpoints.filter(e => e.row.result === 'parsed_ok').length : 0;
+            process.stdout.write(`\r  audited ${svcDone}/${discoveries.length} — last: ${disc.payMdPath ? disc.payMdPath.split('/').slice(1, -1).join('/') : '?'} (${ok}/${epCount} parsed_ok)            `);
+        });
+        process.stdout.write('\n\n');
+        // Re-order by input order
+        auditResults.sort((a, b) => discoveries.indexOf(a.disc) - discoveries.indexOf(b.disc));
+        writeAuditReport(auditResults, Date.now() - t0);
+        return;
+    }
 
     console.log('Phase 2: probing each service (no payment)…\n');
 
