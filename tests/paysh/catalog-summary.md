@@ -1,6 +1,6 @@
 # pay.sh catalog probe — summary
 
-Generated: 2026-05-12T11:17:53.505Z
+Generated: 2026-05-15T13:11:43.415Z
 Source catalog: solana-foundation/pay-skills (72 services)
 Probed: 72 (concurrency 8)
 

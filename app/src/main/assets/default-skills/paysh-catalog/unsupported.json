@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "generatedAt": "2026-05-14",
+  "source": "tests/paysh/catalog-summary.md (probe-catalog run 2026-05-14)",
+  "purpose": "Services we KNOW exist on pay.sh but CANNOT pay today. Agent uses this to answer 'do you know about X?' honestly without claiming a capability it doesn't have. NEVER call agent_pay on these — it will fail. Tell the user the reason and (if relevant) the BAT tracking the fix.",
+  "reasons": {
+    "mpp_protocol": {
+      "label": "Multi-Party Protocol (MPP)",
+      "explanation": "Service uses pay.sh's newer Multi-Party Protocol settlement flow. Our X402Protocol implementation only supports the standard x402 v2 single-signer flow. Adding MPP support is non-trivial — separate BAT, not yet filed.",
+      "actionable": false
+    },
+    "siwx_auth_required": {
+      "label": "Sign-In-With-X auth required",
+      "explanation": "Service requires a wallet auth handshake (sign-in-with-Solana style) before it will return a 402 with payment requirements. We don't implement that auth pre-flight yet. Tracked-adjacent in BAT-697 (Trigger V2 also needs SIWX) — once SIWX lands there, these become payable.",
+      "actionable": false
+    },
+    "invalid_demand": {
+      "label": "Service is free ($0 demanded)",
+      "explanation": "Service returns 402 with amount=0 — i.e. it's actually free. agent_pay refuses zero-demand by design. Call the endpoint directly with web_fetch instead — no payment needed.",
+      "actionable": true,
+      "alternative": "web_fetch on the same URL works without payment"
+    }
+  },
+  "services": [
+    { "name": "agentmail/email", "reason": "invalid_demand" },
+    { "name": "paysponge/nyne", "reason": "invalid_demand" },
+    { "name": "paysponge/textbelt", "reason": "invalid_demand", "note": "Textbelt's status endpoint is free; the POST send endpoint IS paid and IS in our supported list under… (none — POST endpoint exists but isn't part of pay.sh's catalog entry, so it never appears here)" },
+    { "name": "merit-systems/stabledomains/domains", "reason": "siwx_auth_required" },
+    { "name": "merit-systems/stableemail/email", "reason": "siwx_auth_required" },
+    { "name": "merit-systems/stablephone/calls", "reason": "siwx_auth_required" },
+    { "name": "merit-systems/stablesocial/social-data", "reason": "siwx_auth_required" },
+    { "name": "merit-systems/stableupload/hosting", "reason": "siwx_auth_required" },
+    { "name": "solana-foundation/alibaba/agentexplorer", "reason": "mpp_protocol" },
+    { "name": "solana-foundation/alibaba/aigen", "reason": "mpp_protocol" },
+    { "name": "solana-foundation/alibaba/anytrans", "reason": "mpp_protocol" },
+    { "name": "solana-foundation/alibaba/captcha", "reason": "mpp_protocol" },
+    { "name": "solana-foundation/alibaba/contactcenterai", "reason": "mpp_protocol" },
+    { "name": "solana-foundation/alibaba/documentparseservice", "reason": "mpp_protocol" },
+    { "name": "solana-foundation/alibaba/edututor", "reason": "mpp_protocol" },
+    { "name": "solana-foundation/alibaba/embeddings", "reason": "mpp_protocol" },
+    { "name": "solana-foundation/alibaba/facebody", "reason": "mpp_protocol" },
+    { "name": "solana-foundation/alibaba/farui", "reason": "mpp_protocol" },
+    { "name": "solana-foundation/alibaba/goodstech", "reason": "mpp_protocol" },
+    { "name": "solana-foundation/alibaba/green", "reason": "mpp_protocol" },
+    { "name": "solana-foundation/alibaba/imageaudit", "reason": "mpp_protocol" },
+    { "name": "solana-foundation/alibaba/imagerecog", "reason": "mpp_protocol" },
+    { "name": "solana-foundation/alibaba/imageseg", "reason": "mpp_protocol" },
+    { "name": "solana-foundation/alibaba/intelligentspeechinteraction", "reason": "mpp_protocol" },
+    { "name": "solana-foundation/alibaba/iqs", "reason": "mpp_protocol" },
+    { "name": "solana-foundation/alibaba/ivpd", "reason": "mpp_protocol" },
+    { "name": "solana-foundation/alibaba/machinetranslation", "reason": "mpp_protocol" },
+    { "name": "solana-foundation/alibaba/objectdet", "reason": "mpp_protocol" },
+    { "name": "solana-foundation/alibaba/ocr-api", "reason": "mpp_protocol" },
+    { "name": "solana-foundation/alibaba/ocr", "reason": "mpp_protocol" },
+    { "name": "solana-foundation/alibaba/paimodelgallery", "reason": "mpp_protocol" },
+    { "name": "solana-foundation/alibaba/rai", "reason": "mpp_protocol" },
+    { "name": "solana-foundation/alibaba/saf", "reason": "mpp_protocol" },
+    { "name": "solana-foundation/alibaba/translate", "reason": "mpp_protocol" },
+    { "name": "solana-foundation/alibaba/viapi-ocr", "reason": "mpp_protocol" },
+    { "name": "solana-foundation/alibaba/videoenhan", "reason": "mpp_protocol" },
+    { "name": "solana-foundation/alibaba/videorecog", "reason": "mpp_protocol" },
+    { "name": "solana-foundation/alibaba/videoseg", "reason": "mpp_protocol" },
+    { "name": "solana-foundation/google/language", "reason": "mpp_protocol" },
+    { "name": "solana-foundation/google/speech", "reason": "mpp_protocol" },
+    { "name": "solana-foundation/google/videointelligence", "reason": "mpp_protocol" }
+  ]
+}

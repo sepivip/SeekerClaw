@@ -1,0 +1,98 @@
+{
+  "version": 1,
+  "generatedAt": "2026-05-14",
+  "source": "tests/paysh/catalog-summary.md (probe-catalog run 2026-05-12)",
+  "notes": "Only services where probe-catalog parsed_ok with a Solana-USDC leg. Other 62 services in the upstream pay.sh catalog reject for protocol/chain/asset reasons. See SKILL.md for the read flow.",
+  "services": [
+    {
+      "id": "wolfram-alpha",
+      "name": "Wolfram Alpha",
+      "file": "services/wolfram-alpha.md",
+      "cost_usdc": 0.01,
+      "method": "GET",
+      "intents": ["math", "science", "computation", "physics", "chemistry", "facts", "calculate", "compute", "integral", "derivative", "solve", "convert units"],
+      "summary": "Computational intelligence — math, science, factual lookups via the Wolfram knowledge engine."
+    },
+    {
+      "id": "tripadvisor",
+      "name": "Tripadvisor Nearby Search",
+      "file": "services/tripadvisor.md",
+      "cost_usdc": 0.01,
+      "method": "GET",
+      "intents": ["travel", "hotels", "restaurants", "attractions", "nearby", "tourism", "places to visit"],
+      "summary": "Search nearby travel locations — hotels, restaurants, attractions — by latitude/longitude."
+    },
+    {
+      "id": "screenshotone",
+      "name": "ScreenshotOne",
+      "file": "services/screenshotone.md",
+      "cost_usdc": 0.02,
+      "method": "GET",
+      "intents": ["screenshot", "capture website", "render page", "preview url", "show me what site looks like"],
+      "summary": "Capture a screenshot (or animated capture) of any HTTPS URL."
+    },
+    {
+      "id": "2captcha",
+      "name": "2Captcha",
+      "file": "services/2captcha.md",
+      "cost_usdc": 0.01,
+      "method": "POST",
+      "intents": ["solve captcha", "recaptcha", "hcaptcha", "image captcha", "bypass captcha"],
+      "summary": "Submit a CAPTCHA for solving — recaptcha, hcaptcha, image, etc."
+    },
+    {
+      "id": "reducto",
+      "name": "Reducto Document Parser",
+      "file": "services/reducto.md",
+      "cost_usdc": 0.05,
+      "method": "POST",
+      "intents": ["parse document", "extract pdf", "ocr", "extract from pdf", "extract data from document", "parse invoice"],
+      "summary": "Parse documents (PDF, images) into structured data via Reducto's AI extraction."
+    },
+    {
+      "id": "rentcast",
+      "name": "Rentcast Markets",
+      "file": "services/rentcast.md",
+      "cost_usdc": 0.01,
+      "method": "GET",
+      "intents": ["real estate", "rental market", "rent prices", "property value", "housing data", "zillow alternative"],
+      "summary": "US rental market data — average rent, market trends, property statistics by zip/city."
+    },
+    {
+      "id": "crushrewards",
+      "name": "Crushrewards Shopper",
+      "file": "services/crushrewards.md",
+      "cost_usdc": 0.01,
+      "method": "GET",
+      "intents": ["shopping", "compare prices", "find best price", "amazon", "walmart", "product search", "deal finder"],
+      "summary": "Find best price across major US retailers (Amazon, Walmart, Costco, Home Depot, etc.)."
+    },
+    {
+      "id": "stablecrypto-market-data",
+      "name": "StableCrypto Market Data",
+      "file": "services/stablecrypto-market-data.md",
+      "cost_usdc": 0.01,
+      "method": "POST",
+      "intents": ["crypto price", "token price", "coin price", "market data", "coingecko", "crypto market cap"],
+      "summary": "CoinGecko-backed crypto price + market data lookup."
+    },
+    {
+      "id": "stableenrich",
+      "name": "StableEnrich Data Enrichment",
+      "file": "services/stableenrich.md",
+      "cost_usdc": 0.02,
+      "method": "POST",
+      "intents": ["enrich data", "lookup person", "lookup company", "find email", "find linkedin", "people search"],
+      "summary": "Enrich emails, domains, or names into person/company profiles (LinkedIn-style data)."
+    },
+    {
+      "id": "purch",
+      "name": "Purch Marketplace Search",
+      "file": "services/purch.md",
+      "cost_usdc": 0.01,
+      "method": "GET",
+      "intents": ["marketplace search", "product listing search", "ecommerce search"],
+      "summary": "Search the Purch marketplace catalog (general product/listing search)."
+    }
+  ]
+}
