@@ -1,7 +1,7 @@
 ---
 name: paysh-catalog
 description: "Catalog of pay.sh services payable via agent_pay (x402). OPT-IN ONLY — activate when the user explicitly invokes pay.sh / paysh / x402 / 'pay for'. Stay dormant otherwise; defer to free tools. Full keyword list and policy in SKILL.md body."
-version: "1.2.0"
+version: "1.3.0"
 metadata:
   openclaw:
     emoji: "🛒"
@@ -110,13 +110,13 @@ Why it stays dormant: not an x402 query at all. Use `solana_balance` directly. T
 
 ## The `unsupported.json` companion registry
 
-`unsupported.json` lists **62 additional services** that exist on pay.sh today but the agent cannot **end-to-end use** yet — either because `agent_pay` can't pay them (protocol/auth gap), it can pay but can't deliver the response (binary content with no channel attachment path), or the endpoint didn't return a 402 at probe time (broken / moved / re-routed). Read it when:
+`unsupported.json` lists **62 additional services** that exist on pay.sh today but the agent cannot **end-to-end use** yet — either because `agent_pay` can't pay them (protocol/auth gap), it can pay but can't deliver the response (binary content with no channel attachment path), the endpoint didn't return a 402 at probe time (broken / moved / re-routed), or the paid-response shape is contested and unverified. Read it when:
 
 - The user asks "do you know about service X?" or "is X on pay.sh?"
 - The user asks for a capability (translation, image OCR, video analysis, screenshots, Google Vision, image generation, etc.) that the supported 10 don't cover
 - You want to give an honest "I know it exists but can't deliver it because of Y" answer instead of a generic "I don't have a service for that"
 
-Five reason buckets:
+Six reason buckets:
 
 | Reason | What it means | Will we ever use it? |
 |---|---|---|
@@ -125,6 +125,9 @@ Five reason buckets:
 | `invalid_demand` | Service returns 402 with amount=0; agent_pay refuses zero-demand AND our web_fetch throws on 402, so neither tool reaches them | Possible follow-up: a 402-tolerant fetch flag |
 | `requires_binary_response` | Service returns binary content (image/audio/video) we can't pipe to Telegram/Discord as attachment | Future BAT — needs `agent_pay` → workspace-file path |
 | `endpoint_not_402_at_probe` | Service is listed upstream but our probe got a non-402 HTTP status (4xx/5xx/200/301) — likely broken, moved, or auth-gated differently. Each entry's `note` records the probe-time status code | Re-probe via `tests/paysh/probe-catalog.js` if pay.sh announces the endpoint is back |
+| `unverified_paid_response_shape` | Paid endpoint exists and parses OK, but available evidence about the response shape is contested or absent (e.g. openapi declares one content-type while product-family inference suggests another). Distinct from `requires_binary_response` — we only assert binary when evidence clearly points there. Conservative refuse pending paid-response capture | BAT-708 — paid-response capture + classification before catalog inclusion |
+
+Some `endpoint_not_402_at_probe` and `invalid_demand` entries also carry BAT-706 audit notes about **sibling endpoints on the same host** that ARE payable but aren't catalogued yet (e.g. paysponge/perplexity, paysponge/nyne). Deferred to BAT-708. Read each entry's `note` field — it tells you whether the audit found more.
 
 **NEVER call `agent_pay` on a service in `unsupported.json`.** Reasons and what to tell the user:
 
@@ -132,6 +135,7 @@ Five reason buckets:
 - **`invalid_demand`** — service returns 402 with amount=0. `agent_pay` refuses zero-demand AND our `web_fetch` throws on any non-2xx, so neither tool reaches it today. Tell the user the service is known but not currently usable via our tools.
 - **`requires_binary_response`** — `agent_pay` would actually **succeed and spend USDC** — but the binary response (PNG/audio/video) can't be delivered to Telegram/Discord today. Don't burn their money. Tell them the service is recognized but the binary output isn't deliverable yet.
 - **`endpoint_not_402_at_probe`** — service is in pay.sh's upstream catalog but our probe got a non-402 HTTP status (the entry's `note` field records the exact code). `agent_pay` needs a 402 to settle, so it can't pay these. Tell the user the service is listed upstream but our probe found it broken / moved / auth-gated at probe time; suggest re-probing later via `tests/paysh/probe-catalog.js` if pay.sh announces a fix.
+- **`unverified_paid_response_shape`** — `agent_pay` WOULD settle (parseable 402 exists), but we have NOT captured an actual paid response and the evidence is contested. Tell the user the service is known and the catalog-listed URL pays, but we conservatively refuse it until we capture a paid response to confirm we can deliver the output. Mention that BAT-708 will resolve this.
 
 ## When NOT to use this catalog
 

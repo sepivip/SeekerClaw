@@ -407,12 +407,24 @@ async function discoverOne(payMdPath) {
     const openapiUrl = serviceUrl.replace(/\/$/, '') + '/openapi.json';
     const oa = await fetchText(openapiUrl, 15000);
     let probePath = null, probeMethod = 'GET';
+    // R11-B1: cache the parsed openapi (or the error) so auditService can
+    // reuse it instead of re-fetching the same URL during Phase 2. This
+    // halves the openapi traffic and tightens the rate-limit posture.
+    let openapiCache = null;
+    let openapiError = null;
     if (oa.status === 200) {
         try {
             const openapi = JSON.parse(oa.body);
+            openapiCache = openapi;
             const picked = pickProbeEndpoint(openapi);
             if (picked) { probePath = picked.path; probeMethod = picked.method; }
-        } catch (_) { /* malformed openapi — fall through */ }
+        } catch (e) {
+            openapiError = `openapi parse failed: ${e.message}`;
+        }
+    } else {
+        openapiError = oa.error
+            ? `openapi fetch failed: ${oa.error}`
+            : `openapi fetch failed: status ${oa.status}`;
     }
     return {
         ok: true,
@@ -420,7 +432,9 @@ async function discoverOne(payMdPath) {
         serviceUrl,
         probeUrl: probePath ? (serviceUrl.replace(/\/$/, '') + probePath) : serviceUrl,
         probeMethod,
-        openapiOk: oa.status === 200,
+        openapiOk: oa.status === 200 && !openapiError,
+        openapi: openapiCache,
+        openapiError,
     };
 }
 
@@ -529,27 +543,37 @@ async function auditService(disc, proto, opts = {}) {
         result.error = disc.error;
         return result;
     }
-    // Re-fetch openapi.json so we can enumerate ALL endpoints (the
-    // discoverOne pass only kept the picked one in disc).
-    const openapiUrl = disc.serviceUrl.replace(/\/$/, '') + '/openapi.json';
-    const oa = await fetchText(openapiUrl, 15000);
-    if (oa.status !== 200) {
-        // fetchText returns { error } on network/timeout failure (no status).
-        // Surface that error rather than reporting "status undefined" so the
-        // audit error is actionable.
-        result.error = oa.error
-            ? `openapi fetch failed: ${oa.error}`
-            : `openapi fetch failed: status ${oa.status}`;
+    // R11-B1: reuse the openapi parsed during discoverOne (Phase 1).
+    // Pre-fix this re-fetched the same URL, doubling openapi traffic
+    // before any endpoint probes and bypassing per-service politeness.
+    // Now we just consume the cached parsed object or propagate the
+    // recorded error.
+    let openapi;
+    if (disc.openapi) {
+        openapi = disc.openapi;
+    } else if (disc.openapiError) {
+        result.error = disc.openapiError;
         return result;
+    } else {
+        // Defensive: discoverOne should always set one of the two, but
+        // if it doesn't (e.g. a future refactor), fall back to a fresh
+        // fetch so audit doesn't silently drop the service.
+        const openapiUrl = disc.serviceUrl.replace(/\/$/, '') + '/openapi.json';
+        const oa = await fetchText(openapiUrl, 15000);
+        if (oa.status !== 200) {
+            result.error = oa.error
+                ? `openapi fetch failed: ${oa.error}`
+                : `openapi fetch failed: status ${oa.status}`;
+            return result;
+        }
+        try {
+            openapi = JSON.parse(oa.body);
+        } catch (e) {
+            result.error = `openapi parse failed: ${e.message}`;
+            return result;
+        }
     }
-    let endpoints;
-    try {
-        const openapi = JSON.parse(oa.body);
-        endpoints = extractAllEndpoints(openapi);
-    } catch (e) {
-        result.error = `openapi parse failed: ${e.message}`;
-        return result;
-    }
+    const endpoints = extractAllEndpoints(openapi);
     if (!endpoints.length) {
         result.error = 'openapi has no endpoints';
         return result;
@@ -764,7 +788,19 @@ function writeAuditReport(auditResults, elapsedMs, opts = {}) {
         lines.push('|--------|------|--------|----------|--------|');
         for (const e of r.endpoints) {
             const nets = fmtNetworks(e.row.networks || []);
-            const amount = fmtAmount(e.row.amounts || []);
+            // R11-B2: match the parsed_ok summary table's Solana-index
+            // pickup. Pre-fix this rendered `amounts[0]` which is typically
+            // the Base/EVM offer (multi-chain pay.sh challenges list Base
+            // first); a row whose `parsed_ok` status came from the Solana
+            // leg could show a Base/EVM price. For non-parsed_ok rows
+            // (rejected / non-402 / skipped) Solana-index isn't meaningful
+            // — `findIndex` returns -1 and we fall back to amounts[0] as
+            // before, so reject diagnostics still render.
+            const networks = e.row.networks || [];
+            const solanaIdx = networks.findIndex(n => typeof n === 'string' && n.startsWith('solana:'));
+            const pickIdx = solanaIdx >= 0 ? solanaIdx : 0;
+            const amounts = e.row.amounts || [];
+            const amount = fmtAmount(amounts[pickIdx] !== undefined ? [amounts[pickIdx]] : amounts);
             lines.push(`| ${e.method} | \`${e.path}\` | \`${e.row.result}\` | ${nets} | ${amount} |`);
         }
         lines.push('');

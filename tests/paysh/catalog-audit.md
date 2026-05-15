@@ -1,6 +1,6 @@
 # pay.sh catalog audit — multi-endpoint probe per service
 
-Generated: 2026-05-15T19:08:43.777Z
+Generated: 2026-05-15T19:50:43.417Z
 Source: probe-catalog.js --audit --concurrency 4 --filter paysponge --audit-side-effects
 **Scope note**: this run was FILTERED to "paysponge" — aggregate counts below are for the filtered subset, NOT the full ~72-service upstream catalog. Re-run without --filter for a full-catalog audit.
 
