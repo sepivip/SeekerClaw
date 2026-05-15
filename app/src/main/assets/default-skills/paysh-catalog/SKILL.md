@@ -52,17 +52,24 @@ Once an opt-in keyword fires the skill, the agent's job is:
 
 ### Activates → paid call
 
-User: *"Use pay.sh to compute the integral of sin(x)·ln(x) from 0 to π."*
+User: *"Use pay.sh to look up the current GDP of Japan in USD."*
 
-Why it activates: contains `pay.sh` + naming math computation.
+Why it activates: contains `pay.sh` + naming a paid lookup.
 
 ```
-1. Read catalog.json → 'wolfram-alpha' matches "math computation"
+1. Read catalog.json → 'wolfram-alpha' matches the math/facts intent.
 2. Read services/wolfram-alpha.md → URL pattern is
    https://wolframalpha.x402.paysponge.com/v1/result?i=<URL-encoded query>
-3. Construct: https://wolframalpha.x402.paysponge.com/v1/result?i=integral+of+sin(x)*ln(x)+from+0+to+pi
-4. Call agent_pay(url, max_usdc=0.05) → burner signs silently (cost $0.01)
-5. Return the computed value with a brief explanation.
+3. URL-encode the query (spaces → +, then encodeURIComponent any
+   special characters). For this example, no special chars to escape:
+   https://wolframalpha.x402.paysponge.com/v1/result?i=current+GDP+of+Japan+in+USD
+   (If a query DOES include characters like (, ), *, =, &, /, etc.,
+   percent-encode each one — e.g. sin(x) → sin%28x%29.)
+4. Invoke agent_pay with JSON args:
+   agent_pay({ url: "<constructed-url-above>", max_usdc: "0.05" })
+   max_usdc MUST be a decimal STRING (not number). Burner signs
+   silently for this GET call since $0.01 << $0.05 ceiling.
+5. Return Wolfram's answer with a brief framing.
 ```
 
 ### Activates → catalog browsing (no paid call yet)
