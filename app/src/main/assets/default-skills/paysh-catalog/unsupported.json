@@ -2,7 +2,7 @@
   "version": 1,
   "generatedAt": "2026-05-15",
   "source": "tests/paysh/catalog-summary.md (probe-catalog run 2026-05-14)",
-  "purpose": "Services we KNOW exist on pay.sh but the agent cannot end-to-end use today. Two distinct sub-categories — check the `reason` and the matching `reasons.<code>` entry to know which: (1) CANNOT PAY — mpp_protocol / siwx_auth_required / invalid_demand. agent_pay fails at the protocol or refuses zero-demand. (2) CAN PAY BUT CANNOT DELIVER — requires_binary_response. agent_pay WOULD succeed and spend USDC, but the response (PNG/audio/video) can't be piped to Telegram/Discord as an attachment yet. Either way: NEVER call agent_pay on these. For (1) it fails for free. For (2) it would burn the user's USDC for nothing visible. Tell the user the service exists, explain the gap, and (if relevant) reference the BAT tracking the fix.",
+  "purpose": "Services we KNOW exist on pay.sh but the agent cannot end-to-end use today. Three distinct sub-categories — check the `reason` and the matching `reasons.<code>` entry to know which: (1) CANNOT PAY (protocol/auth) — mpp_protocol / siwx_auth_required / invalid_demand. agent_pay fails at the protocol layer or refuses zero-demand. (2) CAN PAY BUT CANNOT DELIVER — requires_binary_response. agent_pay WOULD succeed and spend USDC, but the response (PNG/audio/video) can't be piped to Telegram/Discord as an attachment yet. (3) NOT 402 AT PROBE — endpoint_not_402_at_probe. Service is listed upstream but our probe got a non-402 status (4xx/5xx/200/301) — broken, moved, or auth-gated differently. Either way: NEVER call agent_pay on these. For (1) and (3) it fails for free. For (2) it would burn the user's USDC for nothing visible. Tell the user the service exists, explain the gap, and (if relevant) reference the BAT tracking the fix or suggest a re-probe.",
   "reasons": {
     "mpp_protocol": {
       "label": "Multi-Party Protocol (MPP)",
@@ -23,10 +23,36 @@
       "label": "Service returns binary content (images / files) that we can't deliver",
       "explanation": "agent_pay parses x402 settles and returns the response body as best-effort UTF-8 text. Services that return binary content (e.g. PNG screenshots, audio, video) can be paid but the binary bytes can't currently be piped to the Telegram/Discord channel as an attachment — there's no in-memory-buffer-to-channel path. Tracked: needs a follow-up BAT to (a) save binary content to a workspace file and (b) plumb that file path to the channel sender. Until then, tell the user the service is recognized but its output format isn't supported yet.",
       "actionable": false
+    },
+    "endpoint_not_402_at_probe": {
+      "label": "Service exists in pay.sh's catalog but didn't return a 402 at probe time",
+      "explanation": "Service is listed in pay.sh's upstream catalog but our probe got a non-402 HTTP status (4xx/5xx, sometimes 200/301). Possible causes: endpoint moved, broken, auth-gated differently, or re-routed to a free response. agent_pay needs a 402 to settle, so it can't pay these. web_fetch could in theory reach a 2xx response, but the agent doesn't know the request shape and shouldn't probe blindly. Each entry's `note` field records the probe-time HTTP status as a hint. Tell the user the service is listed upstream but not currently reachable through our tooling.",
+      "actionable": false
     }
   },
   "services": [
     { "name": "paysponge/screenshotone", "reason": "requires_binary_response", "note": "Animated/static screenshots return PNG/GIF bytes. Paid+detect+build works; delivery to user does not." },
+    { "name": "dtelecom/voice", "reason": "endpoint_not_402_at_probe", "note": "http_401 at 2026-05-14 probe — auth-gated before 402." },
+    { "name": "merit-systems/stablemerch/merchandise", "reason": "endpoint_not_402_at_probe", "note": "http_400 at 2026-05-14 probe." },
+    { "name": "paysponge/coingecko", "reason": "endpoint_not_402_at_probe", "note": "http_404 at 2026-05-14 probe — endpoint removed; replaced upstream by stablecrypto/market-data which is in catalog.json." },
+    { "name": "paysponge/fal", "reason": "endpoint_not_402_at_probe", "note": "http_403 at 2026-05-14 probe." },
+    { "name": "paysponge/perplexity", "reason": "endpoint_not_402_at_probe", "note": "http_200 at 2026-05-14 probe — returned 2xx without 402; unknown paid surface." },
+    { "name": "quicknode/rpc", "reason": "endpoint_not_402_at_probe", "note": "http_401 at 2026-05-14 probe — auth-gated before 402." },
+    { "name": "socialintel/influencer-search", "reason": "endpoint_not_402_at_probe", "note": "http_301 at 2026-05-14 probe — redirected." },
+    { "name": "solana-foundation/alibaba/speech", "reason": "endpoint_not_402_at_probe", "note": "http_200 at 2026-05-14 probe." },
+    { "name": "solana-foundation/alibaba/texttospeech", "reason": "endpoint_not_402_at_probe", "note": "http_500 at 2026-05-14 probe — service-side error." },
+    { "name": "solana-foundation/google/addressvalidation", "reason": "endpoint_not_402_at_probe", "note": "http_404 at 2026-05-14 probe." },
+    { "name": "solana-foundation/google/airquality", "reason": "endpoint_not_402_at_probe", "note": "http_404 at 2026-05-14 probe." },
+    { "name": "solana-foundation/google/bigquery", "reason": "endpoint_not_402_at_probe", "note": "http_404 at 2026-05-14 probe." },
+    { "name": "solana-foundation/google/civicinfo", "reason": "endpoint_not_402_at_probe", "note": "http_400 at 2026-05-14 probe." },
+    { "name": "solana-foundation/google/documentai", "reason": "endpoint_not_402_at_probe", "note": "http_404 at 2026-05-14 probe." },
+    { "name": "solana-foundation/google/factchecktools", "reason": "endpoint_not_402_at_probe", "note": "http_400 at 2026-05-14 probe." },
+    { "name": "solana-foundation/google/generativelanguage", "reason": "endpoint_not_402_at_probe", "note": "http_404 at 2026-05-14 probe." },
+    { "name": "solana-foundation/google/kgsearch", "reason": "endpoint_not_402_at_probe", "note": "http_400 at 2026-05-14 probe." },
+    { "name": "solana-foundation/google/places", "reason": "endpoint_not_402_at_probe", "note": "http_400 at 2026-05-14 probe." },
+    { "name": "solana-foundation/google/texttospeech", "reason": "endpoint_not_402_at_probe", "note": "http_200 at 2026-05-14 probe." },
+    { "name": "solana-foundation/google/translate", "reason": "endpoint_not_402_at_probe", "note": "http_404 at 2026-05-14 probe." },
+    { "name": "solana-foundation/google/vision", "reason": "endpoint_not_402_at_probe", "note": "http_400 at 2026-05-14 probe." },
     { "name": "agentmail/email", "reason": "invalid_demand" },
     { "name": "paysponge/nyne", "reason": "invalid_demand" },
     { "name": "paysponge/textbelt", "reason": "invalid_demand", "note": "Textbelt's status endpoint is free; the POST send endpoint IS paid and IS in our supported list under… (none — POST endpoint exists but isn't part of pay.sh's catalog entry, so it never appears here)" },

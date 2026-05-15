@@ -123,7 +123,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 
 ### pay.sh Service Catalog (BAT-699, bundled skill)
 - **`paysh-catalog` skill** — folder-shaped catalog mapping user intent → known pay.sh service URL + cost + example. Agent reads `catalog.json` to pick a service, then reads only the matching `services/<name>.md` for query construction. 9 verified-payable services to start: Wolfram Alpha, Tripadvisor, 2Captcha, Rentcast, Reducto, Crushrewards, StableCrypto Market Data, StableEnrich, Purch.
-- **`unsupported.json`** — 42 known-but-can't-pay services with reasons (mpp_protocol, siwx_auth_required, invalid_demand, requires_binary_response). Agent can answer "I know about Google Vision but can't pay it because of mpp_protocol" honestly instead of generic "I don't have that."
+- **`unsupported.json`** — 63 known-but-not-usable services with reasons (mpp_protocol, siwx_auth_required, invalid_demand, requires_binary_response, endpoint_not_402_at_probe). Full pay.sh catalog coverage (9 supported + 63 unsupported = 72 services). Agent can answer "I know about Google Vision but can't pay it — our probe got HTTP 400" honestly instead of generic "I don't have that."
 - **Folder seeding** — Bundled skills' support files (catalog.json, unsupported.json, services/*.md) are now copied from `assets/default-skills/<name>/` to `workspace/skills/<name>/` recursively on first install and version upgrade (BAT-699 extended `ConfigManager.seedSkill()`).
 - **Static bundle** — Ships with APK. Auto-refresh from upstream pay.sh is a follow-up (BAT-700). Drift caught by `tests/paysh/probe-catalog.js` + the planned `external-api-watch` skill (BAT-698).
 
