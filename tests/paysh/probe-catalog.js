@@ -479,7 +479,12 @@ async function auditService(disc, proto) {
     const openapiUrl = disc.serviceUrl.replace(/\/$/, '') + '/openapi.json';
     const oa = await fetchText(openapiUrl, 15000);
     if (oa.status !== 200) {
-        result.error = `openapi fetch failed: status ${oa.status}`;
+        // fetchText returns { error } on network/timeout failure (no status).
+        // Surface that error rather than reporting "status undefined" so the
+        // audit error is actionable.
+        result.error = oa.error
+            ? `openapi fetch failed: ${oa.error}`
+            : `openapi fetch failed: status ${oa.status}`;
         return result;
     }
     let endpoints;

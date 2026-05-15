@@ -113,7 +113,7 @@ Why it stays dormant: not an x402 query at all. Use `solana_balance` directly. T
 `unsupported.json` lists **62 additional services** that exist on pay.sh today but the agent cannot **end-to-end use** yet — either because `agent_pay` can't pay them (protocol/auth gap), it can pay but can't deliver the response (binary content with no channel attachment path), or the endpoint didn't return a 402 at probe time (broken / moved / re-routed). Read it when:
 
 - The user asks "do you know about service X?" or "is X on pay.sh?"
-- The user asks for a capability (translation, image OCR, video analysis, screenshots, Google Vision, etc.) that the supported 9 don't cover
+- The user asks for a capability (translation, image OCR, video analysis, screenshots, Google Vision, image generation, etc.) that the supported 10 don't cover
 - You want to give an honest "I know it exists but can't deliver it because of Y" answer instead of a generic "I don't have a service for that"
 
 Five reason buckets:

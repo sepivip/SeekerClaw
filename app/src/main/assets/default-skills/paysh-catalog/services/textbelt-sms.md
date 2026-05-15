@@ -20,7 +20,7 @@ Textbelt-compatible JSON body:
 }
 ```
 
-- **`phone`** — recipient phone number in E.164 format (`+` then country code then number, no spaces or dashes). US example: `"+15551234567"`. UK example: `"+447700900123"`.
+- **`phone`** — recipient phone number in E.164 format (`+` then country code then number, no spaces or dashes). **US and Canada only** for this paysponge tier — `+1` country code. Examples: `"+15551234567"` (US), `"+14165551234"` (Toronto). Non-US/Canada numbers (e.g. UK `+44…`, Germany `+49…`) **WILL still consume the $0.02 payment** and return `success: false`. Don't send to non-US/CA numbers — confirm the leading `+1` before paying.
 - **`message`** — the SMS body. Plain text. Standard SMS limit is 160 GSM-7 chars per segment; carriers may concatenate longer messages but each segment counts.
 
 The `body` field passed to `agent_pay` MUST be a JSON object (the validator rejects strings/primitives with `body_not_json`).
@@ -52,4 +52,4 @@ JSON `{ textId, success, quotaRemaining }` (Textbelt's standard response). `succ
 
 - The catalog's "service URL" (`https://api.paysponge.com/x402/purchase/svc_d6kszbre4qwg5n4n4/text`) is paysponge's gateway, not Textbelt's direct API. paysponge holds the Textbelt API key — that's what we're paying for.
 - A separate GET `/status` endpoint exists on Textbelt for delivery confirmation; it's free (no x402 challenge) and not part of this catalog entry. If the user wants delivery confirmation, use `web_fetch` on `https://textbelt.com/status/<textId>` after the SMS is sent.
-- US-bound numbers are the most reliable. International delivery depends on Textbelt's carrier coverage; see https://textbelt.com for current support.
+- **US and Canada only** — paysponge's Textbelt tier (the one this service is wrapping) does not support other countries. A non-US/CA `+44…` / `+49…` / `+81…` number will still get charged $0.02 USDC but return `success: false`. Verify the `+1` prefix before paying.
