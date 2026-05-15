@@ -28,8 +28,8 @@
       "file": "services/2captcha.md",
       "cost_usdc": 0.01,
       "method": "POST",
-      "intents": ["solve captcha on my own site", "accessibility captcha helper", "captcha during owned-site automated testing"],
-      "summary": "Submit a CAPTCHA for solving — supports recaptcha, hcaptcha, image. Authorized use only: accessibility assistance for users with disabilities, automated testing of a site you own, or any other context where the site operator has consented. NOT for defeating anti-abuse controls on sites you don't own."
+      "intents": ["solve captcha on my own site", "accessibility captcha helper for users with disabilities", "captcha during testing of a site I own or have operator permission to automate"],
+      "summary": "Submit a CAPTCHA for solving — supports recaptcha, hcaptcha, image. Authorized use only: (1) accessibility assistance for users with disabilities completing a CAPTCHA on a site they're legitimately using, or (2) automated testing of a site the user OWNS or has direct site-operator permission to automate. The user's own consent does NOT make solving a CAPTCHA on a third-party site authorized — the SITE OPERATOR's consent is what matters. NOT for defeating anti-abuse controls."
     },
     {
       "id": "reducto",

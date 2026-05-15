@@ -51,15 +51,16 @@ GET https://2captcha.x402.paysponge.com/getTaskResult?taskId=<id>
 
 ## When to use — authorized use only
 
-This service can defeat anti-abuse controls. The agent must NOT call it speculatively or to power broader automation. Allowed contexts:
+This service can defeat anti-abuse controls. The agent must NOT call it speculatively or to power broader automation. Allowed contexts — only these two:
 
-- **Accessibility** — the user describes a disability and is asking for help completing a CAPTCHA on a site they're already legitimately using.
-- **Owned-site testing** — the user is automating tests against a site they own and explicitly says so, OR has explicit permission from the site operator.
-- **User explicitly authorizes the specific call** — they describe the exact situation and ask for it.
+- **Accessibility** — the user describes a disability that prevents them from solving a CAPTCHA themselves, and is asking for help completing one on a site they're already legitimately using.
+- **Owned-site OR operator-permission testing** — the user is automating tests against a site they OWN (and explicitly says so), OR they have direct permission from the site operator (and explicitly says so).
 
-**NOT allowed without further authorization** — DO NOT call this service if:
-- The user is automating against a site they don't own and haven't shown authorization for
-- The agent encountered a CAPTCHA wall mid-automation and could "just solve it" to keep going — STOP and ask the user explicitly before paying
-- The intent could plausibly be account creation, scraping at scale, or any other anti-abuse evasion
+**A user's consent alone is NOT sufficient.** A user asking the agent to solve a CAPTCHA on cnn.com / coinbase.com / any-third-party-site does NOT make it allowed — the SITE OPERATOR's consent is what matters. Without one of the two contexts above, refuse.
 
-When in doubt, ask the user to describe the context. Refuse if the answer suggests defeating anti-abuse controls on a site the user doesn't operate.
+**NOT allowed** — DO NOT call this service if:
+- The user is automating against a site they don't own and hasn't shown the site operator authorized it
+- The agent encountered a CAPTCHA wall mid-automation and could "just solve it" to keep going — STOP and ask the user explicitly before paying, then evaluate against the two allowed contexts
+- The intent could plausibly be account creation, scraping at scale, or any other anti-abuse evasion — even with user consent
+
+When in doubt, ask the user which of the two allowed contexts applies. If neither, refuse and explain why.

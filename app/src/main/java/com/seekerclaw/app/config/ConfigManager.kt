@@ -2684,18 +2684,19 @@ object ConfigManager {
         // including the app-private storage Android uses here.
         try {
             workspaceSkillDir.mkdirs()
-            workspaceSkillDir.listFiles()?.forEach { f ->
-                if (f.name != "SKILL.md") f.deleteRecursively()
-            }
-            stagingDir.listFiles()?.forEach { f ->
-                val dest = File(workspaceSkillDir, f.name)
-                if (!f.renameTo(dest)) {
-                    // Cross-device rename can fail; fall back to recursive copy + delete.
-                    if (f.isDirectory) f.copyRecursively(dest, overwrite = true) else f.copyTo(dest, overwrite = true)
-                    f.deleteRecursively()
-                }
-            }
-            stagingDir.delete()
+            // BAT-699 R8: merge staging into live INSTEAD of blanket-deleting
+            // every non-SKILL.md file. The previous approach would have
+            // wiped user-added files (e.g. a user's own notes.md in a
+            // bundled skill's folder) on every version upgrade. Only
+            // remove live files that have a staging counterpart — i.e.
+            // files we're actively refreshing.
+            //
+            // Side effect: bundled files REMOVED in an upgrade leave
+            // orphans on the user's device (e.g. v1.0.0 had foo.md, v1.1.0
+            // doesn't — user keeps foo.md). Acceptable trade-off for V1;
+            // bundled-file removals are rare and orphans are inert.
+            promoteStaging(stagingDir, workspaceSkillDir)
+            stagingDir.deleteRecursively()
             return true
         } catch (e: Exception) {
             Log.e(TAG, "Failed to promote staging into live skill dir; skill may be in mixed state", e)
@@ -2703,6 +2704,35 @@ object ConfigManager {
             // manifest won't advance so the next launch retries.
             stagingDir.deleteRecursively()
             return false
+        }
+    }
+
+    /**
+     * Recursively merge a staging directory's contents into a live
+     * directory. For each entry in staging:
+     *   - Directory: ensure live mirror exists, recurse into it.
+     *   - File: delete the matching live file if it exists, then move
+     *     the staging file into place.
+     *
+     * Files in the live dir that DON'T have a staging counterpart are
+     * preserved untouched — these are user additions and must survive
+     * skill upgrades. BAT-699 R8.
+     */
+    private fun promoteStaging(staging: File, live: File) {
+        live.mkdirs()
+        staging.listFiles()?.forEach { src ->
+            val dest = File(live, src.name)
+            if (src.isDirectory) {
+                promoteStaging(src, dest)
+                src.delete()  // remove now-empty staging subdir
+            } else {
+                if (dest.exists()) dest.deleteRecursively()
+                if (!src.renameTo(dest)) {
+                    // Cross-device rename can fail; fall back to copy + delete.
+                    src.copyTo(dest, overwrite = true)
+                    src.delete()
+                }
+            }
         }
     }
 
