@@ -1,8 +1,8 @@
 {
   "version": 1,
-  "generatedAt": "2026-05-14",
-  "source": "tests/paysh/catalog-summary.md (probe-catalog run 2026-05-12)",
-  "notes": "Only services where probe-catalog parsed_ok with a Solana-USDC leg. Other 62 services in the upstream pay.sh catalog reject for protocol/chain/asset reasons. See SKILL.md for the read flow.",
+  "generatedAt": "2026-05-15",
+  "source": "tests/paysh/catalog-summary.md (probe-catalog run 2026-05-14)",
+  "notes": "Services in this file are end-to-end usable today: probe-catalog parsed_ok with a Solana-USDC leg AND the response shape is deliverable to Telegram/Discord (text/JSON, not binary). Of the 72 upstream pay.sh services: 9 are listed here (supported), 1 (paysponge/screenshotone) parsed_ok but returns binary and is in unsupported.json under requires_binary_response, 41 reject at the parser (mpp_protocol / siwx_auth_required / invalid_demand) and are in unsupported.json, 21 don't return 402 (broken/moved). See SKILL.md for the read flow and tests/paysh/catalog-summary.md for the full probe matrix.",
   "services": [
     {
       "id": "wolfram-alpha",

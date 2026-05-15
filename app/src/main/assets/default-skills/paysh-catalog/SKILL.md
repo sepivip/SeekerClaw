@@ -1,6 +1,6 @@
 ---
 name: paysh-catalog
-description: "Catalog of pay.sh services the burner wallet can pay autonomously via agent_pay (x402). Use when: the user asks for a capability that maps to a known pay.sh service (computation, screenshots, search, real-estate, etc.) without giving you the URL — e.g. 'take a screenshot of github.com', 'what's the mass of the sun', 'find hotels in Rome'. Also use when the user asks 'what can you pay for' or 'show me pay.sh services'. Don't use when: the user gives you the URL directly (just call agent_pay), wants free info that web_search can answer, or asks about the burner wallet itself (use the burner-wallet skill)."
+description: "Catalog of pay.sh services the burner wallet can pay autonomously via agent_pay (x402). Use when: the user asks for a capability that maps to a known pay.sh service (computation, travel/hotels, captcha solving, crypto market data, document extraction, real-estate, retail price comparison, etc.) without giving you the URL — e.g. 'what's the mass of the sun', 'find hotels in Rome', 'best price on a PS5'. Also use when the user asks 'what can you pay for' or 'show me pay.sh services', or names a specific service we should look up — including ones we know about but cannot pay or deliver (unsupported.json), so the agent can give an honest 'I know about X but can't deliver it because Y' answer. Don't use when: the user gives you the URL directly (just call agent_pay), wants free info that web_search can answer, or asks about the burner wallet itself (use the burner-wallet skill)."
 version: "1.0.0"
 metadata:
   openclaw:
@@ -40,15 +40,15 @@ User: *"What's the mass of the sun?"*
 
 ## Reading the catalog efficiently
 
-`catalog.json` is small (~10 services, a few KB). Always load it first to pick the service. Then `read` only the service-specific markdown — never load every services/*.md at once. That's the whole point of the per-service layout.
+`catalog.json` is small (9 services, a few KB). Always load it first to pick the service. Then `read` only the service-specific markdown — never load every services/*.md at once. That's the whole point of the per-service layout.
 
 ## The `unsupported.json` companion registry
 
-`unsupported.json` lists 41 additional services that exist on pay.sh today but our `agent_pay` cannot pay yet. Read it when:
+`unsupported.json` lists 42 additional services that exist on pay.sh today but the agent cannot **end-to-end use** yet — either because `agent_pay` can't pay them (protocol/auth gap) or because it can pay but can't deliver the response (binary content with no channel attachment path). Read it when:
 
 - The user asks "do you know about service X?" or "is X on pay.sh?"
-- The user asks for a capability (translation, image OCR, video analysis) that the supported 10 don't cover
-- You want to give an honest "I know it exists but can't pay it because of Y" answer instead of a generic "I don't have a service for that"
+- The user asks for a capability (translation, image OCR, video analysis, screenshots) that the supported 9 don't cover
+- You want to give an honest "I know it exists but can't deliver it because of Y" answer instead of a generic "I don't have a service for that"
 
 Four reason buckets:
 
@@ -59,7 +59,7 @@ Four reason buckets:
 | `invalid_demand` | Service demands $0 — it's actually free | Call directly via `web_fetch`, no payment needed |
 | `requires_binary_response` | Service returns binary content (image/audio/video) we can't pipe to Telegram/Discord as attachment | Future BAT — needs `agent_pay` → workspace-file path |
 
-**NEVER call `agent_pay` on a service in `unsupported.json`** — it will fail. The agent's job is to tell the user the service exists, explain the reason, and either offer the free alternative (for `invalid_demand`) or admit the gap (for `mpp_protocol` / `siwx_auth_required`).
+**NEVER call `agent_pay` on a service in `unsupported.json`.** For `mpp_protocol` / `siwx_auth_required` it will fail at the protocol layer. For `invalid_demand` the service is free and you should `web_fetch` it instead. For `requires_binary_response` `agent_pay` would actually **succeed and spend USDC** — but the binary response (PNG/audio/video) can't be delivered to Telegram/Discord today, so the user pays for nothing visible. Don't burn their money. Tell them about the service, explain the delivery gap, and offer the alternative if any.
 
 ## When NOT to use this catalog
 

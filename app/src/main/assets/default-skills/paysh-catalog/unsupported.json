@@ -1,8 +1,8 @@
 {
   "version": 1,
-  "generatedAt": "2026-05-14",
+  "generatedAt": "2026-05-15",
   "source": "tests/paysh/catalog-summary.md (probe-catalog run 2026-05-14)",
-  "purpose": "Services we KNOW exist on pay.sh but CANNOT pay today. Agent uses this to answer 'do you know about X?' honestly without claiming a capability it doesn't have. NEVER call agent_pay on these — it will fail. Tell the user the reason and (if relevant) the BAT tracking the fix.",
+  "purpose": "Services we KNOW exist on pay.sh but the agent cannot end-to-end use today. Two distinct sub-categories — check the `reason` and the matching `reasons.<code>` entry to know which: (1) CANNOT PAY — mpp_protocol / siwx_auth_required / invalid_demand. agent_pay fails at the protocol or refuses zero-demand. (2) CAN PAY BUT CANNOT DELIVER — requires_binary_response. agent_pay WOULD succeed and spend USDC, but the response (PNG/audio/video) can't be piped to Telegram/Discord as an attachment yet. Either way: NEVER call agent_pay on these. For (1) it fails for free. For (2) it would burn the user's USDC for nothing visible. Tell the user the service exists, explain the gap, and (if relevant) reference the BAT tracking the fix.",
   "reasons": {
     "mpp_protocol": {
       "label": "Multi-Party Protocol (MPP)",
