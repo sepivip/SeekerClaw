@@ -18,17 +18,25 @@
 //   node tests/paysh/probe-catalog.js --commit-captures   # write individual files too
 //
 // BAT-706 audit mode (--audit):
-//   node tests/paysh/probe-catalog.js --audit             # probe EVERY endpoint per service
+//   node tests/paysh/probe-catalog.js --audit             # probe every GET endpoint per service
 //   node tests/paysh/probe-catalog.js --audit --filter paysponge
+//   node tests/paysh/probe-catalog.js --audit --audit-side-effects  # also probe POST/PUT/PATCH/DELETE
 //
-// Standard mode probes one endpoint per service (typically the
+// Standard mode probes ONE endpoint per service (typically the
 // catalog-listed entry point) and writes to catalog-summary.md. Audit
-// mode probes EVERY endpoint exposed in each service's openapi.json
-// and writes to catalog-audit.md. Audit surfaces hidden paid endpoints
-// the standard probe misses — e.g. paysponge/perplexity has /search +
-// /v1/agent + /v1/sonar + /v1/async/sonar, but standard mode would
-// only capture one. Audit mode also takes longer (≈ services × avg
-// endpoints).
+// mode enumerates EVERY endpoint exposed in each service's
+// openapi.json. By default audit only PROBES GET endpoints — non-GET
+// (POST/PUT/PATCH/DELETE) endpoints are listed as
+// `skipped:non_get_side_effect_risk` so the surface is still surveyed
+// but no side effects can fire. Pass --audit-side-effects to actually
+// probe them (most pay.sh services check x402 before any side effect,
+// but it's not universally guaranteed).
+//
+// Audit writes to catalog-audit.md. Audit surfaces hidden paid
+// endpoints the standard probe misses — e.g. paysponge/perplexity has
+// /search + /v1/agent + /v1/sonar + /v1/async/sonar, but standard mode
+// only captures one. Audit mode also takes longer (≈ services × avg
+// endpoints × politeness delay).
 //
 // Per BAT-582 v1.6 spirit: pay.sh ecosystem is moving fast; this script
 // surfaces drift across the WHOLE catalog (e.g. a new provider adopting
@@ -489,16 +497,19 @@ async function probeAndParse(disc, proto) {
 // temporarily ungated POST that accepts an empty body would actually
 // execute when we probe. Pass --audit-side-effects to include them.
 //
-// RATE LIMIT (R2): each service's endpoints are probed serially with a
-// small inter-request delay (POLITE_DELAY_MS, ~150ms). This matches
-// probe-all.js's ~1 req/sec politeness ceiling per host even when the
-// outer runWithConcurrency runs many services in parallel.
+// RATE LIMIT (R3 #6): each service's endpoints are probed serially with
+// a 1000ms inter-request delay (POLITE_DELAY_MS). Matches probe-all.js's
+// 1 req/sec politeness ceiling per host. Pre-R3-fix this was 150ms,
+// which would have bursted to ~6-7 req/sec per service (still well
+// inside what most APIs tolerate, but inconsistent with the documented
+// politeness contract). When the outer runWithConcurrency parallelizes
+// across services, each service stays at ≤1 req/sec to its own host.
 //
 // Returns { disc, endpoints: [{ method, path, probeUrl, row, captured }] }
 // where each `row` mirrors what probeAndParse produces for one probe.
 async function auditService(disc, proto, opts = {}) {
     const includeSideEffects = !!opts.auditSideEffects;
-    const POLITE_DELAY_MS = 150;
+    const POLITE_DELAY_MS = 1000;
     const result = { disc, endpoints: [] };
     if (!disc.ok) {
         result.error = disc.error;
@@ -636,17 +647,26 @@ function writeAuditReport(auditResults, elapsedMs, opts = {}) {
     }
     lines.push('');
 
+    // R3 #1: separate buckets so skipped/fetch-failed don't get counted
+    // as live non-402 HTTP responses. Pre-fix any non-parsed_ok/non-reject
+    // result fell into notV402, including `skipped:non_get_side_effect_risk`
+    // (never probed) and `fetch_failed` (no HTTP response observed).
     let totalEndpoints = 0;
     let parsedOk = 0;
     let rejected = 0;
     let notV402 = 0;
+    let skipped = 0;
+    let fetchFailed = 0;
     for (const r of auditResults) {
         if (!r.endpoints) continue;
         for (const e of r.endpoints) {
             totalEndpoints++;
             if (e.row.result === 'parsed_ok') parsedOk++;
             else if (e.row.result.startsWith('reject:')) rejected++;
-            else notV402++;
+            else if (e.row.result.startsWith('skipped:')) skipped++;
+            else if (e.row.result === 'fetch_failed') fetchFailed++;
+            else if (e.row.result.startsWith('http_')) notV402++;
+            else notV402++; // unknown classification — bucket conservatively
         }
     }
 
@@ -658,7 +678,9 @@ function writeAuditReport(auditResults, elapsedMs, opts = {}) {
     lines.push(`| Endpoints discovered (across all services) | ${totalEndpoints} |`);
     lines.push(`| **Parsed OK** (Solana-USDC parseable 402) | ${parsedOk} |`);
     lines.push(`| Rejected (402 but parser refused) | ${rejected} |`);
-    lines.push(`| Non-402 response | ${notV402} |`);
+    lines.push(`| Non-402 HTTP response (http_4xx/5xx/3xx/2xx) | ${notV402} |`);
+    lines.push(`| Skipped (non-GET, side-effect risk; opt in via --audit-side-effects) | ${skipped} |`);
+    lines.push(`| Fetch failed (DNS / TLS / timeout — no HTTP response) | ${fetchFailed} |`);
     lines.push(`| Audit elapsed | ${(elapsedMs / 1000).toFixed(1)}s |`);
     lines.push('');
 
@@ -726,7 +748,9 @@ function writeAuditReport(auditResults, elapsedMs, opts = {}) {
     console.log(`  endpoints discovered:  ${totalEndpoints}`);
     console.log(`  parsed_ok:             ${parsedOk}`);
     console.log(`  rejected:              ${rejected}`);
-    console.log(`  non-402:               ${notV402}`);
+    console.log(`  non-402 HTTP:          ${notV402}`);
+    console.log(`  skipped (non-GET):     ${skipped}`);
+    console.log(`  fetch_failed:          ${fetchFailed}`);
     console.log(`  elapsed:               ${(elapsedMs / 1000).toFixed(1)}s`);
     console.log(`\n  Summary written to ${path.relative(process.cwd(), AUDIT_FILE)}`);
 }

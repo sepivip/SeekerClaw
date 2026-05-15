@@ -1,6 +1,6 @@
 # Textbelt SMS (paysponge)
 
-Send a real SMS message to any phone number. paysponge wraps Textbelt's public API behind an x402 paid endpoint — we pay USDC, paysponge supplies the Textbelt API key.
+Send a real SMS message to a **US or Canada** phone number. paysponge wraps Textbelt's public API behind an x402 paid endpoint — we pay USDC, paysponge supplies the Textbelt API key. International numbers (non-`+1`) WILL be charged $0.02 USDC but won't deliver — see "Body construction" below for the region restriction.
 
 ## Endpoint
 

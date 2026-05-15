@@ -1,9 +1,8 @@
 # pay.sh catalog audit — multi-endpoint probe per service
 
-Generated: 2026-05-15T18:22:25.583Z
-Source: probe-catalog.js --audit --filter paysponge
+Generated: 2026-05-15T18:32:11.214Z
+Source: probe-catalog.js --audit --filter paysponge --audit-side-effects
 **Scope note**: this run was FILTERED to "paysponge" — aggregate counts below are for the filtered subset, NOT the full ~72-service upstream catalog. Re-run without --filter for a full-catalog audit.
-**Safety note**: non-GET endpoints were SKIPPED to avoid triggering server-side side effects. Use `--audit-side-effects` to include POST/PUT/PATCH/DELETE probes (most pay.sh services check x402 payment before any side effect runs, but it's not universally guaranteed).
 
 ## Aggregate
 
@@ -11,10 +10,12 @@ Source: probe-catalog.js --audit --filter paysponge
 |--------|-------|
 | Services audited | 11 |
 | Endpoints discovered (across all services) | 68 |
-| **Parsed OK** (Solana-USDC parseable 402) | 20 |
+| **Parsed OK** (Solana-USDC parseable 402) | 39 |
 | Rejected (402 but parser refused) | 2 |
-| Non-402 response | 46 |
-| Audit elapsed | 9.8s |
+| Non-402 HTTP response (http_4xx/5xx/3xx/2xx) | 26 |
+| Skipped (non-GET, side-effect risk; opt in via --audit-side-effects) | 0 |
+| Fetch failed (DNS / TLS / timeout — no HTTP response) | 1 |
+| Audit elapsed | 41.0s |
 
 ## All parsed_ok endpoints from this audit run
 
@@ -22,6 +23,23 @@ Every endpoint that parsed_ok with a Solana-USDC leg. This includes endpoints al
 
 | Service | Method | Path | Networks | Asset | Amount | Result |
 |---------|--------|------|----------|-------|--------|--------|
+| paysponge/2captcha | POST | `/createTask` | base+sol | EVM | $0.01 | `parsed_ok` |
+| paysponge/fal | POST | `/fal-ai/fast-sdxl` | base+sol | EVM | $0.01 | `parsed_ok` |
+| paysponge/fal | POST | `/fal-ai/flux/dev` | base+sol | EVM | $0.03 | `parsed_ok` |
+| paysponge/fal | POST | `/fal-ai/flux-pro/v1.1` | base+sol | EVM | $0.04 | `parsed_ok` |
+| paysponge/fal | POST | `/fal-ai/flux-pro/v1.1-ultra` | base+sol | EVM | $0.06 | `parsed_ok` |
+| paysponge/fal | POST | `/fal-ai/flux/schnell` | base+sol | EVM | $0.01 | `parsed_ok` |
+| paysponge/fal | POST | `/fal-ai/minimax/video-01` | base+sol | EVM | $0.07 | `parsed_ok` |
+| paysponge/fal | POST | `/fal-ai/recraft-v3` | base+sol | EVM | $0.04 | `parsed_ok` |
+| paysponge/fal | POST | `/fal-ai/stable-diffusion-v35-large` | base+sol | EVM | $0.04 | `parsed_ok` |
+| paysponge/fal | POST | `/fal-ai/stable-video` | base+sol | EVM | $0.07 | `parsed_ok` |
+| paysponge/nyne | POST | `/person/enrichment` | base+sol | EVM | $0.02 | `parsed_ok` |
+| paysponge/nyne | POST | `/person/search` | base+sol | EVM | $0.02 | `parsed_ok` |
+| paysponge/perplexity | POST | `/search` | base+sol | EVM | $0.01 | `parsed_ok` |
+| paysponge/perplexity | POST | `/v1/agent` | base+sol | EVM | $0.01 | `parsed_ok` |
+| paysponge/perplexity | POST | `/v1/async/sonar` | base+sol | EVM | $0.01 | `parsed_ok` |
+| paysponge/reducto | POST | `/extract` | base+sol | EVM | $0.05 | `parsed_ok` |
+| paysponge/reducto | POST | `/parse` | base+sol | EVM | $0.05 | `parsed_ok` |
 | paysponge/rentcast | GET | `/markets` | base+sol | EVM | $0.01 | `parsed_ok` |
 | paysponge/rentcast | GET | `/avm/value` | base+sol | EVM | $0.01 | `parsed_ok` |
 | paysponge/rentcast | GET | `/properties` | base+sol | EVM | $0.01 | `parsed_ok` |
@@ -34,6 +52,8 @@ Every endpoint that parsed_ok with a Solana-USDC leg. This includes endpoints al
 | paysponge/rentcast | GET | `/listings/rental/long-term/probe` | base+sol | EVM | $0.01 | `parsed_ok` |
 | paysponge/screenshotone | GET | `/animate` | base+sol | EVM | $0.02 | `parsed_ok` |
 | paysponge/screenshotone | GET | `/take` | base+sol | EVM | $0.02 | `parsed_ok` |
+| paysponge/screenshotone | POST | `/take` | base+sol | EVM | $0.02 | `parsed_ok` |
+| paysponge/textbelt | POST | `/text` | base+sol | EVM | $0.02 | `parsed_ok` |
 | paysponge/tripadvisor | GET | `/api/v1/location/probe/details` | base+sol | EVM | $0.01 | `parsed_ok` |
 | paysponge/tripadvisor | GET | `/api/v1/location/probe/photos` | base+sol | EVM | $0.01 | `parsed_ok` |
 | paysponge/tripadvisor | GET | `/api/v1/location/probe/reviews` | base+sol | EVM | $0.01 | `parsed_ok` |
@@ -55,10 +75,10 @@ Service URL: `https://2captcha.x402.paysponge.com`
 
 | Method | Path | Result | Networks | Amount |
 |--------|------|--------|----------|--------|
-| POST | `/createTask` | `skipped:non_get_side_effect_risk` | — | — |
-| POST | `/getTaskResult` | `skipped:non_get_side_effect_risk` | — | — |
-| POST | `/reportCorrect` | `skipped:non_get_side_effect_risk` | — | — |
-| POST | `/reportIncorrect` | `skipped:non_get_side_effect_risk` | — | — |
+| POST | `/createTask` | `parsed_ok` | base+sol | $0.01 |
+| POST | `/getTaskResult` | `http_403` | — | — |
+| POST | `/reportCorrect` | `http_403` | — | — |
+| POST | `/reportIncorrect` | `http_403` | — | — |
 
 ### paysponge/fal
 
@@ -80,22 +100,22 @@ Service URL: `https://fal.x402.paysponge.com`
 | GET | `/fal-ai/stable-diffusion-v35-large/requests/probe/status` | `http_403` | — | — |
 | GET | `/fal-ai/stable-video/requests/probe` | `http_403` | — | — |
 | GET | `/fal-ai/stable-video/requests/probe/status` | `http_403` | — | — |
-| POST | `/fal-ai/fast-sdxl` | `skipped:non_get_side_effect_risk` | — | — |
-| POST | `/fal-ai/flux/dev` | `skipped:non_get_side_effect_risk` | — | — |
-| POST | `/fal-ai/flux-pro/v1.1` | `skipped:non_get_side_effect_risk` | — | — |
-| POST | `/fal-ai/flux-pro/v1.1-ultra` | `skipped:non_get_side_effect_risk` | — | — |
-| POST | `/fal-ai/flux/schnell` | `skipped:non_get_side_effect_risk` | — | — |
-| POST | `/fal-ai/minimax/video-01` | `skipped:non_get_side_effect_risk` | — | — |
-| POST | `/fal-ai/recraft-v3` | `skipped:non_get_side_effect_risk` | — | — |
-| POST | `/fal-ai/stable-diffusion-v35-large` | `skipped:non_get_side_effect_risk` | — | — |
-| POST | `/fal-ai/stable-video` | `skipped:non_get_side_effect_risk` | — | — |
-| PUT | `/fal-ai/fast-sdxl/requests/probe/cancel` | `skipped:non_get_side_effect_risk` | — | — |
-| PUT | `/fal-ai/flux-pro/requests/probe/cancel` | `skipped:non_get_side_effect_risk` | — | — |
-| PUT | `/fal-ai/flux/requests/probe/cancel` | `skipped:non_get_side_effect_risk` | — | — |
-| PUT | `/fal-ai/minimax/requests/probe/cancel` | `skipped:non_get_side_effect_risk` | — | — |
-| PUT | `/fal-ai/recraft-v3/requests/probe/cancel` | `skipped:non_get_side_effect_risk` | — | — |
-| PUT | `/fal-ai/stable-diffusion-v35-large/requests/probe/cancel` | `skipped:non_get_side_effect_risk` | — | — |
-| PUT | `/fal-ai/stable-video/requests/probe/cancel` | `skipped:non_get_side_effect_risk` | — | — |
+| POST | `/fal-ai/fast-sdxl` | `parsed_ok` | base+sol | $0.01 |
+| POST | `/fal-ai/flux/dev` | `parsed_ok` | base+sol | $0.03 |
+| POST | `/fal-ai/flux-pro/v1.1` | `parsed_ok` | base+sol | $0.04 |
+| POST | `/fal-ai/flux-pro/v1.1-ultra` | `parsed_ok` | base+sol | $0.06 |
+| POST | `/fal-ai/flux/schnell` | `parsed_ok` | base+sol | $0.01 |
+| POST | `/fal-ai/minimax/video-01` | `parsed_ok` | base+sol | $0.07 |
+| POST | `/fal-ai/recraft-v3` | `parsed_ok` | base+sol | $0.04 |
+| POST | `/fal-ai/stable-diffusion-v35-large` | `parsed_ok` | base+sol | $0.04 |
+| POST | `/fal-ai/stable-video` | `parsed_ok` | base+sol | $0.07 |
+| PUT | `/fal-ai/fast-sdxl/requests/probe/cancel` | `http_403` | — | — |
+| PUT | `/fal-ai/flux-pro/requests/probe/cancel` | `http_403` | — | — |
+| PUT | `/fal-ai/flux/requests/probe/cancel` | `http_403` | — | — |
+| PUT | `/fal-ai/minimax/requests/probe/cancel` | `http_403` | — | — |
+| PUT | `/fal-ai/recraft-v3/requests/probe/cancel` | `http_403` | — | — |
+| PUT | `/fal-ai/stable-diffusion-v35-large/requests/probe/cancel` | `http_403` | — | — |
+| PUT | `/fal-ai/stable-video/requests/probe/cancel` | `http_403` | — | — |
 
 ### paysponge/nyne
 
@@ -104,8 +124,8 @@ Service URL: `https://api.paysponge.com/x402/purchase/svc_d5ymfernpzeh58gb8`
 | Method | Path | Result | Networks | Amount |
 |--------|------|--------|----------|--------|
 | GET | `/person/enrichment` | `reject:invalid_demand` | base+sol | $0 |
-| POST | `/person/enrichment` | `skipped:non_get_side_effect_risk` | — | — |
-| POST | `/person/search` | `skipped:non_get_side_effect_risk` | — | — |
+| POST | `/person/enrichment` | `parsed_ok` | base+sol | $0.02 |
+| POST | `/person/search` | `parsed_ok` | base+sol | $0.02 |
 
 ### paysponge/perplexity
 
@@ -113,11 +133,11 @@ Service URL: `https://pplx.x402.paysponge.com`
 
 | Method | Path | Result | Networks | Amount |
 |--------|------|--------|----------|--------|
-| POST | `/search` | `skipped:non_get_side_effect_risk` | — | — |
-| POST | `/v1/agent` | `skipped:non_get_side_effect_risk` | — | — |
-| POST | `/v1/sonar` | `skipped:non_get_side_effect_risk` | — | — |
+| POST | `/search` | `parsed_ok` | base+sol | $0.01 |
+| POST | `/v1/agent` | `parsed_ok` | base+sol | $0.01 |
+| POST | `/v1/sonar` | `fetch_failed` | — | — |
 | GET | `/v1/models` | `http_200` | — | — |
-| POST | `/v1/async/sonar` | `skipped:non_get_side_effect_risk` | — | — |
+| POST | `/v1/async/sonar` | `parsed_ok` | base+sol | $0.01 |
 | GET | `/v1/async/sonar/probe` | `http_403` | — | — |
 
 ### paysponge/reducto
@@ -126,8 +146,8 @@ Service URL: `https://api.paysponge.com/x402/purchase/svc_d672d90ggvqqygj60`
 
 | Method | Path | Result | Networks | Amount |
 |--------|------|--------|----------|--------|
-| POST | `/extract` | `skipped:non_get_side_effect_risk` | — | — |
-| POST | `/parse` | `skipped:non_get_side_effect_risk` | — | — |
+| POST | `/extract` | `parsed_ok` | base+sol | $0.05 |
+| POST | `/parse` | `parsed_ok` | base+sol | $0.05 |
 
 ### paysponge/rentcast
 
@@ -154,7 +174,7 @@ Service URL: `https://screenshotone.x402.paysponge.com`
 |--------|------|--------|----------|--------|
 | GET | `/animate` | `parsed_ok` | base+sol | $0.02 |
 | GET | `/take` | `parsed_ok` | base+sol | $0.02 |
-| POST | `/take` | `skipped:non_get_side_effect_risk` | — | — |
+| POST | `/take` | `parsed_ok` | base+sol | $0.02 |
 
 ### paysponge/textbelt
 
@@ -163,7 +183,7 @@ Service URL: `https://api.paysponge.com/x402/purchase/svc_d6kszbre4qwg5n4n4`
 | Method | Path | Result | Networks | Amount |
 |--------|------|--------|----------|--------|
 | GET | `/status/probe` | `reject:invalid_demand` | base+sol | $0 |
-| POST | `/text` | `skipped:non_get_side_effect_risk` | — | — |
+| POST | `/text` | `parsed_ok` | base+sol | $0.02 |
 
 ### paysponge/tripadvisor
 
