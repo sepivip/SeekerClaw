@@ -1,6 +1,6 @@
 ---
 name: paysh-catalog
-description: "Catalog of pay.sh services payable via agent_pay (x402). OPT-IN ONLY — activate ONLY when the user's message contains an explicit pay-intent keyword (pay.sh / paysh / x402 / 'pay for X' / 'use pay' / similar) or an explicit capability ask ('what can you pay for' / 'show me pay.sh services'). Otherwise stay dormant — agent uses training data / web_search / web_fetch. Full keyword list and activation policy in SKILL.md body."
+description: "Catalog of pay.sh services payable via agent_pay (x402). OPT-IN ONLY — activate when the user explicitly invokes pay.sh / paysh / x402 / 'pay for'. Stay dormant otherwise; defer to free tools. Full keyword list and policy in SKILL.md body."
 version: "1.1.0"
 metadata:
   openclaw:
