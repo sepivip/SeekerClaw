@@ -1,7 +1,7 @@
 # pay.sh catalog audit — multi-endpoint probe per service
 
-Generated: 2026-05-15T18:41:34.297Z
-Source: probe-catalog.js --audit --filter paysponge --audit-side-effects
+Generated: 2026-05-15T19:08:43.777Z
+Source: probe-catalog.js --audit --concurrency 4 --filter paysponge --audit-side-effects
 **Scope note**: this run was FILTERED to "paysponge" — aggregate counts below are for the filtered subset, NOT the full ~72-service upstream catalog. Re-run without --filter for a full-catalog audit.
 
 ## Aggregate
@@ -15,7 +15,7 @@ Source: probe-catalog.js --audit --filter paysponge --audit-side-effects
 | Non-402 HTTP response (http_4xx/5xx/3xx/2xx) | 26 |
 | Skipped (non-GET, side-effect risk; opt in via --audit-side-effects) | 0 |
 | Fetch failed (DNS / TLS / timeout — no HTTP response) | 1 |
-| Audit elapsed | 40.7s |
+| Audit elapsed | 41.2s |
 
 ## All parsed_ok endpoints from this audit run
 

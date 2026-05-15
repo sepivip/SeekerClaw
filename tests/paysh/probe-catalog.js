@@ -649,10 +649,14 @@ function writeAuditReport(auditResults, elapsedMs, opts = {}) {
     lines.push(`Generated: ${new Date().toISOString()}`);
     // R2 transparency: record the actual invocation so readers don't
     // assume "audit" means full-catalog when it was filtered.
+    // R7: also record --concurrency since it affects per-host burst rate
+    // (per R6's per-service-not-per-host caveat); without it the audit
+    // run isn't reproducible or rate-reviewable from this Source line.
     const filterNote = opts.filter ? ` --filter ${opts.filter}` : '';
     const sideEffectsNote = opts.auditSideEffects ? ' --audit-side-effects' : '';
     const limitNote = opts.limit ? ` --limit ${opts.limit}` : '';
-    lines.push(`Source: probe-catalog.js --audit${filterNote}${sideEffectsNote}${limitNote}`);
+    const concurrencyNote = (typeof opts.concurrency === 'number') ? ` --concurrency ${opts.concurrency}` : '';
+    lines.push(`Source: probe-catalog.js --audit${concurrencyNote}${filterNote}${sideEffectsNote}${limitNote}`);
     if (opts.filter) {
         lines.push(`**Scope note**: this run was FILTERED to "${opts.filter}" — aggregate counts below are for the filtered subset, NOT the full ~72-service upstream catalog. Re-run without --filter for a full-catalog audit.`);
     }
@@ -874,6 +878,7 @@ async function main() {
             filter: args.filter,
             auditSideEffects: args.auditSideEffects,
             limit: args.limit,
+            concurrency: args.concurrency,
         });
         return;
     }
