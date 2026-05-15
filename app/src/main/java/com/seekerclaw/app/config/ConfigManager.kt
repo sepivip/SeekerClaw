@@ -2485,13 +2485,20 @@ object ConfigManager {
         val manifestEntry = manifest[name]
 
         if (!skillFile.exists()) {
-            // Case 1: File doesn't exist — seed it
+            // Case 1: File doesn't exist — seed it.
+            //
+            // BAT-699 R3: copy support files BEFORE SKILL.md so the seed is
+            // atomic. If support-file copy fails for any reason (e.g.
+            // transient I/O, disk pressure), abort before writing SKILL.md
+            // or advancing the manifest — case-1 will fire again on next
+            // launch from a clean state. Pre-fix the helper just logged and
+            // returned; we'd advance the manifest with missing support
+            // files, and the version check would skip re-seeding forever.
+            if (!copySkillSupportFiles(context, "default-skills/$name", skillDir)) {
+                Log.w(TAG, "Skill $name: support-file copy failed; skipping seed, will retry on next launch")
+                return
+            }
             skillFile.writeText(content)
-            // BAT-699: folder-shaped skills can ship support files alongside
-            // SKILL.md (paysh-catalog has catalog.json, unsupported.json,
-            // services/*.md). Copy them on first seed so skill_read /
-            // file_read find them at runtime.
-            copySkillSupportFiles(context, "default-skills/$name", skillDir)
             manifest[name] = SkillManifestEntry(version = version, hash = contentHash)
             Log.d(TAG, "Skill $name seeded at version $version")
             return
@@ -2518,15 +2525,24 @@ object ConfigManager {
         // Case 2: Bundled version > manifest version — check for user modifications
         val installedHash = computeHash(skillFile.readText())
         if (installedHash == currentEntry.hash) {
-            // User hasn't modified — safe to overwrite
+            // User hasn't modified — safe to overwrite.
+            //
+            // BAT-699 R3: same atomic pattern as case 1 — copy support files
+            // FIRST, only advance SKILL.md + manifest if that succeeded.
+            // On failure we leave the old SKILL.md + manifest entry intact
+            // so case-2 fires again on the next launch and retries. Pre-fix
+            // we'd advance the manifest with a partial upgrade.
+            //
+            // NOTE: this overwrites user-modified support files (we don't
+            // yet track per-file hashes). Acceptable trade-off for V1 —
+            // folder-shaped skills are curated catalogs, not user-customized
+            // content. Track per-file hashes if/when this becomes a real
+            // concern.
+            if (!copySkillSupportFiles(context, "default-skills/$name", skillDir)) {
+                Log.w(TAG, "Skill $name: support-file copy failed during upgrade ${currentEntry.version}→$version; postponing, will retry on next launch")
+                return
+            }
             skillFile.writeText(content)
-            // BAT-699: refresh support files alongside SKILL.md on version
-            // upgrade. NOTE: this overwrites user-modified support files
-            // (we don't yet track per-file hashes). Acceptable trade-off
-            // for V1 — folder-shaped skills are curated catalogs, not
-            // user-customized content. Track per-file hashes if/when this
-            // becomes a real concern.
-            copySkillSupportFiles(context, "default-skills/$name", skillDir)
             manifest[name] = SkillManifestEntry(version = version, hash = contentHash)
             Log.d(TAG, "Skill $name updated from ${currentEntry.version} to $version")
         } else {
@@ -2545,18 +2561,26 @@ object ConfigManager {
      *
      * AssetManager doesn't expose a is-file probe; we treat a successful
      * `open()` as "file" and a non-empty `list()` as "directory."
+     *
+     * Returns `true` if every walked entry was successfully listed and
+     * (if a file) copied to disk. Returns `false` if ANY step failed —
+     * caller must NOT advance the manifest in that case, so the seed
+     * retries on the next launch instead of being permanently stuck in
+     * a partial state.
      */
     private fun copySkillSupportFiles(
         context: Context,
         assetSkillDir: String,
         workspaceSkillDir: File,
-    ) {
+    ): Boolean {
         val assetManager = context.assets
+        var allOk = true
         fun walk(assetPath: String, targetDir: File) {
             val entries = try {
                 assetManager.list(assetPath) ?: emptyArray()
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to list assets at $assetPath", e)
+                allOk = false
                 return
             }
             for (entry in entries) {
@@ -2580,6 +2604,7 @@ object ConfigManager {
                         }
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed to copy support file $childAssetPath", e)
+                        allOk = false
                     }
                 } else {
                     val childTarget = File(targetDir, entry).apply { mkdirs() }
@@ -2588,6 +2613,7 @@ object ConfigManager {
             }
         }
         walk(assetSkillDir, workspaceSkillDir)
+        return allOk
     }
 
     /**
