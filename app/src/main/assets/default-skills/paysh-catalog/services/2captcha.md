@@ -49,9 +49,17 @@ GET https://2captcha.x402.paysponge.com/getTaskResult?taskId=<id>
 
 (The follow-up should be free or near-free. If it returns 402, treat it as a separate pay.sh call.)
 
-## When to use
+## When to use — authorized use only
 
-- A user explicitly asks "solve this captcha"
-- The agent is automating something and hits a CAPTCHA wall (rare on-device, but possible)
+This service can defeat anti-abuse controls. The agent must NOT call it speculatively or to power broader automation. Allowed contexts:
 
-Don't proactively solve CAPTCHAs as part of a broader automation unless the user has clearly authorized it.
+- **Accessibility** — the user describes a disability and is asking for help completing a CAPTCHA on a site they're already legitimately using.
+- **Owned-site testing** — the user is automating tests against a site they own and explicitly says so, OR has explicit permission from the site operator.
+- **User explicitly authorizes the specific call** — they describe the exact situation and ask for it.
+
+**NOT allowed without further authorization** — DO NOT call this service if:
+- The user is automating against a site they don't own and haven't shown authorization for
+- The agent encountered a CAPTCHA wall mid-automation and could "just solve it" to keep going — STOP and ask the user explicitly before paying
+- The intent could plausibly be account creation, scraping at scale, or any other anti-abuse evasion
+
+When in doubt, ask the user to describe the context. Refuse if the answer suggests defeating anti-abuse controls on a site the user doesn't operate.

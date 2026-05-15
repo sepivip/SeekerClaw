@@ -2619,27 +2619,52 @@ object ConfigManager {
                 // Skip SKILL.md at the top level — seeded separately by
                 // seedSkill() with version-aware logic.
                 if (assetPath == assetSkillDir && entry == "SKILL.md") continue
-                // File-vs-folder probe: open() throws on folders.
-                val isFile = try {
+                // File-vs-directory probe (BAT-699 R7): AssetManager doesn't
+                // expose an `isDirectory` API. Differentiate using BOTH
+                // list() and open() results:
+                //   - list() non-empty           → directory (recurse)
+                //   - list() empty + open() OK   → file (copy)
+                //   - list() empty + open() fail → real I/O error (mark
+                //                                  allOk=false, do not
+                //                                  silently treat as empty
+                //                                  directory).
+                // Pre-fix the probe treated any open() exception as
+                // "directory", which would silently skip a file with a
+                // real I/O error and advance the manifest.
+                val childListing = try {
+                    assetManager.list(childAssetPath) ?: emptyArray()
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to list assets at $childAssetPath", e)
+                    allOk = false
+                    continue
+                }
+                if (childListing.isNotEmpty()) {
+                    // Directory — recurse.
+                    val childTarget = File(targetDir, entry).apply { mkdirs() }
+                    walk(childAssetPath, childTarget)
+                    continue
+                }
+                // list() empty: could be a file OR a broken/missing asset.
+                // Probe by opening.
+                val openOk = try {
                     assetManager.open(childAssetPath).close()
                     true
                 } catch (e: Exception) {
+                    Log.e(TAG, "Asset $childAssetPath is neither a directory (empty list) nor an openable file", e)
+                    allOk = false
                     false
                 }
-                if (isFile) {
-                    val targetFile = File(targetDir, entry)
-                    try {
-                        targetFile.parentFile?.mkdirs()
-                        assetManager.open(childAssetPath).use { input ->
-                            targetFile.outputStream().use { output -> input.copyTo(output) }
-                        }
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Failed to copy support file $childAssetPath", e)
-                        allOk = false
+                if (!openOk) continue
+                // Confirmed file — copy it.
+                val targetFile = File(targetDir, entry)
+                try {
+                    targetFile.parentFile?.mkdirs()
+                    assetManager.open(childAssetPath).use { input ->
+                        targetFile.outputStream().use { output -> input.copyTo(output) }
                     }
-                } else {
-                    val childTarget = File(targetDir, entry).apply { mkdirs() }
-                    walk(childAssetPath, childTarget)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to copy support file $childAssetPath", e)
+                    allOk = false
                 }
             }
         }
