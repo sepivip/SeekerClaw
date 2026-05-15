@@ -7,19 +7,19 @@ Computational knowledge engine — math, science, factual lookups, unit conversi
 - **URL pattern:** `https://wolframalpha.x402.paysponge.com/v1/result?i=<URL-encoded-query>`
 - **Method:** GET
 - **Cost:** $0.01 USDC per call (Solana mainnet)
-- **Suggested max_usdc:** 0.05
+- **Suggested max_usdc:** `"0.05"` (decimal STRING)
 
 ## Query construction
 
-The `i=` parameter takes a natural-language Wolfram Alpha query. URL-encode it (spaces → `+`, etc.).
+The `i=` parameter takes a natural-language Wolfram Alpha query. URL-encode it with `encodeURIComponent` (spaces → `%20`, special chars percent-encoded). Do NOT use `+` for spaces — pick one encoding regime consistently. SKILL.md's "Examples → Activates → paid call" section walks through the full encoding flow.
 
-| Intent | Query |
+| Intent | `encodeURIComponent(query)` → `i=` value |
 |---|---|
-| Mass of the sun | `i=mass+of+the+sun` |
-| Integral of sin(x)·ln(x) | `i=integral+of+sin(x)*ln(x)` |
-| Convert 100 km to miles | `i=100+km+in+miles` |
-| GDP of Japan 2024 | `i=GDP+of+Japan+2024` |
-| Solve x^2 + 3x - 4 = 0 | `i=solve+x%5E2%2B3x-4%3D0` |
+| Mass of the sun | `i=mass%20of%20the%20sun` |
+| Integral of sin(x)·ln(x) | `i=integral%20of%20sin%28x%29*ln%28x%29` |
+| Convert 100 km to miles | `i=100%20km%20in%20miles` |
+| GDP of Japan 2024 | `i=GDP%20of%20Japan%202024` |
+| Solve x²+3x−4 = 0 | `i=solve%20x%5E2%2B3x-4%3D0` |
 
 ## When to use vs free alternatives
 

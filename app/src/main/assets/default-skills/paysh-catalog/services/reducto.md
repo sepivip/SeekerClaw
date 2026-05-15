@@ -7,7 +7,7 @@ AI-powered document parsing — turn PDFs, scanned images, or invoices into stru
 - **URL pattern:** `https://api.paysponge.com/x402/purchase/svc_d672d90ggvqqygj60/extract`
 - **Method:** POST (JSON body)
 - **Cost:** $0.05 USDC per call (Solana mainnet)
-- **Suggested max_usdc:** 0.15
+- **Suggested max_usdc:** `"0.15"` (decimal STRING)
 
 ## Body construction
 

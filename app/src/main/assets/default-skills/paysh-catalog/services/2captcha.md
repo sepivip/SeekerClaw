@@ -7,7 +7,7 @@ Submit CAPTCHAs for solving — recaptcha v2/v3, hcaptcha, image, text, etc.
 - **URL pattern:** `https://2captcha.x402.paysponge.com/createTask`
 - **Method:** POST
 - **Cost:** $0.01 USDC per task created (Solana mainnet)
-- **Suggested max_usdc:** 0.05
+- **Suggested max_usdc:** `"0.05"` (decimal STRING)
 
 ## Request body
 

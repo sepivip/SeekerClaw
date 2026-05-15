@@ -7,7 +7,7 @@ General marketplace product/listing search — querying the Purch catalog of ite
 - **URL pattern:** `https://api.purch.xyz/x402/search?<query>`
 - **Method:** GET
 - **Cost:** $0.01 USDC per call (Solana mainnet — Solana-only, no Base/EVM leg)
-- **Suggested max_usdc:** 0.05
+- **Suggested max_usdc:** `"0.05"` (decimal STRING)
 
 ## Query construction
 
@@ -19,7 +19,7 @@ Pass a free-form search string in `q`:
 ?q=raspberry+pi
 ```
 
-URL-encode spaces as `+` or `%20`.
+URL-encode the value with `encodeURIComponent` (spaces → `%20`, special chars percent-encoded). Do NOT use `+` for spaces — pick one encoding regime consistently.
 
 ## When to use vs free alternatives
 

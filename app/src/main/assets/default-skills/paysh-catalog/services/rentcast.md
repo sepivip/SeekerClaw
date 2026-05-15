@@ -7,7 +7,7 @@ US rental real-estate market data — average rent, median price, vacancy rates,
 - **URL pattern:** `https://rentcast.x402.paysponge.com/markets?<query-string>`
 - **Method:** GET
 - **Cost:** $0.01 USDC per call (Solana mainnet)
-- **Suggested max_usdc:** 0.05
+- **Suggested max_usdc:** `"0.05"` (decimal STRING)
 
 ## Query construction
 
@@ -16,7 +16,7 @@ Standard Rentcast `/markets` query params. Most useful:
 | Param | Example | Notes |
 |---|---|---|
 | `zipCode` | `zipCode=90210` | 5-digit US ZIP |
-| `city` | `city=Austin` | URL-encode `+` for spaces |
+| `city` | `city=Austin` | URL-encode with `encodeURIComponent` (spaces → `%20`); e.g. `city=New%20York` |
 | `state` | `state=TX` | 2-letter |
 | `historyRange` | `historyRange=6` | Months of trend |
 | `bedrooms` | `bedrooms=2` | 1-5 |

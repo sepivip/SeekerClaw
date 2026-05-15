@@ -7,7 +7,7 @@ Data enrichment — turn emails, domains, or place names into structured profile
 - **URL pattern:** `https://stableenrich.dev/api/google-maps/place-details/partial` (and other enrichment sub-paths)
 - **Method:** POST (JSON body)
 - **Cost:** $0.02 USDC per call (Solana mainnet)
-- **Suggested max_usdc:** 0.10
+- **Suggested max_usdc:** `"0.10"` (decimal STRING)
 
 ## Body construction
 

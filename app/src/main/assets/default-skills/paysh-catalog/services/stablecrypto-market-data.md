@@ -7,7 +7,7 @@ CoinGecko-backed on-chain pool data — get **new pools across DEXes**, filterab
 - **URL:** `https://stablecrypto.dev/api/coingecko/onchain/new-pools`
 - **Method:** POST (JSON body)
 - **Cost:** $0.01 USDC per call (Solana mainnet)
-- **Suggested max_usdc:** 0.05
+- **Suggested max_usdc:** `"0.05"` (decimal STRING)
 - **Description (per the payment-required header):** "Get new pools across all networks"
 
 ## Body construction

@@ -7,7 +7,7 @@ Find the best price for a product across major US retailers — Amazon, Walmart,
 - **URL pattern:** `https://api.crushrewards.dev/v1/shopper/best-price?<query>`
 - **Method:** GET
 - **Cost:** $0.01 USDC per call (Solana mainnet — Solana-native, multi-chain offer with both sol+sol+base)
-- **Suggested max_usdc:** 0.05
+- **Suggested max_usdc:** `"0.05"` (decimal STRING)
 
 ## Query construction
 
@@ -19,7 +19,7 @@ Pass the product name or query string in `q`:
 ?q=Nespresso+Vertuo+pods
 ```
 
-URL-encode spaces.
+URL-encode the value with `encodeURIComponent` (spaces → `%20`, special chars percent-encoded). Do NOT use `+` for spaces.
 
 ## When to use vs free alternatives
 

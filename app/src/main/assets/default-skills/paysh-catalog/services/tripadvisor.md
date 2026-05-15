@@ -7,7 +7,7 @@ Search nearby travel locations (hotels, restaurants, attractions) by latitude/lo
 - **URL pattern:** `https://tripadvisor.x402.paysponge.com/api/v1/location/nearby_search?latLong=<lat>,<long>&category=<hotels|restaurants|attractions>`
 - **Method:** GET
 - **Cost:** $0.01 USDC per call (Solana mainnet)
-- **Suggested max_usdc:** 0.05
+- **Suggested max_usdc:** `"0.05"` (decimal STRING)
 
 ## Query construction
 
