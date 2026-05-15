@@ -1,7 +1,7 @@
 ---
 name: paysh-catalog
-description: "Catalog of pay.sh services the burner wallet can pay autonomously via agent_pay (x402). Use when: the user asks for a capability that maps to a known pay.sh service (computation, travel/hotels, captcha solving, crypto market data, document extraction, real-estate, retail price comparison, etc.) without giving you the URL — e.g. 'what's the mass of the sun', 'find hotels in Rome', 'best price on a PS5'. Also use when the user asks 'what can you pay for' or 'show me pay.sh services', or names a specific service we should look up — including ones we know about but cannot pay or deliver (unsupported.json), so the agent can give an honest 'I know about X but can't deliver it because Y' answer. Don't use when: the user gives you the URL directly (just call agent_pay), wants free info that web_search can answer, or asks about the burner wallet itself (use the burner-wallet skill)."
-version: "1.0.0"
+description: "Catalog of pay.sh services the burner wallet can pay via agent_pay (x402). OPT-IN ONLY — activate this skill ONLY when the user's message contains an explicit pay-intent keyword: 'pay.sh' / 'paysh' / 'x402' / 'pay for X' / 'pay to X' / 'use pay' / 'pay <service-name>' / 'use <service-name> to pay' / 'look this up paid' / 'fetch this paid' / 'buy data from <service>'. Do NOT activate for general questions ('what's the mass of the sun', 'find me a hotel in Rome', 'best price on a PS5') — those go to free tools (training data, web_search, web_fetch). Also activate when the user asks 'what can you pay for', 'show me pay.sh services', or names a service to look up. The skill is DORMANT by default — agent behaves like a vanilla AI assistant for any query that does not match the opt-in keywords above."
+version: "1.1.0"
 metadata:
   openclaw:
     emoji: "🛒"
@@ -12,31 +12,78 @@ metadata:
 
 # pay.sh Service Catalog
 
-A curated directory of HTTPS endpoints the agent can pay for autonomously using `agent_pay` and the burner wallet. Every service in this catalog has been verified to:
+A curated directory of HTTPS endpoints the agent can pay for using `agent_pay` and the burner wallet, **only when the user explicitly opts in** via a pay-intent keyword.
 
-- Speak x402 v2 with a Solana-USDC payment leg
-- Return a valid 402 our parser builds against
-- Charge USDC on Solana mainnet
+## Default: this skill is DORMANT
 
-The agent's job, given intent, is to:
+For the **vast majority of user messages**, this skill should not activate. The agent's default behavior for any question is:
+
+1. Try training data (facts, definitions, well-established knowledge)
+2. Try `web_search` / `web_fetch` (live web data, free)
+3. If neither answers and the user did NOT explicitly invoke pay/x402, give a best-effort honest answer noting the limitation — **do NOT autonomously reach for a paid catalog service**
+
+This skill activates ONLY when the user's message contains one of the explicit pay-intent keywords listed below. If you're unsure whether a message is opting in, **prefer the free path** — paid lookups cost USDC and the user did not authorize a charge implicitly.
+
+### Opt-in keywords (skill activates)
+
+- `pay.sh` / `paysh` / `pay sh` — naming the platform
+- `x402` — naming the protocol
+- `pay for X` / `pay to X` / `pay <amount> to <service>` / `use pay` — explicit paying verb
+- `look this up paid` / `fetch this paid` / `buy data from <service>` — explicit paid-fetch verb
+- `use <service> to pay` / `pay <service> for X` — service-name + paying verb
+- `what can you pay for` / `show me pay.sh services` / `list paid services` — capability question
+
+### NOT opt-in (skill stays dormant)
+
+- Topical / factual questions: *"what's the mass of the sun"*, *"who founded Solana"*, *"what time is it in Tokyo"* → training data or `web_search`
+- Live-data questions WITHOUT a paying verb: *"find me a hotel in Rome"*, *"current price of SOL"*, *"best deal on a PS5"* → `web_search`
+- General Solana / Jupiter operations: *"check my balance"*, *"send 0.1 SOL to Alice"*, *"swap SOL for USDC"* → use the relevant tool directly (`solana_balance`, `solana_send`, `jupiter_swap`); these are NOT x402 and don't involve this skill
+
+## What this skill does (once activated)
+
+Once an opt-in keyword fires the skill, the agent's job is:
 
 1. **Match intent → service** by reading `catalog.json` (the index in this folder)
 2. **Read the matching `services/<name>.md`** for URL pattern + query construction
 3. **Call `agent_pay(url, max_usdc, method?, body?)`** with the constructed URL. GET calls run silently when under cap. **POST calls always prompt the user for confirmation** regardless of caps (POST can send SMS, post content, or trigger paid actions — the confirmation is by design). Check each service's `method:` field in `catalog.json` before calling.
 4. **Return the response** to the user
 
-## The flow, with an example
+## Examples
+
+### Activates → paid call
+
+User: *"Use pay.sh to compute the integral of sin(x)·ln(x) from 0 to π."*
+
+Why it activates: contains `pay.sh` + naming math computation.
+
+```
+1. Read catalog.json → 'wolfram-alpha' matches "math computation"
+2. Read services/wolfram-alpha.md → URL pattern is
+   https://wolframalpha.x402.paysponge.com/v1/result?i=<URL-encoded query>
+3. Construct: https://wolframalpha.x402.paysponge.com/v1/result?i=integral+of+sin(x)*ln(x)+from+0+to+pi
+4. Call agent_pay(url, max_usdc=0.05) → burner signs silently (cost $0.01)
+5. Return the computed value with a brief explanation.
+```
+
+### Activates → catalog browsing (no paid call yet)
+
+User: *"What can you pay for?"*
+
+Why it activates: contains `pay`. Agent reads `catalog.json`, lists the 9 supported services with costs, mentions the 63 known-but-not-usable ones. No `agent_pay` call.
+
+### Does NOT activate → vanilla answer
 
 User: *"What's the mass of the sun?"*
 
-```
-1. Read catalog.json → 'wolfram-alpha' matches "math/science/computation"
-2. Read services/wolfram-alpha.md → URL pattern is
-   https://wolframalpha.x402.paysponge.com/v1/result?i=<URL-encoded query>
-3. Construct: https://wolframalpha.x402.paysponge.com/v1/result?i=mass+of+the+sun
-4. Call agent_pay(url, max_usdc=0.05) → burner signs silently (cost $0.01)
-5. Return: "About 1.989 × 10³⁰ kg" (paraphrased from Wolfram's response)
-```
+Why it stays dormant: no opt-in keyword. The agent answers from training data: *"The Sun's mass is about 1.989 × 10³⁰ kg."* — **no USDC charge**.
+
+User: *"Find me a hotel in Rome."*
+
+Why it stays dormant: "find" + "hotel" without any paying verb or service name. Use `web_search`. If the user then says *"pay Tripadvisor to find one"* the skill activates and we hit the catalog.
+
+User: *"Check my Solana balance."*
+
+Why it stays dormant: not an x402 query at all. Use `solana_balance` directly. The paysh-catalog skill is unrelated to Solana balance / send / swap operations.
 
 ## Reading the catalog efficiently
 
