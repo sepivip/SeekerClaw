@@ -1,6 +1,6 @@
 ---
 name: paysh-catalog
-description: "Catalog of pay.sh services the burner wallet can pay via agent_pay (x402). OPT-IN ONLY — activate this skill ONLY when the user's message contains an explicit pay-intent keyword: 'pay.sh', 'paysh', 'pay sh', 'x402', 'pay for X', 'pay to X', 'use pay', 'pay <service>', 'use <service> to pay', 'look this up paid', 'fetch this paid', 'buy data from <service>'. Also activate on explicit capability asks: 'what can you pay for', 'show me pay.sh services', 'list paid services'. For ANY other query — including topical questions, factual lookups, live-data searches without a paying verb, and general Solana/Jupiter operations — the skill stays dormant; the agent uses training data, web_search, web_fetch, or the relevant non-x402 tool instead. See SKILL.md body for the full activation policy and worked examples."
+description: "Catalog of pay.sh services payable via agent_pay (x402). OPT-IN ONLY — activate ONLY when the user's message contains an explicit pay-intent keyword (pay.sh / paysh / x402 / 'pay for X' / 'use pay' / similar) or an explicit capability ask ('what can you pay for' / 'show me pay.sh services'). Otherwise stay dormant — agent uses training data / web_search / web_fetch. Full keyword list and activation policy in SKILL.md body."
 version: "1.1.0"
 metadata:
   openclaw:
@@ -37,7 +37,7 @@ This skill activates ONLY when the user's message contains one of the explicit p
 
 - Topical / factual questions: *"what's the mass of the sun"*, *"who founded Solana"*, *"what time is it in Tokyo"* → training data or `web_search`
 - Live-data questions WITHOUT a paying verb: *"find me a hotel in Rome"*, *"current price of SOL"*, *"best deal on a PS5"* → `web_search`
-- General Solana / Jupiter operations: *"check my balance"*, *"send 0.1 SOL to Alice"*, *"swap SOL for USDC"* → use the relevant tool directly (`solana_balance`, `solana_send`, `jupiter_swap`); these are NOT x402 and don't involve this skill
+- General Solana / Jupiter operations: *"check my balance"*, *"send 0.1 SOL to Alice"*, *"swap SOL for USDC"* → use the relevant tool directly (`solana_balance`, `solana_send`, `solana_swap`); these are NOT x402 and don't involve this skill
 
 ## What this skill does (once activated)
 
