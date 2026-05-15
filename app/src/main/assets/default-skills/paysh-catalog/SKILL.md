@@ -1,6 +1,6 @@
 ---
 name: paysh-catalog
-description: "Catalog of pay.sh services the burner wallet can pay via agent_pay (x402). OPT-IN ONLY — activate this skill ONLY when the user's message contains an explicit pay-intent keyword: 'pay.sh' / 'paysh' / 'x402' / 'pay for X' / 'pay to X' / 'use pay' / 'pay <service-name>' / 'use <service-name> to pay' / 'look this up paid' / 'fetch this paid' / 'buy data from <service>'. Do NOT activate for general questions ('what's the mass of the sun', 'find me a hotel in Rome', 'best price on a PS5') — those go to free tools (training data, web_search, web_fetch). Also activate when the user asks 'what can you pay for', 'show me pay.sh services', or names a service to look up. The skill is DORMANT by default — agent behaves like a vanilla AI assistant for any query that does not match the opt-in keywords above."
+description: "Catalog of pay.sh services the burner wallet can pay via agent_pay (x402). OPT-IN ONLY — activate this skill ONLY when the user's message contains an explicit pay-intent keyword: 'pay.sh', 'paysh', 'pay sh', 'x402', 'pay for X', 'pay to X', 'use pay', 'pay <service>', 'use <service> to pay', 'look this up paid', 'fetch this paid', 'buy data from <service>'. Also activate on explicit capability asks: 'what can you pay for', 'show me pay.sh services', 'list paid services'. For ANY other query — including topical questions, factual lookups, live-data searches without a paying verb, and general Solana/Jupiter operations — the skill stays dormant; the agent uses training data, web_search, web_fetch, or the relevant non-x402 tool instead. See SKILL.md body for the full activation policy and worked examples."
 version: "1.1.0"
 metadata:
   openclaw:
@@ -69,7 +69,7 @@ Why it activates: contains `pay.sh` + naming math computation.
 
 User: *"What can you pay for?"*
 
-Why it activates: contains `pay`. Agent reads `catalog.json`, lists the 9 supported services with costs, mentions the 63 known-but-not-usable ones. No `agent_pay` call.
+Why it activates: matches the capability-ask phrase *"what can you pay for"*. (NOT every message containing the word "pay" — only the specific capability-ask phrases listed in the opt-in section above.) Agent reads `catalog.json`, lists the 9 supported services with costs, mentions the 63 known-but-not-usable ones. No `agent_pay` call.
 
 ### Does NOT activate → vanilla answer
 
