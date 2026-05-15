@@ -169,13 +169,29 @@ function _parseConcurrency(raw) {
 }
 
 function parseArgs(argv) {
-    const out = { concurrency: 5, commitCaptures: false, limit: 0, filter: null, audit: false };
+    const out = {
+        concurrency: 5,
+        commitCaptures: false,
+        limit: 0,
+        filter: null,
+        audit: false,
+        // BAT-706 R2: by default, audit mode probes ONLY GET endpoints
+        // to avoid triggering server-side side effects on POST/PUT/PATCH/
+        // DELETE endpoints in the rare case the 402 check happens AFTER
+        // body processing. Pass --audit-side-effects to opt in to probing
+        // non-GET endpoints. POST in this codebase's other paid services
+        // (Reducto, 2captcha, etc.) checks payment before any side effect,
+        // but we can't assume that for every service in the upstream
+        // catalog — be polite by default.
+        auditSideEffects: false,
+    };
     for (let i = 2; i < argv.length; i++) {
         if (argv[i] === '--concurrency' && argv[i + 1]) { out.concurrency = _parseConcurrency(argv[++i]); }
         else if (argv[i] === '--commit-captures') out.commitCaptures = true;
         else if (argv[i] === '--limit' && argv[i + 1]) out.limit = parseInt(argv[++i], 10);
         else if (argv[i] === '--filter' && argv[i + 1]) out.filter = argv[++i];
         else if (argv[i] === '--audit') out.audit = true;
+        else if (argv[i] === '--audit-side-effects') out.auditSideEffects = true;
     }
     return out;
 }
@@ -466,9 +482,23 @@ async function probeAndParse(disc, proto) {
 // --audit mode to surface hidden paid endpoints that the standard probe
 // would miss.
 //
+// SAFETY (R2): by default, skips non-GET endpoints to avoid triggering
+// server-side side effects. POST/PUT/PATCH/DELETE endpoints in the
+// upstream pay.sh catalog generally check the x402 payment BEFORE any
+// side effect runs, but we can't assume that universally — e.g. a
+// temporarily ungated POST that accepts an empty body would actually
+// execute when we probe. Pass --audit-side-effects to include them.
+//
+// RATE LIMIT (R2): each service's endpoints are probed serially with a
+// small inter-request delay (POLITE_DELAY_MS, ~150ms). This matches
+// probe-all.js's ~1 req/sec politeness ceiling per host even when the
+// outer runWithConcurrency runs many services in parallel.
+//
 // Returns { disc, endpoints: [{ method, path, probeUrl, row, captured }] }
 // where each `row` mirrors what probeAndParse produces for one probe.
-async function auditService(disc, proto) {
+async function auditService(disc, proto, opts = {}) {
+    const includeSideEffects = !!opts.auditSideEffects;
+    const POLITE_DELAY_MS = 150;
     const result = { disc, endpoints: [] };
     if (!disc.ok) {
         result.error = disc.error;
@@ -502,7 +532,20 @@ async function auditService(disc, proto) {
     // Probe each endpoint serially within this service (avoid hammering
     // the same host). Outer runWithConcurrency parallelizes across
     // services, not within one.
+    let isFirst = true;
     for (const ep of endpoints) {
+        // R2 safety: skip non-GET unless explicitly opted in.
+        if (ep.method !== 'GET' && !includeSideEffects) {
+            result.endpoints.push({
+                ...ep,
+                probeUrl: disc.serviceUrl.replace(/\/$/, '') + ep.path,
+                row: { result: 'skipped:non_get_side_effect_risk' },
+            });
+            continue;
+        }
+        // R2 politeness: brief inter-request delay per service.
+        if (!isFirst) await sleep(POLITE_DELAY_MS);
+        isFirst = false;
         const probeUrl = disc.serviceUrl.replace(/\/$/, '') + ep.path;
         const probeOpts = { url: probeUrl, method: ep.method };
         if (ep.method !== 'GET') probeOpts.body = {};
@@ -574,12 +617,23 @@ function fmtNetworks(ns) {
 }
 
 // BAT-706: write per-endpoint audit report.
-function writeAuditReport(auditResults, elapsedMs) {
+function writeAuditReport(auditResults, elapsedMs, opts = {}) {
     const lines = [];
     lines.push('# pay.sh catalog audit — multi-endpoint probe per service');
     lines.push('');
     lines.push(`Generated: ${new Date().toISOString()}`);
-    lines.push(`Source: probe-catalog.js --audit (extracts ALL openapi endpoints per service, probes each)`);
+    // R2 transparency: record the actual invocation so readers don't
+    // assume "audit" means full-catalog when it was filtered.
+    const filterNote = opts.filter ? ` --filter ${opts.filter}` : '';
+    const sideEffectsNote = opts.auditSideEffects ? ' --audit-side-effects' : '';
+    const limitNote = opts.limit ? ` --limit ${opts.limit}` : '';
+    lines.push(`Source: probe-catalog.js --audit${filterNote}${sideEffectsNote}${limitNote}`);
+    if (opts.filter) {
+        lines.push(`**Scope note**: this run was FILTERED to "${opts.filter}" — aggregate counts below are for the filtered subset, NOT the full ~72-service upstream catalog. Re-run without --filter for a full-catalog audit.`);
+    }
+    if (!opts.auditSideEffects) {
+        lines.push(`**Safety note**: non-GET endpoints were SKIPPED to avoid triggering server-side side effects. Use \`--audit-side-effects\` to include POST/PUT/PATCH/DELETE probes (most pay.sh services check x402 payment before any side effect runs, but it's not universally guaranteed).`);
+    }
     lines.push('');
 
     let totalEndpoints = 0;
@@ -608,10 +662,14 @@ function writeAuditReport(auditResults, elapsedMs) {
     lines.push(`| Audit elapsed | ${(elapsedMs / 1000).toFixed(1)}s |`);
     lines.push('');
 
-    // Per-service breakdown — only show services with at least one parsed_ok OR an error
-    lines.push('## New candidate endpoints (parsed_ok beyond what catalog-summary already lists)');
+    // R2: section now honestly named — it's ALL parsed_ok endpoints, not
+    // pre-filtered against catalog-summary.md. Reader must cross-reference
+    // to find true "new candidates"; we don't auto-diff because catalog-
+    // summary entries are per-service (one URL each) while audit entries
+    // are per-endpoint, so the join isn't 1:1 trivial.
+    lines.push('## All parsed_ok endpoints from this audit run');
     lines.push('');
-    lines.push('Endpoints that parsed_ok in this audit. Cross-reference with `catalog-summary.md` to find ones that are NOT already in our standard catalog — those are the audit\'s discoveries.');
+    lines.push('Every endpoint that parsed_ok with a Solana-USDC leg. This includes endpoints already in our standard catalog (`tests/paysh/catalog-summary.md`) AND endpoints we don\'t currently catalog. Cross-reference manually with catalog-summary.md to identify the audit\'s new discoveries (multi-endpoint providers like paysponge/perplexity and paysponge/rentcast typically show many endpoints here that catalog-summary records as only one per service).');
     lines.push('');
     lines.push('| Service | Method | Path | Networks | Asset | Amount | Result |');
     lines.push('|---------|--------|------|----------|-------|--------|--------|');
@@ -739,7 +797,7 @@ async function main() {
         const auditResults = [];
         let svcDone = 0;
         await runWithConcurrency(discoveries, args.concurrency, async (disc) => {
-            const r = await auditService(disc, proto);
+            const r = await auditService(disc, proto, { auditSideEffects: args.auditSideEffects });
             auditResults.push(r);
             svcDone++;
             const epCount = r.endpoints ? r.endpoints.length : 0;
@@ -749,7 +807,11 @@ async function main() {
         process.stdout.write('\n\n');
         // Re-order by input order
         auditResults.sort((a, b) => discoveries.indexOf(a.disc) - discoveries.indexOf(b.disc));
-        writeAuditReport(auditResults, Date.now() - t0);
+        writeAuditReport(auditResults, Date.now() - t0, {
+            filter: args.filter,
+            auditSideEffects: args.auditSideEffects,
+            limit: args.limit,
+        });
         return;
     }
 

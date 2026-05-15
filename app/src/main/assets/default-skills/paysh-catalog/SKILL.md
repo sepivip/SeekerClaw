@@ -1,7 +1,7 @@
 ---
 name: paysh-catalog
 description: "Catalog of pay.sh services payable via agent_pay (x402). OPT-IN ONLY — activate when the user explicitly invokes pay.sh / paysh / x402 / 'pay for'. Stay dormant otherwise; defer to free tools. Full keyword list and policy in SKILL.md body."
-version: "1.1.0"
+version: "1.2.0"
 metadata:
   openclaw:
     emoji: "🛒"
