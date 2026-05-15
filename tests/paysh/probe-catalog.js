@@ -497,13 +497,27 @@ async function probeAndParse(disc, proto) {
 // temporarily ungated POST that accepts an empty body would actually
 // execute when we probe. Pass --audit-side-effects to include them.
 //
-// RATE LIMIT (R3 #6): each service's endpoints are probed serially with
-// a 1000ms inter-request delay (POLITE_DELAY_MS). Matches probe-all.js's
-// 1 req/sec politeness ceiling per host. Pre-R3-fix this was 150ms,
-// which would have bursted to ~6-7 req/sec per service (still well
-// inside what most APIs tolerate, but inconsistent with the documented
-// politeness contract). When the outer runWithConcurrency parallelizes
-// across services, each service stays at ≤1 req/sec to its own host.
+// RATE LIMIT (R3 #6 + R6): each service's endpoints are probed serially
+// with a 1000ms inter-request delay (POLITE_DELAY_MS). Pre-R3-fix this
+// was 150ms (~6-7 req/sec per service); R3 bumped to 1000ms to match
+// probe-all.js's contract.
+//
+// CAVEAT (R6): the rate limit is enforced PER SERVICE, not per HOST.
+// Different pay.sh services can share the same hostname — e.g. all 11
+// paysponge services use *.x402.paysponge.com or api.paysponge.com.
+// With the outer runWithConcurrency parallelizing across services, a
+// shared-host group under --concurrency=N can issue up to N req/sec to
+// that one host even though each individual service stays at 1 req/sec.
+//
+// Practical effect: for audits against multi-service hosts (paysponge,
+// merit-systems, alibaba.gateway-402, google.gateway-402), use
+// --concurrency 1 to enforce a true per-host 1 req/sec ceiling. With
+// --concurrency 4 (the documented default in some examples), the
+// per-host burst against api.paysponge.com can reach ~4 req/sec — still
+// within most rate-limit policies but stricter than the per-host contract.
+//
+// A proper per-host rate limiter (semaphore keyed by hostname) is
+// follow-up work; deferred to keep this script focused.
 //
 // Returns { disc, endpoints: [{ method, path, probeUrl, row, captured }] }
 // where each `row` mirrors what probeAndParse produces for one probe.
@@ -838,7 +852,11 @@ async function main() {
         // BAT-706: audit mode. Probe every endpoint per service and
         // write the full breakdown to catalog-audit.md. Does NOT
         // touch catalog-summary.md (use STANDARD mode for that).
-        console.log('Phase 2 (audit): probing EVERY endpoint per service (no payment)…\n');
+        // R6: clarify scope when --audit-side-effects is OFF (default).
+        const phase2Msg = args.auditSideEffects
+            ? 'Phase 2 (audit): probing EVERY endpoint per service (no payment, --audit-side-effects ON)…\n'
+            : 'Phase 2 (audit): probing every GET endpoint per service; non-GET will be LISTED-BUT-SKIPPED (pass --audit-side-effects to probe them too)…\n';
+        console.log(phase2Msg);
         const auditResults = [];
         let svcDone = 0;
         await runWithConcurrency(discoveries, args.concurrency, async (disc) => {
