@@ -1,37 +1,42 @@
 # StableCrypto Market Data (merit-systems)
 
-CoinGecko-backed crypto market data — token prices, market caps, new on-chain pools, etc.
+CoinGecko-backed on-chain pool data — get **new pools across DEXes**, filterable by network. This is the only stablecrypto endpoint our probe has captured and verified payable; other CoinGecko-proxy paths (price lookup etc.) may exist but aren't in our verified set.
 
 ## Endpoint
 
-- **URL pattern:** `https://stablecrypto.dev/api/coingecko/onchain/new-pools` (and other CoinGecko-proxied paths under `/api/coingecko/...`)
-- **Method:** POST (JSON body — CoinGecko query forwarded server-side)
+- **URL:** `https://stablecrypto.dev/api/coingecko/onchain/new-pools`
+- **Method:** POST (JSON body)
 - **Cost:** $0.01 USDC per call (Solana mainnet)
 - **Suggested max_usdc:** 0.05
+- **Description (per the payment-required header):** "Get new pools across all networks"
 
 ## Body construction
 
-The body shape mirrors CoinGecko's own API parameters. For new-pools example:
+**Verified schema (from the x402 payment-required header):**
 
 ```json
 {
-  "network": "solana",
-  "page": 1,
-  "limit": 20
+  "include": "string (optional)",
+  "page": "number (optional)"
 }
 ```
 
-For token price lookup (different sub-endpoint — path may vary): pass the CoinGecko `ids` or `contract_addresses` list.
+Both fields are optional; `additionalProperties: false` so no extras. Example calls:
+
+| Intent | Body |
+|---|---|
+| First page of new pools (default) | `{}` |
+| Second page | `{ "page": 2 }` |
+| Include extra fields (refer to CoinGecko `/onchain/networks/new_pools` docs for valid `include` strings — typically `base_token`, `quote_token`, `dex`) | `{ "include": "base_token,quote_token,dex" }` |
 
 ## When to use vs free alternatives
 
-- **Use StableCrypto** when you need authoritative live market data — current prices, market caps, ranking, trending pools.
-- **Don't use StableCrypto** for prices the user already mentioned in conversation, historical prices your training data covers, or simple "what's the price of BTC" where a `web_search` is fine.
+- **Use this service** when the user wants a fresh list of new on-chain pools (newly-deployed token pairs across DEXes). Useful for tracking new liquidity events.
+- **Don't use this service** for:
+  - Generic crypto price lookups ("price of BTC") — this endpoint doesn't return prices. Fall back to `web_search`.
+  - Historical pool data — this endpoint returns NEW pools, not history.
+  - Solana-specific queries — pass `include` carefully; this is a CoinGecko proxy so its data model spans all chains.
 
 ## Response shape
 
-JSON matching CoinGecko's native response shape (this is a paid CoinGecko proxy). Return the requested fields concisely — don't dump full pool/token arrays.
-
-## Notes
-
-- Replaces the older `paysponge/coingecko` endpoint which is no longer in pay.sh's catalog (caught in 2026-05-14 probe).
+JSON matching CoinGecko's `/onchain/networks/new_pools` response shape (this is a paid proxy). Return the top 3–5 pools with name, network, address, pool age — don't dump full pool arrays.

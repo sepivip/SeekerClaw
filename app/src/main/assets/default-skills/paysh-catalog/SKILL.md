@@ -59,7 +59,11 @@ Four reason buckets:
 | `invalid_demand` | Service demands $0 — it's actually free | Call directly via `web_fetch`, no payment needed |
 | `requires_binary_response` | Service returns binary content (image/audio/video) we can't pipe to Telegram/Discord as attachment | Future BAT — needs `agent_pay` → workspace-file path |
 
-**NEVER call `agent_pay` on a service in `unsupported.json`.** For `mpp_protocol` / `siwx_auth_required` it will fail at the protocol layer. For `invalid_demand` the service is free and you should `web_fetch` it instead. For `requires_binary_response` `agent_pay` would actually **succeed and spend USDC** — but the binary response (PNG/audio/video) can't be delivered to Telegram/Discord today, so the user pays for nothing visible. Don't burn their money. Tell them about the service, explain the delivery gap, and offer the alternative if any.
+**NEVER call `agent_pay` on a service in `unsupported.json`.** Reasons and what to tell the user:
+
+- **`mpp_protocol`** / **`siwx_auth_required`** — `agent_pay` fails at the protocol layer (free, no USDC spent). Tell the user the service is known but uses a protocol we don't support yet.
+- **`invalid_demand`** — service returns 402 with amount=0. `agent_pay` refuses zero-demand AND our `web_fetch` throws on any non-2xx, so neither tool reaches it today. Tell the user the service is known but not currently usable via our tools.
+- **`requires_binary_response`** — `agent_pay` would actually **succeed and spend USDC** — but the binary response (PNG/audio/video) can't be delivered to Telegram/Discord today. Don't burn their money. Tell them the service is recognized but the binary output isn't deliverable yet.
 
 ## When NOT to use this catalog
 

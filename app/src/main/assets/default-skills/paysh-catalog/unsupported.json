@@ -15,10 +15,9 @@
       "actionable": false
     },
     "invalid_demand": {
-      "label": "Service is free ($0 demanded)",
-      "explanation": "Service returns 402 with amount=0 — i.e. it's actually free. agent_pay refuses zero-demand by design. Call the endpoint directly with web_fetch instead — no payment needed.",
-      "actionable": true,
-      "alternative": "web_fetch on the same URL works without payment"
+      "label": "Service returns 402 with amount=0 (no demand)",
+      "explanation": "Service returns HTTP 402 with amount=0 — semantically 'free' from x402's perspective, but still a 402 status. agent_pay refuses zero-demand by design, AND our web_fetch tool throws on any non-2xx response (so it can't fetch these either). Net result: not currently usable via our tools. Possible follow-up: a tool that fetches with 402-tolerant semantics, or a flag on web_fetch to allow 402 pass-through.",
+      "actionable": false
     },
     "requires_binary_response": {
       "label": "Service returns binary content (images / files) that we can't deliver",

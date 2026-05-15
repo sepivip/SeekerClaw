@@ -60,12 +60,12 @@
     },
     {
       "id": "stablecrypto-market-data",
-      "name": "StableCrypto Market Data",
+      "name": "StableCrypto New Pools",
       "file": "services/stablecrypto-market-data.md",
       "cost_usdc": 0.01,
       "method": "POST",
-      "intents": ["crypto price", "token price", "coin price", "market data", "coingecko", "crypto market cap"],
-      "summary": "CoinGecko-backed crypto price + market data lookup."
+      "intents": ["new on-chain pools", "new dex pools", "newly created pools", "fresh liquidity pairs", "trending new pools", "coingecko onchain new pools"],
+      "summary": "Get new on-chain pools across DEXes via the CoinGecko-onchain proxy. Returns recently-deployed token pairs — NOT generic price lookups."
     },
     {
       "id": "stableenrich",
