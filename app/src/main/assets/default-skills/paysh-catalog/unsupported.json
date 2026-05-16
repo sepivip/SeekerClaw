@@ -1,7 +1,7 @@
 {
   "version": 2,
-  "generated_at": "2026-05-16T16:05:33.248Z",
-  "manifest_checked_at": "2026-05-16T16:05:33.248Z",
+  "generated_at": "2026-05-16T16:18:45.533Z",
+  "manifest_checked_at": "2026-05-16T16:18:45.533Z",
   "source": "BAT-761 migration from v1 (BAT-699 → PR #378 R10) + BAT-706 audit_pending population",
   "reasons": {
     "mpp_protocol": {

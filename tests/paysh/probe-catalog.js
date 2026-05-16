@@ -1014,7 +1014,7 @@ async function runStatus() {
     lines.push('');
     lines.push(`Generated: ${new Date().toISOString()}`);
     lines.push(`Catalog generated_at: ${catalog.generated_at}`);
-    lines.push(`Manifest last checked: ${catalog.manifest_checked_at} (run \`probe-catalog.js --drift --write-checked-at\` to refresh — bare \`--drift\` is a pure check and won't update this timestamp)`);
+    lines.push(`Manifest last checked: ${catalog.manifest_checked_at} (run \`node tests/paysh/probe-catalog.js --drift --write-checked-at\` to refresh — bare \`--drift\` is a pure check and won't update this timestamp)`);
     lines.push(`Freshness window: ${FRESHNESS_DAYS} days`);
     lines.push('');
     lines.push('## Summary');

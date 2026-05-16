@@ -407,6 +407,13 @@ function validate(catalog, unsupported) {
             }
         }
         if (!e.endpoint || !e.endpoint.method || !e.endpoint.path) errors.push(`${ctx}: bad endpoint`);
+        // R5-1: agent_pay only invokes GET/POST. Other methods would fail with
+        // method_not_allowed, so catalog/unsupported entries must declare an
+        // executable method. (audit_pending[] sibling endpoints may carry any
+        // method — those are informational, not invoked.)
+        else if (!['GET', 'POST'].includes(e.endpoint.method)) {
+            errors.push(`${ctx}: endpoint.method "${e.endpoint.method}" not invocable by agent_pay (only GET/POST)`);
+        }
         if (kind === 'catalog' && (typeof e.endpoint.cost_usdc !== 'number' || e.endpoint.cost_usdc < 0)) {
             errors.push(`${ctx}: catalog cost_usdc must be non-negative number`);
         }
