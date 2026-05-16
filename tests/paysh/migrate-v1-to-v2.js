@@ -288,20 +288,33 @@ function buildUnsupportedEntry(v1Entry, auditMap) {
 
     // Try to find a capture (some unsupported entries have one, most don't)
     const captureName = findUnsupportedCapture(v1Name);
-    // R3-5 + R4-3: parse probe date from v1 note when available. Note formats vary:
+    // R3-5 + R4-3 + R12-1: parse probe date from v1 note when available.
+    // Note formats vary:
     //   "http_401 at 2026-05-14 probe"             ← endpoint_not_402_at_probe entries
     //   "BAT-706 audit (2026-05-15) confirmed ..." ← requires_binary_response (paysponge/fal)
-    //   plain "2026-05-14" buried in long prose    ← misc
-    // Strategy: extract ALL YYYY-MM-DD matches from the note, use the LATEST (max).
-    // ISO 8601 dates sort lexically, so string-max == temporal-max. This handles
-    // multi-date notes (initial probe + later audit re-probe) by surfacing the
-    // more recent probe activity.
+    //   BOTH (multi-date)                          ← e.g. paysponge/perplexity has "http_200
+    //                                                 at 2026-05-14 probe" + "BAT-706 audit
+    //                                                 (2026-05-15) discovered ..."
+    //
+    // R12-1 fix: verification.last_probed_at must reflect when THIS specific endpoint
+    // (the catalog-listed URL recorded in the v1 entry) was probed — NOT when sibling
+    // endpoints were audited. Prefer the "http_XXX at YYYY-MM-DD" pattern (always
+    // describes the catalog URL's own probe). Fall back to latest YYYY-MM-DD only
+    // when no http_XXX-anchored date is present (single-date notes, audit-only notes
+    // like fal's where the probe and audit coincide).
     let inferredProbedAt = null;
     if (v1Entry.note) {
-        const matches = v1Entry.note.match(/\b\d{4}-\d{2}-\d{2}\b/g);
-        if (matches && matches.length > 0) {
-            const latest = matches.sort().pop();
-            inferredProbedAt = `${latest}T00:00:00.000Z`;
+        // First: anchored probe date "http_NNN at YYYY-MM-DD"
+        const anchored = /\bhttp_\d{3}\s+at\s+(\d{4}-\d{2}-\d{2})\b/.exec(v1Entry.note);
+        if (anchored) {
+            inferredProbedAt = `${anchored[1]}T00:00:00.000Z`;
+        } else {
+            // Fallback: latest YYYY-MM-DD anywhere in the note
+            const matches = v1Entry.note.match(/\b\d{4}-\d{2}-\d{2}\b/g);
+            if (matches && matches.length > 0) {
+                const latest = matches.sort().pop();
+                inferredProbedAt = `${latest}T00:00:00.000Z`;
+            }
         }
     }
     // R6-3: when no capture exists, we cannot evidence parsed_ok with a captured

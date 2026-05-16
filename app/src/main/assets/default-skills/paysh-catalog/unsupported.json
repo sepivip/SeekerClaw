@@ -1,7 +1,7 @@
 {
   "version": 2,
-  "generated_at": "2026-05-16T17:39:33.660Z",
-  "manifest_checked_at": "2026-05-16T17:39:33.660Z",
+  "generated_at": "2026-05-16T17:51:08.251Z",
+  "manifest_checked_at": "2026-05-16T17:51:08.251Z",
   "source": "BAT-761 migration from v1 (BAT-699 → PR #378 R10) + BAT-706 audit_pending population",
   "reasons": {
     "mpp_protocol": {
@@ -250,7 +250,7 @@
       },
       "reason": "endpoint_not_402_at_probe",
       "verification": {
-        "last_probed_at": "2026-05-15T00:00:00.000Z",
+        "last_probed_at": "2026-05-14T00:00:00.000Z",
         "last_capture_path": null,
         "last_captured_at": null,
         "probe_status": "http_200"
