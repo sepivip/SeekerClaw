@@ -211,7 +211,16 @@ function parseArgs(argv) {
         else if (argv[i] === '--audit-side-effects') out.auditSideEffects = true;
         else if (argv[i] === '--drift') out.drift = true;
         else if (argv[i] === '--status') out.status = true;
-        else if (argv[i] === '--refresh' && argv[i + 1]) out.refreshId = argv[++i];
+        else if (argv[i] === '--refresh') {
+            // R8-1: --refresh requires an id argument. Pre-fix, `--refresh` without
+            // a following arg silently fell through to standard probe mode — operator
+            // would expect a single-entry refresh and get a full catalog probe instead.
+            if (!argv[i + 1] || argv[i + 1].startsWith('--')) {
+                console.error('ERROR: --refresh requires an entry id argument. Usage: --refresh <entry-id>');
+                process.exit(2);
+            }
+            out.refreshId = argv[++i];
+        }
         else if (argv[i] === '--write-checked-at') out.writeCheckedAt = true;
     }
     // R1 #7 — enforce mutual exclusion. Before this guard, "--audit --status"
@@ -219,6 +228,13 @@ function parseArgs(argv) {
     const modeFlags = [out.audit, out.drift, out.status, !!out.refreshId].filter(Boolean);
     if (modeFlags.length > 1) {
         console.error('ERROR: --audit / --drift / --status / --refresh are mutually exclusive. Pick one.');
+        process.exit(2);
+    }
+    // R8-1: --write-checked-at only makes sense with --drift (the only mode
+    // that writes manifest_checked_at). Pre-fix it was silently ignored when
+    // passed to other modes — surprising the operator.
+    if (out.writeCheckedAt && !out.drift) {
+        console.error('ERROR: --write-checked-at only valid with --drift (it persists the manifest_checked_at bump after a drift check). Drop the flag or add --drift.');
         process.exit(2);
     }
     return out;

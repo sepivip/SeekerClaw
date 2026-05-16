@@ -116,7 +116,7 @@ v2 schema (see `SCHEMA.md` in this folder for the full spec):
 
 ## The `unsupported.json` companion registry
 
-`unsupported.json` lists **62 additional entries** that exist on pay.sh today but the agent cannot **end-to-end use** yet — either because `agent_pay` can't pay them (protocol/auth gap), it can pay but can't deliver the response (binary content with no channel attachment path), the endpoint didn't return a 402 at probe time (broken / moved / re-routed), or the paid-response shape is contested and unverified.
+`unsupported.json` lists **63 additional entries** that exist on pay.sh today but the agent cannot **end-to-end use** yet — either because `agent_pay` can't pay them (protocol/auth gap), it can pay but can't deliver the response (binary content with no channel attachment path), the endpoint didn't return a 402 at probe time (broken / moved / re-routed), or the paid-response shape is contested and unverified.
 
 v2 schema: top-level object with `entries[]` (same shape as catalog entries + `reason` field) AND a top-level `reasons` object — a registry of `{ <bucket>: { label, explanation, actionable } }` you compose your "why can't you use X?" answers from. Several entries also carry `audit_pending[]` — sibling endpoints found by the BAT-706 audit that aren't catalogued yet (with `deferred_to: BAT-XXX` pointer).
 
