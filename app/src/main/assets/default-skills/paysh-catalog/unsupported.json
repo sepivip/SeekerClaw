@@ -1,8 +1,8 @@
 {
-  "version": 1,
-  "generatedAt": "2026-05-15",
-  "source": "tests/paysh/catalog-summary.md (probe-catalog run 2026-05-14)",
-  "purpose": "Services we KNOW exist on pay.sh but the agent cannot end-to-end use today. Four distinct sub-categories — check the `reason` and the matching `reasons.<code>` entry to know which: (1) CANNOT PAY (protocol/auth) — mpp_protocol / siwx_auth_required / invalid_demand. agent_pay fails at the protocol layer or refuses zero-demand. (2) CAN PAY BUT CANNOT DELIVER — requires_binary_response. agent_pay WOULD succeed and spend USDC, but the response (PNG/audio/video) can't be piped to Telegram/Discord as an attachment yet. (3) NOT 402 AT PROBE — endpoint_not_402_at_probe. Service is listed upstream but our probe got a non-402 status (4xx/5xx/200/301) — broken, moved, or auth-gated differently. (4) UNVERIFIED RESPONSE SHAPE — unverified_paid_response_shape. agent_pay WOULD settle, but available evidence about the response shape is contested or absent (e.g. openapi declares one content-type while product-family inference suggests another). We hold out conservatively until we capture a real paid response. Either way: NEVER call agent_pay on these. For (1) and (3) it fails for free. For (2) and (4) it would burn the user's USDC on output we can't promise we can deliver. Tell the user the service exists, explain the gap, and (if relevant) reference the BAT tracking the fix or suggest a re-probe. Several entries also carry a `note` documenting BAT-706 audit findings — sibling endpoints on the same host that ARE payable but aren't catalogued yet (deferred to BAT-708 for per-endpoint description + safety scoping).",
+  "version": 2,
+  "generated_at": "2026-05-16T15:14:32.266Z",
+  "manifest_checked_at": "2026-05-16T15:14:32.266Z",
+  "source": "BAT-761 migration from v1 (BAT-699 → PR #378 R10) + BAT-706 audit_pending population",
   "reasons": {
     "mpp_protocol": {
       "label": "Multi-Party Protocol (MPP)",
@@ -35,68 +35,2722 @@
       "actionable": false
     }
   },
-  "services": [
-    { "name": "paysponge/screenshotone", "reason": "unverified_paid_response_shape", "note": "ScreenshotOne is a screenshot-as-a-service product (publicly documented at screenshotone.com); PRODUCT-FAMILY INFERENCE alone suggested binary content (PNG/GIF/JPEG/MP4) on /animate and /take. HOWEVER, the captured 402 openapi for the catalog endpoint DECLARES application/json — see tests/paysh/captures/catalog/paysponge-screenshotone.json (resource.mimeType: \"application/json\", bazaar output.type: \"json\"). That CONTRADICTS the binary-by-family inference: the paid response could be a URL- or base64-wrapped JSON envelope we CAN deliver to a channel, or a JSON shape we haven't documented. We have NOT settled a paid call to observe the actual response body. Conservative refuse — deferred to BAT-708 for paid-response capture before catalog inclusion. Updated 2026-05-15 (PR #378 R10) to RETRACT the earlier requires_binary_response classification, which rested on family inference and didn't reconcile with the openapi evidence." },
-    { "name": "dtelecom/voice", "reason": "endpoint_not_402_at_probe", "note": "http_401 at 2026-05-14 probe — auth-gated before 402." },
-    { "name": "merit-systems/stablemerch/merchandise", "reason": "endpoint_not_402_at_probe", "note": "http_400 at 2026-05-14 probe." },
-    { "name": "paysponge/coingecko", "reason": "endpoint_not_402_at_probe", "note": "http_404 at 2026-05-14 probe — endpoint removed; replaced upstream by stablecrypto/market-data which is in catalog.json." },
-    { "name": "paysponge/fal", "reason": "requires_binary_response", "evidence_basis": "product-family-inference", "note": "BAT-706 audit (2026-05-15) confirmed 9 paid endpoints on fal.x402.paysponge.com all return parseable 402 challenges for Solana-USDC: /fal-ai/fast-sdxl ($0.01), /fal-ai/flux/dev ($0.03), /fal-ai/flux-pro/v1.1 ($0.04), /fal-ai/flux-pro/v1.1-ultra ($0.06), /fal-ai/flux/schnell ($0.01), /fal-ai/minimax/video-01 ($0.07), /fal-ai/recraft-v3 ($0.04), /fal-ai/stable-diffusion-v35-large ($0.04), /fal-ai/stable-video ($0.07). Evidence basis for the binary classification: PRODUCT-FAMILY INFERENCE — the endpoint names map to fal-ai's published image- and video-generation models (Flux SDXL, Recraft v3, Stable Diffusion v3.5, Stable Video, Minimax-video) which return PNG/MP4 binary content by their nature. The audit confirms the 402-and-build path works; we have NOT settled a payment and inspected the response body. Follow-up path to upgrade evidence_basis: extract declared response content-types from fal's openapi.json (the audit's fetcher reaches it successfully — see catalog-audit.md enumerating 30 endpoints from it; WebFetch with a different user-agent gets HTTP 403, but probe-catalog.js's UA works). Parsing openapi response.content media types per endpoint would let us flip this to evidence_basis: openapi-response-content-type. Until then we refuse to avoid spending USDC on output the channel can't deliver. See tests/paysh/catalog-audit.md for the parsed_ok evidence (run 2026-05-15 with --audit-side-effects)." },
-    { "name": "paysponge/perplexity", "reason": "endpoint_not_402_at_probe", "note": "Catalog-listed endpoint returned http_200 at 2026-05-14 probe — non-402, agent_pay can't settle that URL. BAT-706 audit (2026-05-15, --audit-side-effects) discovered 3 SIBLING endpoints on the same host that DO return parseable Solana-USDC 402 challenges: /search ($0.01), /v1/agent ($0.01), /v1/async/sonar ($0.01). See tests/paysh/catalog-audit.md for the parsed_ok evidence. These are payable today but NOT yet catalogued — they need per-endpoint description (request body shape, response shape verification) before catalog inclusion. Deferred to BAT-708. Until then, the agent should tell users that perplexity is listed upstream and the catalog URL itself doesn't pay, but BAT-708 will add searchable Perplexity endpoints to the catalog." },
-    { "name": "quicknode/rpc", "reason": "endpoint_not_402_at_probe", "note": "http_401 at 2026-05-14 probe — auth-gated before 402." },
-    { "name": "socialintel/influencer-search", "reason": "endpoint_not_402_at_probe", "note": "http_301 at 2026-05-14 probe — redirected." },
-    { "name": "solana-foundation/alibaba/speech", "reason": "endpoint_not_402_at_probe", "note": "http_200 at 2026-05-14 probe." },
-    { "name": "solana-foundation/alibaba/texttospeech", "reason": "endpoint_not_402_at_probe", "note": "http_500 at 2026-05-14 probe — service-side error." },
-    { "name": "solana-foundation/google/addressvalidation", "reason": "endpoint_not_402_at_probe", "note": "http_404 at 2026-05-14 probe." },
-    { "name": "solana-foundation/google/airquality", "reason": "endpoint_not_402_at_probe", "note": "http_404 at 2026-05-14 probe." },
-    { "name": "solana-foundation/google/bigquery", "reason": "endpoint_not_402_at_probe", "note": "http_404 at 2026-05-14 probe." },
-    { "name": "solana-foundation/google/civicinfo", "reason": "endpoint_not_402_at_probe", "note": "http_400 at 2026-05-14 probe." },
-    { "name": "solana-foundation/google/documentai", "reason": "endpoint_not_402_at_probe", "note": "http_404 at 2026-05-14 probe." },
-    { "name": "solana-foundation/google/factchecktools", "reason": "endpoint_not_402_at_probe", "note": "http_400 at 2026-05-14 probe." },
-    { "name": "solana-foundation/google/generativelanguage", "reason": "endpoint_not_402_at_probe", "note": "http_404 at 2026-05-14 probe." },
-    { "name": "solana-foundation/google/kgsearch", "reason": "endpoint_not_402_at_probe", "note": "http_400 at 2026-05-14 probe." },
-    { "name": "solana-foundation/google/places", "reason": "endpoint_not_402_at_probe", "note": "http_400 at 2026-05-14 probe." },
-    { "name": "solana-foundation/google/texttospeech", "reason": "endpoint_not_402_at_probe", "note": "http_200 at 2026-05-14 probe." },
-    { "name": "solana-foundation/google/translate", "reason": "endpoint_not_402_at_probe", "note": "http_404 at 2026-05-14 probe." },
-    { "name": "solana-foundation/google/vision", "reason": "endpoint_not_402_at_probe", "note": "http_400 at 2026-05-14 probe." },
-    { "name": "agentmail/email", "reason": "invalid_demand" },
-    { "name": "paysponge/nyne", "reason": "invalid_demand", "note": "Catalog-listed endpoint returns 402 amount=0 (free-from-x402's-perspective, refused by agent_pay design). BAT-706 audit (2026-05-15, --audit-side-effects) discovered 2 SIBLING endpoints on the same host that DO have demand and parse OK for Solana-USDC: /person/enrichment ($0.02) and /person/search ($0.02). See tests/paysh/catalog-audit.md. These are payable today but NOT yet catalogued — person-enrichment/search is privacy-sensitive (PII lookup of third parties) and needs explicit safety scoping (authorized-use-only pattern, like 2captcha and textbelt-sms in catalog.json) before catalog inclusion. Deferred to BAT-708." },
-    { "name": "merit-systems/stabledomains/domains", "reason": "siwx_auth_required" },
-    { "name": "merit-systems/stableemail/email", "reason": "siwx_auth_required" },
-    { "name": "merit-systems/stablephone/calls", "reason": "siwx_auth_required" },
-    { "name": "merit-systems/stablesocial/social-data", "reason": "siwx_auth_required" },
-    { "name": "merit-systems/stableupload/hosting", "reason": "siwx_auth_required" },
-    { "name": "solana-foundation/alibaba/agentexplorer", "reason": "mpp_protocol" },
-    { "name": "solana-foundation/alibaba/aigen", "reason": "mpp_protocol" },
-    { "name": "solana-foundation/alibaba/anytrans", "reason": "mpp_protocol" },
-    { "name": "solana-foundation/alibaba/captcha", "reason": "mpp_protocol" },
-    { "name": "solana-foundation/alibaba/contactcenterai", "reason": "mpp_protocol" },
-    { "name": "solana-foundation/alibaba/documentparseservice", "reason": "mpp_protocol" },
-    { "name": "solana-foundation/alibaba/edututor", "reason": "mpp_protocol" },
-    { "name": "solana-foundation/alibaba/embeddings", "reason": "mpp_protocol" },
-    { "name": "solana-foundation/alibaba/facebody", "reason": "mpp_protocol" },
-    { "name": "solana-foundation/alibaba/farui", "reason": "mpp_protocol" },
-    { "name": "solana-foundation/alibaba/goodstech", "reason": "mpp_protocol" },
-    { "name": "solana-foundation/alibaba/green", "reason": "mpp_protocol" },
-    { "name": "solana-foundation/alibaba/imageaudit", "reason": "mpp_protocol" },
-    { "name": "solana-foundation/alibaba/imagerecog", "reason": "mpp_protocol" },
-    { "name": "solana-foundation/alibaba/imageseg", "reason": "mpp_protocol" },
-    { "name": "solana-foundation/alibaba/intelligentspeechinteraction", "reason": "mpp_protocol" },
-    { "name": "solana-foundation/alibaba/iqs", "reason": "mpp_protocol" },
-    { "name": "solana-foundation/alibaba/ivpd", "reason": "mpp_protocol" },
-    { "name": "solana-foundation/alibaba/machinetranslation", "reason": "mpp_protocol" },
-    { "name": "solana-foundation/alibaba/objectdet", "reason": "mpp_protocol" },
-    { "name": "solana-foundation/alibaba/ocr-api", "reason": "mpp_protocol" },
-    { "name": "solana-foundation/alibaba/ocr", "reason": "mpp_protocol" },
-    { "name": "solana-foundation/alibaba/paimodelgallery", "reason": "mpp_protocol" },
-    { "name": "solana-foundation/alibaba/rai", "reason": "mpp_protocol" },
-    { "name": "solana-foundation/alibaba/saf", "reason": "mpp_protocol" },
-    { "name": "solana-foundation/alibaba/translate", "reason": "mpp_protocol" },
-    { "name": "solana-foundation/alibaba/viapi-ocr", "reason": "mpp_protocol" },
-    { "name": "solana-foundation/alibaba/videoenhan", "reason": "mpp_protocol" },
-    { "name": "solana-foundation/alibaba/videorecog", "reason": "mpp_protocol" },
-    { "name": "solana-foundation/alibaba/videoseg", "reason": "mpp_protocol" },
-    { "name": "solana-foundation/google/language", "reason": "mpp_protocol" },
-    { "name": "solana-foundation/google/speech", "reason": "mpp_protocol" },
-    { "name": "solana-foundation/google/videointelligence", "reason": "mpp_protocol" }
+  "entries": [
+    {
+      "id": "paysponge-screenshotone",
+      "service_id": "screenshotone",
+      "name": "paysponge/screenshotone",
+      "upstream_ref": {
+        "operator": "paysponge",
+        "slug": "screenshotone",
+        "pay_md_path": "providers/paysponge/screenshotone/PAY.md",
+        "service_url": "https://screenshotone.x402.paysponge.com"
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/animate",
+        "cost_usdc": null
+      },
+      "reason": "unverified_paid_response_shape",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:36.659Z",
+        "last_capture_path": "tests/paysh/captures/catalog/paysponge-screenshotone.json",
+        "last_captured_at": "2026-05-15T13:11:36.659Z",
+        "probe_status": "parsed_ok"
+      },
+      "note": "ScreenshotOne is a screenshot-as-a-service product (publicly documented at screenshotone.com); PRODUCT-FAMILY INFERENCE alone suggested binary content (PNG/GIF/JPEG/MP4) on /animate and /take. HOWEVER, the captured 402 openapi for the catalog endpoint DECLARES application/json — see tests/paysh/captures/catalog/paysponge-screenshotone.json (resource.mimeType: \"application/json\", bazaar output.type: \"json\"). That CONTRADICTS the binary-by-family inference: the paid response could be a URL- or base64-wrapped JSON envelope we CAN deliver to a channel, or a JSON shape we haven't documented. We have NOT settled a paid call to observe the actual response body. Conservative refuse — deferred to BAT-708 for paid-response capture before catalog inclusion. Updated 2026-05-15 (PR #378 R10) to RETRACT the earlier requires_binary_response classification, which rested on family inference and didn't reconcile with the openapi evidence.",
+      "audit_pending": [
+        {
+          "method": "GET",
+          "path": "/animate",
+          "cost_usdc": 0.02,
+          "deferred_to": "BAT-764"
+        },
+        {
+          "method": "GET",
+          "path": "/take",
+          "cost_usdc": 0.02,
+          "deferred_to": "BAT-764"
+        },
+        {
+          "method": "POST",
+          "path": "/take",
+          "cost_usdc": 0.02,
+          "deferred_to": "BAT-764"
+        }
+      ]
+    },
+    {
+      "id": "dtelecom-voice",
+      "service_id": "voice",
+      "name": "dtelecom/voice",
+      "upstream_ref": {
+        "operator": "dtelecom",
+        "slug": "voice",
+        "pay_md_path": "providers/dtelecom/voice/PAY.md",
+        "service_url": null
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/",
+        "cost_usdc": null
+      },
+      "reason": "endpoint_not_402_at_probe",
+      "verification": {
+        "last_probed_at": null,
+        "last_capture_path": null,
+        "last_captured_at": null,
+        "probe_status": "http_401"
+      },
+      "note": "http_401 at 2026-05-14 probe — auth-gated before 402."
+    },
+    {
+      "id": "merit-systems-stablemerch-merchandise",
+      "service_id": "stablemerch-merchandise",
+      "name": "merit-systems/stablemerch/merchandise",
+      "upstream_ref": {
+        "operator": "merit-systems",
+        "slug": "stablemerch/merchandise",
+        "pay_md_path": "providers/merit-systems/stablemerch/merchandise/PAY.md",
+        "service_url": null
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/",
+        "cost_usdc": null
+      },
+      "reason": "endpoint_not_402_at_probe",
+      "verification": {
+        "last_probed_at": null,
+        "last_capture_path": null,
+        "last_captured_at": null,
+        "probe_status": "http_400"
+      },
+      "note": "http_400 at 2026-05-14 probe."
+    },
+    {
+      "id": "paysponge-coingecko",
+      "service_id": "coingecko",
+      "name": "paysponge/coingecko",
+      "upstream_ref": {
+        "operator": "paysponge",
+        "slug": "coingecko",
+        "pay_md_path": "providers/paysponge/coingecko/PAY.md",
+        "service_url": null
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/",
+        "cost_usdc": null
+      },
+      "reason": "endpoint_not_402_at_probe",
+      "verification": {
+        "last_probed_at": null,
+        "last_capture_path": null,
+        "last_captured_at": null,
+        "probe_status": "http_404"
+      },
+      "note": "http_404 at 2026-05-14 probe — endpoint removed; replaced upstream by stablecrypto/market-data which is in catalog.json."
+    },
+    {
+      "id": "paysponge-fal",
+      "service_id": "fal",
+      "name": "paysponge/fal",
+      "upstream_ref": {
+        "operator": "paysponge",
+        "slug": "fal",
+        "pay_md_path": "providers/paysponge/fal/PAY.md",
+        "service_url": null
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/",
+        "cost_usdc": null
+      },
+      "reason": "requires_binary_response",
+      "verification": {
+        "last_probed_at": null,
+        "last_capture_path": null,
+        "last_captured_at": null,
+        "probe_status": "parsed_ok"
+      },
+      "evidence_basis": "product-family-inference",
+      "note": "BAT-706 audit (2026-05-15) confirmed 9 paid endpoints on fal.x402.paysponge.com all return parseable 402 challenges for Solana-USDC: /fal-ai/fast-sdxl ($0.01), /fal-ai/flux/dev ($0.03), /fal-ai/flux-pro/v1.1 ($0.04), /fal-ai/flux-pro/v1.1-ultra ($0.06), /fal-ai/flux/schnell ($0.01), /fal-ai/minimax/video-01 ($0.07), /fal-ai/recraft-v3 ($0.04), /fal-ai/stable-diffusion-v35-large ($0.04), /fal-ai/stable-video ($0.07). Evidence basis for the binary classification: PRODUCT-FAMILY INFERENCE — the endpoint names map to fal-ai's published image- and video-generation models (Flux SDXL, Recraft v3, Stable Diffusion v3.5, Stable Video, Minimax-video) which return PNG/MP4 binary content by their nature. The audit confirms the 402-and-build path works; we have NOT settled a payment and inspected the response body. Follow-up path to upgrade evidence_basis: extract declared response content-types from fal's openapi.json (the audit's fetcher reaches it successfully — see catalog-audit.md enumerating 30 endpoints from it; WebFetch with a different user-agent gets HTTP 403, but probe-catalog.js's UA works). Parsing openapi response.content media types per endpoint would let us flip this to evidence_basis: openapi-response-content-type. Until then we refuse to avoid spending USDC on output the channel can't deliver. See tests/paysh/catalog-audit.md for the parsed_ok evidence (run 2026-05-15 with --audit-side-effects).",
+      "audit_pending": [
+        {
+          "method": "POST",
+          "path": "/fal-ai/fast-sdxl",
+          "cost_usdc": 0.01,
+          "deferred_to": "BAT-764"
+        },
+        {
+          "method": "POST",
+          "path": "/fal-ai/flux/dev",
+          "cost_usdc": 0.03,
+          "deferred_to": "BAT-764"
+        },
+        {
+          "method": "POST",
+          "path": "/fal-ai/flux-pro/v1.1",
+          "cost_usdc": 0.04,
+          "deferred_to": "BAT-764"
+        },
+        {
+          "method": "POST",
+          "path": "/fal-ai/flux-pro/v1.1-ultra",
+          "cost_usdc": 0.06,
+          "deferred_to": "BAT-764"
+        },
+        {
+          "method": "POST",
+          "path": "/fal-ai/flux/schnell",
+          "cost_usdc": 0.01,
+          "deferred_to": "BAT-764"
+        },
+        {
+          "method": "POST",
+          "path": "/fal-ai/minimax/video-01",
+          "cost_usdc": 0.07,
+          "deferred_to": "BAT-764"
+        },
+        {
+          "method": "POST",
+          "path": "/fal-ai/recraft-v3",
+          "cost_usdc": 0.04,
+          "deferred_to": "BAT-764"
+        },
+        {
+          "method": "POST",
+          "path": "/fal-ai/stable-diffusion-v35-large",
+          "cost_usdc": 0.04,
+          "deferred_to": "BAT-764"
+        },
+        {
+          "method": "POST",
+          "path": "/fal-ai/stable-video",
+          "cost_usdc": 0.07,
+          "deferred_to": "BAT-764"
+        }
+      ]
+    },
+    {
+      "id": "paysponge-perplexity",
+      "service_id": "perplexity",
+      "name": "paysponge/perplexity",
+      "upstream_ref": {
+        "operator": "paysponge",
+        "slug": "perplexity",
+        "pay_md_path": "providers/paysponge/perplexity/PAY.md",
+        "service_url": null
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/",
+        "cost_usdc": null
+      },
+      "reason": "endpoint_not_402_at_probe",
+      "verification": {
+        "last_probed_at": null,
+        "last_capture_path": null,
+        "last_captured_at": null,
+        "probe_status": "http_200"
+      },
+      "note": "Catalog-listed endpoint returned http_200 at 2026-05-14 probe — non-402, agent_pay can't settle that URL. BAT-706 audit (2026-05-15, --audit-side-effects) discovered 3 SIBLING endpoints on the same host that DO return parseable Solana-USDC 402 challenges: /search ($0.01), /v1/agent ($0.01), /v1/async/sonar ($0.01). See tests/paysh/catalog-audit.md for the parsed_ok evidence. These are payable today but NOT yet catalogued — they need per-endpoint description (request body shape, response shape verification) before catalog inclusion. Deferred to BAT-708. Until then, the agent should tell users that perplexity is listed upstream and the catalog URL itself doesn't pay, but BAT-708 will add searchable Perplexity endpoints to the catalog.",
+      "audit_pending": [
+        {
+          "method": "POST",
+          "path": "/search",
+          "cost_usdc": 0.01,
+          "deferred_to": "BAT-769"
+        },
+        {
+          "method": "POST",
+          "path": "/v1/agent",
+          "cost_usdc": 0.01,
+          "deferred_to": "BAT-769"
+        },
+        {
+          "method": "POST",
+          "path": "/v1/async/sonar",
+          "cost_usdc": 0.01,
+          "deferred_to": "BAT-769"
+        }
+      ]
+    },
+    {
+      "id": "quicknode-rpc",
+      "service_id": "rpc",
+      "name": "quicknode/rpc",
+      "upstream_ref": {
+        "operator": "quicknode",
+        "slug": "rpc",
+        "pay_md_path": "providers/quicknode/rpc/PAY.md",
+        "service_url": null
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/",
+        "cost_usdc": null
+      },
+      "reason": "endpoint_not_402_at_probe",
+      "verification": {
+        "last_probed_at": null,
+        "last_capture_path": null,
+        "last_captured_at": null,
+        "probe_status": "http_401"
+      },
+      "note": "http_401 at 2026-05-14 probe — auth-gated before 402.",
+      "audit_pending": [
+        {
+          "method": "POST",
+          "path": "/sql/rest/v1/query",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/0g-galileo/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/0g-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/abstract-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/abstract-testnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/aptos-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/aptos-testnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/arbitrum-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/arbitrum-sepolia/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/arc-testnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/avalanche-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/avalanche-testnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/b3-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/b3-sepolia/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/base-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/base-sepolia/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/bch-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/bch-testnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/bera-bepolia/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/bera-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/blast-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/blast-sepolia/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/bsc-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/bsc-testnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/btc-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/btc-testnet4/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/celestia-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/celestia-mocha/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/celo-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/cosmos-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/cyber-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/cyber-sepolia/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/doge-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/dot-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/ethereum-hoodi/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/ethereum-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/ethereum-sepolia/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/fantom-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/flare-coston2/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/flare-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/flow-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/flow-testnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/fraxtal-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/fuel-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/fuel-sepolia/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/gravity-alpham/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/hedera-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/hedera-testnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/hemi-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/hemi-testnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/hype-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/hype-testnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/imx-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/imx-testnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/injective-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/injective-testnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/ink-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/ink-sepolia/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/joc-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/kaia-kairos/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/kaia-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/lens-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/lens-testnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/linea-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/lisk-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/ltc-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/ltc-testnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/mantle-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/mantle-sepolia/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/matic-amoy/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/matic-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/mode-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/monad-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/monad-testnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/morph-hoodi/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/morph-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/near-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/near-testnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/nova-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/omni-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/omni-omega/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/optimism-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/optimism-sepolia/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/osmosis-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/peaq-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/plasma-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/plasma-testnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/redstone-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/sahara-testnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/scroll-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/scroll-testnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/sei-atlantic/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/sei-pacific/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/solana-devnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/solana-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/solana-testnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/soneium-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/sonic-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/sophon-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/sophon-testnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/stacks-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/stacks-testnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/stellar-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/stellar-testnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/story-aeneid/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/story-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/strk-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/strk-sepolia/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/sui-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/sui-testnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/tempo-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/tempo-testnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/ton-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/tron-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/unichain-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/unichain-sepolia/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/vana-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/vana-moksha/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/worldchain-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/worldchain-sepolia/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/xai-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/xai-testnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/xdai-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/xlayer-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/xlayer-testnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/xrp-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/xrp-testnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/xrplevm-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/xrplevm-testnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/zkevm-cardona/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/zkevm-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/zksync-mainnet/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/zksync-sepolia/",
+          "cost_usdc": 1,
+          "deferred_to": null
+        }
+      ]
+    },
+    {
+      "id": "socialintel-influencer-search",
+      "service_id": "influencer-search",
+      "name": "socialintel/influencer-search",
+      "upstream_ref": {
+        "operator": "socialintel",
+        "slug": "influencer-search",
+        "pay_md_path": "providers/socialintel/influencer-search/PAY.md",
+        "service_url": null
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/",
+        "cost_usdc": null
+      },
+      "reason": "endpoint_not_402_at_probe",
+      "verification": {
+        "last_probed_at": null,
+        "last_capture_path": null,
+        "last_captured_at": null,
+        "probe_status": "http_301"
+      },
+      "note": "http_301 at 2026-05-14 probe — redirected."
+    },
+    {
+      "id": "solana-foundation-alibaba-speech",
+      "service_id": "alibaba-speech",
+      "name": "solana-foundation/alibaba/speech",
+      "upstream_ref": {
+        "operator": "solana-foundation",
+        "slug": "alibaba/speech",
+        "pay_md_path": "providers/solana-foundation/alibaba/speech/PAY.md",
+        "service_url": null
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/",
+        "cost_usdc": null
+      },
+      "reason": "endpoint_not_402_at_probe",
+      "verification": {
+        "last_probed_at": null,
+        "last_capture_path": null,
+        "last_captured_at": null,
+        "probe_status": "http_200"
+      },
+      "note": "http_200 at 2026-05-14 probe."
+    },
+    {
+      "id": "solana-foundation-alibaba-texttospeech",
+      "service_id": "alibaba-texttospeech",
+      "name": "solana-foundation/alibaba/texttospeech",
+      "upstream_ref": {
+        "operator": "solana-foundation",
+        "slug": "alibaba/texttospeech",
+        "pay_md_path": "providers/solana-foundation/alibaba/texttospeech/PAY.md",
+        "service_url": null
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/",
+        "cost_usdc": null
+      },
+      "reason": "endpoint_not_402_at_probe",
+      "verification": {
+        "last_probed_at": null,
+        "last_capture_path": null,
+        "last_captured_at": null,
+        "probe_status": "http_500"
+      },
+      "note": "http_500 at 2026-05-14 probe — service-side error."
+    },
+    {
+      "id": "solana-foundation-google-addressvalidation",
+      "service_id": "google-addressvalidation",
+      "name": "solana-foundation/google/addressvalidation",
+      "upstream_ref": {
+        "operator": "solana-foundation",
+        "slug": "google/addressvalidation",
+        "pay_md_path": "providers/solana-foundation/google/addressvalidation/PAY.md",
+        "service_url": null
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/",
+        "cost_usdc": null
+      },
+      "reason": "endpoint_not_402_at_probe",
+      "verification": {
+        "last_probed_at": null,
+        "last_capture_path": null,
+        "last_captured_at": null,
+        "probe_status": "http_404"
+      },
+      "note": "http_404 at 2026-05-14 probe."
+    },
+    {
+      "id": "solana-foundation-google-airquality",
+      "service_id": "google-airquality",
+      "name": "solana-foundation/google/airquality",
+      "upstream_ref": {
+        "operator": "solana-foundation",
+        "slug": "google/airquality",
+        "pay_md_path": "providers/solana-foundation/google/airquality/PAY.md",
+        "service_url": null
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/",
+        "cost_usdc": null
+      },
+      "reason": "endpoint_not_402_at_probe",
+      "verification": {
+        "last_probed_at": null,
+        "last_capture_path": null,
+        "last_captured_at": null,
+        "probe_status": "http_404"
+      },
+      "note": "http_404 at 2026-05-14 probe."
+    },
+    {
+      "id": "solana-foundation-google-bigquery",
+      "service_id": "google-bigquery",
+      "name": "solana-foundation/google/bigquery",
+      "upstream_ref": {
+        "operator": "solana-foundation",
+        "slug": "google/bigquery",
+        "pay_md_path": "providers/solana-foundation/google/bigquery/PAY.md",
+        "service_url": null
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/",
+        "cost_usdc": null
+      },
+      "reason": "endpoint_not_402_at_probe",
+      "verification": {
+        "last_probed_at": null,
+        "last_capture_path": null,
+        "last_captured_at": null,
+        "probe_status": "http_404"
+      },
+      "note": "http_404 at 2026-05-14 probe."
+    },
+    {
+      "id": "solana-foundation-google-civicinfo",
+      "service_id": "google-civicinfo",
+      "name": "solana-foundation/google/civicinfo",
+      "upstream_ref": {
+        "operator": "solana-foundation",
+        "slug": "google/civicinfo",
+        "pay_md_path": "providers/solana-foundation/google/civicinfo/PAY.md",
+        "service_url": null
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/",
+        "cost_usdc": null
+      },
+      "reason": "endpoint_not_402_at_probe",
+      "verification": {
+        "last_probed_at": null,
+        "last_capture_path": null,
+        "last_captured_at": null,
+        "probe_status": "http_400"
+      },
+      "note": "http_400 at 2026-05-14 probe."
+    },
+    {
+      "id": "solana-foundation-google-documentai",
+      "service_id": "google-documentai",
+      "name": "solana-foundation/google/documentai",
+      "upstream_ref": {
+        "operator": "solana-foundation",
+        "slug": "google/documentai",
+        "pay_md_path": "providers/solana-foundation/google/documentai/PAY.md",
+        "service_url": null
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/",
+        "cost_usdc": null
+      },
+      "reason": "endpoint_not_402_at_probe",
+      "verification": {
+        "last_probed_at": null,
+        "last_capture_path": null,
+        "last_captured_at": null,
+        "probe_status": "http_404"
+      },
+      "note": "http_404 at 2026-05-14 probe."
+    },
+    {
+      "id": "solana-foundation-google-factchecktools",
+      "service_id": "google-factchecktools",
+      "name": "solana-foundation/google/factchecktools",
+      "upstream_ref": {
+        "operator": "solana-foundation",
+        "slug": "google/factchecktools",
+        "pay_md_path": "providers/solana-foundation/google/factchecktools/PAY.md",
+        "service_url": null
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/",
+        "cost_usdc": null
+      },
+      "reason": "endpoint_not_402_at_probe",
+      "verification": {
+        "last_probed_at": null,
+        "last_capture_path": null,
+        "last_captured_at": null,
+        "probe_status": "http_400"
+      },
+      "note": "http_400 at 2026-05-14 probe."
+    },
+    {
+      "id": "solana-foundation-google-generativelanguage",
+      "service_id": "google-generativelanguage",
+      "name": "solana-foundation/google/generativelanguage",
+      "upstream_ref": {
+        "operator": "solana-foundation",
+        "slug": "google/generativelanguage",
+        "pay_md_path": "providers/solana-foundation/google/generativelanguage/PAY.md",
+        "service_url": null
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/",
+        "cost_usdc": null
+      },
+      "reason": "endpoint_not_402_at_probe",
+      "verification": {
+        "last_probed_at": null,
+        "last_capture_path": null,
+        "last_captured_at": null,
+        "probe_status": "http_404"
+      },
+      "note": "http_404 at 2026-05-14 probe."
+    },
+    {
+      "id": "solana-foundation-google-kgsearch",
+      "service_id": "google-kgsearch",
+      "name": "solana-foundation/google/kgsearch",
+      "upstream_ref": {
+        "operator": "solana-foundation",
+        "slug": "google/kgsearch",
+        "pay_md_path": "providers/solana-foundation/google/kgsearch/PAY.md",
+        "service_url": null
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/",
+        "cost_usdc": null
+      },
+      "reason": "endpoint_not_402_at_probe",
+      "verification": {
+        "last_probed_at": null,
+        "last_capture_path": null,
+        "last_captured_at": null,
+        "probe_status": "http_400"
+      },
+      "note": "http_400 at 2026-05-14 probe."
+    },
+    {
+      "id": "solana-foundation-google-places",
+      "service_id": "google-places",
+      "name": "solana-foundation/google/places",
+      "upstream_ref": {
+        "operator": "solana-foundation",
+        "slug": "google/places",
+        "pay_md_path": "providers/solana-foundation/google/places/PAY.md",
+        "service_url": null
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/",
+        "cost_usdc": null
+      },
+      "reason": "endpoint_not_402_at_probe",
+      "verification": {
+        "last_probed_at": null,
+        "last_capture_path": null,
+        "last_captured_at": null,
+        "probe_status": "http_400"
+      },
+      "note": "http_400 at 2026-05-14 probe."
+    },
+    {
+      "id": "solana-foundation-google-texttospeech",
+      "service_id": "google-texttospeech",
+      "name": "solana-foundation/google/texttospeech",
+      "upstream_ref": {
+        "operator": "solana-foundation",
+        "slug": "google/texttospeech",
+        "pay_md_path": "providers/solana-foundation/google/texttospeech/PAY.md",
+        "service_url": null
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/",
+        "cost_usdc": null
+      },
+      "reason": "endpoint_not_402_at_probe",
+      "verification": {
+        "last_probed_at": null,
+        "last_capture_path": null,
+        "last_captured_at": null,
+        "probe_status": "http_200"
+      },
+      "note": "http_200 at 2026-05-14 probe."
+    },
+    {
+      "id": "solana-foundation-google-translate",
+      "service_id": "google-translate",
+      "name": "solana-foundation/google/translate",
+      "upstream_ref": {
+        "operator": "solana-foundation",
+        "slug": "google/translate",
+        "pay_md_path": "providers/solana-foundation/google/translate/PAY.md",
+        "service_url": null
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/",
+        "cost_usdc": null
+      },
+      "reason": "endpoint_not_402_at_probe",
+      "verification": {
+        "last_probed_at": null,
+        "last_capture_path": null,
+        "last_captured_at": null,
+        "probe_status": "http_404"
+      },
+      "note": "http_404 at 2026-05-14 probe."
+    },
+    {
+      "id": "solana-foundation-google-vision",
+      "service_id": "google-vision",
+      "name": "solana-foundation/google/vision",
+      "upstream_ref": {
+        "operator": "solana-foundation",
+        "slug": "google/vision",
+        "pay_md_path": "providers/solana-foundation/google/vision/PAY.md",
+        "service_url": null
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/",
+        "cost_usdc": null
+      },
+      "reason": "endpoint_not_402_at_probe",
+      "verification": {
+        "last_probed_at": null,
+        "last_capture_path": null,
+        "last_captured_at": null,
+        "probe_status": "http_400"
+      },
+      "note": "http_400 at 2026-05-14 probe."
+    },
+    {
+      "id": "agentmail-email",
+      "service_id": "email",
+      "name": "agentmail/email",
+      "upstream_ref": {
+        "operator": "agentmail",
+        "slug": "email",
+        "pay_md_path": "providers/agentmail/email/PAY.md",
+        "service_url": "https://x402.api.agentmail.to"
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/v0/pods",
+        "cost_usdc": null
+      },
+      "reason": "invalid_demand",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:35.479Z",
+        "last_capture_path": "tests/paysh/captures/catalog/agentmail-email.json",
+        "last_captured_at": "2026-05-15T13:11:35.479Z",
+        "probe_status": "parsed_ok"
+      },
+      "audit_pending": [
+        {
+          "method": "POST",
+          "path": "/v0/pods",
+          "cost_usdc": 0.01,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/v0/domains",
+          "cost_usdc": 10,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/v0/inboxes",
+          "cost_usdc": 2,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/v0/webhooks",
+          "cost_usdc": 0.01,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/v0/pods/probe/domains",
+          "cost_usdc": 10,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/v0/pods/probe/inboxes",
+          "cost_usdc": 2,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/v0/lists/probe/probe",
+          "cost_usdc": 0.01,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/v0/pods/probe/lists/probe/probe",
+          "cost_usdc": 0.01,
+          "deferred_to": null
+        }
+      ]
+    },
+    {
+      "id": "paysponge-nyne",
+      "service_id": "nyne",
+      "name": "paysponge/nyne",
+      "upstream_ref": {
+        "operator": "paysponge",
+        "slug": "nyne",
+        "pay_md_path": "providers/paysponge/nyne/PAY.md",
+        "service_url": "https://api.paysponge.com"
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/x402/purchase/svc_d5ymfernpzeh58gb8/person/enrichment",
+        "cost_usdc": null
+      },
+      "reason": "invalid_demand",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:35.889Z",
+        "last_capture_path": "tests/paysh/captures/catalog/paysponge-nyne.json",
+        "last_captured_at": "2026-05-15T13:11:35.889Z",
+        "probe_status": "parsed_ok"
+      },
+      "note": "Catalog-listed endpoint returns 402 amount=0 (free-from-x402's-perspective, refused by agent_pay design). BAT-706 audit (2026-05-15, --audit-side-effects) discovered 2 SIBLING endpoints on the same host that DO have demand and parse OK for Solana-USDC: /person/enrichment ($0.02) and /person/search ($0.02). See tests/paysh/catalog-audit.md. These are payable today but NOT yet catalogued — person-enrichment/search is privacy-sensitive (PII lookup of third parties) and needs explicit safety scoping (authorized-use-only pattern, like 2captcha and textbelt-sms in catalog.json) before catalog inclusion. Deferred to BAT-708.",
+      "audit_pending": [
+        {
+          "method": "POST",
+          "path": "/person/enrichment",
+          "cost_usdc": 0.02,
+          "deferred_to": "BAT-772"
+        },
+        {
+          "method": "POST",
+          "path": "/person/search",
+          "cost_usdc": 0.02,
+          "deferred_to": "BAT-772"
+        }
+      ]
+    },
+    {
+      "id": "merit-systems-stabledomains-domains",
+      "service_id": "stabledomains-domains",
+      "name": "merit-systems/stabledomains/domains",
+      "upstream_ref": {
+        "operator": "merit-systems",
+        "slug": "stabledomains/domains",
+        "pay_md_path": "providers/merit-systems/stabledomains/domains/PAY.md",
+        "service_url": "https://stabledomains.dev"
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/api/domain/list",
+        "cost_usdc": null
+      },
+      "reason": "siwx_auth_required",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:35.355Z",
+        "last_capture_path": "tests/paysh/captures/catalog/merit-systems-stabledomains_domains.json",
+        "last_captured_at": "2026-05-15T13:11:35.355Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "merit-systems-stableemail-email",
+      "service_id": "stableemail-email",
+      "name": "merit-systems/stableemail/email",
+      "upstream_ref": {
+        "operator": "merit-systems",
+        "slug": "stableemail/email",
+        "pay_md_path": "providers/merit-systems/stableemail/email/PAY.md",
+        "service_url": "https://stableemail.dev"
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/api/subdomain/status",
+        "cost_usdc": null
+      },
+      "reason": "siwx_auth_required",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:35.253Z",
+        "last_capture_path": "tests/paysh/captures/catalog/merit-systems-stableemail_email.json",
+        "last_captured_at": "2026-05-15T13:11:35.253Z",
+        "probe_status": "parsed_ok"
+      },
+      "audit_pending": [
+        {
+          "method": "POST",
+          "path": "/api/inbox/topup/year",
+          "cost_usdc": 8,
+          "deferred_to": "BAT-770"
+        },
+        {
+          "method": "POST",
+          "path": "/api/inbox/messages",
+          "cost_usdc": 0.001,
+          "deferred_to": "BAT-770"
+        },
+        {
+          "method": "POST",
+          "path": "/api/send",
+          "cost_usdc": 0.02,
+          "deferred_to": "BAT-770"
+        },
+        {
+          "method": "POST",
+          "path": "/api/subdomain/send",
+          "cost_usdc": 0.005,
+          "deferred_to": "BAT-770"
+        },
+        {
+          "method": "POST",
+          "path": "/api/inbox/send",
+          "cost_usdc": 0.005,
+          "deferred_to": "BAT-770"
+        },
+        {
+          "method": "POST",
+          "path": "/api/inbox/topup",
+          "cost_usdc": 1,
+          "deferred_to": "BAT-770"
+        },
+        {
+          "method": "POST",
+          "path": "/api/inbox/topup/quarter",
+          "cost_usdc": 2.5,
+          "deferred_to": "BAT-770"
+        },
+        {
+          "method": "POST",
+          "path": "/api/inbox/messages/read",
+          "cost_usdc": 0.001,
+          "deferred_to": "BAT-770"
+        },
+        {
+          "method": "POST",
+          "path": "/api/subdomain/inbox/create",
+          "cost_usdc": 0.25,
+          "deferred_to": "BAT-770"
+        },
+        {
+          "method": "POST",
+          "path": "/api/subdomain/inbox/messages",
+          "cost_usdc": 0.001,
+          "deferred_to": "BAT-770"
+        },
+        {
+          "method": "POST",
+          "path": "/api/subdomain/inbox/messages/read",
+          "cost_usdc": 0.001,
+          "deferred_to": "BAT-770"
+        }
+      ]
+    },
+    {
+      "id": "merit-systems-stablephone-calls",
+      "service_id": "stablephone-calls",
+      "name": "merit-systems/stablephone/calls",
+      "upstream_ref": {
+        "operator": "merit-systems",
+        "slug": "stablephone/calls",
+        "pay_md_path": "providers/merit-systems/stablephone/calls/PAY.md",
+        "service_url": "https://stablephone.dev"
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/api/numbers",
+        "cost_usdc": null
+      },
+      "reason": "siwx_auth_required",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:35.946Z",
+        "last_capture_path": "tests/paysh/captures/catalog/merit-systems-stablephone_calls.json",
+        "last_captured_at": "2026-05-15T13:11:35.946Z",
+        "probe_status": "parsed_ok"
+      },
+      "audit_pending": [
+        {
+          "method": "POST",
+          "path": "/api/lookup",
+          "cost_usdc": 0.05,
+          "deferred_to": "BAT-771"
+        },
+        {
+          "method": "POST",
+          "path": "/api/number",
+          "cost_usdc": 20,
+          "deferred_to": "BAT-771"
+        },
+        {
+          "method": "POST",
+          "path": "/api/number/topup",
+          "cost_usdc": 15,
+          "deferred_to": "BAT-771"
+        }
+      ]
+    },
+    {
+      "id": "merit-systems-stablesocial-social-data",
+      "service_id": "stablesocial-social-data",
+      "name": "merit-systems/stablesocial/social-data",
+      "upstream_ref": {
+        "operator": "merit-systems",
+        "slug": "stablesocial/social-data",
+        "pay_md_path": "providers/merit-systems/stablesocial/social-data/PAY.md",
+        "service_url": "https://stablesocial.dev"
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/api/jobs",
+        "cost_usdc": null
+      },
+      "reason": "siwx_auth_required",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:35.942Z",
+        "last_capture_path": "tests/paysh/captures/catalog/merit-systems-stablesocial_social-data.json",
+        "last_captured_at": "2026-05-15T13:11:35.942Z",
+        "probe_status": "parsed_ok"
+      },
+      "audit_pending": [
+        {
+          "method": "POST",
+          "path": "/api/facebook/post-comments",
+          "cost_usdc": 0.06,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/tiktok/profile",
+          "cost_usdc": 0.06,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/instagram/comment-replies",
+          "cost_usdc": 0.06,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/reddit/search",
+          "cost_usdc": 0.06,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/facebook/search-people",
+          "cost_usdc": 0.06,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/tiktok/comment-replies",
+          "cost_usdc": 0.06,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/facebook/following",
+          "cost_usdc": 0.06,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/tiktok/posts",
+          "cost_usdc": 0.06,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/tiktok/post-comments",
+          "cost_usdc": 0.06,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/tiktok/followers",
+          "cost_usdc": 0.06,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/tiktok/following",
+          "cost_usdc": 0.06,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/tiktok/search",
+          "cost_usdc": 0.06,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/tiktok/search-hashtag",
+          "cost_usdc": 0.06,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/tiktok/search-profiles",
+          "cost_usdc": 0.06,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/tiktok/search-music",
+          "cost_usdc": 0.06,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/instagram/profile",
+          "cost_usdc": 0.06,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/instagram/posts",
+          "cost_usdc": 0.06,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/instagram/post-comments",
+          "cost_usdc": 0.06,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/instagram/followers",
+          "cost_usdc": 0.06,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/instagram/following",
+          "cost_usdc": 0.06,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/instagram/stories",
+          "cost_usdc": 0.06,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/instagram/highlights",
+          "cost_usdc": 0.06,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/instagram/search",
+          "cost_usdc": 0.06,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/instagram/search-tags",
+          "cost_usdc": 0.06,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/facebook/profile",
+          "cost_usdc": 0.06,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/facebook/posts",
+          "cost_usdc": 0.06,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/facebook/comment-replies",
+          "cost_usdc": 0.06,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/facebook/followers",
+          "cost_usdc": 0.06,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/facebook/search",
+          "cost_usdc": 0.06,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/facebook/search-pages",
+          "cost_usdc": 0.06,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/facebook/search-groups",
+          "cost_usdc": 0.06,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/reddit/post",
+          "cost_usdc": 0.06,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/reddit/post-comments",
+          "cost_usdc": 0.06,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/reddit/comment",
+          "cost_usdc": 0.06,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/reddit/search-profiles",
+          "cost_usdc": 0.06,
+          "deferred_to": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/reddit/subreddit",
+          "cost_usdc": 0.06,
+          "deferred_to": null
+        }
+      ]
+    },
+    {
+      "id": "merit-systems-stableupload-hosting",
+      "service_id": "stableupload-hosting",
+      "name": "merit-systems/stableupload/hosting",
+      "upstream_ref": {
+        "operator": "merit-systems",
+        "slug": "stableupload/hosting",
+        "pay_md_path": "providers/merit-systems/stableupload/hosting/PAY.md",
+        "service_url": "https://stableupload.dev"
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/api/site/domain/status",
+        "cost_usdc": null
+      },
+      "reason": "siwx_auth_required",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:35.649Z",
+        "last_capture_path": "tests/paysh/captures/catalog/merit-systems-stableupload_hosting.json",
+        "last_captured_at": "2026-05-15T13:11:35.649Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "solana-foundation-alibaba-agentexplorer",
+      "service_id": "alibaba-agentexplorer",
+      "name": "solana-foundation/alibaba/agentexplorer",
+      "upstream_ref": {
+        "operator": "solana-foundation",
+        "slug": "alibaba/agentexplorer",
+        "pay_md_path": "providers/solana-foundation/alibaba/agentexplorer/PAY.md",
+        "service_url": "https://agentexplorer.alibaba.gateway-402.com"
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/openapi/categories",
+        "cost_usdc": null
+      },
+      "reason": "mpp_protocol",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:37.475Z",
+        "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_agentexplorer.json",
+        "last_captured_at": "2026-05-15T13:11:37.475Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "solana-foundation-alibaba-aigen",
+      "service_id": "alibaba-aigen",
+      "name": "solana-foundation/alibaba/aigen",
+      "upstream_ref": {
+        "operator": "solana-foundation",
+        "slug": "alibaba/aigen",
+        "pay_md_path": "providers/solana-foundation/alibaba/aigen/PAY.md",
+        "service_url": "https://aigen.alibaba.gateway-402.com"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/generate-cosplay-image",
+        "cost_usdc": null
+      },
+      "reason": "mpp_protocol",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:37.596Z",
+        "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_aigen.json",
+        "last_captured_at": "2026-05-15T13:11:37.596Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "solana-foundation-alibaba-anytrans",
+      "service_id": "alibaba-anytrans",
+      "name": "solana-foundation/alibaba/anytrans",
+      "upstream_ref": {
+        "operator": "solana-foundation",
+        "slug": "alibaba/anytrans",
+        "pay_md_path": "providers/solana-foundation/alibaba/anytrans/PAY.md",
+        "service_url": "https://anytrans.alibaba.gateway-402.com"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/anytrans/translate/batch",
+        "cost_usdc": null
+      },
+      "reason": "mpp_protocol",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:37.575Z",
+        "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_anytrans.json",
+        "last_captured_at": "2026-05-15T13:11:37.575Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "solana-foundation-alibaba-captcha",
+      "service_id": "alibaba-captcha",
+      "name": "solana-foundation/alibaba/captcha",
+      "upstream_ref": {
+        "operator": "solana-foundation",
+        "slug": "alibaba/captcha",
+        "pay_md_path": "providers/solana-foundation/alibaba/captcha/PAY.md",
+        "service_url": "https://captcha.alibaba.gateway-402.com"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/verify-intelligent-captcha",
+        "cost_usdc": null
+      },
+      "reason": "mpp_protocol",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:37.685Z",
+        "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_captcha.json",
+        "last_captured_at": "2026-05-15T13:11:37.685Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "solana-foundation-alibaba-contactcenterai",
+      "service_id": "alibaba-contactcenterai",
+      "name": "solana-foundation/alibaba/contactcenterai",
+      "upstream_ref": {
+        "operator": "solana-foundation",
+        "slug": "alibaba/contactcenterai",
+        "pay_md_path": "providers/solana-foundation/alibaba/contactcenterai/PAY.md",
+        "service_url": "https://contactcenterai.alibaba.gateway-402.com"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/probe/ccai/app/probe/analyzeAudioSync",
+        "cost_usdc": null
+      },
+      "reason": "mpp_protocol",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:37.617Z",
+        "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_contactcenterai.json",
+        "last_captured_at": "2026-05-15T13:11:37.617Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "solana-foundation-alibaba-documentparseservice",
+      "service_id": "alibaba-documentparseservice",
+      "name": "solana-foundation/alibaba/documentparseservice",
+      "upstream_ref": {
+        "operator": "solana-foundation",
+        "slug": "alibaba/documentparseservice",
+        "pay_md_path": "providers/solana-foundation/alibaba/documentparseservice/PAY.md",
+        "service_url": "https://documentparseservice.alibaba.gateway-402.com"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/document-parse-online-api",
+        "cost_usdc": null
+      },
+      "reason": "mpp_protocol",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:37.586Z",
+        "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_documentparseservice.json",
+        "last_captured_at": "2026-05-15T13:11:37.586Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "solana-foundation-alibaba-edututor",
+      "service_id": "alibaba-edututor",
+      "name": "solana-foundation/alibaba/edututor",
+      "upstream_ref": {
+        "operator": "solana-foundation",
+        "slug": "alibaba/edututor",
+        "pay_md_path": "providers/solana-foundation/alibaba/edututor/PAY.md",
+        "service_url": "https://edututor.alibaba.gateway-402.com"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/service/cutApi",
+        "cost_usdc": null
+      },
+      "reason": "mpp_protocol",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:37.775Z",
+        "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_edututor.json",
+        "last_captured_at": "2026-05-15T13:11:37.775Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "solana-foundation-alibaba-embeddings",
+      "service_id": "alibaba-embeddings",
+      "name": "solana-foundation/alibaba/embeddings",
+      "upstream_ref": {
+        "operator": "solana-foundation",
+        "slug": "alibaba/embeddings",
+        "pay_md_path": "providers/solana-foundation/alibaba/embeddings/PAY.md",
+        "service_url": "https://embeddings.alibaba.gateway-402.com"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/compatible-mode/v1/embeddings",
+        "cost_usdc": null
+      },
+      "reason": "mpp_protocol",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:37.893Z",
+        "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_embeddings.json",
+        "last_captured_at": "2026-05-15T13:11:37.893Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "solana-foundation-alibaba-facebody",
+      "service_id": "alibaba-facebody",
+      "name": "solana-foundation/alibaba/facebody",
+      "upstream_ref": {
+        "operator": "solana-foundation",
+        "slug": "alibaba/facebody",
+        "pay_md_path": "providers/solana-foundation/alibaba/facebody/PAY.md",
+        "service_url": "https://facebody.alibaba.gateway-402.com"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/blur-face",
+        "cost_usdc": null
+      },
+      "reason": "mpp_protocol",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:38.607Z",
+        "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_facebody.json",
+        "last_captured_at": "2026-05-15T13:11:38.607Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "solana-foundation-alibaba-farui",
+      "service_id": "alibaba-farui",
+      "name": "solana-foundation/alibaba/farui",
+      "upstream_ref": {
+        "operator": "solana-foundation",
+        "slug": "alibaba/farui",
+        "pay_md_path": "providers/solana-foundation/alibaba/farui/PAY.md",
+        "service_url": "https://farui.alibaba.gateway-402.com"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/probe/farui/contract/result/genarate",
+        "cost_usdc": null
+      },
+      "reason": "mpp_protocol",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:38.615Z",
+        "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_farui.json",
+        "last_captured_at": "2026-05-15T13:11:38.615Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "solana-foundation-alibaba-goodstech",
+      "service_id": "alibaba-goodstech",
+      "name": "solana-foundation/alibaba/goodstech",
+      "upstream_ref": {
+        "operator": "solana-foundation",
+        "slug": "alibaba/goodstech",
+        "pay_md_path": "providers/solana-foundation/alibaba/goodstech/PAY.md",
+        "service_url": "https://goodstech.alibaba.gateway-402.com"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/classify-commodity",
+        "cost_usdc": null
+      },
+      "reason": "mpp_protocol",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:38.711Z",
+        "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_goodstech.json",
+        "last_captured_at": "2026-05-15T13:11:38.711Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "solana-foundation-alibaba-green",
+      "service_id": "alibaba-green",
+      "name": "solana-foundation/alibaba/green",
+      "upstream_ref": {
+        "operator": "solana-foundation",
+        "slug": "alibaba/green",
+        "pay_md_path": "providers/solana-foundation/alibaba/green/PAY.md",
+        "service_url": "https://green.alibaba.gateway-402.com"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/image-batch-moderation",
+        "cost_usdc": null
+      },
+      "reason": "mpp_protocol",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:38.699Z",
+        "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_green.json",
+        "last_captured_at": "2026-05-15T13:11:38.699Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "solana-foundation-alibaba-imageaudit",
+      "service_id": "alibaba-imageaudit",
+      "name": "solana-foundation/alibaba/imageaudit",
+      "upstream_ref": {
+        "operator": "solana-foundation",
+        "slug": "alibaba/imageaudit",
+        "pay_md_path": "providers/solana-foundation/alibaba/imageaudit/PAY.md",
+        "service_url": "https://imageaudit.alibaba.gateway-402.com"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/scan-image",
+        "cost_usdc": null
+      },
+      "reason": "mpp_protocol",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:38.827Z",
+        "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_imageaudit.json",
+        "last_captured_at": "2026-05-15T13:11:38.827Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "solana-foundation-alibaba-imagerecog",
+      "service_id": "alibaba-imagerecog",
+      "name": "solana-foundation/alibaba/imagerecog",
+      "upstream_ref": {
+        "operator": "solana-foundation",
+        "slug": "alibaba/imagerecog",
+        "pay_md_path": "providers/solana-foundation/alibaba/imagerecog/PAY.md",
+        "service_url": "https://imagerecog.alibaba.gateway-402.com"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/classifying-rubbish",
+        "cost_usdc": null
+      },
+      "reason": "mpp_protocol",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:38.804Z",
+        "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_imagerecog.json",
+        "last_captured_at": "2026-05-15T13:11:38.804Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "solana-foundation-alibaba-imageseg",
+      "service_id": "alibaba-imageseg",
+      "name": "solana-foundation/alibaba/imageseg",
+      "upstream_ref": {
+        "operator": "solana-foundation",
+        "slug": "alibaba/imageseg",
+        "pay_md_path": "providers/solana-foundation/alibaba/imageseg/PAY.md",
+        "service_url": "https://imageseg.alibaba.gateway-402.com"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/change-sky",
+        "cost_usdc": null
+      },
+      "reason": "mpp_protocol",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:38.813Z",
+        "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_imageseg.json",
+        "last_captured_at": "2026-05-15T13:11:38.813Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "solana-foundation-alibaba-intelligentspeechinteraction",
+      "service_id": "alibaba-intelligentspeechinteraction",
+      "name": "solana-foundation/alibaba/intelligentspeechinteraction",
+      "upstream_ref": {
+        "operator": "solana-foundation",
+        "slug": "alibaba/intelligentspeechinteraction",
+        "pay_md_path": "providers/solana-foundation/alibaba/intelligentspeechinteraction/PAY.md",
+        "service_url": "https://intelligentspeechinteraction.alibaba.gateway-402.com"
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/stream/v1/tts",
+        "cost_usdc": null
+      },
+      "reason": "mpp_protocol",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:39.015Z",
+        "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_intelligentspeechinteraction.json",
+        "last_captured_at": "2026-05-15T13:11:39.015Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "solana-foundation-alibaba-iqs",
+      "service_id": "alibaba-iqs",
+      "name": "solana-foundation/alibaba/iqs",
+      "upstream_ref": {
+        "operator": "solana-foundation",
+        "slug": "alibaba/iqs",
+        "pay_md_path": "providers/solana-foundation/alibaba/iqs/PAY.md",
+        "service_url": "https://iqs.alibaba.gateway-402.com"
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/linked-retrieval/linked-retrieval-entry/v1/iqs/search/global",
+        "cost_usdc": null
+      },
+      "reason": "mpp_protocol",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:39.764Z",
+        "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_iqs.json",
+        "last_captured_at": "2026-05-15T13:11:39.764Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "solana-foundation-alibaba-ivpd",
+      "service_id": "alibaba-ivpd",
+      "name": "solana-foundation/alibaba/ivpd",
+      "upstream_ref": {
+        "operator": "solana-foundation",
+        "slug": "alibaba/ivpd",
+        "pay_md_path": "providers/solana-foundation/alibaba/ivpd/PAY.md",
+        "service_url": "https://ivpd.alibaba.gateway-402.com"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/change-image-size",
+        "cost_usdc": null
+      },
+      "reason": "mpp_protocol",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:39.748Z",
+        "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_ivpd.json",
+        "last_captured_at": "2026-05-15T13:11:39.748Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "solana-foundation-alibaba-machinetranslation",
+      "service_id": "alibaba-machinetranslation",
+      "name": "solana-foundation/alibaba/machinetranslation",
+      "upstream_ref": {
+        "operator": "solana-foundation",
+        "slug": "alibaba/machinetranslation",
+        "pay_md_path": "providers/solana-foundation/alibaba/machinetranslation/PAY.md",
+        "service_url": "https://machinetranslation.alibaba.gateway-402.com"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/api/translate/web/ecommerce",
+        "cost_usdc": null
+      },
+      "reason": "mpp_protocol",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:39.638Z",
+        "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_machinetranslation.json",
+        "last_captured_at": "2026-05-15T13:11:39.638Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "solana-foundation-alibaba-objectdet",
+      "service_id": "alibaba-objectdet",
+      "name": "solana-foundation/alibaba/objectdet",
+      "upstream_ref": {
+        "operator": "solana-foundation",
+        "slug": "alibaba/objectdet",
+        "pay_md_path": "providers/solana-foundation/alibaba/objectdet/PAY.md",
+        "service_url": "https://objectdet.alibaba.gateway-402.com"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/detect-ipcobject",
+        "cost_usdc": null
+      },
+      "reason": "mpp_protocol",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:39.755Z",
+        "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_objectdet.json",
+        "last_captured_at": "2026-05-15T13:11:39.755Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "solana-foundation-alibaba-ocr-api",
+      "service_id": "alibaba-ocr-api",
+      "name": "solana-foundation/alibaba/ocr-api",
+      "upstream_ref": {
+        "operator": "solana-foundation",
+        "slug": "alibaba/ocr-api",
+        "pay_md_path": "providers/solana-foundation/alibaba/ocr-api/PAY.md",
+        "service_url": "https://ocr-api.alibaba.gateway-402.com"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/recognize-advanced",
+        "cost_usdc": null
+      },
+      "reason": "mpp_protocol",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:40.078Z",
+        "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_ocr-api.json",
+        "last_captured_at": "2026-05-15T13:11:40.078Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "solana-foundation-alibaba-ocr",
+      "service_id": "alibaba-ocr",
+      "name": "solana-foundation/alibaba/ocr",
+      "upstream_ref": {
+        "operator": "solana-foundation",
+        "slug": "alibaba/ocr",
+        "pay_md_path": "providers/solana-foundation/alibaba/ocr/PAY.md",
+        "service_url": "https://ocr.alibaba.gateway-402.com"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/compatible-mode/v1/chat/completions",
+        "cost_usdc": null
+      },
+      "reason": "mpp_protocol",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:39.857Z",
+        "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_ocr.json",
+        "last_captured_at": "2026-05-15T13:11:39.857Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "solana-foundation-alibaba-paimodelgallery",
+      "service_id": "alibaba-paimodelgallery",
+      "name": "solana-foundation/alibaba/paimodelgallery",
+      "upstream_ref": {
+        "operator": "solana-foundation",
+        "slug": "alibaba/paimodelgallery",
+        "pay_md_path": "providers/solana-foundation/alibaba/paimodelgallery/PAY.md",
+        "service_url": "https://paimodelgallery.alibaba.gateway-402.com"
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/api/v1/modelgallery/models",
+        "cost_usdc": null
+      },
+      "reason": "mpp_protocol",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:39.933Z",
+        "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_paimodelgallery.json",
+        "last_captured_at": "2026-05-15T13:11:39.933Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "solana-foundation-alibaba-rai",
+      "service_id": "alibaba-rai",
+      "name": "solana-foundation/alibaba/rai",
+      "upstream_ref": {
+        "operator": "solana-foundation",
+        "slug": "alibaba/rai",
+        "pay_md_path": "providers/solana-foundation/alibaba/rai/PAY.md",
+        "service_url": "https://rai.alibaba.gateway-402.com"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/batch-content-sync-detect",
+        "cost_usdc": null
+      },
+      "reason": "mpp_protocol",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:40.974Z",
+        "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_rai.json",
+        "last_captured_at": "2026-05-15T13:11:40.974Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "solana-foundation-alibaba-saf",
+      "service_id": "alibaba-saf",
+      "name": "solana-foundation/alibaba/saf",
+      "upstream_ref": {
+        "operator": "solana-foundation",
+        "slug": "alibaba/saf",
+        "pay_md_path": "providers/solana-foundation/alibaba/saf/PAY.md",
+        "service_url": "https://saf.alibaba.gateway-402.com"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/execute-request",
+        "cost_usdc": null
+      },
+      "reason": "mpp_protocol",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:40.966Z",
+        "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_saf.json",
+        "last_captured_at": "2026-05-15T13:11:40.966Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "solana-foundation-alibaba-translate",
+      "service_id": "alibaba-translate",
+      "name": "solana-foundation/alibaba/translate",
+      "upstream_ref": {
+        "operator": "solana-foundation",
+        "slug": "alibaba/translate",
+        "pay_md_path": "providers/solana-foundation/alibaba/translate/PAY.md",
+        "service_url": "https://translate.alibaba.gateway-402.com"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/compatible-mode/v1/chat/completions",
+        "cost_usdc": null
+      },
+      "reason": "mpp_protocol",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:41.407Z",
+        "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_translate.json",
+        "last_captured_at": "2026-05-15T13:11:41.407Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "solana-foundation-alibaba-viapi-ocr",
+      "service_id": "alibaba-viapi-ocr",
+      "name": "solana-foundation/alibaba/viapi-ocr",
+      "upstream_ref": {
+        "operator": "solana-foundation",
+        "slug": "alibaba/viapi-ocr",
+        "pay_md_path": "providers/solana-foundation/alibaba/viapi-ocr/PAY.md",
+        "service_url": "https://viapi-ocr.alibaba.gateway-402.com"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/recognize-bank-card",
+        "cost_usdc": null
+      },
+      "reason": "mpp_protocol",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:41.212Z",
+        "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_viapi-ocr.json",
+        "last_captured_at": "2026-05-15T13:11:41.212Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "solana-foundation-alibaba-videoenhan",
+      "service_id": "alibaba-videoenhan",
+      "name": "solana-foundation/alibaba/videoenhan",
+      "upstream_ref": {
+        "operator": "solana-foundation",
+        "slug": "alibaba/videoenhan",
+        "pay_md_path": "providers/solana-foundation/alibaba/videoenhan/PAY.md",
+        "service_url": "https://videoenhan.alibaba.gateway-402.com"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/adjust-video-color",
+        "cost_usdc": null
+      },
+      "reason": "mpp_protocol",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:41.271Z",
+        "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_videoenhan.json",
+        "last_captured_at": "2026-05-15T13:11:41.271Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "solana-foundation-alibaba-videorecog",
+      "service_id": "alibaba-videorecog",
+      "name": "solana-foundation/alibaba/videorecog",
+      "upstream_ref": {
+        "operator": "solana-foundation",
+        "slug": "alibaba/videorecog",
+        "pay_md_path": "providers/solana-foundation/alibaba/videorecog/PAY.md",
+        "service_url": "https://videorecog.alibaba.gateway-402.com"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/detect-video-shot",
+        "cost_usdc": null
+      },
+      "reason": "mpp_protocol",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:41.263Z",
+        "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_videorecog.json",
+        "last_captured_at": "2026-05-15T13:11:41.263Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "solana-foundation-alibaba-videoseg",
+      "service_id": "alibaba-videoseg",
+      "name": "solana-foundation/alibaba/videoseg",
+      "upstream_ref": {
+        "operator": "solana-foundation",
+        "slug": "alibaba/videoseg",
+        "pay_md_path": "providers/solana-foundation/alibaba/videoseg/PAY.md",
+        "service_url": "https://videoseg.alibaba.gateway-402.com"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/segment-video-body",
+        "cost_usdc": null
+      },
+      "reason": "mpp_protocol",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:41.669Z",
+        "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_videoseg.json",
+        "last_captured_at": "2026-05-15T13:11:41.669Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "solana-foundation-google-language",
+      "service_id": "google-language",
+      "name": "solana-foundation/google/language",
+      "upstream_ref": {
+        "operator": "solana-foundation",
+        "slug": "google/language",
+        "pay_md_path": "providers/solana-foundation/google/language/PAY.md",
+        "service_url": "https://language.google.gateway-402.com"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/v2/documents:analyzeEntities",
+        "cost_usdc": null
+      },
+      "reason": "mpp_protocol",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:42.611Z",
+        "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-google_language.json",
+        "last_captured_at": "2026-05-15T13:11:42.611Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "solana-foundation-google-speech",
+      "service_id": "google-speech",
+      "name": "solana-foundation/google/speech",
+      "upstream_ref": {
+        "operator": "solana-foundation",
+        "slug": "google/speech",
+        "pay_md_path": "providers/solana-foundation/google/speech/PAY.md",
+        "service_url": "https://speech.google.gateway-402.com"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/v1/speech:recognize",
+        "cost_usdc": null
+      },
+      "reason": "mpp_protocol",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:42.913Z",
+        "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-google_speech.json",
+        "last_captured_at": "2026-05-15T13:11:42.913Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "solana-foundation-google-videointelligence",
+      "service_id": "google-videointelligence",
+      "name": "solana-foundation/google/videointelligence",
+      "upstream_ref": {
+        "operator": "solana-foundation",
+        "slug": "google/videointelligence",
+        "pay_md_path": "providers/solana-foundation/google/videointelligence/PAY.md",
+        "service_url": "https://videointelligence.google.gateway-402.com"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/v1/videos:annotate",
+        "cost_usdc": null
+      },
+      "reason": "mpp_protocol",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:42.942Z",
+        "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-google_videointelligence.json",
+        "last_captured_at": "2026-05-15T13:11:42.942Z",
+        "probe_status": "parsed_ok"
+      }
+    }
   ]
 }

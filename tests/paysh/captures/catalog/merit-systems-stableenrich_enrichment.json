@@ -1,0 +1,28 @@
+{
+  "_meta": {
+    "label": "merit-systems-stableenrich_enrichment-402",
+    "capturedAt": "2026-05-15T13:11:35.337Z",
+    "source": "probe-catalog",
+    "payMdPath": "providers/merit-systems/stableenrich/enrichment/PAY.md",
+    "note": "Sanitized per BAT-582 v1.6 contract amendment 6."
+  },
+  "url": "https://stableenrich.dev/api/google-maps/place-details/partial",
+  "method": "GET",
+  "status": 402,
+  "headers": {
+    "age": "0",
+    "cache-control": "no-store",
+    "content-length": "0",
+    "content-type": "application/json",
+    "date": "Fri, 15 May 2026 13:11:35 GMT",
+    "payment-required": "eyJ4NDAyVmVyc2lvbiI6MiwicmVzb3VyY2UiOnsidXJsIjoiaHR0cHM6Ly9zdGFibGVlbnJpY2guZGV2L2FwaS9nb29nbGUtbWFwcy9wbGFjZS1kZXRhaWxzL3BhcnRpYWwiLCJtZXRob2QiOiJHRVQiLCJkZXNjcmlwdGlvbiI6Ikdvb2dsZSBNYXBzIFBsYWNlIERldGFpbHMgKFBhcnRpYWwpIiwibWltZVR5cGUiOiJhcHBsaWNhdGlvbi9qc29uIn0sImFjY2VwdHMiOlt7InNjaGVtZSI6ImV4YWN0IiwibmV0d29yayI6ImVpcDE1NTo4NDUzIiwiYW1vdW50IjoiMjAwMDAiLCJhc3NldCI6IjB4ODMzNTg5ZkNENmVEYjZFMDhmNGM3QzMyRDRmNzFiNTRiZEEwMjkxMyIsInBheVRvIjoiMHgzMjViZEY2RjdlZkFCMjRhMjIxMGM0OGMxYjY0Y0FiMmVBZTFkNDMwIiwibWF4VGltZW91dFNlY29uZHMiOjMwMCwiZXh0cmEiOnsibmFtZSI6IlVTRCBDb2luIiwidmVyc2lvbiI6IjIifX0seyJzY2hlbWUiOiJleGFjdCIsIm5ldHdvcmsiOiJzb2xhbmE6NWV5a3Q0VXNGdjhQOE5KZFRSRXBZMXZ6cUtxWkt2ZHAiLCJhbW91bnQiOiIyMDAwMCIsImFzc2V0IjoiRVBqRldkZDVBdWZxU1NxZU0ycU4xeHp5YmFwQzhHNHdFR0drWnd5VER0MXYiLCJwYXlUbyI6IjhFZ0FDcFoxNlhXRXQ3WWpKUHNoMVpoZVZSWlVHbW13UThuSmRtQTFvNXc0IiwibWF4VGltZW91dFNlY29uZHMiOjMwMCwiZXh0cmEiOnsiZmVlUGF5ZXIiOiJBZXBXcHEzR1F3TDhDZUtNdFp5S3RLUGE3VzkxQ295Z2gzcm9wQUphcFZkVSIsImRlY2ltYWxzIjo2LCJyZWNlbnRCbG9ja2hhc2giOiJGYVc4V2VSZlNwRXlxTllHRHJjc3RnVTFtcGNxMTRWRThQSlJzV0dGVjh3RyIsInRva2VuUHJvZ3JhbSI6IlRva2Vua2VnUWZlWnlpTndBSmJOYkdLUEZYQ1d1QnZmOVNzNjIzVlE1REEiLCJmZWF0dXJlcyI6eyJ4U2V0dGxlbWVudEFjY291bnRTdXBwb3J0ZWQiOnRydWV9fX1dLCJleHRlbnNpb25zIjp7ImJhemFhciI6eyJpbmZvIjp7ImlucHV0Ijp7InR5cGUiOiJodHRwIiwibWV0aG9kIjoiR0VUIiwicXVlcnlQYXJhbXMiOnt9fX0sInNjaGVtYSI6eyIkc2NoZW1hIjoiaHR0cHM6Ly9qc29uLXNjaGVtYS5vcmcvZHJhZnQvMjAyMC0xMi9zY2hlbWEiLCJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJpbnB1dCI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJ0eXBlIjp7InR5cGUiOiJzdHJpbmciLCJjb25zdCI6Imh0dHAifSwibWV0aG9kIjp7InR5cGUiOiJzdHJpbmciLCJlbnVtIjpbIkdFVCIsIkhFQUQiLCJERUxFVEUiXX0sInF1ZXJ5UGFyYW1zIjp7InR5cGUiOiJvYmplY3QiLCIkc2NoZW1hIjoiaHR0cHM6Ly9qc29uLXNjaGVtYS5vcmcvZHJhZnQvMjAyMC0xMi9zY2hlbWEiLCJwcm9wZXJ0aWVzIjp7InBsYWNlSWQiOnsidHlwZSI6InN0cmluZyIsIm1pbkxlbmd0aCI6MX0sImV4Y2x1ZGVGaWVsZHMiOnsiZGVmYXVsdCI6WyJwaG90b3MiXSwidHlwZSI6ImFycmF5IiwiaXRlbXMiOnsidHlwZSI6InN0cmluZyJ9fSwibGFuZ3VhZ2VDb2RlIjp7ImRlZmF1bHQiOiJlbiIsInR5cGUiOiJzdHJpbmcifX0sInJlcXVpcmVkIjpbInBsYWNlSWQiLCJleGNsdWRlRmllbGRzIiwibGFuZ3VhZ2VDb2RlIl0sImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjpmYWxzZX19LCJyZXF1aXJlZCI6WyJ0eXBlIiwibWV0aG9kIl0sImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjpmYWxzZX19LCJyZXF1aXJlZCI6WyJpbnB1dCJdfX19fQ==",
+    "server": "Vercel",
+    "strict-transport-security": "max-age=63072000",
+    "vary": "rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch",
+    "www-authenticate": "Payment id=\"[REDACTED]\", realm=\"stableenrich.dev\", method=\"tempo\", intent=\"charge\", request=\"[REDACTED]\", expires=\"2026-05-15T13:16:35.870Z\"",
+    "x-matched-path": "/api/google-maps/place-details/partial",
+    "x-vercel-cache": "MISS",
+    "x-vercel-id": "fra1::iad1::hxbqr-1778850695543-350cd09aa238"
+  },
+  "body": ""
+}

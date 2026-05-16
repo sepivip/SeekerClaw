@@ -1,0 +1,138 @@
+{
+  "_meta": {
+    "label": "merit-systems-stableemail_email-402",
+    "capturedAt": "2026-05-15T13:11:35.253Z",
+    "source": "probe-catalog",
+    "payMdPath": "providers/merit-systems/stableemail/email/PAY.md",
+    "note": "Sanitized per BAT-582 v1.6 contract amendment 6."
+  },
+  "url": "https://stableemail.dev/api/subdomain/status",
+  "method": "GET",
+  "status": 402,
+  "headers": {
+    "age": "0",
+    "cache-control": "no-store",
+    "content-type": "application/json",
+    "date": "Fri, 15 May 2026 13:11:35 GMT",
+    "payment-required": "eyJ4NDAyVmVyc2lvbiI6MiwiZXJyb3IiOiJTSVdYIGF1dGhlbnRpY2F0aW9uIHJlcXVpcmVkIiwicmVzb3VyY2UiOnsidXJsIjoiaHR0cHM6Ly9zdGFibGVlbWFpbC5kZXYvYXBpL3N1YmRvbWFpbi9zdGF0dXMiLCJkZXNjcmlwdGlvbiI6IkNoZWNrIHN1YmRvbWFpbiBzdGF0dXMgKGZyZWUpIiwibWltZVR5cGUiOiJhcHBsaWNhdGlvbi9qc29uIn0sImFjY2VwdHMiOltdLCJleHRlbnNpb25zIjp7InNpZ24taW4td2l0aC14Ijp7ImluZm8iOnsiZG9tYWluIjoic3RhYmxlZW1haWwuZGV2IiwidXJpIjoiaHR0cHM6Ly9zdGFibGVlbWFpbC5kZXYvYXBpL3N1YmRvbWFpbi9zdGF0dXMiLCJ2ZXJzaW9uIjoiMSIsImNoYWluSWQiOiJlaXAxNTU6ODQ1MyIsInR5cGUiOiJlaXAxOTEiLCJub25jZSI6IjkyYzg0MTUwNGI4NjRlY2JiNTQwZjM3NDFiZjQxODk0IiwiaXNzdWVkQXQiOiIyMDI2LTA1LTE1VDEzOjExOjM1LjgwM1oiLCJleHBpcmF0aW9uVGltZSI6IjIwMjYtMDUtMTVUMTM6MTY6MzUuODAzWiIsInN0YXRlbWVudCI6IlNpZ24gaW4gdG8gdmVyaWZ5IHlvdXIgd2FsbGV0IGlkZW50aXR5In0sInN1cHBvcnRlZENoYWlucyI6W3siY2hhaW5JZCI6ImVpcDE1NTo4NDUzIiwidHlwZSI6ImVpcDE5MSJ9LHsiY2hhaW5JZCI6InNvbGFuYTo1ZXlrdDRVc0Z2OFA4TkpkVFJFcFkxdnpxS3FaS3ZkcCIsInR5cGUiOiJlZDI1NTE5In1dLCJzY2hlbWEiOnsic2lnbi1pbi13aXRoLXgiOnsiaW5mbyI6eyJ2ZXJzaW9uIjoiMSJ9LCJzdXBwb3J0ZWRDaGFpbnMiOltdLCJzY2hlbWEiOnsiJHNjaGVtYSI6Imh0dHBzOi8vanNvbi1zY2hlbWEub3JnL2RyYWZ0LzIwMjAtMTIvc2NoZW1hIiwidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnsiZG9tYWluIjp7InR5cGUiOiJzdHJpbmcifSwiYWRkcmVzcyI6eyJ0eXBlIjoic3RyaW5nIn0sInN0YXRlbWVudCI6eyJ0eXBlIjoic3RyaW5nIn0sInVyaSI6eyJ0eXBlIjoic3RyaW5nIiwiZm9ybWF0IjoidXJpIn0sInZlcnNpb24iOnsidHlwZSI6InN0cmluZyJ9LCJjaGFpbklkIjp7InR5cGUiOiJzdHJpbmcifSwidHlwZSI6eyJ0eXBlIjoic3RyaW5nIn0sIm5vbmNlIjp7InR5cGUiOiJzdHJpbmcifSwiaXNzdWVkQXQiOnsidHlwZSI6InN0cmluZyIsImZvcm1hdCI6ImRhdGUtdGltZSJ9LCJleHBpcmF0aW9uVGltZSI6eyJ0eXBlIjoic3RyaW5nIiwiZm9ybWF0IjoiZGF0ZS10aW1lIn0sIm5vdEJlZm9yZSI6eyJ0eXBlIjoic3RyaW5nIiwiZm9ybWF0IjoiZGF0ZS10aW1lIn0sInJlcXVlc3RJZCI6eyJ0eXBlIjoic3RyaW5nIn0sInJlc291cmNlcyI6eyJ0eXBlIjoiYXJyYXkiLCJpdGVtcyI6eyJ0eXBlIjoic3RyaW5nIiwiZm9ybWF0IjoidXJpIn19LCJzaWduYXR1cmUiOnsidHlwZSI6InN0cmluZyJ9fSwicmVxdWlyZWQiOlsiZG9tYWluIiwiYWRkcmVzcyIsInVyaSIsInZlcnNpb24iLCJjaGFpbklkIiwidHlwZSIsIm5vbmNlIiwiaXNzdWVkQXQiLCJzaWduYXR1cmUiXX0sIl9vcHRpb25zIjp7fX19fX19",
+    "server": "Vercel",
+    "strict-transport-security": "max-age=63072000",
+    "vary": "rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch",
+    "www-authenticate": "Payment id=\"[REDACTED]\", realm=\"stableemail.dev\", method=\"tempo\", intent=\"charge\", request=\"[REDACTED]\", expires=\"2026-05-15T13:16:35.804Z\"",
+    "x-matched-path": "/api/subdomain/status",
+    "x-vercel-cache": "MISS",
+    "x-vercel-id": "fra1::iad1::zppc5-1778850695538-f06ab889b61b",
+    "transfer-encoding": "chunked"
+  },
+  "body": {
+    "x402Version": 2,
+    "error": "SIWX authentication required",
+    "resource": {
+      "url": "https://stableemail.dev/api/subdomain/status",
+      "description": "Check subdomain status (free)",
+      "mimeType": "application/json"
+    },
+    "accepts": [],
+    "extensions": {
+      "sign-in-with-x": {
+        "info": {
+          "domain": "stableemail.dev",
+          "uri": "https://stableemail.dev/api/subdomain/status",
+          "version": "1",
+          "chainId": "eip155:8453",
+          "type": "eip191",
+          "nonce": "[REDACTED]",
+          "issuedAt": "2026-05-15T13:11:35.803Z",
+          "expirationTime": "2026-05-15T13:16:35.803Z",
+          "statement": "Sign in to verify your wallet identity"
+        },
+        "supportedChains": [
+          {
+            "chainId": "eip155:8453",
+            "type": "eip191"
+          },
+          {
+            "chainId": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+            "type": "ed25519"
+          }
+        ],
+        "schema": {
+          "sign-in-with-x": {
+            "info": {
+              "version": "1"
+            },
+            "supportedChains": [],
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "type": "object",
+              "properties": {
+                "domain": {
+                  "type": "string"
+                },
+                "address": {
+                  "type": "string"
+                },
+                "statement": {
+                  "type": "string"
+                },
+                "uri": {
+                  "type": "string",
+                  "format": "uri"
+                },
+                "version": {
+                  "type": "string"
+                },
+                "chainId": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "nonce": {
+                  "type": "string"
+                },
+                "issuedAt": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "expirationTime": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "notBefore": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "requestId": {
+                  "type": "string"
+                },
+                "resources": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "format": "uri"
+                  }
+                },
+                "signature": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "domain",
+                "address",
+                "uri",
+                "version",
+                "chainId",
+                "type",
+                "nonce",
+                "issuedAt",
+                "signature"
+              ]
+            },
+            "_options": {}
+          }
+        }
+      }
+    }
+  }
+}

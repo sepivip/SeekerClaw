@@ -1,0 +1,148 @@
+{
+  "_meta": {
+    "label": "merit-systems-stableupload_hosting-402",
+    "capturedAt": "2026-05-15T13:11:35.649Z",
+    "source": "probe-catalog",
+    "payMdPath": "providers/merit-systems/stableupload/hosting/PAY.md",
+    "note": "Sanitized per BAT-582 v1.6 contract amendment 6."
+  },
+  "url": "https://stableupload.dev/api/site/domain/status",
+  "method": "GET",
+  "status": 402,
+  "headers": {
+    "date": "Fri, 15 May 2026 13:11:36 GMT",
+    "content-type": "application/json",
+    "transfer-encoding": "chunked",
+    "connection": "keep-alive",
+    "cf-ray": "9fc263b28ba3d0cf-SOF",
+    "cf-cache-status": "DYNAMIC",
+    "access-control-allow-origin": "*",
+    "age": "0",
+    "cache-control": "no-store",
+    "server": "cloudflare",
+    "strict-transport-security": "max-age=63072000",
+    "vary": "rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch",
+    "www-authenticate": "Payment id=\"[REDACTED]\", realm=\"stableupload.dev\", method=\"tempo\", intent=\"charge\", request=\"[REDACTED]\", expires=\"2026-05-15T13:16:36.199Z\"",
+    "access-control-allow-headers": "Content-Type, PAYMENT-SIGNATURE, X-PAYMENT, SIGN-IN-WITH-X",
+    "access-control-allow-methods": "GET, POST, OPTIONS",
+    "access-control-expose-headers": "PAYMENT-REQUIRED, PAYMENT-RESPONSE",
+    "payment-required": "eyJ4NDAyVmVyc2lvbiI6MiwiZXJyb3IiOiJTSVdYIGF1dGhlbnRpY2F0aW9uIHJlcXVpcmVkIiwicmVzb3VyY2UiOnsidXJsIjoiaHR0cHM6Ly9zdGFibGV1cGxvYWQuZGV2L2FwaS9zaXRlL2RvbWFpbi9zdGF0dXMiLCJkZXNjcmlwdGlvbiI6IkNoZWNrIFRMUyBwcm92aXNpb25pbmcgc3RhdHVzIGZvciBhIGN1c3RvbSBkb21haW4uIFBvbGwgdW50aWwgc3NsIGlzICdhY3RpdmUnLiIsIm1pbWVUeXBlIjoiYXBwbGljYXRpb24vanNvbiJ9LCJhY2NlcHRzIjpbXSwiZXh0ZW5zaW9ucyI6eyJzaWduLWluLXdpdGgteCI6eyJpbmZvIjp7ImRvbWFpbiI6InN0YWJsZXVwbG9hZC5kZXYiLCJ1cmkiOiJodHRwczovL3N0YWJsZXVwbG9hZC5kZXYvYXBpL3NpdGUvZG9tYWluL3N0YXR1cyIsInZlcnNpb24iOiIxIiwiY2hhaW5JZCI6ImVpcDE1NTo4NDUzIiwidHlwZSI6ImVpcDE5MSIsIm5vbmNlIjoiOTRiZTdiYTE3YWEwNDZiYzkxZDFhZTcxYzg3MDM5MjIiLCJpc3N1ZWRBdCI6IjIwMjYtMDUtMTVUMTM6MTE6MzYuMTk4WiIsImV4cGlyYXRpb25UaW1lIjoiMjAyNi0wNS0xNVQxMzoxNjozNi4xOThaIiwic3RhdGVtZW50IjoiU2lnbiBpbiB0byB2ZXJpZnkgeW91ciB3YWxsZXQgaWRlbnRpdHkifSwic3VwcG9ydGVkQ2hhaW5zIjpbeyJjaGFpbklkIjoiZWlwMTU1Ojg0NTMiLCJ0eXBlIjoiZWlwMTkxIn0seyJjaGFpbklkIjoic29sYW5hOjVleWt0NFVzRnY4UDhOSmRUUkVwWTF2enFLcVpLdmRwIiwidHlwZSI6ImVkMjU1MTkifV0sInNjaGVtYSI6eyJzaWduLWluLXdpdGgteCI6eyJpbmZvIjp7InZlcnNpb24iOiIxIn0sInN1cHBvcnRlZENoYWlucyI6W10sInNjaGVtYSI6eyIkc2NoZW1hIjoiaHR0cHM6Ly9qc29uLXNjaGVtYS5vcmcvZHJhZnQvMjAyMC0xMi9zY2hlbWEiLCJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJkb21haW4iOnsidHlwZSI6InN0cmluZyJ9LCJhZGRyZXNzIjp7InR5cGUiOiJzdHJpbmcifSwic3RhdGVtZW50Ijp7InR5cGUiOiJzdHJpbmcifSwidXJpIjp7InR5cGUiOiJzdHJpbmciLCJmb3JtYXQiOiJ1cmkifSwidmVyc2lvbiI6eyJ0eXBlIjoic3RyaW5nIn0sImNoYWluSWQiOnsidHlwZSI6InN0cmluZyJ9LCJ0eXBlIjp7InR5cGUiOiJzdHJpbmcifSwibm9uY2UiOnsidHlwZSI6InN0cmluZyJ9LCJpc3N1ZWRBdCI6eyJ0eXBlIjoic3RyaW5nIiwiZm9ybWF0IjoiZGF0ZS10aW1lIn0sImV4cGlyYXRpb25UaW1lIjp7InR5cGUiOiJzdHJpbmciLCJmb3JtYXQiOiJkYXRlLXRpbWUifSwibm90QmVmb3JlIjp7InR5cGUiOiJzdHJpbmciLCJmb3JtYXQiOiJkYXRlLXRpbWUifSwicmVxdWVzdElkIjp7InR5cGUiOiJzdHJpbmcifSwicmVzb3VyY2VzIjp7InR5cGUiOiJhcnJheSIsIml0ZW1zIjp7InR5cGUiOiJzdHJpbmciLCJmb3JtYXQiOiJ1cmkifX0sInNpZ25hdHVyZSI6eyJ0eXBlIjoic3RyaW5nIn19LCJyZXF1aXJlZCI6WyJkb21haW4iLCJhZGRyZXNzIiwidXJpIiwidmVyc2lvbiIsImNoYWluSWQiLCJ0eXBlIiwibm9uY2UiLCJpc3N1ZWRBdCIsInNpZ25hdHVyZSJdfSwiX29wdGlvbnMiOnt9fX19fX0=",
+    "x-matched-path": "/api/site/domain/status",
+    "x-vercel-cache": "MISS",
+    "x-vercel-id": "fra1::iad1::hmq6z-1778850696118-acdbbdcb139b",
+    "report-to": "{\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=uhvWLZd0BVjlvb4OXyIFFHE5vtUAlPypxN41BuJWNljGX6Jt2X1IcEFyG8iTFwPkEgRuD4hB%2FnqQC02on41Xk1r8e9yskwm2NDC6m4u%2BLmBz5uYvV4GFke2dsDDatG0ji554\"}]}",
+    "nel": "{\"report_to\":\"cf-nel\",\"success_fraction\":0.0,\"max_age\":604800}",
+    "alt-svc": "h3=\":443\"; ma=86400"
+  },
+  "body": {
+    "x402Version": 2,
+    "error": "SIWX authentication required",
+    "resource": {
+      "url": "https://stableupload.dev/api/site/domain/status",
+      "description": "Check TLS provisioning status for a custom domain. Poll until ssl is 'active'.",
+      "mimeType": "application/json"
+    },
+    "accepts": [],
+    "extensions": {
+      "sign-in-with-x": {
+        "info": {
+          "domain": "stableupload.dev",
+          "uri": "https://stableupload.dev/api/site/domain/status",
+          "version": "1",
+          "chainId": "eip155:8453",
+          "type": "eip191",
+          "nonce": "[REDACTED]",
+          "issuedAt": "2026-05-15T13:11:36.198Z",
+          "expirationTime": "2026-05-15T13:16:36.198Z",
+          "statement": "Sign in to verify your wallet identity"
+        },
+        "supportedChains": [
+          {
+            "chainId": "eip155:8453",
+            "type": "eip191"
+          },
+          {
+            "chainId": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+            "type": "ed25519"
+          }
+        ],
+        "schema": {
+          "sign-in-with-x": {
+            "info": {
+              "version": "1"
+            },
+            "supportedChains": [],
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "type": "object",
+              "properties": {
+                "domain": {
+                  "type": "string"
+                },
+                "address": {
+                  "type": "string"
+                },
+                "statement": {
+                  "type": "string"
+                },
+                "uri": {
+                  "type": "string",
+                  "format": "uri"
+                },
+                "version": {
+                  "type": "string"
+                },
+                "chainId": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "nonce": {
+                  "type": "string"
+                },
+                "issuedAt": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "expirationTime": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "notBefore": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "requestId": {
+                  "type": "string"
+                },
+                "resources": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "format": "uri"
+                  }
+                },
+                "signature": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "domain",
+                "address",
+                "uri",
+                "version",
+                "chainId",
+                "type",
+                "nonce",
+                "issuedAt",
+                "signature"
+              ]
+            },
+            "_options": {}
+          }
+        }
+      }
+    }
+  }
+}

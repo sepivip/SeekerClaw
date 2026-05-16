@@ -1,7 +1,7 @@
 ---
 name: paysh-catalog
 description: "Catalog of pay.sh services payable via agent_pay (x402). OPT-IN ONLY — activate when the user explicitly invokes pay.sh / paysh / x402 / 'pay for'. Stay dormant otherwise; defer to free tools. Full keyword list and policy in SKILL.md body."
-version: "1.3.0"
+version: "1.4.0"
 metadata:
   openclaw:
     emoji: "🛒"
@@ -43,10 +43,11 @@ This skill activates ONLY when the user's message contains one of the explicit p
 
 Once an opt-in keyword fires the skill, the agent's job is:
 
-1. **Match intent → service** by reading `catalog.json` (the index in this folder)
-2. **Read the matching `services/<name>.md`** for URL pattern + query construction
-3. **Call `agent_pay`** with object-shaped args: `{ url: "<constructed-url>", max_usdc: "<decimal-string-ceiling>", method?: "GET"|"POST", body?: <JSON object or array, required for POST> }`. `max_usdc` MUST be a decimal STRING (not number) — e.g. `"0.05"`. `body` MUST be a JSON object or array (or a JSON string that parses to one); primitives like numbers/strings/booleans are rejected with `body_not_json`. GET calls run silently when under cap. **POST calls always prompt the user for confirmation** regardless of caps (POST can send SMS, post content, or trigger paid actions — the confirmation is by design). Check each service's `method:` field in `catalog.json` before calling.
-4. **Return the response** to the user
+1. **Match intent → entry** by reading `catalog.json` (the index in this folder). v2 schema: top-level object with `entries[]` array; each entry has `id`, `service_id`, `name`, `endpoint.{method, path, cost_usdc}`, `intents[]`, `summary`, `doc_file`, `verification.*`. Pick the entry whose `intents[]` best matches user request.
+2. **Build the URL** by combining `entry.upstream_ref.service_url + entry.endpoint.path`. Add URL-encoded query params for GET endpoints (see encoding rules below).
+3. **Read the matching `entry.doc_file`** (e.g. `services/wolfram-alpha.md`) for body schema (POST endpoints), example calls, and any safety scoping. If the entry has a `doc_anchor`, jump to that section within the doc.
+4. **Call `agent_pay`** with object-shaped args: `{ url: "<constructed-url>", max_usdc: "<decimal-string-ceiling>", method?: "GET"|"POST", body?: <JSON object or array, required for POST> }`. `max_usdc` MUST be a decimal STRING (not number) — e.g. `"0.05"`. `body` MUST be a JSON object or array (or a JSON string that parses to one); primitives like numbers/strings/booleans are rejected with `body_not_json`. GET calls run silently when under cap. **POST calls always prompt the user for confirmation** regardless of caps (POST can send SMS, post content, or trigger paid actions — the confirmation is by design). Use `entry.endpoint.method` to pick GET vs POST.
+5. **Return the response** to the user
 
 ## Examples
 
@@ -106,11 +107,20 @@ Why it stays dormant: not an x402 query at all. Use `solana_balance` directly. T
 
 ## Reading the catalog efficiently
 
-`catalog.json` is small (10 services, a few KB). Always load it first to pick the service. Then `read` only the service-specific markdown — never load every services/*.md at once. That's the whole point of the per-service layout.
+`catalog.json` is small (currently 10 entries, ~11KB in v2 schema). Always load it first to pick the entry. Then `read` only the matching `entry.doc_file` — never load every services/*.md at once. That's the whole point of the per-entry / per-service-doc layout.
+
+v2 schema (see `SCHEMA.md` in this folder for the full spec):
+- One entry per ENDPOINT (not per service) — a service exposing N catalogued endpoints has N entries, all sharing the same `service_id`
+- `entry.doc_file` may carry an optional `doc_anchor` pointing at the endpoint-specific section within the shared service doc
+- `entry.verification.last_captured_at` tells you how fresh the 402 capture is; if very old, the service may have drifted upstream (run `node tests/paysh/probe-catalog.js --refresh <id>` from the dev workstation to re-verify)
 
 ## The `unsupported.json` companion registry
 
-`unsupported.json` lists **62 additional services** that exist on pay.sh today but the agent cannot **end-to-end use** yet — either because `agent_pay` can't pay them (protocol/auth gap), it can pay but can't deliver the response (binary content with no channel attachment path), the endpoint didn't return a 402 at probe time (broken / moved / re-routed), or the paid-response shape is contested and unverified. Read it when:
+`unsupported.json` lists **62 additional entries** that exist on pay.sh today but the agent cannot **end-to-end use** yet — either because `agent_pay` can't pay them (protocol/auth gap), it can pay but can't deliver the response (binary content with no channel attachment path), the endpoint didn't return a 402 at probe time (broken / moved / re-routed), or the paid-response shape is contested and unverified.
+
+v2 schema: top-level object with `entries[]` (same shape as catalog entries + `reason` field) AND a top-level `reasons` object — a registry of `{ <bucket>: { label, explanation, actionable } }` you compose your "why can't you use X?" answers from. Several entries also carry `audit_pending[]` — sibling endpoints found by the BAT-706 audit that aren't catalogued yet (with `deferred_to: BAT-XXX` pointer).
+
+Read `unsupported.json` when:
 
 - The user asks "do you know about service X?" or "is X on pay.sh?"
 - The user asks for a capability (translation, image OCR, video analysis, screenshots, Google Vision, image generation, etc.) that the supported 10 don't cover

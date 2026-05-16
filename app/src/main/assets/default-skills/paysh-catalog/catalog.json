@@ -1,98 +1,329 @@
 {
-  "version": 1,
-  "generatedAt": "2026-05-15",
-  "source": "tests/paysh/catalog-summary.md (probe-catalog run 2026-05-14)",
-  "notes": "Services in this file are end-to-end usable today: probe-catalog parsed_ok with a Solana-USDC leg (or, in textbelt-sms's case, a verified separately-captured POST send endpoint that the catalog probe didn't reach) AND the response shape is deliverable to Telegram/Discord (text/JSON, not binary). Of the 72 upstream pay.sh services: 10 are listed here (supported); 62 are in unsupported.json across four buckets — (a) 1 requires_binary_response (paysponge/fal — `evidence_basis: product-family-inference`, the endpoint names map to fal-ai's published image/video-gen models like Flux, SDXL, Stable Video, Minimax-video; we have not settled to observe a paid response); (b) 1 unverified_paid_response_shape (paysponge/screenshotone — its openapi DECLARES application/json which contradicts the screenshot-as-a-service product-family inference, so we conservatively hold it out until BAT-708 captures a paid response; previously classified as requires_binary_response, retracted in PR #378 R10); (c) 40 parser-reject (33 mpp_protocol + 5 siwx_auth_required + 2 invalid_demand — textbelt was previously in this bucket but its paid POST endpoint is now in catalog.json as textbelt-sms); (d) 20 endpoint_not_402_at_probe (broken/moved at probe time; was 21 before fal was reclassified). Several unsupported entries also carry BAT-706 audit notes for SIBLING endpoints on the same host that ARE payable but aren't catalogued yet — notably paysponge/perplexity (3 paid endpoints: /search, /v1/agent, /v1/async/sonar) and paysponge/nyne (2 paid endpoints: /person/enrichment, /person/search, both PII-sensitive). Deferred to BAT-708 for per-endpoint catalogging + safety scoping. See SKILL.md for the read flow, tests/paysh/catalog-summary.md for the standard probe matrix, and tests/paysh/catalog-audit.md for the BAT-706 multi-endpoint audit.",
-  "services": [
+  "version": 2,
+  "generated_at": "2026-05-16T15:14:32.266Z",
+  "manifest_checked_at": "2026-05-16T15:14:32.266Z",
+  "source": "BAT-761 migration from v1 (BAT-699/704/705) + BAT-706 audit data",
+  "entries": [
     {
       "id": "wolfram-alpha",
+      "service_id": "wolframalpha",
       "name": "Wolfram Alpha",
-      "file": "services/wolfram-alpha.md",
-      "cost_usdc": 0.01,
-      "method": "GET",
-      "intents": ["math", "science", "computation", "physics", "chemistry", "facts", "calculate", "compute", "integral", "derivative", "solve", "convert units"],
-      "summary": "Computational intelligence — math, science, factual lookups via the Wolfram knowledge engine."
+      "upstream_ref": {
+        "operator": "paysponge",
+        "slug": "wolframalpha",
+        "pay_md_path": "providers/paysponge/wolframalpha/PAY.md",
+        "service_url": "https://wolframalpha.x402.paysponge.com"
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/v1/result",
+        "cost_usdc": 0.01
+      },
+      "intents": [
+        "math",
+        "science",
+        "computation",
+        "physics",
+        "chemistry",
+        "facts",
+        "calculate",
+        "compute",
+        "integral",
+        "derivative",
+        "solve",
+        "convert units"
+      ],
+      "summary": "Computational intelligence — math, science, factual lookups via the Wolfram knowledge engine.",
+      "doc_file": "services/wolfram-alpha.md",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:36.359Z",
+        "last_capture_path": "tests/paysh/captures/catalog/paysponge-wolframalpha.json",
+        "last_captured_at": "2026-05-15T13:11:36.359Z",
+        "probe_status": "parsed_ok"
+      }
     },
     {
       "id": "tripadvisor",
+      "service_id": "tripadvisor",
       "name": "Tripadvisor Nearby Search",
-      "file": "services/tripadvisor.md",
-      "cost_usdc": 0.01,
-      "method": "GET",
-      "intents": ["travel", "hotels", "restaurants", "attractions", "nearby", "tourism", "places to visit"],
-      "summary": "Search nearby travel locations — hotels, restaurants, attractions — by latitude/longitude."
+      "upstream_ref": {
+        "operator": "paysponge",
+        "slug": "tripadvisor",
+        "pay_md_path": "providers/paysponge/tripadvisor/PAY.md",
+        "service_url": "https://tripadvisor.x402.paysponge.com"
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/api/v1/location/nearby_search",
+        "cost_usdc": 0.01
+      },
+      "intents": [
+        "travel",
+        "hotels",
+        "restaurants",
+        "attractions",
+        "nearby",
+        "tourism",
+        "places to visit"
+      ],
+      "summary": "Search nearby travel locations — hotels, restaurants, attractions — by latitude/longitude.",
+      "doc_file": "services/tripadvisor.md",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:36.380Z",
+        "last_capture_path": "tests/paysh/captures/catalog/paysponge-tripadvisor.json",
+        "last_captured_at": "2026-05-15T13:11:36.380Z",
+        "probe_status": "parsed_ok"
+      }
     },
     {
       "id": "2captcha",
+      "service_id": "2captcha",
       "name": "2Captcha",
-      "file": "services/2captcha.md",
-      "cost_usdc": 0.01,
-      "method": "POST",
-      "intents": ["solve captcha on my own site", "accessibility captcha helper for users with disabilities", "captcha during testing of a site I own or have operator permission to automate"],
-      "summary": "Submit a CAPTCHA for solving — supports recaptcha, hcaptcha, image. Authorized use only: (1) accessibility assistance for users with disabilities completing a CAPTCHA on a site they're legitimately using, or (2) automated testing of a site the user OWNS or has direct site-operator permission to automate. The user's own consent does NOT make solving a CAPTCHA on a third-party site authorized — the SITE OPERATOR's consent is what matters. NOT for defeating anti-abuse controls."
+      "upstream_ref": {
+        "operator": "paysponge",
+        "slug": "2captcha",
+        "pay_md_path": "providers/paysponge/2captcha/PAY.md",
+        "service_url": "https://2captcha.x402.paysponge.com"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/createTask",
+        "cost_usdc": 0.01
+      },
+      "intents": [
+        "solve captcha on my own site",
+        "accessibility captcha helper for users with disabilities",
+        "captcha during testing of a site I own or have operator permission to automate"
+      ],
+      "summary": "Submit a CAPTCHA for solving — supports recaptcha, hcaptcha, image. Authorized use only: (1) accessibility assistance for users with disabilities completing a CAPTCHA on a site they're legitimately using, or (2) automated testing of a site the user OWNS or has direct site-operator permission to automate. The user's own consent does NOT make solving a CAPTCHA on a third-party site authorized — the SITE OPERATOR's consent is what matters. NOT for defeating anti-abuse controls.",
+      "doc_file": "services/2captcha.md",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:35.742Z",
+        "last_capture_path": "tests/paysh/captures/catalog/paysponge-2captcha.json",
+        "last_captured_at": "2026-05-15T13:11:35.742Z",
+        "probe_status": "parsed_ok"
+      }
     },
     {
       "id": "reducto",
+      "service_id": "reducto",
       "name": "Reducto Document Parser",
-      "file": "services/reducto.md",
-      "cost_usdc": 0.05,
-      "method": "POST",
-      "intents": ["parse document", "extract pdf", "ocr", "extract from pdf", "extract data from document", "parse invoice"],
-      "summary": "Parse documents (PDF, images) into structured data via Reducto's AI extraction."
+      "upstream_ref": {
+        "operator": "paysponge",
+        "slug": "reducto",
+        "pay_md_path": "providers/paysponge/reducto/PAY.md",
+        "service_url": "https://api.paysponge.com"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/x402/purchase/svc_d672d90ggvqqygj60/extract",
+        "cost_usdc": 0.05
+      },
+      "intents": [
+        "parse document",
+        "extract pdf",
+        "ocr",
+        "extract from pdf",
+        "extract data from document",
+        "parse invoice"
+      ],
+      "summary": "Parse documents (PDF, images) into structured data via Reducto's AI extraction.",
+      "doc_file": "services/reducto.md",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:36.179Z",
+        "last_capture_path": "tests/paysh/captures/catalog/paysponge-reducto.json",
+        "last_captured_at": "2026-05-15T13:11:36.179Z",
+        "probe_status": "parsed_ok"
+      }
     },
     {
       "id": "rentcast",
+      "service_id": "rentcast",
       "name": "Rentcast Markets",
-      "file": "services/rentcast.md",
-      "cost_usdc": 0.01,
-      "method": "GET",
-      "intents": ["real estate", "rental market", "rent prices", "property value", "housing data", "zillow alternative"],
-      "summary": "US rental market data — average rent, market trends, property statistics by zip/city."
+      "upstream_ref": {
+        "operator": "paysponge",
+        "slug": "rentcast",
+        "pay_md_path": "providers/paysponge/rentcast/PAY.md",
+        "service_url": "https://rentcast.x402.paysponge.com"
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/markets",
+        "cost_usdc": 0.01
+      },
+      "intents": [
+        "real estate",
+        "rental market",
+        "rent prices",
+        "property value",
+        "housing data",
+        "zillow alternative"
+      ],
+      "summary": "US rental market data — average rent, market trends, property statistics by zip/city.",
+      "doc_file": "services/rentcast.md",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:36.759Z",
+        "last_capture_path": "tests/paysh/captures/catalog/paysponge-rentcast.json",
+        "last_captured_at": "2026-05-15T13:11:36.759Z",
+        "probe_status": "parsed_ok"
+      }
     },
     {
       "id": "crushrewards",
+      "service_id": "crushrewards-pricing",
       "name": "Crushrewards Shopper",
-      "file": "services/crushrewards.md",
-      "cost_usdc": 0.01,
-      "method": "GET",
-      "intents": ["shopping", "compare prices", "find best price", "amazon", "walmart", "product search", "deal finder"],
-      "summary": "Find best price across major US retailers (Amazon, Walmart, Costco, Home Depot, etc.)."
+      "upstream_ref": {
+        "operator": "crushrewards",
+        "slug": "pricing",
+        "pay_md_path": "providers/crushrewards/pricing/PAY.md",
+        "service_url": "https://api.crushrewards.dev"
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/v1/shopper/best-price",
+        "cost_usdc": 0.01
+      },
+      "intents": [
+        "shopping",
+        "compare prices",
+        "find best price",
+        "amazon",
+        "walmart",
+        "product search",
+        "deal finder"
+      ],
+      "summary": "Find best price across major US retailers (Amazon, Walmart, Costco, Home Depot, etc.).",
+      "doc_file": "services/crushrewards.md",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:35.224Z",
+        "last_capture_path": "tests/paysh/captures/catalog/crushrewards-pricing.json",
+        "last_captured_at": "2026-05-15T13:11:35.224Z",
+        "probe_status": "parsed_ok"
+      }
     },
     {
       "id": "stablecrypto-market-data",
+      "service_id": "stablecrypto-market-data",
       "name": "StableCrypto New Pools",
-      "file": "services/stablecrypto-market-data.md",
-      "cost_usdc": 0.01,
-      "method": "POST",
-      "intents": ["new on-chain pools", "new dex pools", "newly created pools", "fresh liquidity pairs", "trending new pools", "coingecko onchain new pools"],
-      "summary": "Get new on-chain pools across DEXes via the CoinGecko-onchain proxy. Returns recently-deployed token pairs — NOT generic price lookups."
+      "upstream_ref": {
+        "operator": "merit-systems",
+        "slug": "stablecrypto/market-data",
+        "pay_md_path": "providers/merit-systems/stablecrypto/market-data/PAY.md",
+        "service_url": "https://stablecrypto.dev"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/api/coingecko/onchain/new-pools",
+        "cost_usdc": 0.01
+      },
+      "intents": [
+        "new on-chain pools",
+        "new dex pools",
+        "newly created pools",
+        "fresh liquidity pairs",
+        "trending new pools",
+        "coingecko onchain new pools"
+      ],
+      "summary": "Get new on-chain pools across DEXes via the CoinGecko-onchain proxy. Returns recently-deployed token pairs — NOT generic price lookups.",
+      "doc_file": "services/stablecrypto-market-data.md",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:35.531Z",
+        "last_capture_path": "tests/paysh/captures/catalog/merit-systems-stablecrypto_market-data.json",
+        "last_captured_at": "2026-05-15T13:11:35.531Z",
+        "probe_status": "parsed_ok"
+      }
     },
     {
       "id": "stableenrich",
+      "service_id": "stableenrich-enrichment",
       "name": "StableEnrich Data Enrichment",
-      "file": "services/stableenrich.md",
-      "cost_usdc": 0.02,
-      "method": "POST",
-      "intents": ["enrich data", "lookup person", "lookup company", "find email", "find linkedin", "people search"],
-      "summary": "Enrich emails, domains, or names into person/company profiles (LinkedIn-style data)."
+      "upstream_ref": {
+        "operator": "merit-systems",
+        "slug": "stableenrich/enrichment",
+        "pay_md_path": "providers/merit-systems/stableenrich/enrichment/PAY.md",
+        "service_url": "https://stableenrich.dev"
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/api/google-maps/place-details/partial",
+        "cost_usdc": 0.02
+      },
+      "intents": [
+        "enrich data",
+        "lookup person",
+        "lookup company",
+        "find email",
+        "find linkedin",
+        "people search"
+      ],
+      "summary": "Enrich emails, domains, or names into person/company profiles (LinkedIn-style data).",
+      "doc_file": "services/stableenrich.md",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:35.337Z",
+        "last_capture_path": "tests/paysh/captures/catalog/merit-systems-stableenrich_enrichment.json",
+        "last_captured_at": "2026-05-15T13:11:35.337Z",
+        "probe_status": "parsed_ok"
+      }
     },
     {
       "id": "purch",
+      "service_id": "purch-marketplace",
       "name": "Purch Marketplace Search",
-      "file": "services/purch.md",
-      "cost_usdc": 0.01,
-      "method": "GET",
-      "intents": ["marketplace search", "product listing search", "ecommerce search"],
-      "summary": "Search the Purch marketplace catalog (general product/listing search)."
+      "upstream_ref": {
+        "operator": "purch",
+        "slug": "marketplace",
+        "pay_md_path": "providers/purch/marketplace/PAY.md",
+        "service_url": "https://api.purch.xyz"
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/x402/search",
+        "cost_usdc": 0.01
+      },
+      "intents": [
+        "marketplace search",
+        "product listing search",
+        "ecommerce search"
+      ],
+      "summary": "Search the Purch marketplace catalog (general product/listing search).",
+      "doc_file": "services/purch.md",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:36.403Z",
+        "last_capture_path": "tests/paysh/captures/catalog/purch-marketplace.json",
+        "last_captured_at": "2026-05-15T13:11:36.403Z",
+        "probe_status": "parsed_ok"
+      }
     },
     {
       "id": "textbelt-sms",
+      "service_id": "textbelt",
       "name": "Textbelt SMS",
-      "file": "services/textbelt-sms.md",
-      "cost_usdc": 0.02,
-      "method": "POST",
-      "intents": ["send sms", "send text message", "send text to my phone", "sms reminder to myself", "text my phone"],
-      "summary": "Send a real SMS to a phone number (E.164 format). Authorized-use only: the user's own phone, or a recipient who has clearly consented. NOT for bulk, marketing-without-opt-in, phishing, or impersonation. POST always confirms before paying."
+      "upstream_ref": {
+        "operator": "paysponge",
+        "slug": "textbelt",
+        "pay_md_path": "providers/paysponge/textbelt/PAY.md",
+        "service_url": "https://api.paysponge.com"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/x402/purchase/svc_d6kszbre4qwg5n4n4/text",
+        "cost_usdc": 0.02
+      },
+      "intents": [
+        "send sms",
+        "send text message",
+        "send text to my phone",
+        "sms reminder to myself",
+        "text my phone"
+      ],
+      "summary": "Send a real SMS to a phone number (E.164 format). Authorized-use only: the user's own phone, or a recipient who has clearly consented. NOT for bulk, marketing-without-opt-in, phishing, or impersonation. POST always confirms before paying.",
+      "doc_file": "services/textbelt-sms.md",
+      "verification": {
+        "last_probed_at": "2026-05-12T16:35:13.286Z",
+        "last_capture_path": "tests/paysh/captures/textbelt-text-v2-success.json",
+        "last_captured_at": "2026-05-12T16:35:13.286Z",
+        "probe_status": "parsed_ok"
+      }
     }
   ]
 }

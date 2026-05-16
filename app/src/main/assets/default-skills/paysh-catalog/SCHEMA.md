@@ -1,0 +1,280 @@
+# paysh-catalog v2 schema
+
+> Contract for catalog.json + unsupported.json shipped with the paysh-catalog skill.
+> Introduced in BAT-761 (2026-05-16). Replaces v1 (BAT-699 → BAT-705).
+
+## Why v2
+
+v1 (BAT-699) was service-first: one entry per service. The BAT-706 full-catalog audit (384 parsed_ok endpoints across 19 services) made three v1 problems obvious:
+
+1. **No upstream linkage** — entries didn't carry `{operator, slug, pay_md_path}` so we couldn't diff against pay.sh's manifest to detect drift.
+2. **No freshness metadata** — we didn't know when each entry was last probed/captured.
+3. **One-service-one-entry forced trade-offs** — wolframalpha has v1/result AND v2/llm-api; rentcast has 10 endpoints; stablecrypto has 105. v1 picked ONE per service.
+
+v2 fixes all three by making catalog entries **per-endpoint** with a `service_id` grouping field, an `upstream_ref` link, and `verification` metadata.
+
+## File layout
+
+```
+paysh-catalog/
+├── SKILL.md                  # opt-in trigger gate, agent instructions (v2-aware)
+├── SCHEMA.md                 # this file
+├── catalog.json              # v2 — supported entries
+├── unsupported.json          # v2 — known-but-not-usable entries
+└── services/
+    ├── <service-id>.md       # one .md per service; sections per endpoint
+    ├── wolfram-alpha.md      # contains /v1/result + /v2/llm-api sections
+    ├── rentcast.md           # contains /markets + 4 other endpoint sections
+    └── ...
+```
+
+**One service doc, multiple endpoint entries.** A service that exposes N catalog-listed endpoints has ONE markdown file with N sub-sections (one per endpoint). The agent reads the one doc per call regardless of which endpoint it picked.
+
+## catalog.json structure
+
+```json
+{
+  "version": 2,
+  "generated_at": "2026-05-16T14:00:00Z",
+  "manifest_checked_at": "2026-05-16T14:00:00Z",
+  "source": "BAT-761 migration from v1 + BAT-706 audit data",
+  "entries": [ /* per-endpoint entry objects (see below) */ ]
+}
+```
+
+| Top-level field | Type | Meaning |
+|---|---|---|
+| `version` | int | Schema version. Currently `2`. Absent field → v1, requires migration. v3+ readers accept any `version >= 2` and treat unknown fields as opaque (preserve on round-trip). |
+| `generated_at` | ISO-8601 string | When this catalog.json file itself was written. Bumped on every regeneration (migrate script, --refresh, manual edits). |
+| `manifest_checked_at` | ISO-8601 string | When `probe-catalog.js --drift` last fetched and compared pay.sh's upstream manifest against our catalog. Always bumps when --drift runs, regardless of whether drift was found. Distinct from generated_at: a regeneration without re-fetching upstream doesn't bump this. The result of the check (in-sync / drift detected) is computed at --status time from the entries; not stored separately. |
+| `source` | string | One-line provenance — "BAT-761 migration", "BAT-706 audit", "manual edit 2026-06-15", etc. |
+| `entries` | array | The actual catalog entries. |
+
+## Entry object (per-endpoint)
+
+```json
+{
+  "id": "wolfram-alpha-llm",
+  "service_id": "wolframalpha",
+  "name": "Wolfram Alpha (LLM API)",
+  "upstream_ref": {
+    "operator": "paysponge",
+    "slug": "wolframalpha",
+    "pay_md_path": "providers/paysponge/wolframalpha/PAY.md",
+    "service_url": "https://wolframalpha.x402.paysponge.com"
+  },
+  "endpoint": {
+    "method": "GET",
+    "path": "/v2/llm-api",
+    "cost_usdc": 0.02
+  },
+  "intents": ["complex math", "physics", "synthesized facts"],
+  "summary": "Wolfram's LLM-optimized API — synthesized prose answers vs v1/result's raw computation.",
+  "doc_file": "services/wolfram-alpha.md",
+  "doc_anchor": "v2-llm-api",
+  "verification": {
+    "last_probed_at": "2026-05-16T11:13:50Z",
+    "last_capture_path": "tests/paysh/captures/catalog/paysponge-wolframalpha-llm.json",
+    "last_captured_at": "2026-05-16T11:13:50Z",
+    "probe_status": "parsed_ok"
+  }
+}
+```
+
+### Required fields
+
+| Field | Type | Meaning + rules |
+|---|---|---|
+| `id` | kebab-case string | **Globally unique across catalog.json AND unsupported.json** (the `--refresh <id>` command searches both). Used as the agent-facing entry handle. Convention: `<service_id>-<endpoint-slug>` (e.g. `wolfram-alpha-llm`) or just `<service_id>` if the service has one entry (e.g. `wolfram-alpha`, `textbelt-sms`). For services with nested slugs (e.g. `stablecrypto/market-data`), flatten via `-` in the id (e.g. `stablecrypto-market-data-price`). |
+| `service_id` | kebab-case string | Groups entries from the same pay.sh service. Multiple entries can share a service_id (wolfram-alpha-v1 + wolfram-alpha-llm both have `service_id: "wolframalpha"`). For nested slugs flatten via `-` (e.g. `stablecrypto-market-data`). |
+| `name` | string | Human-readable display name. May include endpoint clarifier ("Wolfram Alpha (LLM API)"). |
+| `upstream_ref.operator` | string | pay.sh operator slug (e.g. `paysponge`, `merit-systems`, `crushrewards`). Always single-segment. |
+| `upstream_ref.slug` | string | pay.sh service slug within the operator. **May contain `/`** for nested services (e.g. `wolframalpha`, `stablecrypto/market-data`, `stableenrich/enrichment`). Preserve nested form here — flattening only happens in `id`/`service_id`. |
+| `upstream_ref.pay_md_path` | string | Relative path of the PAY.md in pay.sh's pay-skills repo. Always `providers/<operator>/<slug>/PAY.md` (e.g. `providers/merit-systems/stablecrypto/market-data/PAY.md`). Used by --drift to fetch the upstream source of truth. |
+| `upstream_ref.service_url` | URL | Base URL of the service (from PAY.md frontmatter). Combined with `endpoint.path` to build the probe URL. |
+| `endpoint.method` | enum | `GET`, `POST`, `PUT`, `PATCH`, `DELETE`. |
+| `endpoint.path` | URL path | Path on the service. Combined with `service_url` to form the full URL. |
+| `endpoint.cost_usdc` | number | Per-call cost in USDC, **decimal** (e.g. `0.02` not `20000` atomic). Matches the agent-facing `max_usdc: "0.05"` convention. |
+| `intents` | string[] | Keyword/phrase list the agent matches against user intent. Min 3, recommended 5-10. |
+| `summary` | string | One-line description for catalog browsing ("what can you pay for"). |
+| `doc_file` | string | Path (relative to skill folder) to the markdown file with full usage docs. The doc covers body schema, response shape, examples, and any safety scoping. |
+| `verification.last_probed_at` | ISO-8601 | When `probe-catalog.js` last hit this endpoint and got a 402. |
+| `verification.last_capture_path` | string \| null | Path to the JSON capture file. `null` if `probe_status !== "parsed_ok"` (no capture is written for non-402 responses or parser-rejected 402s). |
+| `verification.last_captured_at` | ISO-8601 \| null | When the capture file was written. `null` if `last_capture_path` is null. Distinct from `last_probed_at` — a probe that confirmed the existing capture is still valid bumps `last_probed_at` but not `last_captured_at`. |
+| `verification.probe_status` | enum | `parsed_ok` (good), `rejected:<reason>` (parser refused 402), `fetch_failed` (no HTTP response), `http_<NNN>` (non-402 HTTP response). For catalog.json this MUST be `parsed_ok`. |
+
+### Optional fields
+
+| Field | Type | When to use |
+|---|---|---|
+| `doc_anchor` | kebab-case string | Markdown anchor within `doc_file` pointing to the endpoint-specific section. E.g. `v2-llm-api` → agent reads `services/wolfram-alpha.md#v2-llm-api`. Omit when the service has one entry (whole doc is the entry's section). |
+
+## unsupported.json structure
+
+Same top-level shape as catalog.json (`version`, `generated_at`, `manifest_checked_at`, `source`, `entries`) PLUS a top-level `reasons` registry the agent reads to explain each refusal reason to users:
+
+```json
+{
+  "version": 2,
+  "generated_at": "...",
+  "manifest_checked_at": "...",
+  "source": "...",
+  "reasons": {
+    "endpoint_not_402_at_probe": {
+      "label": "Service exists in pay.sh's catalog but didn't return a 402 at probe time",
+      "explanation": "Service is listed in pay.sh's upstream catalog but our probe got a non-402 HTTP status...",
+      "actionable": false
+    },
+    "...": { /* one entry per reason bucket */ }
+  },
+  "entries": [ /* see below */ ]
+}
+```
+
+### `reasons` registry
+
+Top-level object. One key per reason bucket the catalog uses. Each value:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `label` | string | Short human-readable label for the reason (used in --status reports). |
+| `explanation` | string (markdown) | Full agent-facing prose explaining the bucket — when the agent answers "why can't you use X?", it composes from this. |
+| `actionable` | bool | `true` if there's a known path to fix (e.g. binary handler unblocks `requires_binary_response`), `false` if it's blocked indefinitely. Surfaces in --status. |
+
+Six buckets in v2 (carried from v1 PR #378 R10 state):
+
+| reason | Meaning | actionable |
+|---|---|---|
+| `mpp_protocol` | Service uses Multi-Party Protocol — we don't implement yet | false |
+| `siwx_auth_required` | Service needs Sign-In-With-Solana auth before 402 | false |
+| `invalid_demand` | Service returns 402 with amount=0; agent_pay refuses zero-demand | false |
+| `requires_binary_response` | Service returns binary content we can't deliver to channels yet | true (BAT-764) |
+| `endpoint_not_402_at_probe` | Probe got a non-402 status (4xx/5xx/200/301) — broken/moved/auth-gated | false (re-probe if upstream fixes) |
+| `unverified_paid_response_shape` | Parses_ok but we haven't captured paid response; evidence about shape is contested | true (BAT-708 paid-response capture) |
+
+### Unsupported entry object
+
+```json
+{
+  "id": "paysponge-perplexity-catalog-url",
+  "service_id": "perplexity",
+  "name": "Perplexity (paysponge catalog URL)",
+  "upstream_ref": { /* same as catalog.json */ },
+  "endpoint": {
+    "method": "GET",
+    "path": "/",
+    "cost_usdc": null
+  },
+  "reason": "endpoint_not_402_at_probe",
+  "evidence_basis": "openapi-response-content-type",
+  "verification": {
+    "last_probed_at": "2026-05-16T11:13:50Z",
+    "last_capture_path": null,
+    "last_captured_at": null,
+    "probe_status": "http_200"
+  },
+  "note": "Catalog-listed endpoint returned http_200 — non-402. Sibling endpoints found by BAT-706 audit are listed in audit_pending.",
+  "audit_pending": [
+    { "method": "POST", "path": "/search", "cost_usdc": 0.01, "deferred_to": "BAT-769" },
+    { "method": "POST", "path": "/v1/agent", "cost_usdc": 0.01, "deferred_to": "BAT-769" },
+    { "method": "POST", "path": "/v1/async/sonar", "cost_usdc": 0.01, "deferred_to": "BAT-769" }
+  ]
+}
+```
+
+Required: same `id`/`service_id`/`name`/`upstream_ref`/`endpoint`/`verification` as catalog entries, **plus** `reason` (one of the six bucket keys above). `endpoint.cost_usdc` MAY be `null` for entries where probe never reached 402 (no cost observed).
+
+### Optional fields on unsupported entries
+
+| Field | Type | When to use |
+|---|---|---|
+| `evidence_basis` | enum | For `requires_binary_response` and `unverified_paid_response_shape` only. Values: `paid-response-observed` (settled + observed binary), `openapi-response-content-type` (openapi `responses` declares image/* / video/* / audio/* / application/octet-stream), `product-family-inference` (service's published product is image/video gen — weakest evidence, conservative refuse). Introduced PR #378 R10 — preserve from v1 migration. |
+| `note` | string (markdown) | Free-form per-entry explanation. Useful for documenting specific HTTP error codes, audit findings, deferred BAT pointers. Distinct from the bucket-wide `reasons[<bucket>].explanation` — the note is entry-specific. |
+| `audit_pending` | array | Lists sibling endpoints found by the BAT-706 audit that aren't catalogued. Each entry: `{method, path, cost_usdc, deferred_to: "BAT-XXX"}`. Empty array (or omitted) if the audit found no extras. As endpoints get promoted to catalog.json, drop them from this list. |
+
+### Catalog ↔ unsupported lifecycle
+
+When a paid endpoint gets promoted (via BAT-708 follow-ups, or BAT-764 unblocking a binary entry):
+
+1. Remove the endpoint from the unsupported entry's `audit_pending` array
+2. Add a new entry to `catalog.json` with the same `service_id` (different `id`)
+3. If the unsupported entry's catalog-URL endpoint still fails (e.g. perplexity catalog URL is still `http_200`), the unsupported entry STAYS — the broken URL doesn't get "fixed" by promoting sibling endpoints
+4. If the unsupported entry's catalog-URL ALSO becomes payable (rare), delete the unsupported entry entirely
+
+Conversely, if a catalog entry stops working (drift detected, --refresh fails with non-parsed_ok), it migrates DOWN to unsupported with the new reason bucket.
+
+## Drift detection (`probe-catalog.js --drift`)
+
+Compares catalog vs pay.sh upstream manifest:
+
+1. Fetches pay.sh's `manifest.json` (or equivalent index) and each service's `PAY.md` frontmatter
+2. Diffs against `catalog.json.entries[].upstream_ref` + `unsupported.json.entries[].upstream_ref`
+3. Reports:
+   - **Added upstream** — services in pay.sh's manifest not in either of our files
+   - **Removed upstream** — entries in our files whose `pay_md_path` no longer exists upstream
+   - **Stale captures** — entries with `last_captured_at` older than N days (default 30)
+   - **Endpoint drift** — services whose openapi.json added/removed endpoints since last `--refresh`
+4. Exits non-zero if any drift detected (CI-friendly)
+
+## Status report (`probe-catalog.js --status`)
+
+Generates `tests/paysh/catalog-status.md` with sections:
+- **Fresh** — entries with `last_probed_at` within freshness window
+- **Stale** — entries past freshness window
+- **Drifted** — entries where upstream changed since last sync
+- **Audit pending** — unsupported entries with `audit_pending` arrays summarized
+
+## Refresh single entry (`probe-catalog.js --refresh <id>`)
+
+1. Looks up entry by `id` in catalog.json or unsupported.json
+2. Re-probes the `upstream_ref.service_url + endpoint.path`
+3. Re-captures the 402 response to `last_capture_path`
+4. Updates `verification.last_probed_at` + `last_captured_at` + `probe_status`
+5. Updates `generated_at` on the containing file
+
+## Migration from v1
+
+A one-time `tests/paysh/migrate-v1-to-v2.js` script:
+1. Detects v1 by absence of `version` field (or `version === 1`)
+2. Reads v1 `catalog.json` (10 entries) + `unsupported.json` (62 entries)
+3. Cross-references each v1 entry against `tests/paysh/captures/catalog/<file>.json` for upstream_ref + capture path
+4. Cross-references `tests/paysh/catalog-audit.md` (BAT-706 output) for `audit_pending` lists
+5. Preserves PR #378 R10 fields (`evidence_basis`, `note`)
+6. Emits v2 `catalog.json` + `unsupported.json`
+7. Runs programmatic validation: every entry has required fields, types match, ids are globally unique, no broken doc_file references
+
+Script is idempotent — re-running produces the same output. Run once to migrate; thereafter use `--refresh` to update individual entries.
+
+### Validation rules (enforced by migrate script)
+
+- `version === 2`
+- `entries[]` is array
+- All required fields present on each entry
+- `id` is globally unique across catalog.json + unsupported.json
+- `service_id` matches at least one entry's prefix in `id`
+- `upstream_ref.pay_md_path` matches the pattern `providers/<operator>/<slug>/PAY.md` where `<operator>` and `<slug>` match the corresponding fields
+- `endpoint.cost_usdc` is non-negative number (catalog) or non-negative-or-null (unsupported)
+- `verification.last_capture_path` is null iff `probe_status !== "parsed_ok"`
+- `verification.last_captured_at` is null iff `last_capture_path` is null
+- For catalog.json: `verification.probe_status === "parsed_ok"` for every entry
+- For unsupported.json: `reason` is one of the six registered bucket keys
+- For unsupported.json: `reasons` object has entry for every bucket key referenced in `entries[].reason`
+- `doc_file` refers to a file that exists in `services/`
+
+Validation failure aborts the migration run and prints which entry/field failed.
+
+## Backwards compatibility
+
+Existing user devices have v1 catalog files in `workspace/skills/paysh-catalog/`. The plan:
+
+1. Bump `SKILL.md` frontmatter `version: "1.3.0"` → `"1.4.0"` — triggers `ConfigManager.seedSkill()` re-seed per the BAT-699 R6 pattern
+2. seedSkill uses the existing stage-then-swap atomicity (BAT-699 R7) to swap v1 → v2 files
+3. User-added catalog entries (rare but possible) are preserved by the stage-then-swap merge logic
+4. Agent in `SKILL.md` body explicitly handles v2 schema (no v1 readers in the agent — re-seed is mandatory)
+
+## Forward compatibility
+
+A v3 (if needed) would bump `version: 3`. v2 readers should:
+- Accept any object with `version >= 2`
+- Treat unknown fields as opaque (preserve on round-trip)
+- Fail loudly on `version < 2` (don't try to back-port)
