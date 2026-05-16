@@ -1,7 +1,7 @@
 {
   "version": 2,
-  "generated_at": "2026-05-16T16:18:45.533Z",
-  "manifest_checked_at": "2026-05-16T16:18:45.533Z",
+  "generated_at": "2026-05-16T16:32:41.522Z",
+  "manifest_checked_at": "2026-05-16T16:32:41.522Z",
   "source": "BAT-761 migration from v1 (BAT-699 → PR #378 R10) + BAT-706 audit_pending population",
   "reasons": {
     "mpp_protocol": {
@@ -22,7 +22,7 @@
     "requires_binary_response": {
       "label": "Service expected to return binary content (image/audio/video) that we can't deliver",
       "explanation": "agent_pay parses x402 settles and returns the response body as best-effort UTF-8 text. Services expected to return binary content (PNG screenshots, AI-generated images, audio, video) can be paid but the binary bytes can't currently be piped to the Telegram/Discord channel as an attachment — there's no in-memory-buffer-to-channel path. Tracked: needs a follow-up BAT to (a) save binary content to a workspace file and (b) plumb that file path to the channel sender. Each service's `note` field documents the EVIDENCE BASIS for the classification: 'paid-response-observed' (we have a captured paid response confirming binary), 'product-family-inference' (the service's published product is image/audio/video gen — e.g. fal.ai Flux/SDXL/Stable-Video — making binary the only plausible response shape, AND no openapi evidence contradicts it), or 'openapi-response-content-type' (the openapi spec declares image/* / video/* / audio/* media types). Distinct from `unverified_paid_response_shape`: a service goes there if the evidence is contested (e.g. openapi declares application/json while product family suggests binary), as happened with paysponge/screenshotone in PR #378 R10. Operational consequence: refuse the service to avoid spending USDC for output the channel can't deliver.",
-      "actionable": false
+      "actionable": true
     },
     "endpoint_not_402_at_probe": {
       "label": "Service exists in pay.sh's catalog but didn't return a 402 at probe time",
@@ -32,7 +32,7 @@
     "unverified_paid_response_shape": {
       "label": "Paid endpoint exists and parses OK, but the response shape isn't yet verified — we can't promise the channel can render the output",
       "explanation": "agent_pay would settle (we have a parseable 402 with Solana-USDC), but we have NOT captured an actual paid response, and the available evidence is contested (e.g. openapi declares one content-type while product-family inference suggests another). Conservative refuse: a paid call could burn USDC on output the channel can't render (binary bytes with no file-pipe path), OR could succeed with JSON whose envelope shape we haven't documented. Different from `requires_binary_response`, which we only assert when evidence clearly points to binary content (paid-response-observed or unambiguous openapi media types). Deferred to BAT-708 for paid-response capture + classification before catalog inclusion.",
-      "actionable": false
+      "actionable": true
     }
   },
   "entries": [
@@ -172,7 +172,7 @@
         "last_probed_at": "2026-05-15T00:00:00.000Z",
         "last_capture_path": null,
         "last_captured_at": null,
-        "probe_status": "parsed_ok"
+        "probe_status": "unknown"
       },
       "evidence_basis": "product-family-inference",
       "note": "BAT-706 audit (2026-05-15) confirmed 9 paid endpoints on fal.x402.paysponge.com all return parseable 402 challenges for Solana-USDC: /fal-ai/fast-sdxl ($0.01), /fal-ai/flux/dev ($0.03), /fal-ai/flux-pro/v1.1 ($0.04), /fal-ai/flux-pro/v1.1-ultra ($0.06), /fal-ai/flux/schnell ($0.01), /fal-ai/minimax/video-01 ($0.07), /fal-ai/recraft-v3 ($0.04), /fal-ai/stable-diffusion-v35-large ($0.04), /fal-ai/stable-video ($0.07). Evidence basis for the binary classification: PRODUCT-FAMILY INFERENCE — the endpoint names map to fal-ai's published image- and video-generation models (Flux SDXL, Recraft v3, Stable Diffusion v3.5, Stable Video, Minimax-video) which return PNG/MP4 binary content by their nature. The audit confirms the 402-and-build path works; we have NOT settled a payment and inspected the response body. Follow-up path to upgrade evidence_basis: extract declared response content-types from fal's openapi.json (the audit's fetcher reaches it successfully — see catalog-audit.md enumerating 30 endpoints from it; WebFetch with a different user-agent gets HTTP 403, but probe-catalog.js's UA works). Parsing openapi response.content media types per endpoint would let us flip this to evidence_basis: openapi-response-content-type. Until then we refuse to avoid spending USDC on output the channel can't deliver. See tests/paysh/catalog-audit.md for the parsed_ok evidence (run 2026-05-15 with --audit-side-effects).",

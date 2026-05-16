@@ -291,11 +291,19 @@ function buildUnsupportedEntry(v1Entry, auditMap) {
             inferredProbedAt = `${latest}T00:00:00.000Z`;
         }
     }
+    // R6-3: when no capture exists, we cannot evidence parsed_ok with a captured
+    // 402 body. The reason → status mapping says binary/unverified buckets are
+    // parsed_ok, but the catalog-listed URL for paysponge/fal etc. was never
+    // actually probed (the audit found OTHER endpoints on the same host that
+    // parse_ok — those go in audit_pending). Downgrade to unknown so probe_status
+    // accurately reflects "we never captured this specific endpoint".
+    let initialProbeStatus = deriveProbeStatusFromV1(v1Entry);
+    if (initialProbeStatus === 'parsed_ok') initialProbeStatus = 'unknown';
     let verification = {
         last_probed_at: inferredProbedAt,
         last_capture_path: null,
         last_captured_at: null,
-        probe_status: deriveProbeStatusFromV1(v1Entry),
+        probe_status: initialProbeStatus,
     };
     let service_url = null;
     let endpointMethod = 'GET'; // default for probe; we don't always know
@@ -517,12 +525,25 @@ function main() {
         entries: v2CatalogEntries,
     };
 
+    // R6-2 + R6-4: SCHEMA.md commits two buckets as actionable (true) since both
+    // have known fix paths in flight. The v1 unsupported.json had everything as
+    // actionable: false; align with SCHEMA.md by overriding these two on migrate.
+    // Pre-fix `--status` would not surface these as "fixable" and would mislead
+    // operators reading the report.
+    const reasonsWithActionableFix = JSON.parse(JSON.stringify(v1Unsupported.reasons || {}));
+    if (reasonsWithActionableFix.requires_binary_response) {
+        reasonsWithActionableFix.requires_binary_response.actionable = true;
+    }
+    if (reasonsWithActionableFix.unverified_paid_response_shape) {
+        reasonsWithActionableFix.unverified_paid_response_shape.actionable = true;
+    }
+
     const v2Unsupported = {
         version: 2,
         generated_at: now,
         manifest_checked_at: now,
         source: 'BAT-761 migration from v1 (BAT-699 → PR #378 R10) + BAT-706 audit_pending population',
-        reasons: v1Unsupported.reasons || {},
+        reasons: reasonsWithActionableFix,
         entries: v2UnsupportedEntries,
     };
 
