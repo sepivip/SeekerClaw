@@ -291,11 +291,22 @@ function buildUnsupportedEntry(v1Entry, auditMap) {
             endpointPath = split.path;
             endpointMethod = capture.method || endpointMethod;
             const capturedAt = capture._meta?.capturedAt || null;
+            // R2-1 fix: capture.status === 402 means the HTTP layer succeeded,
+            // but the PARSER might still have rejected (mpp_protocol / siwx_auth_required
+            // / invalid_demand all return 402 but get classified as `reject:<reason>`).
+            // Use deriveProbeStatusFromV1 (reason-aware) as the truth; only override
+            // with `http_NNN` if the capture's HTTP status itself was non-402.
+            let probeStatus;
+            if (capture.status === 402) {
+                probeStatus = deriveProbeStatusFromV1(v1Entry);
+            } else {
+                probeStatus = `http_${capture.status}`;
+            }
             verification = {
                 last_probed_at: capturedAt,
                 last_capture_path: capturedAt ? captureRelPath(captureName) : null,
                 last_captured_at: capturedAt,
-                probe_status: capture.status === 402 ? 'parsed_ok' : `http_${capture.status}`,
+                probe_status: probeStatus,
             };
         } catch (e) {
             console.warn(`  could not read capture for ${v1Name}: ${e.message}`);
@@ -328,13 +339,26 @@ function buildUnsupportedEntry(v1Entry, auditMap) {
     return out;
 }
 
-/** Best-effort probe status from v1 note like "http_401 at 2026-05-14 probe — auth-gated before 402."
- *  R1 #2 fix: only assert parsed_ok when there's actually a capture proving it.
- *  Without a capture, return 'unknown' rather than claim parsed_ok — otherwise
- *  status/drift reporting reads stale "parsed_ok" entries as confirmed-working
- *  when really we never recorded supporting evidence.
- *  Caller may override when capture is available (probe-status derived from capture.status). */
+/** Derive probe_status from v1 reason + note. R2-1 fix: many 402 responses
+ *  are still parser-REJECTED (mpp/siwx/invalid_demand) — those should be
+ *  `reject:<reason>`, not parsed_ok, even when the HTTP layer succeeded.
+ *  Mapping mirrors probeAndParse's classification logic:
+ *
+ *    reason                          → probe_status
+ *    ─────────────────────────────────────────────────────────
+ *    mpp_protocol                    → reject:mpp_protocol
+ *    siwx_auth_required              → reject:siwx_auth_required
+ *    invalid_demand                  → reject:invalid_demand
+ *    requires_binary_response        → parsed_ok (HTTP+parse fine; refusal is delivery-side)
+ *    unverified_paid_response_shape  → parsed_ok (HTTP+parse fine; refusal is verification-side)
+ *    endpoint_not_402_at_probe       → http_<NNN> from note (or 'unknown' if not in note)
+ */
 function deriveProbeStatusFromV1(v1Entry) {
+    if (v1Entry.reason === 'mpp_protocol') return 'reject:mpp_protocol';
+    if (v1Entry.reason === 'siwx_auth_required') return 'reject:siwx_auth_required';
+    if (v1Entry.reason === 'invalid_demand') return 'reject:invalid_demand';
+    if (v1Entry.reason === 'requires_binary_response') return 'parsed_ok';
+    if (v1Entry.reason === 'unverified_paid_response_shape') return 'parsed_ok';
     if (v1Entry.note) {
         const m = /\bhttp_(\d{3})\b/.exec(v1Entry.note);
         if (m) return `http_${m[1]}`;

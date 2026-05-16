@@ -46,7 +46,7 @@ paysh-catalog/
 |---|---|---|
 | `version` | int | Schema version. Currently `2`. Absent field → v1, requires migration. v3+ readers accept any `version >= 2` and treat unknown fields as opaque (preserve on round-trip). |
 | `generated_at` | ISO-8601 string | When this catalog.json file itself was written. Bumped on every regeneration (migrate script, --refresh, manual edits). |
-| `manifest_checked_at` | ISO-8601 string | When `probe-catalog.js --drift` last fetched and compared pay.sh's upstream manifest against our catalog. Always bumps when --drift runs, regardless of whether drift was found. Distinct from generated_at: a regeneration without re-fetching upstream doesn't bump this. The result of the check (in-sync / drift detected) is computed at --status time from the entries; not stored separately. |
+| `manifest_checked_at` | ISO-8601 string | When `probe-catalog.js --drift --write-checked-at` last fetched and compared pay.sh's upstream manifest against our catalog. **Only bumps when the caller passes `--write-checked-at`** — bare `--drift` is a pure check (no file mutations) so the timestamp stays at the last persisted check. Distinct from generated_at: a regeneration without re-fetching upstream doesn't bump this. The result of the check (in-sync / drift detected) is computed at --status time from the entries; not stored separately. |
 | `source` | string | One-line provenance — "BAT-761 migration", "BAT-706 audit", "manual edit 2026-06-15", etc. |
 | `entries` | array | The actual catalog entries. |
 
@@ -99,9 +99,9 @@ paysh-catalog/
 | `summary` | string | One-line description for catalog browsing ("what can you pay for"). |
 | `doc_file` | string | Path (relative to skill folder) to the markdown file with full usage docs. The doc covers body schema, response shape, examples, and any safety scoping. |
 | `verification.last_probed_at` | ISO-8601 | When `probe-catalog.js` last hit this endpoint and got a 402. |
-| `verification.last_capture_path` | string \| null | Path to the JSON capture file. `null` if `probe_status !== "parsed_ok"` (no capture is written for non-402 responses or parser-rejected 402s). |
+| `verification.last_capture_path` | string \| null | Path to the JSON capture file. `null` for entries where the probe never reached HTTP 402 (e.g. `http_4xx`/`5xx` responses, `fetch_failed`, `unknown` status). **May be non-null for `reject:<reason>` entries** — the HTTP 402 succeeded so we have a capture, but the parser refused (mpp_protocol / siwx_auth_required / invalid_demand). |
 | `verification.last_captured_at` | ISO-8601 \| null | When the capture file was written. `null` if `last_capture_path` is null. Distinct from `last_probed_at` — a probe that confirmed the existing capture is still valid bumps `last_probed_at` but not `last_captured_at`. |
-| `verification.probe_status` | enum | `parsed_ok` (good), `rejected:<reason>` (parser refused 402), `fetch_failed` (no HTTP response), `http_<NNN>` (non-402 HTTP response), `unknown` (no capture and no recorded probe status — only valid for unsupported.json entries migrated from v1 without HTTP context). For catalog.json this MUST be `parsed_ok`. |
+| `verification.probe_status` | enum | `parsed_ok` (HTTP 402 + parser accepted), `reject:<reason>` (HTTP 402 + parser refused — `reject:mpp_protocol` / `reject:siwx_auth_required` / `reject:invalid_demand` / `reject:no_solana_offer` / etc., matching probeAndParse's classification), `fetch_failed` (no HTTP response — DNS/TLS/timeout), `http_<NNN>` (non-402 HTTP response), `unknown` (no capture and no recorded probe status — only valid for unsupported.json entries migrated from v1 without HTTP context). For catalog.json this MUST be `parsed_ok`. |
 
 ### Optional fields
 

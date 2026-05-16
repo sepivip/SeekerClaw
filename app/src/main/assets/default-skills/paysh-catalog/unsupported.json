@@ -1,7 +1,7 @@
 {
   "version": 2,
-  "generated_at": "2026-05-16T15:28:12.296Z",
-  "manifest_checked_at": "2026-05-16T15:28:12.296Z",
+  "generated_at": "2026-05-16T15:44:05.950Z",
+  "manifest_checked_at": "2026-05-16T15:44:05.950Z",
   "source": "BAT-761 migration from v1 (BAT-699 → PR #378 R10) + BAT-706 audit_pending population",
   "reasons": {
     "mpp_protocol": {
@@ -172,7 +172,7 @@
         "last_probed_at": null,
         "last_capture_path": null,
         "last_captured_at": null,
-        "probe_status": "unknown"
+        "probe_status": "parsed_ok"
       },
       "evidence_basis": "product-family-inference",
       "note": "BAT-706 audit (2026-05-15) confirmed 9 paid endpoints on fal.x402.paysponge.com all return parseable 402 challenges for Solana-USDC: /fal-ai/fast-sdxl ($0.01), /fal-ai/flux/dev ($0.03), /fal-ai/flux-pro/v1.1 ($0.04), /fal-ai/flux-pro/v1.1-ultra ($0.06), /fal-ai/flux/schnell ($0.01), /fal-ai/minimax/video-01 ($0.07), /fal-ai/recraft-v3 ($0.04), /fal-ai/stable-diffusion-v35-large ($0.04), /fal-ai/stable-video ($0.07). Evidence basis for the binary classification: PRODUCT-FAMILY INFERENCE — the endpoint names map to fal-ai's published image- and video-generation models (Flux SDXL, Recraft v3, Stable Diffusion v3.5, Stable Video, Minimax-video) which return PNG/MP4 binary content by their nature. The audit confirms the 402-and-build path works; we have NOT settled a payment and inspected the response body. Follow-up path to upgrade evidence_basis: extract declared response content-types from fal's openapi.json (the audit's fetcher reaches it successfully — see catalog-audit.md enumerating 30 endpoints from it; WebFetch with a different user-agent gets HTTP 403, but probe-catalog.js's UA works). Parsing openapi response.content media types per endpoint would let us flip this to evidence_basis: openapi-response-content-type. Until then we refuse to avoid spending USDC on output the channel can't deliver. See tests/paysh/catalog-audit.md for the parsed_ok evidence (run 2026-05-15 with --audit-side-effects).",
@@ -1481,7 +1481,7 @@
         "last_probed_at": "2026-05-15T13:11:35.479Z",
         "last_capture_path": "tests/paysh/captures/catalog/agentmail-email.json",
         "last_captured_at": "2026-05-15T13:11:35.479Z",
-        "probe_status": "parsed_ok"
+        "probe_status": "reject:invalid_demand"
       },
       "audit_pending": [
         {
@@ -1554,7 +1554,7 @@
         "last_probed_at": "2026-05-15T13:11:35.889Z",
         "last_capture_path": "tests/paysh/captures/catalog/paysponge-nyne.json",
         "last_captured_at": "2026-05-15T13:11:35.889Z",
-        "probe_status": "parsed_ok"
+        "probe_status": "reject:invalid_demand"
       },
       "note": "Catalog-listed endpoint returns 402 amount=0 (free-from-x402's-perspective, refused by agent_pay design). BAT-706 audit (2026-05-15, --audit-side-effects) discovered 2 SIBLING endpoints on the same host that DO have demand and parse OK for Solana-USDC: /person/enrichment ($0.02) and /person/search ($0.02). See tests/paysh/catalog-audit.md. These are payable today but NOT yet catalogued — person-enrichment/search is privacy-sensitive (PII lookup of third parties) and needs explicit safety scoping (authorized-use-only pattern, like 2captcha and textbelt-sms in catalog.json) before catalog inclusion. Deferred to BAT-708.",
       "audit_pending": [
@@ -1592,7 +1592,7 @@
         "last_probed_at": "2026-05-15T13:11:35.355Z",
         "last_capture_path": "tests/paysh/captures/catalog/merit-systems-stabledomains_domains.json",
         "last_captured_at": "2026-05-15T13:11:35.355Z",
-        "probe_status": "parsed_ok"
+        "probe_status": "reject:siwx_auth_required"
       }
     },
     {
@@ -1615,7 +1615,7 @@
         "last_probed_at": "2026-05-15T13:11:35.253Z",
         "last_capture_path": "tests/paysh/captures/catalog/merit-systems-stableemail_email.json",
         "last_captured_at": "2026-05-15T13:11:35.253Z",
-        "probe_status": "parsed_ok"
+        "probe_status": "reject:siwx_auth_required"
       },
       "audit_pending": [
         {
@@ -1706,7 +1706,7 @@
         "last_probed_at": "2026-05-15T13:11:35.946Z",
         "last_capture_path": "tests/paysh/captures/catalog/merit-systems-stablephone_calls.json",
         "last_captured_at": "2026-05-15T13:11:35.946Z",
-        "probe_status": "parsed_ok"
+        "probe_status": "reject:siwx_auth_required"
       },
       "audit_pending": [
         {
@@ -1749,7 +1749,7 @@
         "last_probed_at": "2026-05-15T13:11:35.942Z",
         "last_capture_path": "tests/paysh/captures/catalog/merit-systems-stablesocial_social-data.json",
         "last_captured_at": "2026-05-15T13:11:35.942Z",
-        "probe_status": "parsed_ok"
+        "probe_status": "reject:siwx_auth_required"
       },
       "audit_pending": [
         {
@@ -1990,7 +1990,7 @@
         "last_probed_at": "2026-05-15T13:11:35.649Z",
         "last_capture_path": "tests/paysh/captures/catalog/merit-systems-stableupload_hosting.json",
         "last_captured_at": "2026-05-15T13:11:35.649Z",
-        "probe_status": "parsed_ok"
+        "probe_status": "reject:siwx_auth_required"
       }
     },
     {
@@ -2013,7 +2013,7 @@
         "last_probed_at": "2026-05-15T13:11:37.475Z",
         "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_agentexplorer.json",
         "last_captured_at": "2026-05-15T13:11:37.475Z",
-        "probe_status": "parsed_ok"
+        "probe_status": "reject:mpp_protocol"
       }
     },
     {
@@ -2036,7 +2036,7 @@
         "last_probed_at": "2026-05-15T13:11:37.596Z",
         "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_aigen.json",
         "last_captured_at": "2026-05-15T13:11:37.596Z",
-        "probe_status": "parsed_ok"
+        "probe_status": "reject:mpp_protocol"
       }
     },
     {
@@ -2059,7 +2059,7 @@
         "last_probed_at": "2026-05-15T13:11:37.575Z",
         "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_anytrans.json",
         "last_captured_at": "2026-05-15T13:11:37.575Z",
-        "probe_status": "parsed_ok"
+        "probe_status": "reject:mpp_protocol"
       }
     },
     {
@@ -2082,7 +2082,7 @@
         "last_probed_at": "2026-05-15T13:11:37.685Z",
         "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_captcha.json",
         "last_captured_at": "2026-05-15T13:11:37.685Z",
-        "probe_status": "parsed_ok"
+        "probe_status": "reject:mpp_protocol"
       }
     },
     {
@@ -2105,7 +2105,7 @@
         "last_probed_at": "2026-05-15T13:11:37.617Z",
         "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_contactcenterai.json",
         "last_captured_at": "2026-05-15T13:11:37.617Z",
-        "probe_status": "parsed_ok"
+        "probe_status": "reject:mpp_protocol"
       }
     },
     {
@@ -2128,7 +2128,7 @@
         "last_probed_at": "2026-05-15T13:11:37.586Z",
         "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_documentparseservice.json",
         "last_captured_at": "2026-05-15T13:11:37.586Z",
-        "probe_status": "parsed_ok"
+        "probe_status": "reject:mpp_protocol"
       }
     },
     {
@@ -2151,7 +2151,7 @@
         "last_probed_at": "2026-05-15T13:11:37.775Z",
         "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_edututor.json",
         "last_captured_at": "2026-05-15T13:11:37.775Z",
-        "probe_status": "parsed_ok"
+        "probe_status": "reject:mpp_protocol"
       }
     },
     {
@@ -2174,7 +2174,7 @@
         "last_probed_at": "2026-05-15T13:11:37.893Z",
         "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_embeddings.json",
         "last_captured_at": "2026-05-15T13:11:37.893Z",
-        "probe_status": "parsed_ok"
+        "probe_status": "reject:mpp_protocol"
       }
     },
     {
@@ -2197,7 +2197,7 @@
         "last_probed_at": "2026-05-15T13:11:38.607Z",
         "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_facebody.json",
         "last_captured_at": "2026-05-15T13:11:38.607Z",
-        "probe_status": "parsed_ok"
+        "probe_status": "reject:mpp_protocol"
       }
     },
     {
@@ -2220,7 +2220,7 @@
         "last_probed_at": "2026-05-15T13:11:38.615Z",
         "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_farui.json",
         "last_captured_at": "2026-05-15T13:11:38.615Z",
-        "probe_status": "parsed_ok"
+        "probe_status": "reject:mpp_protocol"
       }
     },
     {
@@ -2243,7 +2243,7 @@
         "last_probed_at": "2026-05-15T13:11:38.711Z",
         "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_goodstech.json",
         "last_captured_at": "2026-05-15T13:11:38.711Z",
-        "probe_status": "parsed_ok"
+        "probe_status": "reject:mpp_protocol"
       }
     },
     {
@@ -2266,7 +2266,7 @@
         "last_probed_at": "2026-05-15T13:11:38.699Z",
         "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_green.json",
         "last_captured_at": "2026-05-15T13:11:38.699Z",
-        "probe_status": "parsed_ok"
+        "probe_status": "reject:mpp_protocol"
       }
     },
     {
@@ -2289,7 +2289,7 @@
         "last_probed_at": "2026-05-15T13:11:38.827Z",
         "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_imageaudit.json",
         "last_captured_at": "2026-05-15T13:11:38.827Z",
-        "probe_status": "parsed_ok"
+        "probe_status": "reject:mpp_protocol"
       }
     },
     {
@@ -2312,7 +2312,7 @@
         "last_probed_at": "2026-05-15T13:11:38.804Z",
         "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_imagerecog.json",
         "last_captured_at": "2026-05-15T13:11:38.804Z",
-        "probe_status": "parsed_ok"
+        "probe_status": "reject:mpp_protocol"
       }
     },
     {
@@ -2335,7 +2335,7 @@
         "last_probed_at": "2026-05-15T13:11:38.813Z",
         "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_imageseg.json",
         "last_captured_at": "2026-05-15T13:11:38.813Z",
-        "probe_status": "parsed_ok"
+        "probe_status": "reject:mpp_protocol"
       }
     },
     {
@@ -2358,7 +2358,7 @@
         "last_probed_at": "2026-05-15T13:11:39.015Z",
         "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_intelligentspeechinteraction.json",
         "last_captured_at": "2026-05-15T13:11:39.015Z",
-        "probe_status": "parsed_ok"
+        "probe_status": "reject:mpp_protocol"
       }
     },
     {
@@ -2381,7 +2381,7 @@
         "last_probed_at": "2026-05-15T13:11:39.764Z",
         "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_iqs.json",
         "last_captured_at": "2026-05-15T13:11:39.764Z",
-        "probe_status": "parsed_ok"
+        "probe_status": "reject:mpp_protocol"
       }
     },
     {
@@ -2404,7 +2404,7 @@
         "last_probed_at": "2026-05-15T13:11:39.748Z",
         "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_ivpd.json",
         "last_captured_at": "2026-05-15T13:11:39.748Z",
-        "probe_status": "parsed_ok"
+        "probe_status": "reject:mpp_protocol"
       }
     },
     {
@@ -2427,7 +2427,7 @@
         "last_probed_at": "2026-05-15T13:11:39.638Z",
         "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_machinetranslation.json",
         "last_captured_at": "2026-05-15T13:11:39.638Z",
-        "probe_status": "parsed_ok"
+        "probe_status": "reject:mpp_protocol"
       }
     },
     {
@@ -2450,7 +2450,7 @@
         "last_probed_at": "2026-05-15T13:11:39.755Z",
         "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_objectdet.json",
         "last_captured_at": "2026-05-15T13:11:39.755Z",
-        "probe_status": "parsed_ok"
+        "probe_status": "reject:mpp_protocol"
       }
     },
     {
@@ -2473,7 +2473,7 @@
         "last_probed_at": "2026-05-15T13:11:40.078Z",
         "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_ocr-api.json",
         "last_captured_at": "2026-05-15T13:11:40.078Z",
-        "probe_status": "parsed_ok"
+        "probe_status": "reject:mpp_protocol"
       }
     },
     {
@@ -2496,7 +2496,7 @@
         "last_probed_at": "2026-05-15T13:11:39.857Z",
         "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_ocr.json",
         "last_captured_at": "2026-05-15T13:11:39.857Z",
-        "probe_status": "parsed_ok"
+        "probe_status": "reject:mpp_protocol"
       }
     },
     {
@@ -2519,7 +2519,7 @@
         "last_probed_at": "2026-05-15T13:11:39.933Z",
         "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_paimodelgallery.json",
         "last_captured_at": "2026-05-15T13:11:39.933Z",
-        "probe_status": "parsed_ok"
+        "probe_status": "reject:mpp_protocol"
       }
     },
     {
@@ -2542,7 +2542,7 @@
         "last_probed_at": "2026-05-15T13:11:40.974Z",
         "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_rai.json",
         "last_captured_at": "2026-05-15T13:11:40.974Z",
-        "probe_status": "parsed_ok"
+        "probe_status": "reject:mpp_protocol"
       }
     },
     {
@@ -2565,7 +2565,7 @@
         "last_probed_at": "2026-05-15T13:11:40.966Z",
         "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_saf.json",
         "last_captured_at": "2026-05-15T13:11:40.966Z",
-        "probe_status": "parsed_ok"
+        "probe_status": "reject:mpp_protocol"
       }
     },
     {
@@ -2588,7 +2588,7 @@
         "last_probed_at": "2026-05-15T13:11:41.407Z",
         "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_translate.json",
         "last_captured_at": "2026-05-15T13:11:41.407Z",
-        "probe_status": "parsed_ok"
+        "probe_status": "reject:mpp_protocol"
       }
     },
     {
@@ -2611,7 +2611,7 @@
         "last_probed_at": "2026-05-15T13:11:41.212Z",
         "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_viapi-ocr.json",
         "last_captured_at": "2026-05-15T13:11:41.212Z",
-        "probe_status": "parsed_ok"
+        "probe_status": "reject:mpp_protocol"
       }
     },
     {
@@ -2634,7 +2634,7 @@
         "last_probed_at": "2026-05-15T13:11:41.271Z",
         "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_videoenhan.json",
         "last_captured_at": "2026-05-15T13:11:41.271Z",
-        "probe_status": "parsed_ok"
+        "probe_status": "reject:mpp_protocol"
       }
     },
     {
@@ -2657,7 +2657,7 @@
         "last_probed_at": "2026-05-15T13:11:41.263Z",
         "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_videorecog.json",
         "last_captured_at": "2026-05-15T13:11:41.263Z",
-        "probe_status": "parsed_ok"
+        "probe_status": "reject:mpp_protocol"
       }
     },
     {
@@ -2680,7 +2680,7 @@
         "last_probed_at": "2026-05-15T13:11:41.669Z",
         "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-alibaba_videoseg.json",
         "last_captured_at": "2026-05-15T13:11:41.669Z",
-        "probe_status": "parsed_ok"
+        "probe_status": "reject:mpp_protocol"
       }
     },
     {
@@ -2703,7 +2703,7 @@
         "last_probed_at": "2026-05-15T13:11:42.611Z",
         "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-google_language.json",
         "last_captured_at": "2026-05-15T13:11:42.611Z",
-        "probe_status": "parsed_ok"
+        "probe_status": "reject:mpp_protocol"
       }
     },
     {
@@ -2726,7 +2726,7 @@
         "last_probed_at": "2026-05-15T13:11:42.913Z",
         "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-google_speech.json",
         "last_captured_at": "2026-05-15T13:11:42.913Z",
-        "probe_status": "parsed_ok"
+        "probe_status": "reject:mpp_protocol"
       }
     },
     {
@@ -2749,7 +2749,7 @@
         "last_probed_at": "2026-05-15T13:11:42.942Z",
         "last_capture_path": "tests/paysh/captures/catalog/solana-foundation-google_videointelligence.json",
         "last_captured_at": "2026-05-15T13:11:42.942Z",
-        "probe_status": "parsed_ok"
+        "probe_status": "reject:mpp_protocol"
       }
     }
   ]

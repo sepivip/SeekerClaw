@@ -1010,7 +1010,7 @@ async function runStatus() {
     lines.push('');
     lines.push(`Generated: ${new Date().toISOString()}`);
     lines.push(`Catalog generated_at: ${catalog.generated_at}`);
-    lines.push(`Manifest last checked: ${catalog.manifest_checked_at} (run \`probe-catalog.js --drift\` to refresh)`);
+    lines.push(`Manifest last checked: ${catalog.manifest_checked_at} (run \`probe-catalog.js --drift --write-checked-at\` to refresh — bare \`--drift\` is a pure check and won't update this timestamp)`);
     lines.push(`Freshness window: ${FRESHNESS_DAYS} days`);
     lines.push('');
     lines.push('## Summary');
@@ -1079,8 +1079,14 @@ async function runRefresh(id) {
     const disc = await discoverOne(entry.upstream_ref.pay_md_path);
     if (!disc.ok) {
         console.error(`discoverOne failed: ${disc.error}`);
-        entry.verification.last_probed_at = new Date().toISOString();
+        // R2-5: even on failure, the file is being mutated (last_probed_at +
+        // probe_status updated), so bump generated_at so the "last modified"
+        // signal stays accurate. Otherwise the file's generated_at lies about
+        // when the entry was last touched.
+        const failNow = new Date().toISOString();
+        entry.verification.last_probed_at = failNow;
         entry.verification.probe_status = 'fetch_failed';
+        containingObj.generated_at = failNow;
         _writeV2(containingFile, containingObj);
         process.exit(2);
     }
@@ -1110,9 +1116,13 @@ async function runRefresh(id) {
         // to the repo fixture, which could leak secret-shaped tokens (api keys,
         // session cookies, internal IDs). sanitize() is the same helper used by
         // --commit-captures and the live probe path.
+        // R2-6: when no existing capture path, include entry.id in the default
+        // filename. Pre-fix the default was operator+slug only — once we have
+        // multiple v2 entries per service (e.g. stablecrypto-price + stablecrypto-charts),
+        // they'd collide on the same capture file and overwrite each other.
         const captureName = entry.verification.last_capture_path
             ? path.basename(entry.verification.last_capture_path)
-            : `${entry.upstream_ref.operator}-${entry.upstream_ref.slug.replace(/\//g, '_')}.json`;
+            : `${entry.upstream_ref.operator}-${entry.upstream_ref.slug.replace(/\//g, '_')}__${entry.id}.json`;
         const captureFullPath = path.join(__dirname, 'captures', 'catalog', captureName);
         const captureRel = path.relative(path.join(__dirname, '..', '..'), captureFullPath).split(path.sep).join('/');
         const captureContent = sanitize({
