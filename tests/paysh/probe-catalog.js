@@ -237,6 +237,14 @@ function parseArgs(argv) {
         console.error('ERROR: --write-checked-at only valid with --drift (it persists the manifest_checked_at bump after a drift check). Drop the flag or add --drift.');
         process.exit(2);
     }
+    // R10-2: symmetric to R8-1 — --audit-side-effects only makes sense with
+    // --audit (the only mode that probes endpoints with arbitrary methods).
+    // Pre-fix the flag was silently ignored in standard/drift/status/refresh
+    // modes; operator typo or misordered flags wouldn't surface.
+    if (out.auditSideEffects && !out.audit) {
+        console.error('ERROR: --audit-side-effects only valid with --audit (it opts into probing non-GET endpoints during the per-endpoint audit). Drop the flag or add --audit.');
+        process.exit(2);
+    }
     return out;
 }
 

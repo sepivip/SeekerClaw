@@ -497,23 +497,31 @@ function main() {
     const v1Catalog = readJson(CATALOG_PATH);
     const v1Unsupported = readJson(UNSUPPORTED_PATH);
 
-    // Detect already-v2 and bail cleanly. Migration is one-shot per SCHEMA.md
+    // Detect already-v2 (or v3+) and bail cleanly. Migration is one-shot per SCHEMA.md
     // — to refresh individual entries on v2, use `probe-catalog.js --refresh <id>`.
     // To re-run migration, restore v1 from git first (e.g. `git checkout HEAD~ -- <paths>`).
-    const catalogV2 = v1Catalog.version === 2;
-    const unsupV2 = v1Unsupported.version === 2;
-    if (catalogV2 && unsupV2) {
-        console.log('Both catalog.json and unsupported.json are already v2 — nothing to migrate.');
+    // R10-1: accept any `version >= 2` per SCHEMA.md's forward-compat rule (v3+
+    // readers should treat unknown fields as opaque; same goes for our migrate
+    // script — refuse to touch a v3 file even though we only know v2).
+    const isV2OrLater = (data) => typeof data.version === 'number' && data.version >= 2;
+    const catalogMigrated = isV2OrLater(v1Catalog);
+    const unsupMigrated = isV2OrLater(v1Unsupported);
+    if (catalogMigrated && unsupMigrated) {
+        const v = v1Catalog.version === v1Unsupported.version
+            ? `v${v1Catalog.version}`
+            : `catalog v${v1Catalog.version} / unsupported v${v1Unsupported.version}`;
+        console.log(`Both files are already migrated (${v}) — nothing to do.`);
         console.log('To refresh individual entries, run: node tests/paysh/probe-catalog.js --refresh <id>');
         console.log('To re-run the full migration, restore v1 files from git first.');
         return;
     }
-    // R3-4: mixed state (one file v2, other still v1) — refuse to migrate.
-    // Without this guard, the v2 file would be re-read as if it were v1 and
-    // the script would produce corrupted output (missing v1 top-level fields).
-    if (catalogV2 !== unsupV2) {
-        console.error(`ERROR: mixed schema state — catalog.json is ${catalogV2 ? 'v2' : 'v1'} but unsupported.json is ${unsupV2 ? 'v2' : 'v1'}.`);
-        console.error('Migration expects both files to be at the same schema version. Either restore BOTH to v1 from git, or accept the mixed state and refresh individual entries on the v2 file via probe-catalog.js --refresh <id>.');
+    // R3-4 + R10-1: mixed state (one file already migrated, other still v1).
+    // Without this guard, the already-migrated file would be re-read as if it
+    // were v1 and the script would produce corrupted output.
+    if (catalogMigrated !== unsupMigrated) {
+        const fmt = (data) => isV2OrLater(data) ? `v${data.version}` : 'v1';
+        console.error(`ERROR: mixed schema state — catalog.json is ${fmt(v1Catalog)} but unsupported.json is ${fmt(v1Unsupported)}.`);
+        console.error('Migration expects both files to be at the same schema version. Either restore BOTH to v1 from git, or accept the mixed state and refresh individual entries on the migrated file via probe-catalog.js --refresh <id>.');
         process.exit(2);
     }
 
