@@ -1003,9 +1003,14 @@ async function runDrift(args) {
         const now = new Date().toISOString();
         catalog.manifest_checked_at = now;
         unsupported.manifest_checked_at = now;
+        // R9-1: SCHEMA.md says generated_at = "when this file was written".
+        // --drift --write-checked-at mutates the file → must bump generated_at
+        // too, else --status would report a stale "last modified" timestamp.
+        catalog.generated_at = now;
+        unsupported.generated_at = now;
         _writeV2(CATALOG_V2, catalog);
         _writeV2(UNSUPPORTED_V2, unsupported);
-        console.log(`\nmanifest_checked_at bumped to ${now} (--write-checked-at)`);
+        console.log(`\nmanifest_checked_at + generated_at bumped to ${now} (--write-checked-at)`);
     } else {
         console.log(`\nPure check — neither catalog.json nor unsupported.json modified. Pass --write-checked-at to persist manifest_checked_at.`);
     }
