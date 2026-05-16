@@ -1,7 +1,7 @@
 {
   "version": 2,
-  "generated_at": "2026-05-16T15:14:32.266Z",
-  "manifest_checked_at": "2026-05-16T15:14:32.266Z",
+  "generated_at": "2026-05-16T15:28:12.296Z",
+  "manifest_checked_at": "2026-05-16T15:28:12.296Z",
   "source": "BAT-761 migration from v1 (BAT-699/704/705) + BAT-706 audit data",
   "entries": [
     {
@@ -244,7 +244,7 @@
         "service_url": "https://stableenrich.dev"
       },
       "endpoint": {
-        "method": "GET",
+        "method": "POST",
         "path": "/api/google-maps/place-details/partial",
         "cost_usdc": 0.02
       },

@@ -101,7 +101,7 @@ paysh-catalog/
 | `verification.last_probed_at` | ISO-8601 | When `probe-catalog.js` last hit this endpoint and got a 402. |
 | `verification.last_capture_path` | string \| null | Path to the JSON capture file. `null` if `probe_status !== "parsed_ok"` (no capture is written for non-402 responses or parser-rejected 402s). |
 | `verification.last_captured_at` | ISO-8601 \| null | When the capture file was written. `null` if `last_capture_path` is null. Distinct from `last_probed_at` — a probe that confirmed the existing capture is still valid bumps `last_probed_at` but not `last_captured_at`. |
-| `verification.probe_status` | enum | `parsed_ok` (good), `rejected:<reason>` (parser refused 402), `fetch_failed` (no HTTP response), `http_<NNN>` (non-402 HTTP response). For catalog.json this MUST be `parsed_ok`. |
+| `verification.probe_status` | enum | `parsed_ok` (good), `rejected:<reason>` (parser refused 402), `fetch_failed` (no HTTP response), `http_<NNN>` (non-402 HTTP response), `unknown` (no capture and no recorded probe status — only valid for unsupported.json entries migrated from v1 without HTTP context). For catalog.json this MUST be `parsed_ok`. |
 
 ### Optional fields
 
@@ -205,32 +205,41 @@ Conversely, if a catalog entry stops working (drift detected, --refresh fails wi
 
 ## Drift detection (`probe-catalog.js --drift`)
 
-Compares catalog vs pay.sh upstream manifest:
+Compares catalog vs pay.sh upstream:
 
-1. Fetches pay.sh's `manifest.json` (or equivalent index) and each service's `PAY.md` frontmatter
-2. Diffs against `catalog.json.entries[].upstream_ref` + `unsupported.json.entries[].upstream_ref`
+1. Fetches the pay-skills GitHub tree (`https://api.github.com/repos/solana-foundation/pay-skills/git/trees/main?recursive=1`) to enumerate every `PAY.md` path upstream
+2. Diffs against `catalog.json.entries[].upstream_ref.pay_md_path` ∪ `unsupported.json.entries[].upstream_ref.pay_md_path`
 3. Reports:
-   - **Added upstream** — services in pay.sh's manifest not in either of our files
+   - **Added upstream** — `PAY.md` paths in pay.sh's tree not in either of our files (new services to catalog)
    - **Removed upstream** — entries in our files whose `pay_md_path` no longer exists upstream
-   - **Stale captures** — entries with `last_captured_at` older than N days (default 30)
-   - **Endpoint drift** — services whose openapi.json added/removed endpoints since last `--refresh`
-4. Exits non-zero if any drift detected (CI-friendly)
+   - **Stale captures** — entries with a real `last_captured_at` older than N days (default 30; never-captured entries are reported separately, not as "stale")
+   - **Never captured** — entries with `last_captured_at: null` (informational, not drift)
+4. **Pure check by default** — does NOT modify catalog.json/unsupported.json. Pass `--write-checked-at` to persist the `manifest_checked_at` bump (useful for scheduled runs that want the freshness signal recorded).
+5. Exits 3 on drift (CI-friendly).
+6. **Out of scope (future)**: per-service openapi endpoint drift (would require fetching every service's `openapi.json` and diffing against the catalog entries' endpoint paths — heavier; deferred to BAT-765 weekly CI job).
 
 ## Status report (`probe-catalog.js --status`)
 
-Generates `tests/paysh/catalog-status.md` with sections:
-- **Fresh** — entries with `last_probed_at` within freshness window
-- **Stale** — entries past freshness window
-- **Drifted** — entries where upstream changed since last sync
-- **Audit pending** — unsupported entries with `audit_pending` arrays summarized
+Local-only — writes `tests/paysh/catalog-status.md` (does not network, does not modify catalog files):
+
+- **Summary** — counts by bucket (catalog / unsupported / fresh / stale / no-capture / audit-pending)
+- **Stale captures** — entries with `last_captured_at` older than 30 days; suggests `--refresh <id>`
+- **Audit-pending siblings** — table of unsupported entries with `audit_pending[]` arrays, grouped by `service_id` with `deferred_to` BAT pointers
+
+No "Drifted" section in `--status` itself — run `--drift` for that (it queries upstream). The status report does include `manifest_checked_at` so you can tell how stale the last drift check is.
 
 ## Refresh single entry (`probe-catalog.js --refresh <id>`)
 
-1. Looks up entry by `id` in catalog.json or unsupported.json
-2. Re-probes the `upstream_ref.service_url + endpoint.path`
-3. Re-captures the 402 response to `last_capture_path`
-4. Updates `verification.last_probed_at` + `last_captured_at` + `probe_status`
-5. Updates `generated_at` on the containing file
+1. Looks up entry by `id` in catalog.json or unsupported.json (global uniqueness makes this unambiguous)
+2. Re-discovers the service via `discoverOne(upstream_ref.pay_md_path)` to get a fresh `service_url` from PAY.md frontmatter (handles the case where the stored `service_url` is null on unsupported entries)
+3. Re-probes `serviceUrl + endpoint.path` with the entry's curated method
+4. Updates `verification.last_probed_at` + `probe_status` always
+5. If `probe_status === 'parsed_ok'`: sanitizes the response (same `sanitize()` helper used by `--commit-captures`) and writes a fresh capture to `last_capture_path`; bumps `last_captured_at`
+6. Bumps `generated_at` on the containing file
+
+## Mode mutual exclusion
+
+`--audit`, `--drift`, `--status`, `--refresh` are mutually exclusive — passing more than one prints an error and exits 2. Standard probe mode (no mode flag) is the default.
 
 ## Migration from v1
 

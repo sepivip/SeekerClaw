@@ -225,7 +225,14 @@ function buildCatalogEntry(v1Entry) {
         const split = splitUrl(capture.url);
         service_url = split.serviceUrl;
         endpointPath = split.path;
-        endpointMethod = capture.method || v1Entry.method;
+        // R1 #1 — v1Entry.method is the curated source of truth (matches the service doc).
+        // capture.method reflects whatever probe-catalog picked (often /openapi defaults to GET);
+        // for services like stableenrich the doc says POST while the probe-time capture is GET.
+        // If they disagree, warn but trust v1Entry.method to keep catalog ↔ doc consistent.
+        endpointMethod = v1Entry.method;
+        if (capture.method && capture.method !== v1Entry.method) {
+            console.warn(`  [warn] ${v1Entry.id}: v1 method=${v1Entry.method} but capture method=${capture.method} — keeping v1 (run probe-catalog --refresh after migration to verify the curated method actually returns 402)`);
+        }
     }
 
     const capturedAt = capture._meta?.capturedAt
@@ -321,18 +328,17 @@ function buildUnsupportedEntry(v1Entry, auditMap) {
     return out;
 }
 
-/** Best-effort probe status from v1 note like "http_401 at 2026-05-14 probe — auth-gated before 402." */
+/** Best-effort probe status from v1 note like "http_401 at 2026-05-14 probe — auth-gated before 402."
+ *  R1 #2 fix: only assert parsed_ok when there's actually a capture proving it.
+ *  Without a capture, return 'unknown' rather than claim parsed_ok — otherwise
+ *  status/drift reporting reads stale "parsed_ok" entries as confirmed-working
+ *  when really we never recorded supporting evidence.
+ *  Caller may override when capture is available (probe-status derived from capture.status). */
 function deriveProbeStatusFromV1(v1Entry) {
     if (v1Entry.note) {
         const m = /\bhttp_(\d{3})\b/.exec(v1Entry.note);
         if (m) return `http_${m[1]}`;
     }
-    // For reason buckets without HTTP context, leave unknown
-    if (v1Entry.reason === 'mpp_protocol') return 'parsed_ok'; // 402 received, parser refused
-    if (v1Entry.reason === 'siwx_auth_required') return 'rejected:siwx';
-    if (v1Entry.reason === 'invalid_demand') return 'parsed_ok'; // 402 received, amount=0
-    if (v1Entry.reason === 'requires_binary_response') return 'parsed_ok';
-    if (v1Entry.reason === 'unverified_paid_response_shape') return 'parsed_ok';
     return 'unknown';
 }
 

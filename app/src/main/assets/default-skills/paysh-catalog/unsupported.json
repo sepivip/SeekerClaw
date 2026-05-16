@@ -1,7 +1,7 @@
 {
   "version": 2,
-  "generated_at": "2026-05-16T15:14:32.266Z",
-  "manifest_checked_at": "2026-05-16T15:14:32.266Z",
+  "generated_at": "2026-05-16T15:28:12.296Z",
+  "manifest_checked_at": "2026-05-16T15:28:12.296Z",
   "source": "BAT-761 migration from v1 (BAT-699 → PR #378 R10) + BAT-706 audit_pending population",
   "reasons": {
     "mpp_protocol": {
@@ -172,7 +172,7 @@
         "last_probed_at": null,
         "last_capture_path": null,
         "last_captured_at": null,
-        "probe_status": "parsed_ok"
+        "probe_status": "unknown"
       },
       "evidence_basis": "product-family-inference",
       "note": "BAT-706 audit (2026-05-15) confirmed 9 paid endpoints on fal.x402.paysponge.com all return parseable 402 challenges for Solana-USDC: /fal-ai/fast-sdxl ($0.01), /fal-ai/flux/dev ($0.03), /fal-ai/flux-pro/v1.1 ($0.04), /fal-ai/flux-pro/v1.1-ultra ($0.06), /fal-ai/flux/schnell ($0.01), /fal-ai/minimax/video-01 ($0.07), /fal-ai/recraft-v3 ($0.04), /fal-ai/stable-diffusion-v35-large ($0.04), /fal-ai/stable-video ($0.07). Evidence basis for the binary classification: PRODUCT-FAMILY INFERENCE — the endpoint names map to fal-ai's published image- and video-generation models (Flux SDXL, Recraft v3, Stable Diffusion v3.5, Stable Video, Minimax-video) which return PNG/MP4 binary content by their nature. The audit confirms the 402-and-build path works; we have NOT settled a payment and inspected the response body. Follow-up path to upgrade evidence_basis: extract declared response content-types from fal's openapi.json (the audit's fetcher reaches it successfully — see catalog-audit.md enumerating 30 endpoints from it; WebFetch with a different user-agent gets HTTP 403, but probe-catalog.js's UA works). Parsing openapi response.content media types per endpoint would let us flip this to evidence_basis: openapi-response-content-type. Until then we refuse to avoid spending USDC on output the channel can't deliver. See tests/paysh/catalog-audit.md for the parsed_ok evidence (run 2026-05-15 with --audit-side-effects).",
