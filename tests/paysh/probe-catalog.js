@@ -923,6 +923,17 @@ async function runDrift(args) {
     let upstreamPayMdPaths;
     try {
         const json = JSON.parse(tree.body);
+        // R7-2: GitHub Trees API returns `{ truncated: true }` if the recursive
+        // listing exceeds 100k entries OR 7MB. pay-skills today is far smaller
+        // (a few hundred files) but if the repo grows or restructures, we'd
+        // silently see false "no drift" / missing-services false negatives.
+        // Fail loudly so operator notices and switches to a non-truncating
+        // enumeration strategy (e.g. recursive contents API per provider/ dir).
+        if (json.truncated === true) {
+            console.error('ERROR: GitHub Trees API returned truncated=true — upstream PAY.md inventory is INCOMPLETE.');
+            console.error('Drift comparison would be unreliable. Switch to a non-truncating enumeration before re-running --drift.');
+            process.exit(2);
+        }
         upstreamPayMdPaths = (json.tree || []).filter(n => n.path && n.path.endsWith('/PAY.md')).map(n => n.path);
     } catch (e) {
         console.error(`Failed to parse pay-skills tree: ${e.message}`);
@@ -1083,10 +1094,17 @@ async function runRefresh(id) {
     const disc = await discoverOne(entry.upstream_ref.pay_md_path);
     if (!disc.ok) {
         console.error(`discoverOne failed: ${disc.error}`);
-        // R2-5: even on failure, the file is being mutated (last_probed_at +
-        // probe_status updated), so bump generated_at so the "last modified"
-        // signal stays accurate. Otherwise the file's generated_at lies about
-        // when the entry was last touched.
+        // R7-1: parallel to R4-1 — catalog entries MUST stay parsed_ok per
+        // v2 schema. If discoverOne fails (PAY.md unreachable, openapi gone,
+        // etc.), refuse to mutate catalog.json with probe_status: fetch_failed
+        // — that would silently degrade the catalog. Operator must investigate
+        // + manually demote to unsupported.json. For unsupported entries,
+        // recording fetch_failed is fine (they're already not in catalog).
+        if (kind === 'catalog') {
+            console.error(`REFUSING to write: catalog entry "${id}" failed discovery (would degrade catalog).`);
+            console.error('catalog.json was NOT modified. Investigate the failure and manually move the entry to unsupported.json if confirmed broken.');
+            process.exit(3);
+        }
         const failNow = new Date().toISOString();
         entry.verification.last_probed_at = failNow;
         entry.verification.probe_status = 'fetch_failed';

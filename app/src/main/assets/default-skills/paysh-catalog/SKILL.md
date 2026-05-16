@@ -89,7 +89,7 @@ Why it activates: contains `pay.sh` + naming a paid lookup.
 
 User: *"What can you pay for?"*
 
-Why it activates: matches the capability-ask phrase *"what can you pay for"*. (NOT every message containing the word "pay" — only the specific capability-ask phrases listed in the opt-in section above.) Agent reads `catalog.json`, lists the 10 supported services with costs, mentions the 62 known-but-not-usable ones. No `agent_pay` call.
+Why it activates: matches the capability-ask phrase *"what can you pay for"*. (NOT every message containing the word "pay" — only the specific capability-ask phrases listed in the opt-in section above.) Agent reads `catalog.json`, lists the 9 supported services with costs, mentions the 63 known-but-not-usable ones. No `agent_pay` call.
 
 ### Does NOT activate → vanilla answer
 
@@ -107,7 +107,7 @@ Why it stays dormant: not an x402 query at all. Use `solana_balance` directly. T
 
 ## Reading the catalog efficiently
 
-`catalog.json` is small (currently 10 entries, ~11KB in v2 schema). Always load it first to pick the entry. Then `read` only the matching `entry.doc_file` — never load every services/*.md at once. That's the whole point of the per-entry / per-service-doc layout.
+`catalog.json` is small (currently 9 entries, ~10KB in v2 schema). Always load it first to pick the entry. Then `read` only the matching `entry.doc_file` — never load every services/*.md at once. That's the whole point of the per-entry / per-service-doc layout.
 
 v2 schema (see `SCHEMA.md` in this folder for the full spec):
 - One entry per ENDPOINT (not per service) — a service exposing N catalogued endpoints has N entries, all sharing the same `service_id`

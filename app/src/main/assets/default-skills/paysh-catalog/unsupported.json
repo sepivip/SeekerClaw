@@ -1,7 +1,7 @@
 {
   "version": 2,
-  "generated_at": "2026-05-16T16:32:41.522Z",
-  "manifest_checked_at": "2026-05-16T16:32:41.522Z",
+  "generated_at": "2026-05-16T16:49:12.912Z",
+  "manifest_checked_at": "2026-05-16T16:49:12.912Z",
   "source": "BAT-761 migration from v1 (BAT-699 → PR #378 R10) + BAT-706 audit_pending population",
   "reasons": {
     "mpp_protocol": {
@@ -2751,6 +2751,224 @@
         "last_captured_at": "2026-05-15T13:11:42.942Z",
         "probe_status": "reject:mpp_protocol"
       }
+    },
+    {
+      "id": "merit-systems-stableenrich-enrichment",
+      "service_id": "stableenrich-enrichment",
+      "name": "merit-systems/stableenrich/enrichment",
+      "upstream_ref": {
+        "operator": "merit-systems",
+        "slug": "stableenrich/enrichment",
+        "pay_md_path": "providers/merit-systems/stableenrich/enrichment/PAY.md",
+        "service_url": "https://stableenrich.dev"
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/api/google-maps/place-details/partial",
+        "cost_usdc": null
+      },
+      "reason": "unverified_paid_response_shape",
+      "verification": {
+        "last_probed_at": "2026-05-15T13:11:35.337Z",
+        "last_capture_path": "tests/paysh/captures/catalog/merit-systems-stableenrich_enrichment.json",
+        "last_captured_at": "2026-05-15T13:11:35.337Z",
+        "probe_status": "parsed_ok"
+      },
+      "note": "v1 catalog declared POST /api/google-maps/place-details/partial but the captured 402 is GET (and the BAT-706 audit shows GET on that path returns http_400). We have NOT settled with POST + a real body to verify the curated method works. Demoted to unsupported in BAT-761 (PR #379 R7) — re-probe with POST in BAT-708 and re-promote with fresh capture if verified. Audit also found 32 sibling endpoints on the same host that are payable (see audit_pending); those are tracked separately for the Tier 2c catalog expansion (BAT-772).",
+      "audit_pending": [
+        {
+          "method": "POST",
+          "path": "/api/apollo/org-search",
+          "cost_usdc": 0.02,
+          "deferred_to": "BAT-772"
+        },
+        {
+          "method": "POST",
+          "path": "/api/exa/search",
+          "cost_usdc": 0.01,
+          "deferred_to": "BAT-772"
+        },
+        {
+          "method": "POST",
+          "path": "/api/apollo/people-search",
+          "cost_usdc": 0.02,
+          "deferred_to": "BAT-772"
+        },
+        {
+          "method": "POST",
+          "path": "/api/apollo/people-enrich",
+          "cost_usdc": 0.0495,
+          "deferred_to": "BAT-772"
+        },
+        {
+          "method": "POST",
+          "path": "/api/apollo/org-enrich",
+          "cost_usdc": 0.0495,
+          "deferred_to": "BAT-772"
+        },
+        {
+          "method": "POST",
+          "path": "/api/clado/contacts-enrich",
+          "cost_usdc": 0.2,
+          "deferred_to": "BAT-772"
+        },
+        {
+          "method": "POST",
+          "path": "/api/exa/find-similar",
+          "cost_usdc": 0.01,
+          "deferred_to": "BAT-772"
+        },
+        {
+          "method": "POST",
+          "path": "/api/exa/contents",
+          "cost_usdc": 0.002,
+          "deferred_to": "BAT-772"
+        },
+        {
+          "method": "POST",
+          "path": "/api/exa/answer",
+          "cost_usdc": 0.01,
+          "deferred_to": "BAT-772"
+        },
+        {
+          "method": "POST",
+          "path": "/api/firecrawl/scrape",
+          "cost_usdc": 0.0126,
+          "deferred_to": "BAT-772"
+        },
+        {
+          "method": "POST",
+          "path": "/api/firecrawl/search",
+          "cost_usdc": 0.0252,
+          "deferred_to": "BAT-772"
+        },
+        {
+          "method": "POST",
+          "path": "/api/google-maps/text-search/partial",
+          "cost_usdc": 0.02,
+          "deferred_to": "BAT-772"
+        },
+        {
+          "method": "POST",
+          "path": "/api/google-maps/text-search/full",
+          "cost_usdc": 0.08,
+          "deferred_to": "BAT-772"
+        },
+        {
+          "method": "POST",
+          "path": "/api/google-maps/nearby-search/partial",
+          "cost_usdc": 0.02,
+          "deferred_to": "BAT-772"
+        },
+        {
+          "method": "POST",
+          "path": "/api/google-maps/nearby-search/full",
+          "cost_usdc": 0.08,
+          "deferred_to": "BAT-772"
+        },
+        {
+          "method": "POST",
+          "path": "/api/google-maps/aerial-view/render-video",
+          "cost_usdc": 0.01,
+          "deferred_to": "BAT-772"
+        },
+        {
+          "method": "POST",
+          "path": "/api/serper/news",
+          "cost_usdc": 0.04,
+          "deferred_to": "BAT-772"
+        },
+        {
+          "method": "POST",
+          "path": "/api/serper/shopping",
+          "cost_usdc": 0.04,
+          "deferred_to": "BAT-772"
+        },
+        {
+          "method": "POST",
+          "path": "/api/serper/images",
+          "cost_usdc": 0.04,
+          "deferred_to": "BAT-772"
+        },
+        {
+          "method": "POST",
+          "path": "/api/serper/people-image-search",
+          "cost_usdc": 0.04,
+          "deferred_to": "BAT-772"
+        },
+        {
+          "method": "POST",
+          "path": "/api/serper/lens",
+          "cost_usdc": 0.2,
+          "deferred_to": "BAT-772"
+        },
+        {
+          "method": "POST",
+          "path": "/api/whitepages/person-search",
+          "cost_usdc": 0.44,
+          "deferred_to": "BAT-772"
+        },
+        {
+          "method": "POST",
+          "path": "/api/whitepages/property-search",
+          "cost_usdc": 0.44,
+          "deferred_to": "BAT-772"
+        },
+        {
+          "method": "POST",
+          "path": "/api/reddit/search",
+          "cost_usdc": 0.02,
+          "deferred_to": "BAT-772"
+        },
+        {
+          "method": "POST",
+          "path": "/api/reddit/post-comments",
+          "cost_usdc": 0.02,
+          "deferred_to": "BAT-772"
+        },
+        {
+          "method": "POST",
+          "path": "/api/hunter/email-verifier",
+          "cost_usdc": 0.03,
+          "deferred_to": "BAT-772"
+        },
+        {
+          "method": "POST",
+          "path": "/api/influencer/enrich-by-email",
+          "cost_usdc": 0.4,
+          "deferred_to": "BAT-772"
+        },
+        {
+          "method": "POST",
+          "path": "/api/influencer/enrich-by-social",
+          "cost_usdc": 0.4,
+          "deferred_to": "BAT-772"
+        },
+        {
+          "method": "POST",
+          "path": "/api/minerva/resolve",
+          "cost_usdc": 0.02,
+          "deferred_to": "BAT-772"
+        },
+        {
+          "method": "POST",
+          "path": "/api/minerva/enrich",
+          "cost_usdc": 0.05,
+          "deferred_to": "BAT-772"
+        },
+        {
+          "method": "POST",
+          "path": "/api/minerva/validate-emails",
+          "cost_usdc": 0.01,
+          "deferred_to": "BAT-772"
+        },
+        {
+          "method": "POST",
+          "path": "/api/cloudflare/crawl",
+          "cost_usdc": 0.1,
+          "deferred_to": "BAT-772"
+        }
+      ]
     }
   ]
 }

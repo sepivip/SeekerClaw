@@ -52,6 +52,19 @@ const CATALOG_CAPTURE_MAP = {
     'textbelt-sms': '__TEXTBELT__',
 };
 
+// ── R7-3: v1 catalog entries to demote to unsupported during migration ──────
+// Entries whose evidence doesn't actually support the curated method/endpoint.
+// stableenrich: v1 says POST /api/google-maps/place-details/partial, but the
+// capture is a GET 402 and the BAT-706 audit shows GET on that path returns
+// http_400. We don't have a captured POST 402 to confirm POST works either.
+// Demote until BAT-708 re-probes with POST + a real body to verify.
+const CATALOG_DEMOTE_TO_UNSUPPORTED = {
+    'stableenrich': {
+        reason: 'unverified_paid_response_shape',
+        note: 'v1 catalog declared POST /api/google-maps/place-details/partial but the captured 402 is GET (and the BAT-706 audit shows GET on that path returns http_400). We have NOT settled with POST + a real body to verify the curated method works. Demoted to unsupported in BAT-761 (PR #379 R7) — re-probe with POST in BAT-708 and re-promote with fresh capture if verified. Audit also found 32 sibling endpoints on the same host that are payable (see audit_pending); those are tracked separately for the Tier 2c catalog expansion (BAT-772).',
+    },
+};
+
 // ── v1 catalog id → service_id (for grouping; flatten nested slugs) ─────────
 const CATALOG_SERVICE_ID = {
     'wolfram-alpha': 'wolframalpha',
@@ -507,13 +520,37 @@ function main() {
     const auditMap = parseAuditReport();
     console.log(`Audit report: ${auditMap.size} services with parsed_ok endpoints`);
 
-    // Build v2 catalog entries
+    // Build v2 catalog entries — but split out demoted ones first
     const v1CatalogServices = v1Catalog.services || v1Catalog.entries || [];
-    const v2CatalogEntries = v1CatalogServices.map(buildCatalogEntry);
+    const v1CatalogKept = v1CatalogServices.filter(e => !CATALOG_DEMOTE_TO_UNSUPPORTED[e.id]);
+    const v1CatalogDemoted = v1CatalogServices.filter(e => CATALOG_DEMOTE_TO_UNSUPPORTED[e.id]);
+    const v2CatalogEntries = v1CatalogKept.map(buildCatalogEntry);
 
     // Build v2 unsupported entries
     const v1UnsupportedServices = v1Unsupported.services || v1Unsupported.entries || [];
     const v2UnsupportedEntries = v1UnsupportedServices.map(e => buildUnsupportedEntry(e, auditMap));
+
+    // R7-3: append demoted v1 catalog entries to unsupported (synthesize the
+    // v1-shaped entry that buildUnsupportedEntry expects).
+    for (const v1CatEntry of v1CatalogDemoted) {
+        const demoteInfo = CATALOG_DEMOTE_TO_UNSUPPORTED[v1CatEntry.id];
+        // Construct an upstream slug from the capture's payMdPath (we know the
+        // entry has a capture or we wouldn't have a v1 catalog entry for it).
+        const captureName = CATALOG_CAPTURE_MAP[v1CatEntry.id];
+        if (!captureName || captureName === '__TEXTBELT__') {
+            throw new Error(`Demotion mapping incomplete for ${v1CatEntry.id} — no resolvable capture for upstream_ref synthesis`);
+        }
+        const capture = readJson(path.join(CAPTURE_DIR, captureName));
+        const parsed = parsePayMdPath(capture._meta.payMdPath);
+        const syntheticV1Unsup = {
+            name: `${parsed.operator}/${parsed.slug}`,
+            reason: demoteInfo.reason,
+            note: demoteInfo.note,
+        };
+        const v2Entry = buildUnsupportedEntry(syntheticV1Unsup, auditMap);
+        console.warn(`  [demote] ${v1CatEntry.id} → unsupported (${demoteInfo.reason})`);
+        v2UnsupportedEntries.push(v2Entry);
+    }
 
     const now = new Date().toISOString();
 

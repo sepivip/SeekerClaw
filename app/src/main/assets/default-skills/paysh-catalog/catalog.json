@@ -1,7 +1,7 @@
 {
   "version": 2,
-  "generated_at": "2026-05-16T16:32:41.522Z",
-  "manifest_checked_at": "2026-05-16T16:32:41.522Z",
+  "generated_at": "2026-05-16T16:49:12.912Z",
+  "manifest_checked_at": "2026-05-16T16:49:12.912Z",
   "source": "BAT-761 migration from v1 (BAT-699/704/705) + BAT-706 audit data",
   "entries": [
     {
@@ -230,38 +230,6 @@
         "last_probed_at": "2026-05-15T13:11:35.531Z",
         "last_capture_path": "tests/paysh/captures/catalog/merit-systems-stablecrypto_market-data.json",
         "last_captured_at": "2026-05-15T13:11:35.531Z",
-        "probe_status": "parsed_ok"
-      }
-    },
-    {
-      "id": "stableenrich",
-      "service_id": "stableenrich-enrichment",
-      "name": "StableEnrich Data Enrichment",
-      "upstream_ref": {
-        "operator": "merit-systems",
-        "slug": "stableenrich/enrichment",
-        "pay_md_path": "providers/merit-systems/stableenrich/enrichment/PAY.md",
-        "service_url": "https://stableenrich.dev"
-      },
-      "endpoint": {
-        "method": "POST",
-        "path": "/api/google-maps/place-details/partial",
-        "cost_usdc": 0.02
-      },
-      "intents": [
-        "enrich data",
-        "lookup person",
-        "lookup company",
-        "find email",
-        "find linkedin",
-        "people search"
-      ],
-      "summary": "Enrich emails, domains, or names into person/company profiles (LinkedIn-style data).",
-      "doc_file": "services/stableenrich.md",
-      "verification": {
-        "last_probed_at": "2026-05-15T13:11:35.337Z",
-        "last_capture_path": "tests/paysh/captures/catalog/merit-systems-stableenrich_enrichment.json",
-        "last_captured_at": "2026-05-15T13:11:35.337Z",
         "probe_status": "parsed_ok"
       }
     },
