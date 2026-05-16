@@ -208,15 +208,18 @@ function buildCatalogEntry(v1Entry) {
 
     let operator, slug, pay_md_path, service_url, endpointPath, endpointMethod;
     if (captureName === '__TEXTBELT__') {
-        // textbelt live-pay capture has a different shape — derive metadata
-        // from the BAT-705 textbelt-sms.md doc rather than the capture.
+        // R4-4: derive URL+method from the textbelt capture (live-pay 200
+        // response). The capture already records the canonical paid POST URL.
+        // Pre-fix hardcoded the URL string here — duplicating the capture's url
+        // field meant a future paysponge endpoint change wouldn't propagate to
+        // catalog.json without manual edits. Source of truth = capture.
         operator = 'paysponge';
         slug = 'textbelt';
         pay_md_path = 'providers/paysponge/textbelt/PAY.md';
-        const u = new URL('https://api.paysponge.com/x402/purchase/svc_d6kszbre4qwg5n4n4/text');
-        service_url = u.origin;
-        endpointPath = u.pathname;
-        endpointMethod = v1Entry.method;
+        const split = splitUrl(capture.url);
+        service_url = split.serviceUrl;
+        endpointPath = split.path;
+        endpointMethod = capture.method || v1Entry.method;
     } else {
         const parsed = parsePayMdPath(capture._meta.payMdPath);
         operator = parsed.operator;
@@ -272,12 +275,22 @@ function buildUnsupportedEntry(v1Entry, auditMap) {
 
     // Try to find a capture (some unsupported entries have one, most don't)
     const captureName = findUnsupportedCapture(v1Name);
-    // R3-5: parse probe date from v1 note when available (e.g. "http_401 at 2026-05-14 probe").
-    // Pre-fix entries without captures got `last_probed_at: null` even when the note recorded
-    // a real probe date — lost the freshness signal AND conflicted with SCHEMA.md's expectation
-    // that probe_status with HTTP context means we actually probed at some point.
-    const noteProbeDate = v1Entry.note ? /\bat\s+(\d{4}-\d{2}-\d{2})\b/.exec(v1Entry.note) : null;
-    const inferredProbedAt = noteProbeDate ? `${noteProbeDate[1]}T00:00:00.000Z` : null;
+    // R3-5 + R4-3: parse probe date from v1 note when available. Note formats vary:
+    //   "http_401 at 2026-05-14 probe"             ← endpoint_not_402_at_probe entries
+    //   "BAT-706 audit (2026-05-15) confirmed ..." ← requires_binary_response (paysponge/fal)
+    //   plain "2026-05-14" buried in long prose    ← misc
+    // Strategy: extract ALL YYYY-MM-DD matches from the note, use the LATEST (max).
+    // ISO 8601 dates sort lexically, so string-max == temporal-max. This handles
+    // multi-date notes (initial probe + later audit re-probe) by surfacing the
+    // more recent probe activity.
+    let inferredProbedAt = null;
+    if (v1Entry.note) {
+        const matches = v1Entry.note.match(/\b\d{4}-\d{2}-\d{2}\b/g);
+        if (matches && matches.length > 0) {
+            const latest = matches.sort().pop();
+            inferredProbedAt = `${latest}T00:00:00.000Z`;
+        }
+    }
     let verification = {
         last_probed_at: inferredProbedAt,
         last_capture_path: null,

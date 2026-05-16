@@ -1,7 +1,7 @@
 {
   "version": 2,
-  "generated_at": "2026-05-16T15:52:41.421Z",
-  "manifest_checked_at": "2026-05-16T15:52:41.421Z",
+  "generated_at": "2026-05-16T16:05:33.248Z",
+  "manifest_checked_at": "2026-05-16T16:05:33.248Z",
   "source": "BAT-761 migration from v1 (BAT-699 → PR #378 R10) + BAT-706 audit_pending population",
   "reasons": {
     "mpp_protocol": {
@@ -169,7 +169,7 @@
       },
       "reason": "requires_binary_response",
       "verification": {
-        "last_probed_at": null,
+        "last_probed_at": "2026-05-15T00:00:00.000Z",
         "last_capture_path": null,
         "last_captured_at": null,
         "probe_status": "parsed_ok"
@@ -250,7 +250,7 @@
       },
       "reason": "endpoint_not_402_at_probe",
       "verification": {
-        "last_probed_at": "2026-05-14T00:00:00.000Z",
+        "last_probed_at": "2026-05-15T00:00:00.000Z",
         "last_capture_path": null,
         "last_captured_at": null,
         "probe_status": "http_200"

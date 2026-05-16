@@ -91,7 +91,7 @@ paysh-catalog/
 | `upstream_ref.operator` | string | pay.sh operator slug (e.g. `paysponge`, `merit-systems`, `crushrewards`). Always single-segment. |
 | `upstream_ref.slug` | string | pay.sh service slug within the operator. **May contain `/`** for nested services (e.g. `wolframalpha`, `stablecrypto/market-data`, `stableenrich/enrichment`). Preserve nested form here — flattening only happens in `id`/`service_id`. |
 | `upstream_ref.pay_md_path` | string | Relative path of the PAY.md in pay.sh's pay-skills repo. Always `providers/<operator>/<slug>/PAY.md` (e.g. `providers/merit-systems/stablecrypto/market-data/PAY.md`). Used by --drift to fetch the upstream source of truth. |
-| `upstream_ref.service_url` | URL | Base URL of the service (from PAY.md frontmatter). Combined with `endpoint.path` to build the probe URL. |
+| `upstream_ref.service_url` | URL \| null | Base URL of the service (from PAY.md frontmatter). Combined with `endpoint.path` to build the probe URL. **MUST be a real URL for catalog.json entries** (every catalog entry has been probed and we have its service URL). **MAY be `null` for unsupported.json entries** — many unsupported services never reached a 402 in our probe runs, so we don't have a captured service URL. `probe-catalog.js --refresh <id>` backfills `service_url` from the PAY.md frontmatter (`disc.serviceUrl`) on successful refresh. |
 | `endpoint.method` | enum | `GET`, `POST`, `PUT`, `PATCH`, `DELETE`. |
 | `endpoint.path` | URL path | Path on the service. Combined with `service_url` to form the full URL. |
 | `endpoint.cost_usdc` | number | Per-call cost in USDC, **decimal** (e.g. `0.02` not `20000` atomic). Matches the agent-facing `max_usdc: "0.05"` convention. |

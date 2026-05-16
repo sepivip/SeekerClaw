@@ -1,8 +1,8 @@
 # paysh-catalog maintenance status
 
-Generated: 2026-05-16T15:52:49.785Z
-Catalog generated_at: 2026-05-16T15:52:41.421Z
-Manifest last checked: 2026-05-16T15:52:41.421Z (run `probe-catalog.js --drift --write-checked-at` to refresh — bare `--drift` is a pure check and won't update this timestamp)
+Generated: 2026-05-16T16:05:44.945Z
+Catalog generated_at: 2026-05-16T16:05:33.248Z
+Manifest last checked: 2026-05-16T16:05:33.248Z (run `probe-catalog.js --drift --write-checked-at` to refresh — bare `--drift` is a pure check and won't update this timestamp)
 Freshness window: 30 days
 
 ## Summary

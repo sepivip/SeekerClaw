@@ -1122,6 +1122,22 @@ async function runRefresh(id) {
     const status = probed.row.result;
     console.log(`  probe_status: ${status}`);
 
+    // R4-1: catalog entries MUST have probe_status === 'parsed_ok' per SCHEMA.md.
+    // If a refresh degrades a catalog entry (service broke upstream, parser now
+    // rejects, etc.), refuse to write — otherwise we'd ship a "supported" entry
+    // that doesn't probe. Surface the problem and exit non-zero so CI/operator
+    // notices; demoting catalog → unsupported is intentionally OUT OF SCOPE here
+    // (needs human review of which `reason` bucket applies, what to put in note,
+    // whether other catalog endpoints from the same service still work, etc.).
+    if (kind === 'catalog' && status !== 'parsed_ok') {
+        console.error(`\nREFUSING to write: catalog entry "${id}" refreshed with probe_status="${status}" but catalog requires parsed_ok.`);
+        console.error('The service may have degraded upstream. Human review needed:');
+        console.error('  1. Investigate the probe failure (rerun in standard mode or check the service directly).');
+        console.error(`  2. If genuinely broken, manually move "${id}" from catalog.json to unsupported.json with an appropriate reason bucket.`);
+        console.error('  3. catalog.json and unsupported.json were NOT modified by this refresh.');
+        process.exit(3);
+    }
+
     const now = new Date().toISOString();
     entry.verification.last_probed_at = now;
     entry.verification.probe_status = status;
