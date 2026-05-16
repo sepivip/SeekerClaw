@@ -272,8 +272,14 @@ function buildUnsupportedEntry(v1Entry, auditMap) {
 
     // Try to find a capture (some unsupported entries have one, most don't)
     const captureName = findUnsupportedCapture(v1Name);
+    // R3-5: parse probe date from v1 note when available (e.g. "http_401 at 2026-05-14 probe").
+    // Pre-fix entries without captures got `last_probed_at: null` even when the note recorded
+    // a real probe date — lost the freshness signal AND conflicted with SCHEMA.md's expectation
+    // that probe_status with HTTP context means we actually probed at some point.
+    const noteProbeDate = v1Entry.note ? /\bat\s+(\d{4}-\d{2}-\d{2})\b/.exec(v1Entry.note) : null;
+    const inferredProbedAt = noteProbeDate ? `${noteProbeDate[1]}T00:00:00.000Z` : null;
     let verification = {
-        last_probed_at: null,
+        last_probed_at: inferredProbedAt,
         last_capture_path: null,
         last_captured_at: null,
         probe_status: deriveProbeStatusFromV1(v1Entry),
@@ -453,11 +459,21 @@ function main() {
     // Detect already-v2 and bail cleanly. Migration is one-shot per SCHEMA.md
     // — to refresh individual entries on v2, use `probe-catalog.js --refresh <id>`.
     // To re-run migration, restore v1 from git first (e.g. `git checkout HEAD~ -- <paths>`).
-    if (v1Catalog.version === 2 && v1Unsupported.version === 2) {
+    const catalogV2 = v1Catalog.version === 2;
+    const unsupV2 = v1Unsupported.version === 2;
+    if (catalogV2 && unsupV2) {
         console.log('Both catalog.json and unsupported.json are already v2 — nothing to migrate.');
         console.log('To refresh individual entries, run: node tests/paysh/probe-catalog.js --refresh <id>');
         console.log('To re-run the full migration, restore v1 files from git first.');
         return;
+    }
+    // R3-4: mixed state (one file v2, other still v1) — refuse to migrate.
+    // Without this guard, the v2 file would be re-read as if it were v1 and
+    // the script would produce corrupted output (missing v1 top-level fields).
+    if (catalogV2 !== unsupV2) {
+        console.error(`ERROR: mixed schema state — catalog.json is ${catalogV2 ? 'v2' : 'v1'} but unsupported.json is ${unsupV2 ? 'v2' : 'v1'}.`);
+        console.error('Migration expects both files to be at the same schema version. Either restore BOTH to v1 from git, or accept the mixed state and refresh individual entries on the v2 file via probe-catalog.js --refresh <id>.');
+        process.exit(2);
     }
 
     const auditMap = parseAuditReport();

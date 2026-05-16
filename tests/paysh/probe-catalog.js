@@ -893,8 +893,12 @@ const PAY_SKILLS_TREE_URL = 'https://api.github.com/repos/solana-foundation/pay-
 
 function _readV2(p) {
     const data = JSON.parse(fs.readFileSync(p, 'utf8'));
-    if (data.version !== 2) {
-        throw new Error(`${p}: expected version 2, got ${data.version || 'v1 (no version field)'} — run "node tests/paysh/migrate-v1-to-v2.js" first`);
+    // R3-1: SCHEMA.md spec says v2 readers should accept `version >= 2` so
+    // future schema bumps (v3+) don't break existing tooling. Treat unknown
+    // future-version fields as opaque (we don't read them; pass-through on write).
+    if (typeof data.version !== 'number' || data.version < 2) {
+        const got = data.version === undefined ? 'v1 (no version field)' : `version=${data.version}`;
+        throw new Error(`${p}: expected version >= 2, got ${got} — run "node tests/paysh/migrate-v1-to-v2.js" first`);
     }
     return data;
 }
@@ -1095,6 +1099,17 @@ async function runRefresh(id) {
         console.error(`No service_url available (disc.serviceUrl and entry.upstream_ref.service_url both empty)`);
         process.exit(2);
     }
+    // R3-3: persist disc.serviceUrl back into entry.upstream_ref.service_url so
+    // future --refresh calls (and other tooling) don't need to re-discover. This
+    // is especially useful for unsupported entries that started with null service_url.
+    if (disc.serviceUrl && entry.upstream_ref.service_url !== disc.serviceUrl) {
+        if (!entry.upstream_ref.service_url) {
+            console.log(`  service_url backfilled from PAY.md: ${disc.serviceUrl}`);
+        } else {
+            console.log(`  service_url updated: ${entry.upstream_ref.service_url} → ${disc.serviceUrl}`);
+        }
+        entry.upstream_ref.service_url = disc.serviceUrl;
+    }
     disc.probeUrl = baseUrl.replace(/\/$/, '') + entry.endpoint.path;
     disc.probeMethod = entry.endpoint.method;
     console.log(`  endpoint:     ${disc.probeMethod} ${disc.probeUrl}`);
@@ -1124,7 +1139,12 @@ async function runRefresh(id) {
             ? path.basename(entry.verification.last_capture_path)
             : `${entry.upstream_ref.operator}-${entry.upstream_ref.slug.replace(/\//g, '_')}__${entry.id}.json`;
         const captureFullPath = path.join(__dirname, 'captures', 'catalog', captureName);
-        const captureRel = path.relative(path.join(__dirname, '..', '..'), captureFullPath).split(path.sep).join('/');
+        // R3-2: capture path stored in v2 JSON must be relative to repo root
+        // (e.g. `tests/paysh/captures/catalog/foo.json`), not relative to tests/
+        // (`paysh/captures/catalog/foo.json`). __dirname is `tests/paysh`, so go
+        // up TWO levels to reach repo root.
+        const repoRoot = path.join(__dirname, '..', '..');
+        const captureRel = path.relative(repoRoot, captureFullPath).split(path.sep).join('/');
         const captureContent = sanitize({
             _meta: {
                 label: `${entry.upstream_ref.operator}-${entry.upstream_ref.slug.replace(/\//g, '_')}-402`,

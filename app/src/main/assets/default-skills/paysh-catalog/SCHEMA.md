@@ -259,16 +259,19 @@ Script is idempotent — re-running produces the same output. Run once to migrat
 - `version === 2`
 - `entries[]` is array
 - All required fields present on each entry
-- `id` is globally unique across catalog.json + unsupported.json
-- `service_id` matches at least one entry's prefix in `id`
+- `id` is kebab-case and globally unique across catalog.json + unsupported.json (the `--refresh <id>` command searches both files)
+- `service_id` is kebab-case
 - `upstream_ref.pay_md_path` matches the pattern `providers/<operator>/<slug>/PAY.md` where `<operator>` and `<slug>` match the corresponding fields
 - `endpoint.cost_usdc` is non-negative number (catalog) or non-negative-or-null (unsupported)
-- `verification.last_capture_path` is null iff `probe_status !== "parsed_ok"`
-- `verification.last_captured_at` is null iff `last_capture_path` is null
-- For catalog.json: `verification.probe_status === "parsed_ok"` for every entry
+- `verification.last_capture_path` and `last_captured_at` are null together (both null or both non-null) — they're a pair
+- For catalog.json: `verification.probe_status === "parsed_ok"` for every entry, and `last_capture_path` must be non-null when so
 - For unsupported.json: `reason` is one of the six registered bucket keys
-- For unsupported.json: `reasons` object has entry for every bucket key referenced in `entries[].reason`
-- `doc_file` refers to a file that exists in `services/`
+- For unsupported.json: `reasons` object has an entry for every bucket key referenced in `entries[].reason`
+- `doc_file` (catalog only) refers to a file that exists in `services/`
+
+**Not validated** (informational, may relax over time):
+- `service_id` ↔ `id` relationship — convention is `id = <service_id>` or `id = <service_id>-<endpoint-slug>`, but no enforcement (some legacy ids predate the convention)
+- `last_capture_path` non-null for `reject:<reason>` entries — captures CAN exist for parser-rejected 402s (the HTTP layer succeeded, we have the body), but we don't require them; they're informational evidence
 
 Validation failure aborts the migration run and prints which entry/field failed.
 
