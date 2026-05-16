@@ -453,6 +453,22 @@ function validate(catalog, unsupported) {
             if (kind === 'catalog' && v.probe_status !== 'parsed_ok') {
                 errors.push(`${ctx}: catalog probe_status must be parsed_ok (got ${v.probe_status})`);
             }
+            // R11-2: validate ISO-8601 string when last_probed_at / last_captured_at are non-null.
+            // SCHEMA.md spec says these fields are ISO-8601, but pre-fix the migrate didn't enforce
+            // it — a v1 entry without a parseable date in note/capture could emit invalid JSON
+            // (e.g. malformed string) without failing the migration.
+            const isoRe = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
+            if (v.last_probed_at !== null && !isoRe.test(v.last_probed_at)) {
+                errors.push(`${ctx}: last_probed_at must be ISO-8601 (got "${v.last_probed_at}")`);
+            }
+            if (v.last_captured_at !== null && !isoRe.test(v.last_captured_at)) {
+                errors.push(`${ctx}: last_captured_at must be ISO-8601 (got "${v.last_captured_at}")`);
+            }
+            // probe_status format check: parsed_ok | reject:* | http_NNN | fetch_failed | unknown | detect_false
+            const statusRe = /^(parsed_ok|reject:[\w_]+|http_\d{3}|fetch_failed|unknown|detect_false)$/;
+            if (!statusRe.test(v.probe_status)) {
+                errors.push(`${ctx}: probe_status "${v.probe_status}" doesn't match expected format`);
+            }
         }
         if (kind === 'catalog') {
             if (!e.intents || !Array.isArray(e.intents) || e.intents.length < 3) {

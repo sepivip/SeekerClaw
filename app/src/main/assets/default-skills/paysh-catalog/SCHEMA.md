@@ -22,11 +22,13 @@ paysh-catalog/
 ├── catalog.json              # v2 — supported entries
 ├── unsupported.json          # v2 — known-but-not-usable entries
 └── services/
-    ├── <service-id>.md       # one .md per service; sections per endpoint
+    ├── *.md                  # one .md per service; sections per endpoint
     ├── wolfram-alpha.md      # contains /v1/result + /v2/llm-api sections
     ├── rentcast.md           # contains /markets + 4 other endpoint sections
     └── ...
 ```
+
+**`doc_file` is the source of truth for filenames.** Each catalog entry's `doc_file` field is the exact path (relative to skill folder) to its markdown doc. **There's no auto-derived `services/<service-id>.md` convention** — filenames are chosen for readability (`wolfram-alpha.md` is friendlier than `wolframalpha.md`) and the agent always uses `entry.doc_file` to locate the doc, never reconstructs the path from `service_id`. Validation only checks that `doc_file` resolves to an existing file.
 
 **One service doc, multiple endpoint entries.** A service that exposes N catalog-listed endpoints has ONE markdown file with N sub-sections (one per endpoint). The agent reads the one doc per call regardless of which endpoint it picked.
 
