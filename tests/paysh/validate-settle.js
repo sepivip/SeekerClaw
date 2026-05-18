@@ -242,9 +242,18 @@ async function runSettleForCapture(captureEntry) {
         };
     };
 
-    const targetUrl = capture.body && capture.body.resource && capture.body.resource.url
+    // BAT-768+766 R2-1: prefer capture.url (the actual request URL the
+    // probe hit) over body.resource.url (the SERVER's claim about what the
+    // resource is). For gateway services like reducto-parse, paysponge sets
+    // resource.url to the proxied service path (`/parse`) while the agent
+    // actually calls the gateway URL (`/x402/purchase/<svc>/parse`).
+    // Production agent_pay always settles the URL it originally invoked
+    // (capture.url equivalent), so the test must too — otherwise Layer 2.5
+    // exercises a different code path than production and misses gateway-
+    // specific regressions.
+    const targetUrl = capture.url
         || (capture._meta && capture._meta.url)
-        || capture.url
+        || (capture.body && capture.body.resource && capture.body.resource.url)
         || 'https://example.com';
 
     const result = await proto.settle(
