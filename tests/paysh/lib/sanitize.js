@@ -163,12 +163,19 @@ function sanitizeString(s, opts = {}) {
     }
     out = out.replace(SECRET_PREFIX_RE, REDACTED);
     if (!opts.preserveBase64Hex) {
-        // BAT-769 R2-5: JSON Schema $ref pointers (`#/components/schemas/Foo`,
+        // BAT-769 R2-5 + R5-2: JSON Schema $ref pointers (`#/components/schemas/Foo`,
         // `#/paths/...`, etc.) have a long path-shaped tail that LONG_BASE64_RE
         // false-positives on. They're public schema metadata, never secrets.
-        // Detect-and-skip strings that look like JSON Schema refs (start with
-        // `#/` and contain only path-shaped chars) before running the redactor.
-        const isJsonSchemaRef = /^#\/[A-Za-z0-9/_-]+$/.test(out);
+        // Detect-and-skip strings that look like JSON Schema refs.
+        //
+        // R5-2 narrowing: the original R2-5 exception was `^#\/[A-Za-z0-9/_-]+$`
+        // with no length cap — an attacker could hide a secret as
+        // `#/components/schemas/<long-token>` and slip through. Realistic JSON
+        // Schema $refs are well under 128 chars (the longest in pay.sh openapi
+        // we've seen is ~50 chars: `#/components/schemas/FunctionCallOutputInput`).
+        // Cap the exception at 128 chars so the secret-hiding attack vector
+        // closes — anything longer falls back to normal redaction.
+        const isJsonSchemaRef = out.length <= 128 && /^#\/[A-Za-z0-9/_-]+$/.test(out);
         if (!isJsonSchemaRef) {
             // BAT-582 R25 (order matters): apply LONG_BASE64_RE FIRST so a
             // base64 token like "AAAA...AAAA==" (which is also valid hex up

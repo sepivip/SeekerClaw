@@ -175,11 +175,9 @@ Six buckets in v2 (carried from v1 PR #378 R10 state):
     "last_captured_at": null,
     "probe_status": "http_200"
   },
-  "note": "Catalog-listed endpoint returned http_200 — non-402. Sibling endpoints found by BAT-706 audit are listed in audit_pending.",
+  "note": "Catalog-listed endpoint returned http_200 — non-402. Sibling endpoints found by BAT-706 audit: /search and /v1/agent catalogued in BAT-769; /v1/async/sonar remains in audit_pending below (unscheduled — needs async-fetch pattern).",
   "audit_pending": [
-    { "method": "POST", "path": "/search", "cost_usdc": 0.01, "deferred_to": "BAT-769" },
-    { "method": "POST", "path": "/v1/agent", "cost_usdc": 0.01, "deferred_to": "BAT-769" },
-    { "method": "POST", "path": "/v1/async/sonar", "cost_usdc": 0.01, "deferred_to": "BAT-769" }
+    { "method": "POST", "path": "/v1/async/sonar", "cost_usdc": 0.01, "deferred_to": null }
   ]
 }
 ```
