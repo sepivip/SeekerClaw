@@ -1,7 +1,7 @@
 {
   "_meta": {
     "label": "paysponge-textbelt-402",
-    "capturedAt": "2026-05-12T11:15:06.155Z",
+    "capturedAt": "2026-05-15T13:11:36.571Z",
     "source": "probe-catalog",
     "payMdPath": "providers/paysponge/textbelt/PAY.md",
     "note": "Sanitized per BAT-582 v1.6 contract amendment 6."
@@ -10,20 +10,20 @@
   "method": "GET",
   "status": 402,
   "headers": {
-    "date": "Tue, 12 May 2026 11:15:06 GMT",
+    "date": "Fri, 15 May 2026 13:11:37 GMT",
     "content-type": "application/json",
     "transfer-encoding": "chunked",
     "connection": "keep-alive",
     "access-control-allow-credentials": "true",
-    "cf-cache-status": "DYNAMIC",
     "payment-required": "eyJ4NDAyVmVyc2lvbiI6MiwiZXJyb3IiOiJQYXltZW50IHJlcXVpcmVkIiwicmVzb3VyY2UiOnsidXJsIjoiaHR0cHM6Ly9hcGkucGF5c3BvbmdlLmNvbS9zdGF0dXMvcHJvYmUiLCJkZXNjcmlwdGlvbiI6IlNlcnZpY2U6IFRleHRiZWx0IChodHRwczovL2FwaS5wYXlzcG9uZ2UuY29tL3N0YXR1cy9wcm9iZSkiLCJtaW1lVHlwZSI6ImFwcGxpY2F0aW9uL2pzb24ifSwiYWNjZXB0cyI6W3sic2NoZW1lIjoiZXhhY3QiLCJuZXR3b3JrIjoiZWlwMTU1Ojg0NTMiLCJhbW91bnQiOiIwIiwiYXNzZXQiOiIweDgzMzU4OWZDRDZlRGI2RTA4ZjRjN0MzMkQ0ZjcxYjU0YmRBMDI5MTMiLCJwYXlUbyI6IjB4NjMwMkQ5ZTZEQkIyMmZFQzNjMzUwNTUxNTY4QmIzOUI0YjM1QWQ1NyIsIm1heFRpbWVvdXRTZWNvbmRzIjozMDAsImV4dHJhIjp7Im5hbWUiOiJVU0QgQ29pbiIsInZlcnNpb24iOiIyIn19LHsic2NoZW1lIjoiZXhhY3QiLCJuZXR3b3JrIjoic29sYW5hOjVleWt0NFVzRnY4UDhOSmRUUkVwWTF2enFLcVpLdmRwIiwiYW1vdW50IjoiMCIsImFzc2V0IjoiRVBqRldkZDVBdWZxU1NxZU0ycU4xeHp5YmFwQzhHNHdFR0drWnd5VER0MXYiLCJwYXlUbyI6IjkyNDZYcnNBRUtINmhBeUVRZTVQdmRwVUwxcDVLdGo5Yzd5U253UW42b2lzIiwibWF4VGltZW91dFNlY29uZHMiOjMwMCwiZXh0cmEiOnsiZmVlUGF5ZXIiOiIyd0t1cExSOXE2d1hZcHB3OEdyMk52V3hLQlVxbTRQUEpLa1Fmb3hIREJnNCJ9fV0sImV4dGVuc2lvbnMiOnsiYmF6YWFyIjp7InJvdXRlVGVtcGxhdGUiOiIvc3RhdHVzLzppZCIsImluZm8iOnsiaW5wdXQiOnsidHlwZSI6Imh0dHAiLCJtZXRob2QiOiJHRVQiLCJwYXRoUGFyYW1zIjp7ImlkIjoicHJvYmUifSwicXVlcnlQYXJhbXMiOnt9fSwib3V0cHV0Ijp7InR5cGUiOiJqc29uIiwiZXhhbXBsZSI6e319fSwic2NoZW1hIjp7IiRzY2hlbWEiOiJodHRwczovL2pzb24tc2NoZW1hLm9yZy9kcmFmdC8yMDIwLTEyL3NjaGVtYSIsInR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7ImlucHV0Ijp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7InR5cGUiOnsidHlwZSI6InN0cmluZyIsImNvbnN0IjoiaHR0cCJ9LCJtZXRob2QiOnsidHlwZSI6InN0cmluZyIsImVudW0iOlsiR0VUIiwiSEVBRCIsIkRFTEVURSJdfSwicGF0aFBhcmFtcyI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJpZCI6eyJ0eXBlIjoic3RyaW5nIn19LCJyZXF1aXJlZCI6WyJpZCJdLCJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2V9LCJxdWVyeVBhcmFtcyI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6e30sImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjpmYWxzZX19LCJyZXF1aXJlZCI6WyJ0eXBlIiwibWV0aG9kIiwicGF0aFBhcmFtcyJdLCJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2V9LCJvdXRwdXQiOnsidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnsidHlwZSI6eyJ0eXBlIjoic3RyaW5nIiwiY29uc3QiOiJqc29uIn0sImV4YW1wbGUiOnsidHlwZSI6Im9iamVjdCIsImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjp0cnVlfX0sInJlcXVpcmVkIjpbInR5cGUiXSwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlfX0sInJlcXVpcmVkIjpbImlucHV0Il0sImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjpmYWxzZX19fX0=",
-    "rndr-id": "a99c3349-4087-40d4",
+    "rndr-id": "85334e25-5bf1-4a85",
     "server": "cloudflare",
     "vary": "Origin, Accept-Encoding",
     "x-render-origin-server": "Render",
-    "report-to": "{\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=FxsqPxReVgRn3wgvLdfE0tDB33MI5igSKSJtIAcZQ1gJuPrtxgV8FYqCXj8m8OPUqiwFq61KOUS4X3DKUSE2GjB5AJHrHySICOP7SZ82WlA9V2mSY2Q79Bbwnn8hHuadKZST%2Bg%3D%3D\"}]}",
+    "cf-cache-status": "DYNAMIC",
+    "report-to": "{\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=UJ1LgSMmpcch%2BXZDfXkHVpBJKcgOfvqhlnp%[REDACTED]%2FDxdoBwb%2FHASHiDYOm2vUUizXvDYjTbfl%2FNuvPTwLvGSFA5eJWs7g%3D%3D\"}]}",
     "nel": "{\"report_to\":\"cf-nel\",\"success_fraction\":0.0,\"max_age\":604800}",
-    "cf-ray": "9fa900ea496ad0db-SOF",
+    "cf-ray": "9fc263b57fd56e48-SOF",
     "alt-svc": "h3=\":443\"; ma=86400"
   },
   "body": {

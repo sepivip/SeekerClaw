@@ -1,7 +1,7 @@
 {
   "_meta": {
     "label": "solana-foundation-alibaba_edututor-402",
-    "capturedAt": "2026-05-12T11:03:28.614Z",
+    "capturedAt": "2026-05-15T13:11:37.775Z",
     "source": "probe-catalog",
     "payMdPath": "providers/solana-foundation/alibaba/edututor/PAY.md",
     "note": "Sanitized per BAT-582 v1.6 contract amendment 6."
@@ -11,12 +11,11 @@
   "status": 402,
   "headers": {
     "content-type": "application/json",
-    "www-authenticate": "Payment id=\"[REDACTED]\", realm=\"MPP Payment\", method=\"solana\", intent=\"charge\", request=\"[REDACTED]\", expires=\"2026-05-12T11:08:28.183151152Z\", Payment id=\"[REDACTED]\", realm=\"MPP Payment\", method=\"solana\", intent=\"charge\", request=\"[REDACTED]\", expires=\"2026-05-12T11:08:28.319062349Z\", Payment id=\"[REDACTED]\", realm=\"MPP Payment\", method=\"solana\", intent=\"charge\", request=\"[REDACTED]\", expires=\"2026-05-12T11:08:28.489487911Z\"",
-    "content-length": "264",
-    "date": "Tue, 12 May 2026 11:03:28 GMT",
-    "server": "Google Frontend",
+    "www-authenticate": "Payment id=\"[REDACTED]\", realm=\"MPP Payment\", method=\"solana\", intent=\"charge\", request=\"[REDACTED]\", expires=\"2026-05-15T13:16:37.90009225Z\", Payment id=\"[REDACTED]\", realm=\"MPP Payment\", method=\"solana\", intent=\"charge\", request=\"[REDACTED]\", expires=\"2026-05-15T13:16:38.05427574Z\", Payment id=\"[REDACTED]\", realm=\"MPP Payment\", method=\"solana\", intent=\"charge\", request=\"[REDACTED]\", expires=\"2026-05-15T13:16:38.204434778Z\"",
     "x-cloud-trace-context": "[REDACTED]",
-    "traceparent": "[REDACTED]",
+    "date": "Fri, 15 May 2026 13:11:38 GMT",
+    "server": "Google Frontend",
+    "content-length": "264",
     "via": "1.1 google",
     "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000"
   },

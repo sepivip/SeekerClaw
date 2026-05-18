@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "generated_at": "2026-05-18T09:51:59.870Z",
+  "generated_at": "2026-05-18T10:39:50.022Z",
   "manifest_checked_at": "2026-05-16T17:51:08.251Z",
   "source": "BAT-761 migration from v1 (BAT-699 → PR #378 R10) + BAT-706 audit_pending population + BAT-769 partial promotion (perplexity /search, /v1/agent)",
   "reasons": {
@@ -255,13 +255,13 @@
         "last_captured_at": null,
         "probe_status": "http_200"
       },
-      "note": "Catalog-listed endpoint returned http_200 at 2026-05-14 probe — non-402, agent_pay can't settle THAT URL. The BAT-706 audit (2026-05-15, --audit-side-effects) discovered 3 SIBLING endpoints on the same host (pplx.x402.paysponge.com) that DO return parseable Solana-USDC 402 challenges. BAT-769 (PR #380) catalogued 2 of them: /search and /v1/agent (both $0.01 — see catalog.json entries perplexity-search and perplexity-agent). The remaining 1 (/v1/async/sonar) stays in audit_pending below: it returns 402 + parses_ok at $0.01, but the response is a job-id requiring polling — needs an async-fetch pattern before we can catalog it. When the user asks about \"perplexity on pay.sh\", direct them to the 2 catalogued endpoints; the catalog URL itself remains broken (http_200) and isn't payable.",
+      "note": "Catalog-listed endpoint returned http_200 at 2026-05-14 probe — non-402, agent_pay can't settle THAT URL. The BAT-706 audit (2026-05-15, --audit-side-effects) discovered 3 SIBLING endpoints on the same host (pplx.x402.paysponge.com) that DO return parseable Solana-USDC 402 challenges. BAT-769 (PR #380) catalogued 2 of them: /search and /v1/agent (both $0.01 — see catalog.json entries perplexity-search and perplexity-agent). The remaining 1 (/v1/async/sonar) stays in audit_pending below: it returns 402 + parses_ok at $0.01, but the response is a job-id requiring polling — needs an async-fetch pattern in a future BAT (unscheduled — deferred_to: null until ticket is created) before we can catalog it. When the user asks about \"perplexity on pay.sh\", direct them to the 2 catalogued endpoints; the catalog URL itself remains broken (http_200) and isn't payable.",
       "audit_pending": [
         {
           "method": "POST",
           "path": "/v1/async/sonar",
           "cost_usdc": 0.01,
-          "deferred_to": "BAT-769"
+          "deferred_to": null
         }
       ]
     },

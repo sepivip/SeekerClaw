@@ -1,7 +1,7 @@
 # paysh-catalog maintenance status
 
-Generated: 2026-05-18T09:53:51.158Z
-Catalog generated_at: 2026-05-18T09:50:26.826Z
+Generated: 2026-05-18T10:40:01.572Z
+Catalog generated_at: 2026-05-18T10:39:50.012Z
 Manifest last checked: 2026-05-16T17:51:08.251Z (run `node tests/paysh/probe-catalog.js --drift --write-checked-at` to refresh — bare `--drift` is a pure check and won't update this timestamp)
 Freshness window: 30 days
 
@@ -30,5 +30,5 @@ Freshness window: 30 days
 | `screenshotone` | 3 | BAT-764 |
 | `stablephone-calls` | 3 | BAT-771 |
 | `nyne` | 2 | BAT-772 |
-| `perplexity` | 1 | BAT-769 |
+| `perplexity` | 1 | (unscheduled) |
 

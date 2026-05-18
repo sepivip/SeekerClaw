@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "generated_at": "2026-05-18T09:50:26.826Z",
+  "generated_at": "2026-05-18T10:39:50.012Z",
   "manifest_checked_at": "2026-05-16T17:51:08.251Z",
   "source": "BAT-761 v2 schema + BAT-769 Tier 1c perplexity catalog entries",
   "entries": [
@@ -323,9 +323,9 @@
       "doc_file": "services/perplexity.md",
       "doc_anchor": "search",
       "verification": {
-        "last_probed_at": "2026-05-18T09:50:26.826Z",
-        "last_capture_path": "tests/paysh/captures/catalog/paysponge-perplexity__perplexity-search.json",
-        "last_captured_at": "2026-05-18T09:50:26.826Z",
+        "last_probed_at": "2026-05-18T10:23:37.016Z",
+        "last_capture_path": "tests/paysh/captures/perplexity-search-402.json",
+        "last_captured_at": "2026-05-18T10:23:37.016Z",
         "probe_status": "parsed_ok"
       }
     },
@@ -356,9 +356,9 @@
       "doc_file": "services/perplexity.md",
       "doc_anchor": "v1-agent",
       "verification": {
-        "last_probed_at": "2026-05-18T09:50:26.826Z",
-        "last_capture_path": "tests/paysh/captures/catalog/paysponge-perplexity__perplexity-agent.json",
-        "last_captured_at": "2026-05-18T09:50:26.826Z",
+        "last_probed_at": "2026-05-18T10:23:37.016Z",
+        "last_capture_path": "tests/paysh/captures/perplexity-agent-402.json",
+        "last_captured_at": "2026-05-18T10:23:37.016Z",
         "probe_status": "parsed_ok"
       }
     }

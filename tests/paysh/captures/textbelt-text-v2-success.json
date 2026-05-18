@@ -2,8 +2,8 @@
   "_meta": {
     "label": "textbelt-text-v2-success",
     "description": "v2 PAYMENT-RESPONSE captured during Layer 3 live-pay (textbelt-text)",
-    "capturedAt": "2026-05-11T16:54:50.173Z",
-    "onChainSignature": "3v1psLcQaKcfC7dwt7h4ybtwvPuzrShsYN8wZ1K41GFAK2ejHHPz9F5sbtqX7hzazW6LAXxtrveCR3LQYPMDY3Mb",
+    "capturedAt": "2026-05-12T16:35:13.286Z",
+    "onChainSignature": "5SGKjuRJnE1EFGuVdrzRVmE5wXHX6bmhf6hxD5oH2LYVNZ5z8YgNECJdZnXWyqz6MPuLvNTpUujgU7oAM772cxa8",
     "demandAtomic": "20000",
     "note": "Spent real USDC. Body redacted via paidSummary=true (we paid for that content). Captured for regression pinning of v2 settle path."
   },
@@ -11,20 +11,20 @@
   "method": "POST",
   "status": 200,
   "headers": {
-    "date": "Mon, 11 May 2026 16:54:50 GMT",
+    "date": "Tue, 12 May 2026 16:35:13 GMT",
     "content-type": "application/json",
     "transfer-encoding": "chunked",
     "connection": "keep-alive",
     "access-control-allow-credentials": "true",
-    "cf-cache-status": "DYNAMIC",
     "payment-response": "[REDACTED]",
-    "rndr-id": "b229c9a2-632c-4f31",
+    "rndr-id": "0713787b-1014-457a",
     "server": "cloudflare",
     "vary": "Origin, Accept-Encoding",
     "x-render-origin-server": "Render",
-    "report-to": "{\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=hjgQ7C8FTkrjpSu2z2isX0yOrHhm%[REDACTED]%3D%3D\"}]}",
+    "cf-cache-status": "DYNAMIC",
+    "report-to": "{\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=dhjkLwckJw1Tt9umCtJaY72ZipGKwZL9oUYDeH9JGzdk21%2Fc3G4vO7pWGkNHW7%2F2Sn%[REDACTED]%2BQ4csJWukHCK9nAg%3D%3D\"}]}",
     "nel": "{\"report_to\":\"cf-nel\",\"success_fraction\":0.0,\"max_age\":604800}",
-    "cf-ray": "9fa2b5278cefd0e4-SOF",
+    "cf-ray": "9faad5c9c946b8ab-SOF",
     "alt-svc": "h3=\":443\"; ma=86400"
   },
   "body": "[REDACTED — paid response body summarized; ? bytes original]"

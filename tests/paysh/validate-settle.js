@@ -103,6 +103,23 @@ const SETTLE_CAPTURES = [
         expectDelivery: 'body',
         expectResourceUrlPrefix: 'https://api.paysponge.com',
     },
+    // BAT-769: Perplexity catalog (Tier 1c) — both endpoints multi-chain
+    // (Base + Solana), POST. paysponge delivers the challenge in BOTH the
+    // body's accepts[] AND a base64 payment-required header — parser picks
+    // body first (the spec-preferred channel), so the validated delivery
+    // mode for these captures is 'body'.
+    {
+        file: 'perplexity-search-402.json',
+        expectV2: true,
+        expectDelivery: 'body',
+        expectResourceUrlPrefix: 'https://pplx.x402.paysponge.com',
+    },
+    {
+        file: 'perplexity-agent-402.json',
+        expectV2: true,
+        expectDelivery: 'body',
+        expectResourceUrlPrefix: 'https://pplx.x402.paysponge.com',
+    },
 ];
 
 // Detect which delivery mode a capture uses by calling the parser's own

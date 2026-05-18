@@ -50,6 +50,10 @@ const EXPECTATIONS = {
     'tripadvisor-search-402.json':         { detect: true,  buildOk: true  },
     'coingecko-trending-pools.json':       { detect: true,  buildOk: true  },
     'textbelt-text-402.json':              { detect: true,  buildOk: true  },
+    // BAT-769: Perplexity catalog entries (Tier 1c). Both POST endpoints,
+    // both Solana-USDC parseable, both $0.01.
+    'perplexity-search-402.json':          { detect: true,  buildOk: true  },
+    'perplexity-agent-402.json':           { detect: true,  buildOk: true  },
     // BAT-582 v1.6 quirk: pay.sh's "free" status endpoint returns 402
     // with amount=0 (instead of 200 OK). Our build correctly rejects
     // zero demand as invalid_demand — free-via-x402 isn't a supported
