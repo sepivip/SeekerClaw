@@ -39,6 +39,15 @@ const HEADER_DENYLIST = new Set([
     // for any settle-success captures we add later.
     'x-payment',
     'payment-signature',
+    // BAT-769 R2-1/R2-2: transport-noise headers that embed URL-token identifiers
+    // the long-base64 redactor misses because of `s=` lookbehind interaction
+    // (the `=` in `?s=` is in the base64 alphabet so the negative lookbehind
+    // blocks the match start). These headers carry zero protocol value for
+    // x402 fixtures and can be dropped entirely.
+    'report-to',     // W3C Reporting API; URL has `?s=<token>` Cloudflare NEL identifier
+    'nel',           // Network Error Logging policy
+    'rndr-id',       // Render.com request id
+    'x-render-origin-server',
 ]);
 
 const PHONE_RE = /\+\d{6,}/g;
@@ -151,15 +160,23 @@ function sanitizeString(s, opts = {}) {
     }
     out = out.replace(SECRET_PREFIX_RE, REDACTED);
     if (!opts.preserveBase64Hex) {
-        // BAT-582 R25 (order matters): apply LONG_BASE64_RE FIRST so a
-        // base64 token like "AAAA...AAAA==" (which is also valid hex up
-        // to the padding) is captured WITH its `=` padding in one
-        // match. If LONG_HEX_RE ran first, it would greedily match the
-        // hex-valid prefix and leave the `==` orphaned in the output —
-        // partial redaction. Base64 first means the entire token gets
-        // redacted as a single unit.
-        out = out.replace(LONG_BASE64_RE, REDACTED);
-        out = out.replace(LONG_HEX_RE, REDACTED);
+        // BAT-769 R2-5: JSON Schema $ref pointers (`#/components/schemas/Foo`,
+        // `#/paths/...`, etc.) have a long path-shaped tail that LONG_BASE64_RE
+        // false-positives on. They're public schema metadata, never secrets.
+        // Detect-and-skip strings that look like JSON Schema refs (start with
+        // `#/` and contain only path-shaped chars) before running the redactor.
+        const isJsonSchemaRef = /^#\/[A-Za-z0-9/_-]+$/.test(out);
+        if (!isJsonSchemaRef) {
+            // BAT-582 R25 (order matters): apply LONG_BASE64_RE FIRST so a
+            // base64 token like "AAAA...AAAA==" (which is also valid hex up
+            // to the padding) is captured WITH its `=` padding in one
+            // match. If LONG_HEX_RE ran first, it would greedily match the
+            // hex-valid prefix and leave the `==` orphaned in the output —
+            // partial redaction. Base64 first means the entire token gets
+            // redacted as a single unit.
+            out = out.replace(LONG_BASE64_RE, REDACTED);
+            out = out.replace(LONG_HEX_RE, REDACTED);
+        }
     }
     return out;
 }
