@@ -319,7 +319,7 @@
         "find information with citations",
         "what does the community say"
       ],
-      "summary": "Perplexity web search — synthesized answer with citations. Use for \"explain X\" or \"what does the community think about Y\" queries where web_search would just return raw results. Cheaper than /v1/agent ($0.01 vs n/a for deep reasoning).",
+      "summary": "Perplexity web search — synthesized answer with citations ($0.01/call). Use for \"explain X\" or \"what does the community think about Y\" queries where web_search would just return raw results. Same cost as /v1/agent ($0.01) but simpler request shape; pick the agent endpoint when the task needs multi-step reasoning or tool use.",
       "doc_file": "services/perplexity.md",
       "doc_anchor": "search",
       "verification": {

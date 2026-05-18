@@ -80,7 +80,7 @@ agent_pay({
 ```
 
 Required:
-- `input` (object — see openapi for the full `Input` schema) — the agent's task description
+- `input` — **string OR array of input items** (per openapi: `oneOf [StringInput, InputItemArray]`, where `InputItem` is a structured turn). For most queries pass a plain string; use the array form only when constructing multi-turn agent interactions.
 
 Optional:
 - `model` — perplexity model to use
@@ -89,7 +89,7 @@ Optional:
 - `reasoning` (object) — reasoning config
 - `stream` (bool, default false) — leave false for synchronous response
 
-The simplest call: pass a plain-text task as the `input.text` (refer to perplexity's openapi for exact `Input` object shape — wraps as `{ "input": { "text": "..." } }` or similar; verify against current spec). For most user queries the agent should pass the user's question verbatim.
+Simplest call: pass the user's question as a plain string in `input`. The example call below uses this form.
 
 ### Response shape
 
@@ -109,7 +109,7 @@ agent_pay({
 ## When NOT to use Perplexity
 
 - **Free alternatives suffice** — `web_search` returns enough for most lookup queries; perplexity's value is synthesis
-- **User hasn't asked for paid search** — per BAT-704 opt-in, perplexity should only be invoked when the user explicitly mentions pay.sh / x402 / "pay for" OR explicitly names perplexity ("use perplexity to...")
+- **User hasn't asked for paid search** — per BAT-704 opt-in, perplexity (like any paysh-catalog service) is invoked ONLY when the user's message contains an explicit pay-intent keyword from SKILL.md's opt-in list (`pay.sh` / `paysh` / `x402` / `pay for X` / `use pay` / `use <service> to pay` / etc.). Naming "perplexity" alone is NOT sufficient — the user could be asking about the company conceptually, or referring to the perplexity provider option in their AI provider config. The pay-intent keyword is what authorizes a USDC charge.
 - **Realtime data** — perplexity's training/index may lag; for prices, scores, on-chain stats, use the dedicated tools (solana_price, etc.)
 - **Sensitive queries** — if the user asks the agent to research a person, treat that with the same PII scoping as stableenrich (BAT-772) — the response could contain unverified personal info
 
