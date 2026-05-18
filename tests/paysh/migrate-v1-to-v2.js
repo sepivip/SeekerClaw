@@ -8,7 +8,7 @@
  *   - app/src/main/assets/default-skills/paysh-catalog/catalog.json (v1)
  *   - app/src/main/assets/default-skills/paysh-catalog/unsupported.json (v1)
  *   - tests/paysh/captures/catalog/*.json (per-service 402 captures)
- *   - tests/paysh/captures/textbelt-text-402.json (textbelt live-pay capture)
+ *   - tests/paysh/captures/textbelt-text-402.json (textbelt 402 challenge capture)
  *   - tests/paysh/catalog-audit.md (BAT-706 full-audit parsed_ok table for audit_pending)
  *
  * Writes (after validation per paysh-catalog/SCHEMA.md):
@@ -226,11 +226,13 @@ function buildCatalogEntry(v1Entry) {
 
     let operator, slug, pay_md_path, service_url, endpointPath, endpointMethod;
     if (captureName === '__TEXTBELT_402__') {
-        // R4-4: derive URL+method from the textbelt capture (live-pay 200
-        // response). The capture already records the canonical paid POST URL.
-        // Pre-fix hardcoded the URL string here — duplicating the capture's url
-        // field meant a future paysponge endpoint change wouldn't propagate to
-        // catalog.json without manual edits. Source of truth = capture.
+        // R4-4 + R6-2: derive URL+method from the textbelt 402 challenge capture
+        // (status=402, payment-required header present). Pre-R6-2 we used the
+        // v2-success fixture (status=200) which violated the SCHEMA.md rule
+        // that catalog probe_status=parsed_ok requires a 402 challenge capture.
+        // R6-2 switched TEXTBELT_CAPTURE to the proper 402 fixture and renamed
+        // the sentinel from __TEXTBELT__ → __TEXTBELT_402__ for clarity. The
+        // capture already records the canonical paid POST URL — source of truth.
         operator = 'paysponge';
         slug = 'textbelt';
         pay_md_path = 'providers/paysponge/textbelt/PAY.md';
