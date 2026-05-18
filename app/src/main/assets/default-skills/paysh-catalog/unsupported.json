@@ -1,8 +1,8 @@
 {
   "version": 2,
-  "generated_at": "2026-05-16T17:51:08.251Z",
+  "generated_at": "2026-05-18T09:51:59.870Z",
   "manifest_checked_at": "2026-05-16T17:51:08.251Z",
-  "source": "BAT-761 migration from v1 (BAT-699 → PR #378 R10) + BAT-706 audit_pending population",
+  "source": "BAT-761 migration from v1 (BAT-699 → PR #378 R10) + BAT-706 audit_pending population + BAT-769 partial promotion (perplexity /search, /v1/agent)",
   "reasons": {
     "mpp_protocol": {
       "label": "Multi-Party Protocol (MPP)",
@@ -255,20 +255,8 @@
         "last_captured_at": null,
         "probe_status": "http_200"
       },
-      "note": "Catalog-listed endpoint returned http_200 at 2026-05-14 probe — non-402, agent_pay can't settle that URL. BAT-706 audit (2026-05-15, --audit-side-effects) discovered 3 SIBLING endpoints on the same host that DO return parseable Solana-USDC 402 challenges: /search ($0.01), /v1/agent ($0.01), /v1/async/sonar ($0.01). See tests/paysh/catalog-audit.md for the parsed_ok evidence. These are payable today but NOT yet catalogued — they need per-endpoint description (request body shape, response shape verification) before catalog inclusion. Deferred to BAT-708. Until then, the agent should tell users that perplexity is listed upstream and the catalog URL itself doesn't pay, but BAT-708 will add searchable Perplexity endpoints to the catalog.",
+      "note": "Catalog-listed endpoint returned http_200 at 2026-05-14 probe — non-402, agent_pay can't settle that URL. BAT-706 audit (2026-05-15, --audit-side-effects) discovered 3 SIBLING endpoints on the same host that DO return parseable Solana-USDC 402 challenges: /search ($0.01), /v1/agent ($0.01), /v1/async/sonar ($0.01). See tests/paysh/catalog-audit.md for the parsed_ok evidence. Of these, /search and /v1/agent were catalogued in BAT-769 (PR #380); /v1/async/sonar remains in audit_pending pending an async-fetch pattern. — they need per-endpoint description (request body shape, response shape verification) before catalog inclusion. Deferred to BAT-708. Until then, the agent should tell users that perplexity is listed upstream and the catalog URL itself doesn't pay, but BAT-708 will add searchable Perplexity endpoints to the catalog.",
       "audit_pending": [
-        {
-          "method": "POST",
-          "path": "/search",
-          "cost_usdc": 0.01,
-          "deferred_to": "BAT-769"
-        },
-        {
-          "method": "POST",
-          "path": "/v1/agent",
-          "cost_usdc": 0.01,
-          "deferred_to": "BAT-769"
-        },
         {
           "method": "POST",
           "path": "/v1/async/sonar",

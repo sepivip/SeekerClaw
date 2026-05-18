@@ -1,0 +1,270 @@
+{
+  "_meta": {
+    "label": "paysponge-perplexity-search-402",
+    "capturedAt": "2026-05-18T09:49:54.264Z",
+    "source": "BAT-769 manual probe (pre-catalog-entry)",
+    "payMdPath": "providers/paysponge/perplexity/PAY.md",
+    "note": "Captured to support v2 catalog entry perplexity-search in BAT-769."
+  },
+  "url": "https://pplx.x402.paysponge.com/search",
+  "method": "POST",
+  "status": 402,
+  "headers": {
+    "date": "Mon, 18 May 2026 09:49:54 GMT",
+    "content-type": "application/json",
+    "transfer-encoding": "chunked",
+    "connection": "keep-alive",
+    "access-control-allow-credentials": "true",
+    "payment-required": "eyJ4NDAyVmVyc2lvbiI6MiwiZXJyb3IiOiJQYXltZW50IHJlcXVpcmVkIiwicmVzb3VyY2UiOnsidXJsIjoiaHR0cHM6Ly9wcGx4Lng0MDIucGF5c3BvbmdlLmNvbS9zZWFyY2giLCJkZXNjcmlwdGlvbiI6IlNlcnZpY2U6IFBlcnBsZXhpdHkgKGh0dHBzOi8vcHBseC54NDAyLnBheXNwb25nZS5jb20vc2VhcmNoKSIsIm1pbWVUeXBlIjoiYXBwbGljYXRpb24vanNvbiJ9LCJhY2NlcHRzIjpbeyJzY2hlbWUiOiJleGFjdCIsIm5ldHdvcmsiOiJlaXAxNTU6ODQ1MyIsImFtb3VudCI6IjEwMDAwIiwiYXNzZXQiOiIweDgzMzU4OWZDRDZlRGI2RTA4ZjRjN0MzMkQ0ZjcxYjU0YmRBMDI5MTMiLCJwYXlUbyI6IjB4NjMwMkQ5ZTZEQkIyMmZFQzNjMzUwNTUxNTY4QmIzOUI0YjM1QWQ1NyIsIm1heFRpbWVvdXRTZWNvbmRzIjozMDAsImV4dHJhIjp7Im5hbWUiOiJVU0QgQ29pbiIsInZlcnNpb24iOiIyIn19LHsic2NoZW1lIjoiZXhhY3QiLCJuZXR3b3JrIjoic29sYW5hOjVleWt0NFVzRnY4UDhOSmRUUkVwWTF2enFLcVpLdmRwIiwiYW1vdW50IjoiMTAwMDAiLCJhc3NldCI6IkVQakZXZGQ1QXVmcVNTcWVNMnFOMXh6eWJhcEM4RzR3RUdHa1p3eVREdDF2IiwicGF5VG8iOiI5MjQ2WHJzQUVLSDZoQXlFUWU1UHZkcFVMMXA1S3RqOWM3eVNud1FuNm9pcyIsIm1heFRpbWVvdXRTZWNvbmRzIjozMDAsImV4dHJhIjp7ImZlZVBheWVyIjoiMndLdXBMUjlxNndYWXBwdzhHcjJOdld4S0JVcW00UFBKS2tRZm94SERCZzQifX1dLCJleHRlbnNpb25zIjp7ImJhemFhciI6eyJpbmZvIjp7ImlucHV0Ijp7InR5cGUiOiJodHRwIiwibWV0aG9kIjoiUE9TVCIsImJvZHlUeXBlIjoianNvbiIsImJvZHkiOnsicXVlcnkiOiI8cXVlcnk+IiwiY291bnRyeSI6Ijxjb3VudHJ5PiIsIm1heF90b2tlbnMiOiI8bWF4X3Rva2Vucz4iLCJtYXhfcmVzdWx0cyI6IjxtYXhfcmVzdWx0cz4iLCJtYXhfdG9rZW5zX3Blcl9wYWdlIjoiPG1heF90b2tlbnNfcGVyX3BhZ2U+Iiwic2VhcmNoX2xhbmd1YWdlX2ZpbHRlciI6IjxzZWFyY2hfbGFuZ3VhZ2VfZmlsdGVyPiIsInNlYXJjaF9kb21haW5fZmlsdGVyIjoiPHNlYXJjaF9kb21haW5fZmlsdGVyPiIsInNlYXJjaF9yZWNlbmN5X2ZpbHRlciI6IjxzZWFyY2hfcmVjZW5jeV9maWx0ZXI+Iiwic2VhcmNoX2FmdGVyX2RhdGVfZmlsdGVyIjoiPHNlYXJjaF9hZnRlcl9kYXRlX2ZpbHRlcj4iLCJsYXN0X3VwZGF0ZWRfYWZ0ZXJfZmlsdGVyIjoiPGxhc3RfdXBkYXRlZF9hZnRlcl9maWx0ZXI+Iiwic2VhcmNoX2JlZm9yZV9kYXRlX2ZpbHRlciI6IjxzZWFyY2hfYmVmb3JlX2RhdGVfZmlsdGVyPiIsImxhc3RfdXBkYXRlZF9iZWZvcmVfZmlsdGVyIjoiPGxhc3RfdXBkYXRlZF9iZWZvcmVfZmlsdGVyPiJ9fSwib3V0cHV0Ijp7InR5cGUiOiJqc29uIiwiZXhhbXBsZSI6e319fSwic2NoZW1hIjp7IiRzY2hlbWEiOiJodHRwczovL2pzb24tc2NoZW1hLm9yZy9kcmFmdC8yMDIwLTEyL3NjaGVtYSIsInR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7ImlucHV0Ijp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7InR5cGUiOnsidHlwZSI6InN0cmluZyIsImNvbnN0IjoiaHR0cCJ9LCJtZXRob2QiOnsidHlwZSI6InN0cmluZyIsImVudW0iOlsiUE9TVCIsIlBVVCIsIlBBVENIIl19LCJib2R5VHlwZSI6eyJ0eXBlIjoic3RyaW5nIiwiZW51bSI6WyJqc29uIiwiZm9ybS1kYXRhIiwidGV4dCJdfSwiYm9keSI6eyJ0eXBlIjoib2JqZWN0IiwiYWxsT2YiOlt7InR5cGUiOiJvYmplY3QiLCJyZXF1aXJlZCI6WyJxdWVyeSJdLCJwcm9wZXJ0aWVzIjp7InF1ZXJ5Ijp7ImFueU9mIjpbeyJ0eXBlIjoic3RyaW5nIn0seyJ0eXBlIjoiYXJyYXkiLCJpdGVtcyI6eyJ0eXBlIjoic3RyaW5nIn19XSwidGl0bGUiOiJRdWVyeSIsImRlc2NyaXB0aW9uIjoiU2VhcmNoIHF1ZXJ5IChyZXF1aXJlZCkifSwiY291bnRyeSI6eyJ0eXBlIjoic3RyaW5nIiwibWF4TGVuZ3RoIjoyLCJtaW5MZW5ndGgiOjIsImRlc2NyaXB0aW9uIjoiSVNPIDMxNjYtMSBhbHBoYS0yIGNvdW50cnkgY29kZSJ9LCJtYXhfdG9rZW5zIjp7InR5cGUiOiJpbnRlZ2VyIiwiZGVmYXVsdCI6MTAwMDAsIm1heGltdW0iOjEwMDAwMDAsIm1pbmltdW0iOjEsImRlc2NyaXB0aW9uIjoiTWF4aW11bSB0b2tlbnMgZm9yIGNvbnRleHQifSwibWF4X3Jlc3VsdHMiOnsidHlwZSI6ImludGVnZXIiLCJkZWZhdWx0IjoxMCwibWF4aW11bSI6MjAsIm1pbmltdW0iOjEsImRlc2NyaXB0aW9uIjoiTWF4aW11bSBudW1iZXIgb2YgcmVzdWx0cyB0byByZXR1cm4ifSwibWF4X3Rva2Vuc19wZXJfcGFnZSI6eyJ0eXBlIjoiaW50ZWdlciIsImRlZmF1bHQiOjQwOTYsIm1heGltdW0iOjEwMDAwMDAsIm1pbmltdW0iOjEsImRlc2NyaXB0aW9uIjoiTWF4aW11bSB0b2tlbnMgcGVyIHBhZ2UifSwic2VhcmNoX2xhbmd1YWdlX2ZpbHRlciI6eyJ0eXBlIjoiYXJyYXkiLCJpdGVtcyI6eyJ0eXBlIjoic3RyaW5nIiwibWF4TGVuZ3RoIjoyLCJtaW5MZW5ndGgiOjJ9LCJtYXhJdGVtcyI6MjAsImRlc2NyaXB0aW9uIjoiSVNPIDYzOS0xIGxhbmd1YWdlIGNvZGVzICgyLWNoYXJhY3RlciBtYXgpIn19fSx7InR5cGUiOiJvYmplY3QiLCJ0aXRsZSI6IlNlYXJjaERvbWFpbkZpbHRlciIsInByb3BlcnRpZXMiOnsic2VhcmNoX2RvbWFpbl9maWx0ZXIiOnsidHlwZSI6ImFycmF5IiwiaXRlbXMiOnsidHlwZSI6InN0cmluZyIsIm1heExlbmd0aCI6MjUzfSwibWF4SXRlbXMiOjIwLCJkZXNjcmlwdGlvbiI6IkxpbWl0IHNlYXJjaCByZXN1bHRzIHRvIHNwZWNpZmljIGRvbWFpbnMgKG1heCAyMCkifX19LHsidHlwZSI6Im9iamVjdCIsInRpdGxlIjoiRGF0ZUZpbHRlcnMiLCJwcm9wZXJ0aWVzIjp7InNlYXJjaF9yZWNlbmN5X2ZpbHRlciI6eyJlbnVtIjpbImhvdXIiLCJkYXkiLCJ3ZWVrIiwibW9udGgiLCJ5ZWFyIl0sInR5cGUiOiJzdHJpbmciLCJ0aXRsZSI6IlNlYXJjaFJlY2VuY3lGaWx0ZXIiLCJkZXNjcmlwdGlvbiI6IkZpbHRlciBieSBwdWJsaWNhdGlvbiByZWNlbmN5IChob3VyL2RheS93ZWVrL21vbnRoL3llYXIpIn0sInNlYXJjaF9hZnRlcl9kYXRlX2ZpbHRlciI6eyJ0eXBlIjoic3RyaW5nIiwidGl0bGUiOiJEYXRlIiwiZGVzY3JpcHRpb24iOiJSZXR1cm4gcmVzdWx0cyBwdWJsaXNoZWQgYWZ0ZXIgdGhpcyBkYXRlIChNTS9ERC9ZWVlZKSJ9LCJsYXN0X3VwZGF0ZWRfYWZ0ZXJfZmlsdGVyIjp7InR5cGUiOiJzdHJpbmciLCJ0aXRsZSI6IkRhdGUiLCJkZXNjcmlwdGlvbiI6IlJldHVybiByZXN1bHRzIHVwZGF0ZWQgYWZ0ZXIgdGhpcyBkYXRlIChNTS9ERC9ZWVlZKSJ9LCJzZWFyY2hfYmVmb3JlX2RhdGVfZmlsdGVyIjp7InR5cGUiOiJzdHJpbmciLCJ0aXRsZSI6IkRhdGUiLCJkZXNjcmlwdGlvbiI6IlJldHVybiByZXN1bHRzIHB1Ymxpc2hlZCBiZWZvcmUgdGhpcyBkYXRlIChNTS9ERC9ZWVlZKSJ9LCJsYXN0X3VwZGF0ZWRfYmVmb3JlX2ZpbHRlciI6eyJ0eXBlIjoic3RyaW5nIiwidGl0bGUiOiJEYXRlIiwiZGVzY3JpcHRpb24iOiJSZXR1cm4gcmVzdWx0cyB1cGRhdGVkIGJlZm9yZSB0aGlzIGRhdGUgKE1NL0REL1lZWVkpIn19fV0sInRpdGxlIjoiQXBpU2VhcmNoUmVxdWVzdCJ9fSwicmVxdWlyZWQiOlsidHlwZSIsIm1ldGhvZCIsImJvZHlUeXBlIiwiYm9keSJdLCJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2V9LCJvdXRwdXQiOnsidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnsidHlwZSI6eyJ0eXBlIjoic3RyaW5nIiwiY29uc3QiOiJqc29uIn0sImV4YW1wbGUiOnsidHlwZSI6Im9iamVjdCIsImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjp0cnVlfX0sInJlcXVpcmVkIjpbInR5cGUiXSwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlfX0sInJlcXVpcmVkIjpbImlucHV0Il0sImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjpmYWxzZX19fX0=",
+    "rndr-id": "e5287c3b-7e56-4b97",
+    "server": "cloudflare",
+    "vary": "Origin, Accept-Encoding",
+    "x-render-origin-server": "Render",
+    "cf-cache-status": "DYNAMIC",
+    "report-to": "{\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=G6aU1YrbPZJPuD%2BdSoFFkH40QXOFTiNBPZk2RIGa%2FZGGAGnxisNt%2F%2B8E17AkUfutboDT4ZGLy1Qq0%2B2Z5PdKctCRY2IKiwF7i%2FcCOmf45IWbt%2BID%2FtY0Baukh3HW%2Fsf1sBEmBLztuDHUgg%3D%3D\"}]}",
+    "nel": "{\"report_to\":\"cf-nel\",\"success_fraction\":0.0,\"max_age\":604800}",
+    "cf-ray": "9fd9f45f583cd0fd-SOF",
+    "alt-svc": "h3=\":443\"; ma=86400"
+  },
+  "body": {
+    "x402Version": 2,
+    "error": "Payment required",
+    "resource": {
+      "url": "https://pplx.x402.paysponge.com/search",
+      "description": "Service: Perplexity (https://pplx.x402.paysponge.com/search)",
+      "mimeType": "application/json"
+    },
+    "accepts": [
+      {
+        "scheme": "exact",
+        "network": "eip155:8453",
+        "amount": "10000",
+        "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "payTo": "0x6302D9e6DBB22fEC3c350551568Bb39B4b35Ad57",
+        "maxTimeoutSeconds": 300,
+        "extra": {
+          "name": "USD Coin",
+          "version": "2"
+        }
+      },
+      {
+        "scheme": "exact",
+        "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        "amount": "10000",
+        "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "payTo": "9246XrsAEKH6hAyEQe5PvdpUL1p5Ktj9c7ySnwQn6ois",
+        "maxTimeoutSeconds": 300,
+        "extra": {
+          "feePayer": "2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4"
+        }
+      }
+    ],
+    "extensions": {
+      "bazaar": {
+        "info": {
+          "input": {
+            "type": "http",
+            "method": "POST",
+            "bodyType": "json",
+            "body": {
+              "query": "<query>",
+              "country": "<country>",
+              "max_tokens": "<max_tokens>",
+              "max_results": "<max_results>",
+              "max_tokens_per_page": "<max_tokens_per_page>",
+              "search_language_filter": "<search_language_filter>",
+              "search_domain_filter": "<search_domain_filter>",
+              "search_recency_filter": "<search_recency_filter>",
+              "search_after_date_filter": "<search_after_date_filter>",
+              "last_updated_after_filter": "<last_updated_after_filter>",
+              "search_before_date_filter": "<search_before_date_filter>",
+              "last_updated_before_filter": "<last_updated_before_filter>"
+            }
+          },
+          "output": {
+            "type": "json",
+            "example": {}
+          }
+        },
+        "schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object",
+          "properties": {
+            "input": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "http"
+                },
+                "method": {
+                  "type": "string",
+                  "enum": [
+                    "POST",
+                    "PUT",
+                    "PATCH"
+                  ]
+                },
+                "bodyType": {
+                  "type": "string",
+                  "enum": [
+                    "json",
+                    "form-data",
+                    "text"
+                  ]
+                },
+                "body": {
+                  "type": "object",
+                  "allOf": [
+                    {
+                      "type": "object",
+                      "required": [
+                        "query"
+                      ],
+                      "properties": {
+                        "query": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          ],
+                          "title": "Query",
+                          "description": "Search query (required)"
+                        },
+                        "country": {
+                          "type": "string",
+                          "maxLength": 2,
+                          "minLength": 2,
+                          "description": "ISO 3166-1 alpha-2 country code"
+                        },
+                        "max_tokens": {
+                          "type": "integer",
+                          "default": 10000,
+                          "maximum": 1000000,
+                          "minimum": 1,
+                          "description": "Maximum tokens for context"
+                        },
+                        "max_results": {
+                          "type": "integer",
+                          "default": 10,
+                          "maximum": 20,
+                          "minimum": 1,
+                          "description": "Maximum number of results to return"
+                        },
+                        "max_tokens_per_page": {
+                          "type": "integer",
+                          "default": 4096,
+                          "maximum": 1000000,
+                          "minimum": 1,
+                          "description": "Maximum tokens per page"
+                        },
+                        "search_language_filter": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "maxLength": 2,
+                            "minLength": 2
+                          },
+                          "maxItems": 20,
+                          "description": "ISO 639-1 language codes (2-character max)"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "title": "SearchDomainFilter",
+                      "properties": {
+                        "search_domain_filter": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "maxLength": 253
+                          },
+                          "maxItems": 20,
+                          "description": "Limit search results to specific domains (max 20)"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "title": "DateFilters",
+                      "properties": {
+                        "search_recency_filter": {
+                          "enum": [
+                            "hour",
+                            "day",
+                            "week",
+                            "month",
+                            "year"
+                          ],
+                          "type": "string",
+                          "title": "SearchRecencyFilter",
+                          "description": "Filter by publication recency (hour/day/week/month/year)"
+                        },
+                        "search_after_date_filter": {
+                          "type": "string",
+                          "title": "Date",
+                          "description": "Return results published after this date (MM/DD/YYYY)"
+                        },
+                        "last_updated_after_filter": {
+                          "type": "string",
+                          "title": "Date",
+                          "description": "Return results updated after this date (MM/DD/YYYY)"
+                        },
+                        "search_before_date_filter": {
+                          "type": "string",
+                          "title": "Date",
+                          "description": "Return results published before this date (MM/DD/YYYY)"
+                        },
+                        "last_updated_before_filter": {
+                          "type": "string",
+                          "title": "Date",
+                          "description": "Return results updated before this date (MM/DD/YYYY)"
+                        }
+                      }
+                    }
+                  ],
+                  "title": "ApiSearchRequest"
+                }
+              },
+              "required": [
+                "type",
+                "method",
+                "bodyType",
+                "body"
+              ],
+              "additionalProperties": false
+            },
+            "output": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "json"
+                },
+                "example": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "input"
+          ],
+          "additionalProperties": false
+        }
+      }
+    }
+  }
+}

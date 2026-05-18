@@ -1,0 +1,588 @@
+{
+  "_meta": {
+    "label": "paysponge-perplexity-v1_agent-402",
+    "capturedAt": "2026-05-18T09:49:54.264Z",
+    "source": "BAT-769 manual probe (pre-catalog-entry)",
+    "payMdPath": "providers/paysponge/perplexity/PAY.md",
+    "note": "Captured to support v2 catalog entry perplexity-agent in BAT-769."
+  },
+  "url": "https://pplx.x402.paysponge.com/v1/agent",
+  "method": "POST",
+  "status": 402,
+  "headers": {
+    "date": "Mon, 18 May 2026 09:49:54 GMT",
+    "content-type": "application/json",
+    "transfer-encoding": "chunked",
+    "connection": "keep-alive",
+    "access-control-allow-credentials": "true",
+    "payment-required": "eyJ4NDAyVmVyc2lvbiI6MiwiZXJyb3IiOiJQYXltZW50IHJlcXVpcmVkIiwicmVzb3VyY2UiOnsidXJsIjoiaHR0cHM6Ly9wcGx4Lng0MDIucGF5c3BvbmdlLmNvbS92MS9hZ2VudCIsImRlc2NyaXB0aW9uIjoiU2VydmljZTogUGVycGxleGl0eSAoaHR0cHM6Ly9wcGx4Lng0MDIucGF5c3BvbmdlLmNvbS92MS9hZ2VudCkiLCJtaW1lVHlwZSI6ImFwcGxpY2F0aW9uL2pzb24ifSwiYWNjZXB0cyI6W3sic2NoZW1lIjoiZXhhY3QiLCJuZXR3b3JrIjoiZWlwMTU1Ojg0NTMiLCJhbW91bnQiOiIxMDAwMCIsImFzc2V0IjoiMHg4MzM1ODlmQ0Q2ZURiNkUwOGY0YzdDMzJENGY3MWI1NGJkQTAyOTEzIiwicGF5VG8iOiIweDYzMDJEOWU2REJCMjJmRUMzYzM1MDU1MTU2OEJiMzlCNGIzNUFkNTciLCJtYXhUaW1lb3V0U2Vjb25kcyI6MzAwLCJleHRyYSI6eyJuYW1lIjoiVVNEIENvaW4iLCJ2ZXJzaW9uIjoiMiJ9fSx7InNjaGVtZSI6ImV4YWN0IiwibmV0d29yayI6InNvbGFuYTo1ZXlrdDRVc0Z2OFA4TkpkVFJFcFkxdnpxS3FaS3ZkcCIsImFtb3VudCI6IjEwMDAwIiwiYXNzZXQiOiJFUGpGV2RkNUF1ZnFTU3FlTTJxTjF4enliYXBDOEc0d0VHR2tad3lURHQxdiIsInBheVRvIjoiOTI0Nlhyc0FFS0g2aEF5RVFlNVB2ZHBVTDFwNUt0ajljN3lTbndRbjZvaXMiLCJtYXhUaW1lb3V0U2Vjb25kcyI6MzAwLCJleHRyYSI6eyJmZWVQYXllciI6IjJ3S3VwTFI5cTZ3WFlwcHc4R3IyTnZXeEtCVXFtNFBQSktrUWZveEhEQmc0In19XSwiZXh0ZW5zaW9ucyI6eyJiYXphYXIiOnsiaW5mbyI6eyJpbnB1dCI6eyJ0eXBlIjoiaHR0cCIsIm1ldGhvZCI6IlBPU1QiLCJib2R5VHlwZSI6Impzb24iLCJib2R5Ijp7ImlucHV0IjoiPGlucHV0PiIsIm1vZGVsIjoiPG1vZGVsPiIsInRvb2xzIjoiPHRvb2xzPiIsIm1vZGVscyI6Ijxtb2RlbHM+IiwicHJlc2V0IjoiPHByZXNldD4iLCJzdHJlYW0iOiI8c3RyZWFtPiIsIm1heF9zdGVwcyI6IjxtYXhfc3RlcHM+IiwicmVhc29uaW5nIjoiPHJlYXNvbmluZz4iLCJpbnN0cnVjdGlvbnMiOiI8aW5zdHJ1Y3Rpb25zPiIsInJlc3BvbnNlX2Zvcm1hdCI6IjxyZXNwb25zZV9mb3JtYXQ+IiwibWF4X291dHB1dF90b2tlbnMiOiI8bWF4X291dHB1dF90b2tlbnM+IiwibGFuZ3VhZ2VfcHJlZmVyZW5jZSI6IjxsYW5ndWFnZV9wcmVmZXJlbmNlPiJ9fSwib3V0cHV0Ijp7InR5cGUiOiJqc29uIiwiZXhhbXBsZSI6e319fSwic2NoZW1hIjp7IiRzY2hlbWEiOiJodHRwczovL2pzb24tc2NoZW1hLm9yZy9kcmFmdC8yMDIwLTEyL3NjaGVtYSIsInR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7ImlucHV0Ijp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7InR5cGUiOnsidHlwZSI6InN0cmluZyIsImNvbnN0IjoiaHR0cCJ9LCJtZXRob2QiOnsidHlwZSI6InN0cmluZyIsImVudW0iOlsiUE9TVCIsIlBVVCIsIlBBVENIIl19LCJib2R5VHlwZSI6eyJ0eXBlIjoic3RyaW5nIiwiZW51bSI6WyJqc29uIiwiZm9ybS1kYXRhIiwidGV4dCJdfSwiYm9keSI6eyJ0eXBlIjoib2JqZWN0IiwidGl0bGUiOiJSZXNwb25zZXNSZXF1ZXN0IiwicmVxdWlyZWQiOlsiaW5wdXQiXSwicHJvcGVydGllcyI6eyJpbnB1dCI6eyJvbmVPZiI6W3sidHlwZSI6InN0cmluZyIsInRpdGxlIjoiU3RyaW5nSW5wdXQifSx7InR5cGUiOiJhcnJheSIsIml0ZW1zIjp7Im9uZU9mIjpbeyJ0eXBlIjoib2JqZWN0IiwidGl0bGUiOiJJbnB1dE1lc3NhZ2UiLCJyZXF1aXJlZCI6WyJ0eXBlIiwicm9sZSIsImNvbnRlbnQiXSwicHJvcGVydGllcyI6eyJyb2xlIjp7ImVudW0iOlsidXNlciIsImFzc2lzdGFudCIsInN5c3RlbSIsImRldmVsb3BlciJdLCJ0eXBlIjoic3RyaW5nIn0sInR5cGUiOnsiZW51bSI6WyJtZXNzYWdlIl0sInR5cGUiOiJzdHJpbmcifSwiY29udGVudCI6eyJvbmVPZiI6W3sidHlwZSI6InN0cmluZyIsInRpdGxlIjoiU3RyaW5nQ29udGVudCJ9LHsidHlwZSI6ImFycmF5IiwiaXRlbXMiOnsiJHJlZiI6IiMvY29tcG9uZW50cy9zY2hlbWFzL0lucHV0Q29udGVudFBhcnQifSwidGl0bGUiOiJDb250ZW50UGFydEFycmF5In1dLCJ0aXRsZSI6IklucHV0Q29udGVudCIsImRlc2NyaXB0aW9uIjoiTWVzc2FnZSBjb250ZW50IC0gZWl0aGVyIGEgc3RyaW5nIG9yIGFycmF5IG9mIGNvbnRlbnQgcGFydHMifX19LHsidHlwZSI6Im9iamVjdCIsInRpdGxlIjoiRnVuY3Rpb25DYWxsT3V0cHV0SW5wdXQiLCJyZXF1aXJlZCI6WyJ0eXBlIiwiY2FsbF9pZCIsIm91dHB1dCJdLCJwcm9wZXJ0aWVzIjp7Im5hbWUiOnsidHlwZSI6InN0cmluZyIsImRlc2NyaXB0aW9uIjoiRnVuY3Rpb24gbmFtZSAocmVxdWlyZWQgYnkgc29tZSBwcm92aWRlcnMpIn0sInR5cGUiOnsiZW51bSI6WyJmdW5jdGlvbl9jYWxsX291dHB1dCJdLCJ0eXBlIjoic3RyaW5nIn0sIm91dHB1dCI6eyJ0eXBlIjoic3RyaW5nIiwiZGVzY3JpcHRpb24iOiJGdW5jdGlvbiByZXN1bHQgKEpTT04gc3RyaW5nKSJ9LCJjYWxsX2lkIjp7InR5cGUiOiJzdHJpbmciLCJkZXNjcmlwdGlvbiI6IlRoZSBjYWxsX2lkIGZyb20gZnVuY3Rpb25fY2FsbCBvdXRwdXQifSwidGhvdWdodF9zaWduYXR1cmUiOnsidHlwZSI6InN0cmluZyIsImRlc2NyaXB0aW9uIjoiQmFzZTY0LWVuY29kZWQgc2lnbmF0dXJlIGZyb20gZnVuY3Rpb25fY2FsbCJ9fX0seyJ0eXBlIjoib2JqZWN0IiwidGl0bGUiOiJGdW5jdGlvbkNhbGxJbnB1dCIsInJlcXVpcmVkIjpbInR5cGUiLCJjYWxsX2lkIiwibmFtZSIsImFyZ3VtZW50cyJdLCJwcm9wZXJ0aWVzIjp7Im5hbWUiOnsidHlwZSI6InN0cmluZyIsImRlc2NyaXB0aW9uIjoiVGhlIGZ1bmN0aW9uIG5hbWUifSwidHlwZSI6eyJlbnVtIjpbImZ1bmN0aW9uX2NhbGwiXSwidHlwZSI6InN0cmluZyJ9LCJjYWxsX2lkIjp7InR5cGUiOiJzdHJpbmciLCJkZXNjcmlwdGlvbiI6IlRoZSBjYWxsX2lkIHRoYXQgY29ycmVsYXRlcyB3aXRoIGZ1bmN0aW9uX2NhbGxfb3V0cHV0In0sImFyZ3VtZW50cyI6eyJ0eXBlIjoic3RyaW5nIiwiZGVzY3JpcHRpb24iOiJGdW5jdGlvbiBhcmd1bWVudHMgKEpTT04gc3RyaW5nKSJ9LCJ0aG91Z2h0X3NpZ25hdHVyZSI6eyJ0eXBlIjoic3RyaW5nIiwiZGVzY3JpcHRpb24iOiJCYXNlNjQtZW5jb2RlZCBzaWduYXR1cmUgZm9yIHRoaW5raW5nIG1vZGVscyJ9fX1dLCJ0aXRsZSI6IklucHV0SXRlbSIsImRpc2NyaW1pbmF0b3IiOnsibWFwcGluZyI6eyJtZXNzYWdlIjoiIy9jb21wb25lbnRzL3NjaGVtYXMvSW5wdXRNZXNzYWdlIiwiZnVuY3Rpb25fY2FsbCI6IiMvY29tcG9uZW50cy9zY2hlbWFzL0Z1bmN0aW9uQ2FsbElucHV0IiwiZnVuY3Rpb25fY2FsbF9vdXRwdXQiOiIjL2NvbXBvbmVudHMvc2NoZW1hcy9GdW5jdGlvbkNhbGxPdXRwdXRJbnB1dCJ9LCJwcm9wZXJ0eU5hbWUiOiJ0eXBlIn19LCJ0aXRsZSI6IklucHV0SXRlbUFycmF5In1dLCJ0aXRsZSI6IklucHV0IiwiZGVzY3JpcHRpb24iOiJJbnB1dCBjb250ZW50IC0gZWl0aGVyIGEgc3RyaW5nIG9yIGFycmF5IG9mIGlucHV0IGl0ZW1zIn0sIm1vZGVsIjp7InR5cGUiOiJzdHJpbmciLCJkZXNjcmlwdGlvbiI6Ik1vZGVsIElEIGluIHByb3ZpZGVyL21vZGVsIGZvcm1hdCAoZS5nLiwgXCJ4YWkvZ3Jvay00LTFcIiwgXCJvcGVuYWkvZ3B0LTRvXCIpLlxuSWYgbW9kZWxzIGlzIGFsc28gcHJvdmlkZWQsIG1vZGVscyB0YWtlcyBwcmVjZWRlbmNlLlxuUmVxdWlyZWQgaWYgbmVpdGhlciBtb2RlbHMgbm9yIHByZXNldCBpcyBwcm92aWRlZC5cbiJ9LCJ0b29scyI6eyJ0eXBlIjoiYXJyYXkiLCJpdGVtcyI6eyJvbmVPZiI6W3sidHlwZSI6Im9iamVjdCIsInRpdGxlIjoiV2ViU2VhcmNoVG9vbCIsInJlcXVpcmVkIjpbInR5cGUiXSwicHJvcGVydGllcyI6eyJ0eXBlIjp7ImVudW0iOlsid2ViX3NlYXJjaCJdLCJ0eXBlIjoic3RyaW5nIiwiZGVzY3JpcHRpb24iOiJUb29sIHR5cGUgaWRlbnRpZmllciJ9LCJmaWx0ZXJzIjp7ImFsbE9mIjpbeyJ0eXBlIjoib2JqZWN0IiwidGl0bGUiOiJTZWFyY2hEb21haW5GaWx0ZXIiLCJwcm9wZXJ0aWVzIjp7InNlYXJjaF9kb21haW5fZmlsdGVyIjp7InR5cGUiOiJhcnJheSIsIml0ZW1zIjp7InR5cGUiOiJzdHJpbmciLCJtYXhMZW5ndGgiOjI1M30sIm1heEl0ZW1zIjoyMCwiZGVzY3JpcHRpb24iOiJMaW1pdCBzZWFyY2ggcmVzdWx0cyB0byBzcGVjaWZpYyBkb21haW5zIChtYXggMjApIn19fSx7InR5cGUiOiJvYmplY3QiLCJ0aXRsZSI6IkRhdGVGaWx0ZXJzIiwicHJvcGVydGllcyI6eyJzZWFyY2hfcmVjZW5jeV9maWx0ZXIiOnsiZW51bSI6WyJob3VyIiwiZGF5Iiwid2VlayIsIm1vbnRoIiwieWVhciJdLCJ0eXBlIjoic3RyaW5nIiwidGl0bGUiOiJTZWFyY2hSZWNlbmN5RmlsdGVyIiwiZGVzY3JpcHRpb24iOiJGaWx0ZXIgYnkgcHVibGljYXRpb24gcmVjZW5jeSAoaG91ci9kYXkvd2Vlay9tb250aC95ZWFyKSJ9LCJzZWFyY2hfYWZ0ZXJfZGF0ZV9maWx0ZXIiOnsidHlwZSI6InN0cmluZyIsInRpdGxlIjoiRGF0ZSIsImRlc2NyaXB0aW9uIjoiUmV0dXJuIHJlc3VsdHMgcHVibGlzaGVkIGFmdGVyIHRoaXMgZGF0ZSAoTU0vREQvWVlZWSkifSwibGFzdF91cGRhdGVkX2FmdGVyX2ZpbHRlciI6eyJ0eXBlIjoic3RyaW5nIiwidGl0bGUiOiJEYXRlIiwiZGVzY3JpcHRpb24iOiJSZXR1cm4gcmVzdWx0cyB1cGRhdGVkIGFmdGVyIHRoaXMgZGF0ZSAoTU0vREQvWVlZWSkifSwic2VhcmNoX2JlZm9yZV9kYXRlX2ZpbHRlciI6eyJ0eXBlIjoic3RyaW5nIiwidGl0bGUiOiJEYXRlIiwiZGVzY3JpcHRpb24iOiJSZXR1cm4gcmVzdWx0cyBwdWJsaXNoZWQgYmVmb3JlIHRoaXMgZGF0ZSAoTU0vREQvWVlZWSkifSwibGFzdF91cGRhdGVkX2JlZm9yZV9maWx0ZXIiOnsidHlwZSI6InN0cmluZyIsInRpdGxlIjoiRGF0ZSIsImRlc2NyaXB0aW9uIjoiUmV0dXJuIHJlc3VsdHMgdXBkYXRlZCBiZWZvcmUgdGhpcyBkYXRlIChNTS9ERC9ZWVlZKSJ9fX1dLCJ0aXRsZSI6IldlYlNlYXJjaEZpbHRlcnMiLCJkZXNjcmlwdGlvbiI6IkRvbWFpbiBhbmQgZGF0ZSBmaWx0ZXJzIGZvciBzZWFyY2ggcmVzdWx0cyJ9LCJtYXhfdG9rZW5zIjp7InR5cGUiOiJpbnRlZ2VyIiwiZm9ybWF0IjoiaW50MzIiLCJkZXNjcmlwdGlvbiI6Ik1heGltdW0gdG90YWwgdG9rZW5zIGZvciBzZWFyY2ggY29udGV4dCJ9LCJ1c2VyX2xvY2F0aW9uIjp7InR5cGUiOiJvYmplY3QiLCJ0aXRsZSI6IlRvb2xVc2VyTG9jYXRpb24iLCJwcm9wZXJ0aWVzIjp7ImNpdHkiOnsidHlwZSI6InN0cmluZyIsImRlc2NyaXB0aW9uIjoiQ2l0eSBuYW1lIn0sInJlZ2lvbiI6eyJ0eXBlIjoic3RyaW5nIiwiZGVzY3JpcHRpb24iOiJTdGF0ZSBvciByZWdpb24gbmFtZSJ9LCJjb3VudHJ5Ijp7InR5cGUiOiJzdHJpbmciLCJkZXNjcmlwdGlvbiI6IklTTyAzMTY2LTEgYWxwaGEtMiBjb3VudHJ5IGNvZGUifSwibGF0aXR1ZGUiOnsidHlwZSI6Im51bWJlciIsImZvcm1hdCI6ImRvdWJsZSIsImRlc2NyaXB0aW9uIjoiTGF0aXR1ZGUgY29vcmRpbmF0ZSJ9LCJsb25naXR1ZGUiOnsidHlwZSI6Im51bWJlciIsImZvcm1hdCI6ImRvdWJsZSIsImRlc2NyaXB0aW9uIjoiTG9uZ2l0dWRlIGNvb3JkaW5hdGUifX0sImRlc2NyaXB0aW9uIjoiVXNlcidzIGxvY2F0aW9uIGZvciBzZWFyY2ggcGVyc29uYWxpemF0aW9uIn0sIm1heF90b2tlbnNfcGVyX3BhZ2UiOnsidHlwZSI6ImludGVnZXIiLCJmb3JtYXQiOiJpbnQzMiIsImRlc2NyaXB0aW9uIjoiTWF4aW11bSB0b2tlbnMgdG8gZXh0cmFjdCBwZXIgc2VhcmNoIHJlc3VsdCBwYWdlIn19LCJkZXNjcmlwdGlvbiI6IldlYiBzZWFyY2ggdG9vbCBjb25maWd1cmF0aW9uIGZvciB0aGUgUmVzcG9uc2VzIEFQSSJ9LHsidHlwZSI6Im9iamVjdCIsInRpdGxlIjoiRmV0Y2hVcmxUb29sIiwicmVxdWlyZWQiOlsidHlwZSJdLCJwcm9wZXJ0aWVzIjp7InR5cGUiOnsiZW51bSI6WyJmZXRjaF91cmwiXSwidHlwZSI6InN0cmluZyJ9LCJtYXhfdXJscyI6eyJ0eXBlIjoiaW50ZWdlciIsImZvcm1hdCI6ImludDMyIiwibWF4aW11bSI6MTAsIm1pbmltdW0iOjEsImRlc2NyaXB0aW9uIjoiTWF4aW11bSBudW1iZXIgb2YgVVJMcyB0byBmZXRjaCBwZXIgdG9vbCBjYWxsIn19fSx7InR5cGUiOiJvYmplY3QiLCJ0aXRsZSI6IkZ1bmN0aW9uVG9vbCIsInJlcXVpcmVkIjpbInR5cGUiLCJuYW1lIl0sInByb3BlcnRpZXMiOnsibmFtZSI6eyJ0eXBlIjoic3RyaW5nIiwiZGVzY3JpcHRpb24iOiJUaGUgbmFtZSBvZiB0aGUgZnVuY3Rpb24ifSwidHlwZSI6eyJlbnVtIjpbImZ1bmN0aW9uIl0sInR5cGUiOiJzdHJpbmcifSwic3RyaWN0Ijp7InR5cGUiOiJib29sZWFuIiwiZGVzY3JpcHRpb24iOiJXaGV0aGVyIHRvIGVuYWJsZSBzdHJpY3Qgc2NoZW1hIHZhbGlkYXRpb24ifSwicGFyYW1ldGVycyI6eyJ0eXBlIjoib2JqZWN0IiwiZGVzY3JpcHRpb24iOiJKU09OIFNjaGVtYSBkZWZpbmluZyB0aGUgZnVuY3Rpb24ncyBwYXJhbWV0ZXJzIiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOnRydWV9LCJkZXNjcmlwdGlvbiI6eyJ0eXBlIjoic3RyaW5nIiwiZGVzY3JpcHRpb24iOiJBIGRlc2NyaXB0aW9uIG9mIHdoYXQgdGhlIGZ1bmN0aW9uIGRvZXMifX19XSwidGl0bGUiOiJUb29sIiwiZGlzY3JpbWluYXRvciI6eyJtYXBwaW5nIjp7ImZ1bmN0aW9uIjoiIy9jb21wb25lbnRzL3NjaGVtYXMvRnVuY3Rpb25Ub29sIiwiZmV0Y2hfdXJsIjoiIy9jb21wb25lbnRzL3NjaGVtYXMvRmV0Y2hVcmxUb29sIiwid2ViX3NlYXJjaCI6IiMvY29tcG9uZW50cy9zY2hlbWFzL1dlYlNlYXJjaFRvb2wifSwicHJvcGVydHlOYW1lIjoidHlwZSJ9fSwiZGVzY3JpcHRpb24iOiJUb29scyBhdmFpbGFibGUgdG8gdGhlIG1vZGVsIn0sIm1vZGVscyI6eyJ0eXBlIjoiYXJyYXkiLCJpdGVtcyI6eyJ0eXBlIjoic3RyaW5nIn0sIm1heEl0ZW1zIjo1LCJtaW5JdGVtcyI6MSwiZGVzY3JpcHRpb24iOiJNb2RlbCBmYWxsYmFjayBjaGFpbi4gRWFjaCBtb2RlbCBpcyBpbiBwcm92aWRlci9tb2RlbCBmb3JtYXQuXG5Nb2RlbHMgYXJlIHRyaWVkIGluIG9yZGVyIHVudGlsIG9uZSBzdWNjZWVkcy5cbk1heCA1IG1vZGVscyBhbGxvd2VkLiBJZiBzZXQsIHRha2VzIHByZWNlZGVuY2Ugb3ZlciBzaW5nbGUgbW9kZWwgZmllbGQuXG5UaGUgcmVzcG9uc2UubW9kZWwgd2lsbCByZWZsZWN0IHRoZSBtb2RlbCB0aGF0IGFjdHVhbGx5IHN1Y2NlZWRlZC5cbiJ9LCJwcmVzZXQiOnsidHlwZSI6InN0cmluZyIsImRlc2NyaXB0aW9uIjoiUHJlc2V0IGNvbmZpZ3VyYXRpb24gbmFtZSAoZS5nLiwgXCJmYXN0LXNlYXJjaFwiLCBcInByby1zZWFyY2hcIiwgXCJkZWVwLXJlc2VhcmNoXCIpLlxuUHJlLWNvbmZpZ3VyZWQgbW9kZWwgd2l0aCBzeXN0ZW0gcHJvbXB0IGFuZCBzZWFyY2ggcGFyYW1ldGVycy5cblJlcXVpcmVkIGlmIG1vZGVsIGlzIG5vdCBwcm92aWRlZC5cbiJ9LCJzdHJlYW0iOnsidHlwZSI6ImJvb2xlYW4iLCJkZXNjcmlwdGlvbiI6IklmIHRydWUsIHJldHVybnMgU1NFIHN0cmVhbSBpbnN0ZWFkIG9mIEpTT04ifSwibWF4X3N0ZXBzIjp7InR5cGUiOiJpbnRlZ2VyIiwiZm9ybWF0IjoiaW50MzIiLCJtYXhpbXVtIjoxMCwibWluaW11bSI6MSwiZGVzY3JpcHRpb24iOiJNYXhpbXVtIG51bWJlciBvZiByZXNlYXJjaCBsb29wIHN0ZXBzLlxuSWYgcHJvdmlkZWQsIG92ZXJyaWRlcyB0aGUgcHJlc2V0J3MgbWF4X3N0ZXBzIHZhbHVlLlxuTXVzdCBiZSA+PSAxIGlmIHNwZWNpZmllZC4gTWF4aW11bSBhbGxvd2VkIGlzIDEwLlxuIn0sInJlYXNvbmluZyI6eyJ0eXBlIjoib2JqZWN0IiwidGl0bGUiOiJSZWFzb25pbmdDb25maWciLCJwcm9wZXJ0aWVzIjp7ImVmZm9ydCI6eyJlbnVtIjpbImxvdyIsIm1lZGl1bSIsImhpZ2giXSwidHlwZSI6InN0cmluZyIsImRlc2NyaXB0aW9uIjoiSG93IG11Y2ggZWZmb3J0IHRoZSBtb2RlbCBzaG91bGQgc3BlbmQgb24gcmVhc29uaW5nIn19fSwiaW5zdHJ1Y3Rpb25zIjp7InR5cGUiOiJzdHJpbmciLCJkZXNjcmlwdGlvbiI6IlN5c3RlbSBpbnN0cnVjdGlvbnMgZm9yIHRoZSBtb2RlbCJ9LCJyZXNwb25zZV9mb3JtYXQiOnsidHlwZSI6Im9iamVjdCIsInRpdGxlIjoiUmVzcG9uc2VGb3JtYXQiLCJyZXF1aXJlZCI6WyJ0eXBlIl0sInByb3BlcnRpZXMiOnsidHlwZSI6eyJlbnVtIjpbImpzb25fc2NoZW1hIl0sInR5cGUiOiJzdHJpbmciLCJkZXNjcmlwdGlvbiI6IlRoZSB0eXBlIG9mIHJlc3BvbnNlIGZvcm1hdCJ9LCJqc29uX3NjaGVtYSI6eyJ0eXBlIjoib2JqZWN0IiwidGl0bGUiOiJKU09OU2NoZW1hRm9ybWF0IiwicmVxdWlyZWQiOlsibmFtZSIsInNjaGVtYSJdLCJwcm9wZXJ0aWVzIjp7Im5hbWUiOnsidHlwZSI6InN0cmluZyIsIm1heExlbmd0aCI6NjQsIm1pbkxlbmd0aCI6MSwiZGVzY3JpcHRpb24iOiJOYW1lIG9mIHRoZSBzY2hlbWEgKDEtNjQgYWxwaGFudW1lcmljIGNoYXJzKSJ9LCJzY2hlbWEiOnsidHlwZSI6Im9iamVjdCIsImRlc2NyaXB0aW9uIjoiVGhlIEpTT04gc2NoZW1hIG9iamVjdCIsImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjp0cnVlfSwic3RyaWN0Ijp7InR5cGUiOiJib29sZWFuIiwiZGVzY3JpcHRpb24iOiJXaGV0aGVyIHRvIGVuZm9yY2Ugc3RyaWN0IHNjaGVtYSB2YWxpZGF0aW9uIn0sImRlc2NyaXB0aW9uIjp7InR5cGUiOiJzdHJpbmciLCJkZXNjcmlwdGlvbiI6Ik9wdGlvbmFsIGRlc2NyaXB0aW9uIG9mIHRoZSBzY2hlbWEifX0sImRlc2NyaXB0aW9uIjoiRGVmaW5lcyBhIEpTT04gc2NoZW1hIGZvciBzdHJ1Y3R1cmVkIG91dHB1dCB2YWxpZGF0aW9uIn19LCJkZXNjcmlwdGlvbiI6IlNwZWNpZmllcyB0aGUgZGVzaXJlZCBvdXRwdXQgZm9ybWF0IGZvciB0aGUgbW9kZWwgcmVzcG9uc2UifSwibWF4X291dHB1dF90b2tlbnMiOnsidHlwZSI6ImludGVnZXIiLCJmb3JtYXQiOiJpbnQzMiIsIm1pbmltdW0iOjEsImRlc2NyaXB0aW9uIjoiTWF4aW11bSB0b2tlbnMgdG8gZ2VuZXJhdGUifSwibGFuZ3VhZ2VfcHJlZmVyZW5jZSI6eyJ0eXBlIjoic3RyaW5nIiwiZGVzY3JpcHRpb24iOiJJU08gNjM5LTEgbGFuZ3VhZ2UgY29kZSBmb3IgcmVzcG9uc2UgbGFuZ3VhZ2UifX19fSwicmVxdWlyZWQiOlsidHlwZSIsIm1ldGhvZCIsImJvZHlUeXBlIiwiYm9keSJdLCJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2V9LCJvdXRwdXQiOnsidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnsidHlwZSI6eyJ0eXBlIjoic3RyaW5nIiwiY29uc3QiOiJqc29uIn0sImV4YW1wbGUiOnsidHlwZSI6Im9iamVjdCIsImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjp0cnVlfX0sInJlcXVpcmVkIjpbInR5cGUiXSwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlfX0sInJlcXVpcmVkIjpbImlucHV0Il0sImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjpmYWxzZX19fX0=",
+    "rndr-id": "3ee9533e-7a49-4811",
+    "server": "cloudflare",
+    "vary": "Origin, Accept-Encoding",
+    "x-render-origin-server": "Render",
+    "cf-cache-status": "DYNAMIC",
+    "report-to": "{\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=UdSQHxoNvBkBocIbGPhxPUQNOMdjJLb71XTSDSzzE9zhf7HnjjbIjpVjPsIaHmYPICLSAy2OyJ28tG3XfejJVU49XY6bchfVmLI4kBGlAlt2m6Iio6RWy9oaRnCM6Rioqecf3v%2F00VEKJQ%3D%3D\"}]}",
+    "nel": "{\"report_to\":\"cf-nel\",\"success_fraction\":0.0,\"max_age\":604800}",
+    "cf-ray": "9fd9f4613dcdd0fd-SOF",
+    "alt-svc": "h3=\":443\"; ma=86400"
+  },
+  "body": {
+    "x402Version": 2,
+    "error": "Payment required",
+    "resource": {
+      "url": "https://pplx.x402.paysponge.com/v1/agent",
+      "description": "Service: Perplexity (https://pplx.x402.paysponge.com/v1/agent)",
+      "mimeType": "application/json"
+    },
+    "accepts": [
+      {
+        "scheme": "exact",
+        "network": "eip155:8453",
+        "amount": "10000",
+        "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "payTo": "0x6302D9e6DBB22fEC3c350551568Bb39B4b35Ad57",
+        "maxTimeoutSeconds": 300,
+        "extra": {
+          "name": "USD Coin",
+          "version": "2"
+        }
+      },
+      {
+        "scheme": "exact",
+        "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        "amount": "10000",
+        "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "payTo": "9246XrsAEKH6hAyEQe5PvdpUL1p5Ktj9c7ySnwQn6ois",
+        "maxTimeoutSeconds": 300,
+        "extra": {
+          "feePayer": "2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4"
+        }
+      }
+    ],
+    "extensions": {
+      "bazaar": {
+        "info": {
+          "input": {
+            "type": "http",
+            "method": "POST",
+            "bodyType": "json",
+            "body": {
+              "input": "<input>",
+              "model": "<model>",
+              "tools": "<tools>",
+              "models": "<models>",
+              "preset": "<preset>",
+              "stream": "<stream>",
+              "max_steps": "<max_steps>",
+              "reasoning": "<reasoning>",
+              "instructions": "<instructions>",
+              "response_format": "<response_format>",
+              "max_output_tokens": "<max_output_tokens>",
+              "language_preference": "<language_preference>"
+            }
+          },
+          "output": {
+            "type": "json",
+            "example": {}
+          }
+        },
+        "schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object",
+          "properties": {
+            "input": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "http"
+                },
+                "method": {
+                  "type": "string",
+                  "enum": [
+                    "POST",
+                    "PUT",
+                    "PATCH"
+                  ]
+                },
+                "bodyType": {
+                  "type": "string",
+                  "enum": [
+                    "json",
+                    "form-data",
+                    "text"
+                  ]
+                },
+                "body": {
+                  "type": "object",
+                  "title": "ResponsesRequest",
+                  "required": [
+                    "input"
+                  ],
+                  "properties": {
+                    "input": {
+                      "oneOf": [
+                        {
+                          "type": "string",
+                          "title": "StringInput"
+                        },
+                        {
+                          "type": "array",
+                          "items": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "title": "InputMessage",
+                                "required": [
+                                  "type",
+                                  "role",
+                                  "content"
+                                ],
+                                "properties": {
+                                  "role": {
+                                    "enum": [
+                                      "user",
+                                      "assistant",
+                                      "system",
+                                      "developer"
+                                    ],
+                                    "type": "string"
+                                  },
+                                  "type": {
+                                    "enum": [
+                                      "message"
+                                    ],
+                                    "type": "string"
+                                  },
+                                  "content": {
+                                    "oneOf": [
+                                      {
+                                        "type": "string",
+                                        "title": "StringContent"
+                                      },
+                                      {
+                                        "type": "array",
+                                        "items": {
+                                          "$ref": "#/components/schemas/InputContentPart"
+                                        },
+                                        "title": "ContentPartArray"
+                                      }
+                                    ],
+                                    "title": "InputContent",
+                                    "description": "Message content - either a string or array of content parts"
+                                  }
+                                }
+                              },
+                              {
+                                "type": "object",
+                                "title": "FunctionCallOutputInput",
+                                "required": [
+                                  "type",
+                                  "call_id",
+                                  "output"
+                                ],
+                                "properties": {
+                                  "name": {
+                                    "type": "string",
+                                    "description": "Function name (required by some providers)"
+                                  },
+                                  "type": {
+                                    "enum": [
+                                      "function_call_output"
+                                    ],
+                                    "type": "string"
+                                  },
+                                  "output": {
+                                    "type": "string",
+                                    "description": "Function result (JSON string)"
+                                  },
+                                  "call_id": {
+                                    "type": "string",
+                                    "description": "The call_id from function_call output"
+                                  },
+                                  "thought_signature": {
+                                    "type": "string",
+                                    "description": "Base64-encoded signature from function_call"
+                                  }
+                                }
+                              },
+                              {
+                                "type": "object",
+                                "title": "FunctionCallInput",
+                                "required": [
+                                  "type",
+                                  "call_id",
+                                  "name",
+                                  "arguments"
+                                ],
+                                "properties": {
+                                  "name": {
+                                    "type": "string",
+                                    "description": "The function name"
+                                  },
+                                  "type": {
+                                    "enum": [
+                                      "function_call"
+                                    ],
+                                    "type": "string"
+                                  },
+                                  "call_id": {
+                                    "type": "string",
+                                    "description": "The call_id that correlates with function_call_output"
+                                  },
+                                  "arguments": {
+                                    "type": "string",
+                                    "description": "Function arguments (JSON string)"
+                                  },
+                                  "thought_signature": {
+                                    "type": "string",
+                                    "description": "Base64-encoded signature for thinking models"
+                                  }
+                                }
+                              }
+                            ],
+                            "title": "InputItem",
+                            "discriminator": {
+                              "mapping": {
+                                "message": "#/components/schemas/InputMessage",
+                                "function_call": "#/components/schemas/FunctionCallInput",
+                                "function_call_output": "#[REDACTED]"
+                              },
+                              "propertyName": "type"
+                            }
+                          },
+                          "title": "InputItemArray"
+                        }
+                      ],
+                      "title": "Input",
+                      "description": "Input content - either a string or array of input items"
+                    },
+                    "model": {
+                      "type": "string",
+                      "description": "Model ID in provider/model format (e.g., \"xai/grok-4-1\", \"openai/gpt-4o\").\nIf models is also provided, models takes precedence.\nRequired if neither models nor preset is provided.\n"
+                    },
+                    "tools": {
+                      "type": "array",
+                      "items": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "title": "WebSearchTool",
+                            "required": [
+                              "type"
+                            ],
+                            "properties": {
+                              "type": {
+                                "enum": [
+                                  "web_search"
+                                ],
+                                "type": "string",
+                                "description": "Tool type identifier"
+                              },
+                              "filters": {
+                                "allOf": [
+                                  {
+                                    "type": "object",
+                                    "title": "SearchDomainFilter",
+                                    "properties": {
+                                      "search_domain_filter": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string",
+                                          "maxLength": 253
+                                        },
+                                        "maxItems": 20,
+                                        "description": "Limit search results to specific domains (max 20)"
+                                      }
+                                    }
+                                  },
+                                  {
+                                    "type": "object",
+                                    "title": "DateFilters",
+                                    "properties": {
+                                      "search_recency_filter": {
+                                        "enum": [
+                                          "hour",
+                                          "day",
+                                          "week",
+                                          "month",
+                                          "year"
+                                        ],
+                                        "type": "string",
+                                        "title": "SearchRecencyFilter",
+                                        "description": "Filter by publication recency (hour/day/week/month/year)"
+                                      },
+                                      "search_after_date_filter": {
+                                        "type": "string",
+                                        "title": "Date",
+                                        "description": "Return results published after this date (MM/DD/YYYY)"
+                                      },
+                                      "last_updated_after_filter": {
+                                        "type": "string",
+                                        "title": "Date",
+                                        "description": "Return results updated after this date (MM/DD/YYYY)"
+                                      },
+                                      "search_before_date_filter": {
+                                        "type": "string",
+                                        "title": "Date",
+                                        "description": "Return results published before this date (MM/DD/YYYY)"
+                                      },
+                                      "last_updated_before_filter": {
+                                        "type": "string",
+                                        "title": "Date",
+                                        "description": "Return results updated before this date (MM/DD/YYYY)"
+                                      }
+                                    }
+                                  }
+                                ],
+                                "title": "WebSearchFilters",
+                                "description": "Domain and date filters for search results"
+                              },
+                              "max_tokens": {
+                                "type": "integer",
+                                "format": "int32",
+                                "description": "Maximum total tokens for search context"
+                              },
+                              "user_location": {
+                                "type": "object",
+                                "title": "ToolUserLocation",
+                                "properties": {
+                                  "city": {
+                                    "type": "string",
+                                    "description": "City name"
+                                  },
+                                  "region": {
+                                    "type": "string",
+                                    "description": "State or region name"
+                                  },
+                                  "country": {
+                                    "type": "string",
+                                    "description": "ISO 3166-1 alpha-2 country code"
+                                  },
+                                  "latitude": {
+                                    "type": "number",
+                                    "format": "double",
+                                    "description": "Latitude coordinate"
+                                  },
+                                  "longitude": {
+                                    "type": "number",
+                                    "format": "double",
+                                    "description": "Longitude coordinate"
+                                  }
+                                },
+                                "description": "User's location for search personalization"
+                              },
+                              "max_tokens_per_page": {
+                                "type": "integer",
+                                "format": "int32",
+                                "description": "Maximum tokens to extract per search result page"
+                              }
+                            },
+                            "description": "Web search tool configuration for the Responses API"
+                          },
+                          {
+                            "type": "object",
+                            "title": "FetchUrlTool",
+                            "required": [
+                              "type"
+                            ],
+                            "properties": {
+                              "type": {
+                                "enum": [
+                                  "fetch_url"
+                                ],
+                                "type": "string"
+                              },
+                              "max_urls": {
+                                "type": "integer",
+                                "format": "int32",
+                                "maximum": 10,
+                                "minimum": 1,
+                                "description": "Maximum number of URLs to fetch per tool call"
+                              }
+                            }
+                          },
+                          {
+                            "type": "object",
+                            "title": "FunctionTool",
+                            "required": [
+                              "type",
+                              "name"
+                            ],
+                            "properties": {
+                              "name": {
+                                "type": "string",
+                                "description": "The name of the function"
+                              },
+                              "type": {
+                                "enum": [
+                                  "function"
+                                ],
+                                "type": "string"
+                              },
+                              "strict": {
+                                "type": "boolean",
+                                "description": "Whether to enable strict schema validation"
+                              },
+                              "parameters": {
+                                "type": "object",
+                                "description": "JSON Schema defining the function's parameters",
+                                "additionalProperties": true
+                              },
+                              "description": {
+                                "type": "string",
+                                "description": "A description of what the function does"
+                              }
+                            }
+                          }
+                        ],
+                        "title": "Tool",
+                        "discriminator": {
+                          "mapping": {
+                            "function": "#/components/schemas/FunctionTool",
+                            "fetch_url": "#/components/schemas/FetchUrlTool",
+                            "web_search": "#/components/schemas/WebSearchTool"
+                          },
+                          "propertyName": "type"
+                        }
+                      },
+                      "description": "Tools available to the model"
+                    },
+                    "models": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "maxItems": 5,
+                      "minItems": 1,
+                      "description": "Model fallback chain. Each model is in provider/model format.\nModels are tried in order until one succeeds.\nMax 5 models allowed. If set, takes precedence over single model field.\nThe response.model will reflect the model that actually succeeded.\n"
+                    },
+                    "preset": {
+                      "type": "string",
+                      "description": "Preset configuration name (e.g., \"fast-search\", \"pro-search\", \"deep-research\").\nPre-configured model with system prompt and search parameters.\nRequired if model is not provided.\n"
+                    },
+                    "stream": {
+                      "type": "boolean",
+                      "description": "If true, returns SSE stream instead of JSON"
+                    },
+                    "max_steps": {
+                      "type": "integer",
+                      "format": "int32",
+                      "maximum": 10,
+                      "minimum": 1,
+                      "description": "Maximum number of research loop steps.\nIf provided, overrides the preset's max_steps value.\nMust be >= 1 if specified. Maximum allowed is 10.\n"
+                    },
+                    "reasoning": {
+                      "type": "object",
+                      "title": "ReasoningConfig",
+                      "properties": {
+                        "effort": {
+                          "enum": [
+                            "low",
+                            "medium",
+                            "high"
+                          ],
+                          "type": "string",
+                          "description": "How much effort the model should spend on reasoning"
+                        }
+                      }
+                    },
+                    "instructions": {
+                      "type": "string",
+                      "description": "System instructions for the model"
+                    },
+                    "response_format": {
+                      "type": "object",
+                      "title": "ResponseFormat",
+                      "required": [
+                        "type"
+                      ],
+                      "properties": {
+                        "type": {
+                          "enum": [
+                            "json_schema"
+                          ],
+                          "type": "string",
+                          "description": "The type of response format"
+                        },
+                        "json_schema": {
+                          "type": "object",
+                          "title": "JSONSchemaFormat",
+                          "required": [
+                            "name",
+                            "schema"
+                          ],
+                          "properties": {
+                            "name": {
+                              "type": "string",
+                              "maxLength": 64,
+                              "minLength": 1,
+                              "description": "Name of the schema (1-64 alphanumeric chars)"
+                            },
+                            "schema": {
+                              "type": "object",
+                              "description": "The JSON schema object",
+                              "additionalProperties": true
+                            },
+                            "strict": {
+                              "type": "boolean",
+                              "description": "Whether to enforce strict schema validation"
+                            },
+                            "description": {
+                              "type": "string",
+                              "description": "Optional description of the schema"
+                            }
+                          },
+                          "description": "Defines a JSON schema for structured output validation"
+                        }
+                      },
+                      "description": "Specifies the desired output format for the model response"
+                    },
+                    "max_output_tokens": {
+                      "type": "integer",
+                      "format": "int32",
+                      "minimum": 1,
+                      "description": "Maximum tokens to generate"
+                    },
+                    "language_preference": {
+                      "type": "string",
+                      "description": "ISO 639-1 language code for response language"
+                    }
+                  }
+                }
+              },
+              "required": [
+                "type",
+                "method",
+                "bodyType",
+                "body"
+              ],
+              "additionalProperties": false
+            },
+            "output": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "json"
+                },
+                "example": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "input"
+          ],
+          "additionalProperties": false
+        }
+      }
+    }
+  }
+}
